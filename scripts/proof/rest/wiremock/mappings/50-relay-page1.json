@@ -1,0 +1,26 @@
+{
+  "name": "relay-page1: GET /v1/relay (first page, hasNextPage=true)",
+  "request": {
+    "method": "GET",
+    "urlPath": "/v1/relay",
+    "queryParameters": {
+      "after": { "absent": true }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "data": {
+        "edges": [
+          { "node": { "id": "a", "name": "Node-A" } },
+          { "node": { "id": "b", "name": "Node-B" } }
+        ],
+        "pageInfo": {
+          "hasNextPage": true,
+          "endCursor": "c1"
+        }
+      }
+    }
+  }
+}

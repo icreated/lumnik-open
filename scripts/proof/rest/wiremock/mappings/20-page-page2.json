@@ -1,0 +1,4 @@
+{ "request": { "method": "GET", "urlPath": "/v1/orders",
+    "queryParameters": { "page": { "equalTo": "2" }, "size": { "equalTo": "2" } } },
+  "response": { "status": 200, "headers": { "Content-Type": "application/json" },
+    "jsonBody": { "has_more": false, "data": [ { "id": "c", "name": "Gamma" } ] } } }

@@ -1,0 +1,389 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.lumnik</groupId>
+        <artifactId>lumnik</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>lumnik-hub</artifactId>
+    <name>lumnik :: Hub</name>
+    <description>Boot application: aggregates modules, runs Flyway, exposes /api/platform</description>
+
+    <dependencies>
+        <!-- ── Module libraries ────────────────────────────────────── -->
+        <dependency>
+            <groupId>io.lumnik</groupId>
+            <artifactId>lumnik-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.lumnik</groupId>
+            <artifactId>lumnik-identity</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.lumnik</groupId>
+            <artifactId>lumnik-extraction-spi</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.lumnik</groupId>
+            <artifactId>lumnik-llm-spi</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- The two closed-edition modules live in the `closed-extensions` profile below, so that
+             an open-edition build is something we RUN rather than something we assume. -->
+
+        <!-- ── Quarkus runtime ─────────────────────────────────────── -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-hibernate-orm-panache</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-hibernate-validator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-jdbc-postgresql</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-flyway</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-rest</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-rest-jackson</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-smallrye-openapi</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-smallrye-health</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-opentelemetry</artifactId>
+        </dependency>
+        <!-- Backs %prod.quarkus.log.console.json=true — without this extension
+             the property is silently ignored and prod logs stay plain text. -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-logging-json</artifactId>
+        </dependency>
+
+        <!-- ── S3 / MinIO ─────────────────────────────────────────────── -->
+        <dependency>
+            <groupId>io.quarkiverse.amazonservices</groupId>
+            <artifactId>quarkus-amazon-s3</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>url-connection-client</artifactId>
+        </dependency>
+
+        <!-- ── Security / OIDC ─────────────────────────────────────── -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-oidc</artifactId>
+        </dependency>
+
+        <!-- ── Scheduler ───────────────────────────────────────────── -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-scheduler</artifactId>
+        </dependency>
+
+        <!-- ── Email & Templates (Mailer + Qute) ────────────────────── -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-mailer</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-qute</artifactId>
+        </dependency>
+
+        <!-- ── Kotlin scripting via JSR-223 ──────────────────────────── -->
+        <!-- Version (root pom's kotlin.version) must match what Quarkus BOM pulls transitively
+             (2.0.21) to avoid version skew between scripting-jsr223 and compiler-embeddable. -->
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-scripting-jsr223</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.lumnik</groupId>
+            <artifactId>lumnik-hub-hooks-kts</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <!-- ── YAML parsing for manifests ──────────────────────────── -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-xml</artifactId>
+        </dependency>
+
+        <!-- ── Hooks: JSON Schema validation + YAML ─────────────────── -->
+        <dependency>
+            <groupId>com.networknt</groupId>
+            <artifactId>json-schema-validator</artifactId>
+            <version>1.5.4</version>
+        </dependency>
+        <!-- ── Phone number parsing (libphonenumber) ─────────────────── -->
+        <dependency>
+            <groupId>com.googlecode.libphonenumber</groupId>
+            <artifactId>libphonenumber</artifactId>
+            <version>8.13.50</version>
+        </dependency>
+
+        <!-- ── CSV parsing (Apache Commons CSV) ─────────────────────────── -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-csv</artifactId>
+            <version>1.11.0</version>
+        </dependency>
+
+        <!-- ── HTML entity decoding (Apache Commons Text) ───────────────── -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-text</artifactId>
+            <version>1.12.0</version>
+        </dependency>
+
+        <!-- ── Encoding detection (ICU4J) ───────────────────────────────── -->
+        <dependency>
+            <groupId>com.ibm.icu</groupId>
+            <artifactId>icu4j</artifactId>
+            <version>75.1</version>
+        </dependency>
+
+        <!-- ── JDBC connection pooling (for jdbc-generic connector) ──────── -->
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+            <version>5.1.0</version>
+        </dependency>
+
+        <!-- ── JsonPath (REST connector — HybridJsonbWriter) ────────────── -->
+        <dependency>
+            <groupId>com.jayway.jsonpath</groupId>
+            <artifactId>json-path</artifactId>
+            <version>2.9.0</version>
+        </dependency>
+
+        <!-- ── Caffeine cache (SecretResolver 5-min TTL) ─────────────────── -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+            <version>3.1.8</version>
+        </dependency>
+
+        <!-- ── Swagger / OpenAPI parser (REST connector discovery) ──────── -->
+        <dependency>
+            <groupId>io.swagger.parser.v3</groupId>
+            <artifactId>swagger-parser</artifactId>
+            <version>2.1.20</version>
+        </dependency>
+
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+        </dependency>
+
+        <!-- ── Apache MINA SSHD (SFTP file source) ─────────────────── -->
+        <!-- Pin sshd-core + sshd-common to 2.13.2 to match sshd-sftp:2.13.2 and fix EdDSA key-
+             exchange failure ("key spec not recognised: EdDSAPublicKeySpec") that occurs when
+             sshd-common:2.12.1 is pulled transitively and its EdDSASecurityProviderUtils is
+             misaligned with the net.i2p.crypto:eddsa:0.3.0 KeyFactory. -->
+        <dependency>
+            <groupId>org.apache.sshd</groupId>
+            <artifactId>sshd-sftp</artifactId>
+            <version>2.13.2</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.sshd</groupId>
+            <artifactId>sshd-core</artifactId>
+            <version>2.13.2</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.sshd</groupId>
+            <artifactId>sshd-common</artifactId>
+            <version>2.13.2</version>
+        </dependency>
+        <!-- Compile scope so the EdDSA JCE provider and key types are loaded by the
+             same classloader as sshd-common in @QuarkusTest. Without this, Quarkus
+             splits the classloader and sshd-common's
+             EdDSASecurityProviderUtils.generateEDDSAPublicKey() receives an EdDSAPublicKeySpec
+             from a different loader — yielding "key spec not recognised". -->
+        <dependency>
+            <groupId>net.i2p.crypto</groupId>
+            <artifactId>eddsa</artifactId>
+            <version>0.3.0</version>
+        </dependency>
+
+        <!-- ── WireMock (REST connector IT harness) ─────────────────── -->
+        <dependency>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <version>3.9.1</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- ── Testing ─────────────────────────────────────────────── -->
+        <!-- Shared fixtures: the CDI mock LLM ports that keep ARC validation satisfied when
+             lumnik-llm-langchain is absent from the test classpath. The test scope is
+             load-bearing: the testkit's @Mock alternatives would shadow the real LLM ports
+             on a runtime classpath. -->
+        <dependency>
+            <groupId>io.lumnik</groupId>
+            <artifactId>lumnik-testkit</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-test-security-jwt</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>redpanda</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-junit5-mockito</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.rest-assured</groupId>
+            <artifactId>rest-assured</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.awaitility</groupId>
+            <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <!--
+      The open/closed line, made buildable (publication ritual, Act 1 seam 3).
+
+      The open edition ships the hub without lumnik-rag and lumnik-llm-langchain. The SPIs stay
+      on BOTH sides — lumnik-llm-spi holds only interfaces (ChatPort, EmbeddingPort, @Analytic,
+      @Judge) and the hub's main code compiles against them, exactly as it does against
+      lumnik-extraction-spi. A seam ships with the side that declares it.
+
+      Every LLM injection point in the hub is an `Instance<…>`, so Arc starts cleanly with no
+      implementation present and the feature degrades instead of failing. That is the claim this
+      profile exists to TEST rather than assert: `mvn -DopenEdition …` builds the edition the
+      public repo would ship, and scripts/check-open-edition-boots.sh boots it for real.
+
+      Default (no flag) = the full edition, byte-for-byte what it was before this profile existed.
+    -->
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>${quarkus.platform.group-id}</groupId>
+                <artifactId>quarkus-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>${surefire-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <includes>
+                        <include>**/*IT.java</include>
+                    </includes>
+                    <!-- @{argLine} late-binding picks up the JaCoCo -javaagent. -->
+                    <argLine>@{argLine}</argLine>
+                    <systemPropertyVariables>
+                        <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+                        <!-- See surefire note above. -->
+                        <api.version>1.41</api.version>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+            <!-- Aggregate JaCoCo XML across all modules for Sonar.
+                 lumnik-hub depends (directly or transitively) on every module,
+                 so report-aggregate sees all class files and exec data. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>jacoco-report-aggregate</id>
+                        <phase>verify</phase>
+                        <goals><goal>report-aggregate</goal></goals>
+                        <configuration>
+                            <outputDirectory>${project.reporting.outputDirectory}/jacoco-aggregate</outputDirectory>
+                            <!-- Include lumnik-hub classes + exec data (not just dependency modules) -->
+                            <includeCurrentProject>true</includeCurrentProject>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

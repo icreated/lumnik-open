@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Lumnik Roles Manifest",
+  "type": "object",
+  "required": ["module", "version"],
+  "additionalProperties": false,
+  "anyOf": [{ "required": ["roles"] }, { "required": ["grants"] }],
+  "properties": {
+    "module":  { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$" },
+    "grants": {
+      "description": "Permissions this module adds to roles it does not own. A module ships its permissions and the grants for them together, so both disappear when the module is absent from the build.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["role", "permissions"],
+        "additionalProperties": false,
+        "properties": {
+          "role": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+          "permissions": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*){1,2}$" },
+            "uniqueItems": true,
+            "minItems": 1
+          }
+        }
+      }
+    },
+    "roles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "label", "description", "realm"],
+        "additionalProperties": false,
+        "properties": {
+          "id":          { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+          "label":       { "type": "string", "minLength": 1 },
+          "description": { "type": "string", "minLength": 1 },
+          "realm":       { "type": "boolean" },
+          "wildcard":    { "type": "boolean" },
+          "permissions": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*){1,2}$" },
+            "uniqueItems": true,
+            "minItems": 1
+          }
+        },
+        "oneOf": [
+          {
+            "properties": { "wildcard": { "const": true } },
+            "required": ["wildcard"],
+            "not": { "required": ["permissions"] }
+          },
+          {
+            "required": ["permissions"],
+            "not": { "required": ["wildcard"] }
+          }
+        ]
+      }
+    }
+  }
+}

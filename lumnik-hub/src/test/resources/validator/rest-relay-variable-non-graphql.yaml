@@ -1,0 +1,24 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: relay-variable-non-graphql
+  connector_type: rest-generic
+spec:
+  base_url: https://api.example.com
+  endpoints:
+    - id: items
+      path: /items
+      method: GET
+      # no query / kind: graphql — this is a REST relay endpoint
+      pagination:
+        kind: relay
+        cursor_binding: variable     # invalid here: a non-graphql endpoint emits a GET, body cursor is lost
+        cursor_var: after
+        cursor_path: "$.data.pageInfo.endCursor"
+        has_more_path: "$.data.pageInfo.hasNextPage"
+        response_path: "$.data.edges[*].node"
+      target:
+        kind: hybrid
+        table: x_items
+        unique_key: "$.id"
+        tags: [x]

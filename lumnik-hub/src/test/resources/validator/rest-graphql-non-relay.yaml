@@ -1,0 +1,22 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: graphql-non-relay
+  connector_type: rest-generic
+spec:
+  base_url: https://api.example.com
+  graphql_path: /graphql
+  endpoints:
+    - id: orders
+      kind: graphql
+      query: "query { orders { edges { node { id } } } }"
+      # pagination.kind is page, not relay — must trigger a validation error
+      pagination:
+        kind: page
+        page_param: page
+        response_path: "$.data.orders.edges[*].node"
+      target:
+        kind: hybrid
+        table: ext.x
+        unique_key: "$.id"
+        tags: [t]

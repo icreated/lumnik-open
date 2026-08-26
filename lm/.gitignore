@@ -1,0 +1,10 @@
+# Compiled binaries
+/lm
+/cmd/lm/lm
+/otkkey
+
+# Test artifacts
+/test/e2e/lm
+
+# Go workspace caches
+/vendor/

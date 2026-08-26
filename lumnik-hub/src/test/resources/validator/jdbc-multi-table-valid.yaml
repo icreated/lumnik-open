@@ -1,0 +1,30 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: acme-erp-pg
+  connector_type: jdbc-generic
+  tags: [erp]
+spec:
+  connection:
+    url: jdbc:postgresql://db.acme.io:5432/billing
+    user: ro_user
+    password_env: ACME_DB_PASSWORD
+  defaults:
+    schema: public
+  source:
+    tables:
+      - name: invoices
+        mode: watermark
+        watermark_column: updated_at
+        pk_columns: [id]
+      - name: customers
+        mode: full
+        pk_columns: [id]
+      - name: line_items
+        schema: billing
+        mode: watermark
+        watermark_column: ts
+        pk_columns: [invoice_id, line_no]
+  schedule: "*/15 * * * *"
+  target:
+    tags: [erp, billing]

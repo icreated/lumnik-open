@@ -1,0 +1,17 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: acme-events
+  connector_type: kafka
+spec:
+  name: orders
+  brokers_env: KAFKA_BROKERS
+  topic: erp.orders.v1
+  format: json
+  poll_timeout_ms: 5000
+  auth:
+    kind: sasl-plain
+    username_env: KAFKA_USER
+    password_env: KAFKA_PASSWORD
+  target:
+    tags: [erp]

@@ -1,0 +1,32 @@
+module: platform
+version: "0.1"
+roles:
+  - id: lm_superadmin
+    label: "Super Administrateur"
+    description: "Acces cross-tenant, operations systeme. Bypass complet."
+    realm: true
+    wildcard: true
+
+  - id: lm_admin
+    label: "Administrateur"
+    description: "Administration tenant : utilisateurs, listes, integrations, hooks."
+    realm: true
+    permissions:
+      - identity.roles.manage
+      - identity.roles.view
+      - identity.tenants.admin
+      - identity.users.manage
+      - identity.users.view
+      - platform.secret.manage
+
+  - id: lm_user
+    label: "Utilisateur"
+    description: "Acces operationnel : lecture des donnees metier."
+    realm: true
+    permissions:
+      - identity.roles.view
+      - identity.users.view
+
+# The rag.* permissions are declared by lumnik-rag and granted by its own roles.yaml. The open
+# edition ships without that module, and naming its permissions here would refuse to boot —
+# a role may only reference a permission some module on the classpath declares.

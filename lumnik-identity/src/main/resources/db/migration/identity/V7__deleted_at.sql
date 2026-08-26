@@ -1,0 +1,2 @@
+ALTER TABLE app_user ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE session  ADD COLUMN deleted_at TIMESTAMPTZ;

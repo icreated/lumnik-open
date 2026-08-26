@@ -1,0 +1,23 @@
+# The dragon's first rung, PROVEN LIVE: when a new customer from Lyon lands in the CSV,
+# emit a decision event. The effect IS the event — delivery rides the existing webhook
+# subscriptions (n8n/Make/Zapier), zero new code.
+#
+# Why `ville` and scope `demo` (not `segment`/`clients`): a process triggers on
+# data.row.changed, born at the RAW write path — so on.table is the raw ingest table
+# `connector.t_cust_csv`, and its columns are the CSV's own (code, cname, email, ville).
+# `segment` is a Siebel field, absent from the CSV. The raw table lives in the `demo` scope
+# card (the csv connector is tagged `demo`); the fused `clients` card names only v_customer.
+apiVersion: apps.lumnik.io/v1
+kind: Process
+metadata:
+  name: lyon-client-arrive
+spec:
+  scope: demo
+  on:
+    event: data.row.changed
+    table: connector.t_cust_csv
+  when:
+    - ville=Lyon
+  emit:
+    type: decision.lyon-client-arrive
+    message: "Nouveau client {cname} à {ville}"

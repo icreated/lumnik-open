@@ -1,0 +1,61 @@
+manifest_version: 1
+id: identity
+version: 0.1.0
+schema: identity
+display_name:
+  fr: Identité & Tenancy
+  en: Identity & Tenancy
+description:
+  fr: Gestion des tenants, organisations, utilisateurs et rôles
+  en: Tenant, organization, user and role management
+
+api_base: /api/identity
+
+flyway:
+  locations:
+    - classpath:db/migration/identity
+
+menu:
+  - id: identity.users
+    label: { fr: Utilisateurs, en: Users }
+    route: /identity/users
+    icon: pi pi-users
+    permission: identity.users.view
+    order: 900
+  - id: identity.roles
+    label: { fr: Rôles, en: Roles }
+    route: /identity/roles
+    icon: pi pi-shield
+    permission: identity.roles.view
+    order: 910
+  - id: identity.tenants
+    label: { fr: Tenants, en: Tenants }
+    route: /identity/tenants
+    icon: pi pi-building
+    permission: identity.tenants.admin
+    order: 950
+
+permissions:
+  - id: identity.users.view
+    label: { fr: Voir les utilisateurs, en: View users }
+  - id: identity.users.manage
+    label: { fr: Gérer les utilisateurs, en: Manage users }
+  - id: identity.roles.view
+    label: { fr: Voir les rôles, en: View roles }
+  - id: identity.roles.manage
+    label: { fr: Gérer les rôles, en: Manage roles }
+  - id: identity.tenants.admin
+    label: { fr: Administrer les tenants, en: Administer tenants }
+
+events_published:
+  - identity.user.created
+  - identity.user.locked
+  - identity.user.unlocked
+  - identity.tenant.created
+
+events_consumed: []
+
+screens:
+  - user-list
+  - role-list
+  - tenant-list

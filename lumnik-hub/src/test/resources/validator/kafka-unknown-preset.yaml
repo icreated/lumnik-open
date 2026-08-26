@@ -1,0 +1,13 @@
+# A non-blank but unknown preset (typo of 'event-hubs') must be rejected, not silently treated as
+# plain kafka — keeps the validator consistent with the apply handler.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: kafka-unknown-preset
+  connector_type: kafka
+spec:
+  preset: event-hub
+  brokers: localhost:9092
+  topic: erp-exports
+  name: erp_events
+  format: json

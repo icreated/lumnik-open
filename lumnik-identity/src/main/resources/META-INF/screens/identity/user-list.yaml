@@ -1,0 +1,44 @@
+id: user-list
+type: list
+title:
+  fr: Utilisateurs
+  en: Users
+entity: User
+
+api:
+  endpoint: /api/tenants/{tenantId}/users
+  page_size: 50
+
+columns:
+  - field: login
+    label: { fr: Identifiant, en: Login }
+    type: string
+    sortable: true
+    filterable: true
+
+  - field: name
+    label: { fr: Nom complet, en: Full name }
+    type: string
+    sortable: true
+
+  - field: email
+    label: { fr: Email, en: Email }
+    type: string
+
+  - field: active
+    label: { fr: Actif, en: Active }
+    type: boolean
+    width: 80
+
+  - field: locked
+    label: { fr: Verrouillé, en: Locked }
+    type: boolean
+    width: 100
+
+actions:
+  toolbar:
+    - id: new
+      label: { fr: Nouvel utilisateur, en: New user }
+      icon: pi pi-plus
+      style: primary
+      permission: identity.users.manage

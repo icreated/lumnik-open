@@ -1,0 +1,13 @@
+package io.lumnik.hub.connector.rest.pagination.preset;
+
+import jakarta.enterprise.context.ApplicationScoped;
+import java.util.Map;
+
+@ApplicationScoped
+public class SequelizePreset implements PaginationPreset {
+    @Override public String name() { return "sequelize"; }
+    @Override public Map<String, Object> expansion() {
+        return Map.of("kind", "offset", "offset_param", "offset", "limit_param", "limit",
+            "total_path", "$.count", "response_path", "$.rows");
+    }
+}

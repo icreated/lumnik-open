@@ -1,0 +1,16 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: nightly-export
+  connector_type: csv-file
+  tags: [billing]
+spec:
+  transport:
+    kind: local
+    path: /imports/*.csv
+  parser:
+    has_header: false
+    columns:
+  after_process: none
+  target:
+    tags: [billing]

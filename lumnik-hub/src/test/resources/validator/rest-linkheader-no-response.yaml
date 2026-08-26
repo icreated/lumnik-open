@@ -1,0 +1,23 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: linkheader-no-response
+  connector_type: rest-generic
+spec:
+  base_url: https://api.x.io
+  auth:
+    kind: bearer
+    token_env: X_API_KEY
+  endpoints:
+    - id: items
+      path: /items
+      method: GET
+      pagination:
+        kind: link-header
+        rel: next
+        # response_path omitted → items() defaults to "$" and reads the wrong shape
+      target:
+        kind: hybrid
+        table: x_items
+        unique_key: $.id
+        tags: [x]

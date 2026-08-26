@@ -1,0 +1,15 @@
+# event-hubs preset missing the required 'namespace' input. Expansion would silently fill it with
+# an empty string (brokers ".servicebus.windows.net:9093"), so the validator must reject it BEFORE
+# expanding — see KafkaConnectorValidator / SourcePreset.requiredInputs.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: event-hubs-incomplete
+  connector_type: kafka
+spec:
+  preset: event-hubs
+  name: telemetry_events
+  # namespace: (intentionally absent)
+  connection_string_env: EVENTHUBS_CONN_STR
+  topic: telemetry
+  format: json

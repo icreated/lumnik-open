@@ -1,0 +1,25 @@
+# Source 2 — the "flat-file export": a CSV the second system spits out nightly.
+#
+# For csv-file connectors the hub table name is NOT configurable: it is
+#   connector.t_<slug(metadata.name)>
+# i.e. a hardcoded `t_` prefix + the slugified connector name. So:
+#   metadata.name: cust-csv   ->   connector.t_cust_csv
+# (that's the table the entity manifest fuses against). `target` only carries optional
+# `indexes`/`tags` — there is no table_prefix knob for csv-file.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: cust-csv                     # -> connector.t_cust_csv
+  connector_type: csv-file
+  tags: [demo]
+spec:
+  target:                            # the target block itself is required (ConfigDef error if absent)
+    tags: [demo]                     # tags is recommended: silences a warning + gives the RAG scope its filter
+  transport:
+    kind: local
+    # Path AS SEEN BY THE HUB. On the self-host stack the demo folder is mounted at /demo
+    # (docker-compose.wow.yml); with `quarkus:dev` on the host, use ./customer.csv.
+    path: /demo/customer.csv
+  parser:
+    has_header: true                 # header row drives the column names (code, cname, email, ville)
+  after_process: none                # leave the source file in place

@@ -1,0 +1,26 @@
+# Act 3 source — the commandes export: the same nightly CSV habit as csv-connector.yaml,
+# now landing the raw table the workflow act declares a lifecycle over.
+#
+# For csv-file connectors the hub table name is NOT configurable: it is
+#   connector.t_<slug(metadata.name)>
+# i.e. a hardcoded `t_` prefix + the slugified connector name. So:
+#   metadata.name: commandes-csv   ->   connector.t_commandes_csv
+# (that's the table commande-workflow.yaml's spec.on.table names). `target` only carries
+# optional `indexes`/`tags` — there is no table_prefix knob for csv-file.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: commandes-csv                # -> connector.t_commandes_csv
+  connector_type: csv-file
+  tags: [demo]
+spec:
+  target:                            # the target block itself is required (ConfigDef error if absent)
+    tags: [demo]                     # tags is recommended: silences a warning + gives the RAG scope its filter
+  transport:
+    kind: local
+    # Path AS SEEN BY THE HUB. On the self-host stack the demo folder is mounted at /demo
+    # (docker-compose.wow.yml); with `quarkus:dev` on the host, use ./commandes.csv.
+    path: /demo/commandes.csv
+  parser:
+    has_header: true                 # header row drives the column names (num, client, statut, date_expedition)
+  after_process: none                # leave the source file in place

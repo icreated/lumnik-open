@@ -1,0 +1,25 @@
+{
+  "name": "relay-page2: GET /v1/relay?after=c1 (last page, hasNextPage=false)",
+  "request": {
+    "method": "GET",
+    "urlPath": "/v1/relay",
+    "queryParameters": {
+      "after": { "equalTo": "c1" }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "data": {
+        "edges": [
+          { "node": { "id": "c", "name": "Node-C" } }
+        ],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "c2"
+        }
+      }
+    }
+  }
+}

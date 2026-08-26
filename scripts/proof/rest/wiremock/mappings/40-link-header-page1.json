@@ -1,0 +1,23 @@
+{
+  "name": "link-header-page1: GET /v1/events (first page, returns Link rel=next)",
+  "request": {
+    "method": "GET",
+    "urlPath": "/v1/events",
+    "queryParameters": {
+      "cursor": { "absent": true }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "Link": "<http://localhost:8081/v1/events?cursor=p2>; rel=\"next\""
+    },
+    "jsonBody": {
+      "data": [
+        { "id": "a", "name": "Event-A" },
+        { "id": "b", "name": "Event-B" }
+      ]
+    }
+  }
+}

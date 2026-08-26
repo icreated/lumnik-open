@@ -1,0 +1,21 @@
+{
+  "name": "cursor-page1: GET /v1/items (no starting_after)",
+  "request": {
+    "method": "GET",
+    "urlPath": "/v1/items",
+    "queryParameters": {
+      "starting_after": { "absent": true }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "has_more": true,
+      "data": [
+        { "id": "a", "name": "Item-A" },
+        { "id": "b", "name": "Item-B" }
+      ]
+    }
+  }
+}

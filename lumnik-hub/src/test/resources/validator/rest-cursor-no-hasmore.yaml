@@ -1,0 +1,25 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: cursor-no-hasmore
+  connector_type: rest-generic
+spec:
+  base_url: https://api.x.io
+  auth:
+    kind: bearer
+    token_env: X_API_KEY
+  endpoints:
+    - id: items
+      path: /items
+      method: GET
+      pagination:
+        kind: cursor
+        cursor_param: starting_after
+        cursor_path: $.data[-1:].id
+        response_path: $.data
+        # has_more_path omitted → next() stops after page 1 (silent partial ingestion)
+      target:
+        kind: hybrid
+        table: x_items
+        unique_key: $.id
+        tags: [x]

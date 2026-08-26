@@ -1,0 +1,4 @@
+{ "request": { "method": "GET", "urlPath": "/v1/records",
+    "queryParameters": { "offset": { "equalTo": "2" }, "limit": { "equalTo": "2" } } },
+  "response": { "status": 200, "headers": { "Content-Type": "application/json" },
+    "jsonBody": { "total": 3, "data": [ { "id": "c", "name": "Gamma" } ] } } }

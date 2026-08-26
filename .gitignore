@@ -1,0 +1,36 @@
+target/
+*.class
+*.jar
+*.war
+
+.idea/
+*.iml
+.eclipse/
+.settings/
+.project
+.classpath
+
+.env
+*.log
+
+# Brainstorm visual companion (Superpowers)
+.superpowers/
+
+scripts/wow/.env
+
+# Quarkus
+**/generated-sources/
+**/generated-test-sources/
+
+# Claude Code workspace — never public
+.claude/
+# Build output
+lm/lm
+lm/dist/
+# Local env
+*.local
+
+# docs site
+/site/
+/.venv-docs/
+backups/

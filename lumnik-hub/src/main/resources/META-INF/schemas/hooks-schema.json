@@ -1,0 +1,71 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Lumnik Hooks Manifest",
+  "type": "object",
+  "required": ["module"],
+  "additionalProperties": false,
+  "properties": {
+    "module":      { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "version":     { "type": "string" },
+    "description": { "type": "string" },
+    "hooks":       { "type": "array", "items": { "$ref": "#/definitions/Hook" } },
+    "callouts":    { "type": "array", "items": { "$ref": "#/definitions/Callout" } }
+  },
+  "definitions": {
+    "Hook": {
+      "type": "object",
+      "required": ["id", "handler"],
+      "additionalProperties": false,
+      "oneOf": [
+        { "required": ["target", "events"], "not": { "required": ["action"] } },
+        { "required": ["action", "when"],   "not": { "required": ["events"] } }
+      ],
+      "properties": {
+        "id":          { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "description": { "type": "string" },
+        "target":      { "type": "string" },
+        "events": {
+          "type": "array",
+          "items": { "enum": [
+            "BEFORE_CREATE","AFTER_CREATE","BEFORE_UPDATE","AFTER_UPDATE",
+            "BEFORE_DELETE","AFTER_DELETE","BEFORE_ARCHIVE","AFTER_ARCHIVE",
+            "BEFORE_PREPARE","AFTER_PREPARE","BEFORE_COMPLETE","AFTER_COMPLETE",
+            "BEFORE_VOID","AFTER_VOID","BEFORE_CLOSE","AFTER_CLOSE",
+            "BEFORE_REACTIVATE","AFTER_REACTIVATE"
+          ]}
+        },
+        "action": { "type": "string", "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9-]*$" },
+        "when":   { "enum": ["BEFORE", "AFTER"] },
+        "handler":  { "$ref": "#/definitions/Handler" },
+        "priority": { "type": "integer", "default": 100 },
+        "tenants": {
+          "type": "array",
+          "items": { "oneOf": [ {"type": "string", "const": "*"}, {"type": "integer"} ] }
+        },
+        "enabled": { "type": "boolean", "default": true }
+      }
+    },
+    "Handler": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type":   { "enum": ["java", "kotlin"] },
+        "class":  { "type": "string" },
+        "script": { "type": "string" }
+      }
+    },
+    "Callout": {
+      "type": "object",
+      "required": ["id", "entity", "field", "handler"],
+      "additionalProperties": false,
+      "properties": {
+        "id":          { "type": "string" },
+        "description": { "type": "string" },
+        "entity":      { "type": "string" },
+        "field":       { "type": "string" },
+        "handler":     { "$ref": "#/definitions/Handler" }
+      }
+    }
+  }
+}

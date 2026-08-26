@@ -1,0 +1,30 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: stripe-transform-bad
+  connector_type: rest-generic
+spec:
+  base_url: https://api.stripe.com
+  auth:
+    kind: bearer
+    token_env: STRIPE_API_KEY
+  endpoints:
+    - id: customers
+      path: /v1/customers
+      method: GET
+      pagination:
+        kind: cursor
+        cursor_param: starting_after
+        cursor_path: $.data[-1:].id
+        has_more_path: $.has_more
+        response_path: $.data
+      target:
+        kind: hybrid
+        table: stripe_customers
+        unique_key: $.id
+        tags: [crm, customers]
+        promote:
+          - name: name
+            transform: shout
+            path: $.name
+            type: text

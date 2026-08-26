@@ -1,0 +1,6 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: x
+  connector_type: nope-generic
+spec: {}

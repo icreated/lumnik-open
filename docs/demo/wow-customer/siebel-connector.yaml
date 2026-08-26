@@ -1,0 +1,34 @@
+# Source 1 — the "legacy CRM": our fake Siebel over SOAP CustomerQueryPage.
+# kind: soap is a request-shape on the HTTP engine (connector_type stays rest-generic).
+# Lands canonical hub table connector.cust_siebel — the manifest fuses on its promoted columns.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: siebel-customers
+  connector_type: rest-generic
+spec:
+  # fake-siebel.py runs on the HOST. From the hub container (self-host stack) reach it via
+  # host.docker.internal; if you run the hub with `quarkus:dev` on the host, use localhost:8077.
+  base_url: http://host.docker.internal:8077
+  endpoints:
+    - id: customers
+      kind: soap
+      path: /eai
+      soap_action: CustomerQueryPage
+      body: |
+        <In><PageSize>{{page_size}}</PageSize><StartRowNum>{{cursor}}</StartRowNum></In>
+      pagination:
+        kind: soap
+        page_size: 100
+        last_page_path: "$.Body.Out.LastPage"
+        response_path: "$.Body.Out.ListOfCustomer.Customer"
+      incremental:
+        mode: full
+      target:
+        kind: hybrid
+        table: connector.cust_siebel
+        unique_key: "$.CustCode"
+        promote:
+          - { name: customer_code, path: "$.CustCode", type: text }
+          - { name: name,          path: "$.Name",     type: text }
+          - { name: segment,       path: "$.Segment",  type: text }

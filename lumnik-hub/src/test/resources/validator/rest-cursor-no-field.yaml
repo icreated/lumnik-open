@@ -1,0 +1,24 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: x
+  connector_type: rest-generic
+spec:
+  base_url: https://api.example.com
+  auth:
+    kind: bearer
+    token_env: T
+  endpoints:
+    - id: items
+      path: /items
+      method: GET
+      pagination:
+        kind: cursor
+        cursor_param: starting_after
+        has_more_path: $.has_more
+        response_path: $.data
+      target:
+        kind: hybrid
+        table: x_items
+        unique_key: $.id
+        tags: [x]

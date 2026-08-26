@@ -1,0 +1,15 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: bad-move
+  connector_type: csv-file
+  tags: [test]
+spec:
+  transport:
+    kind: local
+    path: /imports/*.csv
+  parser:
+    has_header: true
+  after_process: move
+  target:
+    tags: [test]

@@ -1,0 +1,26 @@
+package io.lumnik.hub.validator.jdbc;
+
+import io.lumnik.hub.validator.ConfigDef;
+import io.lumnik.hub.validator.ConfigDef.Importance;
+import io.lumnik.hub.validator.ConfigDef.Type;
+import io.lumnik.hub.validator.ConfigDefValidators;
+
+public final class ConnectionBlockValidator {
+    private ConnectionBlockValidator() {}
+
+    public static ConfigDef configDef() {
+        return new ConfigDef()
+            .requireCustom("url", Type.STRING, Importance.HIGH,
+                "JDBC URL — jdbc:postgresql://... (only postgres in v1)",
+                ConfigDefValidators.matchesRegex("^jdbc:[a-z0-9]+:.*$", "jdbc:<dialect>:..."))
+            .require("user", Type.STRING, Importance.HIGH, "DB user")
+            .require("password_env", Type.STRING, Importance.HIGH,
+                "Env var name for the DB password")
+            .optional("dialect", Type.STRING, Importance.LOW,
+                "JDBC dialect (inferred from url scheme if absent)", null)
+            .optional("password", Type.STRING, Importance.LOW,
+                "Plain-text DB password (dev/test only — wins over password_env; prefer password_env)",
+                null)
+            .closed();
+    }
+}

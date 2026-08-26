@@ -1,0 +1,20 @@
+{
+  "name": "cursor-page2: GET /v1/items?starting_after=b",
+  "request": {
+    "method": "GET",
+    "urlPath": "/v1/items",
+    "queryParameters": {
+      "starting_after": { "equalTo": "b" }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "has_more": false,
+      "data": [
+        { "id": "c", "name": "Item-C" }
+      ]
+    }
+  }
+}

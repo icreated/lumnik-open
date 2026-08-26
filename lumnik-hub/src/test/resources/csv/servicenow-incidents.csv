@@ -1,0 +1,11 @@
+incident_id,title,assignee,tag
+INC001,Database down,alice,critical
+INC001,Database down,bob,critical
+INC001,Database down,carol,db
+INC002,Login broken,alice,auth
+INC002,Login broken,dave,auth
+INC003,Slow API,bob,perf
+INC003,Slow API,carol,perf
+INC003,Slow API,dave,perf
+INC003,Slow API,erin,perf
+INC003,Slow API,frank,perf

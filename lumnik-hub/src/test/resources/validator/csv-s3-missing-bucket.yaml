@@ -1,0 +1,15 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: s3-import
+  connector_type: csv-file
+  tags: [analytics]
+spec:
+  transport:
+    kind: s3
+    prefix: billing/
+  parser:
+    has_header: true
+  after_process: none
+  target:
+    tags: [analytics]

@@ -1,0 +1,169 @@
+# lumnik open edition — the whole gate on every push and PR:
+# hub (mvn verify, unit + integration), lm (build + full Go suite), the bounded-contexts
+# boundary guard plus the credential-provisioning guards (no shipped realm password, every
+# documented login provisioned per-install), the docs built --strict, and OTK at the declared
+# tier against a hub booted with real auth (%otkauth). Seeded by the publication ritual (Act 3).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  hub:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: mvn verify (unit + integration, Testcontainers)
+        run: mvn -B -ntp verify
+
+  lm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.24"
+          cache: true
+          cache-dependency-path: lm/go.sum
+      - name: Build + full Go suite + hub-free OTK units
+        working-directory: lm
+        run: |
+          go build ./...
+          make test
+          make otk-unit
+
+  boundary-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: ./scripts/check-bounded-contexts.sh
+      - run: ./scripts/check-realm-no-static-passwords.sh
+      - run: ./scripts/check-selfhost-password-provisioning.sh
+
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: mkdocs build --strict (a broken link or missing transclusion fails)
+        run: |
+          pip install -r requirements-docs.txt
+          mkdocs build --strict
+      # --strict never validates that a `#fragment` lands on an id that exists, nor that a
+      # markdown construct became the HTML we meant. This is that hand-check, automated.
+      - name: Check what the site rendered (fragments, tables, swallowed list items)
+        run: bash scripts/check-docs-render.sh
+
+  otk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: lumnik
+          POSTGRES_USER: lumnik
+          POSTGRES_PASSWORD: lumnik
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lumnik -d lumnik"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.24"
+          cache: true
+          cache-dependency-path: lm/go.sum
+
+      - name: Initialise database roles, grants, schemas, and pgvector
+        env:
+          PGPASSWORD: lumnik
+        run: |
+          POSTGRES_USER=lumnik POSTGRES_DB=lumnik PGHOST=localhost PGPORT=5432 bash infra/postgres/init/01-roles.sh
+          psql -h localhost -p 5432 -U lumnik -d lumnik -v ON_ERROR_STOP=1 -f infra/postgres/init/02-extensions.sql
+
+      - name: Generate the OTK signing key (shared by hub and harness)
+        working-directory: lm
+        run: |
+          mkdir -p /tmp/otk
+          {
+            echo "OTK_KEY_FILE=/tmp/otk/otkkey.pem"
+            echo "OTK_OIDC_ISSUER=https://otk.ci/issuer"
+            echo "OTK_OIDC_AUDIENCE=lumnik-backend"
+            echo "LUMNIK_SECRET_MASTER_KEY=$(openssl rand -base64 32)"
+            echo "LUMNIK_CRYPTO_SECRET_KEY=$(openssl rand -base64 32)"
+          } >> "$GITHUB_ENV"
+          {
+            echo "OTK_OIDC_PUBLIC_KEY<<OTK_PEM_EOF"
+            OTK_KEY_FILE=/tmp/otk/otkkey.pem go run -tags otk ./test/otk/cmd/otkkey
+            echo "OTK_PEM_EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Package the hub (fast-jar)
+        run: mvn -B -ntp -q -pl lumnik-hub -am package -DskipTests
+
+      - name: Boot the hub on the %otkauth real-auth profile (background)
+        env:
+          QUARKUS_PROFILE: otkauth
+          DB_URL: jdbc:postgresql://localhost:5432/lumnik
+          QUARKUS_OTEL_SDK_DISABLED: "true"
+        run: |
+          nohup java -jar lumnik-hub/target/quarkus-app/quarkus-run.jar > hub.log 2>&1 &
+          echo "hub boot started (pid $!)"
+
+      - name: Wait for the hub to be ready
+        run: |
+          for i in $(seq 1 180); do
+            if grep -qE "started in [0-9]+\.[0-9]+s" hub.log; then
+              echo "hub ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "hub did not become ready within 180s"
+          tail -n 200 hub.log
+          exit 1
+
+      - name: Run OTK at the declared tier
+        working-directory: lm
+        env:
+          LUMNIK_URL: http://localhost:8080
+          OTK_DB_DSN: postgresql://lumnik_app:lumnik_app_dev_password@localhost:5432/lumnik
+          OTK_DB_ADMIN_DSN: postgresql://lumnik_admin:lumnik_admin_dev_password@localhost:5432/lumnik
+        run: make otk
+
+      - name: Upload hub log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: hub-log
+          path: hub.log

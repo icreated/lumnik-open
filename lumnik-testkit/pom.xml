@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>io.lumnik</groupId>
+        <artifactId>lumnik</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+    <artifactId>lumnik-testkit</artifactId>
+    <name>lumnik :: TestKit</name>
+    <description>Shared test fixtures: CDI mock LLM ports and hand-rolled Instance&lt;T&gt; impls.</description>
+
+    <!-- Deliberately SPI-only. The testkit is consumed at test scope by lumnik-hub and
+         lumnik-rag, so it must sit BELOW them in the reactor: a dependency on either would
+         invert the edge and cycle. Everything here mocks a seam (lumnik-llm-spi) or the CDI
+         container itself — nothing needs a runtime module. -->
+    <!-- WARNING: the main jar ships globally-enabled CDI alternatives (@Mock = @Alternative +
+         @Priority on the LLM ports). Consume this module at <scope>test</scope> ONLY — on a
+         runtime classpath the mocks silently shadow the real langchain ports. -->
+    <dependencies>
+        <dependency>
+            <groupId>io.lumnik</groupId>
+            <artifactId>lumnik-llm-spi</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- @ApplicationScoped / Instance<T>. `provided`: every consumer runs inside a CDI
+             container that already supplies the API. -->
+        <dependency>
+            <groupId>jakarta.enterprise</groupId>
+            <artifactId>jakarta.enterprise.cdi-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <!-- io.quarkus.test.Mock — the alternative stereotype that makes the mock ports shadow
+             the real ones inside @QuarkusTest. `provided` for the same reason: consumers bring
+             quarkus-junit5, which brings this. -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-test-common</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <!-- compile scope, deliberately: this module IS a test library, so its assertion
+             vocabulary is part of its API rather than its own test-time detail. -->
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>compile</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Produce a Jandex index so Quarkus ARC discovers the mock ports as beans when the
+                 testkit arrives as a JAR on a consumer's test classpath — an un-indexed
+                 dependency is not a bean archive and its @Mock alternatives would be invisible.
+                 Mirrors lumnik-llm-spi. -->
+            <plugin>
+                <groupId>io.smallrye</groupId>
+                <artifactId>jandex-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

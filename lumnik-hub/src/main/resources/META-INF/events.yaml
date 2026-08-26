@@ -1,0 +1,107 @@
+module: core
+version: "0.1"
+events:
+  - type: org.created
+    description: "A new organisation was created."
+    payload:
+      orgId: long
+      tenantId: long
+      name: string
+  - type: org.updated
+    description: "An organisation was updated."
+    payload:
+      orgId: long
+      tenantId: long
+  - type: org.moved
+    description: "An organisation's parent changed."
+    payload:
+      orgId: long
+      tenantId: long
+      newParentId: long
+  - type: list.value.added
+    description: "A new value was added to a tenant business list."
+    payload:
+      listCode: string
+      value:    string
+      name:     string
+  - type: list.value.updated
+    description: "An existing list value's display name was changed."
+    payload:
+      listCode: string
+      value:    string
+      oldName:  string
+      newName:  string
+  - type: list.value.removed
+    description: "A list value was deactivated or removed."
+    payload:
+      listCode: string
+      value:    string
+  - type: org.archived
+    description: "An organisation was archived."
+    payload:
+      id:   long
+      code: string
+  - type: connector.run.started
+    description: "A connector endpoint run started."
+    payload:
+      run_id:       string
+      connector_id: string
+      endpoint_id:  string
+      sync_mode:    string
+      trigger:      string
+  - type: connector.run.completed
+    description: "A connector endpoint run completed; carries the conservation counters."
+    payload:
+      run_id:      string
+      endpoint_id: string
+      records_in:  long
+      records_out: long
+      duration_ms: long
+      tables:      map
+  - type: connector.run.cancelled
+    description: "A connector endpoint run was cancelled."
+    payload:
+      run_id: string
+  - type: connector.run.failed
+    description: "A connector endpoint run failed."
+    payload:
+      run_id:        string
+      error_message: string
+      retryable:     boolean
+  - type: platform.secret.created
+    description: "A platform secret was created."
+    payload:
+      name: string
+      by:   string
+      at:   string
+  - type: platform.secret.updated
+    description: "A platform secret's value was rotated."
+    payload:
+      name:              string
+      by:                string
+      at:                string
+      previousRotatedAt: string
+  - type: platform.secret.deleted
+    description: "A platform secret was deleted."
+    payload:
+      name: string
+      by:   string
+      at:   string
+  - type: platform.secret.read
+    description: "A platform secret was read from the database (cache misses only)."
+    payload:
+      name: string
+      by:   string
+      at:   string
+  - type: data.row.changed
+    description: "A genuinely new or changed row landed in a watched ingest table; emitted in the ingestion transaction."
+    payload:
+      entity:     string
+      entity_key: string
+      op:         string
+      run_id:     string
+  - type: annotation.decision.acked
+    description: "A human treated a decision in the inbox."
+    payload:
+      decision_id: long
+      by:          string

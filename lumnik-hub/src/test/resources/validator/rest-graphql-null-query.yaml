@@ -1,0 +1,24 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: graphql-null-query
+  connector_type: rest-generic
+spec:
+  base_url: https://api.example.com
+  graphql_path: /graphql
+  endpoints:
+    - id: orders
+      kind: graphql
+      query: null
+      pagination:
+        kind: relay
+        cursor_binding: variable
+        cursor_var: after
+        cursor_path: "$.data.orders.pageInfo.endCursor"
+        has_more_path: "$.data.orders.pageInfo.hasNextPage"
+        response_path: "$.data.orders.edges[*].node"
+      target:
+        kind: hybrid
+        table: ext.orders
+        unique_key: "$.id"
+        tags: [orders]

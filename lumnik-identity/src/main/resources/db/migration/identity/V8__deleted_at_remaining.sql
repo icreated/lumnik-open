@@ -1,0 +1,3 @@
+ALTER TABLE tenant    ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE org       ADD COLUMN deleted_at TIMESTAMPTZ;
+ALTER TABLE app_role  ADD COLUMN deleted_at TIMESTAMPTZ;

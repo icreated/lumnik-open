@@ -1,0 +1,26 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: stripe-prod
+  connector_type: rest-generic
+spec:
+  base_url: https://api.stripe.com
+  auth:
+    kind: bearer
+  endpoints:
+    - id: customers
+      path: /v1/customers
+      method: GET
+      pagination:
+        kind: page
+        page_param: page
+        size_param: size
+        size: 100
+        start_page: 1
+        has_more_path: $.has_more
+        response_path: $.data
+      target:
+        kind: hybrid
+        table: stripe_customers
+        unique_key: $.id
+        tags: [crm, customers]

@@ -1,0 +1,31 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: bad-promote
+  connector_type: rest-generic
+spec:
+  base_url: https://api.x.io
+  auth:
+    kind: bearer
+    token_env: X_API_KEY
+  endpoints:
+    - id: items
+      path: /items
+      method: GET
+      pagination:
+        kind: cursor
+        cursor_param: starting_after
+        cursor_path: $.data[-1:].id
+        has_more_path: $.has_more
+        response_path: $.data
+      target:
+        kind: hybrid
+        table: x_items
+        unique_key: $.id
+        tags: [x]
+        promote:
+          - name: amount
+            type: frobnicate          # unknown type + missing path
+          - name: ""                   # blank name
+            path: $.x
+            type: text

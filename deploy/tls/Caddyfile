@@ -1,0 +1,29 @@
+# One TLS façade for the whole self-host stack — a single https origin serves
+# Keycloak (path-proxied) and the hub, so browsers see no mixed content, no CORS,
+# and ONE issuer for every device.
+#
+# LUMNIK_TLS_HOST decides the certificate story, automatically:
+#   - a real public domain  → Caddy obtains/renews Let's Encrypt certificates
+#   - a LAN IP or localhost → Caddy issues from its internal CA (trust it on your
+#     devices for a clean padlock: the root cert lives in the caddy_data volume,
+#     see deploy/tls/README.md)
+{
+	# clients dialing a bare IP send no SNI (RFC 6066) — without this, Caddy finds
+	# no certificate and aborts every handshake with alert 80
+	default_sni {$LUMNIK_TLS_HOST}
+}
+
+{$LUMNIK_TLS_HOST} {
+	# Keycloak, same-origin under /realms + its static assets
+	handle /realms/* {
+		reverse_proxy keycloak:8180
+	}
+	handle /resources/* {
+		reverse_proxy keycloak:8180
+	}
+
+	# everything else is the hub (API + the /app/ PWA)
+	handle {
+		reverse_proxy hub:8080
+	}
+}

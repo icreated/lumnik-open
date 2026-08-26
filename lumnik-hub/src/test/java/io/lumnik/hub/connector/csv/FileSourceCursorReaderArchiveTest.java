@@ -1,0 +1,108 @@
+package io.lumnik.hub.connector.csv;
+
+import io.lumnik.hub.connector.api.types.ConnectorCursor;
+import io.lumnik.hub.connector.api.types.ReadResult;
+import io.lumnik.hub.connector.transport.AfterProcessAction;
+import io.lumnik.hub.connector.transport.FileDescriptor;
+import io.lumnik.hub.connector.transport.FileSource;
+import io.lumnik.hub.connector.transport.FileSourceRegistry;
+import org.junit.jupiter.api.Test;
+
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.stream.Stream;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+/**
+ * A8 (tribunal 2026-07-25): archiving must happen only for files whose chunk cursor was
+ * already PERSISTED — never inside the read() that first returns the rows. The old
+ * behavior archived (moved/deleted!) the source file mid-transaction: a crash after
+ * markProcessed but before commit lost the file's rows unreplayably. The committed
+ * cursor is the proof-of-commit; each read() first archives the cursor's entries, then
+ * reads new data without marking it.
+ */
+class FileSourceCursorReaderArchiveTest {
+
+    private static final Instant T1 = Instant.parse("2026-07-25T10:00:00Z");
+    private static final Instant T2 = Instant.parse("2026-07-25T10:05:00Z");
+
+    static final class FakeSource implements FileSource {
+        final List<FileDescriptor> files = new ArrayList<>();
+        final List<String> marked = new ArrayList<>();
+
+        @Override public Stream<FileDescriptor> listSince(Instant cursor) {
+            return files.stream().filter(f -> !f.lastModified().isBefore(cursor));
+        }
+        @Override public InputStream open(FileDescriptor file) {
+            return new ByteArrayInputStream("id,name\n1,a\n".getBytes(StandardCharsets.UTF_8));
+        }
+        @Override public void markProcessed(FileDescriptor file, AfterProcessAction action, Map<String, Object> cfg) {
+            marked.add(file.path());
+            files.removeIf(f -> f.path().equals(file.path()));   // archive = gone from listing
+        }
+    }
+
+    private final FakeSource source = new FakeSource();
+    private final FileSourceRegistry registry = new FileSourceRegistry() {
+        @Override public FileSource build(Map<String, Object> transportCfg) { return source; }
+    };
+
+    private FileSourceCursorReader newReader() {
+        // A fresh reader per read() mirrors the engine: ChunkExecutor rebuilds it per chunk.
+        Map<String, Object> config = Map.of(
+            "transport", Map.of("kind", "sftp"),
+            "after_process", "delete",
+            "parser", Map.of("has_header", true));
+        return new FileSourceCursorReader(config,
+            CsvFileConnectorType.buildParserOverrides(Map.of("has_header", true)), registry);
+    }
+
+    @Test
+    void archiveHappensOneReadLater_neverInTheReadThatReturnsTheRows() {
+        source.files.add(new FileDescriptor("/in/a.csv", 12, T1, null));
+        source.files.add(new FileDescriptor("/in/b.csv", 12, T2, null));
+
+        // read #1: returns a.csv's rows — the file must NOT be archived yet (its chunk
+        // transaction has not committed; a crash here must leave the file in place).
+        ReadResult<Map<String, Object>> r1 = newReader().read(500, ConnectorCursor.empty(), null);
+        assertThat(r1).isInstanceOf(ReadResult.HasMore.class);
+        assertThat(source.marked)
+            .as("a file must never be archived inside the read() that first returns its rows")
+            .isEmpty();
+
+        // read #2: the persisted cursor now proves a.csv's chunk committed → archive it,
+        // then read b.csv (not archived yet).
+        ConnectorCursor c1 = ((ReadResult.HasMore<Map<String, Object>>) r1).nextCursor();
+        ReadResult<Map<String, Object>> r2 = newReader().read(500, c1, null);
+        assertThat(source.marked).containsExactly("/in/a.csv");
+        assertThat(r2).isInstanceOf(ReadResult.HasMore.class);
+
+        // read #3: b.csv's commit is proven by the cursor → archived; nothing new → EOS.
+        ConnectorCursor c2 = ((ReadResult.HasMore<Map<String, Object>>) r2).nextCursor();
+        ReadResult<Map<String, Object>> r3 = newReader().read(500, c2, null);
+        assertThat(source.marked).containsExactly("/in/a.csv", "/in/b.csv");
+        assertThat(r3).isInstanceOf(ReadResult.EndOfStream.class);
+    }
+
+    @Test
+    void leaveActionNeverMarks() {
+        source.files.add(new FileDescriptor("/in/a.csv", 12, T1, null));
+        Map<String, Object> config = Map.of(
+            "transport", Map.of("kind", "sftp"),
+            "after_process", "leave",
+            "parser", Map.of("has_header", true));
+        var overrides = CsvFileConnectorType.buildParserOverrides(Map.of("has_header", true));
+
+        var r1 = new FileSourceCursorReader(config, overrides, registry).read(500, ConnectorCursor.empty(), null);
+        var c1 = ((ReadResult.HasMore<Map<String, Object>>) r1).nextCursor();
+        new FileSourceCursorReader(config, overrides, registry).read(500, c1, null);
+
+        assertThat(source.marked).isEmpty();
+    }
+}

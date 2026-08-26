@@ -1,0 +1,11 @@
+module: platform-test
+description: "Test hooks shipped with platform test classpath"
+hooks:
+  - id: test-noop
+    description: "Sample valid hook used by manifest scanner tests"
+    target: io.lumnik.bpartner.partner.Partner
+    events: [BEFORE_CREATE]
+    handler:
+      type: java
+      class: io.lumnik.hub.hook.TestNoopHook
+    priority: 50

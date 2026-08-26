@@ -1,0 +1,279 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>io.lumnik</groupId>
+    <artifactId>lumnik</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <name>lumnik</name>
+    <description>lumnik — multi-tenant data hub (HUB) + RAG over legacy-ERP data</description>
+    <licenses>
+        <license>
+            <name>Proprietary — All Rights Reserved</name>
+            <comments>Copyright (c) 2026 ∫created. See LICENSE.</comments>
+        </license>
+    </licenses>
+
+    <modules>
+        <module>lumnik-common</module>
+        <module>lumnik-identity</module>
+        <module>lumnik-hub</module>
+        <module>lumnik-extraction-spi</module>
+        <module>lumnik-llm-spi</module>
+        <module>lumnik-hub-hooks-kts</module>
+        <module>lumnik-testkit</module>
+    </modules>
+
+    <properties>
+        <java.version>21</java.version>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
+        <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
+        <quarkus.platform.version>3.17.0</quarkus.platform.version>
+
+        <compiler-plugin.version>3.13.0</compiler-plugin.version>
+        <surefire-plugin.version>3.2.5</surefire-plugin.version>
+        <lombok.version>1.18.36</lombok.version>
+        <jacoco-plugin.version>0.8.12</jacoco-plugin.version>
+        <sonar-plugin.version>3.11.0.3922</sonar-plugin.version>
+        <assertj.version>3.27.7</assertj.version>
+        <kotlin.version>2.0.21</kotlin.version>
+        <jandex-plugin.version>3.2.4</jandex-plugin.version>
+
+        <!-- Sonar project config -->
+        <sonar.projectKey>lumnik</sonar.projectKey>
+        <sonar.projectName>lumnik</sonar.projectName>
+        <!-- Aggregate JaCoCo XML produced by lumnik-hub's report-aggregate execution -->
+        <sonar.coverage.jacoco.xmlReportPaths>${maven.multiModuleProjectDirectory}/lumnik-hub/target/site/jacoco-aggregate/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
+        <!-- Exclude Maven/Quarkus generated sources -->
+        <sonar.exclusions>**/generated/**,**/generated-sources/**</sonar.exclusions>
+        <!-- Suppress CDI field-injection smell (java:S6813): @Inject field injection is idiomatic
+             in Quarkus CDI and converting every bean to constructor injection is out of scope. -->
+        <!-- e2: empty methods (java:S1186) in test sources are deliberate no-op test doubles
+             (mock EntityManager, anonymous ConnectorType/ItemWriter overrides, @Disabled
+             placeholders). Empty bodies are correct there, not a defect — relax in test scope only. -->
+        <!-- e3-e8: assertion-style and test-clock preferences in test sources. These are AssertJ
+             idiom nudges (S5778 single-throwing-invocation lambdas, S5838 specialised assertions,
+             S5853 chained assertions, S6068 raw argument matchers), the "no system clock in tests"
+             nudge (S8692) for deterministic payload builders, and the idiomatic `throws Exception`
+             on @Test methods (S1130). Not defects — relax in test scope only. -->
+        <sonar.issue.ignore.multicriteria>e1,e2,e3,e4,e5,e6,e7,e8</sonar.issue.ignore.multicriteria>
+        <sonar.issue.ignore.multicriteria.e1.ruleKey>java:S6813</sonar.issue.ignore.multicriteria.e1.ruleKey>
+        <sonar.issue.ignore.multicriteria.e1.resourceKey>**/*.java</sonar.issue.ignore.multicriteria.e1.resourceKey>
+        <sonar.issue.ignore.multicriteria.e2.ruleKey>java:S1186</sonar.issue.ignore.multicriteria.e2.ruleKey>
+        <sonar.issue.ignore.multicriteria.e2.resourceKey>**/src/test/**/*.java</sonar.issue.ignore.multicriteria.e2.resourceKey>
+        <sonar.issue.ignore.multicriteria.e3.ruleKey>java:S5778</sonar.issue.ignore.multicriteria.e3.ruleKey>
+        <sonar.issue.ignore.multicriteria.e3.resourceKey>**/src/test/**/*.java</sonar.issue.ignore.multicriteria.e3.resourceKey>
+        <sonar.issue.ignore.multicriteria.e4.ruleKey>java:S5838</sonar.issue.ignore.multicriteria.e4.ruleKey>
+        <sonar.issue.ignore.multicriteria.e4.resourceKey>**/src/test/**/*.java</sonar.issue.ignore.multicriteria.e4.resourceKey>
+        <sonar.issue.ignore.multicriteria.e5.ruleKey>java:S5853</sonar.issue.ignore.multicriteria.e5.ruleKey>
+        <sonar.issue.ignore.multicriteria.e5.resourceKey>**/src/test/**/*.java</sonar.issue.ignore.multicriteria.e5.resourceKey>
+        <sonar.issue.ignore.multicriteria.e6.ruleKey>java:S6068</sonar.issue.ignore.multicriteria.e6.ruleKey>
+        <sonar.issue.ignore.multicriteria.e6.resourceKey>**/src/test/**/*.java</sonar.issue.ignore.multicriteria.e6.resourceKey>
+        <sonar.issue.ignore.multicriteria.e7.ruleKey>java:S8692</sonar.issue.ignore.multicriteria.e7.ruleKey>
+        <sonar.issue.ignore.multicriteria.e7.resourceKey>**/src/test/**/*.java</sonar.issue.ignore.multicriteria.e7.resourceKey>
+        <sonar.issue.ignore.multicriteria.e8.ruleKey>java:S1130</sonar.issue.ignore.multicriteria.e8.ruleKey>
+        <sonar.issue.ignore.multicriteria.e8.resourceKey>**/src/test/**/*.java</sonar.issue.ignore.multicriteria.e8.resourceKey>
+        <!-- Overrides the Quarkus 3.17 BOM's testcontainers 1.20.3 (docker-java 3.4.0 → Docker API
+             1.32, rejected by Docker 25+ whose min API is 1.40). See dependencyManagement note. -->
+        <testcontainers.version>1.21.3</testcontainers.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Override testcontainers (Quarkus 3.17 BOM pins 1.20.3 → docker-java 3.4.0, which
+                 defaults to Docker API 1.32 and is rejected by Docker 25+ daemons whose minimum
+                 API is 1.40: "client version 1.32 is too old". Declared before the Quarkus BOM so
+                 these versions win (first-declared managed version takes precedence). -->
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>${testcontainers.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>${quarkus.platform.group-id}</groupId>
+                <artifactId>${quarkus.platform.artifact-id}</artifactId>
+                <version>${quarkus.platform.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.quarkiverse.amazonservices</groupId>
+                <artifactId>quarkus-amazon-services-bom</artifactId>
+                <version>2.17.0</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.lumnik</groupId>
+                <artifactId>lumnik-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.lumnik</groupId>
+                <artifactId>lumnik-identity</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.lumnik</groupId>
+                <artifactId>lumnik-testkit</artifactId>
+                <version>${project.version}</version>
+                <!-- Managed at test scope: the testkit ships globally-enabled @Mock
+                     alternatives, so a consumer omitting <scope> must not pull them
+                     onto a runtime classpath. -->
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.projectlombok</groupId>
+                <artifactId>lombok</artifactId>
+                <version>${lombok.version}</version>
+                <scope>provided</scope>
+            </dependency>
+            <!-- NO default scope here: most consumers want test scope, but lumnik-testkit is a
+                 test library whose assertion vocabulary is API, so it manages assertj at
+                 compile scope itself. Each module declares its own <scope>. -->
+            <dependency>
+                <groupId>org.assertj</groupId>
+                <artifactId>assertj-core</artifactId>
+                <version>${assertj.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-stdlib</artifactId>
+                <version>${kotlin.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-scripting-jsr223</artifactId>
+                <version>${kotlin.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>${quarkus.platform.group-id}</groupId>
+                    <artifactId>quarkus-maven-plugin</artifactId>
+                    <version>${quarkus.platform.version}</version>
+                    <extensions>true</extensions>
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>build</goal>
+                                <goal>generate-code</goal>
+                                <goal>generate-code-tests</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>${compiler-plugin.version}</version>
+                    <configuration>
+                        <source>${java.version}</source>
+                        <target>${java.version}</target>
+                        <parameters>true</parameters>
+                        <annotationProcessorPaths>
+                            <path>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                                <version>${lombok.version}</version>
+                            </path>
+                        </annotationProcessorPaths>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>org.jacoco</groupId>
+                    <artifactId>jacoco-maven-plugin</artifactId>
+                    <version>${jacoco-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.sonarsource.scanner.maven</groupId>
+                    <artifactId>sonar-maven-plugin</artifactId>
+                    <version>${sonar-plugin.version}</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>${surefire-plugin.version}</version>
+                    <configuration>
+                        <!-- @{argLine} late-binding picks up the JaCoCo -javaagent set by
+                             jacoco:prepare-agent (${argLine} would be empty at parse time). -->
+                        <argLine>@{argLine}</argLine>
+                        <systemPropertyVariables>
+                            <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+                            <maven.home>${maven.home}</maven.home>
+                            <!-- Pin the Docker API version testcontainers' (shaded) docker-java sends.
+                                 It otherwise falls back to 1.32, which Docker 25+ daemons reject
+                                 (min API 1.40). Inherited by every module's @QuarkusTest so DevServices
+                                 starts; the DOCKER_API_VERSION env var does not propagate to the forked
+                                 test JVM. 1.41 is ≥ the daemon minimum and supported by all Docker ≥20.10. -->
+                            <api.version>1.41</api.version>
+                        </systemPropertyVariables>
+                    </configuration>
+                </plugin>
+                <!-- Jandex: shared make-index execution for every module that needs Quarkus ARC
+                     to discover its classes as a bean archive. Modules opt in with a bare
+                     <plugin> declaration; this execution is inherited. -->
+                <plugin>
+                    <groupId>io.smallrye</groupId>
+                    <artifactId>jandex-maven-plugin</artifactId>
+                    <version>${jandex-plugin.version}</version>
+                    <executions>
+                        <execution>
+                            <id>make-index</id>
+                            <goals><goal>jandex</goal></goals>
+                        </execution>
+                    </executions>
+                </plugin>
+                <plugin>
+                    <groupId>org.jetbrains.kotlin</groupId>
+                    <artifactId>kotlin-maven-plugin</artifactId>
+                    <version>${kotlin.version}</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+
+        <!-- JaCoCo agent + per-module reports — inherited by all child modules.
+             lumnik-hub additionally runs report-aggregate to produce the single XML
+             consumed by sonar.coverage.jacoco.xmlReportPaths. -->
+        <plugins>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>jacoco-prepare-agent</id>
+                        <goals><goal>prepare-agent</goal></goals>
+                    </execution>
+                    <execution>
+                        <id>jacoco-prepare-agent-integration</id>
+                        <goals><goal>prepare-agent-integration</goal></goals>
+                    </execution>
+                    <execution>
+                        <id>jacoco-report</id>
+                        <phase>verify</phase>
+                        <goals><goal>report</goal></goals>
+                    </execution>
+                    <execution>
+                        <id>jacoco-report-integration</id>
+                        <phase>verify</phase>
+                        <goals><goal>report-integration</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

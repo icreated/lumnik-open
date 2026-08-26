@@ -1,0 +1,47 @@
+# TLS overlay for the self-host stack: one https origin (Caddy) in front of the hub
+# AND Keycloak (path-proxied under /realms). What it buys:
+#   - secure context on every device: real PWA install prompt, crypto.subtle
+#   - ONE issuer for all clients (https://$LUMNIK_TLS_HOST/realms/lumnik) — the
+#     LAN-IP issuer gymnastics dissolve
+#   - a real domain gets Let's Encrypt automatically; a LAN IP gets Caddy's internal CA
+#
+#   LUMNIK_TLS_HOST=erp.example.com   # or a LAN IP for local testing
+#   docker compose -f docker-compose.selfhost.yml -f docker-compose.tls.yml up -d
+#
+# Layer LAST if combined with other overlays — its issuer must win.
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      # A façade exists to be reached by OTHER devices (phones on the LAN, the world
+      # for a public domain) — so unlike the base compose's 127.0.0.1 posture it
+      # binds all interfaces by default. Restrict with LUMNIK_TLS_BIND if you only
+      # want same-machine TLS.
+      - "${LUMNIK_TLS_BIND:-0.0.0.0}:443:443"
+      - "${LUMNIK_TLS_BIND:-0.0.0.0}:80:80"   # ACME HTTP-01 + https redirect
+    environment:
+      LUMNIK_TLS_HOST: ${LUMNIK_TLS_HOST:?set LUMNIK_TLS_HOST (public domain, or a LAN IP for local testing)}
+    volumes:
+      - ./deploy/tls/Caddyfile:/etc/caddy/Caddyfile:ro
+      - tls_caddy_data:/data
+    depends_on:
+      - hub
+      - keycloak
+
+  keycloak:
+    environment:
+      # behind the façade: honor X-Forwarded-* and announce the public https origin
+      # in every URL it generates (login forms, issuer, redirects)
+      KC_PROXY_HEADERS: xforwarded
+      KC_HOSTNAME: https://${LUMNIK_TLS_HOST:?set LUMNIK_TLS_HOST (public domain, or a LAN IP for local testing)}
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"   # the hub still reaches it as keycloak:8180
+
+  hub:
+    environment:
+      # tokens now carry the façade's issuer — for every device, LAN or not
+      QUARKUS_OIDC_TOKEN_ISSUER: https://${LUMNIK_TLS_HOST:?set LUMNIK_TLS_HOST (public domain, or a LAN IP for local testing)}/realms/lumnik
+      QUARKUS_HTTP_PROXY_PROXY_ADDRESS_FORWARDING: "true"
+
+volumes:
+  tls_caddy_data:

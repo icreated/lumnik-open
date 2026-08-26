@@ -1,0 +1,33 @@
+# The hero entity: one Customer fused from the two legacy sources on customer_code.
+# Siebel is listed first, so on a disagreement Siebel is the representative and the CSV
+# value is preserved in the _conflicts ledger (nothing is silently dropped).
+kind: Entity
+name: Customer
+description: "A customer, fused from the Siebel CRM and the nightly CSV export."
+match: [customer_code]
+scopes: [clients]               # the métier(s) whose chat can ask about this entity
+columns:                        # grounding fed to the chat + human labels a kind:View renders
+  customer_code:
+    label: "Code client"        # shown by kind:View instead of the raw canonical name
+  name:
+    label: "Nom"
+  segment:
+    label: "Segment"
+    description: "Commercial segment."
+    values: [GOLD, SILVER, BRONZE]   # the domain — a filter on any other value is REFUSED, not run
+  city:
+    label: "Ville"
+    description: "Billing city (free text, French city names)."
+    example: "Lyon"
+sources:
+  - table: cust_siebel          # source 1 (SOAP/Siebel) — promoted columns
+    map:
+      customer_code: customer_code
+      name: name
+      segment: segment
+  - table: t_cust_csv           # source 2 (CSV export) — header columns
+    map:
+      code: customer_code
+      cname: name
+      email: email
+      ville: city

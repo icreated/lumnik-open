@@ -1,0 +1,24 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: graphql-relay-no-cursor-var
+  connector_type: rest-generic
+spec:
+  base_url: https://api.example.com
+  graphql_path: /graphql
+  endpoints:
+    - id: orders
+      kind: graphql
+      query: "query($cursor: String) { orders(after: $cursor) { pageInfo { endCursor hasNextPage } edges { node { id } } } }"
+      pagination:
+        kind: relay
+        cursor_binding: variable
+        # cursor_var intentionally omitted — must trigger a validation error
+        cursor_path: "$.data.orders.pageInfo.endCursor"
+        has_more_path: "$.data.orders.pageInfo.hasNextPage"
+        response_path: "$.data.orders.edges[*].node"
+      target:
+        kind: hybrid
+        table: ext.orders
+        unique_key: "$.id"
+        tags: [orders]

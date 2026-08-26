@@ -1,0 +1,11 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata: { name: preset-hateoas, connector_type: rest-generic }
+spec:
+  base_url: https://api.example.com
+  endpoints:
+    - id: items
+      path: /items
+      method: GET
+      pagination: { kind: spring-hateoas }
+      target: { kind: hybrid, table: x_items, unique_key: "$.id", tags: [x] }

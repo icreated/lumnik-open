@@ -1,0 +1,19 @@
+{
+  "name": "link-header-page2: GET /v1/events?cursor=p2 (last page, no Link header)",
+  "request": {
+    "method": "GET",
+    "urlPath": "/v1/events",
+    "queryParameters": {
+      "cursor": { "equalTo": "p2" }
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "data": [
+        { "id": "c", "name": "Event-C" }
+      ]
+    }
+  }
+}

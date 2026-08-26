@@ -1,0 +1,15 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: acme-sched
+  connector_type: kafka
+  tags: [erp]
+spec:
+  name: orders
+  brokers: "broker1:9092,broker2:9092"
+  topic: erp.orders.v1
+  format: json
+  schedule: "0 6 * * *"
+  poll_timeout_ms: 2000
+  target:
+    tags: [erp]

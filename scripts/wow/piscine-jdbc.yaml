@@ -1,0 +1,22 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: wow-atelier-c_order
+  connector_type: jdbc-generic
+  tenant: 1
+  tags: [atelier]
+spec:
+  connection:
+    url: jdbc:postgresql://localhost:5432/piscine
+    user: adempiere
+    password_env: WOW_SRC_PASSWORD
+  defaults:
+    schema: adempiere
+  source:
+    tables:
+      - name: c_order
+        mode: full
+        pk_columns: [c_order_id]
+  target:
+    table_prefix: t_
+    tags: [atelier]

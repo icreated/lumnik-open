@@ -1,0 +1,12 @@
+# max_poll_records must be a positive integer — 0 is rejected (validator==runtime).
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: kafka-bad-max-poll
+  connector_type: kafka
+spec:
+  brokers: localhost:9092
+  topic: erp-exports
+  name: erp_events
+  format: json
+  max_poll_records: 0

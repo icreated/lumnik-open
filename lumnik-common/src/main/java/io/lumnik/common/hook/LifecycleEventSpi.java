@@ -1,0 +1,12 @@
+package io.lumnik.common.hook;
+
+/** Mirror of platform's LifecycleEvent for common-side typing. */
+public enum LifecycleEventSpi {
+    BEFORE_CREATE, AFTER_CREATE, BEFORE_UPDATE, AFTER_UPDATE,
+    BEFORE_DELETE, AFTER_DELETE, BEFORE_ARCHIVE, AFTER_ARCHIVE,
+    BEFORE_PREPARE, AFTER_PREPARE, BEFORE_COMPLETE, AFTER_COMPLETE,
+    BEFORE_VOID, AFTER_VOID, BEFORE_CLOSE, AFTER_CLOSE,
+    BEFORE_REACTIVATE, AFTER_REACTIVATE;
+
+    public enum Phase { BEFORE, AFTER }
+}

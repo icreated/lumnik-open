@@ -1,0 +1,11 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: acme-events
+  connector_type: kafka
+spec:
+  name: orders
+  brokers: "broker1:9092"
+  topic: erp.orders.v1
+  format: json
+  poll_timeout_ms: 99

@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+  <body style="font-family: sans-serif; color: #1a1a1a;">
+    <h2 style="margin-bottom: 4px;">{payload.message ?: eventType}</h2>
+    <p style="color: #666; margin-top: 0;">
+      {entity} &middot; key <strong>{payload.entity_key ?: '—'}</strong> &middot; {occurredAt}
+    </p>
+    {#if payload.fields}
+    <table style="border-collapse: collapse;">
+      {#for f in payload.fields}
+      <tr>
+        <td style="padding: 2px 12px 2px 0; color: #666;">{f.key}</td>
+        <td style="padding: 2px 0;"><strong>{f.value}</strong></td>
+      </tr>
+      {/for}
+    </table>
+    {/if}
+    <p style="color: #999; font-size: 12px;">decision by {source} — treat it in the lumnik inbox.</p>
+  </body>
+</html>

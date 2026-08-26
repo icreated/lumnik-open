@@ -1,0 +1,13 @@
+# WOW demo overlay for the self-host stack. Two things the demo needs beyond the base stack:
+#   1. mount this demo folder into the hub container so the csv-file connector reads /demo/customer.csv;
+#   2. make the host reachable as host.docker.internal so the SOAP connector can reach fake-siebel.py
+#      on the host (Docker Desktop provides this alias automatically; the extra_hosts line adds it on
+#      Linux too — self-contained here, not relying on the base compose).
+#
+#   docker compose -f docker-compose.selfhost.yml -f docs/demo/wow-customer/docker-compose.wow.yml up -d hub
+services:
+  hub:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./docs/demo/wow-customer:/demo:ro

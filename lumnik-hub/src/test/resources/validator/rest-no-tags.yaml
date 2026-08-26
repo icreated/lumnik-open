@@ -1,0 +1,25 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: x
+  connector_type: rest-generic
+spec:
+  base_url: https://api.example.com
+  auth:
+    kind: bearer
+    token_env: T
+  endpoints:
+    - id: customers
+      path: /v1/customers
+      method: GET
+      pagination:
+        kind: offset
+        offset_param: offset
+        limit_param: limit
+        limit: 100
+        total_path: $.total
+        response_path: $.data
+      target:
+        kind: hybrid
+        table: x_customers
+        unique_key: $.id

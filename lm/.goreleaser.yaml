@@ -1,0 +1,58 @@
+version: 2
+
+project_name: lm
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: lm
+    main: ./cmd/lm
+    binary: lm
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # The Windows audience is x86 PME laptops — win-arm64 waits for a request.
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      # LM_VERSION carries the tag with the monorepo's "lm-v" prefix stripped (set by
+      # the release workflow) — goreleaser OSS has no tag_prefix, and the raw tag would
+      # otherwise leak into versions and archive names as "lm-v1.0.0". Local snapshot
+      # builds fall back to goreleaser's own version.
+      - -X github.com/icreated/lumnik-open/lm/internal/cli.Version={{ envOrDefault "LM_VERSION" .Version }}
+      - -X github.com/icreated/lumnik-open/lm/internal/cli.GitCommit={{.ShortCommit}}
+
+archives:
+  - id: lm-archive
+    name_template: "lm_{{ envOrDefault \"LM_VERSION\" .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      # Windows convention: a zip Explorer opens natively (the binary inside is lm.exe).
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE*
+      - THIRD-PARTY-LICENSES.md
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  use: git
+  filters:
+    # lm lives in a monorepo: only (lm)-scoped commits belong in ITS release notes —
+    # without this, the first tag's notes would replay the whole repo history.
+    include:
+      - '\(lm\)'

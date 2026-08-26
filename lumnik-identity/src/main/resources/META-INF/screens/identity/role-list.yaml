@@ -1,0 +1,50 @@
+id: role-list
+type: list
+title:
+  fr: Rôles
+  en: Roles
+entity: Role
+
+api:
+  endpoint: /api/tenants/{tenantId}/roles
+  page_size: 50
+
+columns:
+  - field: name
+    label: { fr: Nom, en: Name }
+    type: string
+    sortable: true
+    filterable: true
+
+  - field: description
+    label: { fr: Description, en: Description }
+    type: string
+
+  - field: userLevel
+    label: { fr: Niveau utilisateur, en: User level }
+    type: string
+    width: 140
+    sortable: true
+
+  - field: manual
+    label: { fr: Manuel, en: Manual }
+    type: boolean
+    width: 90
+
+  - field: active
+    label: { fr: Actif, en: Active }
+    type: boolean
+    width: 80
+
+actions:
+  toolbar:
+    - id: new
+      label: { fr: Nouveau rôle, en: New role }
+      icon: pi pi-plus
+      style: primary
+      permission: identity.roles.manage
+  row:
+    - id: edit
+      label: { fr: Modifier, en: Edit }
+      icon: pi pi-pencil
+      permission: identity.roles.manage

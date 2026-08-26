@@ -1,0 +1,41 @@
+<!doctype html>
+<!-- lumnik PWA — the real métier app. Mounts <App/> over the tested logic layer
+     (config/auth/api/views/format under src/). Per-métier identity (title, manifest, icons)
+     is resolved from ?m= and swapped in before first paint, ported from the spike's head
+     logic (m/index.html). -->
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#14121f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>lumnik</title>
+<link rel="manifest" href="manifest-clients.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="root"></div>
+<script type="module">
+  import { resolveMetier } from './src/config.mjs';
+  import { html, render } from './src/html.mjs';
+  import { App } from './src/components/app.mjs';
+
+  // wear the métier's identity: tab title, manifest, icons (iOS reads apple-touch-icon)
+  const metier = resolveMetier(location.search);
+  document.title = metier.title;
+  document.querySelector('link[rel="manifest"]').href = metier.manifest;
+  document.querySelector('link[rel="apple-touch-icon"]').href = metier.icon;
+  document.querySelector('link[rel="icon"]').href = metier.icon;
+
+  // app-shell cache only (E2) — data is never cached; a failed registration is not fatal
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/app/sw.js').catch(() => {});
+  }
+
+  render(html`<${App} />`, document.getElementById('root'));
+</script>
+</body>
+</html>

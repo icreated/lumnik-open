@@ -1,0 +1,19 @@
+# gitleaks allowlist for the lumnik open edition.
+# Every entry is a JUDGED false positive — the reason lives next to the rule so a
+# contributor (or a future scan) can re-judge it instead of trusting it.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Judged non-secrets"
+# Match the whole LINE, not the captured secret fragment — the justification patterns below
+# name the surrounding code, which is exactly what makes them judgeable.
+regexTarget = "line"
+regexes = [
+  # The in-DB encryption SQL itself: pgp_sym_encrypt(:val, :key, 'cipher-algo=aes256') —
+  # named JPA parameters in SecretResource; the generic-api-key rule matches `key, '…'`.
+  '''pgp_sym_encrypt\(:val, :key''',
+  # Self-describing test passphrase used by the secret-store unit/IT fixtures.
+  '''master-key-test-ok''',
+]

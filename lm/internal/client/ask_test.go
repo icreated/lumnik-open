@@ -1,0 +1,68 @@
+package client
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/icreated/lumnik-open/lm/internal/config"
+)
+
+func TestParseRowsPreservesColumnOrder(t *testing.T) {
+	raw := []json.RawMessage{
+		json.RawMessage(`{"documentno":"SO-9","total":312480,"paid":null}`),
+		json.RawMessage(`{"documentno":"SO-10","total":5,"paid":true}`),
+	}
+	cols, rows := parseRows(raw)
+
+	want := []string{"documentno", "total", "paid"}
+	if len(cols) != len(want) || cols[0] != want[0] || cols[1] != want[1] || cols[2] != want[2] {
+		t.Fatalf("columns = %v, want %v", cols, want)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	if rows[0][0] != "SO-9" || rows[0][1] != "312480" || rows[0][2] != "" {
+		t.Errorf("row0 = %v, want [SO-9 312480 <empty>]", rows[0])
+	}
+	if rows[1][2] != "true" {
+		t.Errorf("row1 paid = %q, want true", rows[1][2])
+	}
+}
+
+func TestRagAskSendsAnalyticMode(t *testing.T) {
+	var gotMode, gotScope string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotMode, _ = body["mode"].(string)
+		gotScope, _ = body["scope"].(string)
+		_, _ = w.Write([]byte(`{"answer":"47 orders worth €312,480 never invoiced.","sql":"SELECT documentno, amount FROM connector.t_order LIMIT 500","rowCount":47,"rows":[{"documentno":"SO-9","amount":312480}],"dataAsOf":"2026-08-20T06:05:00Z"}`))
+	}))
+	defer srv.Close()
+
+	c := New(config.Context{Server: srv.URL})
+	res, err := c.RagAsk("which orders were never invoiced?", "atelier")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMode != "analytic" {
+		t.Errorf("mode sent = %q, want analytic", gotMode)
+	}
+	if gotScope != "atelier" {
+		t.Errorf("scope sent = %q, want atelier", gotScope)
+	}
+	if res.RowCount != 47 {
+		t.Errorf("rowCount = %d, want 47", res.RowCount)
+	}
+	if len(res.Columns) != 2 || res.Columns[0] != "documentno" || res.Columns[1] != "amount" {
+		t.Errorf("columns = %v, want [documentno amount]", res.Columns)
+	}
+	if res.DataAsOf != "2026-08-20T06:05:00Z" {
+		t.Errorf("dataAsOf = %q, want the run timestamp", res.DataAsOf)
+	}
+	if len(res.Rows) != 1 || res.Rows[0][1] != "312480" {
+		t.Errorf("rows = %v, want [[SO-9 312480]]", res.Rows)
+	}
+}

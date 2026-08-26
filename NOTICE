@@ -1,0 +1,13 @@
+lumnik — defrost the enterprise
+Copyright 2026 ∫created
+
+This product includes software developed as part of the lumnik project
+(https://github.com/icreated/lumnik-open).
+
+Licensed under the Apache License, Version 2.0.
+
+This product bundles two third-party ESM libraries, vendored pre-built into
+the métier PWA at `lumnik-hub/src/main/resources/META-INF/resources/app/vendor/`:
+Preact (MIT, Copyright (c) 2015-present Jason Miller) and htm (Apache License,
+Version 2.0, Copyright 2018 Google Inc.). Full license texts are reproduced
+verbatim in `LICENSES.md` within that same directory.

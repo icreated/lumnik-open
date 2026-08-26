@@ -1,0 +1,34 @@
+# Declare the document lifecycle of a column instead of teaching the chat its values by
+# hand: states + labelled aliases (Excel reality is dirty: "en cours"/"encours" both mean
+# the same thing) + a transition graph. provenance MUST be `declared` — v1 accepts no
+# other value. `on.table`/`on.column` name the raw ingest column whose values this
+# taxonomy explains; apply reports the data-truth confrontation: undeclared VALUES found
+# in the data (reality, never refused — 'EN LITIGE' is one) and unobserved CODES declared
+# but never seen.
+apiVersion: apps.lumnik.io/v1
+kind: Workflow
+metadata:
+  name: commande-lifecycle
+spec:
+  scope: demo
+  provenance: declared
+  # the sweep alerts a non-terminal commande observed unchanged past 30 days —
+  # observation-relative, see docs/apps/workflows.md
+  dormancy:
+    after: 30d
+  on:
+    table: connector.t_commandes_csv
+    column: statut
+    key: num
+  states:
+    - code: BROUILLON
+      initial: true
+    - code: EN_COURS
+      label: "En préparation"
+      aliases: [en cours, encours]
+    - code: TERMINE
+      aliases: [fini]
+      terminal: true
+  transitions:
+    - { from: [BROUILLON], to: EN_COURS }
+    - { from: [EN_COURS], to: TERMINE }

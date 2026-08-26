@@ -1,0 +1,4 @@
+kind: rest-generic
+version: v1
+description: Generic REST API ingestion connector
+config_schema: ./config-schema.json

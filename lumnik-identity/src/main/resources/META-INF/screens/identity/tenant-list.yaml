@@ -1,0 +1,46 @@
+id: tenant-list
+type: list
+title:
+  fr: Tenants
+  en: Tenants
+entity: Tenant
+
+api:
+  endpoint: /api/tenants
+  page_size: 50
+
+columns:
+  - field: code
+    label: { fr: Code, en: Code }
+    type: string
+    width: 120
+    sortable: true
+    filterable: true
+
+  - field: name
+    label: { fr: Nom, en: Name }
+    type: string
+    sortable: true
+    filterable: true
+
+  - field: description
+    label: { fr: Description, en: Description }
+    type: string
+
+  - field: active
+    label: { fr: Actif, en: Active }
+    type: boolean
+    width: 80
+
+actions:
+  toolbar:
+    - id: new
+      label: { fr: Nouveau tenant, en: New tenant }
+      icon: pi pi-plus
+      style: primary
+      permission: identity.tenants.admin
+  row:
+    - id: edit
+      label: { fr: Modifier, en: Edit }
+      icon: pi pi-pencil
+      permission: identity.tenants.admin

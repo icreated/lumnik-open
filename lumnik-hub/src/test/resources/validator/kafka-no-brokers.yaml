@@ -1,0 +1,9 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: acme-events
+  connector_type: kafka
+spec:
+  name: orders
+  topic: erp.orders.v1
+  format: json

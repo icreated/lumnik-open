@@ -1,0 +1,133 @@
+# Self-host lumnik HUB: hub + postgres + keycloak, real OIDC, dev-bypass OFF.
+#   1. cp .env.example .env   &&   fill the secrets (compose fails fast if unset)
+#   2. docker compose -f docker-compose.selfhost.yml up --build
+# .env (gitignored) supplies: the Postgres superuser password, the Keycloak admin
+# password, the hub encryption keys (master/crypto) AND the three DB role
+# passwords (lumnik_app/admin/readonly) — up.sh generates them all per install,
+# so no shared default credential ships in the repo. Usernames keep safe defaults.
+# Operator runs `lm` from the host: server http://localhost:8080,
+# OIDC endpoints under http://localhost:8180/realms/lumnik.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: lumnik
+      POSTGRES_USER: ${POSTGRES_USER:-lumnik}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (cp .env.example .env)}
+      # Role passwords consumed by the 01-roles.sh init script at first boot;
+      # up.sh aligns the live roles to these on every run (rotation = edit + re-run).
+      LUMNIK_APP_DB_PASSWORD: ${LUMNIK_APP_DB_PASSWORD:?run deploy/selfhost/up.sh (generates it in .env)}
+      LUMNIK_ADMIN_DB_PASSWORD: ${LUMNIK_ADMIN_DB_PASSWORD:?run deploy/selfhost/up.sh (generates it in .env)}
+      LUMNIK_READONLY_DB_PASSWORD: ${LUMNIK_READONLY_DB_PASSWORD:?run deploy/selfhost/up.sh (generates it in .env)}
+    volumes:
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+      - selfhost_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lumnik} -d lumnik"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    restart: unless-stopped
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD in .env (cp .env.example .env)}
+      KC_HTTP_PORT: "8180"
+      # No KC_HOSTNAME pin: start-dev uses the per-request host, so the discovery
+      # doc the hub fetches at keycloak:8180 advertises a reachable jwks_uri
+      # (keycloak:8180). The hub accepts lm's localhost-issued tokens via
+      # QUARKUS_OIDC_TOKEN_ISSUER below.
+    ports:
+      # Bind to localhost only — the documented workflow is a same-machine operator,
+      # so the Keycloak admin console must not be exposed on all interfaces (0.0.0.0)
+      # when this runs on a VM/remote host. Override the host part for remote access.
+      - "127.0.0.1:8180:8180"
+    volumes:
+      - ./infra/keycloak:/opt/keycloak/data/import:ro
+      # Persist the dev-mode H2 store so runtime admin/realm changes survive
+      # recreates (start-dev re-imports only when the realm is absent).
+      - selfhost_kc:/opt/keycloak/data
+
+  hub:
+    # Pull the published image by default; `up.sh --build` (or `docker compose ... up --build`)
+    # compiles from source and tags the result as this same image name.
+    image: ghcr.io/icreated/lumnik-hub:${LUMNIK_VERSION:-main}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # service_started doesn't mean Keycloak is serving yet; the hub retries OIDC
+    # discovery on first request, and restart makes the stack self-heal a race.
+    restart: unless-stopped
+    healthcheck:
+      # /q/health/live is the unauthenticated Quarkus liveness probe (smallrye-health).
+      # /api/platform/health requires a Bearer token in prod so cannot be used here.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/q/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+    environment:
+      QUARKUS_PROFILE: prod
+      # This self-host stack ships no OTLP collector — disable the exporter so the logs aren't
+      # spammed with "Connection refused localhost:4317". Set an endpoint + flip this to wire tracing.
+      QUARKUS_OTEL_SDK_DISABLED: "true"
+      DB_URL: jdbc:postgresql://postgres:5432/lumnik
+      LUMNIK_APP_DB_PASSWORD: ${LUMNIK_APP_DB_PASSWORD:?run deploy/selfhost/up.sh (generates it in .env)}
+      LUMNIK_ADMIN_DB_PASSWORD: ${LUMNIK_ADMIN_DB_PASSWORD:?run deploy/selfhost/up.sh (generates it in .env)}
+      LUMNIK_READONLY_DB_PASSWORD: ${LUMNIK_READONLY_DB_PASSWORD:?run deploy/selfhost/up.sh (generates it in .env)}
+      OIDC_AUTH_SERVER_URL: http://keycloak:8180/realms/lumnik
+      QUARKUS_OIDC_TOKEN_ISSUER: http://localhost:8180/realms/lumnik
+      # RAG chat + analytic ask need an Ollama the hub can reach. Ollama runs on the HOST
+      # (models are big and GPU-bound); host.docker.internal + the extra_hosts alias below
+      # let the container reach it. Prereq: `ollama serve` + pull the models (see selfhost README).
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      # Model knobs — pass-throughs with the application defaults duplicated (the
+      # OLLAMA_BASE_URL precedent): set the variable in the root .env, `up -d hub`, then
+      # verify with `docker compose -f docker-compose.selfhost.yml exec hub env | grep MODEL`.
+      RAG_CHAT_MODEL: ${RAG_CHAT_MODEL:-llama3.2}
+      ASK_SQL_MODEL: ${ASK_SQL_MODEL:-qwen2.5-coder:7b}
+      JUDGE_MODEL: ${JUDGE_MODEL:-gemma4}
+      RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-nomic-embed-text}
+      LUMNIK_EVENTS_RETENTION_DAYS: ${LUMNIK_EVENTS_RETENTION_DAYS:-30}
+      LUMNIK_AUDIT_RETENTION_DAYS: ${LUMNIK_AUDIT_RETENTION_DAYS:-365}
+      # Email delivery — mock stays on until BOTH are set (see .env.example):
+      LUMNIK_SMTP_HOST: ${LUMNIK_SMTP_HOST:-}
+      LUMNIK_SMTP_PORT: ${LUMNIK_SMTP_PORT:-587}
+      LUMNIK_SMTP_USERNAME: ${LUMNIK_SMTP_USERNAME:-}
+      LUMNIK_SMTP_PASSWORD: ${LUMNIK_SMTP_PASSWORD:-}
+      LUMNIK_SMTP_FROM: ${LUMNIK_SMTP_FROM:-lumnik@localhost}
+      LUMNIK_SMTP_MOCK: ${LUMNIK_SMTP_MOCK:-true}
+      LUMNIK_SMTP_STARTTLS: ${LUMNIK_SMTP_STARTTLS:-OPTIONAL}
+      LUMNIK_SECRET_MASTER_KEY: ${LUMNIK_SECRET_MASTER_KEY:?set a strong key in .env — openssl rand -base64 32}
+      LUMNIK_CRYPTO_SECRET_KEY: ${LUMNIK_CRYPTO_SECRET_KEY:?set a strong key in .env — openssl rand -base64 32}
+    extra_hosts:
+      # Make the host's Ollama (and any other host service) reachable as host.docker.internal
+      # on Linux too (Docker Desktop provides it automatically; this makes it portable).
+      - "host.docker.internal:host-gateway"
+    ports:
+      # Localhost-only by default (matches the documented http://localhost:8080 URLs);
+      # front it with a reverse proxy / change the host part for remote access.
+      - "127.0.0.1:8080:8080"
+
+  # Dev mailer — the delivery drill (profile-gated; the default stack is unchanged).
+  # `docker compose --profile mailpit -f docker-compose.selfhost.yml up -d`, then
+  # LUMNIK_SMTP_HOST=mailpit LUMNIK_SMTP_PORT=1025 LUMNIK_SMTP_MOCK=false in .env,
+  # `up -d hub` — sent mail appears at http://127.0.0.1:8025.
+  mailpit:
+    image: axllent/mailpit:v1.31
+    profiles: ["mailpit"]
+    ports:
+      - "127.0.0.1:8025:8025"
+
+volumes:
+  selfhost_pg:
+  selfhost_kc:

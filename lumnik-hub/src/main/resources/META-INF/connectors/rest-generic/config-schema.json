@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["kind", "base_url"],
+  "properties": {
+    "kind": { "const": "rest-generic" },
+    "base_url": { "type": "string", "format": "uri" },
+    "auth": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["bearer", "basic", "api-key", "none"] }
+      }
+    },
+    "default_rate_limit": {
+      "type": "string",
+      "pattern": "^[0-9]+/[0-9]*[smh]$"
+    },
+    "default_schedule": { "type": "string" }
+  }
+}

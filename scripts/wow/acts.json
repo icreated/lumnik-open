@@ -1,0 +1,33 @@
+{
+  "scope": "atelier",
+  "acts": [
+    {
+      "id": "A",
+      "title": "Act I — delivered orders never invoiced (found cash)",
+      "question": "Quelles commandes livrées n'ont jamais été facturées ? Donne le nombre et le montant total.",
+      "reference_sql": "SELECT json_build_object('n', count(*), 'total', coalesce(sum(grandtotal),0)) FROM connector.t_c_order o WHERE upper(o.docstatus)='CO' AND NOT EXISTS (SELECT 1 FROM connector.t_c_invoice i WHERE i.c_order_id = o.c_order_id)",
+      "expect": {
+        "n":     { "value": "TBD", "tol_abs": 0, "agent_jq": [".rows[0].n", ".rows[0].count", ".rowCount"] },
+        "total": { "value": "TBD", "tol_pct": 1, "agent_jq": [".rows[0].total", ".rows[0].sum", ".rows[0].grandtotal"] }
+      }
+    },
+    {
+      "id": "C",
+      "title": "Act II — a question through a CUSTOM column (the moat)",
+      "question": "TBD — written at calibration around the custom column found via 'lm source schema'",
+      "reference_sql": "SELECT json_build_object('n', count(*)) FROM connector.t_c_order o WHERE o.TBD_CUSTOM_COLUMN IS NOT NULL",
+      "expect": {
+        "n": { "value": "TBD", "tol_abs": 0, "agent_jq": [".rows[0].n", ".rows[0].count", ".rowCount"] }
+      }
+    },
+    {
+      "id": "D",
+      "title": "Act III — top-10 clients invoiced vs paid (handles the mass)",
+      "question": "Pour les 10 plus gros clients, montre le total facturé, le total réellement payé, et le délai moyen de paiement.",
+      "reference_sql": "SELECT json_build_object('n', count(*)) FROM (SELECT i.c_bpartner_id, sum(i.grandtotal) AS invoiced FROM connector.t_c_invoice i GROUP BY i.c_bpartner_id ORDER BY invoiced DESC LIMIT 10) x",
+      "expect": {
+        "n": { "value": "TBD", "tol_abs": 0, "agent_jq": [".rows | length", ".rowCount", ".rows[0].n"] }
+      }
+    }
+  ]
+}

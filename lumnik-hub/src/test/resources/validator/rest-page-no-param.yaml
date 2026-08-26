@@ -1,0 +1,23 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: page-no-param
+  connector_type: rest-generic
+spec:
+  base_url: https://api.x.io
+  auth:
+    kind: bearer
+    token_env: X_API_KEY
+  endpoints:
+    - id: items
+      path: /items
+      method: GET
+      pagination:
+        kind: page          # page_param omitted → cannot paginate
+        size_param: size
+        response_path: $.data
+      target:
+        kind: hybrid
+        table: x_items
+        unique_key: $.id
+        tags: [x]

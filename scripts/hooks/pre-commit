@@ -1,0 +1,14 @@
+#!/bin/sh
+# scripts/hooks/pre-commit
+#
+# Regenerates docs/ai-context.md and stages it automatically on every commit.
+# Tracked in git — install once with: ./scripts/install-hooks.sh
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+SCRIPT="$REPO_ROOT/scripts/gen-ai-context.sh"
+CONTEXT_FILE="$REPO_ROOT/docs/ai-context.md"
+
+if [ -x "$SCRIPT" ]; then
+  "$SCRIPT" >/dev/null 2>&1 || true   # never block the commit on failure
+  git add "$CONTEXT_FILE" 2>/dev/null || true
+fi
