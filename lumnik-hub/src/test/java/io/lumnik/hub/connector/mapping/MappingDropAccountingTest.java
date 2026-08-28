@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.mapping;
 
 import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.SkipReason;
+import io.lumnik.hub.connector.api.types.SyncMode;
 import io.lumnik.hub.connector.api.types.WriteOutcome;
 import io.lumnik.hub.connector.mapping.spec.MappingLoader;
 import io.lumnik.hub.connector.mapping.spec.MappingSpec;
@@ -9,6 +10,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
+import java.time.Clock;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -233,8 +235,8 @@ class MappingDropAccountingTest {
         new HashMap<>(Map.of("name", "")));
     ConnectorContext ctx = new ConnectorContext(
         UUID.randomUUID(), null, null, 1L, "test", "test", Map.of(),
-        new io.lumnik.hub.connector.api.types.SyncMode.FullRefresh(),
-        null, null, null, java.time.Clock.systemUTC());
+        new SyncMode.FullRefresh(),
+        null, null, null, Clock.systemUTC());
     WriteOutcome outcome = engine.itemWriter(spec).write(writerInput, ctx);
 
     assertThat(outcome).isInstanceOf(WriteOutcome.PartialWrite.class);

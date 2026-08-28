@@ -1,6 +1,7 @@
 package io.lumnik.hub.view;
 
 import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
@@ -19,7 +20,7 @@ class ViewDetailReaderIT {
     @Inject ViewDetailReader reader;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     private void exec(String sql) {

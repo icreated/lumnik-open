@@ -2,6 +2,7 @@ package io.lumnik.hub.api.secret;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.audit.AuditOutboxRow;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.RestAssured;
 import jakarta.inject.Inject;
@@ -43,7 +44,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class SecretResourceAuditTest {
 
     @Inject EntityManager em;
-    @Inject @io.quarkus.agroal.DataSource("admin") AgroalDataSource adminDs;
+    @Inject @DataSource("admin") AgroalDataSource adminDs;
 
     @Test
     void create_records_a_CREATE_row_without_the_ciphertext_or_plaintext() {

@@ -27,6 +27,7 @@ import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.ArgumentMatchers;
 
 import java.time.Instant;
 import java.util.List;
@@ -224,7 +225,7 @@ class ChunkExecutorSkipRoutingTest {
     assertThat(after.getRecordsOut()).as("written=0 from the PartialWrite").isEqualTo(0);
     assertThat(after.getRecordsSkipped()).as("the duplicate skip is counted").isEqualTo(1);
 
-    verify(deadLetter, times(0)).capture(eq(run.getConnectorId()), eq(run.getId()), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    verify(deadLetter, times(0)).capture(eq(run.getConnectorId()), eq(run.getId()), ArgumentMatchers.any(), ArgumentMatchers.any());
   }
 
   /**

@@ -9,6 +9,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.Map;
@@ -77,7 +78,7 @@ class CellHooksParseTest {
     var params = yaml("column: amount\ndecimal-separator: ','");
     var row = new HashMap<String, Object>(Map.of("amount", "1234,56"));
     hook.apply(row, params, new MappingState());
-    assertThat(row.get("amount")).isInstanceOf(java.math.BigDecimal.class);
+    assertThat(row.get("amount")).isInstanceOf(BigDecimal.class);
     assertThat(row.get("amount").toString()).isEqualTo("1234.56");
   }
 

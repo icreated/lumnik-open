@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
@@ -34,7 +35,7 @@ class CsvFileConnectorTypeCompositionTest {
             FileSource src = registry.build(transport);
             assertInstanceOf(LocalFileSource.class, src);
         } finally {
-            Files.walk(dir).sorted(java.util.Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
+            Files.walk(dir).sorted(Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
         }
     }
 

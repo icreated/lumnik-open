@@ -1,12 +1,15 @@
 package io.lumnik.hub.entity;
 
 import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 
 import java.sql.Connection;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -16,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class EntityRegistry {
 
   @Inject
-  @io.quarkus.agroal.DataSource("admin")
+  @DataSource("admin")
   Instance<AgroalDataSource> adminDsInstance;
 
   @Inject
@@ -32,7 +35,7 @@ public class EntityRegistry {
 
   /** Reloads all manifests from the DB into a temp map, then swaps atomically. Package-private for testing. */
   void loadFromDb() {
-    Map<String, EntityManifest> temp = new java.util.LinkedHashMap<>();
+    Map<String, EntityManifest> temp = new LinkedHashMap<>();
     try (Connection c = adminDsInstance.get().getConnection();
          var st = c.createStatement();
          var rs = st.executeQuery("SELECT name, yaml_text FROM connector.entity_manifest")) {
@@ -63,7 +66,7 @@ public class EntityRegistry {
   /** Every registered manifest, sorted by name — deterministic iteration for the aggregate reads. */
   public List<EntityManifest> all() {
     return byName.values().stream()
-        .sorted(java.util.Comparator.comparing(EntityManifest::name, String.CASE_INSENSITIVE_ORDER))
+        .sorted(Comparator.comparing(EntityManifest::name, String.CASE_INSENSITIVE_ORDER))
         .toList();
   }
 }

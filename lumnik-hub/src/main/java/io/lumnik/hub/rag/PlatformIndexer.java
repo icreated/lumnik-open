@@ -8,6 +8,7 @@ import io.lumnik.hub.manifest.ModuleManifestRegistry;
 import io.lumnik.hub.rag.chunk.HookChunkBuilder;
 import io.lumnik.hub.rag.chunk.ManifestChunkBuilder;
 import io.lumnik.hub.rag.chunk.OpenApiChunkBuilder;
+import io.lumnik.llm.spi.EmbeddingPort;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.annotation.PreDestroy;
 import jakarta.annotation.Priority;
@@ -33,7 +34,7 @@ public class PlatformIndexer {
     private static final Logger LOG = Logger.getLogger(PlatformIndexer.class);
 
     @Inject ModuleManifestRegistry manifestRegistry;
-    @Inject Instance<io.lumnik.llm.spi.EmbeddingPort> embeddingPorts;
+    @Inject Instance<EmbeddingPort> embeddingPorts;
     @Inject HookRegistry hookRegistry;
     @Inject ManifestChunkBuilder manifestChunkBuilder;
     @Inject OpenApiChunkBuilder openApiChunkBuilder;

@@ -3,11 +3,14 @@ package io.lumnik.hub.workflow;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.config.EncoderConfig;
 import io.restassured.config.RestAssuredConfig;
 import io.restassured.http.ContentType;
+import io.restassured.specification.RequestSpecification;
 import jakarta.inject.Inject;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.MethodOrderer;
@@ -55,7 +58,7 @@ class WorkflowApplyIT {
     @Inject SchemaCardStore cards;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     /** Prior manifests are deleted before this class's ordered sequence runs, unconditionally —
@@ -86,7 +89,7 @@ class WorkflowApplyIT {
     // apply ITs): dev-bypass mode (%test.lumnik.security.dev-bypass=true) reads tenant/user from
     // X-Tenant-ID / X-User-ID headers (TenantContextFilter) and grants ALL roles — including
     // lm_integrator — automatically (RequiresPermission javadoc). No @TestProfile needed.
-    private static io.restassured.specification.RequestSpecification asIntegrator() {
+    private static RequestSpecification asIntegrator() {
         return given().config(YAML_CFG).header("X-Tenant-ID", TENANT).header("X-User-ID", "1");
     }
 
@@ -177,12 +180,12 @@ class WorkflowApplyIT {
             .then().statusCode(200).body(containsString("label: Ay"));
     }
 
-    @jakarta.inject.Inject
-    @io.quarkus.agroal.DataSource("admin")
-    io.agroal.api.AgroalDataSource auditAdminDs;
+    @Inject
+    @DataSource("admin")
+    AgroalDataSource auditAdminDs;
 
-    @org.junit.jupiter.api.Test
-    @org.junit.jupiter.api.Order(90)
+    @Test
+    @Order(90)
     void a_successful_apply_lands_in_the_audit_outbox() throws Exception {
         // Audit P4: workflow applies were recorded nowhere. The full chain is proven here:
         // HTTP apply -> core.audit_outbox row with actor, key and manifest hash.
@@ -192,7 +195,7 @@ class WorkflowApplyIT {
                + "WHERE entity_type = 'WorkflowManifest' AND operation = 'APPLY' "
                + "AND entity_key = 'wf-apply-it' AND actor_id = 1")) {
             rs.next();
-            org.junit.jupiter.api.Assertions.assertTrue(rs.getLong(1) >= 1,
+            Assertions.assertTrue(rs.getLong(1) >= 1,
                 "a green workflow apply must land in core.audit_outbox");
         }
     }

@@ -1,14 +1,19 @@
 package io.lumnik.hub.security;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
+import io.restassured.response.Response;
+import jakarta.inject.Inject;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
+import java.time.Instant;
 import java.util.Map;
 
 import static io.restassured.RestAssured.given;
@@ -36,15 +41,15 @@ class RateLimitFilterIT {
         }
     }
 
-    @org.junit.jupiter.api.BeforeAll
+    @BeforeAll
     static void avoidWindowEdge() throws InterruptedException {
         // The limiter's window is a fixed epoch minute; starting the 3-call sequence in
         // its dying seconds could roll the counter mid-test and flake the 429 assertion.
-        long intoWindow = java.time.Instant.now().getEpochSecond() % 60;
+        long intoWindow = Instant.now().getEpochSecond() % 60;
         if (intoWindow >= 55) Thread.sleep((60 - intoWindow) * 1000 + 200);
     }
 
-    private static io.restassured.response.Response chat(String tenant) {
+    private static Response chat(String tenant) {
         return given()
             .header("X-Tenant-ID", tenant)
             .header("Content-Type", "application/json")
@@ -71,8 +76,8 @@ class RateLimitFilterIT {
         Assertions.assertNotEquals(429, chat("2000").statusCode());
     }
 
-    @jakarta.inject.Inject
-    io.micrometer.core.instrument.MeterRegistry registry;
+    @Inject
+    MeterRegistry registry;
 
     @Test
     @Order(3)

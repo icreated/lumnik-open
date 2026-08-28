@@ -2,13 +2,14 @@ package io.lumnik.hub.secret;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.tenant.CurrentTenantHolder;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
-import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -30,8 +31,8 @@ public class PgcryptoSecretResolver implements SecretResolver {
     private static final Logger LOG = Logger.getLogger(PgcryptoSecretResolver.class);
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
-    DataSource adminDs;
+    @DataSource("admin")
+    AgroalDataSource adminDs;
 
     @Inject
     SecretEvents events;

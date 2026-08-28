@@ -1,10 +1,12 @@
 package io.lumnik.hub.entity;
 
+import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
-import javax.sql.DataSource;
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -12,6 +14,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
 
@@ -19,8 +22,8 @@ import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
 public class EntityViewCompiler {
 
   @Inject
-  @io.quarkus.agroal.DataSource("admin")
-  DataSource adminDs;
+  @DataSource("admin")
+  AgroalDataSource adminDs;
 
   /** Run DROP/CREATE/GRANT + manifest UPSERT atomically on the admin (BYPASSRLS) datasource. */
   public void apply(EntityManifest m, String yaml) {
@@ -55,7 +58,7 @@ public class EntityViewCompiler {
       // missing INTERNAL relation (entity_manifest, a migration fault) must stay a
       // loud 500: a "run your connectors" 409 there would be a lie.
       for (Throwable t = e; t != null; t = t.getCause()) {
-        if (t instanceof java.sql.SQLException sql && "42P01".equals(sql.getSQLState())) {
+        if (t instanceof SQLException sql && "42P01".equals(sql.getSQLState())) {
           String line = firstLine(sql.getMessage());
           if (namesASourceTable(m, line)) {
             throw new MissingSourceTableException(line);
@@ -75,7 +78,7 @@ public class EntityViewCompiler {
 
   /** True when the 42P01 message names one of the manifest's declared source tables. */
   static boolean namesASourceTable(EntityManifest m, String dbFirstLine) {
-    var matcher = java.util.regex.Pattern.compile("relation \"([^\"]+)\"").matcher(dbFirstLine);
+    var matcher = Pattern.compile("relation \"([^\"]+)\"").matcher(dbFirstLine);
     if (!matcher.find()) {
       return false;
     }

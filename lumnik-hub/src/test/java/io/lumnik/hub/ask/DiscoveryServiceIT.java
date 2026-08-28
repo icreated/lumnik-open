@@ -4,6 +4,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.webhook.SecretCipher;
 import io.lumnik.extraction.spi.ask.DiscoveryResult;
 import io.lumnik.extraction.spi.ask.SchemaCard;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,7 +25,7 @@ class DiscoveryServiceIT {
     @Inject SecretCipher cipher;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     // In %test mode, admin DS runs as lumnik_app (quoted "admin" key is not injectable

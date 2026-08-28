@@ -15,6 +15,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.postgresql.util.PSQLException;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
@@ -77,7 +78,7 @@ class RestConnectorRunRlsIT {
                 long n = rs.getLong(1);
                 st.execute("COMMIT");
                 return n;
-            } catch (org.postgresql.util.PSQLException pse) {
+            } catch (PSQLException pse) {
                 if ("42P01".equals(pse.getSQLState())) { // relation does not exist
                     st.execute("ROLLBACK");
                     return 0L;

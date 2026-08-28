@@ -4,6 +4,7 @@ import io.lumnik.extraction.spi.ExtractedChunk;
 import io.lumnik.hub.workflow.WorkflowGraph;
 import jakarta.enterprise.context.ApplicationScoped;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -19,7 +20,7 @@ public class WorkflowChunkBuilder {
     public List<ExtractedChunk> build(WorkflowGraph g) {
         String states = g.states().stream().map(s -> {
             StringBuilder b = new StringBuilder(s.code());
-            List<String> marks = new java.util.ArrayList<>();
+            List<String> marks = new ArrayList<>();
             if (s.code().equals(g.initialState())) marks.add("initial");
             if (s.terminal()) marks.add("terminal");
             if (s.label() != null) marks.add("« " + s.label() + " »");

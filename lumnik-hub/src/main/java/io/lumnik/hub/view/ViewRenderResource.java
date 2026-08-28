@@ -5,6 +5,7 @@ import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.ask.ScopeFreshness;
 import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
@@ -16,6 +17,7 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -33,7 +35,7 @@ public class ViewRenderResource {
     @Inject SchemaCardStore cards;
     @Inject ViewDataReader reader;
 
-    @jakarta.inject.Inject io.lumnik.hub.ask.ScopeFreshness freshness;
+    @Inject ScopeFreshness freshness;
 
     private final ViewManifestParser parser = new ViewManifestParser();
     private final ViewResolver resolver = new ViewResolver();
@@ -86,7 +88,7 @@ public class ViewRenderResource {
             return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
         }
         String dataAsOf = freshness.lastCompletedRun(tenant, manifest.scope())
-            .map(java.time.Instant::toString).orElse(null);
+            .map(Instant::toString).orElse(null);
         return Response.ok(new RenderResponse(rv.title(), rv.columns(), read.rows(), read.truncated(), dataAsOf))
             .build();
     }

@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Parses a kind:Workflow YAML manifest — the declarative document lifecycle. Structural
@@ -56,30 +57,82 @@ public class WorkflowManifestParser {
         return s.trim().toLowerCase(Locale.ROOT);
     }
 
+    /**
+     * A manifest is a CATALOGUE of rules, not a knot: an envelope, the column it watches, the states,
+     * the transitions. Each movement is named for what it requires, so this method reads as the table
+     * of contents it always was. All 21 refusals are pinned one-for-one by WorkflowManifestParserTest,
+     * which is what makes the split safe.
+     */
     public WorkflowManifest parse(String yaml) {
-        JsonNode root;
+        JsonNode root = readTree(yaml);
+        requireWorkflowKind(root);
+        JsonNode meta = root.path(METADATA);
+        JsonNode spec = root.path("spec");
+
+        String name = requireSimpleName(meta);
+        String scope = requireScope(spec);
+        String provenance = requireDeclaredProvenance(spec);
+
+        Watched watched = requireWatchedColumn(spec);
+        WorkflowManifest.DormancyDef dormancy = optionalDormancy(spec, watched.key());
+
+        Declared declared = requireStates(spec);
+        List<WorkflowManifest.TransitionDef> transitions = requireTransitions(spec, declared);
+
+        return new WorkflowManifest(name, scope, provenance, watched.table(), watched.column(),
+            watched.key(), dormancy, List.copyOf(declared.states()), List.copyOf(transitions));
+    }
+
+    /** The column this workflow watches, and the optional business key linking a document's versions. */
+    private record Watched(String table, String column, String key) {}
+
+    /** The declared states, with their codes normalized once for every later membership test. */
+    private record Declared(List<WorkflowManifest.StateDef> states, Set<String> codes) {}
+
+    private JsonNode readTree(String yaml) {
         try {
-            root = MAPPER.readTree(yaml);
+            return MAPPER.readTree(yaml);
         } catch (Exception e) {
             throw new IllegalArgumentException("invalid kind:Workflow manifest: " + e.getMessage(), e);
         }
+    }
+
+    private static void requireWorkflowKind(JsonNode root) {
         if (!"Workflow".equals(ManifestKeys.text(root, "kind")))
             throw new IllegalArgumentException("kind must be 'Workflow'");
-        JsonNode meta = root.path(METADATA);
-        JsonNode spec = root.path("spec");
+    }
+
+    private static String requireSimpleName(JsonNode meta) {
         String name = ManifestKeys.text(meta, "name");
         if (name == null || !name.matches("[a-z0-9-]+"))
             throw new IllegalArgumentException(
                 "metadata.name is required and must be a simple identifier (a-z, 0-9, -): " + name);
+        return name;
+    }
+
+    private static String requireScope(JsonNode spec) {
         String scope = ManifestKeys.text(spec, "scope");
         if (scope == null || scope.isBlank())
             throw new IllegalArgumentException("spec.scope is required");
+        return scope;
+    }
+
+    private static String requireDeclaredProvenance(JsonNode spec) {
         String provenance = ManifestKeys.text(spec, "provenance");
         if (provenance == null || provenance.isBlank())
             throw new IllegalArgumentException("spec.provenance is required ('declared')");
         if (!"declared".equals(provenance))
             throw new IllegalArgumentException("spec.provenance '" + provenance
                 + "' not yet supported (v1 accepts only 'declared')");
+        return provenance;
+    }
+
+    /**
+     * The identifiers that ride into SQL. The grammars are closed here, at declaration, because JDBC
+     * cannot bind an identifier — see WorkflowDormancySweep, which interpolates these on the admin
+     * (BYPASSRLS) datasource.
+     */
+    private static Watched requireWatchedColumn(JsonNode spec) {
         JsonNode on = spec.path("on");
         String table = ManifestKeys.text(on, "table");
         if (table == null || !table.matches(TABLE_RX))
@@ -89,30 +142,31 @@ public class WorkflowManifestParser {
         if (column == null || !column.matches(COLUMN_RX))
             throw new IllegalArgumentException(
                 "spec.on.column is required and must match " + COLUMN_RX + ": " + column);
-
         String key = ManifestKeys.text(on, "key");
         if (key != null && !key.matches(COLUMN_RX))
             throw new IllegalArgumentException(
                 "spec.on.key must match " + COLUMN_RX + ": " + key);
+        return new Watched(table, column, key);
+    }
 
-        WorkflowManifest.DormancyDef dormancy = null;
+    private static WorkflowManifest.DormancyDef optionalDormancy(JsonNode spec, String key) {
         JsonNode dorm = spec.path("dormancy");
-        if (!dorm.isMissingNode() && !dorm.isNull()) {
-            if (key == null)
-                throw new IllegalArgumentException(
-                    "spec.dormancy requires spec.on.key (dormancy is per-document; "
-                        + "the key links a document's versions)");
-            String after = ManifestKeys.text(dorm, "after");
-            if (after == null || !after.matches(AFTER_RX))
-                throw new IllegalArgumentException(
-                    "spec.dormancy.after is required and must match " + AFTER_RX
-                        + " (e.g. 30d, 12h, 2m): " + after);
-            dormancy = new WorkflowManifest.DormancyDef(after);
-        }
+        if (dorm.isMissingNode() || dorm.isNull()) return null;
+        if (key == null)
+            throw new IllegalArgumentException(
+                "spec.dormancy requires spec.on.key (dormancy is per-document; "
+                    + "the key links a document's versions)");
+        String after = ManifestKeys.text(dorm, "after");
+        if (after == null || !after.matches(AFTER_RX))
+            throw new IllegalArgumentException(
+                "spec.dormancy.after is required and must match " + AFTER_RX
+                    + " (e.g. 30d, 12h, 2m): " + after);
+        return new WorkflowManifest.DormancyDef(after);
+    }
 
+    private static Declared requireStates(JsonNode spec) {
         List<WorkflowManifest.StateDef> states = new ArrayList<>();
         Set<String> codes = new HashSet<>();
-        Map<String, String> aliasOwner = new HashMap<>(); // normalized alias -> state code
         int initials = 0;
         for (JsonNode s : spec.path("states")) {
             String code = ManifestKeys.text(s, "code");
@@ -131,6 +185,13 @@ public class WorkflowManifestParser {
             throw new IllegalArgumentException("spec.states must declare at least one state");
         if (initials != 1)
             throw new IllegalArgumentException("exactly one state must be initial: true (found " + initials + ")");
+        refuseAmbiguousAliases(states, codes);
+        return new Declared(states, codes);
+    }
+
+    /** An alias must name exactly one state, and must not shadow a code — dirty legacy values depend on it. */
+    private static void refuseAmbiguousAliases(List<WorkflowManifest.StateDef> states, Set<String> codes) {
+        Map<String, String> aliasOwner = new HashMap<>(); // normalized alias -> state code
         for (WorkflowManifest.StateDef s : states) {
             for (String a : s.aliases()) {
                 String n = norm(a);
@@ -143,30 +204,43 @@ public class WorkflowManifestParser {
                         + owner + " and " + s.code());
             }
         }
+    }
+
+    private static List<WorkflowManifest.TransitionDef> requireTransitions(JsonNode spec, Declared declared) {
+        Set<String> terminals = new HashSet<>();
+        declared.states().stream().filter(WorkflowManifest.StateDef::terminal)
+            .forEach(s -> terminals.add(norm(s.code())));
 
         List<WorkflowManifest.TransitionDef> transitions = new ArrayList<>();
-        Set<String> terminals = new HashSet<>();
-        states.stream().filter(WorkflowManifest.StateDef::terminal)
-            .forEach(s -> terminals.add(norm(s.code())));
         for (JsonNode t : spec.path("transitions")) {
-            List<String> from = new ArrayList<>();
-            for (JsonNode f : t.path("from")) from.add(f.asText());
-            String to = ManifestKeys.text(t, "to");
-            if (from.isEmpty() || to == null)
-                throw new IllegalArgumentException("every transition needs from: [..] and to:");
-            for (String f : from) {
-                if (!codes.contains(norm(f)))
-                    throw new IllegalArgumentException("transition from undeclared state '" + f + "'");
-                if (terminals.contains(norm(f)))
-                    throw new IllegalArgumentException(
-                        "terminal state '" + f + "' has an outgoing transition");
-            }
-            if (!codes.contains(norm(to)))
-                throw new IllegalArgumentException("transition to undeclared state '" + to + "'");
-            transitions.add(new WorkflowManifest.TransitionDef(List.copyOf(from), to));
+            transitions.add(requireTransition(t, declared, terminals));
         }
-        return new WorkflowManifest(name, scope, provenance, table, column, key, dormancy,
-            List.copyOf(states), List.copyOf(transitions));
+        return transitions;
+    }
+
+    /**
+     * One edge. Every refusal here is about the edge itself, which is why it reads at this level and
+     * not inside the loop that collects them: an edge needs both ends, both ends must name declared
+     * states, and a terminal state has no way out — that last one is the whole point of declaring a
+     * state terminal.
+     */
+    private static WorkflowManifest.TransitionDef requireTransition(JsonNode t, Declared declared,
+                                                                    Set<String> terminals) {
+        List<String> from = new ArrayList<>();
+        for (JsonNode f : t.path("from")) from.add(f.asText());
+        String to = ManifestKeys.text(t, "to");
+        if (from.isEmpty() || to == null)
+            throw new IllegalArgumentException("every transition needs from: [..] and to:");
+        for (String f : from) {
+            if (!declared.codes().contains(norm(f)))
+                throw new IllegalArgumentException("transition from undeclared state '" + f + "'");
+            if (terminals.contains(norm(f)))
+                throw new IllegalArgumentException(
+                    "terminal state '" + f + "' has an outgoing transition");
+        }
+        if (!declared.codes().contains(norm(to)))
+            throw new IllegalArgumentException("transition to undeclared state '" + to + "'");
+        return new WorkflowManifest.TransitionDef(List.copyOf(from), to);
     }
 
     /** Unknown keys as dotted paths — reporting only; the apply door refuses. Mirror of kind:Process C3. */
@@ -188,6 +262,6 @@ public class WorkflowManifestParser {
     }
 
     private static String sorted(Set<String> keys) {
-        return String.join(", ", new java.util.TreeSet<>(keys));
+        return String.join(", ", new TreeSet<>(keys));
     }
 }

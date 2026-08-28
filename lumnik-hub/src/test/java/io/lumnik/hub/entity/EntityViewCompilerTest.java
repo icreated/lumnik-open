@@ -3,6 +3,7 @@ package io.lumnik.hub.entity;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -61,7 +62,7 @@ class EntityViewCompilerTest {
   @Test
   void build_statements_fails_fast_on_a_null_source_entry() {
     EntityManifest m = new EntityManifest("Entity", "Customer", List.of("customer_code"),
-        java.util.Collections.singletonList((EntityManifest.Source) null));
+        Collections.singletonList((EntityManifest.Source) null));
     assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m))
         .isInstanceOf(IllegalStateException.class);
   }

@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 
 import java.util.Map;
+import java.util.UUID;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
@@ -147,7 +148,7 @@ class EndpointResourceIT {
             try {
                 utx.begin();
                 ConnectorEndpoint ep = new ConnectorEndpoint();
-                ep.setConnectorId(java.util.UUID.fromString(connectorId));
+                ep.setConnectorId(UUID.fromString(connectorId));
                 ep.setTenantId(1L);
                 ep.setName("purge-target-" + System.nanoTime());
                 ep.setMethod("GET");

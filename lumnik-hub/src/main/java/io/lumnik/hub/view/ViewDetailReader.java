@@ -2,6 +2,7 @@ package io.lumnik.hub.view;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.sql.TenantRlsScope;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -28,7 +29,7 @@ public class ViewDetailReader {
     private static final int TIMEOUT_S = 5;
 
     @Inject
-    @io.quarkus.agroal.DataSource("readonly")
+    @DataSource("readonly")
     AgroalDataSource readonlyDs;
 
     public record DetailRow(List<Object> values, String conflictsJson) {}

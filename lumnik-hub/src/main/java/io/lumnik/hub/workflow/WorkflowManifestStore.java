@@ -1,6 +1,7 @@
 package io.lumnik.hub.workflow;
 
 import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -16,7 +17,7 @@ import java.util.Optional;
 public class WorkflowManifestStore {
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     public record StoredWorkflow(String name, String scope, String table, String column,

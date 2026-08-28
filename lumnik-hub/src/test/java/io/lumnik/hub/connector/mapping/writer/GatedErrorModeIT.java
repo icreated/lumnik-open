@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.mapping.writer;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
@@ -34,7 +35,7 @@ class GatedErrorModeIT {
     @Inject UserTransaction utx;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     @BeforeEach

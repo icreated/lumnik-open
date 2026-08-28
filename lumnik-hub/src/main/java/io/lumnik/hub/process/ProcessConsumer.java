@@ -8,6 +8,7 @@ import io.lumnik.hub.event.EventOutboxRow;
 import io.lumnik.hub.event.RowEventGate;
 import io.lumnik.hub.event.consumer.OutboxSweeper;
 import io.lumnik.hub.view.ViewFilter;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -50,7 +51,7 @@ public class ProcessConsumer {
     @Inject ObjectMapper json;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     @Scheduled(every = "5s", concurrentExecution = SKIP)

@@ -1,5 +1,6 @@
 package io.lumnik.hub.webhook;
 
+import io.lumnik.hub.tenant.TenantContextFilter;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,12 +17,12 @@ class IntegrationResourceIT {
 
     @BeforeEach
     void setTenant() {
-        io.lumnik.hub.tenant.TenantContextFilter.CURRENT_TENANT.set(TENANT);
+        TenantContextFilter.CURRENT_TENANT.set(TENANT);
     }
 
     @AfterEach
     void clearTenant() {
-        io.lumnik.hub.tenant.TenantContextFilter.CURRENT_TENANT.remove();
+        TenantContextFilter.CURRENT_TENANT.remove();
     }
 
     @Test

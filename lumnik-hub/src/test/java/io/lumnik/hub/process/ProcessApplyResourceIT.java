@@ -3,11 +3,13 @@ package io.lumnik.hub.process;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.config.EncoderConfig;
 import io.restassured.config.RestAssuredConfig;
 import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -28,7 +30,7 @@ class ProcessApplyResourceIT {
     @Inject SchemaCardStore store;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     private void exec(String sql) {
@@ -82,8 +84,8 @@ class ProcessApplyResourceIT {
         String yaml = given().header("X-Tenant-Id", "1")
         .when().get("/api/processes/gold-arrive/manifest")
         .then().statusCode(200).extract().asString();
-        org.junit.jupiter.api.Assertions.assertTrue(yaml.contains("kind: Process"), yaml);
-        org.junit.jupiter.api.Assertions.assertTrue(yaml.contains("segment=GOLD"), yaml);
+        Assertions.assertTrue(yaml.contains("kind: Process"), yaml);
+        Assertions.assertTrue(yaml.contains("segment=GOLD"), yaml);
     }
 
     @Test

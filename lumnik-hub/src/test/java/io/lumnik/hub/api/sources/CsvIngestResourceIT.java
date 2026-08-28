@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.File;
 import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.hamcrest.Matchers.*;
 
@@ -43,7 +44,7 @@ class CsvIngestResourceIT {
      */
     @Test
     void a_refused_ingest_answers_400_with_the_reason() throws Exception {
-        java.nio.file.Path dir = Files.createTempDirectory("it_a11_");
+        Path dir = Files.createTempDirectory("it_a11_");
         Files.writeString(dir.resolve("a-" + System.nanoTime() + ".csv"), "id,email\n1,a@x\n");
         Files.writeString(dir.resolve("b-" + System.nanoTime() + ".csv"), "id,email\n2,b@x\n");
 
@@ -69,8 +70,8 @@ class CsvIngestResourceIT {
      */
     @Test
     void a_refused_pre_process_hook_answers_400_not_500() throws Exception {
-        java.nio.file.Path dir = Files.createTempDirectory("it_task6_");
-        java.nio.file.Path csv = dir.resolve("data.csv");
+        Path dir = Files.createTempDirectory("it_task6_");
+        Path csv = dir.resolve("data.csv");
         Files.writeString(csv, "id,email\n1,a@x\n");
 
         RestAssured.given()

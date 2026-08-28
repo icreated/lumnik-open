@@ -1,6 +1,7 @@
 package io.lumnik.hub.ask;
 
 import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -27,7 +28,7 @@ public class ScopeFreshness {
         "WHERE c.tenant_id = ? AND ? = ANY(c.tags) AND c.deleted_at IS NULL AND r.status = 'Completed'";
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     /** Empty when the scope has no completed run (fresh install, one-shot-only) — the caller

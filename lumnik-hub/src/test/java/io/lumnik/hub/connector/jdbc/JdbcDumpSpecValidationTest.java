@@ -1,9 +1,11 @@
 package io.lumnik.hub.connector.jdbc;
 
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
+import io.lumnik.hub.connector.mapping.spec.MappingSpec;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -36,14 +38,14 @@ class JdbcDumpSpecValidationTest {
 
     @Test
     void dumpSpec_withoutRename_hasNoHooks() {
-        io.lumnik.hub.connector.mapping.spec.MappingSpec spec =
+        MappingSpec spec =
             JdbcConnectorType.dumpSpec("invoices", List.of(), Map.of());
         assertThat(spec.row()).isEmpty();
     }
 
     @Test
     void dumpSpec_withRename_emitsOneMapColumnsHook() {
-        io.lumnik.hub.connector.mapping.spec.MappingSpec spec =
+        MappingSpec spec =
             JdbcConnectorType.dumpSpec("invoices", List.of(), Map.of("id", "source_id"));
         assertThat(spec.row()).hasSize(1);
         assertThat(spec.row().get(0).name()).isEqualTo("map-columns");
@@ -63,7 +65,7 @@ class JdbcDumpSpecValidationTest {
 
     @Test
     void dumpSpec_rejectsTwoSourcesRenamedOntoTheSameTarget() {
-        Map<String, String> rename = new java.util.LinkedHashMap<>();
+        Map<String, String> rename = new LinkedHashMap<>();
         rename.put("a", "same");
         rename.put("b", "same");
         assertThatThrownBy(() -> JdbcConnectorType.dumpSpec("invoices", List.of(), rename))
@@ -86,7 +88,7 @@ class JdbcDumpSpecValidationTest {
 
     @Test
     void validateConfig_rejectsTwoSourcesRenamedOntoTheSameTarget() {
-        Map<String, Object> rename = new java.util.LinkedHashMap<>();
+        Map<String, Object> rename = new LinkedHashMap<>();
         rename.put("a", "same");
         rename.put("b", "same");
         assertThatThrownBy(() -> JdbcConnectorType.validateRename(rename))
@@ -105,7 +107,7 @@ class JdbcDumpSpecValidationTest {
 
     @Test
     void validateRename_rejectsNullTargetDirectly() {
-        Map<String, String> rename = new java.util.LinkedHashMap<>();
+        Map<String, String> rename = new LinkedHashMap<>();
         rename.put("id", null);
         assertThatThrownBy(() -> JdbcConnectorType.validateRename(rename))
             .isInstanceOf(ConfigValidationException.class)

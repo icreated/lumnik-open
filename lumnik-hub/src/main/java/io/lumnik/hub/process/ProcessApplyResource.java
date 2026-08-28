@@ -11,6 +11,7 @@ import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
+import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
@@ -88,7 +89,7 @@ public class ProcessApplyResource {
     @GET
     @Path("/{name}/manifest")
     @Transactional
-    public Response manifest(@jakarta.ws.rs.PathParam("name") String name) {
+    public Response manifest(@PathParam("name") String name) {
         long tenant = RequireTenant.current();
         return store.findYaml(tenant, name)
                 .map(yaml -> Response.ok(yaml).type("application/yaml").build())

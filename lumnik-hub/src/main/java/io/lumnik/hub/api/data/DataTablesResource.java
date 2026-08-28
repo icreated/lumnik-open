@@ -1,10 +1,12 @@
 package io.lumnik.hub.api.data;
 
+import io.agroal.api.AgroalDataSource;
+import io.lumnik.hub.tenant.RequireTenant;
+import io.quarkus.agroal.DataSource;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
-import javax.sql.DataSource;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -17,15 +19,15 @@ import java.util.List;
 public class DataTablesResource {
 
   @Inject
-  @io.quarkus.agroal.DataSource("admin")
-  DataSource adminDs;
+  @DataSource("admin")
+  AgroalDataSource adminDs;
 
   public record TableInfo(String mappingId, String tableSchema, String tableName, long rowCount) {}
 
   @GET
   @Transactional
   public List<TableInfo> list() {
-    long t = io.lumnik.hub.tenant.RequireTenant.current();
+    long t = RequireTenant.current();
     List<TableInfo> out = new ArrayList<>();
     try (Connection c = adminDs.getConnection();
          PreparedStatement ps = c.prepareStatement(

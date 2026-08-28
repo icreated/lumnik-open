@@ -11,6 +11,7 @@ import io.lumnik.hub.connector.domain.ConnectorCursorEntity;
 import io.lumnik.hub.connector.repository.ConnectorCursorEntityRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.testsupport.EventItSupport;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.arc.Arc;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -61,7 +62,7 @@ class ConnectorConcurrencyCursorIT {
     @Inject ObjectMapper mapper;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     private String jdbcUrl;

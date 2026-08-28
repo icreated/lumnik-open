@@ -14,6 +14,7 @@ import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.repository.ConnectorRunRepository;
 import io.lumnik.hub.testsupport.EventItSupport;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
@@ -45,7 +46,7 @@ class MultiEndpointCursorIT {
     @Inject ConnectorCursorEntityRepository cursors;
     @Inject UserTransaction utx;
 
-    @Inject @io.quarkus.agroal.DataSource("admin") AgroalDataSource adminDs;
+    @Inject @DataSource("admin") AgroalDataSource adminDs;
 
     private String jdbcUrl;
     private static final String U = "lumnik_app", P = "lumnik_app_dev_password";

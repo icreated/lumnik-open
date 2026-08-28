@@ -4,6 +4,7 @@ import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.extraction.spi.ExtractionSink;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.rag.chunk.WorkflowChunkBuilder;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.quarkus.narayana.jta.QuarkusTransaction;
@@ -20,7 +21,9 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
+import java.sql.SQLException;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -38,7 +41,7 @@ public class WorkflowApplyResource {
     private static final Logger LOG = Logger.getLogger(WorkflowApplyResource.class);
 
     @Inject WorkflowManifestStore store;
-    @Inject io.lumnik.hub.audit.AuditRecorder audit;
+    @Inject AuditRecorder audit;
     @Inject WorkflowDataTruth truth;
     @Inject WorkflowChunkBuilder chunkBuilder;
     @Inject SchemaCardStore cards;
@@ -117,9 +120,9 @@ public class WorkflowApplyResource {
             index(tenant, g);
             // Audit P4: same rationale as ViewApplyResource — the store writes raw JDBC,
             // nothing else records the apply.
-            audit.record("WorkflowManifest", m.name(), "APPLY", java.util.Map.of(
+            audit.record("WorkflowManifest", m.name(), "APPLY", Map.of(
                 "scope", m.scope(), "table", m.table(), "column", m.column(),
-                "manifest_sha256", io.lumnik.hub.audit.AuditRecorder.sha256(body)));
+                "manifest_sha256", AuditRecorder.sha256(body)));
             return Response.ok(
                 new ApplyResult(m.name(), m.scope(), m.table(), m.column(), report)).build();
         } catch (RuntimeException e) {
@@ -146,7 +149,7 @@ public class WorkflowApplyResource {
 
     private static boolean isUniqueViolation(Throwable e) {
         for (Throwable t = e; t != null; t = t.getCause()) {
-            if (t instanceof java.sql.SQLException se
+            if (t instanceof SQLException se
                 && UNIQUE_VIOLATION_SQLSTATE.equals(se.getSQLState())) {
                 return true;
             }

@@ -1,6 +1,7 @@
 package io.lumnik.hub.workflow;
 
 import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,7 +20,7 @@ class WorkflowObservationsReadIT {
     @Inject WorkflowObservationStore store;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     @BeforeEach

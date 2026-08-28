@@ -3,6 +3,7 @@ package io.lumnik.hub.connector.source.preset;
 import jakarta.enterprise.inject.Instance;
 import org.junit.jupiter.api.Test;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -76,7 +77,7 @@ class SourcePresetRegistryTest {
             .isEmpty());
 
         // absent namespace + blank connection_string_env → both flagged
-        Map<String, Object> incomplete = new java.util.HashMap<>();
+        Map<String, Object> incomplete = new HashMap<>();
         incomplete.put("connection_string_env", "   ");
         incomplete.put("topic", "t");
         incomplete.put("name", "n");
@@ -89,7 +90,7 @@ class SourcePresetRegistryTest {
         SourcePresetRegistry registry = registryWith(new FakePreset());
         // a non-string namespace (e.g. YAML `namespace: 123` or a map) must NOT be substituted into a
         // broker template — report it as missing so the spec is rejected before expansion.
-        Map<String, Object> cfg = new java.util.HashMap<>();
+        Map<String, Object> cfg = new HashMap<>();
         cfg.put("namespace", 123);
         cfg.put("connection_string_env", "MY_EH_CONN");
         assertEquals(List.of("namespace"), registry.missingInputs("test-vendor", cfg));

@@ -10,6 +10,9 @@ import org.apache.sshd.client.SshClient;
 import org.apache.sshd.client.keyverifier.AcceptAllServerKeyVerifier;
 import org.apache.sshd.client.keyverifier.ServerKeyVerifier;
 import org.apache.sshd.client.session.ClientSession;
+import org.apache.sshd.common.NamedResource;
+import org.apache.sshd.common.config.keys.FilePasswordProvider;
+import org.apache.sshd.common.util.security.SecurityUtils;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.client.SftpClientFactory;
 
@@ -134,12 +137,12 @@ public class SftpFileSource implements FileSource, SeekableSource {
         }
     }
 
-    private java.util.Collection<KeyPair> parseKeyPairs(SftpAuthMethod.Key k) {
-        java.util.Collection<KeyPair> pairs;
+    private Collection<KeyPair> parseKeyPairs(SftpAuthMethod.Key k) {
+        Collection<KeyPair> pairs;
         try {
-            pairs = org.apache.sshd.common.util.security.SecurityUtils.getKeyPairResourceParser()
-                .loadKeyPairs(null, org.apache.sshd.common.NamedResource.ofName("sftp-key"),
-                              org.apache.sshd.common.config.keys.FilePasswordProvider.EMPTY,
+            pairs = SecurityUtils.getKeyPairResourceParser()
+                .loadKeyPairs(null, NamedResource.ofName("sftp-key"),
+                              FilePasswordProvider.EMPTY,
                               k.pemContent());
         } catch (Exception e) {
             throw new ConnectorException(
@@ -191,6 +194,13 @@ public class SftpFileSource implements FileSource, SeekableSource {
      * {@code position} directly via the low-level {@code SftpClient.read(handle, fileOffset,
      * ...)} API — a real seek, not a discard loop over the skipped prefix.
      */
+    // S2095: the handle is not leaked — ownership transfers to the returned stream, whose
+    // close() closes it, and PositionedInputStream's constructor is three field assignments and
+    // cannot throw between open and transfer. Every caller reads it in a try-with-resources or
+    // closes it on the failure path (FileSourceCursorReader.openResumed,
+    // CsvFileConnectorType.tryFirstWindow/openResumed). Sonar cannot see ownership cross a
+    // constructor; closing here would close the handle the caller is about to read from.
+    @SuppressWarnings("java:S2095")
     @Override
     public InputStream openAt(FileDescriptor file, long byteOffset) {
         ensureConnected();

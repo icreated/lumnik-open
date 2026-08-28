@@ -36,6 +36,9 @@ public class RoleRegistry {
     private static final Logger LOG = Logger.getLogger(RoleRegistry.class);
     private static final String YAML_PATH = "META-INF/roles.yaml";
     private static final String SCHEMA_PATH = "META-INF/schemas/roles-schema.json";
+
+    /** The grant/role list key in roles.yaml. */
+    private static final String PERMISSIONS = "permissions";
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final YAMLMapper YAML_MAPPER = new YAMLMapper();
 
@@ -89,7 +92,7 @@ public class RoleRegistry {
     private Grant parseGrant(JsonNode g, URL url, Set<String> knownPermissions) {
         String role = g.get("role").asText();
         List<String> perms = new ArrayList<>();
-        for (JsonNode p : g.get("permissions")) {
+        for (JsonNode p : g.get(PERMISSIONS)) {
             String permId = p.asText();
             if (!knownPermissions.contains(permId)) {
                 throw new IllegalStateException("Grant to role '" + role + "' at " + url +
@@ -147,8 +150,8 @@ public class RoleRegistry {
 
     private List<String> parsePermissions(JsonNode r, String roleId, Set<String> knownPermissions) {
         List<String> perms = new ArrayList<>();
-        if (!r.has("permissions")) return perms;
-        for (JsonNode p : r.get("permissions")) {
+        if (!r.has(PERMISSIONS)) return perms;
+        for (JsonNode p : r.get(PERMISSIONS)) {
             String permId = p.asText();
             if (!knownPermissions.contains(permId)) {
                 throw new IllegalStateException(

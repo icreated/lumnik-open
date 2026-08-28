@@ -5,11 +5,14 @@ import io.lumnik.hub.connector.api.helpers.CredentialResolver;
 import io.lumnik.hub.connector.api.types.ResolvedCredential;
 import io.lumnik.hub.connector.domain.ConnectorCredential;
 import io.lumnik.hub.connector.repository.ConnectorCredentialRepository;
+import io.lumnik.hub.connector.exceptions.CredentialNotFoundException;
 import io.lumnik.hub.webhook.SecretCipher;
 import io.quarkus.test.TestTransaction;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
+
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -64,8 +67,8 @@ class CredentialResolverIT {
     @TestTransaction
     void resolve_missing_throws() {
         TenantContext.runAsSystem(() ->
-            assertThatThrownBy(() -> resolver.resolve(java.util.UUID.randomUUID()))
-                .isInstanceOf(io.lumnik.hub.connector.exceptions.CredentialNotFoundException.class)
+            assertThatThrownBy(() -> resolver.resolve(UUID.randomUUID()))
+                .isInstanceOf(CredentialNotFoundException.class)
         );
     }
 }

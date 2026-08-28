@@ -12,6 +12,7 @@ import jakarta.ws.rs.container.ResourceInfo;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.ext.Provider;
 import org.eclipse.microprofile.config.Config;
 import org.jboss.logging.Logger;
 
@@ -25,7 +26,7 @@ import java.util.Map;
  * delegation through CDI proxies would multi-count a single request).
  * In-memory, single-node by design; both deploy paths are single-replica today.
  */
-@jakarta.ws.rs.ext.Provider
+@Provider
 @Priority(Priorities.USER)
 @ApplicationScoped
 public class RateLimitFilter implements ContainerRequestFilter {

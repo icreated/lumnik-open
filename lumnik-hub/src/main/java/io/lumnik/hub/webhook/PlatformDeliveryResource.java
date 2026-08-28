@@ -11,6 +11,7 @@ import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * What the substrate sent out, and whether it arrived — flattened across every integration.
@@ -72,7 +73,7 @@ public class PlatformDeliveryResource {
         WebhookDelivery d = deliveries.findById(id);
         // getTenantId() is a Long: compare with equals, never ==, or two identical ids outside
         // the Integer cache would compare false and hide a tenant's own delivery from them.
-        if (d == null || !java.util.Objects.equals(d.getTenantId(), RequireTenant.current()))
+        if (d == null || !Objects.equals(d.getTenantId(), RequireTenant.current()))
             throw new NotFoundException();
         // Deleting an integration closes this door too — see WebhookEndpointRepository.findLiveById.
         WebhookEndpoint e = endpoints.findLiveById(d.getEndpointId());

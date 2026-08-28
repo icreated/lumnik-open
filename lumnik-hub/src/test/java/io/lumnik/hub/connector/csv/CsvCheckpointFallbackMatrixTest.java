@@ -7,12 +7,16 @@ import io.lumnik.hub.connector.api.types.ReadResult;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
+import java.util.function.UnaryOperator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -28,7 +32,7 @@ class CsvCheckpointFallbackMatrixTest {
   private static final ObjectMapper M = new ObjectMapper();
 
   private static final CsvFileConnectorType.ParserOverrides DEFAULTS =
-      new CsvFileConnectorType.ParserOverrides(',', java.nio.charset.StandardCharsets.UTF_8,
+      new CsvFileConnectorType.ParserOverrides(',', StandardCharsets.UTF_8,
           true, true, List.of("", "NULL", "null", "#N/A"), null);
 
   private static Path sixRows(Path tmp) throws Exception {
@@ -40,7 +44,7 @@ class CsvCheckpointFallbackMatrixTest {
   /** Drain the reader to EndOfStream, mutating the cursor once after the first read. */
   private static List<Map<String, Object>> runWithCursorMutation(
       CsvFileConnectorType.CsvGlobCursorReader reader, int chunkSize,
-      java.util.function.UnaryOperator<ConnectorCursor> mutateAfterFirst) {
+      UnaryOperator<ConnectorCursor> mutateAfterFirst) {
     List<Map<String, Object>> all = new ArrayList<>();
     ConnectorCursor cursor = ConnectorCursor.empty();
     boolean first = true;
@@ -57,7 +61,7 @@ class CsvCheckpointFallbackMatrixTest {
     }
   }
 
-  private static ConnectorCursor editNode(ConnectorCursor c, java.util.function.Consumer<ObjectNode> edit) {
+  private static ConnectorCursor editNode(ConnectorCursor c, Consumer<ObjectNode> edit) {
     ObjectNode n = ((ObjectNode) c.value()).deepCopy();
     edit.accept(n);
     return new ConnectorCursor(n, Instant.now());
@@ -130,7 +134,7 @@ class CsvCheckpointFallbackMatrixTest {
   void off_allowlist_charset_never_writes_a_checkpoint_and_still_reads_all(@TempDir Path tmp) throws Exception {
     Path file = sixRows(tmp);   // pure ASCII → identical bytes in GB18030
     var overrides = new CsvFileConnectorType.ParserOverrides(',',
-        java.nio.charset.Charset.forName("GB18030"), true, true,
+        Charset.forName("GB18030"), true, true,
         List.of("", "NULL", "null", "#N/A"), null);
     var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), overrides);
     var r = reader.read(2, ConnectorCursor.empty(), null);

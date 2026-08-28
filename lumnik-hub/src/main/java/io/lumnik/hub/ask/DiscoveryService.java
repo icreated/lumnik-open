@@ -7,6 +7,7 @@ import io.lumnik.hub.webhook.SecretCipher;
 import io.lumnik.extraction.spi.ask.DiscoveryPort;
 import io.lumnik.extraction.spi.ask.DiscoveryResult;
 import io.lumnik.extraction.spi.ask.SchemaCard;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -34,7 +35,7 @@ public class DiscoveryService implements DiscoveryPort {
     @Inject EntitySchemaBuilder entityViews;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     /**

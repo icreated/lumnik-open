@@ -1,10 +1,10 @@
 package io.lumnik.hub.connector.mapping.writer;
 
+import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
-import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -46,7 +46,7 @@ class RlsDdlCharacterizationTest {
         DynamicTableWriter writer = new DynamicTableWriter();
         Statement st = mock(Statement.class);
         Connection c = mock(Connection.class);
-        DataSource ds = mock(DataSource.class);
+        AgroalDataSource ds = mock(AgroalDataSource.class);
         when(c.createStatement()).thenReturn(st);
         when(ds.getConnection()).thenReturn(c);
         writer.adminDs = ds;
@@ -78,7 +78,7 @@ class RlsDdlCharacterizationTest {
         DynamicTableWriter writer = new DynamicTableWriter();
         Statement st = mock(Statement.class);
         Connection c = mock(Connection.class);
-        DataSource ds = mock(DataSource.class);
+        AgroalDataSource ds = mock(AgroalDataSource.class);
         when(c.createStatement()).thenReturn(st);
         when(ds.getConnection()).thenReturn(c);
         writer.adminDs = ds;

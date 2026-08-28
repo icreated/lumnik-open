@@ -15,7 +15,7 @@ class EventRegistryIT {
         .when().get("/api/platform/events")
         .then().statusCode(200)
             .body("type", hasItem("org.created"))
-            .body("type", hasItem("list.value.added"));
+            .body("type", hasItem("connector.run.started"));
     }
 
     /** Every statically-emitted type must be in the catalog — an integrator discovering the
@@ -25,7 +25,6 @@ class EventRegistryIT {
     void catalog_covers_every_statically_emitted_type() {
         String[] emitted = {
             "org.created", "org.updated", "org.moved", "org.archived",
-            "list.value.added", "list.value.updated", "list.value.removed",
             "connector.run.started", "connector.run.completed",
             "connector.run.cancelled", "connector.run.failed",
             "platform.secret.created", "platform.secret.updated",

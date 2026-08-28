@@ -2,6 +2,8 @@ package io.lumnik.hub.connector.mapping.writer;
 
 import jakarta.enterprise.context.ApplicationScoped;
 
+import java.sql.Date;
+import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -104,11 +106,11 @@ public class SchemaInferrer {
   private static boolean isTimestamp(Object v) {
     return v instanceof Instant || v instanceof LocalDateTime
         || v instanceof OffsetDateTime || v instanceof ZonedDateTime
-        || v instanceof java.sql.Timestamp;
+        || v instanceof Timestamp;
   }
 
   private static boolean isDate(Object v) {
-    return v instanceof LocalDate || v instanceof java.sql.Date;
+    return v instanceof LocalDate || v instanceof Date;
   }
 
   private static boolean isBool(Object v) {

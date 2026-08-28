@@ -1,6 +1,7 @@
 package io.lumnik.hub.ask;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.extraction.spi.ask.NoSchemaException;
 import io.lumnik.llm.spi.Analytic;
 import io.lumnik.llm.spi.ChatPort;
 import io.lumnik.extraction.spi.ask.AskPort;
@@ -8,6 +9,7 @@ import io.lumnik.extraction.spi.ask.AskResult;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.extraction.spi.ask.SqlGuard;
 import io.lumnik.hub.sql.TenantRlsScope;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
@@ -19,6 +21,7 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -41,11 +44,11 @@ public class AskToSqlAgent implements AskPort {
     @Inject AbstentionGuard abstentionGuard;
 
     @Inject
-    @io.quarkus.agroal.DataSource("readonly")
+    @DataSource("readonly")
     AgroalDataSource readonlyDs;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     private final SqlGuard guard = new SqlGuard(MAX_ROWS);
@@ -55,7 +58,7 @@ public class AskToSqlAgent implements AskPort {
         SchemaCard card = store.load(tenantId, scope).orElseThrow(
             // Typed (SPI) so the chat door can translate it into an honest 409 refusal —
             // as an IllegalStateException it escaped to the tester as an anonymous 500.
-            () -> new io.lumnik.extraction.spi.ask.NoSchemaException(scope));
+            () -> new NoSchemaException(scope));
 
         // Abstention floor: an empty schema has nothing to answer from — abstain before calling the model.
         if (abstentionGuard.hasNoSchema(card)) {
@@ -160,7 +163,7 @@ public class AskToSqlAgent implements AskPort {
     }
 
     private String dataAsOf(long tenantId, String scope) {
-        return freshness.lastCompletedRun(tenantId, scope).map(java.time.Instant::toString).orElse(null);
+        return freshness.lastCompletedRun(tenantId, scope).map(Instant::toString).orElse(null);
     }
 
     /**

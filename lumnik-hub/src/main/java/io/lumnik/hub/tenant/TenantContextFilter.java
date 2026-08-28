@@ -6,6 +6,8 @@ import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
+import jakarta.json.JsonNumber;
+import jakarta.json.JsonString;
 import jakarta.ws.rs.Priorities;
 import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.container.ContainerRequestFilter;
@@ -32,6 +34,9 @@ import java.util.Set;
 @Provider
 @ApplicationScoped
 public class TenantContextFilter implements ContainerRequestFilter, ContainerResponseFilter {
+
+    /** The JSON key every refusal from this filter answers with. */
+    private static final String ERROR = "error";
 
     private static final Logger LOG = Logger.getLogger(TenantContextFilter.class);
 
@@ -165,94 +170,136 @@ public class TenantContextFilter implements ContainerRequestFilter, ContainerRes
         CurrentRolesHolder.set(Set.of("lm_admin", "lm_user", "lm_superadmin"));
     }
 
+    /**
+     * The four bindings a request carries, in the order they must happen: the tenant (RLS must see
+     * it before any transaction runs), the roles, the user, then impersonation — which applies AFTER
+     * the user is resolved so it never redirects JIT creation into the impersonated tenant.
+     *
+     * <p>Each step answers "may the request continue?". Every refusal below is pinned:
+     * TenantContextFilterJwtTest covers seven of them, TenantImpersonationAuthIT the eighth.
+     */
     private void fromJwt(ContainerRequestContext ctx) {
         if (jwtInstance.isUnsatisfied()) return;
         JsonWebToken token = jwtInstance.get();
 
-        Optional<Long> tenant = parseLongClaim(token, "tenant_id");
-        if (tenant.isEmpty()) { abort(ctx, "missing or invalid tenant_id claim"); return; }
-        CURRENT_TENANT.set(tenant.get());
-        // RLS must see the tenant BEFORE the JIT provisioner's transaction runs.
-        CurrentTenantHolder.set(tenant.get());
+        if (!bindTenant(ctx, token)) return;
+        bindRoles(token);
+        if (!bindUser(ctx, token)) return;
+        applyImpersonation(ctx, token);
+    }
 
+    /** The tenant claim, set where RLS can see it BEFORE the JIT provisioner's transaction runs. */
+    private boolean bindTenant(ContainerRequestContext ctx, JsonWebToken token) {
+        Optional<Long> tenant = parseLongClaim(token, "tenant_id");
+        if (tenant.isEmpty()) {
+            abort(ctx, "missing or invalid tenant_id claim");
+            return false;
+        }
+        CURRENT_TENANT.set(tenant.get());
+        CurrentTenantHolder.set(tenant.get());
+        return true;
+    }
+
+    private void bindRoles(JsonWebToken token) {
         Set<String> groups = token.getGroups();
         CurrentRolesHolder.set(groups != null ? groups : Set.of());
+    }
 
+    /** Two mutually exclusive paths: the realm emits user_id, or an external identity is resolved. */
+    private boolean bindUser(ContainerRequestContext ctx, JsonWebToken token) {
         Optional<Long> userId = parseLongClaim(token, "user_id");
-        if (userId.isPresent()) {
-            // The shipped realm emits user_id, so this path — not the resolver below — is what a
-            // still-valid token of a SCIM-archived user rides in on. Mirror the resolver's guard:
-            // a row that exists but is no longer login-active is denied on this very request. An
-            // id with no row passes through unchanged (back-compat: the hub does not own every
-            // IdP's user table). Costs one PK SELECT per request, as the resolver path already
-            // does. The guard bean is transactional — a bare read here would lose the SET LOCAL
-            // tenant GUC and never see the row under enforced RLS (UserDeactivationGuardRlsIT).
-            if (loginGuard != null && loginGuard.isDeactivated(userId.get())) {
-                LOG.warn("login denied: user is deactivated");
-                LOG.debugf("  (user_id=%d)", userId.get());
-                ctx.abortWith(Response.status(Response.Status.FORBIDDEN)
-                    .entity(Map.of("error", "user is deactivated"))
-                    .type(MediaType.APPLICATION_JSON).build());
-                return;
-            }
-            CURRENT_USER.set(userId.get());           // back-compat: our realm / any IdP that emits it
-        } else {
-            String issuer = token.getIssuer();
-            String subject = stringClaim(token, subjectClaim, null);
-            if (subject == null || issuer == null || issuer.isBlank()) {
-                abort(ctx, "missing subject/issuer claim"); return;
-            }
-            // The key (issuer, subject) maps to NOT-NULL varchar(255) columns and cannot be
-            // truncated without changing identity — reject an oversized one (fail closed) rather
-            // than let it become a 500 at persist. (Profile name/email are clamped in the provisioner.)
-            if (subject.length() > 255 || issuer.length() > 255) {
-                abort(ctx, "subject/issuer claim too long"); return;
-            }
-            if (externalIdentities.isUnsatisfied()) {
-                // Open edition: no resolver ships. Refuse honestly rather than continue user-less.
-                abort(ctx, "no external identity resolution in this edition (user_id claim required)");
-                return;
-            }
-            String name  = stringClaim(token, "name", subject);
-            String email = stringClaim(token, "email", null);
-            try {
-                Long resolved = externalIdentities.get().findOrCreate(issuer, subject, name, email);
-                if (resolved == null) {
-                    // A broken resolver must not yield a user-less authenticated request.
-                    abort(ctx, "external identity resolution returned no user"); return;
-                }
-                CURRENT_USER.set(resolved);
-            } catch (DeactivatedUserException e) {
-                // Generic message — do NOT log the external subject/issuer (PII) at WARN; the
-                // 403 already communicates the denial to the caller. Details at DEBUG only.
-                LOG.warn("login denied: external identity is deactivated");
-                LOG.debug(e.getMessage());
-                ctx.abortWith(Response.status(Response.Status.FORBIDDEN)
-                    .entity(Map.of("error", "user is deactivated"))
-                    .type(MediaType.APPLICATION_JSON).build());
-                return;
-            }
-        }
+        return userId.isPresent()
+            ? bindUserFromClaim(ctx, userId.get())
+            : resolveExternalIdentity(ctx, token);
+    }
 
-        // Impersonation (admin acting_as_tenant) applies AFTER the user is resolved, so it never
-        // redirects JIT creation into the impersonated tenant. ImpersonationResource already
-        // requires lm_superadmin to START an impersonation, but this filter is what actually
-        // switches the RLS tenant on every subsequent request — it must require the same role,
-        // or enforcement would rest entirely on the IdP never minting the claim otherwise.
-        Optional<Long> actingAsTenant = parseLongClaim(token, "acting_as_tenant");
-        if (actingAsTenant.isPresent()) {
-            if (!CurrentRolesHolder.get().contains("lm_superadmin")) {
-                LOG.warn("acting_as_tenant claim rejected: bearer lacks lm_superadmin");
-                ctx.abortWith(Response.status(Response.Status.FORBIDDEN)
-                    .entity(Map.of("error", "lm_superadmin required to impersonate a tenant"))
-                    .type(MediaType.APPLICATION_JSON).build());
-                return;
-            }
-            Long v = actingAsTenant.get();
-            MDC.put(MDC_IMPERSONATED_TENANT, v);
-            CURRENT_TENANT.set(v);
-            CurrentTenantHolder.set(v);
+    /**
+     * The shipped realm emits user_id, so this path — not the resolver below — is what a still-valid
+     * token of a SCIM-archived user rides in on. Mirror the resolver's guard: a row that exists but
+     * is no longer login-active is denied on this very request. An id with no row passes through
+     * unchanged (back-compat: the hub does not own every IdP's user table). Costs one PK SELECT per
+     * request, as the resolver path already does. The guard bean is transactional — a bare read here
+     * would lose the SET LOCAL tenant GUC and never see the row under enforced RLS
+     * (UserDeactivationGuardRlsIT).
+     */
+    private boolean bindUserFromClaim(ContainerRequestContext ctx, Long userId) {
+        if (loginGuard != null && loginGuard.isDeactivated(userId)) {
+            LOG.warn("login denied: user is deactivated");
+            LOG.debugf("  (user_id=%d)", userId);
+            denyDeactivated(ctx);
+            return false;
         }
+        CURRENT_USER.set(userId);           // back-compat: our realm / any IdP that emits it
+        return true;
+    }
+
+    private boolean resolveExternalIdentity(ContainerRequestContext ctx, JsonWebToken token) {
+        String issuer = token.getIssuer();
+        String subject = stringClaim(token, subjectClaim, null);
+        if (subject == null || issuer == null || issuer.isBlank()) {
+            abort(ctx, "missing subject/issuer claim");
+            return false;
+        }
+        // The key (issuer, subject) maps to NOT-NULL varchar(255) columns and cannot be truncated
+        // without changing identity — reject an oversized one (fail closed) rather than let it
+        // become a 500 at persist. (Profile name/email are clamped in the provisioner.)
+        if (subject.length() > 255 || issuer.length() > 255) {
+            abort(ctx, "subject/issuer claim too long");
+            return false;
+        }
+        if (externalIdentities.isUnsatisfied()) {
+            // Open edition: no resolver ships. Refuse honestly rather than continue user-less.
+            abort(ctx, "no external identity resolution in this edition (user_id claim required)");
+            return false;
+        }
+        String name  = stringClaim(token, "name", subject);
+        String email = stringClaim(token, "email", null);
+        try {
+            Long resolved = externalIdentities.get().findOrCreate(issuer, subject, name, email);
+            if (resolved == null) {
+                // A broken resolver must not yield a user-less authenticated request.
+                abort(ctx, "external identity resolution returned no user");
+                return false;
+            }
+            CURRENT_USER.set(resolved);
+            return true;
+        } catch (DeactivatedUserException e) {
+            // Generic message — do NOT log the external subject/issuer (PII) at WARN; the 403
+            // already communicates the denial to the caller. Details at DEBUG only.
+            LOG.warn("login denied: external identity is deactivated");
+            LOG.debug(e.getMessage());
+            denyDeactivated(ctx);
+            return false;
+        }
+    }
+
+    /**
+     * Impersonation (admin acting_as_tenant). ImpersonationResource already requires lm_superadmin
+     * to START an impersonation, but this filter is what actually switches the RLS tenant on every
+     * subsequent request — it must require the same role, or enforcement would rest entirely on the
+     * IdP never minting the claim otherwise.
+     */
+    private void applyImpersonation(ContainerRequestContext ctx, JsonWebToken token) {
+        Optional<Long> actingAsTenant = parseLongClaim(token, "acting_as_tenant");
+        if (actingAsTenant.isEmpty()) return;
+        if (!CurrentRolesHolder.get().contains("lm_superadmin")) {
+            LOG.warn("acting_as_tenant claim rejected: bearer lacks lm_superadmin");
+            ctx.abortWith(Response.status(Response.Status.FORBIDDEN)
+                .entity(Map.of(ERROR, "lm_superadmin required to impersonate a tenant"))
+                .type(MediaType.APPLICATION_JSON).build());
+            return;
+        }
+        Long v = actingAsTenant.get();
+        MDC.put(MDC_IMPERSONATED_TENANT, v);
+        CURRENT_TENANT.set(v);
+        CurrentTenantHolder.set(v);
+    }
+
+    /** The same 403 for both deactivation paths — the caller cannot tell which one denied it, by design. */
+    private static void denyDeactivated(ContainerRequestContext ctx) {
+        ctx.abortWith(Response.status(Response.Status.FORBIDDEN)
+            .entity(Map.of(ERROR, "user is deactivated"))
+            .type(MediaType.APPLICATION_JSON).build());
     }
 
     private static String stringClaim(JsonWebToken token, String claim, String fallback) {
@@ -260,7 +307,7 @@ public class TenantContextFilter implements ContainerRequestFilter, ContainerRes
         if (raw == null) return fallback;
         // A custom claim (e.g. cohab_id) arrives as a JsonString — getString() avoids the
         // surrounding quotes that String.valueOf would keep.
-        String s = (raw instanceof jakarta.json.JsonString js) ? js.getString() : String.valueOf(raw);
+        String s = (raw instanceof JsonString js) ? js.getString() : String.valueOf(raw);
         s = s.strip();
         return s.isBlank() ? fallback : s;
     }
@@ -268,7 +315,7 @@ public class TenantContextFilter implements ContainerRequestFilter, ContainerRes
     private void abort(ContainerRequestContext ctx, String msg) {
         LOG.warnf("JWT auth rejected: %s", msg);
         ctx.abortWith(Response.status(Response.Status.UNAUTHORIZED)
-            .entity(Map.of("error", msg)).type(MediaType.APPLICATION_JSON).build());
+            .entity(Map.of(ERROR, msg)).type(MediaType.APPLICATION_JSON).build());
     }
 
     /**
@@ -282,7 +329,7 @@ public class TenantContextFilter implements ContainerRequestFilter, ContainerRes
     private Optional<Long> parseLongClaim(JsonWebToken token, String claim) {
         Object raw = token.getClaim(claim);
         if (raw == null) return Optional.empty();
-        if (raw instanceof jakarta.json.JsonNumber jn) {
+        if (raw instanceof JsonNumber jn) {
             try {
                 return Optional.of(jn.longValueExact());   // throws on a fractional/out-of-range value
             } catch (ArithmeticException e) {
@@ -291,7 +338,7 @@ public class TenantContextFilter implements ContainerRequestFilter, ContainerRes
             }
         }
         if (raw instanceof Number n) return Optional.of(n.longValue());
-        String s = (raw instanceof jakarta.json.JsonString js) ? js.getString() : String.valueOf(raw);
+        String s = (raw instanceof JsonString js) ? js.getString() : String.valueOf(raw);
         s = s.strip();
         if (s.isBlank()) return Optional.empty();
         try {

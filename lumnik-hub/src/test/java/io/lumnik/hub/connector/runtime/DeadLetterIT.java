@@ -11,6 +11,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
+import java.util.Map;
 import java.util.UUID;
 import static org.assertj.core.api.Assertions.*;
 
@@ -78,7 +79,7 @@ class DeadLetterIT {
       connectors.persist(c);
       connectors.flush();
 
-      var payload = mapper.valueToTree(java.util.Map.of("file", "/imports/x.csv", "line", 3));
+      var payload = mapper.valueToTree(Map.of("file", "/imports/x.csv", "line", 3));
       UUID id = capture.capture(c.getId(), null, payload,
           new SkipReason.MalformedSource("/imports/x.csv", 3L, "col count"));
 

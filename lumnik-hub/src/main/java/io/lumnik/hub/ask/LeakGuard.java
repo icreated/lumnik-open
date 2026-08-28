@@ -71,7 +71,18 @@ public class LeakGuard {
         return firstUndeclaredRead(SqlLexer.tokenize(sql), declared, schemasOf(declared));
     }
 
-    /** Every table the card declares, schema-qualified (a legacy card without a schema gets the hub's). */
+    /**
+     * Every table the card declares, schema-qualified (a legacy card without a schema gets the hub's).
+     *
+     * <p>S2692: {@code indexOf('.') > 0}, not {@code >= 0}, is deliberate. A name whose first char is
+     * a dot has no schema part to keep, and {@code >= 0} would send it to {@link #schemasOf} where
+     * {@code substring(0, 0)} yields an EMPTY schema — a declaration matching nothing, silently.
+     * With {@code > 0} such a name becomes {@code connector..x}, which matches no token the lexer
+     * produces, so the guard refuses rather than admits. Both are unreachable from a generated card
+     * (builders emit {@code schema.name}); the difference only decides which way malformed input
+     * fails, and this one fails closed.
+     */
+    @SuppressWarnings("java:S2692")
     private static Set<String> declaredTables(SchemaCard card) {
         Set<String> declared = new LinkedHashSet<>();
         for (SchemaCard.Table t : card.tables()) {

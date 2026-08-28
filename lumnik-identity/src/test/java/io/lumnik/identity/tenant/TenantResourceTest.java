@@ -7,6 +7,8 @@ import jakarta.transaction.Transactional;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
 
@@ -19,7 +21,7 @@ class TenantResourceTest {
     @AfterEach
     @Transactional
     void cleanup() {
-        tenants.delete("code in ?1", java.util.List.of("TEST01", "DUPTEST"));
+        tenants.delete("code in ?1", List.of("TEST01", "DUPTEST"));
     }
 
     @Test

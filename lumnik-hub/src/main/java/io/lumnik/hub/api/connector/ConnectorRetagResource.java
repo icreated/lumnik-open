@@ -9,6 +9,7 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -26,7 +27,7 @@ public class ConnectorRetagResource {
   public Response retag(@PathParam("id") UUID id) {
     var c = repo.findById(id);
     if (c == null) return Response.status(404).build();
-    var tags = c.getTags() != null ? c.getTags() : java.util.List.<String>of();
+    var tags = c.getTags() != null ? c.getTags() : List.<String>of();
 
     // Through the seam, never the rag schema directly (Act 2 dry-run). No store on the
     // classpath = no chunks exist = zero updated is the honest answer.

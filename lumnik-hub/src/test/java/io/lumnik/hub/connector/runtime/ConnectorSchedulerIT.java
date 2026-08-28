@@ -11,6 +11,8 @@ import jakarta.transaction.UserTransaction;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.time.LocalTime;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.UUID;
 
@@ -60,7 +62,7 @@ class ConnectorSchedulerIT {
     // P10 wiring: due by cron, but the window [now+2h, now+3h) excludes now — the
     // scheduler must skip it (and never queue it). The gate itself is unit-tested in
     // RunWindowTest; THIS pins that tick() actually consults it.
-    java.time.LocalTime plus2 = java.time.LocalTime.now(java.time.ZoneOffset.UTC).plusHours(2).withSecond(0).withNano(0);
+    LocalTime plus2 = LocalTime.now(ZoneOffset.UTC).plusHours(2).withSecond(0).withNano(0);
     String window = "%02d:%02d-%02d:%02d".formatted(
         plus2.getHour(), plus2.getMinute(), plus2.plusHours(1).getHour(), plus2.plusHours(1).getMinute());
 

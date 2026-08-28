@@ -3,6 +3,7 @@ package io.lumnik.hub.connector.transport;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
+import java.nio.file.Files;
 import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -19,7 +20,7 @@ class FileSourceRegistryTest {
 
     @Test
     void resolves_local_when_kind_is_local() throws Exception {
-        var dir = java.nio.file.Files.createTempDirectory("registry_local_");
+        var dir = Files.createTempDirectory("registry_local_");
         try {
             FileSource src = registry.build(Map.of("kind", "local", "path", dir.toString() + "/*.csv"));
             assertNotNull(src);

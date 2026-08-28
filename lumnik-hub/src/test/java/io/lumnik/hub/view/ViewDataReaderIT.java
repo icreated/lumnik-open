@@ -1,9 +1,11 @@
 package io.lumnik.hub.view;
 
 import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
+import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -29,7 +31,7 @@ class ViewDataReaderIT {
     @Inject ViewDataReader reader;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     private void exec(String sql) {
@@ -200,7 +202,7 @@ class ViewDataReaderIT {
         // ordering op but operandType()==null (a value that isn't a number or ISO date), built
         // outside parse() — sqlFor must refuse it locally, not bind it into a misleading cast
         ViewFilter bad = new ViewFilter("amount", ">", "abc");
-        org.assertj.core.api.Assertions.assertThatThrownBy(
+        Assertions.assertThatThrownBy(
             () -> reader.read(1L, numsView(), List.of(bad)))
             .isInstanceOf(RuntimeException.class);
     }

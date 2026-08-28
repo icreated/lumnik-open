@@ -2,9 +2,10 @@ package io.lumnik.hub.connector.mapping.writer;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import javax.sql.DataSource;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -46,8 +47,8 @@ public class DynamicTableRegistry {
   }
 
   @Inject
-  @io.quarkus.agroal.DataSource("admin")
-  DataSource adminDs;
+  @DataSource("admin")
+  AgroalDataSource adminDs;
 
   /** Returns the inferred schema {column: pg_type} or null if not registered. */
   public Map<String, String> findSchema(Long tenantId, String mappingId) {

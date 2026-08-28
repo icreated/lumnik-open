@@ -2,6 +2,7 @@ package io.lumnik.hub.entity;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
 import io.restassured.config.EncoderConfig;
@@ -27,7 +28,7 @@ import static org.hamcrest.Matchers.equalTo;
 class EntityFusionRlsIT {
 
   @Inject
-  @io.quarkus.agroal.DataSource("admin")
+  @DataSource("admin")
   AgroalDataSource adminDs;
 
   static final String MANIFEST = """

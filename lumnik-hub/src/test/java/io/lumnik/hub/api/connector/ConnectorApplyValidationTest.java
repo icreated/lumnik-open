@@ -3,6 +3,7 @@ package io.lumnik.hub.api.connector;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.config.EncoderConfig;
 import io.restassured.config.RestAssuredConfig;
+import io.restassured.http.ContentType;
 import org.junit.jupiter.api.Test;
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
@@ -12,7 +13,7 @@ class ConnectorApplyValidationTest {
 
     private static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config()
         .encoderConfig(EncoderConfig.encoderConfig()
-            .encodeContentTypeAs("application/yaml", io.restassured.http.ContentType.TEXT));
+            .encodeContentTypeAs("application/yaml", ContentType.TEXT));
 
     @Test void applyInvalidManifest_returns400_withValidationResult() {
         String yaml = """

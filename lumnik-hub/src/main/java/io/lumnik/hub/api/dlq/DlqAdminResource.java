@@ -6,6 +6,7 @@ import io.lumnik.hub.connector.runtime.DeadLetterCapture;
 import io.lumnik.hub.tenant.TenantContextFilter;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
+import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
@@ -18,6 +19,7 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Path("/api/platform/dlq")
@@ -88,9 +90,9 @@ public class DlqAdminResource {
       return UUID.fromString(s);
     } catch (IllegalArgumentException e) {
       // JSON error body for consistency with the other platform 400s (not plain text).
-      throw new jakarta.ws.rs.BadRequestException(
+      throw new BadRequestException(
           Response.status(400)
-              .entity(java.util.Map.of("error", "invalid UUID: " + s))
+              .entity(Map.of("error", "invalid UUID: " + s))
               .type(MediaType.APPLICATION_JSON)
               .build());
     }

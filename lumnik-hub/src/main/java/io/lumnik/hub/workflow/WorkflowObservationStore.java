@@ -1,6 +1,7 @@
 package io.lumnik.hub.workflow;
 
 import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -24,7 +25,7 @@ import java.util.Map;
 public class WorkflowObservationStore {
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     public record Observation(String docKey, String state, Instant since,

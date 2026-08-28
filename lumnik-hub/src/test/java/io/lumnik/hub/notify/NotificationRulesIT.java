@@ -1,6 +1,7 @@
 package io.lumnik.hub.notify;
 
 import io.quarkus.test.junit.QuarkusTest;
+import io.restassured.specification.RequestSpecification;
 import org.junit.jupiter.api.MethodOrderer;
 import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
@@ -21,7 +22,7 @@ class NotificationRulesIT {
     private static final String TENANT = "7001";
     private static Long createdId;
 
-    private static io.restassured.specification.RequestSpecification asAdmin(String tenant) {
+    private static RequestSpecification asAdmin(String tenant) {
         return given().header("X-Tenant-ID", tenant).header("X-User-ID", "1")
                       .header("Content-Type", "application/json");
     }

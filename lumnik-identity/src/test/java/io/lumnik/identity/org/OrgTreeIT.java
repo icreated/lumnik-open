@@ -12,6 +12,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
+import java.util.Optional;
+
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
@@ -29,7 +31,7 @@ class OrgTreeIT {
     @BeforeEach
     @Transactional
     void setup() {
-        Mockito.when(geocoder.resolve(Mockito.any())).thenReturn(java.util.Optional.empty());
+        Mockito.when(geocoder.resolve(Mockito.any())).thenReturn(Optional.empty());
         Tenant t = new Tenant("TREE-TEST", "Tree Test Tenant");
         tenants.persist(t);
         tenantId = t.getId();

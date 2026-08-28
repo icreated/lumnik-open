@@ -3,6 +3,7 @@ package io.lumnik.hub.api.mapping;
 import io.lumnik.hub.connector.mapping.MappingTemplateRegistry;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
 
 import static io.restassured.RestAssured.given;
@@ -42,7 +43,7 @@ class MappingAdminResourceTest {
       .header("X-Tenant-Id", "1").header("X-User-Id", "test")
       .when().get("/api/platform/mappings/" + tid)
       .then().statusCode(200)
-        .body("id", org.hamcrest.Matchers.equalTo(tid));
+        .body("id", Matchers.equalTo(tid));
   }
 
   @Test
@@ -55,6 +56,6 @@ class MappingAdminResourceTest {
       .queryParam("raw", true)
       .when().get("/api/platform/mappings/" + tid)
       .then().statusCode(200)
-        .body("yaml", org.hamcrest.Matchers.containsString(tid));
+        .body("yaml", Matchers.containsString(tid));
   }
 }

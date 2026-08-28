@@ -2,6 +2,7 @@ package io.lumnik.hub.auth;
 
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.smallrye.jwt.build.Jwt;
+import io.smallrye.jwt.build.JwtClaimsBuilder;
 
 import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
@@ -111,7 +112,7 @@ public final class NoBypassOidcProfile implements QuarkusTestProfile {
     /** A real, signed bearer JWT for tenant 1 carrying the given {@code groups} roles and,
      *  when non-null, an {@code acting_as_tenant} claim (impersonation). */
     static String token(Set<String> roles, Long actingAsTenant) {
-        io.smallrye.jwt.build.JwtClaimsBuilder claims = Jwt.claims()
+        JwtClaimsBuilder claims = Jwt.claims()
             .issuer(ISSUER)
             .audience(AUDIENCE)
             .subject("tester")

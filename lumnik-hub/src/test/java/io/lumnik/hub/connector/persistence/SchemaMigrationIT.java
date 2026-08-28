@@ -6,6 +6,7 @@ import jakarta.inject.Inject;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.ResultSet;
+import java.util.ArrayList;
 import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -24,7 +25,7 @@ class SchemaMigrationIT {
          ResultSet rs = stmt.executeQuery(
              "SELECT table_name FROM information_schema.tables WHERE table_schema='connector' "
              + "AND table_name NOT LIKE 't\\_%' ORDER BY table_name")) {
-      var found = new java.util.ArrayList<String>();
+      var found = new ArrayList<String>();
       while (rs.next()) found.add(rs.getString(1));
       assertThat(found).contains(
           "connector", "connector_credential", "connector_cursor", "connector_dead_letter",

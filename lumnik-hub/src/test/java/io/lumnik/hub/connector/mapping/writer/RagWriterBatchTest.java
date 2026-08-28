@@ -9,6 +9,7 @@ import org.hibernate.Session;
 import org.hibernate.jdbc.Work;
 import org.junit.jupiter.api.Test;
 
+import java.sql.Array;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -89,7 +90,7 @@ class RagWriterBatchTest {
     List<String> insertedHashes() { return insertedRows.stream().map(InsertedRow::rowHash).toList(); }
 
     final EntityManager em;
-    private final Map<java.sql.Array, Object[]> arrayContents = new IdentityHashMap<>();
+    private final Map<Array, Object[]> arrayContents = new IdentityHashMap<>();
     // Current binds on the insert statement (committed on addBatch/executeUpdate):
     // 4 = tags text[], 7 = module, 8 = ref (row_hash), 11 = metadata jsonb.
     private List<String> currentTags;
@@ -123,7 +124,7 @@ class RagWriterBatchTest {
 
       Connection conn = mock(Connection.class);
       when(conn.createArrayOf(eq("text"), any(Object[].class))).thenAnswer(inv -> {
-        java.sql.Array arr = mock(java.sql.Array.class);
+        Array arr = mock(Array.class);
         arrayContents.put(arr, inv.getArgument(1));
         return arr;
       });
@@ -131,7 +132,7 @@ class RagWriterBatchTest {
       // Batch dedup probe
       PreparedStatement selectPs = mock(PreparedStatement.class);
       doAnswer(inv -> {
-        Object[] elems = arrayContents.get((java.sql.Array) inv.getArgument(1));
+        Object[] elems = arrayContents.get((Array) inv.getArgument(1));
         dedupBoundHashes = Arrays.stream(elems).map(String.class::cast).toList();
         return null;
       }).when(selectPs).setArray(eq(2), any());
@@ -143,7 +144,7 @@ class RagWriterBatchTest {
       // Insert (single-row executeUpdate AND addBatch/executeBatch both recorded)
       PreparedStatement insertPs = mock(PreparedStatement.class);
       doAnswer(inv -> {
-        Object[] elems = arrayContents.get((java.sql.Array) inv.getArgument(1));
+        Object[] elems = arrayContents.get((Array) inv.getArgument(1));
         currentTags = Arrays.stream(elems).map(String.class::cast).toList();
         return null;
       }).when(insertPs).setArray(eq(4), any());

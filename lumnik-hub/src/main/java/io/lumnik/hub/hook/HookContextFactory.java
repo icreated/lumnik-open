@@ -1,5 +1,6 @@
 package io.lumnik.hub.hook;
 
+import io.lumnik.common.security.CurrentRolesHolder;
 import io.lumnik.hub.tenant.TenantContextFilter;
 import io.lumnik.hub.webhook.OutboxPublisher;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -24,7 +25,7 @@ public class HookContextFactory {
     public HookContext create(HookBinding binding) {
         Long tenantId = TenantContextFilter.CURRENT_TENANT.get();
         Long userId   = TenantContextFilter.CURRENT_USER.get();
-        Set<String> roles = io.lumnik.common.security.CurrentRolesHolder.get();
+        Set<String> roles = CurrentRolesHolder.get();
         // TODO: populate name from JWT claim when Keycloak is wired
         UserContext user = new UserContext(userId, "current", roles);
         Instant createdAt = Instant.now();

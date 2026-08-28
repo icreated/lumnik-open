@@ -14,6 +14,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 import java.time.Instant;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -34,7 +35,7 @@ class ChunkExecutorIT {
       c.setTenantId(1L);
       c.setName("chunk-test");
       c.setTypeId("hello-world");
-      c.setConfig(java.util.Map.of("count", 5));
+      c.setConfig(Map.of("count", 5));
       connectors.persist(c);
       connectors.flush();
 
@@ -45,7 +46,7 @@ class ChunkExecutorIT {
       endpoint.setMethod("GET");
       endpoint.setPath("/default");
       endpoint.setEnabled(true);
-      endpoint.setConfig(java.util.Map.of("count", 5));
+      endpoint.setConfig(Map.of("count", 5));
       endpoints.persist(endpoint);
       endpoints.flush();
 

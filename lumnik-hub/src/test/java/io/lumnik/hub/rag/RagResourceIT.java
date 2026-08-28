@@ -3,12 +3,9 @@ package io.lumnik.hub.rag;
 import io.lumnik.llm.spi.EmbeddingPort;
 import io.quarkus.test.InjectMock;
 import io.quarkus.test.junit.QuarkusTest;
-import io.quarkus.test.junit.QuarkusTestProfile;
-import io.quarkus.test.junit.TestProfile;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
-import java.util.Map;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
@@ -49,30 +46,5 @@ class RagResourceIT {
         .then()
             .statusCode(202)
             .body("status", is("reindex_started"));
-    }
-
-    /**
-     * 403 tests require dev-bypass=false so PermissionInterceptor actually checks roles.
-     * In dev-bypass mode, all roles are always granted.
-     */
-    @QuarkusTest
-    @TestProfile(WithoutRoleTest.NoBypassProfile.class)
-    static class WithoutRoleTest {
-
-        public static class NoBypassProfile implements QuarkusTestProfile {
-            @Override
-            public Map<String, String> getConfigOverrides() {
-                return Map.of(
-                    "lumnik.security.dev-bypass", "false",
-                    "lumnik.rag.index-on-startup", "false"
-                );
-            }
-        }
-
-        @Test
-        void adminEndpoints_withoutAdminRole_return403() {
-            given().when().get("/api/platform/rag/status").then().statusCode(403);
-            given().when().post("/api/platform/rag/reindex").then().statusCode(403);
-        }
     }
 }

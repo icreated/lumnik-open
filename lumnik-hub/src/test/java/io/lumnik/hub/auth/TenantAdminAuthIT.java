@@ -2,6 +2,7 @@ package io.lumnik.hub.auth;
 
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
+import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import static io.restassured.RestAssured.given;
@@ -43,7 +44,7 @@ class TenantAdminAuthIT {
             .when().get("/api/tenants")
             .then().statusCode(403)
             .extract().asString();
-        org.assertj.core.api.Assertions.assertThat(body)
+        Assertions.assertThat(body)
             .as("a role refusal must stay body-less — the docs distinguish it from the scope and "
                 + "platform refusals by exactly that")
             .isEmpty();

@@ -4,6 +4,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.security.TestSecurity;
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
@@ -45,7 +46,7 @@ class PlatformAuthIT {
         // No authenticated principal → 401 with a WWW-Authenticate: Bearer challenge (RFC 7235).
         given().when().get("/api/platform/connectors")
             .then().statusCode(401)
-            .header("WWW-Authenticate", org.hamcrest.Matchers.containsString("Bearer"));
+            .header("WWW-Authenticate", Matchers.containsString("Bearer"));
     }
 
     @Test

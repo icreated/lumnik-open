@@ -3,6 +3,7 @@ package io.lumnik.hub.webhook;
 import io.lumnik.hub.event.consumer.SchedulerPausedProfile;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
+import io.restassured.RestAssured;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
 import jakarta.transaction.Transactional;
@@ -72,7 +73,7 @@ class WebhookRetryDeletedEndpointIT {
         Long id = ((Number) em.createNativeQuery(
             "SELECT id FROM core.webhook_endpoint WHERE name = 'del-ep'").getSingleResult()).longValue();
 
-        io.restassured.RestAssured.given()
+        RestAssured.given()
             .header("X-Tenant-ID", "1").header("X-User-ID", "1")
             .contentType("application/json").body("{\"eventType\":\"org.created\"}")
             .when().post("/api/tenants/1/integrations/" + id + "/test")

@@ -6,6 +6,7 @@ import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
@@ -66,7 +67,7 @@ class ConnectorAdminResourceTest {
         """)
       .when().put("/api/platform/connectors/" + created)
       .then().statusCode(200)
-        .body("config.count", org.hamcrest.Matchers.equalTo(99));
+        .body("config.count", Matchers.equalTo(99));
 
     given()
       .header("X-Tenant-Id", "1").header("X-User-Id", "test")

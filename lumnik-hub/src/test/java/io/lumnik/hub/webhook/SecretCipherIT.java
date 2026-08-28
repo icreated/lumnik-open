@@ -3,6 +3,8 @@ package io.lumnik.hub.webhook;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
+import jakarta.persistence.EntityManager;
+import org.eclipse.microprofile.config.ConfigProvider;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,7 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SecretCipherIT {
 
     @Inject SecretCipher cipher;
-    @Inject jakarta.persistence.EntityManager em;
+    @Inject EntityManager em;
 
     @BeforeEach void setTenant() { CurrentTenantHolder.set(1L); }
     @AfterEach  void clear()     { CurrentTenantHolder.clear(); }
@@ -39,7 +41,7 @@ class SecretCipherIT {
     void legacy_aes128_ciphertext_still_decrypts() {
         // Ciphertexts written before the aes256 switch carry their algo in the PGP header —
         // pgp_sym_decrypt honours it, so old rows must keep decrypting unchanged.
-        String key = org.eclipse.microprofile.config.ConfigProvider.getConfig()
+        String key = ConfigProvider.getConfig()
             .getValue("lumnik.crypto.secret-key", String.class);
         byte[] legacy = (byte[]) em.createNativeQuery(
                 "SELECT public.pgp_sym_encrypt(cast(? as text), cast(? as text), 'cipher-algo=aes128')")

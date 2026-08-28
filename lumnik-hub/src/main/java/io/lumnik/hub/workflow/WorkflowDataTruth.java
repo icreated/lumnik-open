@@ -2,6 +2,7 @@ package io.lumnik.hub.workflow;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.sql.TenantRlsScope;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -37,7 +38,7 @@ public class WorkflowDataTruth {
     private static final String UNDEFINED_TABLE = "42P01";
 
     @Inject
-    @io.quarkus.agroal.DataSource("readonly")
+    @DataSource("readonly")
     AgroalDataSource readonlyDs;
 
     public record ValueCount(String value, long rows) {}
@@ -61,18 +62,43 @@ public class WorkflowDataTruth {
                          boolean tableMissing, boolean keyColumnMissing,
                          boolean checkUnavailable, String unavailableReason) {}
 
+    /**
+     * Three movements: fold the declaration into the values it accepts, confront the data, compare.
+     * The middle one is the only one that can fail, and it degrades into a Report rather than
+     * throwing — "nothing ever blocks" (spec). Both degradation paths are pinned by
+     * WorkflowDataTruthIT (absent table, unrunnable probe).
+     */
     public Report check(long tenantId, WorkflowGraph g) {
+        Set<String> declared = declaredValues(g);
+        Observed observed;
+        try {
+            observed = confrontTheData(tenantId, g);
+        } catch (SQLException e) {
+            return degraded(tenantId, g, e);
+        }
+        return compare(g, declared, observed);
+    }
+
+    /** What the data said: value counts, blanks, and whether the declared key column is even there. */
+    private record Observed(Map<String, Long> seen, long nullOrBlank, boolean keyColumnMissing) {}
+
+    /** Every value the manifest accepts for this column — a state code or one of its aliases. */
+    private static Set<String> declaredValues(WorkflowGraph g) {
         Set<String> declared = new HashSet<>();
         for (WorkflowGraph.StateDto s : g.states()) {
             declared.add(norm(s.code()));
             s.aliases().forEach(a -> declared.add(norm(a)));
         }
+        return declared;
+    }
 
-        Map<String, Long> seen = new LinkedHashMap<>();
-        long nullOrBlank = 0L;
-        boolean keyColumnMissing = false;
+    private Observed confrontTheData(long tenantId, WorkflowGraph g) throws SQLException {
+        // Identifiers are parse-time grammar-guarded (TABLE_RX/COLUMN_RX) and the graph came from a
+        // re-parsed manifest — the standing injection invariant. Read-only datasource, tenant-scoped.
         String sql = "SELECT " + g.column() + "::text AS v, COUNT(*) FROM " + g.table()
             + " GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT " + LIMIT;
+        Map<String, Long> seen = new LinkedHashMap<>();
+        long nullOrBlank = 0L;
         try (Connection c = readonlyDs.getConnection()) {
             TenantRlsScope.applyTo(c, tenantId);
             try (PreparedStatement ps = c.prepareStatement(sql); ResultSet rs = ps.executeQuery()) {
@@ -82,36 +108,43 @@ public class WorkflowDataTruth {
                     else seen.put(v, rs.getLong(2));
                 }
             }
-            keyColumnMissing = g.key() != null && !hasColumn(c, g.table(), g.key());
-        } catch (SQLException e) {
-            if (UNDEFINED_TABLE.equals(e.getSQLState())) {
-                return new Report(List.of(), List.of(), 0L, true, false, false, null);
-            }
-            // Everything else — a statement timeout on a 50M-row table, a dropped column, a
-            // revoked grant — degrades the REPORT, never the declaration: the manifest is
-            // already stored and "nothing ever blocks" (spec). The caller is told plainly
-            // that the data was not confronted.
-            LOG.warnf(e, "workflow data-truth check unavailable for tenant %d, workflow %s "
-                + "(%s.%s, SQLSTATE %s)", tenantId, g.name(), g.table(), g.column(), e.getSQLState());
-            return new Report(List.of(), List.of(), 0L, false, false, true,
-                "SQLSTATE " + e.getSQLState() + ": " + e.getMessage());
+            return new Observed(seen, nullOrBlank, g.key() != null && !hasColumn(c, g.table(), g.key()));
         }
+    }
 
+    /**
+     * A probe that could not run degrades the REPORT, never the declaration: the manifest is already
+     * stored and "nothing ever blocks" (spec). An absent table is an ordinary answer — the ingest has
+     * not landed yet. Anything else — a statement timeout on a 50M-row table, a dropped column, a
+     * revoked grant — is logged and the caller is told plainly that the data was not confronted.
+     */
+    private static Report degraded(long tenantId, WorkflowGraph g, SQLException e) {
+        if (UNDEFINED_TABLE.equals(e.getSQLState())) {
+            return new Report(List.of(), List.of(), 0L, true, false, false, null);
+        }
+        LOG.warnf(e, "workflow data-truth check unavailable for tenant %d, workflow %s "
+            + "(%s.%s, SQLSTATE %s)", tenantId, g.name(), g.table(), g.column(), e.getSQLState());
+        return new Report(List.of(), List.of(), 0L, false, false, true,
+            "SQLSTATE " + e.getSQLState() + ": " + e.getMessage());
+    }
+
+    /** What the data says that the manifest does not, and what the manifest says that the data never shows. */
+    private static Report compare(WorkflowGraph g, Set<String> declared, Observed observed) {
         List<ValueCount> undeclared = new ArrayList<>();
         Set<String> observedNorm = new HashSet<>();
-        seen.forEach((v, n) -> {
+        observed.seen().forEach((v, n) -> {
             if (declared.contains(norm(v))) observedNorm.add(norm(v));
             else undeclared.add(new ValueCount(v, n));
         });
 
         List<String> unobserved = new ArrayList<>();
         for (WorkflowGraph.StateDto s : g.states()) {
-            boolean observed = observedNorm.contains(norm(s.code()))
+            boolean seen = observedNorm.contains(norm(s.code()))
                 || s.aliases().stream().anyMatch(a -> observedNorm.contains(norm(a)));
-            if (!observed) unobserved.add(s.code());
+            if (!seen) unobserved.add(s.code());
         }
-        return new Report(List.copyOf(undeclared), List.copyOf(unobserved), nullOrBlank,
-            false, keyColumnMissing, false, null);
+        return new Report(List.copyOf(undeclared), List.copyOf(unobserved), observed.nullOrBlank(),
+            false, observed.keyColumnMissing(), false, null);
     }
 
     /**

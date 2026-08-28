@@ -7,6 +7,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
 import jakarta.transaction.UserTransaction;
+import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -42,7 +43,7 @@ class HybridJsonbWriterIT {
                 + "AND schemaname = 'ext' AND tablename = ?1")
             .setParameter(1, bare)
             .getSingleResult();
-        org.assertj.core.api.Assertions.assertThat(qual)
+        Assertions.assertThat(qual)
             .as("the V21 guard must be born with the table").contains("NULLIF");
     }
 

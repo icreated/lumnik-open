@@ -1,6 +1,7 @@
 package io.lumnik.hub.testsupport;
 
 import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
@@ -29,7 +30,7 @@ class EventItSupportTest {
     @Inject UserTransaction utx;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     @BeforeEach

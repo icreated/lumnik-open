@@ -5,6 +5,7 @@ import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.tenant.TenantContextFilter;
+import io.quarkus.agroal.DataSource;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
@@ -47,7 +48,7 @@ public class EntityReadResource {
 
   @Inject EntityRegistry registry;
   @Inject EntityManager em;
-  @Inject @io.quarkus.agroal.DataSource("admin") AgroalDataSource adminDs;
+  @Inject @DataSource("admin") AgroalDataSource adminDs;
 
   /** One equality filter carried from the query string, already checked against the canonical columns. */
   private record ColumnFilter(String column, String value) {}

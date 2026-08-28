@@ -37,11 +37,13 @@ import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -272,7 +274,7 @@ public class CsvIngestService {
 
         try (FileSource source = buildSource(transportCfg, plan.kind())) {
             long listStart = System.currentTimeMillis();
-            List<FileDescriptor> files = source.listSince(java.time.Instant.EPOCH)
+            List<FileDescriptor> files = source.listSince(Instant.EPOCH)
                 .filter(f -> hooks.shouldProcess(plan.fileFilter(), f, source))
                 .toList();
             metrics.recordListed(plan.kind(), plan.connectorLabel(), files.size(),
@@ -512,7 +514,7 @@ public class CsvIngestService {
      * Reserved column names already present in every ext.* table created by HybridJsonbWriter.
      * Promoting a column with one of these names would cause a DDL "column specified more than once" error.
      */
-    private static final java.util.Set<String> RESERVED_COLUMNS = java.util.Set.of(
+    private static final Set<String> RESERVED_COLUMNS = Set.of(
         "id", "tenant_id", "external_id", "data", "indexed_at", "connector_id", "endpoint_id"
     );
 

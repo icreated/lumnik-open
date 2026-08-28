@@ -1,6 +1,10 @@
 package io.lumnik.hub.connector.csv;
 
+import io.lumnik.hub.connector.transport.FileDescriptor;
 import org.junit.jupiter.api.Test;
+
+import java.time.Instant;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -42,7 +46,7 @@ class CsvCursorCheckpointTest {
   @Test
   void extended_cursor_round_trips_with_all_checkpoint_fields() {
     CsvCursor c = new CsvCursor("/imports/x.csv", 500, 8192L, 117L, 12L,
-        java.util.List.of("id", "name"),
+        List.of("id", "name"),
         new CsvCursor.Version(102400L, "2026-08-12T10:15:30.123456Z", null));
     CsvCursor back = CsvCursor.fromJson(c.toJson());
     assertThat(back).isEqualTo(c);
@@ -54,7 +58,7 @@ class CsvCursorCheckpointTest {
 
   @Test
   void checkpoint_requires_every_field_and_a_sane_anchor() {
-    var headers = java.util.List.of("id");
+    var headers = List.of("id");
     var v = new CsvCursor.Version(100L, "2026-08-12T10:15:30Z", null);
     assertThat(new CsvCursor("f", 1, 10L, 0L, 3L, headers, v).hasCheckpoint()).isTrue();
     // missing pieces → fallback
@@ -62,7 +66,7 @@ class CsvCursorCheckpointTest {
     assertThat(new CsvCursor("f", 1, 10L, null, 3L, headers, v).hasCheckpoint()).isFalse();
     assertThat(new CsvCursor("f", 1, 10L, 0L, null, headers, v).hasCheckpoint()).isFalse();
     assertThat(new CsvCursor("f", 1, 10L, 0L, 3L, null, v).hasCheckpoint()).isFalse();
-    assertThat(new CsvCursor("f", 1, 10L, 0L, 3L, java.util.List.of(), v).hasCheckpoint()).isFalse();
+    assertThat(new CsvCursor("f", 1, 10L, 0L, 3L, List.of(), v).hasCheckpoint()).isFalse();
     assertThat(new CsvCursor("f", 1, 10L, 0L, 3L, headers, null).hasCheckpoint()).isFalse();
     // corrupt coordinates → fallback: a negative anchor/delta, or an anchor at/past EOF,
     // cannot name a record start in a file of version.size bytes
@@ -75,21 +79,21 @@ class CsvCursorCheckpointTest {
 
   @Test
   void version_token_matches_only_the_same_bytes() {
-    var lm = java.time.Instant.parse("2026-08-12T10:15:30.000000042Z");
+    var lm = Instant.parse("2026-08-12T10:15:30.000000042Z");
     var v = new CsvCursor.Version(100L, lm.toString(), null);
-    var same = new io.lumnik.hub.connector.transport.FileDescriptor("/f", 100L, lm, null);
+    var same = new FileDescriptor("/f", 100L, lm, null);
     assertThat(v.matches(same)).isTrue();
     // nanosecond-precision mtimes must round-trip exactly — no epoch-millis truncation
-    assertThat(v.matches(new io.lumnik.hub.connector.transport.FileDescriptor(
-        "/f", 100L, java.time.Instant.parse("2026-08-12T10:15:30Z"), null))).isFalse();
-    assertThat(v.matches(new io.lumnik.hub.connector.transport.FileDescriptor("/f", 99L, lm, null)))
+    assertThat(v.matches(new FileDescriptor(
+        "/f", 100L, Instant.parse("2026-08-12T10:15:30Z"), null))).isFalse();
+    assertThat(v.matches(new FileDescriptor("/f", 99L, lm, null)))
         .isFalse();
     assertThat(v.matches(null)).isFalse();
     // etag participates only when both sides carry one (FileDescriptor.sameVersion semantics)
     var withEtag = new CsvCursor.Version(100L, lm.toString(), "abc");
-    assertThat(withEtag.matches(new io.lumnik.hub.connector.transport.FileDescriptor("/f", 100L, lm, "abc"))).isTrue();
-    assertThat(withEtag.matches(new io.lumnik.hub.connector.transport.FileDescriptor("/f", 100L, lm, "zzz"))).isFalse();
-    assertThat(withEtag.matches(new io.lumnik.hub.connector.transport.FileDescriptor("/f", 100L, lm, null))).isTrue();
+    assertThat(withEtag.matches(new FileDescriptor("/f", 100L, lm, "abc"))).isTrue();
+    assertThat(withEtag.matches(new FileDescriptor("/f", 100L, lm, "zzz"))).isFalse();
+    assertThat(withEtag.matches(new FileDescriptor("/f", 100L, lm, null))).isTrue();
     // an unparseable stored timestamp is a corrupt token, never a match
     assertThat(new CsvCursor.Version(100L, "not-a-time", null).matches(same)).isFalse();
     assertThat(new CsvCursor.Version(100L, null, null).matches(same)).isFalse();

@@ -17,12 +17,15 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.PrintWriter;
 import java.net.URI;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.logging.Logger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -158,14 +161,14 @@ class EntityScopeBindingUnitTest {
     @Override public AgroalDataSourceConfiguration getConfiguration() { throw new UnsupportedOperationException(); }
     @Override public AgroalDataSourceMetrics getMetrics() { throw new UnsupportedOperationException(); }
     @Override public void flush(FlushMode mode) { throw new UnsupportedOperationException(); }
-    @Override public void setPoolInterceptors(java.util.Collection<? extends AgroalPoolInterceptor> interceptors) { throw new UnsupportedOperationException(); }
+    @Override public void setPoolInterceptors(Collection<? extends AgroalPoolInterceptor> interceptors) { throw new UnsupportedOperationException(); }
     @Override public List<AgroalPoolInterceptor> getPoolInterceptors() { throw new UnsupportedOperationException(); }
     @Override public void close() { /* no-op */ }
-    @Override public java.io.PrintWriter getLogWriter() { throw new UnsupportedOperationException(); }
-    @Override public void setLogWriter(java.io.PrintWriter out) { throw new UnsupportedOperationException(); }
+    @Override public PrintWriter getLogWriter() { throw new UnsupportedOperationException(); }
+    @Override public void setLogWriter(PrintWriter out) { throw new UnsupportedOperationException(); }
     @Override public void setLoginTimeout(int seconds) { throw new UnsupportedOperationException(); }
     @Override public int getLoginTimeout() { throw new UnsupportedOperationException(); }
-    @Override public java.util.logging.Logger getParentLogger() { throw new UnsupportedOperationException(); }
+    @Override public Logger getParentLogger() { throw new UnsupportedOperationException(); }
     @Override public <T> T unwrap(Class<T> iface) { throw new UnsupportedOperationException(); }
     @Override public boolean isWrapperFor(Class<?> iface) { throw new UnsupportedOperationException(); }
   }

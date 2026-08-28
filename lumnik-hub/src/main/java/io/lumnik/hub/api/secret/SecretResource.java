@@ -8,6 +8,7 @@ import io.lumnik.hub.secret.SecretRepository;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.hub.tenant.TenantContextFilter;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
@@ -37,7 +38,7 @@ public class SecretResource {
     @Inject PgcryptoSecretResolver resolver;
     @Inject SecretEvents events;
     @Inject ObjectMapper mapper;
-    @Inject @io.quarkus.agroal.DataSource("admin") AgroalDataSource adminDs;
+    @Inject @DataSource("admin") AgroalDataSource adminDs;
 
     @ConfigProperty(name = "lumnik.secret.master-key") String masterKey;
 
@@ -110,7 +111,7 @@ public class SecretResource {
         long tid = RequireTenant.current();
         var existing = repo.findByName(tid, name);
         if (existing.isEmpty()) return Response.status(Response.Status.NOT_FOUND).build();
-        java.time.Instant previousRotatedAt = existing.get().getRotatedAt();
+        Instant previousRotatedAt = existing.get().getRotatedAt();
 
         // rotatedAt is bound explicitly (not SQL now()) so the audit snapshot below can carry
         // the exact value written to the row, not an approximation of it.

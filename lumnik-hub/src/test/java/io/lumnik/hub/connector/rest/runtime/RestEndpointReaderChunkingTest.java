@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -325,7 +326,7 @@ class RestEndpointReaderChunkingTest {
         // SOAP + watermark: SOAP cannot chunk (single fetch), but watermark mode must still advance
         // the cursor's watermark over the fetched items — exactly as the pre-PR-B single-fetch path
         // did. Dropping it (cursor(null,...)) makes every run re-fetch the same window forever.
-        Map<String, Object> cfg = new java.util.HashMap<>(watermarkConfig());
+        Map<String, Object> cfg = new HashMap<>(watermarkConfig());
         cfg.put("pagination", Map.of("kind", "soap"));
 
         var more = hasMore(reader().read(8, null, ctx(cfg)));
@@ -344,7 +345,7 @@ class RestEndpointReaderChunkingTest {
         // watermark mode ON but watermark_path missing (misconfig): maxWatermark can't extract, so
         // the prior watermark must be CARRIED THROUGH — exactly as the chunking branch does with a
         // null path. Nulling it (a too-eager path!=null guard) reintroduces the re-fetch-forever bug.
-        Map<String, Object> cfg = new java.util.HashMap<>();
+        Map<String, Object> cfg = new HashMap<>();
         cfg.put("base_url", "https://erp.test");
         cfg.put("pagination", Map.of("kind", "soap"));
         cfg.put("incremental", Map.of("mode", "watermark", "param", "updated_since")); // no watermark_path

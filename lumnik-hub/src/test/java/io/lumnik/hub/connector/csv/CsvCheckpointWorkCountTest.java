@@ -5,6 +5,7 @@ import io.lumnik.hub.connector.api.types.ReadResult;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -28,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CsvCheckpointWorkCountTest {
 
   private static final CsvFileConnectorType.ParserOverrides DEFAULTS =
-      new CsvFileConnectorType.ParserOverrides(',', java.nio.charset.StandardCharsets.UTF_8,
+      new CsvFileConnectorType.ParserOverrides(',', StandardCharsets.UTF_8,
           true, true, List.of("", "NULL", "null", "#N/A"), null);
 
   @Test

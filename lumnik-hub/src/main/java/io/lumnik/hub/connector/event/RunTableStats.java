@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.event;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -29,7 +30,7 @@ public class RunTableStats {
         if (runId == null) return Map.of(); // ConcurrentHashMap forbids null keys; mirror recordCounts()
         Map<String, Counts> m = byRun.remove(runId);
         if (m == null) return Map.of();
-        Map<String, Map<String, Long>> out = new java.util.HashMap<>();
+        Map<String, Map<String, Long>> out = new HashMap<>();
         m.forEach((t, c) -> out.put(t, Map.of("written", c.written().sum(), "skipped", c.skipped().sum())));
         return out;
     }

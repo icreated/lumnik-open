@@ -120,42 +120,33 @@ public class ChunkExecutor {
 
         return switch (result) {
           case ReadResult.HasMore hm -> {
-            var outcome = (writer != null) ? writer.write(hm.records(), ctx) : new WriteOutcome.AllWritten(hm.records().size());
+            var outcome = writeOrPassThrough(writer, hm.records(), ctx);
+            // A batch the writer refused wholesale is a chunk FAILURE, not a success with odd
+            // counters: the rows would leave the conservation identity, nothing would reach the
+            // dead-letter queue, and persistCursor below would advance the cursor past them —
+            // contradicting this method's own javadoc.
+            if (outcome instanceof WriteOutcome.AllFailed f) yield allFailed(c, f);
             persistCursor(c.getId(), endpoint.getId(), c.getTenantId(), hm.nextCursor());
-            // A read-time-malformed row was read from the source, so it counts toward
-            // recordsIn as well as recordsSkipped — otherwise conservation (in = out +
-            // skipped) breaks for a dead-lettered-at-read row (in=0, dlq=1).
-            int malformed = captureMalformed(reader, c.getId(), r.getId());
-            r.setRecordsIn(r.getRecordsIn() + hm.records().size() + malformed);
-            r.setRecordsOut(r.getRecordsOut() + outcomeWritten(outcome));
-            r.setRecordsSkipped(r.getRecordsSkipped()
-                + outcomeSkipped(outcome, deadLetter, c.getId(), r.getId(), mapper)
-                + malformed);
-            // Drain exactly once: drainCellErrors() empties on read, so a second call this chunk
-            // would return 0 and silently LOSE the count rather than double it.
-            long cellErrors = (writer != null) ? writer.drainCellErrors() : 0;
-            r.setCellErrors(r.getCellErrors() + cellErrors);
-            r.setChunkCount(r.getChunkCount() + 1);
+            account(r, c, reader, writer, hm.records().size(), outcome);
             yield new ChunkResult.Success(hm.records().size(), hm.nextCursor());
           }
           case ReadResult.EndOfStream eos -> {
-            var outcome = (writer != null) ? writer.write(eos.records(), ctx) : new WriteOutcome.AllWritten(eos.records().size());
-            // See the HasMore branch: malformed rows were read, so they count toward
-            // recordsIn (conservation) as well as recordsSkipped.
-            int malformed = captureMalformed(reader, c.getId(), r.getId());
-            r.setRecordsIn(r.getRecordsIn() + eos.records().size() + malformed);
-            r.setRecordsOut(r.getRecordsOut() + outcomeWritten(outcome));
-            r.setRecordsSkipped(r.getRecordsSkipped()
-                + outcomeSkipped(outcome, deadLetter, c.getId(), r.getId(), mapper)
-                + malformed);
-            // Drain exactly once: drainCellErrors() empties on read, so a second call this chunk
-            // would return 0 and silently LOSE the count rather than double it.
-            long cellErrors = (writer != null) ? writer.drainCellErrors() : 0;
-            r.setCellErrors(r.getCellErrors() + cellErrors);
-            r.setChunkCount(r.getChunkCount() + 1);
+            var outcome = writeOrPassThrough(writer, eos.records(), ctx);
+            // See the HasMore branch. There is no cursor to hold back here — the stream is done —
+            // but the counters must not move either.
+            if (outcome instanceof WriteOutcome.AllFailed f) yield allFailed(c, f);
+            account(r, c, reader, writer, eos.records().size(), outcome);
             yield new ChunkResult.Success(eos.records().size(), cursorIn);
           }
-          case ReadResult.EmptyButOpen ep -> new ChunkResult.Success(0, ep.sameCursor());
+          case ReadResult.EmptyButOpen ep -> {
+            // "Nothing usable this pass, the stream is still open" does not mean nothing was READ:
+            // a window whose every line is unparsable yields no record and still buffers malformed
+            // ones. Draining here is what keeps them out of the void.
+            int malformed = captureMalformed(reader, c.getId(), r.getId());
+            r.setRecordsIn(r.getRecordsIn() + malformed);
+            r.setRecordsSkipped(r.getRecordsSkipped() + malformed);
+            yield new ChunkResult.Success(0, ep.sameCursor());
+          }
         };
       } catch (Throwable t) {
         // Swallowed here, INSIDE the transaction, exactly as before: the chunk turns into a
@@ -166,9 +157,51 @@ public class ChunkExecutor {
     });
   }
 
+  /** A writerless target writes nothing and everything counts as written — the pass-through case. */
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  private static WriteOutcome writeOrPassThrough(ItemWriter writer, List records, ConnectorContext ctx) {
+    return (writer != null) ? writer.write(records, ctx) : new WriteOutcome.AllWritten(records.size());
+  }
+
+  /**
+   * THE CONSERVATION IDENTITY, in one place: records_in = records_out + records_skipped.
+   *
+   * <p>It used to live twice — once per non-empty read shape — and the two copies were identical
+   * except for the cursor. That duplication is not academic: when the wholesale-refusal guard was
+   * added it had to be written twice, and only one copy was covered until review caught it. A rule
+   * spelled once cannot disagree with itself.
+   *
+   * <p>A read-time-malformed row counts on BOTH sides: it WAS read (records_in) and was NOT written
+   * (records_skipped) — otherwise conservation breaks for a dead-lettered-at-read row (in=0, dlq=1).
+   * Cell errors are a third tally, outside the row identity, drained exactly once: drainCellErrors()
+   * empties on read, so a second call this chunk would return 0 and silently LOSE the count.
+   */
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  private void account(ConnectorRun r, Connector c, ItemReader reader, ItemWriter writer,
+                       int recordsRead, WriteOutcome outcome) {
+    int malformed = captureMalformed(reader, c.getId(), r.getId());
+    r.setRecordsIn(r.getRecordsIn() + recordsRead + malformed);
+    r.setRecordsOut(r.getRecordsOut() + outcomeWritten(outcome));
+    r.setRecordsSkipped(r.getRecordsSkipped()
+        + outcomeSkipped(outcome, deadLetter, c.getId(), r.getId(), mapper)
+        + malformed);
+    r.setCellErrors(r.getCellErrors() + ((writer != null) ? writer.drainCellErrors() : 0));
+    r.setChunkCount(r.getChunkCount() + 1);
+  }
+
   /** Everything the chunk needs from the DB-bound preparation step, carried across the read. */
   private record Prepared(Connector connector, ConnectorContext ctx,
                           ItemReader<?> reader, ItemWriter<?> writer) {}
+
+  /**
+   * A wholesale write refusal. {@code AllFailed.cause()} may be null (the record permits it), so the
+   * message is taken from {@code reason()} rather than from the throwable.
+   */
+  private static ChunkResult.Failure allFailed(Connector c, WriteOutcome.AllFailed f) {
+    Logger.getLogger(ChunkExecutor.class)
+        .warnf(f.cause(), "Chunk write refused every record for connector %s: %s", c.getName(), f.reason());
+    return new ChunkResult.Failure(f.reason(), f.cause(), f.cause() instanceof TransientFailureException);
+  }
 
   private static ChunkResult.Failure failure(Connector c, Throwable t) {
     Logger.getLogger(ChunkExecutor.class)

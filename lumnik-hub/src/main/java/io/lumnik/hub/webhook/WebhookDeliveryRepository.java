@@ -9,8 +9,12 @@ import java.util.List;
 @ApplicationScoped
 public class WebhookDeliveryRepository implements PanacheRepository<WebhookDelivery> {
 
+
+    /** The delivery-ordering column every query here sorts on. */
+    private static final String ATTEMPTED_AT = "attemptedAt";
+
     public List<WebhookDelivery> recentForEndpoint(Long endpointId, int limit) {
-        return find("endpointId = ?1", Sort.descending("attemptedAt"), endpointId)
+        return find("endpointId = ?1", Sort.descending(ATTEMPTED_AT), endpointId)
             .page(0, Math.min(limit, 500)).list();
     }
 
@@ -18,7 +22,7 @@ public class WebhookDeliveryRepository implements PanacheRepository<WebhookDeliv
         // Key off succeeded (authoritative since V24): deliver() treats anything outside 2xx
         // as failed, so a 3xx — status < 400 — is still a failure and must appear here.
         return find("endpointId = ?1 AND succeeded = false",
-            Sort.descending("attemptedAt"), endpointId)
+            Sort.descending(ATTEMPTED_AT), endpointId)
             .page(0, Math.min(limit, 500)).list();
     }
 
@@ -26,7 +30,7 @@ public class WebhookDeliveryRepository implements PanacheRepository<WebhookDeliv
      *  the server's promise to the :outputs screen, which renders it and never re-derives it. */
     public List<WebhookDelivery> recentForTenant(long tenantId, int limit) {
         return find("tenantId = ?1",
-                Sort.ascending("succeeded").and("attemptedAt", Sort.Direction.Descending), tenantId)
+                Sort.ascending("succeeded").and(ATTEMPTED_AT, Sort.Direction.Descending), tenantId)
             .page(0, Math.min(limit, 500)).list();
     }
 

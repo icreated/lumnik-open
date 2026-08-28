@@ -219,6 +219,43 @@ else
     echo "✓ No api.rag references in platform main (rag resources extracted)"
 fi
 
+# Check 10: no @QuarkusTest on a NESTED class. Failsafe discovers by FILE name (**/*IT.java), so a
+# @QuarkusTest on a static inner class is compiled, reported nowhere, and never runs — the suite
+# stays green because the test is absent, not because it passes. Two security tests lived that way
+# until 2026-08-28: RagResourceIT$WithoutRoleTest (which had also kept a wrong 403 expectation, since
+# a dead test cannot fail to correct it) and RagSchemaResourceClosedIT$WithoutAuthTest. An indented
+# @QuarkusTest is the signature; a top-level one starts at column 0.
+# The open edition prunes lumnik-rag, so the directory list is built from what EXISTS. scan()
+# treats a grep exit >= 2 as a failed search and aborts — correctly: a search that could not run
+# must never read as "no violations". Passing it a pruned path turned that honesty into a false
+# alarm on every open-edition publish (caught by the publisher's own proof 3, 2026-08-28).
+dirs10=""
+for d in lumnik-hub/src/test/java lumnik-identity/src/test/java lumnik-rag/src/test/java; do
+    [ -d "$d" ] && dirs10="$dirs10 $d"
+done
+if [ -z "$dirs10" ]; then
+    # Why this branch exists at all: scan() with no path operand runs grep with none either,
+    # and grep then reads STDIN — the check would hang rather than answer. Unreachable through
+    # this script today (check 2 scans lumnik-hub/src/test/java unconditionally and aborts
+    # first), so it guards the helper's contract, not a path anyone walks.
+    #
+    # No "✓" banner here. An earlier draft set fail=1 and then scanned /dev/null, which found
+    # nothing and printed a pass — a fail and a pass in the log for the SAME check, and a reader
+    # skimming CI output keeps the last one they see. (Caught in review, #340.)
+    echo "❌ no test source root found at all — this check cannot run"
+    fail=1
+else
+    # shellcheck disable=SC2086  # word splitting is the point: dirs10 is a path list
+    leaks10=$(scan '^[[:space:]]+@QuarkusTest' $dirs10)
+    if [ -n "$leaks10" ]; then
+        echo "❌ @QuarkusTest on a nested class — failsafe will never run it; move it to its own *IT.java:"
+        echo "$leaks10" | sed 's/^/    /'
+        fail=1
+    else
+        echo "✓ No @QuarkusTest on a nested class (every Quarkus test is discoverable by file name)"
+    fi
+fi
+
 if [ $fail -ne 0 ]; then
     echo ""
     echo "Bounded contexts check FAILED."

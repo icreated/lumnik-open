@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.domain;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.common.domain.TenantedEntity;
+import io.lumnik.hub.connector.persistence.converters.JsonNodeConverter;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -28,7 +29,7 @@ public class ConnectorCursorEntity extends TenantedEntity {
   @Column(name = "connector_id", nullable = false)
   private UUID connectorId;
 
-  @Convert(converter = io.lumnik.hub.connector.persistence.converters.JsonNodeConverter.class)
+  @Convert(converter = JsonNodeConverter.class)
   @Column(name = "cursor_value", nullable = false, columnDefinition = "jsonb")
   @ColumnTransformer(write = "?::jsonb", read = "cursor_value::text")
   private JsonNode cursorValue;

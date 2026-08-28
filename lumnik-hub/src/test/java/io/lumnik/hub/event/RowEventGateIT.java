@@ -1,5 +1,7 @@
 package io.lumnik.hub.event;
 
+import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
@@ -24,8 +26,8 @@ class RowEventGateIT {
     @Inject EntityManager em;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
-    io.agroal.api.AgroalDataSource adminDs;
+    @DataSource("admin")
+    AgroalDataSource adminDs;
 
     @BeforeEach
     void clean() {

@@ -1,6 +1,11 @@
 package io.lumnik.hub.workflow;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import java.util.stream.Stream;
+import java.time.Duration;
 import java.util.List;
 import static org.assertj.core.api.Assertions.*;
 
@@ -31,6 +36,60 @@ class WorkflowManifestParserTest {
           transitions:
             - { from: [BROUILLON], to: EN_COURS }
             - { from: [EN_COURS], to: TERMINE }
+        """;
+
+
+    /**
+     * The refusals this parser can raise that no test named. Characterization, not discovery: they
+     * pass on today's code by construction. Their job is to JUDGE the decomposition that follows —
+     * parse() is a catalogue of rules, and a catalogue is only safe to split when every rule in it
+     * is pinned. Six of the twenty-one had no test: metadata.name, spec.scope, a state without a
+     * code, an empty state list, a transition missing from/to, and a transition FROM an undeclared
+     * state (only `to` was covered).
+     */
+    static Stream<Arguments> refusals() {
+        return Stream.of(
+            Arguments.of("metadata.name must be a simple identifier",
+                VALID.replace("name: commande-lifecycle", "name: Commande Lifecycle"),
+                "metadata.name is required"),
+            Arguments.of("spec.scope is required",
+                VALID.replace("  scope: magasin\n", ""),
+                "spec.scope is required"),
+            Arguments.of("every state needs a code",
+                VALID.replace("- code: BROUILLON", "- label: sans-code"),
+                "every state needs a code"),
+            Arguments.of("at least one state must be declared", NO_STATES,
+                "spec.states must declare at least one state"),
+            Arguments.of("a transition needs both from and to",
+                VALID.replace("- { from: [BROUILLON], to: EN_COURS }", "- { to: EN_COURS }"),
+                "every transition needs from"),
+            Arguments.of("a transition cannot start from an undeclared state",
+                VALID.replace("from: [BROUILLON]", "from: [INCONNU]"),
+                "transition from undeclared state")
+        );
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("refusals")
+    void refusesAMalformedManifest(String rule, String manifest, String expected) {
+        assertThatThrownBy(() -> parser.parse(manifest))
+            .as(rule)
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining(expected);
+    }
+
+    private static final String NO_STATES = """
+        apiVersion: apps.lumnik.io/v1
+        kind: Workflow
+        metadata:
+          name: sans-etats
+        spec:
+          scope: magasin
+          provenance: declared
+          on:
+            table: connector.t_commandes_csv
+            column: statut
+          states: []
         """;
 
     @Test
@@ -150,7 +209,7 @@ class WorkflowManifestParserTest {
         WorkflowManifest m = parser.parse(WITH_DORMANCY);
         assertThat(m.key()).isEqualTo("num");
         assertThat(m.dormancy().after()).isEqualTo("30d");
-        assertThat(m.dormancy().duration()).isEqualTo(java.time.Duration.ofDays(30));
+        assertThat(m.dormancy().duration()).isEqualTo(Duration.ofDays(30));
     }
 
     @Test
@@ -197,8 +256,8 @@ class WorkflowManifestParserTest {
     @Test
     void duration_units_map_correctly() {
         assertThat(new WorkflowManifest.DormancyDef("2m").duration())
-            .isEqualTo(java.time.Duration.ofMinutes(2));
+            .isEqualTo(Duration.ofMinutes(2));
         assertThat(new WorkflowManifest.DormancyDef("12h").duration())
-            .isEqualTo(java.time.Duration.ofHours(12));
+            .isEqualTo(Duration.ofHours(12));
     }
 }

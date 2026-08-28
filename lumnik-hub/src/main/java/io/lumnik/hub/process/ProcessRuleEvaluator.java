@@ -4,6 +4,7 @@ import io.lumnik.hub.view.ViewFilter;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -76,7 +77,7 @@ public final class ProcessRuleEvaluator {
 
     private static Integer compareTemporal(Object v, String operand) {
         Instant left;
-        if (v instanceof java.util.Date d) {           // covers java.sql.Timestamp/Date
+        if (v instanceof Date d) {           // covers java.sql.Timestamp/Date
             left = Instant.ofEpochMilli(d.getTime());
         } else if (v instanceof Instant i) {
             left = i;

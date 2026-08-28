@@ -38,6 +38,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -113,7 +114,7 @@ public class ConnectorEngine {
             LOG.warnf("No runnable endpoint for connector %s — nothing to run", connectorId);
             return List.of();
         }
-        List<RunHandle> handles = new java.util.ArrayList<>(endpointIds.size());
+        List<RunHandle> handles = new ArrayList<>(endpointIds.size());
         for (UUID endpointId : endpointIds) {
             UUID runId = startRunRowInRequestContext(endpointId, trigger);
             if (runId == null) continue;  // endpoint/connector vanished between resolve and start

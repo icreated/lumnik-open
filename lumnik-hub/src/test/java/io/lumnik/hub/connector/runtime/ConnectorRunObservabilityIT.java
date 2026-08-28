@@ -4,6 +4,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
@@ -48,7 +49,7 @@ class ConnectorRunObservabilityIT {
   @Inject UserTransaction utx;
 
   @Inject
-  @io.quarkus.agroal.DataSource("admin")
+  @DataSource("admin")
   AgroalDataSource adminDs;
 
   @Test

@@ -10,6 +10,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -82,7 +83,7 @@ class JdbcChunkReaderWatermarkIT {
           Map<String, Object> lastRow = recs.get(recs.size() - 1);
           Object wmRaw = lastRow.get("updated");
           String wmStr = wmRaw != null ? wmRaw.toString() : null;
-          Map<String, Object> pk = new java.util.LinkedHashMap<>();
+          Map<String, Object> pk = new LinkedHashMap<>();
           pk.put("id", lastRow.get("id"));
           last = new JdbcCursor("updated", wmStr, pk).toConnectorCursor();
         }

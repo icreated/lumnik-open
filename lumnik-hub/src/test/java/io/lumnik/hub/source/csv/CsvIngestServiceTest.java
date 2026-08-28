@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -199,7 +200,7 @@ class CsvIngestServiceTest {
             }
         });
 
-        var byName = new java.util.HashMap<String, String>();
+        var byName = new HashMap<String, String>();
         result.promoteColumns().forEach(c -> byName.put(c.name(), c.type()));
         // "id" is a reserved HybridJsonb column — it is used as uniqueKeyPath but not promoted.
         assertFalse(byName.containsKey("id"), "id must not be in promoted columns (reserved)");

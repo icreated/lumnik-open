@@ -1,6 +1,7 @@
 package io.lumnik.hub.inbox;
 
 import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.assertj.core.api.Assertions;
@@ -19,7 +20,7 @@ import static org.hamcrest.Matchers.*;
 class InboxResourceIT {
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     private void exec(String sql) {

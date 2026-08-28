@@ -1,6 +1,7 @@
 package io.lumnik.hub.webhook;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import com.github.tomakehurst.wiremock.client.WireMock;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -130,8 +131,8 @@ class PlatformDeliveryReplayIT {
         given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
             .when().post("/api/platform/deliveries/" + idOf("replay.probe.live") + "/replay")
             .then().statusCode(404);
-        wm.verify(0, com.github.tomakehurst.wiremock.client.WireMock
-            .postRequestedFor(com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo("/live")));
+        wm.verify(0, WireMock
+            .postRequestedFor(WireMock.urlEqualTo("/live")));
     }
 
     /**

@@ -1,5 +1,7 @@
 package io.lumnik.hub.connector.mapping.spec;
 
+import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
+
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -50,7 +52,7 @@ public record MappingTarget(
   public record HybridJsonb(
       String table,
       String uniqueKeyPath,
-      List<io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.PromotedColumn> promote,
+      List<HybridJsonbSpec.PromotedColumn> promote,
       UUID endpointId
   ) {}
 

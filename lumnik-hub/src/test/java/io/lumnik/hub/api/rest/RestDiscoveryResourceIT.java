@@ -3,6 +3,7 @@ package io.lumnik.hub.api.rest;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 
 import static io.restassured.RestAssured.given;
@@ -30,7 +31,7 @@ class RestDiscoveryResourceIT {
             .body(Map.of(
                 "url", "http://localhost:8081/q/openapi",
                 "name", "self",
-                "tags", java.util.List.of("internal")))
+                "tags", List.of("internal")))
         .when().post("/api/platform/sources/rest/from-openapi")
         .then()
             .statusCode(anyOf(is(200), is(500)));

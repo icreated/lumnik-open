@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import java.io.*;
 import java.nio.file.*;
+import java.nio.file.attribute.FileTime;
 import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -19,8 +20,8 @@ class LocalFileSourceTest {
         Path f1 = Files.write(dir.resolve("a.csv"), "x".getBytes());
         Path f2 = Files.write(dir.resolve("b.csv"), "y".getBytes());
         Files.write(dir.resolve("c.tmp"), "z".getBytes());
-        Files.setLastModifiedTime(f1, java.nio.file.attribute.FileTime.from(Instant.parse("2026-01-01T00:00:00Z")));
-        Files.setLastModifiedTime(f2, java.nio.file.attribute.FileTime.from(Instant.parse("2026-03-01T00:00:00Z")));
+        Files.setLastModifiedTime(f1, FileTime.from(Instant.parse("2026-01-01T00:00:00Z")));
+        Files.setLastModifiedTime(f2, FileTime.from(Instant.parse("2026-03-01T00:00:00Z")));
 
         var source = new LocalFileSource(dir.toString() + "/*.csv");
         List<FileDescriptor> all = source.listSince(Instant.EPOCH).collect(Collectors.toList());

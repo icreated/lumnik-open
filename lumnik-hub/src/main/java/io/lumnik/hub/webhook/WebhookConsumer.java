@@ -30,6 +30,14 @@ import static io.quarkus.scheduler.Scheduled.ConcurrentExecution.SKIP;
 @ApplicationScoped
 public class WebhookConsumer {
 
+    /**
+     * The cross-tenant sentinel this consumer runs its sweeps under. RLS reads
+     * app.current_tenant; '0' is the system value, and PostgreSQL accepts no bind
+     * placeholder in SET LOCAL — so the statement is a literal by necessity, spelled once
+     * so the three sweeps cannot drift apart.
+     */
+    private static final String SET_SYSTEM_TENANT = "SET LOCAL app.current_tenant = '0'";
+
     static final String CONSUMER_NAME = "webhook";
     private static final Logger LOG = Logger.getLogger(WebhookConsumer.class);
 
@@ -97,7 +105,7 @@ public class WebhookConsumer {
         return QuarkusTransaction.requiringNew().call(() -> {
             // System sentinel: webhook_delivery policy gained the '0' branch in V24. SET LOCAL is
             // scoped to a transaction, so every short transaction below sets the GUC for itself.
-            em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
+            em.createNativeQuery(SET_SYSTEM_TENANT).executeUpdate();
             WebhookDelivery d = deliveryRepo.claimNext(afterId, CLAIM_LEASE_SECONDS);
             if (d == null) return null;
             try {
@@ -114,7 +122,7 @@ public class WebhookConsumer {
                 return new Claim(d.getId(), d.getTenantId(), ep, d.getEventType(), d.getPayload().toString());
             } finally {
                 CurrentTenantHolder.clear();
-                em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
+                em.createNativeQuery(SET_SYSTEM_TENANT).executeUpdate();
             }
         });
     }
@@ -160,7 +168,7 @@ public class WebhookConsumer {
                 d.setClaimedUntil(null); // claim released: retryable again unless it just capped
             } finally {
                 CurrentTenantHolder.clear();
-                em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
+                em.createNativeQuery(SET_SYSTEM_TENANT).executeUpdate();
             }
         });
     }

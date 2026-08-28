@@ -7,6 +7,7 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import java.util.HashMap;
 import java.util.Map;
 
 @Path("/api/platform/users/me/scope")
@@ -20,7 +21,7 @@ public class UserScopeResource {
   @Transactional
   public Map<String, Object> get(@HeaderParam("X-User-Id") Long userId) {
     var u = users.findById(userId);
-    Map<String, Object> body = new java.util.HashMap<>();
+    Map<String, Object> body = new HashMap<>();
     body.put("defaultScope", u != null ? u.getDefaultScope() : null);
     return body;
   }

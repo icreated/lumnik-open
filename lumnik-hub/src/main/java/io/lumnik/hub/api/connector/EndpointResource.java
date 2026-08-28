@@ -19,6 +19,7 @@ import jakarta.ws.rs.core.Response;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
@@ -36,7 +37,7 @@ public class EndpointResource {
     @Inject AuthProviderRegistry authReg;
 
     /** Schemas dynamic ingestion writes to — the only ones an endpoint purge may target. */
-    private static final java.util.Set<String> PURGEABLE_SCHEMAS = java.util.Set.of("connector", "ext");
+    private static final Set<String> PURGEABLE_SCHEMAS = Set.of("connector", "ext");
 
     @GET
     @Transactional

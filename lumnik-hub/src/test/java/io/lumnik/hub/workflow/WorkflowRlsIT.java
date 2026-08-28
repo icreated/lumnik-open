@@ -9,6 +9,7 @@ import io.quarkus.test.junit.TestProfile;
 import io.restassured.config.EncoderConfig;
 import io.restassured.config.RestAssuredConfig;
 import io.restassured.http.ContentType;
+import io.restassured.specification.RequestSpecification;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.MethodOrderer;
@@ -66,7 +67,7 @@ class WorkflowRlsIT {
         cards.save(2L, "registry", new SchemaCard("demo", List.of()));
     }
 
-    private static io.restassured.specification.RequestSpecification as(String tenant) {
+    private static RequestSpecification as(String tenant) {
         return given().config(YAML_CFG).header("X-Tenant-ID", tenant).header("X-User-ID", tenant);
     }
 

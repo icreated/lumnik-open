@@ -1,7 +1,9 @@
 package io.lumnik.hub.flyway;
 
+import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.manifest.ModuleManifest;
 import io.lumnik.hub.manifest.ModuleManifestRegistry;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -10,8 +12,13 @@ import jakarta.inject.Inject;
 import org.flywaydb.core.Flyway;
 import org.jboss.logging.Logger;
 
-import javax.sql.DataSource;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @ApplicationScoped
 public class PlatformFlywayRunner {
@@ -19,8 +26,8 @@ public class PlatformFlywayRunner {
     private static final Logger LOG = Logger.getLogger(PlatformFlywayRunner.class);
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
-    DataSource dataSource;
+    @DataSource("admin")
+    AgroalDataSource dataSource;
     @Inject ModuleManifestRegistry registry;
 
     // Priority(2) — runs after registry (Priority 1)
@@ -48,10 +55,10 @@ public class PlatformFlywayRunner {
     }
 
     private void grantSchemaUsage(String schema) {
-        try (java.sql.Connection conn = dataSource.getConnection();
-             java.sql.Statement st = conn.createStatement()) {
+        try (Connection conn = dataSource.getConnection();
+             Statement st = conn.createStatement()) {
             st.execute("GRANT USAGE ON SCHEMA " + schema + " TO lumnik_app");
-        } catch (java.sql.SQLException e) {
+        } catch (SQLException e) {
             LOG.warnf(e, "Could not grant USAGE on schema '%s' to lumnik_app — may already exist", schema);
         }
     }
@@ -60,8 +67,8 @@ public class PlatformFlywayRunner {
      * Returns Flyway status (version + pending count) per registered schema.
      * Used by /api/platform/migrations for the lm CLI / TUI.
      */
-    public java.util.Map<String, SchemaStatus> statusPerSchema() {
-        java.util.Map<String, SchemaStatus> out = new java.util.LinkedHashMap<>();
+    public Map<String, SchemaStatus> statusPerSchema() {
+        Map<String, SchemaStatus> out = new LinkedHashMap<>();
         for (ModuleManifest manifest : registry.all()) {
             if (manifest.flywayLocations().isEmpty()) continue;
             out.put(manifest.schema(), statusFor(manifest));
@@ -81,7 +88,7 @@ public class PlatformFlywayRunner {
                 .load();
             String current = "—";
             int pending = 0;
-            java.time.Instant lastApplied = null;
+            Instant lastApplied = null;
             for (var inf : flyway.info().all()) {
                 if (inf.getInstalledOn() != null) {
                     current = inf.getVersion() != null ? inf.getVersion().toString() : inf.getDescription();
@@ -95,5 +102,5 @@ public class PlatformFlywayRunner {
         }
     }
 
-    public record SchemaStatus(String currentVersion, int pending, java.time.Instant lastApplied) {}
+    public record SchemaStatus(String currentVersion, int pending, Instant lastApplied) {}
 }

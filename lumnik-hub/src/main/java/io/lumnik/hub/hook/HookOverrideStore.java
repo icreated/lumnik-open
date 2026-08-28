@@ -8,6 +8,7 @@ import jakarta.transaction.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -86,7 +87,7 @@ public class HookOverrideStore {
             }
             entity.setScriptContent(scriptContent);
             entity.setEnabled(true);
-            entity.setUpdatedAt(java.time.OffsetDateTime.now());
+            entity.setUpdatedAt(OffsetDateTime.now());
             repo.persist(entity);
         } finally {
             if (prev == null) TenantContextFilter.CURRENT_TENANT.remove();
@@ -132,7 +133,7 @@ public class HookOverrideStore {
             if (existing.isPresent()) {
                 HookTenantOverride e = existing.get();
                 e.setEnabled(enabled);
-                e.setUpdatedAt(java.time.OffsetDateTime.now());
+                e.setUpdatedAt(OffsetDateTime.now());
                 repo.persist(e);
             } else {
                 repo.persist(new HookTenantOverride(tenantId, hookId, enabled));

@@ -5,9 +5,14 @@ import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.llm.spi.Analytic;
 import io.lumnik.llm.spi.ChatPort;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.InjectMock;
 import io.quarkus.test.junit.QuarkusTest;
+import io.restassured.config.EncoderConfig;
+import io.restassured.config.RestAssuredConfig;
+import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -27,7 +32,7 @@ class ViewGenerateResourceIT {
     @InjectMock @Analytic ChatPort chatPort;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     private void exec(String sql) {
@@ -68,9 +73,9 @@ class ViewGenerateResourceIT {
                 .contentType(containsString("yaml"))
                 .extract().asString();
 
-        org.junit.jupiter.api.Assertions.assertTrue(yaml.contains("kind: \"View\"")
+        Assertions.assertTrue(yaml.contains("kind: \"View\"")
                 || yaml.contains("kind: View"));
-        org.junit.jupiter.api.Assertions.assertTrue(
+        Assertions.assertTrue(
             yaml.lines().findFirst().orElseThrow().contains("--filter 'segment=GOLD'"));
     }
 
@@ -110,9 +115,9 @@ class ViewGenerateResourceIT {
             .then().statusCode(200).extract().asString();
 
         given().header("X-Tenant-Id", "1").contentType("application/yaml")
-            .config(io.restassured.config.RestAssuredConfig.config().encoderConfig(
-                io.restassured.config.EncoderConfig.encoderConfig()
-                    .encodeContentTypeAs("application/yaml", io.restassured.http.ContentType.TEXT)))
+            .config(RestAssuredConfig.config().encoderConfig(
+                EncoderConfig.encoderConfig()
+                    .encodeContentTypeAs("application/yaml", ContentType.TEXT)))
             .queryParam("filter", "segment=GOLD")
             .body(yaml)
         .when().post("/api/views/render")

@@ -12,6 +12,7 @@ import io.lumnik.hub.connector.registry.ConnectorTypeRegistry;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.repository.ConnectorRunRepository;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
@@ -25,6 +26,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -46,7 +48,7 @@ class JdbcWriterPersistIT {
     @Inject UserTransaction utx;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     private String jdbcUrl;
@@ -138,7 +140,7 @@ class JdbcWriterPersistIT {
 
     private ConnectorRun reload(UUID runId) { return runs.findById(runId); }
 
-    private ChunkResult inTx(java.util.concurrent.Callable<ChunkResult> work) throws Exception {
+    private ChunkResult inTx(Callable<ChunkResult> work) throws Exception {
         utx.begin();
         try {
             ChunkResult r = work.call();

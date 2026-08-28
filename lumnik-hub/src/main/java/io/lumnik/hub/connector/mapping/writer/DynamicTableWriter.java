@@ -2,14 +2,15 @@ package io.lumnik.hub.connector.mapping.writer;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.event.RunTableStats;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget;
 import io.lumnik.hub.event.RowEventGate;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import javax.sql.DataSource;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -17,10 +18,13 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.UUID;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
@@ -48,8 +52,8 @@ public class DynamicTableWriter {
   @Inject ObjectMapper mapper;
 
   @Inject
-  @io.quarkus.agroal.DataSource("admin")
-  DataSource adminDs;
+  @DataSource("admin")
+  AgroalDataSource adminDs;
 
   /**
    * Write a batch of rows to the target table.
@@ -113,7 +117,7 @@ public class DynamicTableWriter {
     Set<String> newCols = detectNewColumns(rows, registered);
     if (newCols.isEmpty()) return registered;
 
-    Map<String, String> updated = new java.util.HashMap<>(registered);
+    Map<String, String> updated = new HashMap<>(registered);
     for (String col : newCols) {
       alterAddColumn(spec, col, "TEXT");
       updated.put(col, "TEXT");
@@ -128,7 +132,7 @@ public class DynamicTableWriter {
   }
 
   private Set<String> detectNewColumns(List<Map<String, Object>> rows, Map<String, String> registered) {
-    Set<String> newCols = new java.util.HashSet<>();
+    Set<String> newCols = new HashSet<>();
     for (var r : rows) {
       for (String k : r.keySet()) {
         if (!registered.containsKey(k)) newCols.add(k);
@@ -144,6 +148,21 @@ public class DynamicTableWriter {
 
   // ── DDL ────────────────────────────────────────────────────────────────────
 
+  // ── System column names ────────────────────────────────────────────────────
+  // Declared BEFORE SYSTEM_COLUMNS on purpose: static initialisers run in source order, and
+  // Set.of() rejects null, so a name declared after the set it feeds would fail at class load.
+
+  private static final String ID = "id";
+  /** Content-hash system column — the per-row dedup key written by MultiTargetWriter. */
+  private static final String ROW_HASH = "_row_hash";
+  private static final String INGESTED_AT = "_ingested_at";
+  /** The originating connector, or "ingest" when none is known. */
+  private static final String SOURCE = "_source";
+  /** Ingestion-run system column carrying the originating run id. */
+  private static final String RUN_ID = "_run_id";
+  private static final String MAPPING_VERSION = "_mapping_version";
+  private static final String TENANT_ID = "tenant_id";
+
   /**
    * The columns {@link #createTableDdl} always creates. A payload column carrying one of these
    * names cannot be written: on a fresh table Postgres refuses the duplicate, and on an existing
@@ -151,7 +170,7 @@ public class DynamicTableWriter {
    * Pinned against the DDL by {@code DynamicTableSystemColumnsTest}.
    */
   public static final Set<String> SYSTEM_COLUMNS =
-      Set.of("id", "_row_hash", "_ingested_at", "_source", "_run_id", "_mapping_version", "tenant_id");
+      Set.of(ID, ROW_HASH, INGESTED_AT, SOURCE, RUN_ID, MAPPING_VERSION, TENANT_ID);
 
   /**
    * Refuses payload columns that collide with {@link #SYSTEM_COLUMNS}. Static + package-visible so
@@ -170,7 +189,7 @@ public class DynamicTableWriter {
         if (SYSTEM_COLUMNS.contains(col)) {
           throw new ConfigValidationException(
               "source column '" + col + "' collides with a hub system column "
-              + "(" + String.join(", ", new java.util.TreeSet<>(SYSTEM_COLUMNS)) + "); "
+              + "(" + String.join(", ", new TreeSet<>(SYSTEM_COLUMNS)) + "); "
               + "it must reach the hub under another name — "
               + "jdbc: source.tables[].rename; "
               + "csv: a map-columns row hook under spec.mapping; "
@@ -245,14 +264,9 @@ public class DynamicTableWriter {
 
   // ── DML ────────────────────────────────────────────────────────────────────
 
-  /** Content-hash system column — the per-row dedup key written by MultiTargetWriter. */
-  private static final String ROW_HASH = "_row_hash";
-  /** Ingestion-run system column carrying the originating run id. */
-  private static final String RUN_ID = "_run_id";
-
   /** Fixed system columns, in bind order, always first in the INSERT. */
   private static final List<String> FIXED_COLS =
-      List.of(ROW_HASH, "_source", RUN_ID, "_mapping_version", "tenant_id");
+      List.of(ROW_HASH, SOURCE, RUN_ID, MAPPING_VERSION, TENANT_ID);
 
   // Upper bound on rows per gated multi-row INSERT. The real per-statement size is clamped by
   // {@link #subBatchSize(int)} so that rows × colsPerRow never exceeds Postgres' 65535 bind-param
@@ -500,9 +514,9 @@ public class DynamicTableWriter {
   private void bindRow(PreparedStatement ps, int base, Map<String, Object> row,
                        Map<String, Object> s, Long tenantId, List<String> schemaCols) throws SQLException {
     ps.setString(base + 1, (String) s.get(ROW_HASH));
-    ps.setString(base + 2, (String) s.getOrDefault("_source", "unknown"));
+    ps.setString(base + 2, (String) s.getOrDefault(SOURCE, "unknown"));
     ps.setObject(base + 3, s.get(RUN_ID));
-    ps.setInt(base + 4, (int) s.getOrDefault("_mapping_version", 1));
+    ps.setInt(base + 4, (int) s.getOrDefault(MAPPING_VERSION, 1));
     ps.setLong(base + 5, tenantId);
     for (int i = 0; i < schemaCols.size(); i++) {
       ps.setObject(base + 6 + i, toJdbc(row.get(schemaCols.get(i))));

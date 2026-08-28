@@ -1,13 +1,15 @@
 package io.lumnik.hub.api.data;
 
+import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.CitationLocator;
+import io.lumnik.hub.tenant.RequireTenant;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import javax.sql.DataSource;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -32,13 +34,13 @@ public class DataRowResource {
   @Inject Instance<CitationLocator> citations;
 
   @Inject
-  @io.quarkus.agroal.DataSource("admin")
-  DataSource adminDs;
+  @DataSource("admin")
+  AgroalDataSource adminDs;
 
   @GET
   @Transactional
   public Response get(@PathParam("hash") String rowHash) {
-    long tenant = io.lumnik.hub.tenant.RequireTenant.current();
+    long tenant = RequireTenant.current();
     // 1. Lookup mapping_id from the chunk store — through the seam, never the rag schema
     // directly (Act 2 dry-run: a native-SQL string on rag.chunk 500s in the open edition).
     // No store on the classpath = no citations exist = every hash is honestly unknown.

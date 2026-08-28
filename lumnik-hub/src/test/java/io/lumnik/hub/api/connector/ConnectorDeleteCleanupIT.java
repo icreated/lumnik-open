@@ -9,6 +9,7 @@ import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.runtime.ConnectorEngine;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
@@ -36,7 +37,7 @@ class ConnectorDeleteCleanupIT {
     @Inject UserTransaction utx;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     @Test
@@ -139,7 +140,7 @@ class ConnectorDeleteCleanupIT {
             .isEqualTo(0L);
     }
 
-    @org.junit.jupiter.api.Test
+    @Test
     void purge_does_not_drop_tables_outside_the_dynamic_convention() throws Exception {
         // Blast-radius guard: a registry row pointing at a non-(connector.t_*) table
         // (a corrupted/foreign row) must NOT be dropped by purge.

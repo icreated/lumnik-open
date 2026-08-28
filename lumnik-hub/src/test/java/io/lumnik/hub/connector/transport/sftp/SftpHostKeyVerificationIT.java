@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -71,7 +72,7 @@ class SftpHostKeyVerificationIT {
             "password_env", "SFTP_PASS_UNSET",
             "path", "/upload/*.csv"));
         cfg.putAll(extra);
-        var factory = new SftpFileSourceFactory((java.util.function.Function<String, String>) name -> null);
+        var factory = new SftpFileSourceFactory((Function<String, String>) name -> null);
         var source = (SftpFileSource) factory.build(cfg);
         source.setPasswordOverrideForTest(PASS);
         return source;
@@ -129,7 +130,7 @@ class SftpHostKeyVerificationIT {
 
     @Test
     void an_auth_failure_is_not_blamed_on_the_host_key() {
-        var factory = new SftpFileSourceFactory((java.util.function.Function<String, String>) name -> null);
+        var factory = new SftpFileSourceFactory((Function<String, String>) name -> null);
         var cfg = new HashMap<String, Object>(Map.of(
             "host", "localhost",
             "port", port,

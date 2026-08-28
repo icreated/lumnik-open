@@ -12,6 +12,7 @@ import org.junit.jupiter.api.TestMethodOrder;
 import io.restassured.config.EncoderConfig;
 import io.restassured.config.RestAssuredConfig;
 import io.restassured.http.ContentType;
+import org.postgresql.util.PSQLException;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -48,7 +49,7 @@ class ConnectorRunRlsIT {
         long n = rs.getLong(1);
         st.execute("COMMIT");
         return n;
-      } catch (org.postgresql.util.PSQLException pse) {
+      } catch (PSQLException pse) {
         // "relation does not exist" (SQLSTATE 42P01) — table not yet created; treat as zero.
         if ("42P01".equals(pse.getSQLState())) {
           st.execute("ROLLBACK");

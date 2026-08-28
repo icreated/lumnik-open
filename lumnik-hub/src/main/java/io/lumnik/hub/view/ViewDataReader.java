@@ -2,6 +2,7 @@ package io.lumnik.hub.view;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.sql.TenantRlsScope;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -13,6 +14,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
@@ -33,7 +35,7 @@ public class ViewDataReader {
     private static final int MAX_ROWS = 1000;
 
     @Inject
-    @io.quarkus.agroal.DataSource("readonly")
+    @DataSource("readonly")
     AgroalDataSource readonlyDs;
 
     /** The rows plus the honest cut: {@code truncated} is true when the cap dropped rows. */
@@ -125,7 +127,7 @@ public class ViewDataReader {
      *  information_schema's ({@code data_type}), which spells the varchar family out in words. */
     private static boolean isTextType(String pgType) {
         if (pgType == null) return false;
-        return switch (pgType.toLowerCase(java.util.Locale.ROOT)) {
+        return switch (pgType.toLowerCase(Locale.ROOT)) {
             case "text", "varchar", "character varying", "char", "character", "bpchar" -> true;
             default -> false;
         };

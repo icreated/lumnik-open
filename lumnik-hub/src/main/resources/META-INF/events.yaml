@@ -18,24 +18,6 @@ events:
       orgId: long
       tenantId: long
       newParentId: long
-  - type: list.value.added
-    description: "A new value was added to a tenant business list."
-    payload:
-      listCode: string
-      value:    string
-      name:     string
-  - type: list.value.updated
-    description: "An existing list value's display name was changed."
-    payload:
-      listCode: string
-      value:    string
-      oldName:  string
-      newName:  string
-  - type: list.value.removed
-    description: "A list value was deactivated or removed."
-    payload:
-      listCode: string
-      value:    string
   - type: org.archived
     description: "An organisation was archived."
     payload:

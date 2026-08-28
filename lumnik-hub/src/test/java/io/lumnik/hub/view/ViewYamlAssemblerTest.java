@@ -1,8 +1,10 @@
 package io.lumnik.hub.view;
 
 import io.lumnik.extraction.spi.ask.SchemaCard;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -79,7 +81,7 @@ class ViewYamlAssemblerTest {
             "Desk", List.of("name"));
         String yaml = assembler.assemble(m, List.of("name~L'Oréal"));
         String firstLine = yaml.lines().findFirst().orElseThrow();
-        org.junit.jupiter.api.Assertions.assertEquals(
+        Assertions.assertEquals(
             "# lm view -f desk.yaml --filter 'name~L'\\''Oréal'", firstLine);
     }
 
@@ -118,7 +120,7 @@ class ViewYamlAssemblerTest {
             "Desk", List.of("name"));
 
         IllegalArgumentException nul = assertThrows(IllegalArgumentException.class,
-            () -> assembler.assemble(m, java.util.Arrays.asList((String) null)));
+            () -> assembler.assemble(m, Arrays.asList((String) null)));
         assertTrue(nul.getMessage().contains("null or blank"));
 
         IllegalArgumentException blank = assertThrows(IllegalArgumentException.class,

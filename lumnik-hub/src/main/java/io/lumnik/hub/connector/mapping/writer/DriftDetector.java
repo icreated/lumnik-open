@@ -1,8 +1,9 @@
 package io.lumnik.hub.connector.mapping.writer;
 
+import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import javax.sql.DataSource;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -20,8 +21,8 @@ import java.util.Map;
 public class DriftDetector {
 
   @Inject
-  @io.quarkus.agroal.DataSource("admin")
-  DataSource adminDs;
+  @DataSource("admin")
+  AgroalDataSource adminDs;
 
   public List<String> detect(String tableSchema, String tableName, Map<String, String> expectedSchema) {
     List<String> warnings = new ArrayList<>();

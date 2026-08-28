@@ -9,6 +9,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -50,7 +51,7 @@ class ViewScopeBindingUnitTest {
   void clear() { CurrentTenantHolder.clear(); CurrentRolesHolder.clear(); }
 
   private static void bindTo(String... scopes) {
-    var roles = new java.util.HashSet<String>(Set.of("lm_user"));
+    var roles = new HashSet<String>(Set.of("lm_user"));
     for (String s : scopes) roles.add("scope:" + s);
     CurrentRolesHolder.set(roles);
   }

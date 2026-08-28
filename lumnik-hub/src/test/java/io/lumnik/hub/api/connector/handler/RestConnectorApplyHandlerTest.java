@@ -9,6 +9,7 @@ import io.lumnik.hub.validator.JsonNodes;
 import io.quarkus.hibernate.orm.panache.PanacheQuery;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
 
 import java.util.Optional;
 
@@ -60,7 +61,7 @@ class RestConnectorApplyHandlerTest {
         handler.apply(M.readTree(doc), 1L);
 
         ArgumentCaptor<Connector> captor = ArgumentCaptor.forClass(Connector.class);
-        org.mockito.Mockito.verify(connRepo).persist(captor.capture());
+        Mockito.verify(connRepo).persist(captor.capture());
         return captor.getValue();
     }
 

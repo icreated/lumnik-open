@@ -1,9 +1,16 @@
 package io.lumnik.hub.api.connector;
 
+import io.lumnik.hub.connector.api.types.RunTrigger;
+import io.lumnik.hub.connector.domain.Connector;
+import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
+import io.lumnik.hub.connector.repository.ConnectorRunRepository;
+import io.lumnik.hub.connector.runtime.ConnectorEngine;
+import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
@@ -15,6 +22,7 @@ import jakarta.ws.rs.DELETE;
 import jakarta.transaction.Transactional;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Path("/api/platform/connectors")
@@ -23,9 +31,9 @@ import java.util.UUID;
 public class ConnectorAdminResource {
 
   @Inject ConnectorRepository repo;
-  @Inject io.lumnik.hub.connector.runtime.ConnectorEngine engine;
-  @Inject io.lumnik.hub.connector.repository.ConnectorRunRepository runs;
-  @Inject io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry dynamicTables;
+  @Inject ConnectorEngine engine;
+  @Inject ConnectorRunRepository runs;
+  @Inject DynamicTableRegistry dynamicTables;
 
   @GET
   @Transactional
@@ -49,7 +57,7 @@ public class ConnectorAdminResource {
   @POST
   @Transactional
   public Response create(ConnectorCreateRequest req) {
-    var c = new io.lumnik.hub.connector.domain.Connector();
+    var c = new Connector();
     c.setTenantId(req.tenantId());
     c.setName(req.name());
     c.setTypeId(req.typeId());
@@ -90,11 +98,11 @@ public class ConnectorAdminResource {
   @Path("{id}/run")
   @Consumes(MediaType.WILDCARD)
   public Response runNow(@PathParam("id") UUID id,
-                          @jakarta.ws.rs.HeaderParam("X-User-Id") String userIdStr) {
+                          @HeaderParam("X-User-Id") String userIdStr) {
     // Tenant-scoped authorization: the connector must be visible to the REQUEST tenant — RLS itself
     // enforces it (another tenant's connector is a legitimate 404). runNow stays deliberately
     // non-@Transactional (each run row commits in its own tx), so this read opens its own tx.
-    boolean visible = io.quarkus.narayana.jta.QuarkusTransaction.requiringNew()
+    boolean visible = QuarkusTransaction.requiringNew()
         .call(() -> repo.findById(id) != null);
     if (!visible) return Response.status(404).build();
     Long userId = userIdStr != null ? safeParseLong(userIdStr) : 0L;
@@ -102,15 +110,15 @@ public class ConnectorAdminResource {
     // REAL run id(s) BEFORE the async chunk loop runs — the caller can immediately dereference them.
     // Deliberately NOT @Transactional: each run row must commit in its own transaction so the async
     // worker (a separate transaction) can read the row it must finalize.
-    var runIds = engine.submitRun(id, new io.lumnik.hub.connector.api.types.RunTrigger.Manual(userId));
+    var runIds = engine.submitRun(id, new RunTrigger.Manual(userId));
     if (runIds.isEmpty()) {
       return Response.status(422)
-          .entity(java.util.Map.of("error", "no runnable endpoint for connector " + id)).build();
+          .entity(Map.of("error", "no runnable endpoint for connector " + id)).build();
     }
     // Single-endpoint (flat) connectors return one run id under "runId"; multi-endpoint fan-out also
     // exposes every run under "runIds".
     return Response.status(202)
-        .entity(java.util.Map.of(
+        .entity(Map.of(
             "runId", runIds.get(0).toString(),
             "runIds", runIds.stream().map(UUID::toString).toList()))
         .build();

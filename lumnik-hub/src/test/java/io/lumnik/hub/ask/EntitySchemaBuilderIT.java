@@ -2,6 +2,7 @@ package io.lumnik.hub.ask;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.SchemaCard;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,7 +25,7 @@ class EntitySchemaBuilderIT {
     @Inject EntitySchemaBuilder builder;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     private static final String MANIFEST = """

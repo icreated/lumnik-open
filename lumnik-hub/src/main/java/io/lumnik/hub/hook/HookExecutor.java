@@ -7,11 +7,13 @@ import io.lumnik.hub.tenant.TenantContextFilter;
 import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Alternative;
+import jakarta.enterprise.inject.Instance;
 import jakarta.enterprise.inject.spi.CDI;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Real HookSpi implementation. Declared @Alternative @Priority(1) to override
@@ -86,7 +88,7 @@ public class HookExecutor implements HookSpi {
     private void invokeJava(HookHandler.JavaHandler jh, LifecycleEvent event, Object entity, HookContext ctx)
             throws ClassNotFoundException {
         Class<?> cls = Class.forName(jh.className());
-        jakarta.enterprise.inject.Instance inst = CDI.current().select(cls);
+        Instance inst = CDI.current().select(cls);
         Object handler = inst.get();
         try {
             if (handler instanceof LifecycleHook lh && event != null) {
@@ -106,7 +108,7 @@ public class HookExecutor implements HookSpi {
                               LifecycleEvent event, Object entity, HookContext ctx) {
         try {
             Long tenantId = TenantContextFilter.CURRENT_TENANT.get();
-            java.util.Optional<String> scriptOverride = overrides.findScript(tenantId, b.id());
+            Optional<String> scriptOverride = overrides.findScript(tenantId, b.id());
             if (scriptOverride.isPresent()) {
                 kotlinHost.executeSource(scriptOverride.get(), event, entity, ctx);
             } else {

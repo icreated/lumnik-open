@@ -245,7 +245,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
     private static RestRequest firstRequest(PaginationStrategy pag, Map<String, Object> cfg,
                                             ConnectorEndpoint ep, Incremental inc, Parsed parsed) {
         EndpointConfig ec = new EndpointConfig((String) cfg.get("base_url"), ep.getMethod(), ep.getPath(), cfg);
-        RestRequest req = RequestHeaders.apply(pag.first(ec, null), cfg.get("headers"), RequestHeaders.ENV);
+        RestRequest req = RequestHeaders.apply(pag.first(ec, null), cfg.get(HEADERS), RequestHeaders.ENV);
         boolean canSend = inc.enabled() && parsed.watermark != null && inc.param() != null;
         return canSend ? req.withQuery(inc.param(), parsed.watermark) : req;
     }
@@ -293,7 +293,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * lost its query; using only {@code query} would silently fall back to the Noop validator.
      */
     static boolean isGraphQlEndpoint(Map<String, Object> cfg) {
-        return "graphql".equals(cfg.get("kind")) || cfg.get("query") != null;
+        return "graphql".equals(cfg.get("kind")) || cfg.get(QUERY) != null;
     }
 
     /** Whether an endpoint is a SOAP request-shape — authoritative flag {@code kind: soap}. */
@@ -392,7 +392,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
             q.fields().forEachRemaining(e -> query.put(e.getKey(), e.getValue().asText()));
         }
         RestRequest req = RequestHeaders.apply(new RestRequest(method, url, Map.of(), query, text(resume, BODY)),
-            cfg.get("headers"), RequestHeaders.ENV);
+            cfg.get(HEADERS), RequestHeaders.ENV);
         JsonNode h = resume.get(HEADERS);
         if (h != null && h.isObject()) {
             for (var it = h.fields(); it.hasNext(); ) {

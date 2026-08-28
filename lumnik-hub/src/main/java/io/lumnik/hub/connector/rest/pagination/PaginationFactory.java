@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.pagination;
 
+import io.lumnik.hub.connector.rest.soap.SoapPaginationStrategy;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.Map;
@@ -21,7 +22,7 @@ public class PaginationFactory {
             case "offset"      -> new OffsetPaginationStrategy(c);
             case "link-header" -> new LinkHeaderPaginationStrategy(c);
             case "relay"       -> new RelayPaginationStrategy(c);
-            case "soap"        -> new io.lumnik.hub.connector.rest.soap.SoapPaginationStrategy(c);
+            case "soap"        -> new SoapPaginationStrategy(c);
             case "body-link"   -> new BodyLinkPaginationStrategy(c);
             case "custom"      -> {
                 String scriptRef = c.get("script_ref");

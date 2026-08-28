@@ -2,6 +2,7 @@ package io.lumnik.hub.hook;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.common.security.RequiresPermission;
+import jakarta.enterprise.inject.Instance;
 import jakarta.enterprise.inject.spi.CDI;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
@@ -46,7 +47,7 @@ public class CalloutResource {
             case HookHandler.JavaHandler jh -> {
                 Class<?> handlerClass = Class.forName(jh.className());
                 @SuppressWarnings({"rawtypes", "unchecked"})
-                jakarta.enterprise.inject.Instance inst = CDI.current().select(handlerClass);
+                Instance inst = CDI.current().select(handlerClass);
                 Object handler = inst.get();
                 try {
                     yield ((Callout<Object>) handler).invoke(entityInstance, ctx);

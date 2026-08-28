@@ -5,6 +5,7 @@ import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -18,6 +19,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Curated writes to the saved-view store: apply = validate-then-upsert. A view that
@@ -30,12 +32,12 @@ import java.util.Optional;
 @RequiresPermission("lm_integrator")
 public class ViewApplyResource {
   /** Sibling endpoint literals under /api/views — a view so named would list but never fetch. */
-  static final java.util.Set<String> RESERVED_NAMES =
-      java.util.Set.of("apply", "render", "detail", "generate");
+  static final Set<String> RESERVED_NAMES =
+      Set.of("apply", "render", "detail", "generate");
 
   @Inject SchemaCardStore cards;
   @Inject SavedViewStore store;
-  @Inject io.lumnik.hub.audit.AuditRecorder audit;
+  @Inject AuditRecorder audit;
 
   private final ViewManifestParser parser = new ViewManifestParser();
   private final ViewResolver resolver = new ViewResolver();
@@ -94,7 +96,7 @@ public class ViewApplyResource {
     // explicit capture is the only record of who changed which métier screen when.
     audit.record("SavedView", name, "APPLY", Map.of(
         "scope", manifest.scope(),
-        "manifest_sha256", io.lumnik.hub.audit.AuditRecorder.sha256(body)));
+        "manifest_sha256", AuditRecorder.sha256(body)));
     return Response.ok(Map.of("name", name, "scope", manifest.scope())).build();
   }
 }

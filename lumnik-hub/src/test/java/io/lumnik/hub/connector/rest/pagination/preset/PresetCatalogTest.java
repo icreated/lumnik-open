@@ -6,6 +6,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -27,7 +28,7 @@ class PresetCatalogTest {
     @Test
     void every_catalogue_preset_expands_to_a_real_kind() throws Exception {
         record P(String name, String extra) {}
-        var presets = java.util.List.of(
+        var presets = List.of(
             new P("spring-page", null), new P("spring-slice", null), new P("micronaut", null),
             new P("drf-page", null), new P("drf-limit-offset", null), new P("fastapi", null),
             new P("nestjs", null), new P("json-api", null), new P("sequelize", null),

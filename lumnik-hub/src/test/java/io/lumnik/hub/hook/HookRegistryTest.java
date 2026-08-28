@@ -1,5 +1,6 @@
 package io.lumnik.hub.hook;
 
+import io.lumnik.bpartner.partner.Partner;
 import org.junit.jupiter.api.Test;
 
 import java.util.EnumSet;
@@ -20,7 +21,7 @@ class HookRegistryTest {
             100, List.of("*"), true);
         r.register(b);
 
-        assertThat(r.findFor(io.lumnik.bpartner.partner.Partner.class,
+        assertThat(r.findFor(Partner.class,
                               LifecycleEvent.BEFORE_CREATE, 42L)).contains(b);
     }
 
@@ -35,7 +36,7 @@ class HookRegistryTest {
             100, List.of("*"), false);
         r.register(b);
 
-        assertThat(r.findFor(io.lumnik.bpartner.partner.Partner.class,
+        assertThat(r.findFor(Partner.class,
                               LifecycleEvent.AFTER_UPDATE, 1L)).isEmpty();
         assertThat(r.allBindings()).contains(b);
     }

@@ -1,5 +1,6 @@
 package io.lumnik.hub.admin;
 
+import io.lumnik.common.security.CurrentRolesHolder;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,7 +16,7 @@ class TenantListResourceIT {
 
     @BeforeEach
     void setup() {
-        io.lumnik.common.security.CurrentRolesHolder.set(Set.of("lm_superadmin"));
+        CurrentRolesHolder.set(Set.of("lm_superadmin"));
         // Ensure at least one tenant exists in the DB
         given().contentType("application/json")
             .body("""
@@ -26,7 +27,7 @@ class TenantListResourceIT {
 
     @AfterEach
     void clear() {
-        io.lumnik.common.security.CurrentRolesHolder.clear();
+        CurrentRolesHolder.clear();
     }
 
     @Test

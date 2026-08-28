@@ -1,8 +1,11 @@
 package io.lumnik.hub.event;
 
+import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import javax.sql.DataSource;
+import org.jboss.logging.Logger;
+import java.sql.Array;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -19,12 +22,12 @@ public class RowEventGate {
 
     public static final String DATA_ROW_CHANGED = "data.row.changed";
 
-    private static final org.jboss.logging.Logger LOG =
-        org.jboss.logging.Logger.getLogger(RowEventGate.class);
+    private static final Logger LOG =
+        Logger.getLogger(RowEventGate.class);
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
-    DataSource adminDs;
+    @DataSource("admin")
+    AgroalDataSource adminDs;
 
     public boolean enabled(Long tenantId, String table) {
         try (Connection c = adminDs.getConnection()) {
@@ -34,7 +37,7 @@ public class RowEventGate {
                 ps.setLong(1, tenantId);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
-                        java.sql.Array arr = rs.getArray(1);
+                        Array arr = rs.getArray(1);
                         if (arr == null) continue; // event_types is NOT NULL, but never NPE on drift
                         String[] types = (String[]) arr.getArray();
                         String filter = rs.getString(2);

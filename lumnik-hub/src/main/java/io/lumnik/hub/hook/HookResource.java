@@ -1,6 +1,7 @@
 package io.lumnik.hub.hook;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.hub.tenant.TenantContextFilter;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
@@ -43,7 +44,7 @@ public class HookResource {
                            ToggleRequest body) {
         Long tenantId = queryTenantId != null
             ? queryTenantId
-            : io.lumnik.hub.tenant.TenantContextFilter.CURRENT_TENANT.get();
+            : TenantContextFilter.CURRENT_TENANT.get();
         if (tenantId == null) throw new BadRequestException("Tenant required");
         boolean hookExists = registry.allBindings().stream().anyMatch(h -> h.id().equals(hookId));
         if (!hookExists) throw new NotFoundException("Unknown hook id: " + hookId);

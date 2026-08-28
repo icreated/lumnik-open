@@ -2,6 +2,7 @@ package io.lumnik.hub.api.validator;
 
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.config.EncoderConfig;
+import io.restassured.http.ContentType;
 import org.junit.jupiter.api.Test;
 import static io.restassured.RestAssured.given;
 import static io.restassured.RestAssured.config;
@@ -30,7 +31,7 @@ class ConnectorValidatorResourceTest {
             """;
         given()
             .config(config().encoderConfig(
-                EncoderConfig.encoderConfig().encodeContentTypeAs("application/x-yaml", io.restassured.http.ContentType.TEXT)))
+                EncoderConfig.encoderConfig().encodeContentTypeAs("application/x-yaml", ContentType.TEXT)))
             .contentType("application/x-yaml").body(yaml)
             .when().post("/api/platform/validator/validate")
             .then().statusCode(200)
@@ -59,7 +60,7 @@ class ConnectorValidatorResourceTest {
             """;
         given()
             .config(config().encoderConfig(
-                EncoderConfig.encoderConfig().encodeContentTypeAs("application/yaml", io.restassured.http.ContentType.TEXT)))
+                EncoderConfig.encoderConfig().encodeContentTypeAs("application/yaml", ContentType.TEXT)))
             .contentType("application/yaml").body(yaml)
             .when().post("/api/platform/validator/validate")
             .then().statusCode(200)

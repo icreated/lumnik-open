@@ -6,6 +6,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.hub.tenant.TenantContextFilter;
+import io.quarkus.agroal.DataSource;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
@@ -21,6 +22,7 @@ import org.jboss.logging.Logger;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -41,7 +43,7 @@ public class InboxResource {
     private static final ObjectMapper M = new ObjectMapper();
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     public record InboxEntry(long id, String occurredAt, String type, String process, String message,
@@ -132,7 +134,7 @@ public class InboxResource {
     }
 
     /** Shape one outbox row; a non-object payload degrades to source-derived fallbacks, never a 500. */
-    private static InboxEntry shape(ResultSet rs) throws java.sql.SQLException {
+    private static InboxEntry shape(ResultSet rs) throws SQLException {
         String type = rs.getString("event_type");
         String source = rs.getString("source");
         String process = source != null && source.startsWith("process:")

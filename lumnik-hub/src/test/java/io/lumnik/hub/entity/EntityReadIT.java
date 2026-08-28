@@ -2,6 +2,7 @@ package io.lumnik.hub.entity;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
 import io.restassured.config.EncoderConfig;
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.Statement;
 
 import io.restassured.path.json.JsonPath;
@@ -28,7 +30,7 @@ import static org.hamcrest.Matchers.hasItems;
 class EntityReadIT {
 
   @Inject
-  @io.quarkus.agroal.DataSource("admin")
+  @DataSource("admin")
   AgroalDataSource adminDs;
 
   static final String MANIFEST = """
@@ -114,7 +116,7 @@ class EntityReadIT {
     // A refused read must never be recorded as a successful access.
     try (Connection c = adminDs.getConnection();
          Statement st = c.createStatement();
-         java.sql.ResultSet rs = st.executeQuery(
+         ResultSet rs = st.executeQuery(
              "SELECT count(*) FROM core.audit_outbox WHERE entity_key = 'nope' AND operation = 'READ'")) {
       rs.next();
       assertThat(rs.getLong(1)).as("a 404 must not write a READ audit row").isZero();

@@ -206,9 +206,17 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
                                  List<Map<String, Object>> rows) throws Exception {
         if (source instanceof SeekableSource && CheckpointingReader.canCheckpoint(cfg.encoding())) {
             CheckpointingReader rdr = null;
+            InputStream in = null;
             try {
-                rdr = new CheckpointingReader(Files.newInputStream(temp), cfg.encoding());
+                in = Files.newInputStream(temp);
+                rdr = new CheckpointingReader(in, cfg.encoding());
             } catch (Exception openFailed) {
+                // The stream is named so the fallback can close it. Constructed inline it was
+                // unreachable, and openResumed below — and tryFirstWindow in
+                // CsvFileConnectorType, the same method's other copy — already close theirs.
+                if (in != null) {
+                    try { in.close(); } catch (IOException ignored) { /* best-effort */ }
+                }
                 LOG.debugf(openFailed, "csv fast path unavailable for %s — using the skip-parse fallback",
                     next.path());
             }

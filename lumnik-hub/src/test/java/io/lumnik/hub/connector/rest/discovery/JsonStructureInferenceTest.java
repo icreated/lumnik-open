@@ -1,6 +1,8 @@
 package io.lumnik.hub.connector.rest.discovery;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.jayway.jsonpath.JsonPath;
 import org.junit.jupiter.api.Test;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
@@ -54,7 +56,7 @@ class JsonStructureInferenceTest {
         // every path still resolves to its original value
         String json = M.writeValueAsString(item);
         for (var p : promotes) {
-            Object val = com.jayway.jsonpath.JsonPath.read(json, (String) p.get("path"));
+            Object val = JsonPath.read(json, (String) p.get("path"));
             assertNotNull(val, "path " + p.get("path") + " did not resolve");
         }
     }
@@ -65,7 +67,7 @@ class JsonStructureInferenceTest {
      * (or points at the wrong key); the path builder must escape and use one consistent quote style.
      */
     @Test void promote_paths_survive_quotes_and_backslashes() throws Exception {
-        com.fasterxml.jackson.databind.node.ObjectNode item = M.createObjectNode();
+        ObjectNode item = M.createObjectNode();
         item.put("it's", "v_apostrophe");
         item.put("a\"b", "v_quote");
         item.put("a\"'b", "v_both");
@@ -76,7 +78,7 @@ class JsonStructureInferenceTest {
         String json = M.writeValueAsString(item);
 
         List<Object> read = promotes.stream()
-            .map(p -> com.jayway.jsonpath.JsonPath.<Object>read(json, (String) p.get("path")))
+            .map(p -> JsonPath.<Object>read(json, (String) p.get("path")))
             .toList();
         assertEquals(
             Set.of("v_apostrophe", "v_quote", "v_both", "v_backslash", "v_clean"),

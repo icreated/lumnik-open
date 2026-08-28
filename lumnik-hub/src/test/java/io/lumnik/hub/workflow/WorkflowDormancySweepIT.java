@@ -1,6 +1,7 @@
 package io.lumnik.hub.workflow;
 
 import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,6 +12,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -24,7 +26,7 @@ class WorkflowDormancySweepIT {
     @Inject WorkflowObservationStore observations;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     private static final long TENANT = 7501L;
@@ -88,7 +90,7 @@ class WorkflowDormancySweepIT {
                     + "WHERE tenant_id = ? AND event_type LIKE 'decision.dormant.%' ORDER BY id")) {
             ps.setLong(1, TENANT);
             try (ResultSet rs = ps.executeQuery()) {
-                List<Map<String, String>> out = new java.util.ArrayList<>();
+                List<Map<String, String>> out = new ArrayList<>();
                 while (rs.next()) out.add(Map.of("type", rs.getString(1),
                     "key", rs.getString(2), "payload", rs.getString(3)));
                 return out;

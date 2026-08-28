@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.csv;
 
+import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
@@ -55,7 +56,7 @@ public class CsvFileReader {
     Charset enc = EncodingDetector.detect(file);
     char delim = DelimiterDetector.detect(file, enc);
     return new Config(enc, delim, true, true,
-        java.util.List.of("", "NULL", "null", "#N/A"), null);
+        List.of("", "NULL", "null", "#N/A"), null);
   }
 
   /** Outcome of a bounded read: events consumed past the skip point, and whether the file ended. */
@@ -209,44 +210,57 @@ public class CsvFileReader {
         consumed++;
         good++;
       }
-      // Chunk is full. Peek one record ahead so a file that ends exactly on this boundary is
-      // reported as exhausted now — sparing the next chunk a full re-open + skip just to hit EOF.
-      if (ckpt == null) {
-        boolean more;
-        try {
-          more = it.hasNext();
-          if (more) rowsTokenized++;   // the peek parses one record ahead
-        } catch (UncheckedIOException desyncAhead) {
-          more = true;   // a tokenizer desync sits just past the boundary; the next window isolates it
-        }
-        return new Scan(consumed, !more, null, 0L, headers);
-      }
-      // Checkpoint path: the peeked record's start IS the resumable position (design finding 4 —
-      // no extra parse work: hasNext() already tokenized it; next() surfaces the cached record).
-      // Line accounting for file-absolute DLQ lines: capture the physical lines consumed BEFORE
-      // the peek — the resumed window's parser restarts its line counter at the anchor, and adds
-      // this base back. (An ignored empty line sitting exactly on the window boundary shifts the
-      // base by its count — an accepted corner: the affected value is a diagnostic line number,
-      // never a row.)
-      long boundaryLine = lineBase + parser.getCurrentLineNumber();
-      CSVRecord peeked;
-      try {
-        if (!it.hasNext()) return new Scan(consumed, true, null, 0L, headers);
-        peeked = it.next();
-        rowsTokenized++;
-      } catch (UncheckedIOException desyncAhead) {
-        // Desync just past the boundary: report "more" with no checkpoint — the caller writes a
-        // legacy cursor and the next (fallback) window isolates it, exactly as the plain path.
-        return new Scan(consumed, false, null, 0L, headers);
-      }
-      CheckpointingReader.Checkpoint cp;
-      try {
-        cp = ckpt.checkpoint(charBase + peeked.getCharacterPosition());
-      } catch (CheckpointingReader.UncheckpointableCharsetException offAllowlist) {
-        cp = null;   // rows already delivered are fine; only the cursor stays legacy-shaped
-      }
-      return new Scan(consumed, false, cp, boundaryLine, headers);
+      // The window is full; what the boundary means is its own question.
+      return boundary(it, parser, ckpt, charBase, lineBase, consumed, headers);
     }
+  }
+
+  /**
+   * What the end of a full window MEANS. Peeking one record ahead is what lets a file that ends
+   * exactly on the boundary be reported as exhausted now, sparing the next chunk a full re-open and
+   * skip just to hit EOF. Four outcomes live here and none of them belongs in the row loop: clean
+   * EOF, a tokenizer desync just past the boundary, a resumable checkpoint, and a charset that
+   * cannot be checkpointed (rows already delivered are fine; only the cursor stays legacy-shaped).
+   */
+  private Scan boundary(Iterator<CSVRecord> it, CSVParser parser, CheckpointingReader ckpt,
+                        long charBase, long lineBase, long consumed, List<String> headers) {
+    // Chunk is full. Peek one record ahead so a file that ends exactly on this boundary is
+    // reported as exhausted now — sparing the next chunk a full re-open + skip just to hit EOF.
+    if (ckpt == null) {
+      boolean more;
+      try {
+        more = it.hasNext();
+        if (more) rowsTokenized++;   // the peek parses one record ahead
+      } catch (UncheckedIOException desyncAhead) {
+        more = true;   // a tokenizer desync sits just past the boundary; the next window isolates it
+      }
+      return new Scan(consumed, !more, null, 0L, headers);
+    }
+    // Checkpoint path: the peeked record's start IS the resumable position (design finding 4 —
+    // no extra parse work: hasNext() already tokenized it; next() surfaces the cached record).
+    // Line accounting for file-absolute DLQ lines: capture the physical lines consumed BEFORE
+    // the peek — the resumed window's parser restarts its line counter at the anchor, and adds
+    // this base back. (An ignored empty line sitting exactly on the window boundary shifts the
+    // base by its count — an accepted corner: the affected value is a diagnostic line number,
+    // never a row.)
+    long boundaryLine = lineBase + parser.getCurrentLineNumber();
+    CSVRecord peeked;
+    try {
+      if (!it.hasNext()) return new Scan(consumed, true, null, 0L, headers);
+      peeked = it.next();
+      rowsTokenized++;
+    } catch (UncheckedIOException desyncAhead) {
+      // Desync just past the boundary: report "more" with no checkpoint — the caller writes a
+      // legacy cursor and the next (fallback) window isolates it, exactly as the plain path.
+      return new Scan(consumed, false, null, 0L, headers);
+    }
+    CheckpointingReader.Checkpoint cp;
+    try {
+      cp = ckpt.checkpoint(charBase + peeked.getCharacterPosition());
+    } catch (CheckpointingReader.UncheckpointableCharsetException offAllowlist) {
+      cp = null;   // rows already delivered are fine; only the cursor stays legacy-shaped
+    }
+    return new Scan(consumed, false, cp, boundaryLine, headers);
   }
 
   /**
@@ -277,7 +291,7 @@ public class CsvFileReader {
           .build();
     }
     if (effective.columns() == null || effective.columns().isEmpty()) {
-      throw new io.lumnik.hub.connector.exceptions.ConfigValidationException(
+      throw new ConfigValidationException(
           "csv: has-header=false requires an explicit 'columns' list "
           + "(headerless files have no column names to infer)");
     }

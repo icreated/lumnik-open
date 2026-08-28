@@ -5,11 +5,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import io.lumnik.hub.connector.mapping.MappingValidationException;
 import io.lumnik.hub.sql.SqlIdentifiers;
+import org.jboss.logging.Logger;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public final class MappingLoader {
 
@@ -73,7 +75,7 @@ public final class MappingLoader {
   }
 
   private static MappingTarget.Rag parseRag(JsonNode r) {
-    java.util.Map<String, String> meta = new LinkedHashMap<>();
+    Map<String, String> meta = new LinkedHashMap<>();
     if (r.has("metadata")) {
       r.get("metadata").fields().forEachRemaining(e -> meta.put(e.getKey(), e.getValue().asText()));
     }
@@ -154,7 +156,7 @@ public final class MappingLoader {
     // Honest boundary (tribunal B3): the policy is parsed and carried on MappingSpec,
     // but NO runtime consumer enforces it yet — rows follow the engine's default
     // behavior regardless. Warn so a template author doesn't rely on it silently.
-    org.jboss.logging.Logger.getLogger(MappingLoader.class).warn(
+    Logger.getLogger(MappingLoader.class).warn(
         "mapping template declares on-error, which is parsed but NOT enforced yet — "
             + "rows follow the engine's default error handling");
     String def = n.path("default").asText("soft");

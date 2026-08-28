@@ -9,6 +9,7 @@ import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 import org.jboss.logging.Logger;
 import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -81,8 +82,8 @@ class HelloWorldConnectorTypeTest {
     ItemWriter<HelloWorldConnectorType.HelloRecord> writer =
         (ItemWriter<HelloWorldConnectorType.HelloRecord>) type.writer(ctx(10));
     var items = List.of(
-        new HelloWorldConnectorType.HelloRecord(0, "Hello #0", java.time.Instant.now()),
-        new HelloWorldConnectorType.HelloRecord(1, "Hello #1", java.time.Instant.now())
+        new HelloWorldConnectorType.HelloRecord(0, "Hello #0", Instant.now()),
+        new HelloWorldConnectorType.HelloRecord(1, "Hello #1", Instant.now())
     );
     var outcome = writer.write(items, ctx(10));
     assertThat(outcome).isInstanceOf(WriteOutcome.AllWritten.class);

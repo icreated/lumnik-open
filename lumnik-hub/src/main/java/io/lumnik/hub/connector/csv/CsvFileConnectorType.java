@@ -324,7 +324,7 @@ public class CsvFileConnectorType implements ConnectorType {
      */
     private final FileSource source;
     private List<Path> resolvedFiles;
-    private final List<io.lumnik.hub.connector.api.types.MalformedRecord> malformedBuffer = new ArrayList<>();
+    private final List<MalformedRecord> malformedBuffer = new ArrayList<>();
 
     CsvGlobCursorReader(String pathPattern, ParserOverrides overrides) {
       this.pathPattern = pathPattern;
@@ -338,12 +338,16 @@ public class CsvFileConnectorType implements ConnectorType {
     }
 
     @Override
-    public List<io.lumnik.hub.connector.api.types.MalformedRecord> drainMalformed() {
+    public List<MalformedRecord> drainMalformed() {
       var out = List.copyOf(malformedBuffer);
       malformedBuffer.clear();
       return out;
     }
 
+    /**
+     * Three movements: resolve where the cursor left off, walk the files filling one chunk, encode
+     * what remains. The loop is the only part that carries state, so it is the only part extracted.
+     */
     @Override
     public ReadResult<Map<String, Object>> read(int chunkSize, ConnectorCursor cursor, ConnectorContext ctx) {
       ensureResolved();
@@ -352,23 +356,39 @@ public class CsvFileConnectorType implements ConnectorType {
       CsvCursor start = cursor.isEmpty()
           ? new CsvCursor(resolvedFiles.get(0).toString(), 0L)
           : decodeCursor(cursor);
-      String currentFile = start.file();
-      long recordsConsumed = start.rowsProcessed();   // now: events consumed (good + malformed)
 
-      int fileIndex = indexOfFile(currentFile);
-      if (fileIndex < 0) {
-        return new ReadResult.EndOfStream<>(List.of());
-      }
+      int fileIndex = indexOfFile(start.file());
+      // The cursor names a file this run no longer resolves — it was archived, moved or deleted
+      // between runs. Nothing left to read from here.
+      if (fileIndex < 0) return new ReadResult.EndOfStream<>(List.of());
 
       List<Map<String, Object>> chunk = new ArrayList<>(chunkSize);
+      Walk walk = fillChunk(chunk, chunkSize, fileIndex, start);
+
+      if (walk.fileIndex() >= resolvedFiles.size()) {
+        return new ReadResult.EndOfStream<>(chunk);
+      }
+      return new ReadResult.HasMore<>(chunk, encodeCursor(walk.file(), walk.consumed(), walk.last()));
+    }
+
+    /** Where the walk stopped: the file it is on, how much of it is consumed, and its last window. */
+    private record Walk(int fileIndex, String file, long consumed, WindowOutcome last) {}
+
+    /**
+     * Walks files from {@code fileIndex}, one window at a time, until the chunk is full or the files
+     * run out. Good rows stream straight into {@code chunk} and malformed ones into the buffer, so
+     * the unread tail of a large file is never parsed or materialized.
+     */
+    private Walk fillChunk(List<Map<String, Object>> chunk, int chunkSize, int fileIndex, CsvCursor start) {
+      String currentFile = start.file();
+      long recordsConsumed = start.rowsProcessed();   // events consumed (good + malformed)
       WindowOutcome last = null;
+
       while (chunk.size() < chunkSize && fileIndex < resolvedFiles.size()) {
         Path file = resolvedFiles.get(fileIndex);
         boolean isCursorFile = file.toString().equals(currentFile);
         long skip = isCursorFile ? recordsConsumed : 0L;
 
-        // Stream good rows straight into the chunk and malformed rows into the buffer, stopping once
-        // the chunk is full — the unread tail of a large file is never parsed or materialized.
         last = readOneWindow(file, skip, chunkSize - chunk.size(), chunk,
             isCursorFile ? start : null);
 
@@ -382,11 +402,7 @@ public class CsvFileConnectorType implements ConnectorType {
           break;
         }
       }
-
-      if (fileIndex >= resolvedFiles.size()) {
-        return new ReadResult.EndOfStream<>(chunk);
-      }
-      return new ReadResult.HasMore<>(chunk, encodeCursor(currentFile, recordsConsumed, last));
+      return new Walk(fileIndex, currentFile, recordsConsumed, last);
     }
 
     /**

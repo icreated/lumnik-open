@@ -1,8 +1,10 @@
 package io.lumnik.hub.workflow;
 
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.agroal.api.AgroalDataSource;
 import jakarta.inject.Inject;
+import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
@@ -20,7 +22,7 @@ class WorkflowObservationStoreIT {
     @Inject WorkflowObservationStore store;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     private static final long TENANT = 7401L;
@@ -71,7 +73,7 @@ class WorkflowObservationStoreIT {
         try (var c = adminDs.getConnection(); var st = c.createStatement()) {
             st.execute("DELETE FROM core.workflow_observation WHERE doc_key LIKE 'LSTALL-%'");
         }
-        java.time.Instant now = java.time.Instant.now();
+        Instant now = Instant.now();
         store.insertNew(1L, "wf-a", "LSTALL-OLD", "draft", now.minusSeconds(3600));
         store.insertNew(1L, "wf-b", "LSTALL-MID", "sent",  now.minusSeconds(1800));
         store.insertNew(1L, "wf-a", "LSTALL-NEW", "paid",  now.minusSeconds(60));
@@ -79,11 +81,11 @@ class WorkflowObservationStoreIT {
 
         var rows = store.listAll(1L, 10).stream()
             .filter(r -> r.docKey().startsWith("LSTALL-")).toList();
-        org.assertj.core.api.Assertions.assertThat(rows)
+        Assertions.assertThat(rows)
             .extracting(WorkflowObservationStore.ObservationRow::docKey)
             .containsExactly("LSTALL-OLD", "LSTALL-MID", "LSTALL-NEW"); // since ASC, no tenant-2 row
 
         var limited = store.listAll(1L, 1);
-        org.assertj.core.api.Assertions.assertThat(limited).hasSize(1);
+        Assertions.assertThat(limited).hasSize(1);
     }
 }

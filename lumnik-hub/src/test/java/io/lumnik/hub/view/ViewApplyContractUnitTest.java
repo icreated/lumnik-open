@@ -5,6 +5,7 @@ import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.audit.AuditRecorder;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.core.Response;
 import org.junit.jupiter.api.AfterEach;
@@ -99,7 +100,7 @@ class ViewApplyContractUnitTest {
     assertThat(store.name).isNull();
   }
 
-  static final class RecordingAudit extends io.lumnik.hub.audit.AuditRecorder {
+  static final class RecordingAudit extends AuditRecorder {
     String entityType, entityKey, operation;
     Map<String, Object> snapshot;
     @Override public void record(String entityType, String entityKey, String operation, Map<String, Object> snapshot) {
@@ -109,8 +110,8 @@ class ViewApplyContractUnitTest {
 
   private static final SchemaCardStore CLIENTS_CARD = new SchemaCardStore() {
     @Override public Optional<SchemaCard> load(long tenantId, String scope) {
-      return Optional.of(new SchemaCard("clients", java.util.List.of(
-          new SchemaCard.Table("connector.v_customer", "Clients", java.util.List.of(
+      return Optional.of(new SchemaCard("clients", List.of(
+          new SchemaCard.Table("connector.v_customer", "Clients", List.of(
               new SchemaCard.Column("customer_code", "text", "Code client"))))));
     }
   };

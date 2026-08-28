@@ -10,6 +10,7 @@ import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.runtime.ConnectorEngine;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.config.EncoderConfig;
 import io.restassured.config.RestAssuredConfig;
@@ -62,7 +63,7 @@ class CustomerWowFusionIT {
   @Inject UserTransaction utx;
 
   @Inject
-  @io.quarkus.agroal.DataSource("admin")
+  @DataSource("admin")
   AgroalDataSource adminDs;
 
   static WireMockServer wm;

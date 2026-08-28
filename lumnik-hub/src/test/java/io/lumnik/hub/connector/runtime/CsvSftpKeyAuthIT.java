@@ -12,12 +12,17 @@ import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
+import org.apache.sshd.common.config.keys.PublicKeyEntry;
+import org.apache.sshd.common.config.keys.writer.openssh.OpenSSHKeyPairResourceWriter;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.images.builder.Transferable;
 import org.testcontainers.utility.MountableFile;
 
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
@@ -52,15 +57,15 @@ class CsvSftpKeyAuthIT {
 
     @BeforeAll
     static void start() throws Exception {
-        java.security.KeyPairGenerator gen = java.security.KeyPairGenerator.getInstance("RSA");
+        KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
         gen.initialize(2048);
-        java.security.KeyPair kp = gen.generateKeyPair();
+        KeyPair kp = gen.generateKeyPair();
 
-        var privOut = new java.io.ByteArrayOutputStream();
-        new org.apache.sshd.common.config.keys.writer.openssh.OpenSSHKeyPairResourceWriter()
+        var privOut = new ByteArrayOutputStream();
+        new OpenSSHKeyPairResourceWriter()
             .writePrivateKey(kp, "lumnik throwaway test key", null, privOut);
         String pem = privOut.toString(StandardCharsets.UTF_8);
-        String pubLine = org.apache.sshd.common.config.keys.PublicKeyEntry.toString(kp.getPublic());
+        String pubLine = PublicKeyEntry.toString(kp.getPublic());
 
         // No password set → key-only auth. The .pub is copied into the atmoz key dir before the
         // entrypoint runs, so it is appended to authorized_keys on startup.

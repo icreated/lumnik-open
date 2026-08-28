@@ -3,6 +3,7 @@ package io.lumnik.hub.api.connector.handler;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.config.EncoderConfig;
 import io.restassured.config.RestAssuredConfig;
+import io.restassured.http.ContentType;
 import org.junit.jupiter.api.Test;
 
 import static io.restassured.RestAssured.given;
@@ -13,7 +14,7 @@ class CsvFileConnectorApplyHandlerIT {
 
     private static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config()
         .encoderConfig(EncoderConfig.encoderConfig()
-            .encodeContentTypeAs("application/yaml", io.restassured.http.ContentType.TEXT));
+            .encodeContentTypeAs("application/yaml", ContentType.TEXT));
 
     @Test void apply_csvSftp_creates_connector_and_one_endpoint() {
         String yaml = """

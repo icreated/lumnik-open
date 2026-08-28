@@ -14,6 +14,7 @@ import java.lang.reflect.Method;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.Savepoint;
 import java.sql.Types;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -151,7 +152,7 @@ public class AuditEntityListener {
      */
     void writeOutboxRow(Connection connection, long tenantId, Long actorId, String entityType,
                          String entityKey, String operation, String changesJson) throws SQLException {
-        java.sql.Savepoint savepoint = connection.setSavepoint();
+        Savepoint savepoint = connection.setSavepoint();
         try {
             try (PreparedStatement ps = connection.prepareStatement(
                     "INSERT INTO core.audit_outbox "

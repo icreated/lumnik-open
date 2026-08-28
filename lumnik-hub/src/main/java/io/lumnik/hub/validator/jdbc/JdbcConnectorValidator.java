@@ -13,6 +13,7 @@ import io.lumnik.hub.validator.ValidationError;
 import io.lumnik.hub.validator.ValidationError.Severity;
 import io.lumnik.hub.validator.common.CronField;
 import io.lumnik.hub.validator.common.TargetBlockValidator;
+import io.lumnik.hub.validator.common.WindowField;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.ArrayList;
@@ -26,6 +27,9 @@ import java.util.regex.Pattern;
 @ApplicationScoped
 @ConnectorTypeId("jdbc-generic")
 public class JdbcConnectorValidator implements ConnectorValidator {
+
+    /** Prefix of the three refusals a bad source.tables[].rename can draw. */
+    private static final String RENAME_TARGET = "rename target '";
 
     private static final Set<String> SUPPORTED_DIALECTS = Set.of("postgres", "postgresql");
     private static final Pattern URL_PATTERN = Pattern.compile("^jdbc:([a-z0-9]+):.*$");
@@ -162,13 +166,13 @@ public class JdbcConnectorValidator implements ConnectorValidator {
 
             if (!SqlIdentifiers.isPlainIdentifier(target)) {
                 errs.add(new ValidationError(path, Severity.ERROR,
-                    "rename target '" + target + "' is not a valid identifier", hints));
+                    RENAME_TARGET + target + "' is not a valid identifier", hints));
             } else if (DynamicTableWriter.SYSTEM_COLUMNS.contains(target)) {
                 errs.add(new ValidationError(path, Severity.ERROR,
-                    "rename target '" + target + "' collides with a hub system column", hints));
+                    RENAME_TARGET + target + "' collides with a hub system column", hints));
             } else if (!targets.add(target)) {
                 errs.add(new ValidationError(path, Severity.ERROR,
-                    "rename target '" + target + "' is used by more than one source column", hints));
+                    RENAME_TARGET + target + "' is used by more than one source column", hints));
             }
         }
     }
@@ -182,7 +186,7 @@ public class JdbcConnectorValidator implements ConnectorValidator {
 
     private void validateWindow(JsonNode window, List<ValidationError> errs) {
         if (window.isMissingNode() || window.isNull()) return;
-        io.lumnik.hub.validator.common.WindowField.validWindow().apply(window).ifPresent(msg ->
+        WindowField.validWindow().apply(window).ifPresent(msg ->
             errs.add(new ValidationError("spec.window", Severity.ERROR, msg,
                 List.of("Example: window: \"22:00-06:00\" (UTC; scheduled runs are skipped outside it)"))));
     }

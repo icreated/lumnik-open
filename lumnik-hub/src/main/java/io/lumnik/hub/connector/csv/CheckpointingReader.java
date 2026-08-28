@@ -253,47 +253,49 @@ public class CheckpointingReader extends Reader {
       // its remaining() is exactly that leftover.
       long batchStart = streamBytes - bytes.remaining();
       fillFromStream();
-      if (!bytes.hasRemaining()) {
-        // Terminal: EOF with no undecoded bytes. Give the decoder its end-of-input signal and
-        // flush; a stateless decoder produces nothing here, but the protocol requires it.
-        chars.clear();
-        CoderResult cr = decoder.decode(bytes, chars, true);
-        if (cr.isError()) {
-          cr.throwException();
-        }
-        cr = decoder.flush(chars);
-        if (cr.isError()) {
-          cr.throwException();
-        }
-        chars.flip();
-        charsProduced += chars.remaining();
-        finished = true;
-        return chars.hasRemaining();
-      }
+      if (!bytes.hasRemaining()) return drainAtEof();
+
       ledger.add(new Batch(batchStart, charsProduced));
       chars.clear();
-      CoderResult cr = decoder.decode(bytes, chars, eofSeen);
-      if (cr.isError()) {
-        cr.throwException();  // REPORT semantics: malformed/unmappable bytes fail the read
-      }
+      check(decoder.decode(bytes, chars, eofSeen));
       if (eofSeen && !bytes.hasRemaining()) {
         // Final decode consumed everything (with endOfInput=true an incomplete tail would have
         // been reported above): flush terminal state and finish.
-        cr = decoder.flush(chars);
-        if (cr.isError()) {
-          cr.throwException();
-        }
+        check(decoder.flush(chars));
         finished = true;
       }
       chars.flip();
       charsProduced += chars.remaining();
-      if (chars.hasRemaining()) {
-        return true;
-      }
+      if (chars.hasRemaining()) return true;
       // Zero chars produced (all bytes were an incomplete tail near EOF): loop and read more.
     }
     return false;
   }
+
+  /**
+   * REPORT semantics: malformed or unmappable bytes FAIL the read rather than being substituted,
+   * matching Files.newBufferedReader — which is what makes the checkpoint path and the plain path
+   * throw at the same bytes on the same file. Spelled once; it appeared four times in the loop and
+   * was most of what the complexity measured.
+   */
+  private static void check(CoderResult cr) throws IOException {
+    if (cr.isError()) cr.throwException();
+  }
+
+  /**
+   * Terminal pass: EOF with no undecoded bytes left. The decoder still needs its end-of-input
+   * signal and a flush — a stateless decoder produces nothing here, but the protocol requires it.
+   */
+  private boolean drainAtEof() throws IOException {
+    chars.clear();
+    check(decoder.decode(bytes, chars, true));
+    check(decoder.flush(chars));
+    chars.flip();
+    charsProduced += chars.remaining();
+    finished = true;
+    return chars.hasRemaining();
+  }
+
 
   /**
    * Compacts the undecoded leftover to the front of the byte buffer and tops it up from the

@@ -2,18 +2,21 @@ package io.lumnik.hub.entity;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
 import io.restassured.config.EncoderConfig;
 import io.restassured.config.RestAssuredConfig;
 import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
 import java.sql.Statement;
+import java.util.List;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
@@ -28,7 +31,7 @@ import static org.hamcrest.Matchers.hasSize;
 class EntityConflictsIT {
 
   @Inject
-  @io.quarkus.agroal.DataSource("admin")
+  @DataSource("admin")
   AgroalDataSource adminDs;
 
   static final String MANIFEST = """
@@ -105,8 +108,8 @@ class EntityConflictsIT {
         .then().statusCode(200)
         .body("findAll { it.entity == 'ConflictProbe' }", hasSize(1))
         .body("find { it.entity == 'ConflictProbe' }.key", equalTo("C-200"))
-        .body("find { it.entity == 'ConflictProbe' }.columns", equalTo(java.util.List.of("name")))
-        .body("find { it.entity == 'ConflictProbe' }.conflicts.name.value", equalTo(java.util.List.of("Marie", "MARIE A.")));
+        .body("find { it.entity == 'ConflictProbe' }.columns", equalTo(List.of("name")))
+        .body("find { it.entity == 'ConflictProbe' }.conflicts.name.value", equalTo(List.of("Marie", "MARIE A.")));
   }
 
   @Test
@@ -123,7 +126,7 @@ class EntityConflictsIT {
     given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
         .when().get("/api/entities/conflicts?limit=1")
         .then().statusCode(200)
-        .body("size()", org.hamcrest.Matchers.lessThanOrEqualTo(1));
+        .body("size()", Matchers.lessThanOrEqualTo(1));
   }
 
   @Test

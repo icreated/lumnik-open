@@ -4,13 +4,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jayway.jsonpath.Configuration;
 import com.jayway.jsonpath.JsonPath;
 import com.jayway.jsonpath.Option;
+import com.jayway.jsonpath.ReadContext;
+import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.PromotedColumn;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.SqlType;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.Transform;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.jboss.logging.Logger;
 
-import javax.sql.DataSource;
 import java.math.BigDecimal;
 import java.sql.*;
 import java.time.*;
@@ -36,13 +39,16 @@ import static io.lumnik.hub.sql.SqlIdentifiers.quoteTable;
 @ApplicationScoped
 public class HybridJsonbWriter {
 
+    /** The per-row dedup column this writer retrofits and binds. */
+    private static final String ROW_HASH = "row_hash";
+
     private static final Configuration JP =
         Configuration.defaultConfiguration().addOptions(Option.SUPPRESS_EXCEPTIONS);
     private static final ObjectMapper JSON = new ObjectMapper();
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
-    DataSource adminDs;
+    @DataSource("admin")
+    AgroalDataSource adminDs;
 
     @Inject
     DynamicTableRegistry registry;
@@ -134,7 +140,7 @@ public class HybridJsonbWriter {
             // its runs, so its registration succeeds on the first chunk. The cache entry is
             // released so any later write retries.
             registered.remove(key);
-            org.jboss.logging.Logger.getLogger(HybridJsonbWriter.class)
+            Logger.getLogger(HybridJsonbWriter.class)
                 .infof("ext table %s not registered for discovery (will retry on next write): %s",
                        spec.table(), e.getMessage());
         }
@@ -164,11 +170,11 @@ public class HybridJsonbWriter {
             }
         }
         // Retrofit: tables created before C4/P18 PR1 lack row_hash
-        if (!known.contains("row_hash")) {
+        if (!known.contains(ROW_HASH)) {
             try (Statement st = c.createStatement()) {
-                st.execute("ALTER TABLE " + fqn(spec.table()) + " ADD COLUMN IF NOT EXISTS row_hash TEXT");
+                st.execute("ALTER TABLE " + fqn(spec.table()) + " ADD COLUMN IF NOT EXISTS " + ROW_HASH + " TEXT");
             }
-            known.add("row_hash");
+            known.add(ROW_HASH);
             changed = true;
         }
         return changed;
@@ -261,7 +267,7 @@ public class HybridJsonbWriter {
         for (PromotedColumn col : spec.promote()) {
             cols.add(qi(col.name())); qs.add("?");
         }
-        cols.add("row_hash");     qs.add("?");
+        cols.add(ROW_HASH);     qs.add("?");
         cols.add("data");         qs.add("?::jsonb");
         cols.add("connector_id"); qs.add("?");
         cols.add("endpoint_id");  qs.add("?");
@@ -288,7 +294,7 @@ public class HybridJsonbWriter {
         String jsonStr;
         try { jsonStr = JSON.writeValueAsString(item); }
         catch (Exception e) { throw new SQLException("HybridJsonbWriter: JSON serialization failed", e); }
-        com.jayway.jsonpath.ReadContext ctx = JsonPath.using(JP).parse(jsonStr);
+        ReadContext ctx = JsonPath.using(JP).parse(jsonStr);
         Object rawId = ctx.read(uniqueKey, Object.class);
         String externalId = (rawId == null) ? null : rawId.toString();
 

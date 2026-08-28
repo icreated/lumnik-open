@@ -1,6 +1,7 @@
 package io.lumnik.hub.process;
 
 import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -16,7 +17,7 @@ import java.util.Optional;
 public class ProcessManifestStore {
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     private final ProcessManifestParser parser = new ProcessManifestParser();

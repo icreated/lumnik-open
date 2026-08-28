@@ -3,6 +3,7 @@ package io.lumnik.hub.api.connector;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.config.EncoderConfig;
 import io.restassured.config.RestAssuredConfig;
+import io.restassured.http.ContentType;
 import org.junit.jupiter.api.Test;
 
 import static io.restassured.RestAssured.given;
@@ -13,7 +14,7 @@ class ConnectorApplyResourceIT {
 
     private static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config()
         .encoderConfig(EncoderConfig.encoderConfig()
-            .encodeContentTypeAs("application/yaml", io.restassured.http.ContentType.TEXT));
+            .encodeContentTypeAs("application/yaml", ContentType.TEXT));
 
     private static final String YAML_BODY = """
         apiVersion: connectors.lumnik.io/v1

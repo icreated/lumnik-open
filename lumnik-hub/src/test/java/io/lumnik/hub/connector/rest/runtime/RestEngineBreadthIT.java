@@ -11,6 +11,8 @@ import jakarta.persistence.EntityManager;
 import jakarta.transaction.UserTransaction;
 import org.junit.jupiter.api.*;
 
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.UUID;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
@@ -170,8 +172,8 @@ class RestEngineBreadthIT {
             RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(id, new RunTrigger.Manual(1L)));
             assertInstanceOf(RunStatus.Completed.class, s);
             assertEquals(3L, count(table));
-            String expected = "Basic " + java.util.Base64.getEncoder()
-                .encodeToString("u:p".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            String expected = "Basic " + Base64.getEncoder()
+                .encodeToString("u:p".getBytes(StandardCharsets.UTF_8));
             verify(getRequestedFor(urlPathEqualTo(path)).withHeader("Authorization", equalTo(expected)));
         } finally {
             System.clearProperty("C2_BASIC_PW");
@@ -241,8 +243,8 @@ class RestEngineBreadthIT {
             RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(id, new RunTrigger.Manual(1L)));
             assertInstanceOf(RunStatus.Completed.class, s);
             assertEquals(3L, count(table));
-            String expected = "Basic " + java.util.Base64.getEncoder()
-                .encodeToString("u:p".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            String expected = "Basic " + Base64.getEncoder()
+                .encodeToString("u:p".getBytes(StandardCharsets.UTF_8));
             verify(getRequestedFor(urlPathEqualTo(path)).withHeader("Authorization", equalTo(expected)));
         } finally {
             System.clearProperty("C2_BASIC_PW");

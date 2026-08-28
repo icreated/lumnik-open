@@ -18,6 +18,7 @@ import javax.xml.stream.XMLInputFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Converts a SOAP XML response into a {@link JsonNode} so the existing JsonPath pagination/items
@@ -53,7 +54,7 @@ public final class XmlBodyParser implements BodyParser {
     }
 
     // Derived from RetryPolicy.defaults() so the two stay in sync when the retry config changes.
-    private static final java.util.Set<Integer> RETRYABLE = RetryPolicy.defaults().retryOn();
+    private static final Set<Integer> RETRYABLE = RetryPolicy.defaults().retryOn();
 
     @Override
     public RestResponse reparse(RestResponse raw) {

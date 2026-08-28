@@ -147,7 +147,7 @@ public class JdbcConnectorType implements ConnectorType {
   private static List<MappingTarget.Index> parseIndexes(Map<String, Object> config) {
     Object raw = config.get("indexes");
     if (!(raw instanceof List<?> list)) return List.of();
-    var out = new java.util.ArrayList<MappingTarget.Index>(list.size());
+    var out = new ArrayList<MappingTarget.Index>(list.size());
     for (Object o : list) {
       if (o instanceof Map<?, ?> m && m.get("columns") instanceof List<?> cols && !cols.isEmpty()) {
         out.add(new MappingTarget.Index(
@@ -307,7 +307,7 @@ public class JdbcConnectorType implements ConnectorType {
     Object d = config.get("dialect");
     // Registry keys are lowercase; "postgresql" is a validator-accepted alias of "postgres".
     if (d instanceof String s && !s.isBlank()) {
-      String v = s.trim().toLowerCase(java.util.Locale.ROOT);
+      String v = s.trim().toLowerCase(Locale.ROOT);
       return "postgresql".equals(v) ? "postgres" : v;
     }
     Object url = config.get("url");

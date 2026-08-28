@@ -1,5 +1,6 @@
 package io.lumnik.hub.workflow;
 
+import java.time.Duration;
 import java.util.List;
 
 /** A parsed kind:Workflow declaration — the unfrozen head-knowledge of a document lifecycle. */
@@ -17,12 +18,12 @@ public record WorkflowManifest(
 
     /** after matches [0-9]+[mhd] — validated by the parser before construction. */
     public record DormancyDef(String after) {
-        public java.time.Duration duration() {
+        public Duration duration() {
             long n = Long.parseLong(after.substring(0, after.length() - 1));
             return switch (after.charAt(after.length() - 1)) {
-                case 'm' -> java.time.Duration.ofMinutes(n);
-                case 'h' -> java.time.Duration.ofHours(n);
-                default -> java.time.Duration.ofDays(n);
+                case 'm' -> Duration.ofMinutes(n);
+                case 'h' -> Duration.ofHours(n);
+                default -> Duration.ofDays(n);
             };
         }
     }

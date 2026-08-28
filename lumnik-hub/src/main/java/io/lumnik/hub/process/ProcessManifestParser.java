@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Parses a kind:Process YAML manifest — structural refusals only; the condition honesty
@@ -70,7 +71,7 @@ public class ProcessManifestParser {
     }
 
     private static String sorted(Set<String> keys) {
-        return String.join(", ", new java.util.TreeSet<>(keys));
+        return String.join(", ", new TreeSet<>(keys));
     }
 
     public ProcessManifest parse(String yaml) {

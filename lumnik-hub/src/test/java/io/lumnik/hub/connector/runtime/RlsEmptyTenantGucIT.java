@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.runtime;
 
 import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.AfterEach;
@@ -57,7 +58,7 @@ class RlsEmptyTenantGucIT {
 
     /** Admin datasource — used to provision the probe role, FORCE RLS, and seed a row (setup only). */
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     @BeforeEach

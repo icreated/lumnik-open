@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -23,7 +24,7 @@ class RoleRegistryIT {
     @Test
     void everyDeclaredRole_isOneOfThreeKnown() {
         Set<String> ids = registry.all().stream().map(RoleDefinition::id)
-            .collect(java.util.stream.Collectors.toUnmodifiableSet());
+            .collect(Collectors.toUnmodifiableSet());
         assertEquals(Set.of("lm_superadmin", "lm_admin", "lm_user"), ids,
             "Catalog must contain exactly the three platform roles");
     }

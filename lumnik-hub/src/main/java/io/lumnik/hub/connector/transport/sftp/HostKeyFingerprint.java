@@ -12,6 +12,9 @@ import java.security.PublicKey;
  */
 public final class HostKeyFingerprint {
 
+    /** The OpenSSH prefix a SHA-256 fingerprint may carry, stripped before comparison. */
+    private static final String SHA256_PREFIX = "SHA256:";
+
     private HostKeyFingerprint() {
     }
 
@@ -36,8 +39,8 @@ public final class HostKeyFingerprint {
 
     private static String normalise(String fingerprint) {
         String value = fingerprint.trim();
-        if (value.regionMatches(true, 0, "SHA256:", 0, "SHA256:".length())) {
-            value = value.substring("SHA256:".length());
+        if (value.regionMatches(true, 0, SHA256_PREFIX, 0, SHA256_PREFIX.length())) {
+            value = value.substring(SHA256_PREFIX.length());
         }
         while (value.endsWith("=")) {
             value = value.substring(0, value.length() - 1);

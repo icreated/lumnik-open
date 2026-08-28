@@ -1,8 +1,9 @@
 package io.lumnik.hub.ask;
 
+import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
-import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
@@ -15,8 +16,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class SchemaCardMigrationIT {
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
-    DataSource adminDs;
+    @DataSource("admin")
+    AgroalDataSource adminDs;
 
     @Test
     void schemaCardTableExists() throws Exception {

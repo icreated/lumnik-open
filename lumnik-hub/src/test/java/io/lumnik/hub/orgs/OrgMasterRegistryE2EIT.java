@@ -1,6 +1,7 @@
 package io.lumnik.hub.orgs;
 
 import com.sun.net.httpserver.HttpServer;
+import io.lumnik.hub.tenant.TenantContextFilter;
 import io.lumnik.identity.geo.Coords;
 import io.lumnik.identity.geo.Geocoder;
 import io.lumnik.common.tenant.TenantContext;
@@ -83,7 +84,7 @@ class OrgMasterRegistryE2EIT {
             tenantId.set(json.getLong("id"));
         }
 
-        io.lumnik.hub.tenant.TenantContextFilter.CURRENT_TENANT.set(tenantId.get());
+        TenantContextFilter.CURRENT_TENANT.set(tenantId.get());
         Mockito.when(geocoder.resolve(Mockito.any()))
             .thenReturn(Optional.of(new Coords(new BigDecimal("48.85"), new BigDecimal("2.35"))));
         lastPayload.set(null);

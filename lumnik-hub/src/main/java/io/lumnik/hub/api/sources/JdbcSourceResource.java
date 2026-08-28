@@ -6,6 +6,7 @@ import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorCredential;
 import io.lumnik.hub.connector.domain.ConnectorMapping;
 import io.lumnik.hub.connector.domain.ConnectorRun;
+import io.lumnik.hub.connector.jdbc.HikariPoolRegistry;
 import io.lumnik.hub.connector.jdbc.JdbcConnectionConfig;
 import io.lumnik.hub.connector.jdbc.JdbcConnectorType;
 import io.lumnik.hub.connector.jdbc.MappingYamlBuilder;
@@ -47,7 +48,7 @@ public class JdbcSourceResource {
   @Inject ConnectorMappingRepository mappingRepo;
   @Inject ConnectorRunRepository runRepo;
   @Inject SecretCipher cipher;
-  @Inject io.lumnik.hub.connector.jdbc.HikariPoolRegistry poolRegistry;
+  @Inject HikariPoolRegistry poolRegistry;
 
   // ── POST /test ──────────────────────────────────────────────────────────────
 

@@ -3,12 +3,16 @@ package io.lumnik.hub.tenant;
 import jakarta.enterprise.inject.Instance;
 import jakarta.json.Json;
 import jakarta.ws.rs.container.ContainerRequestContext;
+import jakarta.ws.rs.container.ContainerResponseContext;
 import jakarta.ws.rs.core.Response;
 import org.eclipse.microprofile.jwt.JsonWebToken;
+import org.jboss.logging.MDC;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.math.BigDecimal;
+import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -54,7 +58,7 @@ class TenantContextFilterJwtTest {
     TenantContextFilter.CURRENT_USER.remove();
     CurrentRolesHolder.clear();
     CurrentTenantHolder.clear();
-    org.jboss.logging.MDC.clear();
+    MDC.clear();
   }
 
   @Test
@@ -93,7 +97,7 @@ class TenantContextFilterJwtTest {
     assertThat(cap.getValue().getStatus()).isEqualTo(403);
     assertThat(cap.getValue().getEntity())
         .as("same refusal shape as the JIT path")
-        .isEqualTo(java.util.Map.of("error", "user is deactivated"));
+        .isEqualTo(Map.of("error", "user is deactivated"));
     assertThat(TenantContextFilter.currentUser())
         .as("no user context may survive a denied login").isNull();
   }
@@ -131,7 +135,7 @@ class TenantContextFilterJwtTest {
     assertThat(CurrentRolesHolder.get())
         .containsExactlyInAnyOrder("lm_user", "scope:achat");
 
-    f.filter(ctx, mock(jakarta.ws.rs.container.ContainerResponseContext.class));
+    f.filter(ctx, mock(ContainerResponseContext.class));
     assertThat(CurrentRolesHolder.get())
         .as("response filter clears the holder — no leak onto the pooled thread").isEmpty();
   }
@@ -254,7 +258,7 @@ class TenantContextFilterJwtTest {
     // A fractional JSON number must be rejected, not truncated to an int (1.9 → 1 could land
     // the user in the wrong tenant).
     JsonWebToken t = mock(JsonWebToken.class);
-    when(t.getClaim("tenant_id")).thenReturn(Json.createValue(new java.math.BigDecimal("1.9")));
+    when(t.getClaim("tenant_id")).thenReturn(Json.createValue(new BigDecimal("1.9")));
     ExternalIdentityResolver resolver = mock(ExternalIdentityResolver.class);
     ContainerRequestContext ctx = mock(ContainerRequestContext.class);
 

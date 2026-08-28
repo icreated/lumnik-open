@@ -1,7 +1,10 @@
 package io.lumnik.hub.connector.mapping.writer;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
@@ -13,6 +16,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -41,7 +45,7 @@ class GatedUpdateModeIT {
     @Inject UserTransaction utx;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     @BeforeEach
@@ -108,8 +112,8 @@ class GatedUpdateModeIT {
             "tenant_1_data", mappingId, true, MappingTarget.OnConflict.SKIP, List.of());
 
         int total = 401; // 401 > 400 → two sub-batches
-        List<Map<String, Object>> rows = new java.util.ArrayList<>(total);
-        List<Map<String, Object>> syss = new java.util.ArrayList<>(total);
+        List<Map<String, Object>> rows = new ArrayList<>(total);
+        List<Map<String, Object>> syss = new ArrayList<>(total);
         for (int i = 0; i < total; i++) {
             rows.add(Map.of("email", "u" + i + "@x.com", "name", "U" + i));
             syss.add(Map.of(
@@ -149,8 +153,8 @@ class GatedUpdateModeIT {
         runInTxAsSystem(utx, () ->
             writer.write(spec, List.of(row), List.of(sys), 1L));
 
-        com.fasterxml.jackson.databind.JsonNode p =
-            new com.fasterxml.jackson.databind.ObjectMapper().readTree(payloadFor(hash));
+        JsonNode p =
+            new ObjectMapper().readTree(payloadFor(hash));
         assertThat(p.has("run_id"))
             .as("run_id is omitted when no _run_id is present (never the string \"null\")").isFalse();
         assertThat(p.get("op").asText()).isEqualTo("insert");

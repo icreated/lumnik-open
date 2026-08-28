@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -120,7 +121,7 @@ class RestEndpointReaderCursorTest {
     }
 
     private static Map<String, Object> watermarkConfig(String... extra) {
-        Map<String, Object> inc = new java.util.HashMap<>(Map.of("mode", "watermark", "param", "updated_since"));
+        Map<String, Object> inc = new HashMap<>(Map.of("mode", "watermark", "param", "updated_since"));
         for (int i = 0; i < extra.length; i += 2) inc.put(extra[i], extra[i + 1]);
         return Map.of("base_url", "https://erp.test", "incremental", inc);
     }

@@ -440,7 +440,6 @@ Events are defined in `META-INF/events.yaml` files, one per module. These files 
 | `connector.run.started` / `completed` / `cancelled` / `failed` | Run lifecycle; `completed` carries the conservation counters |
 | `platform.secret.created` / `updated` / `deleted` / `read` | Secret lifecycle (`read` on cache misses only) |
 | `org.created` / `updated` / `moved` / `archived` | Organisation lifecycle |
-| `list.value.added` / `updated` / `removed` | Tenant business-list values |
 
 `decision.*` types are the one dynamic family outside this catalog: each `kind:Process`
 and `kind:Workflow` manifest names its own (`decision.litige`,
@@ -717,81 +716,6 @@ hook ↔ transition binding: `WorkflowRegistry` no longer consults `HookRegistry
 | Path | View |
 |---|---|
 | `/admin/:tid/hooks` | Hooks & Workflows tab (Hooks / Workflows selector) |
-
----
-
-## Manage business value lists
-
-Management of business value lists — `core.list_definition` (the header) +
-`core.list_value` (the values). Two categories:
-
-| Origin | Flag | Permissions |
-| ---------- | ----------------- | ------------------------------------------------------ |
-| **System** | `system_owned=true` | Renaming the label is allowed; adding/removing values is refused |
-| **Business** | `system_owned=false` | Full CRUD (values are deactivated, never deleted) |
-
-### The value/name pattern
-
-- **`value`** = technical code, **immutable**. Used in code, imports and cross-references.
-  Example: `VIP`.
-- **`name`** = display label, **editable**. Example: `Client VIP`. A tenant can rename a
-  value without breaking the code that reads it.
-
-No i18n for this scope — `name` is a plain VARCHAR.
-
-### `@ListMirror` — declare a mirror of a Java enum
-
-```java
-@ListMirror(code = "repair_status", name = "Repair statuses")
-public enum RepairStatus { WAITING, IN_PROGRESS, DONE, CANCELLED; }
-```
-
-`ListMirrorBootstrapper` reads the annotation at boot and creates (or updates), for each
-tenant, the list `repair_status` (system_owned=true) with one `list_value` per constant.
-Labels are initialised to the value itself (`WAITING` → "WAITING") and can then be renamed
-per tenant.
-
-`@ListMirror` can be placed on any enum, independently of whatever else that enum is used for.
-
-No enum in the shipped hub carries it today — the mechanism is there for a module that
-declares one, and the bootstrapper simply skips when it finds none.
-
-### Events emitted
-
-```
-list.value.added     {listCode, value, name}
-list.value.updated   {listCode, value, oldName, newName}
-list.value.removed   {listCode, value}
-```
-
-They are in the catalog (`GET /api/platform/events`). Hooks and integrations can subscribe
-to them as they would to any other event.
-
-### Endpoints
-
-```
-GET    /api/tenants/{tid}/lists                          (lm_admin)
-POST   /api/tenants/{tid}/lists                          (lm_admin)  — system_owned forced to false
-GET    /api/tenants/{tid}/lists/{id}                     (lm_admin)
-PUT    /api/tenants/{tid}/lists/{id}                     (lm_admin)  — label/description only
-DELETE /api/tenants/{tid}/lists/{id}                     (lm_admin)  — 403 on system_owned
-
-GET    /api/tenants/{tid}/lists/{id}/values              (lm_admin)
-POST   /api/tenants/{tid}/lists/{id}/values              (lm_admin)  — 403 on system_owned
-PUT    /api/tenants/{tid}/lists/{id}/values/{vid}        (lm_admin)
-DELETE /api/tenants/{tid}/lists/{id}/values/{vid}        (lm_admin)  — deactivation, not deletion
-```
-
-### Isolation
-
-- Tenant-scoped RLS on `core.list_definition` and `core.list_value`.
-- `tenant_id` is duplicated on `list_value` so the RLS policy needs no join.
-  The bootstrapper and `ListResource` must keep the two consistent.
-
-### Not planned yet
-
-- **Label i18n**: a `list_value_label(list_value_id, locale, name)` table, if it is ever
-  needed.
 
 ---
 

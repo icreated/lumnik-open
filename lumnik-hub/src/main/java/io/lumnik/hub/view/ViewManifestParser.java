@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 /** Parses a kind:View YAML manifest into a ViewManifest. Structural only — the ViewResolver validates columns. */
 public class ViewManifestParser {
@@ -63,7 +64,7 @@ public class ViewManifestParser {
     }
 
     private static String sorted(Set<String> keys) {
-        return String.join(", ", new java.util.TreeSet<>(keys));
+        return String.join(", ", new TreeSet<>(keys));
     }
 
     public ViewManifest parse(String yaml) {

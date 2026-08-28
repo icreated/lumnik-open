@@ -4,9 +4,13 @@ import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.AbstentionGuard;
 import io.lumnik.llm.spi.ChatMessage;
 import io.lumnik.llm.spi.ChatPort;
+import jakarta.enterprise.inject.Instance;
+import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -17,7 +21,7 @@ class ViewGenerateAgentTest {
     static final class FakeChat implements ChatPort {
         final List<String> prompts = new ArrayList<>();
         private final List<String> answers;
-        FakeChat(String... answers) { this.answers = new ArrayList<>(java.util.Arrays.asList(answers)); }
+        FakeChat(String... answers) { this.answers = new ArrayList<>(Arrays.asList(answers)); }
         @Override public String name() { return "fake"; }
         @Override public String chat(List<ChatMessage> messages) { throw new UnsupportedOperationException(); }
         @Override public String chat(String prompt) {
@@ -55,16 +59,16 @@ class ViewGenerateAgentTest {
         // refusing honestly (audit P11, #286).
         ViewGenerateAgent a = agent();
         @SuppressWarnings("unchecked")
-        jakarta.enterprise.inject.Instance<io.lumnik.llm.spi.ChatPort> none =
-            org.mockito.Mockito.mock(jakarta.enterprise.inject.Instance.class);
-        org.mockito.Mockito.when(none.isUnsatisfied()).thenReturn(true);
+        Instance<ChatPort> none =
+            Mockito.mock(Instance.class);
+        Mockito.when(none.isUnsatisfied()).thenReturn(true);
         a.chatPorts = none;
 
         ViewGenerateAgent.Outcome out = a.generate(card(), "clients", "les clients gold");
 
-        org.assertj.core.api.Assertions.assertThat(out.status())
+        Assertions.assertThat(out.status())
             .isEqualTo(ViewGenerateAgent.Outcome.Status.ABSTAINED);
-        org.assertj.core.api.Assertions.assertThat(out.message()).contains("edition");
+        Assertions.assertThat(out.message()).contains("edition");
     }
 
     @Test

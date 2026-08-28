@@ -11,6 +11,8 @@ import io.lumnik.hub.validator.ConfigDef.Importance;
 import static io.lumnik.hub.validator.JsonNodes.blankOrNull;
 import io.lumnik.hub.validator.ConfigDef.Type;
 import io.lumnik.hub.validator.ValidationError.Severity;
+import io.lumnik.hub.validator.common.CronField;
+import io.lumnik.hub.validator.common.WindowField;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -66,14 +68,14 @@ public class RestConnectorValidator implements ConnectorValidator {
         validateHeaders(spec.path("headers"), errs);
         JsonNode sched = spec.path("schedule");
         if (!sched.isMissingNode() && !sched.isNull()) {
-            io.lumnik.hub.validator.common.CronField.validCron().apply(sched)
+            CronField.validCron().apply(sched)
                 .ifPresent(msg -> errs.add(new ValidationError("spec.schedule",
                     ValidationError.Severity.ERROR, msg,
                     List.of("Example: schedule: \"0 6 * * *\" (daily at 06:00 UTC)"))));
         }
         JsonNode window = spec.path("window");
         if (!window.isMissingNode() && !window.isNull()) {
-            io.lumnik.hub.validator.common.WindowField.validWindow().apply(window)
+            WindowField.validWindow().apply(window)
                 .ifPresent(msg -> errs.add(new ValidationError("spec.window",
                     ValidationError.Severity.ERROR, msg,
                     List.of("Example: window: \"22:00-06:00\" (UTC; scheduled runs are skipped outside it)"))));

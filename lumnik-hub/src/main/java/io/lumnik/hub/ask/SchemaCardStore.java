@@ -3,6 +3,7 @@ package io.lumnik.hub.ask;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.SchemaCard;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -18,7 +19,7 @@ public class SchemaCardStore {
     private static final ObjectMapper M = new ObjectMapper();
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     public void save(long tenantId, String sourceType, SchemaCard card) {

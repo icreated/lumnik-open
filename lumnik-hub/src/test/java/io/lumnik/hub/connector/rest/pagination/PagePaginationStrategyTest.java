@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.rest.pagination;
 import io.lumnik.hub.connector.rest.*;
 import org.junit.jupiter.api.Test;
+import java.util.HashMap;
 import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -55,7 +56,7 @@ class PagePaginationStrategyTest {
     void total_pages_no_overfetch_when_zero_indexed() {
         // 0-indexed (start_page=0), totalPages=2 → valid pages are 0 and 1; the loop must stop after
         // page 1 (pages-fetched == totalPages), not fetch a non-existent page 2.
-        var c = new java.util.HashMap<String, String>();
+        var c = new HashMap<String, String>();
         c.put("page_param", "page");
         c.put("start_page", "0");
         c.put("total_pages_path", "$.totalPages");
@@ -69,7 +70,7 @@ class PagePaginationStrategyTest {
 
     @Test
     void last_path_stops_when_true() {
-        var c = new java.util.HashMap<String, String>();
+        var c = new HashMap<String, String>();
         c.put("page_param", "page");
         c.put("start_page", "0");
         c.put("last_path", "$.last");

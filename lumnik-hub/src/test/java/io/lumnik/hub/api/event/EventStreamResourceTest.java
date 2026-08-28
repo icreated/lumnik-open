@@ -1,6 +1,7 @@
 package io.lumnik.hub.api.event;
 
 import io.quarkus.test.junit.QuarkusTest;
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
 
 import static io.restassured.RestAssured.given;
@@ -17,6 +18,6 @@ class EventStreamResourceTest {
       .when().get("/api/platform/events/stream")
       .then()
         .statusCode(200)
-        .contentType(org.hamcrest.Matchers.startsWith("text/event-stream"));
+        .contentType(Matchers.startsWith("text/event-stream"));
   }
 }

@@ -1,5 +1,7 @@
 package io.lumnik.hub.api.event;
 
+import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import io.smallrye.common.annotation.Blocking;
 import io.smallrye.mutiny.Multi;
 import jakarta.inject.Inject;
@@ -10,10 +12,10 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import org.jboss.resteasy.reactive.RestStreamElementType;
 
-import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
@@ -34,8 +36,8 @@ import java.util.regex.Pattern;
 public class EventStreamResource {
 
   @Inject
-  @io.quarkus.agroal.DataSource("admin")
-  DataSource dataSource;
+  @DataSource("admin")
+  AgroalDataSource dataSource;
 
   @GET
   @Blocking
@@ -86,7 +88,7 @@ public class EventStreamResource {
           ));
         }
       }
-    } catch (java.sql.SQLException e) {
+    } catch (SQLException e) {
       // table may not exist yet or transient DB error — return empty batch silently
     }
     return out;

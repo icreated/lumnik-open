@@ -2,17 +2,22 @@ package io.lumnik.hub.workflow;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -57,7 +62,7 @@ public class WorkflowDormancySweep {
     @Inject ObjectMapper json;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     @Scheduled(every = "${lumnik.workflow.sweep.every:15m}", concurrentExecution = SKIP)
@@ -209,18 +214,18 @@ public class WorkflowDormancySweep {
     static String bounded(String s) {
         if (s == null || s.length() <= OUTBOX_KEY_MAX) return s;
         try {
-            byte[] d = java.security.MessageDigest.getInstance("SHA-256")
-                .digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            byte[] d = MessageDigest.getInstance("SHA-256")
+                .digest(s.getBytes(StandardCharsets.UTF_8));
             StringBuilder sb = new StringBuilder("sha256:");
             for (byte b : d) sb.append(String.format("%02x", b));
             return sb.toString();
-        } catch (java.security.NoSuchAlgorithmException e) {
+        } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 unavailable", e); // never on a JRE
         }
     }
 
     private List<Long> tenants() {
-        List<Long> out = new java.util.ArrayList<>();
+        List<Long> out = new ArrayList<>();
         try (Connection c = adminDs.getConnection();
              PreparedStatement ps = c.prepareStatement(TENANTS_SQL);
              ResultSet rs = ps.executeQuery()) {

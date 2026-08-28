@@ -10,6 +10,7 @@ import io.lumnik.hub.validator.ValidationError;
 import io.lumnik.hub.validator.ValidationError.Severity;
 import io.lumnik.hub.validator.common.CronField;
 import io.lumnik.hub.validator.common.TargetBlockValidator;
+import io.lumnik.hub.validator.common.WindowField;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.ArrayList;
@@ -155,7 +156,7 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
     private static List<ValidationError> windowValid(JsonNode spec) {
         JsonNode window = spec.path("window");
         if (window.isMissingNode() || window.isNull()) return List.of();
-        return io.lumnik.hub.validator.common.WindowField.validWindow().apply(window)
+        return WindowField.validWindow().apply(window)
             .map(msg -> List.of(new ValidationError("spec.window", Severity.ERROR, msg,
                 List.of("Example: window: \"22:00-06:00\" (UTC; scheduled runs are skipped outside it)"))))
             .orElseGet(List::of);

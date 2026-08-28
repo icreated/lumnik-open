@@ -1,6 +1,9 @@
 package io.lumnik.hub.process;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
@@ -10,6 +13,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
@@ -24,7 +28,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 class ProcessConsumerIT {
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     private void exec(String sql) {
@@ -66,7 +70,7 @@ class ProcessConsumerIT {
      *  either way — the assertion right after the call site does the failing, unchanged from the
      *  fixed sleep this replaces: on the red path (condition never met) it waits the full ceiling
      *  and then fails exactly as it did before. */
-    private void pollUntil(java.util.function.BooleanSupplier condition, long timeoutMs) {
+    private void pollUntil(BooleanSupplier condition, long timeoutMs) {
         long deadline = System.currentTimeMillis() + timeoutMs;
         do {
             if (condition.getAsBoolean()) return;
@@ -152,8 +156,8 @@ class ProcessConsumerIT {
         await().atMost(20, SECONDS).untilAsserted(() ->
             assertThat(countDecisions("decision.gold-hello")).isEqualTo(1L));
 
-        com.fasterxml.jackson.databind.JsonNode n =
-            new com.fasterxml.jackson.databind.ObjectMapper().readTree(payloadOf("decision.gold-hello"));
+        JsonNode n =
+            new ObjectMapper().readTree(payloadOf("decision.gold-hello"));
         assertThat(n.get("message").asText()).isEqualTo("Client C-1 en GOLD");
         assertThat(n.get("fields").get("code").asText()).isEqualTo("C-1");
         assertThat(n.get("fields").get("segment").asText()).isEqualTo("GOLD");

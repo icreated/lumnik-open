@@ -21,6 +21,9 @@ import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
  */
 final class RlsDdl {
 
+    /** The RLS-enforced application role every grant here targets. */
+    private static final String TO_APP_ROLE = " TO lumnik_app";
+
     /**
      * Dollar-quote tag for every {@code DO} block this class emits, instead of the bare {@code $$}.
      * An identifier reaching here is only ever double-quoted (see {@link #qualify}), never validated
@@ -86,7 +89,7 @@ final class RlsDdl {
 
     /** The app role's row access — the datasource the request path reads and writes through. */
     static String grantAppDml(String schema, String table) {
-        return "GRANT INSERT, SELECT, UPDATE, DELETE ON " + qualify(schema, table) + " TO lumnik_app";
+        return "GRANT INSERT, SELECT, UPDATE, DELETE ON " + qualify(schema, table) + TO_APP_ROLE;
     }
 
     /**
@@ -99,7 +102,7 @@ final class RlsDdl {
     }
 
     static String grantSequenceUsage(String schema, String sequence) {
-        return "GRANT USAGE, SELECT ON SEQUENCE " + qualify(schema, sequence) + " TO lumnik_app";
+        return "GRANT USAGE, SELECT ON SEQUENCE " + qualify(schema, sequence) + TO_APP_ROLE;
     }
 
     /**
@@ -109,7 +112,7 @@ final class RlsDdl {
      * the call site, so it shares this class's single {@link #TAG} instead of duplicating it.
      */
     static String grantSchemaUsageApp(String schema) {
-        return "GRANT USAGE ON SCHEMA " + quoteIdent(schema) + " TO lumnik_app";
+        return "GRANT USAGE ON SCHEMA " + quoteIdent(schema) + TO_APP_ROLE;
     }
 
     /** Same USAGE grant for the read-only role (ask-to-SQL). */

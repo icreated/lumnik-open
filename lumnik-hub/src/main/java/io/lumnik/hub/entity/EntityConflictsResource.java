@@ -13,6 +13,7 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
+import org.hibernate.Session;
 import org.jboss.logging.Logger;
 
 import java.util.ArrayList;
@@ -125,7 +126,7 @@ public class EntityConflictsResource {
 
   /** SET LOCAL is transaction-scoped; issued once per request, and only if a view is actually scanned. */
   private void setStatementTimeout() {
-    em.unwrap(org.hibernate.Session.class).doWork(c -> {
+    em.unwrap(Session.class).doWork(c -> {
       try (var st = c.createStatement()) {
         st.execute("SET LOCAL statement_timeout = " + STATEMENT_TIMEOUT_MS);
       }

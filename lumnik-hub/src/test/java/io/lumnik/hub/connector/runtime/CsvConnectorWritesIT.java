@@ -7,6 +7,7 @@ import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
@@ -16,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.UUID;
 
 import static io.lumnik.hub.testsupport.EventItSupport.execSql;
 import static io.lumnik.hub.testsupport.EventItSupport.runInTxAsSystem;
@@ -44,7 +46,7 @@ class CsvConnectorWritesIT {
     @Inject UserTransaction utx;
 
     @Inject
-    @io.quarkus.agroal.DataSource("admin")
+    @DataSource("admin")
     AgroalDataSource adminDs;
 
     private Path csvFile;
@@ -67,7 +69,7 @@ class CsvConnectorWritesIT {
     void csvConnector_writesRows_toHubTable() throws Exception {
         String filePath = csvFile.toAbsolutePath().toString();
 
-        java.util.UUID connectorId = runInTxAsSystem(utx, () -> {
+        UUID connectorId = runInTxAsSystem(utx, () -> {
             Connector c = new Connector();
             c.setTenantId(1L);
             c.setName("csv-writes-" + System.nanoTime());

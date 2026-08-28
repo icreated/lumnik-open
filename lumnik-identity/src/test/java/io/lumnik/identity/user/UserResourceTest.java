@@ -11,6 +11,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
 
@@ -38,8 +40,8 @@ class UserResourceTest {
     @AfterEach
     @Transactional
     void cleanup() {
-        users.delete("tenantId in ?1", java.util.List.of(tenantId, otherTenantId));
-        tenants.delete("code in ?1", java.util.List.of("UTEST", "UTEST2"));
+        users.delete("tenantId in ?1", List.of(tenantId, otherTenantId));
+        tenants.delete("code in ?1", List.of("UTEST", "UTEST2"));
     }
 
     // ── CRUD basics ────────────────────────────────────────────────────────────

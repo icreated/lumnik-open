@@ -10,6 +10,7 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -143,7 +144,7 @@ public class IntegrationResource {
     }
 
     public record DeliveryRow(Long id, String eventType, Integer httpStatus, String error,
-                              Integer durationMs, java.time.OffsetDateTime attemptedAt) {
+                              Integer durationMs, OffsetDateTime attemptedAt) {
         public static DeliveryRow from(WebhookDelivery d) {
             return new DeliveryRow(d.getId(), d.getEventType(), d.getHttpStatus(),
                                    d.getError(), d.getDurationMs(), d.getAttemptedAt());

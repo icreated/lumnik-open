@@ -5,6 +5,7 @@ import io.lumnik.extraction.spi.ask.AskResult;
 import io.lumnik.hub.ask.AskToSqlAgent;
 import io.lumnik.llm.spi.Analytic;
 import io.lumnik.llm.spi.ChatPort;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.InjectMock;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.config.EncoderConfig;
@@ -30,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class EntityRagDomainGuardIT {
 
   @Inject
-  @io.quarkus.agroal.DataSource("admin")
+  @DataSource("admin")
   AgroalDataSource adminDs;
 
   @Inject AskToSqlAgent agent;

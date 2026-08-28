@@ -6,6 +6,7 @@ import io.agroal.api.AgroalDataSourceMetrics;
 import io.agroal.api.AgroalPoolInterceptor;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.lumnik.hub.tenant.TenantContextFilter;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
 import io.restassured.config.EncoderConfig;
@@ -20,19 +21,23 @@ import jakarta.ws.rs.core.PathSegment;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriBuilder;
 import jakarta.ws.rs.core.UriInfo;
+import org.hamcrest.Matchers;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.PrintWriter;
 import java.net.URI;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.logging.Logger;
 
 import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,7 +55,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class EntityReadAuditTest {
 
   @Inject
-  @io.quarkus.agroal.DataSource("admin")
+  @DataSource("admin")
   AgroalDataSource adminDs;
 
   @Inject EntityManager em;
@@ -105,7 +110,7 @@ class EntityReadAuditTest {
     given().header("X-Tenant-ID", String.valueOf(tenantId)).header("X-User-ID", "555")
         .get("/api/entities/auditprobeentity")
         .then().statusCode(200)
-        .body("size()", org.hamcrest.Matchers.equalTo(1));
+        .body("size()", Matchers.equalTo(1));
 
     long after = countReadRows("AuditProbeEntity");
     assertThat(after).isEqualTo(before + 1);
@@ -193,14 +198,14 @@ class EntityReadAuditTest {
       @Override public AgroalDataSourceConfiguration getConfiguration() { throw new UnsupportedOperationException(); }
       @Override public AgroalDataSourceMetrics getMetrics() { throw new UnsupportedOperationException(); }
       @Override public void flush(FlushMode mode) { throw new UnsupportedOperationException(); }
-      @Override public void setPoolInterceptors(java.util.Collection<? extends AgroalPoolInterceptor> interceptors) { throw new UnsupportedOperationException(); }
+      @Override public void setPoolInterceptors(Collection<? extends AgroalPoolInterceptor> interceptors) { throw new UnsupportedOperationException(); }
       @Override public List<AgroalPoolInterceptor> getPoolInterceptors() { throw new UnsupportedOperationException(); }
       @Override public void close() { /* no-op */ }
-      @Override public java.io.PrintWriter getLogWriter() { throw new UnsupportedOperationException(); }
-      @Override public void setLogWriter(java.io.PrintWriter out) { throw new UnsupportedOperationException(); }
+      @Override public PrintWriter getLogWriter() { throw new UnsupportedOperationException(); }
+      @Override public void setLogWriter(PrintWriter out) { throw new UnsupportedOperationException(); }
       @Override public void setLoginTimeout(int seconds) { throw new UnsupportedOperationException(); }
       @Override public int getLoginTimeout() { throw new UnsupportedOperationException(); }
-      @Override public java.util.logging.Logger getParentLogger() { throw new UnsupportedOperationException(); }
+      @Override public Logger getParentLogger() { throw new UnsupportedOperationException(); }
       @Override public <T> T unwrap(Class<T> iface) { throw new UnsupportedOperationException(); }
       @Override public boolean isWrapperFor(Class<?> iface) { throw new UnsupportedOperationException(); }
     };
