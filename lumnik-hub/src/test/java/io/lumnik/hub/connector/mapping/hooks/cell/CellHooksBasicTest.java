@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import io.lumnik.hub.connector.mapping.MappingState;
+import io.lumnik.hub.connector.mapping.MappingValidationException;
 import io.lumnik.hub.connector.mapping.hooks.HookCatalog;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -13,6 +14,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @QuarkusTest
 class CellHooksBasicTest {
@@ -110,6 +112,25 @@ class CellHooksBasicTest {
     var row = new HashMap<String, Object>(Map.of("ssn", "123-45-6789"));
     hook.apply(row, params, new MappingState());
     assertThat((String) row.get("ssn")).endsWith("6789").doesNotContain("123");
+  }
+
+  @Test
+  void mask_char_must_be_exactly_one_character() throws Exception {
+    // Not just non-empty: a multi-character mask-char used to be silently truncated by charAt(0),
+    // so `mask-char: "**"` masked with a single '*' and the manifest quietly meant something other
+    // than what it said. The refusal names the knob rather than the manifest meaning two things.
+    var hook = catalog.cell("mask");
+    var row = new HashMap<String, Object>(Map.of("ssn", "123-45-6789"));
+
+    for (String bad : new String[] {"", "**", "xy"}) {
+      assertThatThrownBy(() -> hook.apply(row, yaml("column: ssn\nmask-char: \"" + bad + "\""),
+                                          new MappingState()))
+          .as("mask-char %s must be refused, not truncated", bad.isEmpty() ? "(empty)" : "'" + bad + "'")
+          .isInstanceOf(MappingValidationException.class)
+          .hasMessageContaining("mask-char");
+    }
+    assertThat(row).as("nothing was masked on the way to the refusal")
+        .containsEntry("ssn", "123-45-6789");
   }
 
   @Test

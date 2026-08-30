@@ -7,6 +7,69 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.4.1 — 2026-08-30
+
+Fixes only. Nothing to migrate, no schema change, no API removed.
+
+Most of what follows came out of a single exercise: folding families of near-identical tests into
+parameterized tables, then reading the axes the table exposed. Twelve defects surfaced that way, and
+nine were reproduced by running the new rows before anything was fixed.
+
+### Ask-to-SQL
+
+- **The 200-row bound was not always applied.** The guard matched patterns against the model's raw
+  output, so a query ending in a `--` comment received its `LIMIT 200` *inside* that comment and ran
+  unbounded. Row-level security and the read-only datasource still held, so no data crossed a tenant
+  boundary — but the bound this project promises did not hold. Both guard layers now read lexer
+  tokens rather than text.
+- **Honest questions were refused.** Reading raw text, the same guard blocked a customer in a town
+  called Grant, a note containing the word "update", and a reference `A;B`. A `;` inside a string
+  literal is a character again, and a quoted `"insert"` is a column name.
+- **`NOT IN` was refused under a column that exists in no schema.** `WHERE segment NOT IN (…)` built
+  its filter on the operator instead of the column, so the refusal named `"NOT"` — a daily shape of
+  model output, refused for a reason the reader could not act on.
+- **An accent split an identifier in two.** `WHERE crédit = 'X'` was refused as `"dit"`: the lexer
+  read ASCII only, so an accent ended one identifier and the letters after it began another.
+  Identifiers are Unicode now; numbers stay ASCII, because a foreign digit is not a page size.
+
+### Ingestion
+
+- **`split` with `into-array` produced a value that could not be stored.** The documented option
+  puts a list in the row; it reached the `jsonb` column as `character varying` and Postgres refused
+  it. A nested map failed earlier still, on hstore. Either way the chunk failed, the cursor did not
+  advance, and the retry replayed the same failure. Both shapes now land as real `jsonb`, queryable
+  with `@>` and indexable with a GIN index — when the chunk that creates the column carries a value.
+  When it is null-only there, the column is typed `text` and stays that way; column types are never
+  widened.
+- **Four cell hooks crashed on a malformed manifest.** `truncate`, `mask`, `regex-replace` and
+  `regex-extract` threw raw runtime errors on a bad parameter instead of refusing the manifest the
+  way every other validator does.
+- **`kind: Entity` silently ignored keys it does not honour.** A misspelled key was accepted and
+  dropped. It is now named.
+- **`default_rate_limit` was validated by nobody.** The value was read by the limiter and checked by
+  no validator, so a nonsensical setting reached the engine intact.
+- **A chunk template rendered `_id` as empty** into every chunk it produced.
+
+### Métier scope and identity
+
+- **The scope boundary did not reach three app-ladder doors.** Entity apply, process apply and the
+  process manifest store answered a scope-bound caller as if the caller were unscoped. They now give
+  the same uniform refusal as every other scoped door.
+- **The tenant in the URL is now compared to the caller's own.** Ten identity endpoints took the
+  tenant from the path without checking it against the caller's claim. Row-level security already
+  blocked the rows — a cross-tenant request found nothing and returned `404` — so nothing was
+  readable that should not have been. What changes is that the refusal now says what it means:
+  `403`, not a `404` that misdescribes why.
+
+### Tests
+
+These are not behaviour changes, but this repository ships its tests and they are meant to be
+read. Six inventory
+tests were added: each enumerates its axis from the production source and fails in both directions,
+so a new subject cannot arrive unguarded and a stale exemption cannot outlive its reason. A registered
+after-each callback now rolls back any transaction a test leaves open, so one failing test can no
+longer make an unrelated one fail after it.
+
 ## v1.4.0 — 2026-08-28
 
 ### Breaking

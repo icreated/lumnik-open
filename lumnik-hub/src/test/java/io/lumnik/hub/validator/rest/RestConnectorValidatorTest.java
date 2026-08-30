@@ -27,6 +27,15 @@ class RestConnectorValidatorTest {
         }
     }
 
+    // The runtime parses default_rate_limit on the first request of a run; before this rule an
+    // unparseable value passed validate, passed apply, and crashed the run instead.
+    @Test void malformedRateLimit_isError() throws Exception {
+        ValidationResult r = service.validate(load("rest-bad-rate-limit.yaml"));
+        assertFalse(r.isValid());
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().contains("default_rate_limit")),
+            () -> "expected a default_rate_limit error, got: " + r.errors());
+    }
+
     // C4: a typo'd incremental.mode used to silently degrade to a full re-fetch forever;
     // watermark without param silently never applied the watermark.
     @Test void incrementalUnknownMode_isError() throws Exception {

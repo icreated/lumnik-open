@@ -44,6 +44,23 @@ public class ProcessManifestStore {
         }
     }
 
+    /**
+     * The scope one process was declared in, if it exists. Read BEFORE the yaml so the scope
+     * boundary can refuse without the caller ever touching a manifest they may not hold.
+     */
+    public Optional<String> findScope(long tenantId, String name) {
+        String sql = "SELECT scope FROM core.process_manifest WHERE tenant_id = ? AND name = ?";
+        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setLong(1, tenantId);
+            ps.setString(2, name);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("ProcessManifestStore.findScope: " + e.getMessage(), e);
+        }
+    }
+
     /** The stored manifest yaml for one process, if it exists — the TUI edit round-trip. */
     public Optional<String> findYaml(long tenantId, String name) {
         String sql = "SELECT yaml_text FROM core.process_manifest WHERE tenant_id = ? AND name = ?";

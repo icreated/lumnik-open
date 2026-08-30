@@ -70,10 +70,12 @@ public class UserRoleResource {
     }
 
     private User requireUser(Long tenantId, Long userId) {
+        Require.callerOwnsTenant(tenantId);
         return Require.owned(users, userId, tenantId, "User");
     }
 
     private Role requireRole(Long tenantId, Long roleId) {
+        Require.callerOwnsTenant(tenantId);
         return Require.owned(roles, roleId, tenantId, "Role");
     }
 }

@@ -51,4 +51,21 @@ public final class ScopeGrants {
             .map(g -> scopes != null && scopes.stream().anyMatch(g::contains))
             .orElse(true);
     }
+
+    /**
+     * May this user PUBLISH a resource carrying these scope tags? Unscoped: always.
+     * Bound: needs every tag, and at least one — an overlap is not enough.
+     *
+     * <p>Reading asks {@link #allowsAny}, writing asks this. The asymmetry is the whole point and
+     * it is easy to miss, because {@code allowsAny} is the only other collection-shaped method here:
+     * a user holding {@code clients} who applies a manifest scoped {@code [clients, magasin]} passes
+     * {@code allowsAny} and thereby publishes into {@code magasin}, which they do not hold. Seeing a
+     * resource someone else tagged with one of your scopes is fine; creating one that lands in a
+     * scope you were never granted is escalation.
+     */
+    public static boolean allowsAll(Collection<String> scopes) {
+        return granted()
+            .map(g -> scopes != null && !scopes.isEmpty() && g.containsAll(scopes))
+            .orElse(true);
+    }
 }

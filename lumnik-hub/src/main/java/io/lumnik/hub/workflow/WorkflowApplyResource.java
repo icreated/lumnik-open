@@ -1,6 +1,7 @@
 package io.lumnik.hub.workflow;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.extraction.spi.ExtractionSink;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.ask.SchemaCardStore;
@@ -76,6 +77,14 @@ public class WorkflowApplyResource {
             return Response.status(400).entity(ApiErrors.error(
                 "unknown key(s) in the manifest: " + String.join(", ", unknown)
                     + " — kind:Workflow honors " + WorkflowManifestParser.honoredSurface())).build();
+        }
+
+        // May this user declare into that scope at all? BEFORE the card lookup, because a 404
+        // "no schema for scope 'x'" would otherwise tell a bound integrator which scopes exist —
+        // the refusal must read the same for a real scope and an invented one. Same order, same
+        // words as ViewApplyResource: one boundary, not one per kind.
+        if (!ScopeGrants.allows(m.scope())) {
+            return ApiErrors.scopeNotGranted();
         }
 
         // The scope must be a real, discovered scope. A typo'd `scope: demoo` used to be
@@ -162,6 +171,7 @@ public class WorkflowApplyResource {
     public Response list() {
         long tenant = RequireTenant.current();
         List<WorkflowInfo> out = store.listByTenant(tenant).stream()
+            .filter(w -> ScopeGrants.allows(w.scope()))   // a bound user must not learn the rest exist
             .map(w -> new WorkflowInfo(w.name(), w.table(), w.column(), w.scope(), w.enabled()))
             .toList();
         return Response.ok(out).build();
@@ -173,6 +183,13 @@ public class WorkflowApplyResource {
     @Transactional
     public Response manifest(@PathParam("name") String name) {
         long tenant = RequireTenant.current();
+        Optional<String> scope = store.findScope(tenant, name);
+        if (scope.isEmpty()) {
+            return Response.status(404).entity(ApiErrors.error("unknown workflow: " + name)).build();
+        }
+        if (!ScopeGrants.allows(scope.get())) {
+            return ApiErrors.scopeNotGranted();
+        }
         return store.findYaml(tenant, name)
             .map(yaml -> Response.ok(yaml).type("application/yaml").build())
             .orElseGet(() -> Response.status(404)

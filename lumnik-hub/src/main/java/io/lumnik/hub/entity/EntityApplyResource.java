@@ -1,6 +1,7 @@
 package io.lumnik.hub.entity;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.ask.DiscoveryService;
@@ -14,6 +15,8 @@ import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
+
+import java.util.List;
 
 @Path("/api/entities/apply")
 @RequiresPermission("lm_admin")
@@ -37,6 +40,29 @@ public class EntityApplyResource {
       m = parser.parse(body);
     } catch (IllegalArgumentException e) {
       throw new BadRequestException(e.getMessage());
+    }
+    // C3, for the kind that never got it. Jackson deserializes this manifest with
+    // FAIL_ON_UNKNOWN_PROPERTIES=false, so a key the record does not declare is dropped in silence:
+    // `scope:` for `scopes:` empties the scope list and the entity becomes invisible to every bound
+    // user, and `colums:` takes the whole grounding block — labels, examples, and the values domain
+    // the DomainGuard enforces — with a clean 200 either way. Same words and same order as the
+    // View, Process and Workflow doors: one refusal, not one per kind.
+    List<String> unknown = parser.unknownKeys(body);
+    if (!unknown.isEmpty()) {
+      throw new WebApplicationException(Response.status(400)
+          .type(MediaType.APPLICATION_JSON)
+          .entity(ApiErrors.error("unknown key(s) in the manifest: " + String.join(", ", unknown)
+              + " — kind:Entity honors " + EntityManifestParser.honoredSurface()))
+          .build());
+    }
+
+    // A WRITE door asks allowsAll, not allowsAny. EntityReadResource is right to accept an overlap
+    // — one grant is enough to SEE a resource someone else tagged — but publishing into a list you
+    // only partly hold widens the scopes you do not. Before the compiler, which writes a view on
+    // the BYPASSRLS admin datasource. A scopeless entity is likewise not a bound user's to create:
+    // it would be invisible to them by the same rule that makes it visible to everyone else.
+    if (!ScopeGrants.allowsAll(m.scopes())) {
+      throw new WebApplicationException(ApiErrors.scopeNotGranted());
     }
     try {
       compiler.apply(m, body);

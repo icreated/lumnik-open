@@ -17,6 +17,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -519,7 +520,7 @@ public class DynamicTableWriter {
     ps.setInt(base + 4, (int) s.getOrDefault(MAPPING_VERSION, 1));
     ps.setLong(base + 5, tenantId);
     for (int i = 0; i < schemaCols.size(); i++) {
-      ps.setObject(base + 6 + i, toJdbc(row.get(schemaCols.get(i))));
+      bindValue(ps, base + 6 + i, row.get(schemaCols.get(i)));
     }
   }
 
@@ -534,17 +535,41 @@ public class DynamicTableWriter {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  /** Serializes List values to JSON strings so Postgres TEXT/JSONB columns accept them. */
-  private Object toJdbc(Object v) {
-    if (v == null) return null;
-    if (v instanceof List<?>) {
-      try {
-        return mapper.writeValueAsString(v);
-      } catch (Exception e) {
-        return v.toString();
-      }
+  /**
+   * Binds one cell. A nested value goes as its JSON text under {@code Types.OTHER}, which makes
+   * pgJDBC send it untyped so Postgres reads it as the column's own type — the idiom
+   * {@link HybridJsonbWriter} already uses, and the reason the INSERT builder can stay type-blind
+   * and positional.
+   *
+   * <p>Sending it any other way does not work, measured both ways: a plain {@code setObject} of the
+   * JSON String reaches a jsonb column as {@code character varying} and Postgres refuses it, and a
+   * raw {@code Map} hits pgJDBC's hstore mapping and dies before Postgres sees anything. Both threw,
+   * and a throw here becomes a {@code ChunkResult.Failure} — cursor unmoved, nothing dead-lettered,
+   * the retry replaying the same failure.
+   */
+  private void bindValue(PreparedStatement ps, int idx, Object v) throws SQLException {
+    if (v instanceof List<?> || v instanceof Map<?, ?>) {
+      ps.setObject(idx, toJson(v), Types.OTHER);
+      return;
     }
-    return v;
+    ps.setObject(idx, v);
+  }
+
+  /**
+   * The value as JSON text, or a failure that says so.
+   *
+   * <p>It used to fall back to {@code v.toString()}, which for a nested value is not JSON —
+   * {@code [java.lang.Object@1a2b]}, {@code {k=v}} — and reached the jsonb column as
+   * "invalid input syntax for type json": the same poison pill this class now avoids, wearing a
+   * cause that points at Postgres instead of at the value. {@code HybridJsonbWriter} throws here
+   * and so does this.
+   */
+  private String toJson(Object v) throws SQLException {
+    try {
+      return mapper.writeValueAsString(v);
+    } catch (Exception e) {
+      throw new SQLException("DynamicTableWriter: JSON serialization failed", e);
+    }
   }
 
   private void exec(String sql) {

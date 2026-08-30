@@ -92,10 +92,12 @@ public class UserResource {
     }
 
     private void requireTenant(Long tenantId) {
+        Require.callerOwnsTenant(tenantId);
         Require.found(tenants, tenantId, "Tenant");
     }
 
     private User requireUser(Long tenantId, Long id) {
+        Require.callerOwnsTenant(tenantId);
         return Require.owned(users, id, tenantId, "User");
     }
 }

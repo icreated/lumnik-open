@@ -1,6 +1,7 @@
 package io.lumnik.hub.process;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.ask.SchemaCardStore;
@@ -61,6 +62,13 @@ public class ProcessApplyResource {
                     + " — kind:Process honors " + ProcessManifestParser.honoredSurface())).build();
         }
 
+        // May this user declare into that scope at all? BEFORE the card lookup: a 404 naming the
+        // scope would otherwise tell a bound admin which scopes exist. Same order, same words as
+        // ViewApplyResource — one boundary, not one per kind.
+        if (!ScopeGrants.allows(m.scope())) {
+            return ApiErrors.scopeNotGranted();
+        }
+
         Optional<SchemaCard> card = cards.load(tenant, m.scope());
         if (card.isEmpty()) {
             return Response.status(404).entity(ApiErrors.error(
@@ -91,6 +99,13 @@ public class ProcessApplyResource {
     @Transactional
     public Response manifest(@PathParam("name") String name) {
         long tenant = RequireTenant.current();
+        Optional<String> scope = store.findScope(tenant, name);
+        if (scope.isEmpty()) {
+            return Response.status(404).entity(ApiErrors.error("unknown process: " + name)).build();
+        }
+        if (!ScopeGrants.allows(scope.get())) {
+            return ApiErrors.scopeNotGranted();
+        }
         return store.findYaml(tenant, name)
                 .map(yaml -> Response.ok(yaml).type("application/yaml").build())
                 // JSON via the class-level @Produces — consistent with every other error here.
@@ -103,6 +118,7 @@ public class ProcessApplyResource {
     public Response list() {
         long tenant = RequireTenant.current();
         List<ProcessInfo> out = store.listByTenant(tenant).stream()
+                .filter(p -> ScopeGrants.allows(p.scope()))  // a bound user must not learn the rest exist
                 .map(p -> new ProcessInfo(p.name(), p.onTable(), p.emitType(), p.enabled()))
                 .toList();
         return Response.ok(out).build();

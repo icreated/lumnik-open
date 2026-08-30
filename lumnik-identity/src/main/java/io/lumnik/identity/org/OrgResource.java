@@ -185,10 +185,12 @@ public class OrgResource {
     }
 
     private void requireTenant(Long tenantId) {
+        Require.callerOwnsTenant(tenantId);
         Require.found(tenants, tenantId, "Tenant");
     }
 
     private Organization requireOrg(Long tenantId, Long id) {
+        Require.callerOwnsTenant(tenantId);
         return Require.owned(orgs, id, tenantId, "Organization");
     }
 }

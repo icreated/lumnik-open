@@ -109,14 +109,28 @@ public final class NoBypassOidcProfile implements QuarkusTestProfile {
         return token(Set.of(role), null);
     }
 
+    /**
+     * A signed bearer JWT for a tenant OTHER than 1 — the column the auth matrix could not write.
+     * Every other mint here hardcodes {@code tenant_id: 1}, so "the caller's tenant differs from
+     * the one named in the URL" was a case the harness had no way to express, and therefore a case
+     * no test could pin.
+     */
+    static String tokenForTenant(long tenantId, String role) {
+        return token(Set.of(role), null, tenantId);
+    }
+
     /** A real, signed bearer JWT for tenant 1 carrying the given {@code groups} roles and,
      *  when non-null, an {@code acting_as_tenant} claim (impersonation). */
     static String token(Set<String> roles, Long actingAsTenant) {
+        return token(roles, actingAsTenant, 1L);
+    }
+
+    private static String token(Set<String> roles, Long actingAsTenant, long tenantId) {
         JwtClaimsBuilder claims = Jwt.claims()
             .issuer(ISSUER)
             .audience(AUDIENCE)
             .subject("tester")
-            .claim("tenant_id", 1)
+            .claim("tenant_id", tenantId)
             .claim("user_id", 1)
             .groups(roles)
             .expiresIn(Duration.ofMinutes(5));

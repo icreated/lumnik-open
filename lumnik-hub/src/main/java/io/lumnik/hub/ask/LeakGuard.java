@@ -1,6 +1,7 @@
 package io.lumnik.hub.ask;
 
 import io.lumnik.extraction.spi.ask.SchemaCard;
+import io.lumnik.extraction.spi.ask.SqlLexer;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.HashSet;

@@ -31,6 +31,36 @@ class ScopeGrantsTest {
     assertThat(ScopeGrants.allows("clients")).isFalse();
   }
 
+  /**
+   * Reading asks for ANY, writing asks for ALL — the asymmetry that makes {@code allowsAny} the
+   * wrong question at a write door. A bound user holding only {@code stock} must not publish a
+   * resource into {@code clients} merely because {@code stock} is also on the list.
+   */
+  @Test
+  void writing_needs_every_scope_not_merely_an_overlapping_one() {
+    CurrentRolesHolder.set(Set.of("lm_user", "scope:stock"));
+
+    assertThat(ScopeGrants.allowsAny(List.of("clients", "stock")))
+        .as("reading a resource tagged with both is allowed — one grant is enough to see it")
+        .isTrue();
+    assertThat(ScopeGrants.allowsAll(List.of("clients", "stock")))
+        .as("but publishing INTO both would widen 'clients' to a user who does not hold it")
+        .isFalse();
+
+    assertThat(ScopeGrants.allowsAll(List.of("stock"))).isTrue();
+    assertThat(ScopeGrants.allowsAll(List.of())).as("a bound user cannot write a scopeless resource")
+        .isFalse();
+    assertThat(ScopeGrants.allowsAll(null)).isFalse();
+  }
+
+  @Test
+  void an_unscoped_user_may_write_anywhere() {
+    CurrentRolesHolder.set(Set.of("lm_user"));
+    assertThat(ScopeGrants.allowsAll(List.of("clients", "stock"))).isTrue();
+    assertThat(ScopeGrants.allowsAll(List.of())).isTrue();
+    assertThat(ScopeGrants.allowsAll(null)).isTrue();
+  }
+
   @Test
   void bound_user_needs_a_non_empty_intersection() {
     CurrentRolesHolder.set(Set.of("lm_user", "scope:stock"));

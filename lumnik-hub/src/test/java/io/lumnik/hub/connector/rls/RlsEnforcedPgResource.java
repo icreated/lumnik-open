@@ -4,6 +4,8 @@ import io.quarkus.test.common.QuarkusTestResourceLifecycleManager;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 
+import java.time.Duration;
+
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -31,7 +33,14 @@ public class RlsEnforcedPgResource implements QuarkusTestResourceLifecycleManage
         .withEnv("POSTGRES_USER", "postgres")
         .withEnv("POSTGRES_PASSWORD", "postgres")
         .withExposedPorts(5432)
-        .waitingFor(Wait.forListeningPort());
+        // NOT forListeningPort(): the Postgres entrypoint runs a TEMPORARY server for initdb and
+        // then restarts it, so the port accepts connections during a window when the real server
+        // is not up yet. Under load the first JDBC connect lands in that window and dies with a
+        // SocketTimeoutException mid-SSL-negotiation, taking every @QuarkusTest on this profile
+        // down with it. Testcontainers' own PostgreSQLContainer waits for the ready line TWICE for
+        // exactly this reason; the MinIO sites in this tree already wait on /minio/health/ready.
+        .waitingFor(Wait.forLogMessage(".*database system is ready to accept connections.*\\s", 2)
+            .withStartupTimeout(Duration.ofMinutes(2)));
     pg.start();
     String url = "jdbc:postgresql://" + pg.getHost() + ":" + pg.getMappedPort(5432) + "/lumnik";
 

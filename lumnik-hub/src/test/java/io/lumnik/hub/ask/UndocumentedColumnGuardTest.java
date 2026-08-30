@@ -2,9 +2,13 @@ package io.lumnik.hub.ask;
 
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -12,116 +16,103 @@ class UndocumentedColumnGuardTest {
 
   private final UndocumentedColumnGuard guard = new UndocumentedColumnGuard();
 
-  /** A card declaring exactly segment + grandtotal on one table. */
+  /** A card declaring segment + grandtotal + an accented column, on one table. */
   private static SchemaCard card() {
     return new SchemaCard("clients", List.of(
         new SchemaCard.Table("connector.v_customer", "customer", List.of(
             new SchemaCard.Column("segment", "text", "segment"),
-            new SchemaCard.Column("grandtotal", "numeric", "grandtotal")))));
+            new SchemaCard.Column("grandtotal", "numeric", "grandtotal"),
+            new SchemaCard.Column("crédit", "numeric", "crédit")))));
   }
 
+  /**
+   * The guard as one table: a query in, and either the column it refuses or nothing.
+   *
+   * <p>The third column is what makes the empty cells visible — every row states WHICH axis it is
+   * exercising, so a shape nobody thought of shows up as an axis with no row rather than as silence.
+   * {@code null} means the query is allowed through.
+   */
+  static Stream<Arguments> verdicts() {
+    return Stream.of(
+        // ── the advertised job: an invented or internal column filtered against a string ──
+        Arguments.of("an invented column", "WHERE loyalty_tier = 'GOLD'", "loyalty_tier"),
+        Arguments.of("an invented column in an IN list", "WHERE rank_band IN ('A','B')", "rank_band"),
+        Arguments.of("an invented column with <>", "WHERE vip <> 'Y'", "vip"),
+        Arguments.of("an internal column the chat was never meant to reason over",
+                     "WHERE tenant_id = '5'", "tenant_id"),
+        Arguments.of("an invented column behind NOT IN", "WHERE loyalty_tier NOT IN ('A','B')",
+                     "loyalty_tier"),
+        Arguments.of("an invented column carrying an accent", "WHERE société = 'X'", "société"),
+
+        // ── declared columns must pass, whatever the operator ──
+        Arguments.of("a declared column", "WHERE segment = 'GOLD'", null),
+        Arguments.of("a declared column behind NOT IN", "WHERE segment NOT IN ('GOLD','SILVER')", null),
+        Arguments.of("a declared column behind IN", "WHERE segment IN ('GOLD','SILVER')", null),
+        Arguments.of("a declared column carrying an accent", "WHERE crédit = 'X'", null),
+        Arguments.of("a numeric right-hand side, which is usually an alias not a column",
+                     "WHERE grandtotal = 100", null),
+
+        // ── the deliberate fail-opens: a miss is allowed, an over-block never is ──
+        Arguments.of("a qualified column, whose table we cannot resolve", "t WHERE t.foo = 'X'", null),
+        Arguments.of("a function-wrapped column", "WHERE lower(foo) = 'x'", null),
+        Arguments.of("a quoted identifier", "WHERE \"foo\" = 'X'", null),
+        Arguments.of("a cast target", "WHERE foo::text = 'X'", null),
+        Arguments.of("a non-clean IN list", "WHERE foo IN ('A', upper('B'))", null),
+        Arguments.of("a keyword left-hand side", "WHERE null = 'X'", null),
+        Arguments.of("a niladic value keyword", "WHERE user = 'alice'", null),
+        Arguments.of("another niladic value keyword", "WHERE current_role = 'admin'", null),
+
+        // ── a column name is only a column name where SQL says it is ──
+        Arguments.of("a filter-shaped string inside a literal",
+                     "WHERE segment = 'loyalty_tier = ''X'''", null),
+        Arguments.of("a filter-shaped string inside a line comment",
+                     "-- loyalty_tier = 'GOLD'\nWHERE segment = 'GOLD'", null),
+        Arguments.of("a filter-shaped string inside a block comment",
+                     "/* loyalty_tier = 'GOLD' */ WHERE segment = 'GOLD'", null));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("verdicts")
+  void refusesOnlyAnUndeclaredFilteredColumn(String axis, String tail, String refusedColumn) {
+    var v = guard.check("SELECT * FROM connector.v_customer " + tail, card());
+
+    if (refusedColumn == null) {
+      assertThat(v).as("%s — must pass: over-blocking a legitimate query is the cardinal harm", axis)
+          .isEmpty();
+    } else {
+      assertThat(v).as("%s — must be refused", axis).isPresent();
+      assertThat(v.get().column())
+          .as("%s — the refusal must name the whole column, not a fragment of it", axis)
+          .isEqualTo(refusedColumn);
+    }
+  }
+
+  /** A HAVING or subquery alias compared to a number is not a column filter. */
+  static Stream<Arguments> aliasShapes() {
+    return Stream.of(
+        Arguments.of("a HAVING alias",
+                     "SELECT segment, count(*) c FROM connector.v_customer GROUP BY segment HAVING c = 5"),
+        Arguments.of("a subquery alias",
+                     "SELECT cnt FROM (SELECT count(*) cnt FROM connector.v_customer) z WHERE cnt = 3"));
+  }
+
+  @ParameterizedTest(name = "does not over-block {0}")
+  @MethodSource("aliasShapes")
+  void doesNotOverBlockAnAlias(String axis, String sql) {
+    assertThat(guard.check(sql, card())).as("%s — must pass", axis).isEmpty();
+  }
+
+  // ── the message, and the two card shapes the table cannot carry ──────────
+
   @Test
-  void refuses_an_undeclared_column_equality() {
+  void theRefusalTellsTheUserWhatToDoAboutIt() {
     var v = guard.check("SELECT * FROM connector.v_customer WHERE loyalty_tier = 'GOLD'", card());
+
     assertThat(v).isPresent();
-    assertThat(v.get().column()).isEqualTo("loyalty_tier");
-    assertThat(v.get().message()).contains("not a declared column").contains("segment").contains("manifest");
-  }
-
-  @Test
-  void fails_open_on_a_numeric_rhs_to_avoid_over_blocking_aliases() {
-    // A bare `<word> = <number>` is overwhelmingly a SELECT/HAVING/subquery alias, not a column filter,
-    // so a numeric RHS is never inspected — over-blocking a legitimate query is the cardinal harm.
-    assertThat(guard.check("SELECT * FROM connector.v_customer WHERE tenant_id = 5", card())).isEmpty();
-  }
-
-  @Test
-  void does_not_over_block_a_having_or_subquery_alias() {
-    assertThat(guard.check(
-        "SELECT segment, count(*) c FROM connector.v_customer GROUP BY segment HAVING c = 5", card()))
-        .isEmpty();
-    assertThat(guard.check(
-        "SELECT cnt FROM (SELECT count(*) cnt FROM connector.v_customer) z WHERE cnt = 3", card()))
-        .isEmpty();
-  }
-
-  @Test
-  void refuses_an_undeclared_column_in_an_in_list() {
-    assertThat(guard.check(
-        "SELECT * FROM connector.v_customer WHERE rank_band IN ('A','B')", card())).isPresent();
-  }
-
-  @Test
-  void refuses_an_undeclared_column_with_not_equal() {
-    assertThat(guard.check("SELECT * FROM connector.v_customer WHERE vip <> 'Y'", card())).isPresent();
-  }
-
-  @Test
-  void allows_a_declared_column() {
-    assertThat(guard.check("SELECT * FROM connector.v_customer WHERE segment = 'GOLD'", card())).isEmpty();
-    assertThat(guard.check("SELECT * FROM connector.v_customer WHERE grandtotal = 100", card())).isEmpty();
-  }
-
-  @Test
-  void fails_open_on_a_qualified_column() {
-    // t.foo — cannot resolve the table without parsing aliases; never over-block.
-    assertThat(guard.check(
-        "SELECT * FROM connector.v_customer t WHERE t.foo = 'X'", card())).isEmpty();
-  }
-
-  @Test
-  void fails_open_on_a_function_wrapped_column() {
-    assertThat(guard.check(
-        "SELECT * FROM connector.v_customer WHERE lower(foo) = 'x'", card())).isEmpty();
-  }
-
-  @Test
-  void fails_open_on_a_quoted_identifier() {
-    assertThat(guard.check(
-        "SELECT * FROM connector.v_customer WHERE \"foo\" = 'X'", card())).isEmpty();
-  }
-
-  @Test
-  void ignores_a_keyword_left_hand_side() {
-    assertThat(guard.check("SELECT * FROM connector.v_customer WHERE null = 'X'", card())).isEmpty();
-  }
-
-  @Test
-  void ignores_bare_sql_niladic_keywords_as_lhs() {
-    // `user` (a synonym of current_user), current_role, etc. are bare SQL value keywords, not columns.
-    assertThat(guard.check("SELECT * FROM connector.v_customer WHERE user = 'alice'", card())).isEmpty();
-    assertThat(guard.check("SELECT * FROM connector.v_customer WHERE current_role = 'admin'", card())).isEmpty();
-  }
-
-  @Test
-  void does_not_flag_a_column_name_appearing_inside_a_literal() {
-    // The filtered column `segment` is declared; the literal merely CONTAINS "loyalty_tier = X".
-    assertThat(guard.check(
-        "SELECT * FROM connector.v_customer WHERE segment = 'loyalty_tier = ''X'''", card())).isEmpty();
-  }
-
-  @Test
-  void fails_open_on_a_non_clean_in_list() {
-    assertThat(guard.check(
-        "SELECT * FROM connector.v_customer WHERE foo IN ('A', upper('B'))", card())).isEmpty();
-  }
-
-  @Test
-  void comment_contents_do_not_trigger_a_refusal() {
-    // A filter-like pattern inside an inert SQL comment must NOT be inspected (line and block forms).
-    assertThat(guard.check(
-        "SELECT * FROM connector.v_customer -- loyalty_tier = 'GOLD'\nWHERE segment = 'GOLD'", card()))
-        .isEmpty();
-    assertThat(guard.check(
-        "SELECT * FROM connector.v_customer /* loyalty_tier = 'GOLD' */ WHERE segment = 'GOLD'", card()))
-        .isEmpty();
-  }
-
-  @Test
-  void fails_open_on_a_cast_target() {
-    // `foo::text = 'X'` — `text` is a cast target preceded by ':', not a filtered column; never over-block.
-    assertThat(guard.check(
-        "SELECT * FROM connector.v_customer WHERE foo::text = 'X'", card())).isEmpty();
+    assertThat(v.get().message())
+        .contains("not a declared column")
+        .contains("segment")
+        .contains("manifest");
   }
 
   @Test

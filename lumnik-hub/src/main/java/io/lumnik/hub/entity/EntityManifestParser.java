@@ -1,21 +1,74 @@
 package io.lumnik.hub.entity;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import io.lumnik.hub.manifest.ManifestKeys;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 
 @ApplicationScoped
 public class EntityManifestParser {
 
   private static final Set<String> RESERVED = Set.of("_conflicts", "_src", "_ord");
+
+  // The honored surface, as an inventory rather than as folklore. apiVersion is DECLARED though
+  // parse() ignores it: the shipped manifests carry the apps.lumnik.io/v1 envelope, and refusing it
+  // would cry wolf on our own demo — the failure mode the C3 verdict named.
+  private static final Set<String> ROOT_KEYS = Set.of(
+      "apiVersion", "kind", "name", "match", "sources", "scopes", "description", "columns");
+  private static final Set<String> SOURCE_KEYS = Set.of("table", "map");
+
+  private static final Map<String, Set<String>> ALLOWED_BY_PATH = new LinkedHashMap<>();
+  static {
+    ALLOWED_BY_PATH.put("", ROOT_KEYS);
+    ALLOWED_BY_PATH.put("sources[]", SOURCE_KEYS);
+    // `map` and `columns` are keyed by the integrator's OWN column names, so their keys cannot be
+    // inventoried — only the shape one level down could be, and ManifestKeys walks fixed paths.
+    // The cost of that limit is a typo INSIDE one column's grounding (`labl:` for `label:`); the
+    // two silences that cost real behaviour, `scope:` and `colums:`, are both root keys.
+  }
+
+  private static final ObjectMapper KEYS = new ObjectMapper(new YAMLFactory());
+
+  /**
+   * Every key the manifest declares that this parser does not honor, as dotted paths in document
+   * order — empty when the manifest is clean, and empty when it does not parse at all (that is
+   * {@link #parse}'s error to raise, not this check's).
+   *
+   * <p>Reporting only, as in {@code ViewManifestParser}: an entity already stored must stay
+   * readable. The apply door is where a manifest is refused.
+   */
+  public List<String> unknownKeys(String yamlText) {
+    JsonNode root;
+    try {
+      root = KEYS.readTree(yamlText);
+    } catch (Exception e) {
+      return List.of();
+    }
+    return ManifestKeys.unknownKeys(root, ALLOWED_BY_PATH);
+  }
+
+  /**
+   * The honored surface, <b>derived</b> from the inventory above so the refusal can never
+   * contradict what is actually accepted.
+   */
+  public static String honoredSurface() {
+    return "root {" + sorted(ROOT_KEYS) + "}, sources[] {" + sorted(SOURCE_KEYS) + "}";
+  }
+
+  private static String sorted(Set<String> keys) {
+    return String.join(", ", new TreeSet<>(keys));
+  }
 
   private final ObjectMapper yaml = new ObjectMapper(new YAMLFactory())
       .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);

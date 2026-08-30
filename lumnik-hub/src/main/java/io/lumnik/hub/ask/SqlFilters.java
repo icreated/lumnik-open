@@ -1,7 +1,7 @@
 package io.lumnik.hub.ask;
 
-import io.lumnik.hub.ask.SqlLexer.Kind;
-import io.lumnik.hub.ask.SqlLexer.Token;
+import io.lumnik.extraction.spi.ask.SqlLexer.Kind;
+import io.lumnik.extraction.spi.ask.SqlLexer.Token;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -10,7 +10,7 @@ import java.util.Optional;
 /**
  * Extracts the bare-column = string-literal filters that {@link DomainGuard} and
  * {@link UndocumentedColumnGuard} both inspect: {@code col = 'v'} / {@code col <> 'v'} /
- * {@code col != 'v'} / {@code col IN ('a','b')}. Purely LEXICAL — no policy: the guards apply their own
+ * {@code col != 'v'} / {@code col IN ('a','b')} / {@code col NOT IN ('a','b')}. Purely LEXICAL — no policy: the guards apply their own
  * semantic checks (declared? in-domain? a niladic keyword?). A numeric RHS, a qualified/quoted/cast column,
  * a function-wrapped column, and a non-clean IN list never yield a filter (the deliberate fail-opens).
  */
@@ -31,10 +31,14 @@ final class SqlFilters {
         return filters;
     }
 
-    /** A bare identifier: not quoted, not qualified ({@code a.b}), not a cast target ({@code ::type}). */
+    /**
+     * A bare identifier: not quoted, not qualified ({@code a.b}), not a cast target ({@code ::type}),
+     * and not {@code NOT} — a logical operator lexes as an identifier, and reading it as one made
+     * {@code segment NOT IN (…)} refuse a DECLARED column under the name "NOT".
+     */
     private static boolean isBareColumnRef(List<Token> tokens, int i) {
         Token col = tokens.get(i);
-        if (col.kind() != Kind.IDENT || col.quoted()) return false;
+        if (col.kind() != Kind.IDENT || col.quoted() || col.text().equalsIgnoreCase("not")) return false;
         Token prev = i > 0 ? tokens.get(i - 1) : null;
         return prev == null || !(isPunct(prev, ".") || isOp(prev, "::"));
     }
@@ -50,11 +54,20 @@ final class SqlFilters {
             }
             return Optional.empty();
         }
-        if (op.kind() == Kind.IDENT && op.text().equalsIgnoreCase("in")
-                && i + 2 < tokens.size() && isPunct(tokens.get(i + 2), "(")) {
+        if (isKeyword(op, "in") && i + 2 < tokens.size() && isPunct(tokens.get(i + 2), "(")) {
             return cleanStringList(tokens, i + 3).map(values -> new Filter(col.text(), values));
         }
+        // `col NOT IN ('a','b')` — the same filter, negated. The guards treat it like `<>` already does:
+        // a value outside a declared domain is a value the model invented, whichever way the test runs.
+        if (isKeyword(op, "not") && i + 3 < tokens.size() && isKeyword(tokens.get(i + 2), "in")
+                && isPunct(tokens.get(i + 3), "(")) {
+            return cleanStringList(tokens, i + 4).map(values -> new Filter(col.text(), values));
+        }
         return Optional.empty();
+    }
+
+    private static boolean isKeyword(Token t, String word) {
+        return t.kind() == Kind.IDENT && !t.quoted() && t.text().equalsIgnoreCase(word);
     }
 
     private static boolean isComparison(Token op) {

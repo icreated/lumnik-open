@@ -85,10 +85,12 @@ public class RoleResource {
     }
 
     private void requireTenant(Long tenantId) {
+        Require.callerOwnsTenant(tenantId);
         Require.found(tenants, tenantId, "Tenant");
     }
 
     private Role requireRole(Long tenantId, Long id) {
+        Require.callerOwnsTenant(tenantId);
         return Require.owned(roles, id, tenantId, "Role");
     }
 }

@@ -1,5 +1,6 @@
 package io.lumnik.hub.ask;
 
+import io.lumnik.extraction.spi.ask.SqlLexer;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;

@@ -2,6 +2,7 @@ package io.lumnik.hub.validator.rest;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.lumnik.hub.connector.rest.reliability.RateLimiterRegistry;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.connector.rest.DottedPath;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
@@ -72,6 +73,15 @@ public class RestConnectorValidator implements ConnectorValidator {
                 .ifPresent(msg -> errs.add(new ValidationError("spec.schedule",
                     ValidationError.Severity.ERROR, msg,
                     List.of("Example: schedule: \"0 6 * * *\" (daily at 06:00 UTC)"))));
+        }
+        JsonNode rate = spec.path("default_rate_limit");
+        if (!rate.isMissingNode() && !rate.isNull()) {
+            // validator == runtime: the same reading the HTTP client does on the first request,
+            // so `lm apply` never accepts a rate the run would only choke on later.
+            RateLimiterRegistry.describeProblem(rate.asText())
+                .ifPresent(msg -> errs.add(new ValidationError("spec.default_rate_limit",
+                    ValidationError.Severity.ERROR, msg,
+                    List.of("Example: default_rate_limit: \"100/s\" (count/window; unit s|m|h)"))));
         }
         JsonNode window = spec.path("window");
         if (!window.isMissingNode() && !window.isNull()) {

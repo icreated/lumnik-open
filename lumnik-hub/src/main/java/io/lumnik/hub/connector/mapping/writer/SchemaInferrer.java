@@ -21,7 +21,11 @@ import java.util.function.Predicate;
 /**
  * Infers a PostgreSQL column type per field from a sample of rows.
  * All non-null values for a field must agree, otherwise TEXT is used.
- * Null-only fields → TEXT.
+ *
+ * <p>A null-only field takes its {@code sourceTypeHints} entry when there is one, and TEXT when
+ * there is not. This line used to read "Null-only fields → TEXT" flatly; the hint feature made
+ * that false and the sentence did not notice. {@code SchemaTypingInventoryTest} now pins both
+ * halves, so the doc cannot drift ahead of the code a second time.
  */
 @ApplicationScoped
 public class SchemaInferrer {
@@ -60,7 +64,12 @@ public class SchemaInferrer {
     DATE     ("DATE",          SchemaInferrer::isDate),
     BOOLEAN  ("BOOLEAN",       SchemaInferrer::isBool),
     NUMERIC  ("NUMERIC(18,4)", SchemaInferrer::isNumber),
-    LIST     ("JSONB",         v -> v instanceof List<?>);
+    // Both nested shapes, one type. A Map used to fall through to TEXT while a List got JSONB —
+    // an asymmetry with no reason behind it, and both were unwritable anyway: the List's JSON
+    // string was sent as varchar (Postgres refuses it on a jsonb column) and the Map was sent to
+    // pgJDBC's hstore mapping ("No hstore extension installed"). DynamicTableWriter now binds both
+    // with Types.OTHER, so the type this names is the type that lands.
+    NESTED   ("JSONB",         v -> v instanceof List<?> || v instanceof Map<?, ?>);
 
     final String ddl;
     final Predicate<Object> matches;

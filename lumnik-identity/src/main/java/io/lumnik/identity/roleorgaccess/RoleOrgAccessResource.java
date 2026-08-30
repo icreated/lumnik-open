@@ -71,10 +71,12 @@ public class RoleOrgAccessResource {
     }
 
     private Role requireRole(Long tenantId, Long roleId) {
+        Require.callerOwnsTenant(tenantId);
         return Require.owned(roles, roleId, tenantId, "Role");
     }
 
     private Organization requireOrg(Long tenantId, Long orgId) {
+        Require.callerOwnsTenant(tenantId);
         return Require.owned(orgs, orgId, tenantId, "Organization");
     }
 }
