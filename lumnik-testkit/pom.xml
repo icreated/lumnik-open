@@ -33,7 +33,7 @@
         </dependency>
         <!-- io.quarkus.test.Mock — the alternative stereotype that makes the mock ports shadow
              the real ones inside @QuarkusTest. `provided` for the same reason: consumers bring
-             quarkus-junit5, which brings this. -->
+             quarkus-junit, which brings this. -->
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-test-common</artifactId>

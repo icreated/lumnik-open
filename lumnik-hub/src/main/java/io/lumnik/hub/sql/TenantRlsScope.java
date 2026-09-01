@@ -36,8 +36,9 @@ public final class TenantRlsScope {
     }
 
     /**
-     * Mark the connection read-only and pin it to {@code tenantId} for the ambient
-     * (request) transaction.
+     * Pin the connection to {@code tenantId} for the ambient (request) transaction.
+     * Read-only-ness is not this method's job: it is carried by the {@code lumnik_readonly}
+     * role the datasource connects as (default_transaction_read_only=on, SELECT-only grants).
      *
      * <p>{@code SET LOCAL app.current_tenant} scopes RLS on hub tables to this tenant's
      * rows. {@code SET LOCAL} rides the ambient transaction — bound to it, no leak onto
@@ -58,7 +59,13 @@ public final class TenantRlsScope {
                 + "Wrap the read in QuarkusTransaction.requiringNew() or make the caller "
                 + "@Transactional.");
         }
-        c.setReadOnly(true);
+        // No JDBC setReadOnly here, deliberately: Agroal (since Quarkus 3.33) refuses to
+        // modify read-only state on a JTA-enlisted connection — every production caller is
+        // enlisted, so the call 500'd all four readers (caught by the OTK publish proof,
+        // never by %test, whose readonly datasource does not enlist). Read-only-ness is not
+        // lost: this datasource runs as lumnik_readonly, whose ROLE carries
+        // default_transaction_read_only=on and SELECT-only grants — the physical firewall
+        // is the role, not a driver flag. TenantRlsScopeEnlistedIT pins the enlisted posture.
         try (Statement st = c.createStatement()) {
             st.execute("SET LOCAL app.current_tenant = '" + tenantId + "'");
             st.execute("SET LOCAL search_path = ''");

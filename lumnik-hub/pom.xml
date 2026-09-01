@@ -11,6 +11,7 @@
     </parent>
 
     <artifactId>lumnik-hub</artifactId>
+    <packaging>quarkus</packaging>
     <name>lumnik :: Hub</name>
     <description>Boot application: aggregates modules, runs Flyway, exposes /api/platform</description>
 
@@ -210,34 +211,32 @@
         </dependency>
 
         <!-- ── Apache MINA SSHD (SFTP file source) ─────────────────── -->
-        <!-- Pin sshd-core + sshd-common to 2.13.2 to match sshd-sftp:2.13.2 and fix EdDSA key-
-             exchange failure ("key spec not recognised: EdDSAPublicKeySpec") that occurs when
-             sshd-common:2.12.1 is pulled transitively and its EdDSASecurityProviderUtils is
-             misaligned with the net.i2p.crypto:eddsa:0.3.0 KeyFactory. -->
+        <!-- Keep sshd-sftp/core/common on the SAME version: a transitively-pulled older
+             sshd-common once broke the EdDSA key exchange ("key spec not recognised"). -->
         <dependency>
             <groupId>org.apache.sshd</groupId>
             <artifactId>sshd-sftp</artifactId>
-            <version>2.13.2</version>
+            <version>2.19.0</version>
         </dependency>
         <dependency>
             <groupId>org.apache.sshd</groupId>
             <artifactId>sshd-core</artifactId>
-            <version>2.13.2</version>
+            <version>2.19.0</version>
         </dependency>
         <dependency>
             <groupId>org.apache.sshd</groupId>
             <artifactId>sshd-common</artifactId>
-            <version>2.13.2</version>
+            <version>2.19.0</version>
         </dependency>
-        <!-- Compile scope so the EdDSA JCE provider and key types are loaded by the
-             same classloader as sshd-common in @QuarkusTest. Without this, Quarkus
-             splits the classloader and sshd-common's
-             EdDSASecurityProviderUtils.generateEDDSAPublicKey() receives an EdDSAPublicKeySpec
-             from a different loader — yielding "key spec not recognised". -->
+        <!-- Ed25519 host keys ride Bouncy Castle (sshd's supported provider since 2.15;
+             the unmaintained net.i2p.crypto:eddsa carried a signature-malleability advisory).
+             Compile scope so the JCE provider and key types are loaded by the same
+             classloader as sshd-common in @QuarkusTest — a split loader once yielded
+             "key spec not recognised" (see parent-first-artifacts in test properties). -->
         <dependency>
-            <groupId>net.i2p.crypto</groupId>
-            <artifactId>eddsa</artifactId>
-            <version>0.3.0</version>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>1.85.2</version>
         </dependency>
 
         <!-- ── WireMock (REST connector IT harness) ─────────────────── -->
@@ -260,7 +259,7 @@
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-junit5</artifactId>
+            <artifactId>quarkus-junit</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -275,22 +274,22 @@
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
-            <artifactId>junit-jupiter</artifactId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
-            <artifactId>postgresql</artifactId>
+            <artifactId>testcontainers-postgresql</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
-            <artifactId>redpanda</artifactId>
+            <artifactId>testcontainers-redpanda</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-junit5-mockito</artifactId>
+            <artifactId>quarkus-junit-mockito</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

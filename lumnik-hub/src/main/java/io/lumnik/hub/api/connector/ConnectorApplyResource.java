@@ -20,8 +20,8 @@ import jakarta.ws.rs.core.Response;
 @Produces(MediaType.APPLICATION_JSON)
 public class ConnectorApplyResource {
 
-    private static final YAMLMapper YAML = new YAMLMapper();
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final YAMLMapper YAML = new YAMLMapper();   // no managed YAML mapper exists
+    @Inject ObjectMapper json;   // the Quarkus-managed one: one JSON behavior app-wide
     private static final String METADATA = "metadata";
     private static final String TENANT = "tenant";
 
@@ -37,7 +37,7 @@ public class ConnectorApplyResource {
         if (body == null || body.isBlank()) {
             return Response.status(400).entity(ApiErrors.error("empty body")).build();
         }
-        JsonNode doc = body.trim().startsWith("{") ? JSON.readTree(body) : YAML.readTree(body);
+        JsonNode doc = body.trim().startsWith("{") ? json.readTree(body) : YAML.readTree(body);
 
         // metadata.tenant may still be declared (documented) but can no longer CHOOSE the
         // tenant: it must match the authenticated one — never a silent cross-tenant apply.

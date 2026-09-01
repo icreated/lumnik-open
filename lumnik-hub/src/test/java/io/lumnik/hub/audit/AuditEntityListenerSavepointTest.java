@@ -20,7 +20,7 @@ import static org.mockito.Mockito.when;
 
 /**
  * F3. {@link AuditEntityListener#writeOutboxRow} is the extracted, directly-callable body of the
- * savepoint block {@code insertOutboxRow} runs inside {@code Session.doWork(...)} — pure unit
+ * savepoint block {@code insertOutboxRow} runs inside {@code runWithConnection(...)} — pure unit
  * tests here, no Quarkus container and no database, driving it with a mocked JDBC
  * {@link Connection}.
  * <p>

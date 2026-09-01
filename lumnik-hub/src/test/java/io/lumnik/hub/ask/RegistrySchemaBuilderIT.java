@@ -43,7 +43,7 @@ class RegistrySchemaBuilderIT {
            + "sync_mode, skip_policy) "
            + "VALUES ('" + connId + "', " + tenant + ", 'src--c_order', 'jdbc-generic', '{}'::jsonb, '"
            + mappingId + "', true, ARRAY['atelierA'], "
-           + "'Incremental', '{\"type\":\"SkipUpTo\",\"max\":100}'::jsonb)");
+           + "'Incremental', '{\"type\":\"SkipUpTo\",\"maxSkips\":100}'::jsonb)");
         // Discovery now links hub tables to their connector via dynamic_table.connector_id.
         exec("INSERT INTO connector.dynamic_table (id, tenant_id, mapping_id, table_schema, table_name, schema_inferred, connector_id) "
            + "VALUES (gen_random_uuid(), " + tenant + ", 'jdbc:c_order', 'connector', 't_c_order', "

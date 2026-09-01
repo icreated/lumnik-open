@@ -69,7 +69,7 @@ class DiscoveryServiceIT {
            + "enabled, tags, sync_mode, skip_policy) VALUES ('" + connId + "', " + tenant
            + ", 'src--c_order', 'jdbc-generic', '{\"url\":\"" + url + "\",\"user\":\"" + USER + "\"}'::jsonb, '"
            + credId + "', '" + mappingId + "', true, ARRAY['atelierB'], 'Incremental', "
-           + "'{\"type\":\"SkipUpTo\",\"max\":100}'::jsonb)");
+           + "'{\"type\":\"SkipUpTo\",\"maxSkips\":100}'::jsonb)");
         exec("INSERT INTO connector.dynamic_table (id, tenant_id, mapping_id, table_schema, table_name, schema_inferred, connector_id) "
            + "VALUES (gen_random_uuid(), " + tenant + ", 'jdbc:c_order', 'connector', 't_c_order', "
            + "'{\"documentno\":\"text\",\"custcol_47\":\"text\"}'::jsonb, '" + connId + "')");

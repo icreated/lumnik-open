@@ -43,7 +43,7 @@ class RunReaperIT {
         exec("INSERT INTO connector.connector (id, tenant_id, name, type_id, config, mapping_id, "
            + "enabled, tags, sync_mode, skip_policy) VALUES ('" + connId + "', " + TENANT
            + ", '" + name + "', 'jdbc-generic', '{}'::jsonb, '" + mappingId + "', true, "
-           + "ARRAY['reaper'], 'Incremental', '{\"type\":\"SkipUpTo\",\"max\":100}'::jsonb)");
+           + "ARRAY['reaper'], 'Incremental', '{\"type\":\"SkipUpTo\",\"maxSkips\":100}'::jsonb)");
         exec("INSERT INTO connector.connector_run (id, tenant_id, connector_id, status, sync_mode, triggered_by) "
            + "VALUES ('" + runId + "', " + TENANT + ", '" + connId + "', '" + runStatus + "', 'Incremental', 'manual')");
         return runId;

@@ -6,37 +6,33 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+
 import java.time.Duration;
-import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.function.BiFunction;
 
 @ApplicationScoped
 public class HookOverrideStore {
 
-    private record CacheEntry(Boolean override, Instant expiresAt) {
-        boolean expired() { return Instant.now().isAfter(expiresAt); }
-    }
-
     private final BiFunction<Long, String, Boolean> testLoader;
-    private final Duration ttl;
-    private final ConcurrentMap<String, CacheEntry> cache = new ConcurrentHashMap<>();
+    // Optional values: "no override for this tenant/hook" is a cacheable answer too,
+    // and Caffeine does not admit null.
+    private final Cache<String, Optional<Boolean>> cache;
     private BiFunction<Long, String, Boolean> activeLoader;
 
     /** CDI constructor. */
     public HookOverrideStore() {
-        this.testLoader = null;
-        this.ttl = Duration.ofSeconds(60);
+        this(null, Duration.ofSeconds(60));
     }
 
     /** Test constructor — bypasses CDI, uses provided loader. */
     public HookOverrideStore(BiFunction<Long, String, Boolean> loader, Duration ttl) {
         this.testLoader = loader;
-        this.ttl = ttl;
         this.activeLoader = loader;
+        this.cache = Caffeine.newBuilder().expireAfterWrite(ttl).maximumSize(10_000).build();
     }
 
     @Inject HookTenantOverrideRepository repo;
@@ -59,18 +55,13 @@ public class HookOverrideStore {
 
     public boolean isEnabled(Long tenantId, String hookId, boolean defaultValue) {
         if (tenantId == null) return defaultValue;
-        String key = tenantId + "|" + hookId;
-        CacheEntry e = cache.get(key);
-        if (e == null || e.expired()) {
-            Boolean override = activeLoader.apply(tenantId, hookId);
-            e = new CacheEntry(override, Instant.now().plus(ttl));
-            cache.put(key, e);
-        }
-        return e.override() != null ? e.override() : defaultValue;
+        Optional<Boolean> override = cache.get(tenantId + "|" + hookId,
+            key -> Optional.ofNullable(activeLoader.apply(tenantId, hookId)));
+        return override.orElse(defaultValue);
     }
 
     public void invalidate(Long tenantId, String hookId) {
-        cache.remove(tenantId + "|" + hookId);
+        cache.invalidate(tenantId + "|" + hookId);
     }
 
     @Transactional

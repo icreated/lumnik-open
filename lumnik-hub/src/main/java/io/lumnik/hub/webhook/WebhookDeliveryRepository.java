@@ -15,7 +15,7 @@ public class WebhookDeliveryRepository implements PanacheRepository<WebhookDeliv
 
     public List<WebhookDelivery> recentForEndpoint(Long endpointId, int limit) {
         return find("endpointId = ?1", Sort.descending(ATTEMPTED_AT), endpointId)
-            .page(0, Math.min(limit, 500)).list();
+            .page(0, Math.min(Math.max(limit, 1), 500)).list();
     }
 
     public List<WebhookDelivery> recentFailedForEndpoint(Long endpointId, int limit) {
@@ -23,7 +23,7 @@ public class WebhookDeliveryRepository implements PanacheRepository<WebhookDeliv
         // as failed, so a 3xx — status < 400 — is still a failure and must appear here.
         return find("endpointId = ?1 AND succeeded = false",
             Sort.descending(ATTEMPTED_AT), endpointId)
-            .page(0, Math.min(limit, 500)).list();
+            .page(0, Math.min(Math.max(limit, 1), 500)).list();
     }
 
     /** Every integration's deliveries for one tenant, FAILURES FIRST then newest — the order is
@@ -31,7 +31,7 @@ public class WebhookDeliveryRepository implements PanacheRepository<WebhookDeliv
     public List<WebhookDelivery> recentForTenant(long tenantId, int limit) {
         return find("tenantId = ?1",
                 Sort.ascending("succeeded").and(ATTEMPTED_AT, Sort.Direction.Descending), tenantId)
-            .page(0, Math.min(limit, 500)).list();
+            .page(0, Math.min(Math.max(limit, 1), 500)).list();
     }
 
     /**

@@ -1,12 +1,12 @@
 package io.lumnik.hub.connector.rest.pagination;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.jayway.jsonpath.Configuration;
 import com.jayway.jsonpath.JsonPath;
 import com.jayway.jsonpath.Option;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 public final class JsonPathExtractor {
 
@@ -14,14 +14,17 @@ public final class JsonPathExtractor {
         Configuration.defaultConfiguration()
             .addOptions(Option.SUPPRESS_EXCEPTIONS, Option.DEFAULT_PATH_LEAF_TO_NULL);
 
-    private static final Map<String, JsonPath> cache = new ConcurrentHashMap<>();
+    // Bounded: path expressions come from connector manifests, but nothing should be
+    // able to grow a static map without limit.
+    private static final Cache<String, JsonPath> cache =
+        Caffeine.newBuilder().maximumSize(1_000).build();
 
     private JsonPathExtractor() {}
 
     @SuppressWarnings("unchecked")
     public static <T> T read(JsonNode root, String path) {
         if (path == null) return null;
-        JsonPath jp = cache.computeIfAbsent(path, JsonPath::compile);
+        JsonPath jp = cache.get(path, JsonPath::compile);
         return (T) JsonPath.using(CFG).parse(root.toString()).read(jp, Object.class);
     }
 }

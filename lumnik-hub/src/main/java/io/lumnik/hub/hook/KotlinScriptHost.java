@@ -1,6 +1,8 @@
 package io.lumnik.hub.hook;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
@@ -12,7 +14,6 @@ import java.io.InputStream;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Loads, compiles and evaluates Kotlin (.kts) hook scripts via JSR-223.
@@ -34,7 +35,11 @@ public class KotlinScriptHost {
 
     private final ScriptEngine engine = new ScriptEngineManager().getEngineByExtension("kts");
 
-    private final Map<String, CompiledScript> cache = new ConcurrentHashMap<>();
+    // Bounded: the __src__ keys embed whole script sources, and a tenant editing an
+    // override mints a fresh key each time — unbounded, this map is a slow leak of
+    // heavyweight CompiledScripts.
+    private final Cache<String, CompiledScript> cache =
+        Caffeine.newBuilder().maximumSize(256).build();
 
     public void execute(String scriptPath, LifecycleEvent event, Object entity, HookContext ctx)
             throws Exception {
@@ -44,7 +49,7 @@ public class KotlinScriptHost {
         }
         CompiledScript compiled = hotReload
             ? compile(scriptPath)
-            : cache.computeIfAbsent(scriptPath, this::compileUnchecked);
+            : cache.get(scriptPath, this::compileUnchecked);
 
         var bindings = engine.createBindings();
         bindings.put("event", event);
@@ -62,7 +67,7 @@ public class KotlinScriptHost {
         String cacheKey = "__src__:" + source;
         CompiledScript compiled = hotReload
             ? ((Compilable) engine).compile(source)
-            : cache.computeIfAbsent(cacheKey, k -> {
+            : cache.get(cacheKey, k -> {
                 try {
                     return ((Compilable) engine).compile(source);
                 } catch (Exception e) {
@@ -88,7 +93,7 @@ public class KotlinScriptHost {
         String cacheKey = "__src__:" + source;
         CompiledScript compiled = hotReload
             ? ((Compilable) engine).compile(source)
-            : cache.computeIfAbsent(cacheKey, k -> {
+            : cache.get(cacheKey, k -> {
                 try {
                     return ((Compilable) engine).compile(source);
                 } catch (Exception e) {

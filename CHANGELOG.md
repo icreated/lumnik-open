@@ -7,6 +7,40 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.5.1 — 2026-09-01
+
+One fix, found by this edition's own release proofs before v1.5.0 could ship here —
+which is why the open edition goes straight from v1.4.1 to v1.5.1.
+
+### Fixed
+- **Scope-bound reads (view render, view detail, workflow data-truth, ask execution)
+  answered 500** on the Quarkus 3.33 platform: the connection pool now refuses a JDBC
+  read-only toggle inside a transaction, and the tenant-scoping path used one. The toggle
+  is removed; read-only-ness is enforced where it always was — by the `lumnik_readonly`
+  database role (`default_transaction_read_only=on`, SELECT-only grants). An integration
+  test now exercises the exact production posture.
+
+## v1.5.0 — 2026-09-01
+
+The platform catches up. Nothing to migrate: no schema change, no API change, the fast-jar
+layout and every operator gesture are untouched.
+
+### Platform
+- **Quarkus 3.17 → 3.33 LTS** (upstream-patched until March 2027; Java 21 unchanged), carrying
+  Hibernate ORM 7, Testcontainers 2 and the aligned extension ecosystem.
+
+### Security
+- **Ed25519 SFTP host keys now ride Bouncy Castle.** The unmaintained `net.i2p.crypto:eddsa`
+  (Ed25519 signature-malleability advisory, never patched upstream) is removed. Host-key
+  verification behaves exactly as before — and an integration test now asserts the negotiated
+  key really is ed25519, so a silent fallback to RSA cannot pass unnoticed.
+
+### Fixed
+- `GET …/deliveries?limit=0` returned a 500 instead of an answer; the limit now clamps.
+- A per-tenant hook-script edit could accumulate compiled scripts in memory indefinitely;
+  script caches are bounded.
+- The hub module build ran every Quarkus build step twice; builds are roughly 2× faster.
+
 ## v1.4.1 — 2026-08-30
 
 Fixes only. Nothing to migrate, no schema change, no API removed.

@@ -40,7 +40,7 @@ import java.util.Map;
 public class InboxResource {
 
     private static final Logger LOG = Logger.getLogger(InboxResource.class);
-    private static final ObjectMapper M = new ObjectMapper();
+    @Inject ObjectMapper mapper;   // the Quarkus-managed one: one JSON behavior app-wide
 
     @Inject
     @DataSource("admin")
@@ -116,7 +116,7 @@ public class InboxResource {
                 }
             }
 
-            String payload = M.writeValueAsString(Map.of("decision_id", id, "by", by));
+            String payload = mapper.writeValueAsString(Map.of("decision_id", id, "by", by));
             try (PreparedStatement ps = c.prepareStatement(ACK_SQL)) {
                 ps.setLong(1, tenant);
                 ps.setString(2, ACK_TYPE);
@@ -134,7 +134,7 @@ public class InboxResource {
     }
 
     /** Shape one outbox row; a non-object payload degrades to source-derived fallbacks, never a 500. */
-    private static InboxEntry shape(ResultSet rs) throws SQLException {
+    private InboxEntry shape(ResultSet rs) throws SQLException {
         String type = rs.getString("event_type");
         String source = rs.getString("source");
         String process = source != null && source.startsWith("process:")
@@ -143,7 +143,7 @@ public class InboxResource {
         String payload = rs.getString("payload");
         if (payload != null) {
             try {
-                JsonNode n = M.readTree(payload);
+                JsonNode n = mapper.readTree(payload);
                 // Only a scalar overrides the fallback: asText() on an object/array node returns "",
                 // which would silently erase the source-derived process / empty message.
                 JsonNode pn = n.get("process");

@@ -186,19 +186,6 @@ these are softened here — collect them for a risk register directly from this 
 
 **Supply chain**
 
-- **One dependency alert has no upgrade path, and will stay open.**
-  `net.i2p.crypto:eddsa` 0.3.0 (MEDIUM — Ed25519 signature malleability, a missing scalar
-  range check) is a **deliberate direct pin** in `lumnik-hub/pom.xml`, not a transitive
-  surprise: it aligns the EdDSA `KeyFactory` with Apache MINA SSHD's
-  `EdDSASecurityProviderUtils`, without which the SFTP file transport fails its key
-  exchange outright. 0.3.0 is the last release ed25519-java ever published and the advisory
-  names no patched version, so no bump can close this one — it stays until the SFTP
-  transport moves to a maintained Ed25519 provider. It is reached only through that
-  transport: nothing else in the hub registers or uses the provider. That transport now
-  pins the server's host key by fingerprint
-  ([CSV & files → SFTP](../connectors/csv.md#sftp)), so an impostor must present the pinned
-  key itself — which is a narrower door than it was, not a fix for the advisory.
-
 - **A Maven security fix is merged on the nightly's word.** Dependabot alerts and
   automated security updates were switched on 2026-08-22, so an advisory against a Java
   dependency or a container base image does open a pull request. But nothing on the

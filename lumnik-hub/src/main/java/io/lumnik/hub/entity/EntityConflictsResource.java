@@ -13,9 +13,9 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
-import org.hibernate.Session;
 import org.jboss.logging.Logger;
 
+import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -54,7 +54,7 @@ public class EntityConflictsResource {
   @Inject EntityRegistry registry;
   @Inject EntityManager em;
 
-  private final ObjectMapper mapper = new ObjectMapper(); // thread-safe for readTree; the resource is a Quarkus singleton
+  @Inject ObjectMapper mapper;   // the Quarkus-managed one: one JSON behavior app-wide
 
   @GET
   @Transactional
@@ -126,7 +126,7 @@ public class EntityConflictsResource {
 
   /** SET LOCAL is transaction-scoped; issued once per request, and only if a view is actually scanned. */
   private void setStatementTimeout() {
-    em.unwrap(Session.class).doWork(c -> {
+    em.runWithConnection((Connection c) -> {
       try (var st = c.createStatement()) {
         st.execute("SET LOCAL statement_timeout = " + STATEMENT_TIMEOUT_MS);
       }

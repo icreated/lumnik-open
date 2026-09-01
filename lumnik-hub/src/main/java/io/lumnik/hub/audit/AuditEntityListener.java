@@ -7,7 +7,6 @@ import io.quarkus.arc.Arc;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PostPersist;
 import jakarta.persistence.PostUpdate;
-import org.hibernate.Session;
 import org.jboss.logging.Logger;
 
 import java.lang.reflect.Method;
@@ -122,14 +121,14 @@ public class AuditEntityListener {
         ObjectMapper mapper = Arc.container().instance(ObjectMapper.class).get();
         String changesJson = mapper.writeValueAsString(changes);
 
-        em.unwrap(Session.class).doWork(connection ->
+        em.runWithConnection((Connection connection) ->
             writeOutboxRow(connection, tenantId, actorId, entityType, entityKey, operation, changesJson));
     }
 
     /**
      * The savepoint-scoped INSERT itself, extracted from {@link #insertOutboxRow} so it can be
-     * driven directly against a mocked {@link Connection} in a unit test — {@code doWork}'s
-     * {@code Session} plumbing cannot be constructed outside a running Hibernate session.
+     * driven directly against a mocked {@link Connection} in a unit test — {@code runWithConnection}
+     * needs a running persistence context.
      * Package-private for that reason.
      * <p>
      * In PostgreSQL any statement error aborts the WHOLE transaction, not just the failing

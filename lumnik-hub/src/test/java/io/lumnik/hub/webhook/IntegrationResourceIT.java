@@ -63,6 +63,32 @@ class IntegrationResourceIT {
     }
 
     @Test
+    void deliveries_with_zero_limit_answers_instead_of_throwing() {
+        Integer id = given().contentType("application/json")
+            .header("X-Tenant-ID", TENANT.toString())
+            .body("""
+                  {"name":"zero-limit-probe","targetUrl":"https://hook.make.com/zero",
+                   "platform":"make","authMode":"BEARER",
+                   "secret":"sk-test-123",
+                   "eventTypes":["repair.completed"]}""")
+        .when().post("/api/tenants/" + TENANT + "/integrations")
+        .then().statusCode(201)
+            .extract().path("id");
+
+        // limit=0 is a nonsense request; it must clamp, not surface page(0,0)'s exception as a 500.
+        given().header("X-Tenant-ID", TENANT.toString())
+            .when().get("/api/tenants/" + TENANT + "/integrations/" + id + "/deliveries?limit=0")
+            .then().statusCode(200);
+        given().header("X-Tenant-ID", TENANT.toString())
+            .when().get("/api/tenants/" + TENANT + "/integrations/" + id + "/deliveries?limit=0&status=failed")
+            .then().statusCode(200);
+
+        given().header("X-Tenant-ID", TENANT.toString())
+            .when().delete("/api/tenants/" + TENANT + "/integrations/" + id)
+            .then().statusCode(204);
+    }
+
+    @Test
     void list_without_tenant_context_is_forbidden() {
         // No X-Tenant-ID header: the request-thread TenantContextFilter never sets a tenant,
         // so requireTenant() must fail closed rather than silently let an arbitrary tid through.

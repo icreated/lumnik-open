@@ -1,14 +1,11 @@
 package io.lumnik.hub.process;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -31,17 +28,14 @@ public class ProcessManifestStore {
             + "ON CONFLICT (tenant_id, name) DO UPDATE SET yaml_text = EXCLUDED.yaml_text, "
             + "scope = EXCLUDED.scope, on_table = EXCLUDED.on_table, emit_type = EXCLUDED.emit_type, "
             + "updated_at = NOW()";
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+        Jdbc.update(adminDs, "ProcessManifestStore.upsert", sql, ps -> {
             ps.setLong(1, tenantId);
             ps.setString(2, m.name());
             ps.setString(3, yamlText);
             ps.setString(4, m.scope());
             ps.setString(5, m.onTable());
             ps.setString(6, m.emitType());
-            ps.executeUpdate();
-        } catch (Exception e) {
-            throw new RuntimeException("ProcessManifestStore.upsert: " + e.getMessage(), e);
-        }
+        });
     }
 
     /**
@@ -50,29 +44,19 @@ public class ProcessManifestStore {
      */
     public Optional<String> findScope(long tenantId, String name) {
         String sql = "SELECT scope FROM core.process_manifest WHERE tenant_id = ? AND name = ?";
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+        return Jdbc.queryOne(adminDs, "ProcessManifestStore.findScope", sql, ps -> {
             ps.setLong(1, tenantId);
             ps.setString(2, name);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("ProcessManifestStore.findScope: " + e.getMessage(), e);
-        }
+        }, rs -> rs.getString(1));
     }
 
     /** The stored manifest yaml for one process, if it exists — the TUI edit round-trip. */
     public Optional<String> findYaml(long tenantId, String name) {
         String sql = "SELECT yaml_text FROM core.process_manifest WHERE tenant_id = ? AND name = ?";
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+        return Jdbc.queryOne(adminDs, "ProcessManifestStore.findYaml", sql, ps -> {
             ps.setLong(1, tenantId);
             ps.setString(2, name);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("ProcessManifestStore.findYaml: " + e.getMessage(), e);
-        }
+        }, rs -> rs.getString(1));
     }
 
     public List<StoredProcess> listByTenant(long tenantId) {
@@ -87,22 +71,11 @@ public class ProcessManifestStore {
                 ps -> { ps.setLong(1, tenantId); ps.setString(2, table); });
     }
 
-    private interface Binder { void bind(PreparedStatement ps) throws Exception; }
-
-    private List<StoredProcess> query(String sql, Binder binder) {
-        List<StoredProcess> out = new ArrayList<>();
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
-            binder.bind(ps);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    ProcessManifest m = parser.parse(rs.getString(1));
-                    out.add(new StoredProcess(m.name(), m.scope(), m.onTable(), m.when(),
-                            m.emitType(), m.emitMessage(), rs.getBoolean(2)));
-                }
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("ProcessManifestStore.query: " + e.getMessage(), e);
-        }
-        return out;
+    private List<StoredProcess> query(String sql, Jdbc.Binder binder) {
+        return Jdbc.query(adminDs, "ProcessManifestStore.query", sql, binder, rs -> {
+            ProcessManifest m = parser.parse(rs.getString(1));
+            return new StoredProcess(m.name(), m.scope(), m.onTable(), m.when(),
+                    m.emitType(), m.emitMessage(), rs.getBoolean(2));
+        });
     }
 }

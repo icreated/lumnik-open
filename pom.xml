@@ -36,7 +36,7 @@
 
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
-        <quarkus.platform.version>3.17.0</quarkus.platform.version>
+        <quarkus.platform.version>3.33.3.1</quarkus.platform.version>
 
         <compiler-plugin.version>3.13.0</compiler-plugin.version>
         <surefire-plugin.version>3.2.5</surefire-plugin.version>
@@ -44,7 +44,7 @@
         <jacoco-plugin.version>0.8.12</jacoco-plugin.version>
         <sonar-plugin.version>3.11.0.3922</sonar-plugin.version>
         <assertj.version>3.27.7</assertj.version>
-        <kotlin.version>2.0.21</kotlin.version>
+        <kotlin.version>2.3.10</kotlin.version>
         <jandex-plugin.version>3.2.4</jandex-plugin.version>
 
         <!-- Sonar project config -->
@@ -81,24 +81,10 @@
         <sonar.issue.ignore.multicriteria.e7.resourceKey>**/src/test/**/*.java</sonar.issue.ignore.multicriteria.e7.resourceKey>
         <sonar.issue.ignore.multicriteria.e8.ruleKey>java:S1130</sonar.issue.ignore.multicriteria.e8.ruleKey>
         <sonar.issue.ignore.multicriteria.e8.resourceKey>**/src/test/**/*.java</sonar.issue.ignore.multicriteria.e8.resourceKey>
-        <!-- Overrides the Quarkus 3.17 BOM's testcontainers 1.20.3 (docker-java 3.4.0 → Docker API
-             1.32, rejected by Docker 25+ whose min API is 1.40). See dependencyManagement note. -->
-        <testcontainers.version>1.21.3</testcontainers.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
-            <!-- Override testcontainers (Quarkus 3.17 BOM pins 1.20.3 → docker-java 3.4.0, which
-                 defaults to Docker API 1.32 and is rejected by Docker 25+ daemons whose minimum
-                 API is 1.40: "client version 1.32 is too old". Declared before the Quarkus BOM so
-                 these versions win (first-declared managed version takes precedence). -->
-            <dependency>
-                <groupId>org.testcontainers</groupId>
-                <artifactId>testcontainers-bom</artifactId>
-                <version>${testcontainers.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
             <dependency>
                 <groupId>${quarkus.platform.group-id}</groupId>
                 <artifactId>${quarkus.platform.artifact-id}</artifactId>
@@ -109,7 +95,7 @@
             <dependency>
                 <groupId>io.quarkiverse.amazonservices</groupId>
                 <artifactId>quarkus-amazon-services-bom</artifactId>
-                <version>2.17.0</version>
+                <version>3.15.0</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -166,16 +152,10 @@
                     <groupId>${quarkus.platform.group-id}</groupId>
                     <artifactId>quarkus-maven-plugin</artifactId>
                     <version>${quarkus.platform.version}</version>
+                    <!-- No explicit executions: lumnik-hub declares <packaging>quarkus</packaging>,
+                         and the Quarkus lifecycle binds build/generate-code(-tests) itself —
+                         re-declaring them here ran every goal twice. -->
                     <extensions>true</extensions>
-                    <executions>
-                        <execution>
-                            <goals>
-                                <goal>build</goal>
-                                <goal>generate-code</goal>
-                                <goal>generate-code-tests</goal>
-                            </goals>
-                        </execution>
-                    </executions>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>

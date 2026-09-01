@@ -42,12 +42,15 @@ class SftpHostKeyVerificationIT {
         actualFingerprint = readHostKeyFingerprint();
     }
 
+    static String hostKeyAlgorithm;
+
     /** Read the container's own host key, so the test compares against the real server. */
     private static String readHostKeyFingerprint() throws Exception {
         var seen = new AtomicReference<String>();
         try (SshClient client = SshClient.setUpDefaultClient()) {
             client.setServerKeyVerifier((s, addr, key) -> {
                 seen.set(HostKeyFingerprint.of(key));
+                hostKeyAlgorithm = key.getAlgorithm();
                 return true;
             });
             client.start();
@@ -62,6 +65,16 @@ class SftpHostKeyVerificationIT {
     @AfterAll
     static void stopSftp() {
         if (sftp != null) sftp.stop();
+    }
+
+    /**
+     * The container offers RSA host keys too: if Ed25519 support (Bouncy Castle) silently
+     * vanished from the classpath, the handshake would fall back to RSA and every green
+     * test in this class would be guarding a different mechanism than it claims.
+     */
+    @Test
+    void negotiated_host_key_is_ed25519() {
+        assertThat(hostKeyAlgorithm).isIn("Ed25519", "EdDSA");
     }
 
     private SftpFileSource sourceWith(Map<String, Object> extra) {

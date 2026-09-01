@@ -5,7 +5,7 @@ import io.lumnik.hub.connector.transport.AfterProcessAction;
 import io.lumnik.hub.connector.transport.FileDescriptor;
 import io.lumnik.hub.connector.transport.FileSource;
 import io.lumnik.hub.connector.transport.SeekableSource;
-import net.i2p.crypto.eddsa.EdDSASecurityProvider;
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.apache.sshd.client.SshClient;
 import org.apache.sshd.client.keyverifier.AcceptAllServerKeyVerifier;
 import org.apache.sshd.client.keyverifier.ServerKeyVerifier;
@@ -60,9 +60,10 @@ public class SftpFileSource implements FileSource, SeekableSource {
 
     private synchronized void ensureConnected() {
         if (sftp != null) return;
-        // Ensure the EdDSA JCE provider is registered so MINA SSHD can handle Ed25519 key types.
-        if (Security.getProvider(EdDSASecurityProvider.PROVIDER_NAME) == null) {
-            Security.addProvider(new EdDSASecurityProvider());
+        // Ensure the Bouncy Castle JCE provider is registered so MINA SSHD can handle
+        // Ed25519 key types (sshd's supported EdDSA provider since 2.15).
+        if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
+            Security.addProvider(new BouncyCastleProvider());
         }
         // Scoped to this one attempt on purpose. A field would outlive the connect that wrote
         // it, and a later failure of another kind would then report itself as a host-key refusal

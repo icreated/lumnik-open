@@ -5,10 +5,10 @@ import io.lumnik.hub.connector.mapping.spec.MappingTarget;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
-import org.hibernate.Session;
 import org.jboss.logging.Logger;
 
 import java.sql.Array;
+import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Types;
@@ -81,7 +81,7 @@ public class RagWriter {
   /**
    * Write one chunk per data row, batched: one dedup probe for the whole batch,
    * {@code embedAll} in sub-batches, one batched INSERT. Must be called within an active
-   * transaction — all store access runs on the caller's connection via {@code doWork}.
+   * transaction — all store access runs on the caller's connection via {@code runWithConnection}.
    *
    * <p>Embeds inline (no prepared cache) — the pre-{@code prepare-hook} behaviour, unchanged.
    *
@@ -99,7 +99,7 @@ public class RagWriter {
   /**
    * Write one chunk per data row, batched, consuming a {@link #prepare} cache when one is
    * supplied. Must be called within an active transaction — all store access runs on the
-   * caller's connection via {@code doWork}.
+   * caller's connection via {@code runWithConnection}.
    *
    * @param spec            the RAG target spec from the mapping
    * @param rows            data row values (column → value), one map per row
@@ -237,12 +237,12 @@ public class RagWriter {
 
   /**
    * ONE dedup probe for the whole batch. The hash set binds as a real text[] — same
-   * createArrayOf reasoning as the tags in {@link #insertBatch}. doWork stays on the
+   * createArrayOf reasoning as the tags in {@link #insertBatch}. runWithConnection stays on the
    * session's connection, so the caller's transaction (and its RLS tenant) still applies.
    */
   private Set<String> probeExistingHashes(String source, List<PendingChunk> pending) {
     Set<String> existing = new HashSet<>();
-    em.unwrap(Session.class).doWork(conn -> {
+    em.runWithConnection((Connection conn) -> {
       try (PreparedStatement ps = conn.prepareStatement(
           "SELECT metadata->>'row_hash' FROM rag.chunk WHERE source = ? AND metadata->>'row_hash' = ANY(?)")) {
         ps.setString(1, source);
@@ -257,8 +257,8 @@ public class RagWriter {
   }
 
   /**
-   * Embed in sub-batches of {@link #SUB_BATCH}, outside doWork — a network call has no
-   * business holding the Work callback. If a sub-batch call throws, its texts are retried
+   * Embed in sub-batches of {@link #SUB_BATCH}, outside runWithConnection — a network call
+   * has no business holding the connection callback. If a sub-batch call throws, its texts are retried
    * one by one so one poison text costs one row, not the sub-batch — preserving the per-row
    * warn-and-skip resilience of the sequential path.
    */
@@ -306,13 +306,13 @@ public class RagWriter {
    *
    * <p>Tags bind as a real text[] parameter (createArrayOf — the ChunkRetagService pattern),
    * never a hand-rolled "{a,b}" literal: a métier tag is free text, so a comma inside one
-   * would be stored as two tags and a brace would corrupt the array. doWork stays on the
+   * would be stored as two tags and a brace would corrupt the array. runWithConnection stays on the
    * session's connection, so the caller's transaction (and its RLS tenant) still applies.
    */
   private void insertBatch(EmbeddedBatch batch, String source, Long tenantId,
                            UUID connectorId, List<String> tags) {
     List<String> safeTags = (tags != null) ? tags : List.of();
-    em.unwrap(Session.class).doWork(conn -> {
+    em.runWithConnection((Connection conn) -> {
       try (PreparedStatement ps = conn.prepareStatement(INSERT_SQL)) {
         Array tagsArray = conn.createArrayOf("text", safeTags.toArray(new String[0]));
         for (int i = 0; i < batch.chunks().size(); i++) {

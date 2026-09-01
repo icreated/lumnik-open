@@ -3,10 +3,9 @@ package io.lumnik.hub.connector.mapping.writer;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget;
 import io.lumnik.llm.spi.EmbeddingPort;
 import jakarta.enterprise.inject.Instance;
+import jakarta.persistence.ConnectionConsumer;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
-import org.hibernate.Session;
-import org.hibernate.jdbc.Work;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Array;
@@ -183,10 +182,10 @@ class RagWriterBatchTest {
         return insertPs;
       });
 
-      Session session = mock(Session.class);
-      doAnswer(inv -> { ((Work) inv.getArgument(0)).execute(conn); return null; })
-          .when(session).doWork(any());
-      when(em.unwrap(Session.class)).thenReturn(session);
+      doAnswer(inv -> {
+        inv.<ConnectionConsumer<Connection>>getArgument(0).accept(conn);
+        return null;
+      }).when(em).runWithConnection(any());
       return em;
     }
 

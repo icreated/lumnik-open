@@ -59,7 +59,7 @@ class AskToSqlAgentIT {
             + "ON CONFLICT DO NOTHING");
         agent.seedDdl("INSERT INTO connector.connector (id, tenant_id, name, type_id, config, mapping_id, enabled, tags, sync_mode, skip_policy) "
             + "VALUES ('00000000-0000-0000-0000-00000000a5f2', 7, 'src-asof', 'csv-file', '{}'::jsonb, "
-            + "'00000000-0000-0000-0000-00000000a5f1', true, ARRAY['demo'], 'Incremental', '{\"type\":\"SkipUpTo\",\"max\":1}'::jsonb)");
+            + "'00000000-0000-0000-0000-00000000a5f1', true, ARRAY['demo'], 'Incremental', '{\"type\":\"SkipUpTo\",\"maxSkips\":1}'::jsonb)");
         agent.seedDdl("INSERT INTO connector.connector_run (tenant_id, connector_id, status, sync_mode, triggered_by, started_at, ended_at) "
             + "VALUES (7, '00000000-0000-0000-0000-00000000a5f2', 'Completed', 'Incremental', 'test', "
             + "'2026-08-20T06:00:00Z', '2026-08-20T06:05:00Z')");

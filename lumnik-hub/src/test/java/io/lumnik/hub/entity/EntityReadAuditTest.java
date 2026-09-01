@@ -195,6 +195,9 @@ class EntityReadAuditTest {
       @Override public Connection getConnection(String username, String password) throws SQLException {
         throw new SQLException("boom");
       }
+      @Override public Connection getReadOnlyConnection() throws SQLException {
+        throw new SQLException("boom: audit connection deliberately broken for the test");
+      }
       @Override public AgroalDataSourceConfiguration getConfiguration() { throw new UnsupportedOperationException(); }
       @Override public AgroalDataSourceMetrics getMetrics() { throw new UnsupportedOperationException(); }
       @Override public void flush(FlushMode mode) { throw new UnsupportedOperationException(); }

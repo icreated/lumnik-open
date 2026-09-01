@@ -1,94 +1,79 @@
 # Bring your own IdP
 
-> The hub validates any OIDC issuer generically — no Keycloak-specific code. JIT
-> provisioning — the piece that turns a first login into a lumnik user — ships by default
-> in the self-host and Helm builds this page documents; it is absent only from the
-> separately-published open-source edition, which refuses it, fail-closed.
+> The hub validates any OIDC issuer generically — no Keycloak-specific code. Your
+> IdP authenticates; lumnik provisions the user on first login (JIT) into a
+> pre-seeded tenant.
 
 Operator guide for plugging a customer's existing IdP (Keycloak, Okta, Entra ID, any
 OIDC issuer) into lumnik — enterprise onboarding without deploying a second Keycloak.
 
 ## The model
 
-Your IdP authenticates; lumnik provisions. The hub validates the Bearer token against
-your issuer (`%prod` OIDC, discovery + JWKS), reads the mandatory `tenant_id` claim to
-scope every query through PostgreSQL Row-Level Security, and — on a user's **first**
-login — JIT-provisions a lumnik user keyed on `(idp_issuer, idp_subject)`
-(`JitUserProvisioner`). No password ever lives in lumnik; no user list is synced up
-front. Departures ride [SCIM](scim.md) — JIT never reactivates a deactivated
-identity.
+The hub validates the Bearer token against your issuer (discovery + JWKS), reads the
+mandatory `tenant_id` claim to scope every query through PostgreSQL Row-Level
+Security, and — on a user's **first** login — creates the lumnik user, keyed on
+`(idp_issuer, idp_subject)`. No password ever lives in lumnik; no user list is
+synced up front. Departures ride [SCIM](scim.md) — JIT never reactivates a
+deactivated identity.
 
 > **The crucial rule: JIT creates users, never tenants.** The tenant row must
 > pre-exist — seeded by the operator at onboarding. A token claiming a `tenant_id`
-> with no matching `identity.tenant` row fails the first login (FK violation), by
-> design: a tenant is an operator decision, not a side effect of someone signing in.
+> with no matching tenant row fails the first login, by design: a tenant is an
+> operator decision, not a side effect of someone signing in.
 
-> **JIT is not in the open edition.** `ExternalIdentityResolver`'s only
-> implementation, `JitUserProvisioner`, lives under `io.lumnik.hub.pro.jit` — the package
-> `-DopenEdition` compiles out of the public build (`lumnik-hub/pom.xml`). It ships by
-> default in the self-host and Helm builds this page documents, so the walkthroughs below
-> work as written; it is absent only from the separately-published open-source edition
-> (`icreated/lumnik-open`). There, `TenantContextFilter` finds no resolver on the classpath
-> and fails closed: a JWT with no `user_id` claim gets `401
-> {"error":"no external identity resolution in this edition (user_id claim required)"}` —
-> never a user-less request. Since a real customer IdP normally cannot emit `user_id` (it
-> would have to know lumnik's own database primary key), this means BYO IdP for an actual
-> external issuer needs a build carrying external identity resolution, which the open
-> edition does not — in practice, not just in theory.
+**Edition note.** JIT provisioning ships in the self-host and Helm builds this page
+documents, so the walkthroughs below work as written. It is absent from the
+separately-published [open edition](../editions.md#feature-by-feature), which fails
+closed instead: a token without a `user_id` claim gets
+`401 {"error":"no external identity resolution in this edition (user_id claim required)"}`.
+Since a real customer IdP cannot know lumnik's internal user ids, BYO IdP in
+practice needs a build that carries JIT.
 
 ## Prerequisites checklist
 
 Before the first user logs in:
 
-- [ ] **Tenant row seeded.** A fresh install seeds tenant `1` (`code='default'`,
-  migration `V13__default_tenant.sql`). Every *other* tenant is yours to create —
-  the same gesture the k8s rehearsal script (`deploy/helm/up.sh`) uses, run as the
-  owner role (BYPASSRLS):
+**1. Seed the tenant row.** A fresh install seeds tenant `1` (`code='default'`).
+Every *other* tenant is yours to create, run as the owner role (BYPASSRLS):
 
-  ```sql
-  INSERT INTO identity.tenant (id, code, name, created_at, updated_at)
-  VALUES (42, 'acme', 'ACME Corp', now(), now())
-  ON CONFLICT DO NOTHING;
-  ```
+```sql
+INSERT INTO identity.tenant (id, code, name, created_at, updated_at)
+VALUES (42, 'acme', 'ACME Corp', now(), now())
+ON CONFLICT DO NOTHING;
+```
 
-  (Or `POST /api/tenants` as `lm_superadmin`. Explicit ids below 1000 are safe —
-  the sequence starts at 1000.)
-- [ ] **A client registered in your IdP** for each surface: one for `lm` (device
-  flow) and — if you use the PWA — the SPA client (public + PKCE). See the
-  [SPA warning](#the-pwa-client-lumnik-spa) below.
-- [ ] **Claims mapped** on the *access* token:
-  - `aud: lumnik-backend` — **mandatory**, the hub pins this audience
-    (`quarkus.oidc.token.audience=lumnik-backend`). No token without it gets past
-    the OIDC layer (401).
-  - `tenant_id` — **mandatory**, integer. Missing or non-numeric aborts with
-    `401 {"error":"missing or invalid tenant_id claim"}`. A fractional value
-    (e.g. `1.9`) is rejected, never truncated — silent truncation could land a
-    user in the wrong tenant.
-  - `groups` — the realm-role array (`lm_user`, `lm_integrator`, `lm_admin`, plus
-    any `scope:<tag>` grants). The hub reads roles from this claim path
-    (`roles.role-claim-path=groups`). No hierarchy — grant every role a user
-    needs explicitly ([Role management](role-management.md)).
-  - `user_id` — **optional**. Emit it only if your IdP knows lumnik's DB PK (the
-    bundled realm does; a customer IdP normally cannot). When absent, the hub
-    takes the JIT path from `iss` + the subject claim — this is the normal
-    external-IdP posture.
-  - `name`, `email` — optional profile fields, used only at first-login creation
-    (name clamped to 60 chars, an invalid email is dropped to null — a profile
-    claim never turns a login into a 500).
+(Or `POST /api/tenants` as `lm_superadmin`. Explicit ids below 1000 are safe — the
+sequence starts at 1000.)
 
-> **Subject claim.** The identity key's subject side defaults to `sub`
-> (`lumnik.oidc.subject-claim`, env `OIDC_SUBJECT_CLAIM`). Both `iss` and the
-> subject must fit 255 chars — an oversized one is rejected
-> (`401 {"error":"subject/issuer claim too long"}`), never truncated: truncating
-> the key would change the identity.
+**2. Register a client in your IdP** for each surface: one for `lm` (device flow)
+and — if you use the PWA — the SPA client (public + PKCE). See the
+[SPA warning](#the-pwa-client-lumnik-spa) below.
+
+**3. Map the claims** onto the *access* token:
+
+| Claim | Required | What it must carry |
+|---|---|---|
+| `aud` | **yes** | Exactly `lumnik-backend` — the hub pins this audience; a token without it never gets past the OIDC layer (401). |
+| `tenant_id` | **yes** | The seeded tenant id, as an integer. |
+| `groups` | **yes** | The realm-role array: `lm_user`, `lm_integrator`, `lm_admin`, plus any `scope:<tag>` grants — literal lumnik role names, flat, no hierarchy ([Role management](role-management.md)). |
+| `user_id` | no | Only if your IdP knows lumnik's internal user id (the bundled realm does; a customer IdP normally cannot). When absent, JIT resolves the user from `iss` + the subject claim — the normal external-IdP posture. |
+| `name`, `email` | no | Profile fields, used only at first-login creation. |
+
+The subject side of the identity key defaults to `sub`; override with
+`OIDC_SUBJECT_CLAIM` when your IdP has a more stable claim (see the Entra note
+below).
+
+Malformed claims are rejected, never repaired — a non-integer `tenant_id`, an
+oversized issuer or subject: each fails with its own explicit 401 in the
+[troubleshooting table](#troubleshooting). A bad *profile* claim never blocks a
+login: an over-long name is clamped, an invalid email is dropped.
 
 ## What JIT creates (and what it refuses)
 
-On first login with no `user_id` claim, the hub creates one `identity.app_user` row
-**in the token's tenant**: `login` = subject, display name from `name` (fallback:
-subject), optional email, and the `(idp_issuer, idp_subject)` key. Creation is
-race-safe with replicas > 1 — a concurrent first login on two pods resolves to one
-row via the unique constraint (`ExternalIdentityCreator`).
+On first login with no `user_id` claim, the hub creates one user row **in the
+token's tenant**: login = subject, display name from `name` (fallback: subject),
+optional email, and the `(idp_issuer, idp_subject)` key. Creation is race-safe with
+replicas > 1 — two concurrent first logins resolve to one row.
 
 Every later login resolves the same row. A **deactivated** identity is refused with
 `403 {"error":"user is deactivated"}` — JIT never reactivates or recreates; only an
@@ -109,16 +94,15 @@ copy its mapper shapes onto your client:
 
 ## Okta / Entra ID notes
 
-One layer to re-own when you swap IdPs: the bundled realm ships **brute-force detection
-on** (temporary lockout); with your own IdP, login throttling and lockout are your IdP's
-policies — lumnik neither sees nor throttles password attempts.
+One layer to re-own when you swap IdPs: the bundled realm ships **brute-force
+detection on** (temporary lockout); with your own IdP, login throttling and lockout
+are your IdP's policies — lumnik neither sees nor throttles password attempts.
 
-The hub is generic OIDC — nothing in the code is Keycloak-specific; it needs only
-discovery/JWKS at the issuer URL and the claims above. So Okta and Entra work **on
-paper**; in practice: only Keycloak is exercised by the shipped rehearsal
-(`make k8s-up-oidc-external`), Okta/Entra have not been run against a live hub. And
-because neither emits a `user_id` claim, first login for either rides the JIT path —
-see the [edition note above](#the-model) before you commit to one.
+The hub needs only discovery/JWKS at the issuer URL and the claims above, so Okta
+and Entra work **on paper**. In practice, only Keycloak is exercised by the shipped
+rehearsal (`make k8s-up-oidc-external`) — neither has been run against a live hub.
+And because neither emits a `user_id` claim, first login for either rides the JIT
+path — mind the [edition note](#the-model).
 
 - **Okta**: custom claims (`tenant_id`, `groups`) and a custom audience require a
   *custom authorization server*; map `groups` to the lumnik role names, not Okta
@@ -149,11 +133,11 @@ oidc:
                       # Set ONLY when it differs (a port-forward split on kind).
 ```
 
-The chart **fails fast** (`hub-configmap.yaml`): a typo'd `auth.mode` aborts
-`helm install` (instead of silently pointing the hub at a Keycloak that was never
-deployed), and `oidc-external` with an empty `issuerUrl` refuses to render. Both
-`oidc` and `oidc-external` run the hub on `%prod` (dev-bypass OFF); only where the
-issuer points differs.
+The chart **fails fast**: a typo'd `auth.mode` aborts `helm install` (instead of
+silently pointing the hub at a Keycloak that was never deployed), and
+`oidc-external` with an empty `issuerUrl` refuses to render. Both `oidc` and
+`oidc-external` run the hub on `%prod` (dev-bypass OFF); only where the issuer
+points differs.
 
 To rehearse the whole shape locally — a stand-in "customer IdP" in its own
 namespace, the hub trusting it, the release provably Keycloak-free:
@@ -192,11 +176,11 @@ the kind port-forward).
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `401 {"error":"missing or invalid tenant_id claim"}` | No `tenant_id` on the access token, or non-integer value | Add/fix the `tenant_id` mapper (JSON type long, access token) |
+| `401 {"error":"missing or invalid tenant_id claim"}` | No `tenant_id` on the access token, or a non-integer value (a fractional id is rejected, never truncated) | Add/fix the `tenant_id` mapper (JSON type long, access token) |
 | 401 with no lumnik error body | Token rejected by the OIDC layer: wrong/missing `aud: lumnik-backend`, or `iss` ≠ the configured token issuer | Add the audience mapper; check `issuerUrl`/`tokenIssuer` match the token's `iss` |
 | `401 {"error":"missing subject/issuer claim"}` | No `user_id` claim *and* the subject claim is absent | Check `OIDC_SUBJECT_CLAIM` names a claim the IdP actually emits |
-| `401 {"error":"no external identity resolution in this edition (user_id claim required)"}` | No `user_id` claim, and the running build is the open-source edition (no `ExternalIdentityResolver` on the classpath) | Deploy the default self-host/Helm build (JIT ships there), or have the IdP emit `user_id` naming lumnik's own PK |
-| `401 {"error":"subject/issuer claim too long"}` | `iss` or subject exceeds 255 chars | Use a shorter stable claim (e.g. Entra `oid`) |
+| `401 {"error":"no external identity resolution in this edition (user_id claim required)"}` | No `user_id` claim, and the running build is the open-source edition (no JIT) | Deploy the default self-host/Helm build (JIT ships there) |
+| `401 {"error":"subject/issuer claim too long"}` | `iss` or subject exceeds 255 chars — rejected, never truncated: truncating the key would change the identity | Use a shorter stable claim (e.g. Entra `oid`) |
 | First login 500, logs show `fk_user_tenant` | Tenant row not seeded — JIT creates users, never tenants | Seed the tenant (checklist above), retry |
 | `403 {"error":"user is deactivated"}` | Identity exists but was deactivated (e.g. SCIM departure) | Reactivate via admin — JIT never resurrects |
 | 403 on every endpoint despite valid login | `groups` claim missing or carrying IdP-native names instead of `lm_*` | Map realm roles into `groups` as literal lumnik role names |

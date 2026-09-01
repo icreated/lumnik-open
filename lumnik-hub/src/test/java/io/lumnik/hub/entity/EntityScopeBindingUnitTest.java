@@ -158,6 +158,10 @@ class EntityScopeBindingUnitTest {
       connectionRequested = true;
       throw new SQLException("the audit connection must never be opened for a refused read");
     }
+    @Override public Connection getReadOnlyConnection() throws SQLException {
+      connectionRequested = true;
+      throw new SQLException("the audit connection must never be opened for a refused read");
+    }
     @Override public AgroalDataSourceConfiguration getConfiguration() { throw new UnsupportedOperationException(); }
     @Override public AgroalDataSourceMetrics getMetrics() { throw new UnsupportedOperationException(); }
     @Override public void flush(FlushMode mode) { throw new UnsupportedOperationException(); }

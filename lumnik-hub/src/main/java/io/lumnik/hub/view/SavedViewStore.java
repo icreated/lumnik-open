@@ -1,6 +1,7 @@
 package io.lumnik.hub.view;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
@@ -35,17 +36,12 @@ public class SavedViewStore {
   public void upsert(String name, String scope, String title, String yaml) {
     // the store owns case normalization on BOTH sides (find lowercases too) — every
     // caller reaches the same row, the EntityRegistry rule
-    name = name.toLowerCase(Locale.ROOT);
-    try (Connection c = adminDs.get().getConnection();
-         PreparedStatement ps = c.prepareStatement(
-             "INSERT INTO connector.saved_view (name, scope, title, yaml_text) VALUES (?,?,?,?) "
-                 + "ON CONFLICT (name) DO UPDATE SET scope = EXCLUDED.scope, "
-                 + "title = EXCLUDED.title, yaml_text = EXCLUDED.yaml_text, updated_at = now()")) {
-      ps.setString(1, name); ps.setString(2, scope); ps.setString(3, title); ps.setString(4, yaml);
-      ps.executeUpdate();
-    } catch (Exception e) {
-      throw new RuntimeException("SavedViewStore.upsert: " + e, e);
-    }
+    String key = name.toLowerCase(Locale.ROOT);
+    Jdbc.update(adminDs.get(), "SavedViewStore.upsert",
+        "INSERT INTO connector.saved_view (name, scope, title, yaml_text) VALUES (?,?,?,?) "
+            + "ON CONFLICT (name) DO UPDATE SET scope = EXCLUDED.scope, "
+            + "title = EXCLUDED.title, yaml_text = EXCLUDED.yaml_text, updated_at = now()",
+        ps -> { ps.setString(1, key); ps.setString(2, scope); ps.setString(3, title); ps.setString(4, yaml); });
   }
 
   /** scopes == null → all (unscoped user); empty set → none (bound to nothing). */
@@ -81,18 +77,11 @@ public class SavedViewStore {
   }
 
   public Optional<Row> find(String name) {
-    try (Connection c = adminDs.get().getConnection();
-         PreparedStatement ps = c.prepareStatement(
-             "SELECT name, scope, title, yaml_text FROM connector.saved_view WHERE name = ?")) {
-      // lowercase on read like EntityRegistry.find — apply lowercases on write, so a
-      // hand-typed 'Clients-Desk' must reach the same row as 'clients-desk'
-      ps.setString(1, name.toLowerCase(Locale.ROOT));
-      try (ResultSet rs = ps.executeQuery()) {
-        if (!rs.next()) return Optional.empty();
-        return Optional.of(new Row(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4)));
-      }
-    } catch (Exception e) {
-      throw new RuntimeException("SavedViewStore.find: " + e, e);
-    }
+    // lowercase on read like EntityRegistry.find — apply lowercases on write, so a
+    // hand-typed 'Clients-Desk' must reach the same row as 'clients-desk'
+    return Jdbc.queryOne(adminDs.get(), "SavedViewStore.find",
+        "SELECT name, scope, title, yaml_text FROM connector.saved_view WHERE name = ?",
+        ps -> ps.setString(1, name.toLowerCase(Locale.ROOT)),
+        rs -> new Row(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4)));
   }
 }
