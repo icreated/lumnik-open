@@ -105,10 +105,11 @@ Runbook: [deploy/tls/README.md](../tls/README.md) — also summarized on the
 
 ## Postgres bootstrap user
 
-Fresh installs bootstrap Postgres as superuser **`lumnik`**. Installs created before the
-rename run as the legacy `adempiere` — the name is frozen into the data volume at first
-init, so `up.sh` pins `POSTGRES_USER=adempiere` into an older `.env` automatically and
-everything (healthcheck, backup, restore) keeps working. No action needed either way.
+Fresh installs bootstrap Postgres as superuser **`lumnik`**, and `up.sh` records that
+name in `.env`. If `.env` does not say (an install created by an older `up.sh`), the
+script asks the running database which name the volume was initialized with — `lumnik`,
+or the legacy `adempiere` on pre-rename volumes — and records the answer, so healthcheck,
+backup and restore keep working. No action needed either way.
 
 ## Backup & restore
 

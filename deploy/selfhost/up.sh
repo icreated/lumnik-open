@@ -53,6 +53,9 @@ if [[ ! -f .env ]]; then
     awk -v k="$key" -v v="$secret" 'BEGIN{FS=OFS="="} $1==k && $2=="" {print k"="v; next} {print}' .env > .env.tmp
     mv .env.tmp .env
   done
+  # Stamp the bootstrap superuser explicitly: the volume freezes this name at first
+  # init, and a .env that SAYS which name it froze never needs the probe below.
+  printf 'POSTGRES_USER=lumnik\n' >> .env
   chmod 600 .env  # owner-only — these are secrets (cp + redirect would otherwise leave it world-readable)
   echo "    wrote .env (gitignored, mode 600). BACK IT UP — losing LUMNIK_SECRET_MASTER_KEY makes stored secrets unrecoverable."
 else
@@ -69,20 +72,6 @@ else
       echo "    added $key to .env"
     fi
   done
-  # Older installs bootstrapped Postgres as 'adempiere' (the pre-rename default); the
-  # superuser name is frozen into PGDATA at first init, so an existing .env without an
-  # explicit POSTGRES_USER must keep the legacy name — pin it, or pg_dump/pg_restore and
-  # the healthcheck would target a role that doesn't exist in the old volume.
-  if ! grep -q '^POSTGRES_USER=..*' .env; then
-    if grep -q '^POSTGRES_USER=' .env; then
-      awk 'BEGIN{FS=OFS="="} $1=="POSTGRES_USER" && $2=="" {print "POSTGRES_USER=adempiere"; next} {print}' .env > .env.tmp
-      mv .env.tmp .env
-    else
-      printf 'POSTGRES_USER=adempiere\n' >> .env
-    fi
-    chmod 600 .env
-    echo "    pinned POSTGRES_USER=adempiere (legacy volume — fresh installs use 'lumnik')"
-  fi
 fi
 
 # 2) start the stack
@@ -103,14 +92,31 @@ fi
 echo "==> aligning database role passwords to .env"
 pg_cid="$("${COMPOSE[@]}" ps -q postgres)"
 env_val() { grep "^$1=" .env | cut -d= -f2-; }
-# Superuser name comes from .env, like every other key — the script env never has it,
-# and a legacy volume pins POSTGRES_USER=adempiere (block above): using 'lumnik' there
-# would FATAL and leave the hub with fresh passwords the DB never learned.
-pg_super="$(env_val POSTGRES_USER)" || [ $? -eq 1 ]; pg_super="${pg_super:-lumnik}"
+# Superuser name: .env is believed when it speaks; when it is silent, ASK THE VOLUME —
+# the name is frozen into PGDATA at first init, and guessing from the age of .env once
+# pinned 'adempiere' onto fresh 'lumnik' volumes (an install's own second run broke it).
+# pg_isready ignores auth, so it waits for the server regardless of the role name.
+pg_super="$(env_val POSTGRES_USER)" || [ $? -eq 1 ]
 for _ in $(seq 1 30); do
-  docker exec "$pg_cid" pg_isready -U "$pg_super" -d lumnik >/dev/null 2>&1 && break
+  docker exec "$pg_cid" pg_isready -U "${pg_super:-lumnik}" -d lumnik >/dev/null 2>&1 && break
   sleep 2
 done
+if [[ -z "$pg_super" ]]; then
+  if docker exec "$pg_cid" psql -U lumnik -d lumnik -tAc 'SELECT 1' >/dev/null 2>&1; then
+    pg_super=lumnik
+  else
+    pg_super=adempiere   # pre-rename volume — the only other name ever bootstrapped
+  fi
+  # Persist the discovery so compose interpolation and every later run agree with the volume.
+  if grep -q '^POSTGRES_USER=' .env; then
+    awk -v v="$pg_super" 'BEGIN{FS=OFS="="} $1=="POSTGRES_USER" {print "POSTGRES_USER="v; next} {print}' .env > .env.tmp
+    mv .env.tmp .env
+  else
+    printf 'POSTGRES_USER=%s\n' "$pg_super" >> .env
+  fi
+  chmod 600 .env
+  echo "    discovered bootstrap superuser '$pg_super' from the volume; recorded in .env"
+fi
 {
   printf "ALTER ROLE lumnik_app PASSWORD '%s';\n"      "$(env_val LUMNIK_APP_DB_PASSWORD)"
   printf "ALTER ROLE lumnik_admin PASSWORD '%s';\n"    "$(env_val LUMNIK_ADMIN_DB_PASSWORD)"

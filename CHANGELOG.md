@@ -7,6 +7,19 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.5.2 — 2026-09-01
+
+One installer fix, found during a real first install of this edition.
+
+### Fixed
+- **Re-running `deploy/selfhost/up.sh` on a fresh install broke the stack**: the script
+  guessed the Postgres bootstrap superuser from the age of `.env` and could pin the
+  legacy name onto a new volume, after which the password-alignment step failed with
+  `FATAL: role "adempiere" does not exist`. It now records the name at first install
+  and, for older installs, asks the running database which name the volume was
+  initialized with. If you hit this: set `POSTGRES_USER=lumnik` in `.env` (or remove
+  the line) and re-run `up.sh`.
+
 ## v1.5.1 — 2026-09-01
 
 One fix, found by this edition's own release proofs before v1.5.0 could ship here —
