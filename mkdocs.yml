@@ -129,6 +129,7 @@ nav:
     - Diagnosing a failed run: recipes/diagnose-a-run.md
     - Reading the logs: recipes/logs.md
     - Test the API (Postman): recipes/test-the-api.md
+    - Analyze the database directly: recipes/analyze-the-database.md
   - Operations:
     - On-call runbook: operations/oncall-runbook.md
     - Backup & restore: operations/backup-restore.md

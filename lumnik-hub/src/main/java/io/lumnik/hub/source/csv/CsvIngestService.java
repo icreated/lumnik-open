@@ -104,8 +104,13 @@ public class CsvIngestService {
         // Local upload path: a file was uploaded directly — use the fast local pipeline.
         // If an explicit path is provided in the transport map (or any non-upload config such as
         // max_file_size), route through executeViaFileSource so all transport options are honoured.
-        if (LOCAL.equals(kind) && transportCfg.size() == 1) {
-            // Only "kind" present — implicit local transport derived from an uploaded file.
+        // "Implicit" is judged on the FORM, not on the resolved map: resolveTransport() derives a
+        // {kind, path} map from an upload, and judging by map size sent every HTTP upload down the
+        // FileSource pipeline — which then named the table after RESTEasy's multipart temp file.
+        boolean implicitUpload = form.transport == null
+            && (form.transportJson == null || form.transportJson.isBlank());
+        if (LOCAL.equals(kind) && implicitUpload) {
+            // No explicit transport — the request IS the uploaded file.
             File file = form.resolveFile();
             if (file == null) {
                 throw new IllegalArgumentException("local transport requires a file upload");
@@ -129,8 +134,14 @@ public class CsvIngestService {
     // ── Local file pipeline ───────────────────────────────────────────────────
 
     private CsvIngestResult executeLocalFile(CsvIngestForm form, long tenantId, File file) {
+        // Unnamed upload: the table carries the CALLER's filename (the multipart part name),
+        // never the server-side buffer's — RESTEasy names that one resteasy-reactive…upload,
+        // and the remote pipeline's twin test already pinned the same rule for temp downloads.
+        String callerFile = (form.fileUpload != null
+                && form.fileUpload.fileName() != null && !form.fileUpload.fileName().isBlank())
+            ? form.fileUpload.fileName() : file.getName();
         String name = slugify(
-            (form.name != null && !form.name.isBlank()) ? form.name : stripExt(file.getName())
+            (form.name != null && !form.name.isBlank()) ? form.name : stripExt(callerFile)
         );
         String tableName = "ext." + name;
 
@@ -142,11 +153,11 @@ public class CsvIngestService {
         List<PromotedColumn> promoted = inferSchema(sample);
 
         UUID connectorId = UUID.randomUUID();
-        insertDormantConnector(connectorId, tenantId, name, file);
+        insertDormantConnector(connectorId, tenantId, name, callerFile);
 
         UUID endpointId = UUID.randomUUID();
         String uniqueKey = promoted.isEmpty() ? "$.id" : JsonPaths.member(promoted.get(0).name());
-        insertDormantEndpoint(endpointId, connectorId, tenantId, name, file, tableName, uniqueKey, promoted);
+        insertDormantEndpoint(endpointId, connectorId, tenantId, name, callerFile, tableName, uniqueKey, promoted);
 
         var target = new MappingTarget(null, null, null,
             new HybridJsonb(tableName, uniqueKey, promoted, endpointId));
@@ -165,7 +176,7 @@ public class CsvIngestService {
     }
 
     /** Insert the dormant (enabled=false) connector row for an inspected CSV ingest. */
-    private void insertDormantConnector(UUID connectorId, long tenantId, String name, File file) {
+    private void insertDormantConnector(UUID connectorId, long tenantId, String name, String sourceFileName) {
         em.createNativeQuery(
             "INSERT INTO connector.connector" +
             " (id, tenant_id, org_id, name, type_id, config, enabled)" +
@@ -173,7 +184,7 @@ public class CsvIngestService {
             .setParameter("id", connectorId)
             .setParameter("tid", tenantId)
             .setParameter("name", name)
-            .setParameter("cfg", buildConnectorConfig(file.getName()))
+            .setParameter("cfg", buildConnectorConfig(sourceFileName))
             .executeUpdate();
     }
 
@@ -181,7 +192,7 @@ public class CsvIngestService {
     // S107: the parameters are the endpoint row's columns, passed straight to one INSERT.
     @SuppressWarnings("java:S107")
     private void insertDormantEndpoint(UUID endpointId, UUID connectorId, long tenantId, String name,
-                                       File file, String tableName, String uniqueKey,
+                                       String sourceFileName, String tableName, String uniqueKey,
                                        List<PromotedColumn> promoted) {
         em.createNativeQuery(
             "INSERT INTO connector.connector_endpoint" +
@@ -191,7 +202,7 @@ public class CsvIngestService {
             .setParameter("cid", connectorId)
             .setParameter("tid", tenantId)
             .setParameter("name", name)
-            .setParameter("path", file.getName())
+            .setParameter("path", sourceFileName)
             .setParameter("cfg", buildEndpointConfig(tableName, uniqueKey, promoted))
             .executeUpdate();
     }
@@ -518,26 +529,36 @@ public class CsvIngestService {
         "id", "tenant_id", "external_id", "data", "indexed_at", "connector_id", "endpoint_id"
     );
 
-    private List<PromotedColumn> inferSchema(List<Map<String, Object>> sample) {
+    List<PromotedColumn> inferSchema(List<Map<String, Object>> sample) {   // package-private: pinned by CsvTypeInferenceTest
         if (sample.isEmpty()) return List.of();
-        // Collect widest type per column, preserving header order.
+        // Collect the widest type per column, preserving header order. Absence is not
+        // evidence: an empty cell says nothing about a column's type (146k real orders
+        // once landed with NUMERIC amounts as TEXT because of blanks in the sample); a
+        // column with no typed value at all stays TEXT.
         Map<String, SqlType> types = new LinkedHashMap<>();
         for (Map<String, Object> row : sample) {
             row.forEach((k, v) -> {
                 if (!RESERVED_COLUMNS.contains(k.toLowerCase())) {
-                    types.merge(k, inferType(v), CsvIngestService::widerType);
+                    types.putIfAbsent(k, null);
+                    SqlType t = inferType(v);
+                    if (t != null) {
+                        SqlType prev = types.get(k);
+                        types.put(k, prev == null ? t : widerType(prev, t));
+                    }
                 }
             });
         }
         return types.entrySet().stream()
-            .map(e -> new PromotedColumn(e.getKey(), JsonPaths.member(e.getKey()), e.getValue(), Optional.empty()))
+            .map(e -> new PromotedColumn(e.getKey(), JsonPaths.member(e.getKey()),
+                    e.getValue() != null ? e.getValue() : SqlType.TEXT, Optional.empty()))
             .toList();
     }
 
+    /** @return the value's type, or {@code null} when the cell is empty — absence is not evidence. */
     private static SqlType inferType(Object v) {
-        if (v == null) return SqlType.TEXT;
+        if (v == null) return null;
         String s = v.toString().trim();
-        if (s.isEmpty()) return SqlType.TEXT;
+        if (s.isEmpty()) return null;
         if (s.matches("-?\\d+")) return SqlType.BIGINT;
         if (s.matches("-?\\d+\\.\\d+")) return SqlType.DECIMAL;
         if (s.equalsIgnoreCase("true") || s.equalsIgnoreCase("false")) return SqlType.BOOLEAN;
@@ -549,8 +570,12 @@ public class CsvIngestService {
     }
 
     /** Returns the wider of two SqlTypes — TEXT wins over everything. */
-    private static SqlType widerType(SqlType a, SqlType b) {
+    static SqlType widerType(SqlType a, SqlType b) {   // package-private: pinned by CsvTypeInferenceTest
         if (a == b) return a;
+        if ((a == SqlType.BIGINT && b == SqlType.DECIMAL)
+                || (a == SqlType.DECIMAL && b == SqlType.BIGINT)) {
+            return SqlType.DECIMAL;   // a bigint IS a decimal — 0 and 59.4 share a column type
+        }
         return SqlType.TEXT;
     }
 

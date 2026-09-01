@@ -12,6 +12,9 @@ import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.Transform;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import jakarta.transaction.Status;
+import jakarta.transaction.Synchronization;
+import jakarta.transaction.TransactionSynchronizationRegistry;
 import org.jboss.logging.Logger;
 
 import java.math.BigDecimal;
@@ -45,6 +48,9 @@ public class HybridJsonbWriter {
     private static final Configuration JP =
         Configuration.defaultConfiguration().addOptions(Option.SUPPRESS_EXCEPTIONS);
     private static final ObjectMapper JSON = new ObjectMapper();
+
+    @Inject
+    TransactionSynchronizationRegistry txSync;
 
     @Inject
     @DataSource("admin")
@@ -132,14 +138,25 @@ public class HybridJsonbWriter {
         try {
             registry.register(tenantId, "hybrid:" + spec.table(), schema, table, cols, connectorId);
         } catch (RuntimeException e) {
-            // Registration must never fail a data write. The known benign case: the one-shot CSV
-            // path writes rows INSIDE the transaction that creates its connector row, so the
-            // registry FK (dynamic_table_connector_fk, admin DS, outside that tx) cannot see it
-            // yet — and since a one-shot never writes again, it simply stays unregistered, which
-            // is exactly its documented un-askable behaviour. A REST connector exists long before
-            // its runs, so its registration succeeds on the first chunk. The cache entry is
-            // released so any later write retries.
+            // Registration must never fail a data write. The known case: the one-shot CSV path
+            // writes rows INSIDE the transaction that creates its connector row, so the registry
+            // FK (dynamic_table_connector_fk, admin DS, outside that tx) cannot see it yet. It
+            // used to stay unregistered — "benign" for discovery (a one-shot is un-askable by
+            // design), but the DELETE purge walks the registry, so the unregistered table
+            // survived its connector as an orphan. When a transaction is active, retry once
+            // after it commits: the FK target is visible then, and the delete promise holds.
+            // No commit (or a second failure) leaves it unregistered as before.
             registered.remove(key);
+            if (txSync.getTransactionKey() != null) {
+                txSync.registerInterposedSynchronization(new Synchronization() {
+                    @Override public void beforeCompletion() { /* nothing to flush */ }
+                    @Override public void afterCompletion(int status) {
+                        if (status == Status.STATUS_COMMITTED) {
+                            registerIfNeeded(spec, tenantId, connectorId);
+                        }
+                    }
+                });
+            }
             Logger.getLogger(HybridJsonbWriter.class)
                 .infof("ext table %s not registered for discovery (will retry on next write): %s",
                        spec.table(), e.getMessage());

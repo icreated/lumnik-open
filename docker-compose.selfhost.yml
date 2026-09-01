@@ -100,7 +100,10 @@ services:
       LUMNIK_EVENTS_RETENTION_DAYS: ${LUMNIK_EVENTS_RETENTION_DAYS:-30}
       LUMNIK_AUDIT_RETENTION_DAYS: ${LUMNIK_AUDIT_RETENTION_DAYS:-365}
       # Email delivery — mock stays on until BOTH are set (see .env.example):
-      LUMNIK_SMTP_HOST: ${LUMNIK_SMTP_HOST:-}
+      # Default mirrors the property's own default: SmallRye (Quarkus 3.33) refuses a
+      # DEFINED-but-empty quarkus.mailer.host at boot, where an absent one takes the
+      # default. 'localhost' is inert while LUMNIK_SMTP_MOCK=true (the default here).
+      LUMNIK_SMTP_HOST: ${LUMNIK_SMTP_HOST:-localhost}
       LUMNIK_SMTP_PORT: ${LUMNIK_SMTP_PORT:-587}
       LUMNIK_SMTP_USERNAME: ${LUMNIK_SMTP_USERNAME:-}
       LUMNIK_SMTP_PASSWORD: ${LUMNIK_SMTP_PASSWORD:-}

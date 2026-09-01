@@ -7,6 +7,30 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.5.3 — 2026-09-01
+
+An evening of real first-install testing; every catch fixed the same day.
+
+### Fixed
+- A fresh install without SMTP configured failed to start (the compose file passed an
+  empty mail host, which the platform now refuses at boot). No action needed: the
+  default is inert while mail delivery is mocked, the install default.
+- `lm csv ingest` without `--name` created tables and connectors named after an internal
+  temporary file (`ext.resteasy_reactive…upload`). The table, the connector and the
+  endpoint now carry your file's name, as the `--name` help always promised.
+- `lm connector delete` on a CSV one-shot removed the connector but left its `ext.`
+  table behind. Ext tables now die with their connector, one-shots included.
+- Numeric CSV columns mixing whole and decimal values (or containing blanks) were
+  promoted as TEXT; they now promote as NUMERIC. Re-ingest to pick up the better types.
+- Re-running `deploy/selfhost/up.sh` on an install whose database volume predates the
+  current init scripts could leave ingestion failing with `permission denied`; `up.sh`
+  now re-applies the (idempotent) grants on every run.
+
+### Added
+- A new recipe, *Analyze the database directly*: connecting psql, pgAdmin or IntelliJ
+  to your install's PostgreSQL — the three database roles, the safe port-forward, and
+  the one habit that makes your session see what the product sees.
+
 ## v1.5.2 — 2026-09-01
 
 One installer fix, found during a real first install of this edition.

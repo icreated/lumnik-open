@@ -125,6 +125,15 @@ fi
   && echo "    roles aligned (lumnik_app / lumnik_admin / lumnik_readonly)" \
   || echo "  !! role-password alignment failed — the hub may not reach the DB; inspect: docker exec -it $pg_cid psql -U $pg_super lumnik" >&2
 
+# Grants, schemas and extensions ride every run too (the whole file is idempotent):
+# init scripts only run at FIRST volume init, so a volume older than 02-extensions.sql
+# never received them — the first one-shot CSV ingest then fails its CREATE SCHEMA with
+# "permission denied for database lumnik".
+docker exec -i "$pg_cid" psql -q -v ON_ERROR_STOP=1 -U "$pg_super" -d lumnik \
+  < infra/postgres/init/02-extensions.sql \
+  && echo "    grants/schemas/extensions aligned (02-extensions.sql, idempotent)" \
+  || echo "  !! grants alignment failed — ingestion may hit 'permission denied'; inspect: docker exec -it $pg_cid psql -U $pg_super lumnik" >&2
+
 # Neither hubadmin nor integrator ships in the realm WITH a credential — C1 posture
 # (2026-07-25), extended 2026-08-11 to integrator (RealmAudienceContractTest): a known
 # password must never survive an install, and infra/keycloak/*.json is on the
