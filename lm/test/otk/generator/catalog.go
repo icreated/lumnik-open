@@ -18,7 +18,7 @@ type manifestFields struct {
 	archivePath   string // "" omits the line
 	schedule      string // "" omits the line
 	keyEnv        string // "" omits the line
-	tags          []string
+	scopes        []string
 }
 
 func baseline(seed int64) manifestFields {
@@ -29,7 +29,7 @@ func baseline(seed int64) manifestFields {
 		delimiter:     ",",
 		chunkSize:     "1000",
 		afterProcess:  "none",
-		tags:          []string{"otk"},
+		scopes:        []string{"otk"},
 	}
 }
 
@@ -40,6 +40,7 @@ func render(m manifestFields) string {
 	fmt.Fprintf(&b, "metadata:\n")
 	fmt.Fprintf(&b, "  name: %q\n", m.name)
 	fmt.Fprintf(&b, "  connector_type: csv-file\n")
+	fmt.Fprintf(&b, "  scopes: [%s]\n", renderScopes(m.scopes))
 	fmt.Fprintf(&b, "spec:\n")
 	fmt.Fprintf(&b, "  transport:\n")
 	fmt.Fprintf(&b, "    kind: %q\n", m.transportKind)
@@ -60,20 +61,19 @@ func render(m manifestFields) string {
 	if m.schedule != "" {
 		fmt.Fprintf(&b, "  schedule: %q\n", m.schedule)
 	}
-	fmt.Fprintf(&b, "  target:\n")
-	fmt.Fprintf(&b, "    tags: [%s]\n", renderTags(m.tags))
+	fmt.Fprintf(&b, "  target: {}\n")
 	return b.String()
 }
 
-func renderTags(tags []string) string {
-	qs := make([]string, len(tags))
-	for i, t := range tags {
+func renderScopes(scopes []string) string {
+	qs := make([]string, len(scopes))
+	for i, t := range scopes {
 		qs[i] = fmt.Sprintf("%q", t)
 	}
 	return strings.Join(qs, ", ")
 }
 
-func manyTags(n int) []string {
+func manyScopes(n int) []string {
 	t := make([]string, n)
 	for i := range t {
 		t[i] = fmt.Sprintf("t%d", i)
@@ -117,8 +117,8 @@ var variantsByCategory = map[string][]variant{
 			mutate: func(m *manifestFields, p string) { m.delimiter = p }},
 		{name: "chunk-boundary", field: "spec.parser.chunk_size", payloads: []string{"1", "100000", "100001"},
 			mutate: func(m *manifestFields, p string) { m.chunkSize = p }},
-		{name: "huge-tags", field: "spec.target.tags", payloads: []string{""},
-			mutate: func(m *manifestFields, _ string) { m.tags = manyTags(10000) }},
+		{name: "huge-scopes", field: "metadata.scopes", payloads: []string{""},
+			mutate: func(m *manifestFields, _ string) { m.scopes = manyScopes(10000) }},
 		{name: "unicode-glob-path", field: "spec.transport.path", payloads: []string{""},
 			mutate: func(m *manifestFields, _ string) { m.path = "/tmp/données/*.csv" }},
 	},

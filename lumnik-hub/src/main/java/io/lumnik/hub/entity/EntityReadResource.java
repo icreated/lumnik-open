@@ -65,7 +65,7 @@ public class EntityReadResource {
                        @QueryParam("limit") @DefaultValue("100") int limit,
                        @QueryParam("offset") @DefaultValue("0") int offset) {
     EntityManifest m = registry.find(name);
-    if (m == null) return Response.status(Response.Status.NOT_FOUND).build();
+    if (m == null) return ApiErrors.notFound("entity " + name + " not found");
 
     if (!ScopeGrants.allowsAny(m.scopes())) {
       return ApiErrors.scopeNotGranted();

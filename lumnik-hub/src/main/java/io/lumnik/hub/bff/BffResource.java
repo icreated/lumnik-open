@@ -7,6 +7,7 @@ import io.lumnik.identity.user.UserRepository;
 import io.lumnik.hub.manifest.ModuleManifestRegistry;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.hub.tenant.TenantContextFilter;
+import jakarta.transaction.Transactional;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
@@ -29,6 +30,7 @@ public class BffResource {
     @GET
     @Path("/me")
     @Operation(summary = "Current user context — user info, tenant, roles, and accessible modules")
+    @Transactional
     public BffMeResponse me() {
         Long tenantId = requireTenantId();
         Long userId   = TenantContextFilter.currentUser();

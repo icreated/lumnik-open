@@ -1,6 +1,7 @@
 package io.lumnik.hub.workflow;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
@@ -44,6 +45,6 @@ public class WorkflowResource {
     public Response one(@PathParam("name") String name) {
         return registry.findByName(RequireTenant.current(), name)
             .<Response>map(g -> Response.ok(g).build())
-            .orElse(Response.status(404).build());
+            .orElseGet(() -> ApiErrors.notFound("workflow " + name + " not found"));
     }
 }

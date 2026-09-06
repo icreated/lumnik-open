@@ -23,7 +23,7 @@ Full walkthroughs: [Deploy](deploy.md) · [Reading the logs](recipes/logs.md).
 | 4 | `lm connector run NAME` | run it now |
 | 5 | `lm run list --connector NAME` | the run ledger — records in/out/skip at a glance |
 | 6 | `lm dlq list --run ID` | exactly which rows fell out, and why |
-| 7 | `lm entity apply -f FILE` | fuse sources into one canonical entity |
+| 7 | `lm entity apply -f FILE` | fuse sources into one canonical entity (`lm entity delete NAME` removes it, and frees a connector it blocked) |
 | 8 | `lm workflow apply -f FILE` | declare a lifecycle — prints the data-truth report |
 | 9 | `lm ask --scope S "question"` | ask the data — prints the answer *and the SQL that ran* |
 | 10 | `lm secret set NAME -` | store a secret from stdin; values are never returned |
@@ -31,6 +31,20 @@ Full walkthroughs: [Deploy](deploy.md) · [Reading the logs](recipes/logs.md).
 The full surface (sources, endpoints, mappings, tags, observations…) is in the
 [CLI & TUI reference](cli/lm-reference.md).
 
+Command 5 is the screen you will read most. One row per run, and the arithmetic
+`IN = OUT + SKIPPED` holds on every row — nothing is lost without being counted:
+
+```
+$ lm run list
+ID        CONNECTOR     STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+30b078c6  customers     Completed  12  12   0        0             2026-09-05 05:38  2026-09-05 05:38
+f0466804  orders        Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
+3ccd21eb  products      Failed     0   0    0        0             2026-09-05 05:38  2026-09-05 05:38
+852771fa  crm-contacts  Completed  5   5    0        0             2026-09-05 05:39  2026-09-05 05:39
+```
+
+`Failed` is the run itself (source unreachable, bad credentials) — `lm run get 3ccd21eb`
+prints the reason. `DEAD-LETTERS` are rows set aside with their reason — `lm dlq list`.
 Command 9 is the one that is not in every build: `lm ask` posts to
 `POST /api/platform/rag/chat`, which the **open edition does not carry** — see
 [which edition you installed](editions.md#which-edition-am-i-running). The other nine are native

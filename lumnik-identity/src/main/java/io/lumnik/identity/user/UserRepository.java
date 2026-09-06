@@ -9,6 +9,15 @@ import java.util.Optional;
 @ApplicationScoped
 public class UserRepository implements PanacheRepository<User> {
 
+    /**
+     * One user of one tenant by id, or {@code null} — the tenant IN THE QUERY. SCIM's read
+     * ({@code ScimUserService.get}) needs the predicate but throws {@code ScimErrors.notFound},
+     * not the plain 404 {@code Require.owned} raises, so it resolves through here rather than there.
+     */
+    public User findForTenant(Long id, Long tenantId) {
+        return find("id = ?1 AND tenantId = ?2", id, tenantId).firstResult();
+    }
+
     public List<User> listAll() {
         return list("archivedAt IS NULL AND deletedAt IS NULL ORDER BY name");
     }

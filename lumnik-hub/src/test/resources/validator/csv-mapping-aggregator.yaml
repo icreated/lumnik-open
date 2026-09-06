@@ -3,7 +3,7 @@ kind: Connector
 metadata:
   name: nightly-export
   connector_type: csv-file
-  tags: [billing]
+  scopes: [billing]
 spec:
   transport:
     kind: local
@@ -20,5 +20,4 @@ spec:
             orders:
               collect: order_id
               into: array
-  target:
-    tags: [billing]
+  target: {}

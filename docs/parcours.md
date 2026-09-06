@@ -95,6 +95,12 @@ Follow [Deploy lumnik](deploy.md), self-host path: one command, `deploy/selfhost
 The [60-second Quickstart](quickstart/installer.md) builds the `lm` binary, points it at your hub, and logs you in — then puts a first file into the hub with one command.
 
 <p class="lm-check" markdown="span">**You know it worked when:** `lm login` succeeds and `lm connector list` answers — an authenticated round trip to your own hub.</p>
+
+```
+$ lm connector list
+NAME       TYPE      TENANT  SCHED  STATUS     LAST RUN
+customers  csv-file  1              Completed  2026-09-05 05:38
+```
 </div>
 </article>
 <article class="lm-step" markdown>
@@ -125,6 +131,13 @@ Now that you have seen one run, read [Connectors overview](connectors/index.md) 
 Read [Seeing what was ingested, skipped, and quarantined](transparency/ingestion-honesty.md).
 
 <p class="lm-check" markdown="span">**You know it worked when:** on your own run, `lm run get` shows the arithmetic holding — IN = OUT + SKIPPED — and DEAD-LETTERS never exceeds SKIPPED: every row you read is accounted for, dropped or not.</p>
+
+```
+$ lm run get f0466804
+ID        CONNECTOR  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+f0466804  orders     Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
+⚠ 2 rows quarantined — see: lm dlq list --run f0466804-0824-4eb4-8aa2-54e263dccafe
+```
 </div>
 </article>
 </div>
@@ -159,7 +172,7 @@ Read [Ask honesty — the five guards](transparency/ask-honesty.md). This page i
 <div markdown>
 <h3>Scopes — 30 min</h3>
 
-Read [Scopes](rag/scopes.md): a scope is a connector tag, granted as a Keycloak role. Zero scope roles = tenant-wide; one or more = bound.
+Read [Scopes](rag/scopes.md): a scope is declared on the connector (`metadata.scopes`) and granted as a Keycloak role. Zero scope roles = tenant-wide; one or more = bound.
 
 <p class="lm-check" markdown="span">**You know it worked when:** a scope-bound user gets `403 scope not granted` outside their métier — and sees answers inside it.</p>
 </div>

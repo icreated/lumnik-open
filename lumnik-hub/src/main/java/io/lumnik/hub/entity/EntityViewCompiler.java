@@ -70,6 +70,36 @@ public class EntityViewCompiler {
     }
   }
 
+  /**
+   * The inverse of {@link #apply}: DROP the entity's view and remove its manifest row, atomically
+   * on the admin (BYPASSRLS) datasource. {@code DROP VIEW IF EXISTS} is idempotent, so a
+   * half-applied entity (row present, view already gone) still deletes cleanly.
+   */
+  public void delete(String name) {
+    String view = viewName(name);
+    try (Connection c = adminDs.getConnection()) {
+      boolean prevAuto = c.getAutoCommit();
+      c.setAutoCommit(false);
+      try {
+        try (Statement st = c.createStatement()) {
+          st.execute("DROP VIEW IF EXISTS " + view);
+        }
+        try (var ps = c.prepareStatement("DELETE FROM connector.entity_manifest WHERE name = ?")) {
+          ps.setString(1, name.toLowerCase(Locale.ROOT));
+          ps.executeUpdate();
+        }
+        c.commit();
+      } catch (Exception e) {
+        c.rollback();
+        throw e;
+      } finally {
+        c.setAutoCommit(prevAuto);
+      }
+    } catch (Exception e) {
+      throw new RuntimeException("EntityViewCompiler.delete: " + e.toString(), e);
+    }
+  }
+
   /** The PG server message's first line, without the "ERROR: " prefix. */
   static String firstLine(String msg) {
     String line = msg == null ? "" : msg.lines().findFirst().orElse("");
@@ -107,6 +137,16 @@ public class EntityViewCompiler {
 
   static String viewName(String entityName) {
     return SCHEMA + "." + quoteIdent("v_" + entityName.toLowerCase(Locale.ROOT));
+  }
+
+  /**
+   * The entity name a {@code connector.v_<name>} view was compiled from — the inverse of
+   * {@link #viewName}. Returns {@code null} for anything not shaped like one of our entity views
+   * (a foreign view, in any schema), so the caller can tell an entity view from a stranger's.
+   */
+  public static String entityNameFromView(String qualifiedView) {
+    String prefix = SCHEMA + ".v_";
+    return qualifiedView != null && qualifiedView.startsWith(prefix) ? qualifiedView.substring(prefix.length()) : null;
   }
 
   /**

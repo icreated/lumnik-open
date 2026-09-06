@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.jdbc;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.http.ContentType;
 import org.junit.jupiter.api.*;
@@ -48,7 +49,7 @@ class JdbcMultiTenancyIT {
 
     // ── Tenant 11 adds a connector ────────────────────────────────────────────
     String connId1 = given()
-        .header("X-Tenant-ID", "11").header("X-User-ID", "1")
+        .headers(TestIdentity.tenantAndUser(11))
         .contentType(ContentType.JSON)
         .body(Map.of(
             "sourceName", sourceName,
@@ -62,7 +63,7 @@ class JdbcMultiTenancyIT {
 
     // ── Tenant 12 adds a connector with the same source name ─────────────────
     String connId2 = given()
-        .header("X-Tenant-ID", "12").header("X-User-ID", "1")
+        .headers(TestIdentity.tenantAndUser(12))
         .contentType(ContentType.JSON)
         .body(Map.of(
             "sourceName", sourceName,
@@ -80,21 +81,21 @@ class JdbcMultiTenancyIT {
 
     // ── Tenant 11 sees exactly its own connector via listTables ───────────────
     given()
-        .header("X-Tenant-ID", "11").header("X-User-ID", "1")
+        .headers(TestIdentity.tenantAndUser(11))
         .when().get("/api/platform/sources/jdbc/" + sourceName + "/tables")
         .then().statusCode(200)
                .body("tables.size()", is(1));
 
     // ── Tenant 12 sees exactly its own connector via listTables ───────────────
     given()
-        .header("X-Tenant-ID", "12").header("X-User-ID", "1")
+        .headers(TestIdentity.tenantAndUser(12))
         .when().get("/api/platform/sources/jdbc/" + sourceName + "/tables")
         .then().statusCode(200)
                .body("tables.size()", is(1));
 
     // ── Cross-tenant leak check: a third tenant sees nothing ──────────────────
     given()
-        .header("X-Tenant-ID", "99").header("X-User-ID", "1")
+        .headers(TestIdentity.tenantAndUser(99))
         .when().get("/api/platform/sources/jdbc/" + sourceName + "/tables")
         .then().statusCode(200)
                .body("tables.size()", is(0));

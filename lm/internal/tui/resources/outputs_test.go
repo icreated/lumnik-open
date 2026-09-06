@@ -59,6 +59,33 @@ func TestOutputsDescribeShowsTheFailure(t *testing.T) {
 	}
 }
 
+// The describe panel's "attempted:" line renders local, second precision — not the raw
+// RFC3339 the hub sends. Expected value computed, not hardcoded, so this does not depend on
+// the machine running it being on any particular timezone.
+func TestOutputsDescribe_attemptedIsLocal(t *testing.T) {
+	attempted, err := time.Parse(time.RFC3339, "2026-08-15T09:12:04Z")
+	if err != nil {
+		t.Fatalf("the sample timestamp must parse: %v", err)
+	}
+	o := &Outputs{table: tview.NewTable(), items: []client.Output{
+		{ID: 91, Integration: "n8n-prod", EventType: "decision.dormant.commande",
+			HTTPStatus: status502(), Error: "connect timed out", AttemptedAt: attempted},
+	}}
+	o.render()
+	o.table.Select(1, 0)
+	_, body, ok := o.SelectedDescribe()
+	if !ok {
+		t.Fatal("SelectedDescribe returned !ok for a selected row")
+	}
+	want := "attempted:  " + attempted.In(time.Local).Format("2006-01-02 15:04:05")
+	if !strings.Contains(body, want) {
+		t.Errorf("describe body missing %q:\n%s", want, body)
+	}
+	if strings.Contains(body, "2026-08-15T09:12:04Z") {
+		t.Errorf("describe body should render local-formatted, not the raw ISO string:\n%s", body)
+	}
+}
+
 func TestOutputsDescribeEmptyWithoutSelection(t *testing.T) {
 	o := &Outputs{table: tview.NewTable()}
 	if _, _, ok := o.SelectedDescribe(); ok {

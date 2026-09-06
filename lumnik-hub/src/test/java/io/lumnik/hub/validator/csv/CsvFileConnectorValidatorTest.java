@@ -80,16 +80,38 @@ class CsvFileConnectorValidatorTest {
         assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.schedule")));
     }
 
-    @Test void missingTargetTags_isWarningNotError() throws Exception {
-        ValidationResult r = service.validate(load("csv-no-tags.yaml"));
-        assertTrue(r.isValid());
-        assertTrue(r.warnings().stream().anyMatch(w -> w.path().equals("spec.target.tags")));
-    }
-
     @Test void badAfterProcessValue_isError() throws Exception {
         ValidationResult r = service.validate(load("csv-bad-after-process.yaml"));
         assertFalse(r.isValid());
         assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.after_process")));
+    }
+
+    // The door that did not exist. jdbc had TWO doors on these rules and csv had none, which is
+    // backwards: jdbc's rename is a narrow config key the hub assembles, csv's is written by hand.
+    // A bad rename was accepted by `lm apply`, scheduled, and killed the run on its first row.
+    @Test
+    void mapColumns_everyBadShape_isRefusedAtApplyTime() throws Exception {
+        ValidationResult r = service.validate(load("csv-map-columns-bad.yaml"));
+
+        var messages = r.errors().stream().map(e -> e.path() + " " + e.message()).toList();
+        assertAll(
+            () -> assertTrue(messages.stream().anyMatch(m -> m.contains("system column")),
+                () -> "renaming INTO a hub system column must be refused, got: " + messages),
+            () -> assertTrue(messages.stream().anyMatch(m -> m.contains("more than one source")),
+                () -> "two sources onto one target must be refused, got: " + messages),
+            () -> assertTrue(messages.stream().anyMatch(m -> m.contains("plain identifier")),
+                () -> "a target that is not an identifier must be refused, got: " + messages),
+            () -> assertTrue(messages.stream().anyMatch(m -> m.contains("not a rename target")),
+                () -> "a colon with nothing after it must be refused, got: " + messages),
+            () -> assertTrue(messages.stream().anyMatch(m -> m.contains("must be a list")),
+                () -> "a drop that is not a list must be refused, got: " + messages),
+            // The point of refusing at APPLY time rather than on the first row: all of them, once.
+            // EXACTLY five, not ">= 5": the five anyMatch above already force five distinct
+            // messages, so a >= assertion could never fail. An exact count also catches the door
+            // reporting one violation twice.
+            () -> assertEquals(5, messages.stream().filter(m -> m.contains("map-columns")).count(),
+                () -> "apply-time validation accumulates; expected every problem once, got: "
+                    + messages));
     }
 
     // Connector runs are chunked transactions: the aggregator's cross-chunk buffer would be

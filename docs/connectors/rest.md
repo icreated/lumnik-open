@@ -19,7 +19,7 @@
 # 1. Generate manifest from an OpenAPI spec
 lm source rest from-openapi \
     https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json \
-    --name stripe --tag billing --output stripe.yaml
+    --name stripe --scope billing --output stripe.yaml
 
 # 2. Review and adjust (auth, pagination, schedule — the cron lands on the hub scheduler)
 $EDITOR stripe.yaml
@@ -39,7 +39,7 @@ kind: Connector
 metadata:
   name: stripe
   connector_type: rest-generic
-  tags: [billing]
+  scopes: [billing]
 spec:
   base_url: https://api.stripe.com
   auth:
@@ -248,7 +248,7 @@ lm apply -f <file.yaml>
 lm endpoint enable|disable|reset-cursor|purge <connector>/<endpoint>
 lm connector run <connector>
 lm source rest test <connector>                     # pre-flight: auth + 1 page, no write
-lm source rest from-openapi <url> --name N --tag T -o FILE
+lm source rest from-openapi <url> --name N --scope S -o FILE
 lm source rest probe <connector> --endpoint <path>   # sample fetch + manifest draft
 ```
 
@@ -266,7 +266,7 @@ Full reference: [CLI & TUI](../cli/lm-reference.md).
 ```bash
 lm source rest from-openapi \
     https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json \
-    --name stripe --tag billing --output stripe.yaml
+    --name stripe --scope billing --output stripe.yaml
 ```
 
 **Result:** a manifest scaffold (`stripe.yaml`) with endpoints inferred from the OpenAPI spec —

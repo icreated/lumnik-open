@@ -32,6 +32,15 @@ lm integration test <ID>          # fires a real POST at the target, result inli
   dynamic and not testable this way — trigger the rule instead.
 - Forwarding starts **at registration** — nothing is delivered retroactively.
 
+```
+$ echo -n "$SIGNING_SECRET" | lm integration add n8n \
+    --url https://n8n.example.com/webhook/lumnik --events 'decision.*' --secret-stdin
+registered: n8n (id 1001) — forwards subscribed events from now on
+$ lm integration list
+ID    NAME  URL                                     EVENTS      ENABLED
+1001  n8n   https://n8n.example.com/webhook/lumnik  decision.*  true
+```
+
 ### What arrives, and how to verify it
 
 One HTTP `POST` per event, JSON payload as in the registry, with two headers:
@@ -55,14 +64,25 @@ lm outputs list                   # deliveries across every integration, failure
 lm integration describe <ID>      # one target: config + its recent deliveries
 ```
 
+A decision fired while the target was down — the journal says so, failures first:
+
+```
+$ lm outputs list
+INTEGRATION     EVENT                   STATUS       WHEN              ERROR
+ops-automation  decision.order-on-hold  no response  2026-09-05 05:40  ConnectException: null
+```
 A delivery that exhausted its attempts stays in the journal and can be **replayed**:
 `POST /api/platform/deliveries/{id}/replay`. The outbox itself is purged daily (04:30,
 `LUMNIK_EVENTS_RETENTION_DAYS`, default 30) — never past what the slowest consumer has seen.
 
 ## Route events to email
 
-```bash
-lm notify add --events 'decision.*' --to adv@example.com --template decision-alert
+```
+$ lm notify add --events 'decision.*' --to adv@example.com --template decision-alert
+rule 1000: decision.* → adv@example.com
+$ lm notify list
+ID    EVENTS      RECIPIENT        TEMPLATE        ENABLED
+1000  decision.*  adv@example.com  decision-alert  true
 ```
 
 One mail per matching event, rendered through a template that can reach into the payload —

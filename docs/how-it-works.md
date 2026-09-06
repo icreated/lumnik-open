@@ -68,10 +68,11 @@ by kind (verified against the `lm` CLI source, `lm/internal/cli/`):
 | `View` | yes | yes | no |
 | `Workflow` | yes | yes | no |
 | `Process` | yes | no | no |
-| `Entity` | no | no | no |
+| `Entity` | no | no | yes |
 
-`Entity` has none of the three — `lm entity apply` is its entire CLI surface, and a fused
-entity is read back through [`GET /api/entities/{name}`](entities.md#read-api), not `lm`.
+`Entity` has no `list`/`get` — `lm entity apply` and `lm entity delete NAME` are its CLI
+surface, and a fused entity is read back through
+[`GET /api/entities/{name}`](entities.md#read-api), not through `lm`.
 There is no single command that lists every kind at once — each shelf keeps its own
 `list`. See [CLI & TUI reference](cli/lm-reference.md) for the full command tables.
 

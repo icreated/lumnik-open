@@ -3,6 +3,7 @@ kind: Connector
 metadata:
   name: cursor-variable-binding
   connector_type: rest-generic
+  scopes: [x]
 spec:
   base_url: https://api.example.com
   endpoints:
@@ -20,4 +21,3 @@ spec:
         kind: hybrid
         table: x_items
         unique_key: "$.id"
-        tags: [x]

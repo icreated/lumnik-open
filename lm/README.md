@@ -5,9 +5,11 @@ The integrator's single Go binary: a kubectl-style CLI plus a k9s-style TUI.
 ## Build
 
 ```bash
-cd lm && go build -o lm ./cmd/lm
-# put ./lm on your PATH, e.g.:  sudo mv lm /usr/local/bin/
+cd lm && make install   # builds, then copies to ~/.local/bin (no sudo)
 ```
+
+If the shell cannot find `lm` afterwards, `~/.local/bin` is not on your `PATH` — add it, or
+run the binary in place as `./lm`.
 
 ## Connect & sign in
 

@@ -1,9 +1,8 @@
 package io.lumnik.hub.validator.jdbc;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import io.lumnik.hub.connector.mapping.writer.DynamicTableWriter;
+import io.lumnik.hub.connector.mapping.MapColumnsRules;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
-import io.lumnik.hub.sql.SqlIdentifiers;
 import io.lumnik.hub.validator.ConfigDef;
 import io.lumnik.hub.validator.ConfigDef.Importance;
 import io.lumnik.hub.validator.ConfigDef.Type;
@@ -19,7 +18,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -27,9 +25,6 @@ import java.util.regex.Pattern;
 @ApplicationScoped
 @ConnectorTypeId("jdbc-generic")
 public class JdbcConnectorValidator implements ConnectorValidator {
-
-    /** Prefix of the three refusals a bad source.tables[].rename can draw. */
-    private static final String RENAME_TARGET = "rename target '";
 
     private static final Set<String> SUPPORTED_DIALECTS = Set.of("postgres", "postgresql");
     private static final Pattern URL_PATTERN = Pattern.compile("^jdbc:([a-z0-9]+):.*$");
@@ -57,7 +52,6 @@ public class JdbcConnectorValidator implements ConnectorValidator {
         validateTables(spec.path("defaults"), spec.path("source").path("tables"), errs);
         validateSchedule(spec.path("schedule"), errs);
         validateWindow(spec.path("window"), errs);
-        validateTags(spec.path("target"), errs);
         return errs;
     }
 
@@ -143,37 +137,21 @@ public class JdbcConnectorValidator implements ConnectorValidator {
     }
 
     /**
-     * {@code rename} maps a source column to a hub column name. The ConfigDef runner already
-     * reports a non-object value (case 5 in the tests); this only rules on an actual object.
+     * {@code rename} maps a source column to a hub column name. This door ACCUMULATES — reporting
+     * every problem in the block from one {@code lm apply} is the whole reason an apply-time
+     * refusal exists next to the run-time one. The rules are {@link MapColumnsRules}.
      */
     private void validateRename(JsonNode rename, String path, List<ValidationError> errs) {
+        // Only an actual object, ON PURPOSE. SourceBlockValidator declares `rename` as
+        // Type.NESTED, so ConfigDefRunner already refuses a non-object on this same path
+        // (jdbc-rename-not-object.yaml pins it) — running the shared rule here too would print
+        // two errors for one mistake. The csv door has no such ConfigDef entry, which is why the
+        // rule itself still carries the non-object refusal for the door that needs it.
         if (!rename.isObject()) return;
 
         List<String> hints = List.of("Example: rename: { id: source_id }");
-        Set<String> targets = new HashSet<>();
-        for (var it = rename.fields(); it.hasNext(); ) {
-            Map.Entry<String, JsonNode> entry = it.next();
-            if (entry.getValue().isNull()) {
-                // A manifest typo — "rename:\n  id:" — parses to a YAML/JSON null, not an empty
-                // string. asText() on a NullNode returns the STRING "null", which would then pass
-                // isPlainIdentifier unnoticed — refuse it before that stringification happens.
-                errs.add(new ValidationError(path, Severity.ERROR,
-                    "rename target for '" + entry.getKey() + "' is null — a manifest column with a "
-                    + "colon and nothing after it is not a rename target", hints));
-                continue;
-            }
-            String target = entry.getValue().asText();
-
-            if (!SqlIdentifiers.isPlainIdentifier(target)) {
-                errs.add(new ValidationError(path, Severity.ERROR,
-                    RENAME_TARGET + target + "' is not a valid identifier", hints));
-            } else if (DynamicTableWriter.SYSTEM_COLUMNS.contains(target)) {
-                errs.add(new ValidationError(path, Severity.ERROR,
-                    RENAME_TARGET + target + "' collides with a hub system column", hints));
-            } else if (!targets.add(target)) {
-                errs.add(new ValidationError(path, Severity.ERROR,
-                    RENAME_TARGET + target + "' is used by more than one source column", hints));
-            }
+        for (var v : MapColumnsRules.checkRename(rename)) {
+            errs.add(new ValidationError(path, Severity.ERROR, v.path() + " " + v.reason(), hints));
         }
     }
 
@@ -189,13 +167,5 @@ public class JdbcConnectorValidator implements ConnectorValidator {
         WindowField.validWindow().apply(window).ifPresent(msg ->
             errs.add(new ValidationError("spec.window", Severity.ERROR, msg,
                 List.of("Example: window: \"22:00-06:00\" (UTC; scheduled runs are skipped outside it)"))));
-    }
-
-    private void validateTags(JsonNode target, List<ValidationError> errs) {
-        if (target.path("tags").isMissingNode()) {
-            errs.add(new ValidationError("spec.target.tags", Severity.WARNING,
-                "no tags defined — RAG scope filtering will be impossible",
-                List.of("Add: target.tags: [\"erp\", \"billing\"]")));
-        }
     }
 }

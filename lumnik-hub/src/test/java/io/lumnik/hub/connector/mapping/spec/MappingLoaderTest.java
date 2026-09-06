@@ -23,6 +23,16 @@ class MappingLoaderTest {
   }
 
   @Test
+  void rejects_a_malformed_hook_entry() {
+    // A hook entry that is not a single-key object. MappingLoader always threw; the point of the
+    // shared parser is that the csv loader now does too (it used to silently drop it).
+    String yaml = "id: t\nversion: 1\ntarget: foo\nrow:\n  - [a, b]\n";
+    assertThatThrownBy(() -> MappingLoader.load(yaml))
+      .isInstanceOf(MappingValidationException.class)
+      .hasMessageContaining("each hook must be an object with one key");
+  }
+
+  @Test
   void rejects_yaml_without_id() {
     String yaml = "version: 1\ntarget: foo";
     assertThatThrownBy(() -> MappingLoader.load(yaml))

@@ -58,3 +58,22 @@ func TestPaletteResolvesConnectorsAliasToSources(t *testing.T) {
 		t.Error("pageByName(sources) = nil — the canonical page is unreachable")
 	}
 }
+
+// The startup seed reads the user's default scope over the network, after the loop is
+// pumping. It is only a seed: a scope the user picked meanwhile (:scopes, :scope) must win
+// over a reply that lands later (Copilot, #394).
+func TestSeedScope_NeverOverwritesAScopeTheUserAlreadyChose(t *testing.T) {
+	c := client.New(config.Context{Server: "http://x"})
+	app := newApp(c)
+
+	app.seedScope("compta")
+	if app.currentScope != "compta" {
+		t.Fatalf("an unscoped session takes the seed, got %q", app.currentScope)
+	}
+
+	app.setScope("sales") // the user chose
+	app.seedScope("compta")
+	if app.currentScope != "sales" {
+		t.Fatalf("a late seed must not overwrite the user's choice, got %q", app.currentScope)
+	}
+}

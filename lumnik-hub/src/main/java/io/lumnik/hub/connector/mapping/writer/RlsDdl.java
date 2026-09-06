@@ -14,10 +14,14 @@ import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
  * <p>Callers pass UNQUOTED identifiers; quoting happens here via
  * {@link io.lumnik.hub.sql.SqlIdentifiers}. A {@code null} schema means an unqualified table.
  *
- * <p>Grant composition deliberately stays at each call site — {@link DynamicTableWriter} issues one
- * guarded block per grant, {@link HybridJsonbWriter} groups all of its into one — but both writers
- * now grant the same set (app DML, readonly select, sequence usage), and the statements themselves
- * come from here.
+ * <p>Both writers grant the same set (app DML, readonly select, sequence usage) and both issue
+ * <b>one guarded block per grant</b>. That is a rule, not a style: {@link #guarded} swallows with
+ * {@code EXCEPTION WHEN OTHERS}, which aborts the whole block, so grants sharing one block are
+ * cancelled by the first that fails — and the javadoc below says plainly that the target roles
+ * may not exist. Grouping once put the readonly SELECT second behind the app's DML.
+ * {@link #guarded} takes a single statement so that arrangement cannot be written again;
+ * {@code RlsDdlCharacterizationTest} asserts the resulting one-grant-per-block property over the
+ * writers' output, so a grant added later inherits it.
  */
 final class RlsDdl {
 
@@ -121,17 +125,19 @@ final class RlsDdl {
     }
 
     /**
-     * Wraps grant statements in a {@code DO} block that swallows failures. Grants are no-ops when
+     * Wraps ONE grant in a {@code DO} block that swallows failures — the parameter is a single
+     * statement on purpose, not for want of varargs. The handler aborts its block, so statements
+     * sharing one are cancelled by the first that fails, silently; and failing is ordinary, per
+     * the next sentence. Grouping is therefore not a caller's choice to make, and this signature
+     * is what says so — a javadoc saying it was tried, and a sibling test rotted unnoticed within
+     * the same change. {@code RlsDdlGuardedSemanticsIT} pins the abort behaviour against a real
+     * Postgres. Grants are no-ops when
      * the executing user already owns the table (test mode) and the target roles may not exist at
      * all there — neither case must break table creation. In production {@code lumnik_admin} owns
      * the table and the grants are the real thing.
      */
-    static String guarded(String... statements) {
-        StringBuilder sb = new StringBuilder("DO ").append(TAG).append(" BEGIN ");
-        for (String statement : statements) {
-            sb.append("  ").append(statement).append("; ");
-        }
-        return sb.append("EXCEPTION WHEN OTHERS THEN NULL; END ").append(TAG).toString();
+    static String guarded(String statement) {
+        return "DO " + TAG + " BEGIN   " + statement + "; EXCEPTION WHEN OTHERS THEN NULL; END " + TAG;
     }
 
     private static String qualify(String schema, String table) {

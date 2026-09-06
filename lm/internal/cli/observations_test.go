@@ -6,9 +6,16 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestObservationsList_printsTapeWithRawTimestamps(t *testing.T) {
+// SINCE renders like every other date column (output.HumanTime), not the raw ISO string
+// the hub sends: -o json/yaml already carry the full-precision timestamp (Print marshals
+// the struct directly for those formats, bypassing observationRow entirely), so the table
+// buys nothing by staying raw — only a column nobody could read at a glance. Expected value
+// computed the same way output.HumanTime computes it, not hardcoded, so this does not depend
+// on the machine running it being on any particular timezone.
+func TestObservationsList_printsTapeInLocalTime(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`[{"workflow":"commande","docKey":"CMD-1","state":"draft",
 			"since":"2026-08-01T10:00:00Z","firstObservedAt":"2026-07-30T09:00:00Z","alertedAt":null}]`))
@@ -25,10 +32,18 @@ func TestObservationsList_printsTapeWithRawTimestamps(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 	got := out.String()
-	for _, want := range []string{"WORKFLOW", "commande", "CMD-1", "draft", "2026-08-01T10:00:00Z"} {
+	since, err := time.Parse(time.RFC3339, "2026-08-01T10:00:00Z")
+	if err != nil {
+		t.Fatalf("the sample timestamp must parse: %v", err)
+	}
+	wantSince := since.In(time.Local).Format("2006-01-02 15:04")
+	for _, want := range []string{"WORKFLOW", "commande", "CMD-1", "draft", wantSince} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "2026-08-01T10:00:00Z") {
+		t.Errorf("SINCE should render local-formatted, not the raw ISO string:\n%s", got)
 	}
 	if strings.Contains(got, "0001-01-01") {
 		t.Error("a null alertedAt must print empty, not a zero time")

@@ -1,9 +1,12 @@
 package io.lumnik.hub.webhook;
 
+import io.lumnik.identity.Require;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.event.EventRegistry;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.hub.tenant.TenantContextFilter;
+import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import jakarta.ws.rs.*;
@@ -32,18 +35,17 @@ public class IntegrationResource {
     // ── CRUD ────────────────────────────────────────────────────────────────
 
     @GET
+    @Transactional
     public List<IntegrationDto> list(@PathParam("tid") Long tid) {
         requireTenant(tid);
-        return repo.list("archivedAt IS NULL AND deletedAt IS NULL ORDER BY name")
-                   .stream().map(IntegrationDto::from).toList();
+        return repo.listLiveForTenant(tid).stream().map(IntegrationDto::from).toList();
     }
 
     @GET @Path("/{id}")
+    @Transactional
     public IntegrationDto one(@PathParam("tid") Long tid, @PathParam("id") Long id) {
         requireTenant(tid);
-        WebhookEndpoint e = repo.findById(id);
-        if (e == null) throw new NotFoundException();
-        return IntegrationDto.from(e);
+        return IntegrationDto.from(Require.owned(repo, id, tid, "Integration"));
     }
 
     @POST
@@ -69,8 +71,7 @@ public class IntegrationResource {
     public IntegrationDto update(@PathParam("tid") Long tid, @PathParam("id") Long id,
                                  IntegrationUpdate in) {
         requireTenant(tid);
-        WebhookEndpoint e = repo.findById(id);
-        if (e == null) throw new NotFoundException();
+        WebhookEndpoint e = Require.owned(repo, id, tid, "Integration");
         if (in.name()       != null) e.setName(in.name());
         if (in.targetUrl()  != null) e.setTargetUrl(in.targetUrl());
         if (in.platform()   != null) e.setPlatform(in.platform());
@@ -86,8 +87,7 @@ public class IntegrationResource {
     @Transactional
     public Response delete(@PathParam("tid") Long tid, @PathParam("id") Long id) {
         requireTenant(tid);
-        WebhookEndpoint e = repo.findById(id);
-        if (e == null) throw new NotFoundException();
+        WebhookEndpoint e = Require.owned(repo, id, tid, "Integration");
         e.softDelete();
         return Response.noContent().build();
     }
@@ -104,9 +104,14 @@ public class IntegrationResource {
                              TestRequest body) {
         requireTenant(tid);
         // /test DELIVERS — deliveryService.deliver below is a real POST — so it is a send door and
-        // obeys the same liveness rule as the retry and the two replays.
-        WebhookEndpoint e = repo.findLiveById(id);
-        if (e == null) throw new NotFoundException();
+        // obeys the same liveness rule as the retry and the two replays. Scoped to the tenant IN
+        // THE QUERY, not by findLiveById: the id is a path parameter, and a bare by-id lookup would
+        // let one tenant fire a test webhook at ANOTHER tenant's endpoint URL. And read INSIDE a
+        // transaction of its own: the tenant is bound with SET LOCAL, which is transaction-scoped,
+        // so this lookup answered 404 on every RLS-enforced hub until it was. Its own, and not the
+        // method's, so the delivery below — up to the HttpClient's timeouts — holds no connection.
+        WebhookEndpoint e = QuarkusTransaction.requiringNew().call(() -> repo.findLiveForTenant(id, tid));
+        if (e == null) throw new NotFoundException("endpoint " + id + " not found");
 
         var descriptor = events.find(body.eventType())
             .orElseThrow(() -> new BadRequestException("Unknown event type: " + body.eventType()));
@@ -133,10 +138,12 @@ public class IntegrationResource {
     }
 
     @GET @Path("/{id}/deliveries")
+    @Transactional
     public List<DeliveryRow> deliveries(@PathParam("tid") Long tid, @PathParam("id") Long id,
                                         @QueryParam("limit") @DefaultValue("50") int limit,
                                         @QueryParam("status") String status) {
         requireTenant(tid);
+        if (repo.countForTenant(id, tid) == 0) throw new NotFoundException("endpoint " + id + " not found");
         var list = "failed".equals(status)
             ? deliveryRepo.recentFailedForEndpoint(id, limit)
             : deliveryRepo.recentForEndpoint(id, limit);
@@ -157,10 +164,10 @@ public class IntegrationResource {
                                @PathParam("did") Long did) {
         requireTenant(tid);
         // A deleted integration receives nothing more, by any door.
-        WebhookEndpoint e = repo.findLiveById(id);
-        if (e == null) throw new NotFoundException();
-        WebhookDelivery d = deliveryRepo.findById(did);
-        if (d == null || !d.getEndpointId().equals(id)) throw new NotFoundException();
+        WebhookEndpoint e = repo.findLiveForTenant(id, tid);
+        if (e == null) throw new NotFoundException("endpoint " + id + " not found");
+        WebhookDelivery d = deliveryRepo.findForTenant(did, tid);
+        if (d == null || !d.getEndpointId().equals(id)) throw new NotFoundException("delivery " + did + " not found");
 
         var r = replayService.replay(e, d);
         return new TestResponse(r.ok(), r.httpStatus(), r.responseBody(), r.error(), r.durationMs());

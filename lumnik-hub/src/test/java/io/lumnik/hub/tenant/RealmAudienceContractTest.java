@@ -1,11 +1,9 @@
 package io.lumnik.hub.tenant;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -22,8 +20,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class RealmAudienceContractTest {
 
-  private static final ObjectMapper MAPPER = new ObjectMapper();
-
   @ParameterizedTest(name = "{0} — {1}")
   @CsvSource({
       "../infra/keycloak/lumnik-realm.json,        lm-cli",
@@ -31,14 +27,8 @@ class RealmAudienceContractTest {
       "../infra/keycloak/lumnik-realm-native.json, lm-cli",
       "../infra/keycloak/lumnik-realm-native.json, lumnik-spa",
   })
-  void hub_facing_client_carries_the_backend_audience(String realmFile, String clientId) throws Exception {
-    JsonNode realm = MAPPER.readTree(Files.readString(Path.of(realmFile)));
-
-    JsonNode client = null;
-    for (JsonNode c : realm.path("clients")) {
-      if (clientId.equals(c.path("clientId").asText())) client = c;
-    }
-    assertThat(client).as("client %s exists in %s", clientId, realmFile).isNotNull();
+  void hub_facing_client_carries_the_backend_audience(String realmFile, String clientId) {
+    JsonNode client = ShippedRealms.client(ShippedRealms.read(Path.of(realmFile)), clientId);
 
     boolean hasBackendAudience = false;
     for (JsonNode m : client.path("protocolMappers")) {
@@ -77,8 +67,8 @@ class RealmAudienceContractTest {
       "../infra/keycloak/lumnik-realm.json",
       "../infra/keycloak/lumnik-realm-native.json",
   })
-  void no_shipped_user_carries_a_static_password(String realmFile) throws Exception {
-    JsonNode realm = MAPPER.readTree(Files.readString(Path.of(realmFile)));
+  void no_shipped_user_carries_a_static_password(String realmFile) {
+    JsonNode realm = ShippedRealms.read(Path.of(realmFile));
     for (JsonNode user : realm.path("users")) {
       String name = user.path("username").asText();
       assertThat(user.path("credentials").isMissingNode() || user.path("credentials").isEmpty())

@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.mapping;
 
+import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.connector.mapping.MappingResolverImpl;
 import io.lumnik.hub.connector.mapping.MappingTemplateRegistry;
 import io.lumnik.hub.connector.mapping.spec.MappingSpec;
@@ -51,7 +52,7 @@ public class MappingAdminResource {
     long t = RequireTenant.current();
     if (raw) {
       String yaml = registry.rawYaml(id);
-      if (yaml == null) return Response.status(404).build();
+      if (yaml == null) return ApiErrors.notFound("mapping " + id + " not found");
       return Response.ok(Map.of("yaml", yaml)).build();
     }
     try {

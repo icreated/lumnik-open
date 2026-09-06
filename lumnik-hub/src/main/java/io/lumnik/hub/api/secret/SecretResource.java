@@ -47,12 +47,20 @@ public class SecretResource {
     // lm_integrator on /api/platform/* — stated here so the gate survives any filter refactor.
     @RequiresPermission("lm_integrator")
     @Produces(MediaType.APPLICATION_JSON)
+    // A READ needs the transaction as much as a write does, and for a reason a reader will not
+    // guess: TenantConnectionInterceptor binds the tenant with SET LOCAL app.current_tenant, and
+    // SET LOCAL is transaction-scoped. Without one it is discarded before the query, the policy's
+    // NULLIF(…, '')::bigint becomes NULL, and tenant_id = NULL matches nothing. This method
+    // answered "(no secrets)" on a hub whose table held them. SecretResourceRlsIT is the twin
+    // that can see it — the plain @QuarkusTest one cannot, its datasource owning the table.
+    @Transactional
     public List<SecretDto> list() {
         long tid = RequireTenant.current();
         return repo.listByTenant(tid).stream().map(SecretDto::from).toList();
     }
 
     @GET @Path("/{name}")
+    @Transactional   // same reason as list(): SET LOCAL needs a transaction to survive
     @RequiresPermission("lm_integrator")
     @Produces(MediaType.APPLICATION_JSON)
     public Response describe(@PathParam("name") String name) {

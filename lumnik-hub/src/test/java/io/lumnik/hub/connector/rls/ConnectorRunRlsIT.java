@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rls;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
@@ -74,7 +75,7 @@ class ConnectorRunRlsIT {
           name: rls-csv
           connector_type: csv-file
           tenant: 1
-          tags: [rls]
+          scopes: [rls]
         spec:
           transport:
             kind: local
@@ -84,7 +85,6 @@ class ConnectorRunRlsIT {
           after_process: none
           target:
             table_prefix: t_
-            tags: [rls]
         """.formatted(csv.toAbsolutePath());
 
     // Apply as tenant 1 — the same path `lm apply` uses; creates connector + endpoint.
@@ -94,7 +94,7 @@ class ConnectorRunRlsIT {
         EncoderConfig.encoderConfig().encodeContentTypeAs("application/yaml", ContentType.TEXT));
     connectorId = given()
         .config(yamlCfg)
-        .header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        .headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml")
         .body(manifest)
         .post("/api/platform/connectors/apply")
@@ -105,7 +105,7 @@ class ConnectorRunRlsIT {
     // Pre-fix this returned 404: engine.exists() read in system mode while the interceptor
     // skipped the GUC (finding lm-connector-run-rls-404).
     given()
-        .header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        .headers(TestIdentity.tenantAndUser(1))
         .post("/api/platform/connectors/" + connectorId + "/run")
         .then().statusCode(202);
 
@@ -121,10 +121,10 @@ class ConnectorRunRlsIT {
 
   @Test @Order(2)
   void tenant2_cannot_see_or_run_tenant1s_connector() {
-    given().header("X-Tenant-ID", "2").header("X-User-ID", "2")
+    given().headers(TestIdentity.tenantAndUser(2, 2))
         .get("/api/platform/connectors/" + connectorId)
         .then().statusCode(404);
-    given().header("X-Tenant-ID", "2").header("X-User-ID", "2")
+    given().headers(TestIdentity.tenantAndUser(2, 2))
         .post("/api/platform/connectors/" + connectorId + "/run")
         .then().statusCode(404);
     assertThat(countAs(2, "SELECT count(*) FROM connector.t_rls_csv"))
@@ -144,10 +144,10 @@ class ConnectorRunRlsIT {
   @Test @Order(4)
   void claimed_tenant_zero_is_not_a_sentinel_backdoor() {
     // A request CLAIMING tenant 0 must not be elevated to cross-tenant system access.
-    given().header("X-Tenant-ID", "0").header("X-User-ID", "0")
+    given().headers(TestIdentity.tenantAndUser(0, 0))
         .get("/api/platform/connectors/" + connectorId)
         .then().statusCode(404);
-    given().header("X-Tenant-ID", "0").header("X-User-ID", "0")
+    given().headers(TestIdentity.tenantAndUser(0, 0))
         .post("/api/platform/connectors/" + connectorId + "/run")
         .then().statusCode(404);
   }

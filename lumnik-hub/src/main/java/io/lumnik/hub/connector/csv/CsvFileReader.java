@@ -173,6 +173,7 @@ public class CsvFileReader {
     try (CSVParser parser = buildFormat(effective).parse(rdr)) {
       Set<String> nullSet = new HashSet<>(effective.nullValues());
       Map<String, String> originalToStripped = strippedHeaders(parser, effective.bomStrip());
+      int declaredColumns = parser.getHeaderNames().size();
       List<String> headers = List.copyOf(originalToStripped.values());
       Iterator<CSVRecord> it = parser.iterator();
       while (good < maxGood) {
@@ -198,7 +199,7 @@ public class CsvFileReader {
         }
         Map<String, Object> row;
         try {
-          row = toRow(rec, originalToStripped, nullSet, effective.bomStrip());
+          row = toRow(rec, originalToStripped, declaredColumns, nullSet, effective.bomStrip());
         } catch (IllegalArgumentException badColumns) {
           // Column-count mismatch: isolate this row, keep going.
           malformed.accept(new MalformedRecord(
@@ -312,8 +313,41 @@ public class CsvFileReader {
     return originalToStripped;
   }
 
+  /**
+   * The row, against the schema DECLARED for it — a header line, or the {@code columns} a
+   * headerless connector configures. Both paths land here, so this method says "declared" rather
+   * than "header" throughout, exactly as its refusal does when the operator reads it in the DLQ.
+   *
+   * <p>Both column-count directions end as an {@link IllegalArgumentException} the caller isolates
+   * into the DLQ — too FEW comes from Commons CSV itself (a declared index past the record's
+   * values), too MANY is refused here.
+   *
+   * <p>The extra-values guard is not decoration: without it this loop walks the DECLARED keys and
+   * never looks at what follows, so a third value on a two-column row was dropped without a trace
+   * — a row the run counted as written, with nothing in the DLQ to say a field had gone missing.
+   *
+   * <p>{@code declaredColumns} is the count of declared NAMES, not of {@code originalToStripped}
+   * entries: Commons CSV collapses a repeated name in its header MAP ({@code a,b,a} → 2 entries)
+   * while the records still carry all three values, so counting the map would quarantine every row
+   * of a legacy export that repeats a column name.
+   *
+   * <p><b>A repeated name is still lossy, and this guard does not pretend otherwise.</b>
+   * Counting names makes the guard right about WIDTH; it cannot make the OUTPUT whole, because a
+   * row is a {@code Map} and a map cannot hold the same key twice — {@code a,b,a} yields two
+   * entries with the last duplicate winning, so the first {@code a} value is dropped exactly as
+   * a surplus value used to be. The captured {@code headers} list inherits that collapse, which
+   * is why a resumed window declares fewer columns than the first one and can quarantine rows the
+   * first window accepted. Both predate this guard and need a decision it has no business making
+   * alone — rename the repeats, or refuse the file at apply time.
+   */
   private Map<String, Object> toRow(CSVRecord rec, Map<String, String> originalToStripped,
-                                    Set<String> nullSet, boolean bomStrip) {
+                                    int declaredColumns, Set<String> nullSet, boolean bomStrip) {
+    if (rec.size() > declaredColumns) {
+      // "are declared", not "the header declares": a headerless file declares its columns in the
+      // config, and this sentence is what the operator reads in `lm dlq get`.
+      throw new IllegalArgumentException("Record has " + rec.size()
+          + " values but only " + declaredColumns + " columns are declared");
+    }
     Map<String, Object> row = new LinkedHashMap<>(originalToStripped.size());
     for (var entry : originalToStripped.entrySet()) {
       String v = stripBom(rec.get(entry.getKey()), bomStrip);

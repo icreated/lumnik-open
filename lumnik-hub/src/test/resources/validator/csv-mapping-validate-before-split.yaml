@@ -3,7 +3,7 @@ kind: Connector
 metadata:
   name: nightly-export
   connector_type: csv-file
-  tags: [billing]
+  scopes: [billing]
 spec:
   transport:
     kind: local
@@ -17,5 +17,4 @@ spec:
           required: [name]
       - split-row:
           explode: tags
-  target:
-    tags: [billing]
+  target: {}

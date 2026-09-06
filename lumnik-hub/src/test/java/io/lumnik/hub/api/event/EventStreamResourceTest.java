@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.event;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.test.common.http.TestHTTPResource;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.Test;
@@ -26,8 +27,7 @@ class EventStreamResourceTest {
   @Test
   void sse_endpoint_responds_with_event_stream_content_type() throws Exception {
     HttpRequest request = HttpRequest.newBuilder(URI.create(streamUrl + "?topic=connector.run.*"))
-        .header("X-Tenant-Id", "1")
-        .header("X-User-Id", "test")
+        .headers(TestIdentity.TENANT_HEADER, "1", TestIdentity.USER_HEADER, "1")
         .GET()
         .build();
     HttpClient client = HttpClient.newHttpClient();

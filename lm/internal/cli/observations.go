@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/output"
@@ -11,14 +10,11 @@ import (
 
 var observationHeaders = []string{"WORKFLOW", "DOC", "STATE", "SINCE", "ALERTED"}
 
-// Raw timestamps on purpose: the CLI is the scriptable surface, the TUI is where the
-// age is humanized.
+// SINCE/ALERTED render like every other date column (output.HumanTime) — see outputRow's
+// comment: -o json/yaml already carry the full-precision timestamp untouched, so a raw ISO
+// string in the table bought no scriptability that -o json didn't already give.
 func observationRow(o client.Observation) []string {
-	alerted := ""
-	if o.AlertedAt != nil {
-		alerted = o.AlertedAt.Format(time.RFC3339)
-	}
-	return []string{o.Workflow, o.DocKey, o.State, o.Since.Format(time.RFC3339), alerted}
+	return []string{o.Workflow, o.DocKey, o.State, output.HumanTime(&o.Since), output.HumanTime(o.AlertedAt)}
 }
 
 func newObservationsCmd() *cobra.Command {

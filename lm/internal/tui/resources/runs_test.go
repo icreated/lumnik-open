@@ -30,6 +30,40 @@ func TestStartedLabel(t *testing.T) {
 	}
 }
 
+// The describe panel's started/finished lines render local, second precision — output.
+// HumanTimeSeconds, not the raw RFC3339 the hub sends. Expected value computed, not
+// hardcoded, so this does not depend on the machine running it being on any particular
+// timezone. The table's STARTED column already went through startedLabel (tested above);
+// this pins the describe panel, which used to disagree with it in the same file.
+func TestRunsDescribe_startedAndFinishedAreLocal(t *testing.T) {
+	started, err := time.Parse(time.RFC3339, "2026-09-03T13:43:24Z")
+	if err != nil {
+		t.Fatalf("the sample timestamp must parse: %v", err)
+	}
+	ended := started.Add(31 * time.Second)
+	wantStarted := "started:         " + started.In(time.Local).Format("2006-01-02 15:04:05")
+	wantFinished := "finished:        " + ended.In(time.Local).Format("2006-01-02 15:04:05")
+
+	r := &Runs{table: tview.NewTable(),
+		sort: style.NewColumnSort([]string{"CONNECTOR", "STATUS", "STARTED", "DURATION"})}
+	r.items = []types.Run{{ID: "r1", StartedAt: started, EndedAt: &ended}}
+	r.render()
+	r.table.Select(1, 0)
+	_, body, ok := r.SelectedDescribe()
+	if !ok {
+		t.Fatal("describe !ok")
+	}
+	if !strings.Contains(body, wantStarted) {
+		t.Errorf("describe body missing %q:\n%s", wantStarted, body)
+	}
+	if !strings.Contains(body, wantFinished) {
+		t.Errorf("describe body missing %q:\n%s", wantFinished, body)
+	}
+	if strings.Contains(body, "2026-09-03T13:43:24Z") {
+		t.Errorf("describe body should render local-formatted, not the raw ISO string:\n%s", body)
+	}
+}
+
 // The RECORDS column becomes the full in/out/skip triple — SKIPPED joins the CLI
 // table here too, in the TUI's same compact idiom.
 func TestRunsRender_recordsCellShowsInOutSkip(t *testing.T) {

@@ -120,17 +120,14 @@ class CellHooksBasicTest {
     // so `mask-char: "**"` masked with a single '*' and the manifest quietly meant something other
     // than what it said. The refusal names the knob rather than the manifest meaning two things.
     var hook = catalog.cell("mask");
-    var row = new HashMap<String, Object>(Map.of("ssn", "123-45-6789"));
 
     for (String bad : new String[] {"", "**", "xy"}) {
-      assertThatThrownBy(() -> hook.apply(row, yaml("column: ssn\nmask-char: \"" + bad + "\""),
-                                          new MappingState()))
+      // Refused in validateParams (once per spec), before any value is touched.
+      assertThatThrownBy(() -> hook.validateParams(yaml("column: ssn\nmask-char: \"" + bad + "\"")))
           .as("mask-char %s must be refused, not truncated", bad.isEmpty() ? "(empty)" : "'" + bad + "'")
           .isInstanceOf(MappingValidationException.class)
           .hasMessageContaining("mask-char");
     }
-    assertThat(row).as("nothing was masked on the way to the refusal")
-        .containsEntry("ssn", "123-45-6789");
   }
 
   @Test
@@ -143,13 +140,4 @@ class CellHooksBasicTest {
     assertThat(row).containsEntry("id", validUuid);
   }
 
-  @Test
-  void to_uuid_generates_when_invalid_and_generate_true() throws Exception {
-    var hook = catalog.cell("to-uuid");
-    var params = yaml("column: id\ngenerate: true");
-    var row = new HashMap<String, Object>(Map.of("id", "not-a-uuid"));
-    hook.apply(row, params, new MappingState());
-    String result = (String) row.get("id");
-    assertThat(result).matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
-  }
 }

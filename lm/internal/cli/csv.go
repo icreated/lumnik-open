@@ -20,8 +20,8 @@ func newCsvCmd() *cobra.Command {
 }
 
 func newCsvIngestCmd() *cobra.Command {
-	var name, scope string
-	var tags []string
+	var name string
+	var scopes []string
 	var limit int
 
 	// Remote transport flags
@@ -43,9 +43,14 @@ func newCsvIngestCmd() *cobra.Command {
 				return err
 			}
 			arg := args[0]
-			scopeVal := scope
-			if scopeVal == "" {
-				scopeVal = "system"
+			// --scope is repeatable: the first goes in the hub's `scope` form field (it is the one
+			// the rows carry), the rest ride `tags`. Same wire as before, one flag instead of two.
+			// An empty scope is the hub's to default (CsvIngestService.connectorTags → "system"),
+			// not ours to guess.
+			var scopeVal string
+			var tags []string
+			if len(scopes) > 0 {
+				scopeVal, tags = scopes[0], scopes[1:]
 			}
 
 			if strings.HasPrefix(arg, "sftp://") || strings.HasPrefix(arg, "s3://") {
@@ -69,10 +74,10 @@ func newCsvIngestCmd() *cobra.Command {
 			}
 			defer f.Close()
 			result, err := cli.CsvIngest(f, arg, client.CsvIngestOpts{
-				Name:       name,
-				Scope:      scopeVal,
-				Tags:       tags,
-				Limit:      limit,
+				Name:  name,
+				Scope: scopeVal,
+				Tags:  tags,
+				Limit: limit,
 			})
 			if err != nil {
 				return err
@@ -83,8 +88,7 @@ func newCsvIngestCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "connector name; a globbed sftp/s3 source must match a single file (default = filename basename)")
-	cmd.Flags().StringVar(&scope, "scope", "system", "scope tag stamped on the ingested rows")
-	cmd.Flags().StringSliceVar(&tags, "tag", nil, "additional tags (repeatable)")
+	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "métier scope(s) the ingested table is askable in (repeatable; the first is the one the rows carry; default: system)")
 	cmd.Flags().IntVar(&limit, "limit", -1, "max rows (default: all)")
 
 	// SFTP flags
@@ -108,7 +112,11 @@ func newCsvIngestCmd() *cobra.Command {
 }
 
 func printCsvIngestSummary(w io.Writer, r *client.CsvIngestResult) {
-	fmt.Fprintf(w, "Ingested %s into %s\n", r.SourceFile, r.TableName)
+	if r.Refreshed {
+		fmt.Fprintf(w, "Re-ingested %s into %s — one more breath (rows dedup by key)\n", r.SourceFile, r.TableName)
+	} else {
+		fmt.Fprintf(w, "Ingested %s into %s\n", r.SourceFile, r.TableName)
+	}
 	fmt.Fprintf(w, "  • rows written:    %d\n", r.RowsWritten)
 	fmt.Fprintf(w, "  • promoted cols:   %d\n", len(r.PromoteColumns))
 	for _, pc := range r.PromoteColumns {
@@ -120,10 +128,17 @@ func printCsvIngestSummary(w io.Writer, r *client.CsvIngestResult) {
 			fmt.Fprintf(w, "      - %s\n", msg)
 		}
 	}
-	// Not "Ready to chat": a one-shot records no connector run and indexes no corpus, so the
-	// scope holds no schema card and `lm ask` — which is always analytic — refuses on its first
-	// line (AskToSqlAgent: store.load(...).orElseThrow(NoSchemaException)). Proven by execution
-	// in CsvIngestServiceTest. Say what exists instead.
+	// The hub reports which scopes the ingest made askable (spec 2026-09-02: schema card +
+	// descriptor chunk ride the ingest itself) AND whether this build carries the chat door.
+	// Both must be true before promising: an older hub reports no scopes, and a doorless
+	// build keeps the plain summary — the schema card it builds silently is our accounting,
+	// not the reader's, and a paid feature's absence is not announced (the GraphQL rule).
+	if len(r.AskableScopes) > 0 && r.ChatAvailable {
+		scope := r.AskableScopes[0]
+		fmt.Fprintf(w, "\n  • askable:         scope '%s' — try: lm ask --scope %s \"how many rows are in %s?\"\n", scope, scope, r.TableName)
+		fmt.Fprintf(w, "A dormant connector is registered — see `lm connector list`.\n")
+		return
+	}
 	fmt.Fprintf(w, "\nA one-shot: no run recorded, nothing indexed for chat.\n")
 	fmt.Fprintf(w, "The rows are in %s, and a dormant connector is registered — see `lm connector list`.\n", r.TableName)
 }

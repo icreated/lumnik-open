@@ -1,5 +1,6 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.quarkus.agroal.DataSource;
@@ -67,14 +68,14 @@ class EntityFusionRlsIT {
       st.execute("INSERT INTO connector.t_rlsfuse_erp VALUES (1,'C-1','Alice-T1'), (2,'C-1','Zoe-T2')");
       st.execute("INSERT INTO connector.t_rlsfuse_csv VALUES (1,'C-1','alice@t1'), (2,'C-1','zoe@t2')");
     }
-    given().config(YAML_CFG).header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().config(YAML_CFG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
   }
 
   @Test
   void tenant1_sees_only_its_fused_row() {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/rlsfusecustomer")
         .then().statusCode(200)
         .body("size()", equalTo(1))
@@ -85,7 +86,7 @@ class EntityFusionRlsIT {
 
   @Test
   void tenant2_sees_only_its_fused_row() {
-    given().header("X-Tenant-ID", "2").header("X-User-ID", "2")
+    given().headers(TestIdentity.tenantAndUser(2, 2))
         .get("/api/entities/rlsfusecustomer")
         .then().statusCode(200)
         .body("size()", equalTo(1))

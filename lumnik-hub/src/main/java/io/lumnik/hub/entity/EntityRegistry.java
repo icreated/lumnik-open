@@ -51,8 +51,13 @@ public class EntityRegistry {
     } catch (Exception e) {
       throw new RuntimeException("EntityRegistry.loadFromDb: " + e, e);
     }
-    byName.clear();
+    // Refresh WITHOUT ever publishing an empty map. clear()+putAll() exposes a transient
+    // "registry is empty" window to concurrent readers — harmless at @PostConstruct boot, but
+    // findReloadingIfMissing now runs this on the request path, where that window is a false 404 /
+    // misclassification. Add-or-update every current row first, then prune the keys the DB no longer
+    // has: at no instant is a live entity absent from the map.
     byName.putAll(temp);
+    byName.keySet().retainAll(temp.keySet());
   }
 
   public void put(EntityManifest m) {
@@ -61,6 +66,26 @@ public class EntityRegistry {
 
   public EntityManifest find(String name) {
     return name == null ? null : byName.get(name.toLowerCase(Locale.ROOT));
+  }
+
+  /**
+   * {@link #find} that re-reads the global manifests from the DB once on a cache miss, then retries.
+   * {@code entity_manifest} is global, so a second hub instance's cold/stale map must not be trusted
+   * to say an entity does not exist — every decision keyed on existence (delete's 404, the
+   * connector-delete 409's entity-vs-foreign wording) goes through here to stay drift-free.
+   */
+  public EntityManifest findReloadingIfMissing(String name) {
+    EntityManifest m = find(name);
+    if (m == null) {
+      loadFromDb();
+      m = find(name);
+    }
+    return m;
+  }
+
+  /** Drop a manifest from the in-memory map (its row is removed from the DB by the compiler). */
+  public void remove(String name) {
+    if (name != null) byName.remove(name.toLowerCase(Locale.ROOT));
   }
 
   /** Every registered manifest, sorted by name — deterministic iteration for the aggregate reads. */

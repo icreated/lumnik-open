@@ -14,15 +14,21 @@ import java.util.Map;
 public class TruncateHook implements CellHook {
 
   @Override
-  public void apply(Map<String, Object> row, JsonNode params, MappingState s) {
-    String col = params.path("column").asText();
+  public void validateParams(JsonNode params) {
+    // substring(0, -1) throws StringIndexOutOfBounds, which reaches the integrator as a stack
+    // trace naming neither the hook nor the knob. Refuse in the house's typed way instead — once,
+    // not per row: 'length' is a param, invariant across the chunk.
     int length = params.path("length").asInt(Integer.MAX_VALUE);
     if (length < 0) {
-      // substring(0, -1) throws StringIndexOutOfBounds, which reaches the integrator as a stack
-      // trace naming neither the hook nor the knob. Refuse in the house's typed way instead.
       throw new MappingValidationException(
           "truncate hook: 'length' must be >= 0 (got " + length + ")");
     }
+  }
+
+  @Override
+  public void apply(Map<String, Object> row, JsonNode params, MappingState s) {
+    String col = params.path("column").asText();
+    int length = params.path("length").asInt(Integer.MAX_VALUE);
     Object v = row.get(col);
     if (v == null) return;
     String str = v.toString();

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.mapping.MappingState;
 import io.lumnik.hub.connector.mapping.MappingValidationException;
 import io.lumnik.hub.connector.mapping.hooks.CellHook;
+import io.lumnik.hub.connector.mapping.hooks.RegexParams;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import jakarta.enterprise.context.ApplicationScoped;
 
@@ -15,9 +16,21 @@ import java.util.regex.PatternSyntaxException;
 public class RegexReplaceHook implements CellHook {
 
   @Override
+  public void validateParams(JsonNode params) {
+    // The pattern's SHAPE and SYNTAX are knowable from the manifest — refuse a container node and a
+    // bad regex once per spec, via the shared helpers. (The replacement's group references can only
+    // fail against a value that MATCHES, so that check stays in apply.) An empty/absent pattern is a
+    // no-op there, so skip it here too.
+    String pat = RegexParams.patternText("regex-replace", "pattern", params.path("pattern"));
+    if (!pat.isEmpty()) RegexParams.compileOrRefuse("regex-replace", "pattern", pat);
+  }
+
+  @Override
   public void apply(Map<String, Object> row, JsonNode params, MappingState s) {
     String col = params.path("column").asText();
-    String pat = params.path("pattern").asText();
+    // Read the pattern the same way validateParams did: a bare `pattern:` (null) is absent, not the
+    // literal "null" that asText() would hand back.
+    String pat = RegexParams.patternText("regex-replace", "pattern", params.path("pattern"));
     String repl = params.path("replacement").asText("");
     Object v = row.get(col);
     if (v == null || pat.isEmpty()) return;

@@ -259,19 +259,14 @@ class CsvIngestServiceTest {
 
 
     /**
-     * After a one-shot the CLI printed {@code Ready to chat: lm ask "…" --scope <scope>}.
-     * `lm ask` hardcodes {@code mode: "analytic"}, and AskToSqlAgent's very first act is
-     * {@code store.load(tenant, scope).orElseThrow(NoSchemaException::new)} — before any model is
-     * touched. Cards are written only by DiscoveryService.rediscover, whose callers are a completed
-     * connector run, `lm entity apply`, or a manual POST. Since C4/P18 PR1 HybridJsonbWriter
-     * ATTEMPTS to register the {@code ext.*} table — but on the one-shot path the write runs
-     * inside the still-uncommitted transaction that creates the connector row, so the registry
-     * FK (admin DS, outside that tx) refuses it and the fail-soft guard skips registration
-     * (see registerIfNeeded). No registry row, no run, no rediscover: the scope holds no card.
-     * This pins the real behaviour so the promise cannot come back.
+     * The day the old guardian foretold: it pinned "the scope holds no card — if this ever
+     * passes, the ask CAN answer and the CLI may promise it again". Spec 2026-09-02 made it
+     * true on purpose: after the ingest COMMITS, the one-shot upserts its registry row and
+     * rediscoveres its own scopes, so the card exists and the CLI's promise is honest.
+     * The inverse pin, same rigor: if this fails, the WOW silently died.
      */
     @Test
-    void one_shot_leaves_its_scope_with_no_schema_card_so_the_ask_cannot_answer() throws Exception {
+    void one_shot_leaves_its_scope_WITH_a_schema_card_so_the_ask_can_answer() throws Exception {
         Path csv = Files.createTempFile("test_readytochat_", ".csv");
         Files.writeString(csv, "id,email\n1,alice@x.io\n2,bob@x.io\n");
 
@@ -297,9 +292,9 @@ class CsvIngestServiceTest {
         assertEquals(2, result.rowsWritten(), "the ingest itself must have worked");
 
         TenantContext.callAsSystem(() -> {
-            assertTrue(schemaCards.load(1L, scope).isEmpty(),
-                () -> "the one-shot left a schema card for " + scope
-                    + " — if this ever passes, the ask CAN answer and the CLI may promise it again");
+            assertTrue(schemaCards.load(1L, scope).isPresent(),
+                () -> "the committed one-shot left NO schema card for " + scope
+                    + " — the one-command askable table (spec 2026-09-02) silently died");
             return null;
         });
 

@@ -132,7 +132,7 @@ class JdbcDumpSpecValidationTest {
 
     private static Map<String, Object> baseConfig(String name) {
         Map<String, Object> cfg = new HashMap<>(Map.of(
-            "url", "jdbc:postgresql://localhost:5432/piscine",
+            "url", "jdbc:postgresql://localhost:5432/legacy_erp",
             "user", "legacy_erp",
             "schema", "legacy_erp",
             "mode", "full",

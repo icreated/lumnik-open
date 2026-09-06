@@ -1,5 +1,6 @@
 package io.lumnik.identity;
 
+import io.lumnik.testkit.sources.SourceTree;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -30,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class UrlTenantReconciliationInventoryTest {
 
-  private static final Path MAIN = resolveMain();
+  private static final SourceTree TREE = SourceTree.of("lumnik-identity", "io/lumnik/identity");
 
   /** The call every such resource must make, on every path that reaches a tenanted row. */
   private static final String RECONCILIATION = "Require.callerOwnsTenant(";
@@ -41,22 +42,13 @@ class UrlTenantReconciliationInventoryTest {
    */
   private static final Map<String, String> EXEMPT = Map.of();
 
-  private static Path resolveMain() {
-    Path fromModule = Path.of("src/main/java/io/lumnik/identity");
-    Path fromReactor = Path.of("lumnik-identity/src/main/java/io/lumnik/identity");
-    if (Files.isDirectory(fromModule)) return fromModule;
-    if (Files.isDirectory(fromReactor)) return fromReactor;
-    throw new IllegalStateException("cannot locate the identity sources from "
-        + Path.of("").toAbsolutePath() + " — this inventory cannot police what it cannot find");
-  }
-
   @Test
   void everyResourceWhoseUrlNamesATenantReconcilesItWithTheCallers() throws IOException {
     Map<String, String> unreconciled = new LinkedHashMap<>();
     List<String> seen = new ArrayList<>();
 
     for (Path p : resources()) {
-      String code = code(Files.readString(p));
+      String code = SourceTree.code(Files.readString(p));
       String path = pathOf(code);
       if (!path.contains("{tenantId}")) continue;   // not on the axis
 
@@ -81,7 +73,7 @@ class UrlTenantReconciliationInventoryTest {
     for (Map.Entry<String, String> e : EXEMPT.entrySet()) {
       Path p = find(e.getKey());
       if (p == null) { stale.add(e.getKey() + " — no such resource any more"); continue; }
-      if (!pathOf(code(Files.readString(p))).contains("{tenantId}")) {
+      if (!pathOf(SourceTree.code(Files.readString(p))).contains("{tenantId}")) {
         stale.add(e.getKey() + " — its URL no longer names a tenant, so the exemption says nothing");
       }
       if (e.getValue().isBlank()) stale.add(e.getKey() + " — exempted without a reason");
@@ -94,11 +86,11 @@ class UrlTenantReconciliationInventoryTest {
 
   @Test
   void aMentionInACommentOrAnImportIsNotTheCall() {
-    assertFalse(code("import io.lumnik.identity.Require;\nclass R {}").contains(RECONCILIATION),
+    assertFalse(SourceTree.code("import io.lumnik.identity.Require;\nclass R {}").contains(RECONCILIATION),
         "an import must not satisfy the rule");
-    assertFalse(code("class R { /* Require.callerOwnsTenant( is not needed here */ }")
+    assertFalse(SourceTree.code("class R { /* Require.callerOwnsTenant( is not needed here */ }")
         .contains(RECONCILIATION), "a comment explaining the absence is not the call");
-    assertTrue(code("class R { void f(Long t) { Require.callerOwnsTenant(t); } }")
+    assertTrue(SourceTree.code("class R { void f(Long t) { Require.callerOwnsTenant(t); } }")
         .contains(RECONCILIATION), "a real call is");
   }
 
@@ -127,23 +119,11 @@ class UrlTenantReconciliationInventoryTest {
   }
 
   private static List<Path> resources() throws IOException {
-    try (Stream<Path> files = Files.walk(MAIN)) {
-      return files.filter(f -> f.getFileName().toString().endsWith("Resource.java")).sorted().toList();
-    }
+    return TREE.javaFiles("Resource.java");
   }
 
   private static Path find(String fileName) throws IOException {
-    try (Stream<Path> files = Files.walk(MAIN)) {
-      return files.filter(f -> f.getFileName().toString().equals(fileName)).findFirst().orElse(null);
-    }
-  }
-
-  /** Comments and imports removed: a mention is not a call, and a commented-out @Path is not a URL. */
-  private static String code(String javaSource) {
-    return javaSource
-        .replaceAll("(?s)/\\*.*?\\*/", " ")
-        .replaceAll("(?m)//[^\n]*", " ")
-        .replaceAll("(?m)^\\s*import\\s+[^;]+;", " ");
+    return TREE.find(fileName).orElse(null);
   }
 
   /**

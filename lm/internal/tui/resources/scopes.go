@@ -2,10 +2,10 @@ package resources
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/icreated/lumnik-open/lm/internal/client"
+	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/icreated/lumnik-open/lm/internal/tui/style"
 	"github.com/rivo/tview"
 )
@@ -59,19 +59,8 @@ func (s *Scopes) render() {
 		s.table.SetCell(row, 0, dataCell(sc.Scope))
 		s.table.SetCell(row, 1, tview.NewTableCell(fmt.Sprintf("%d", sc.Connectors)))
 		s.table.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("%d", sc.Chunks)))
-		s.table.SetCell(row, 3, dataCell(formatTime(sc.LastIndexed)))
+		s.table.SetCell(row, 3, dataCell(output.HumanTimeStr(sc.LastIndexed)))
 	}
-}
-
-func formatTime(ts string) string {
-	if ts == "" {
-		return ""
-	}
-	t, err := time.Parse(time.RFC3339, ts)
-	if err != nil {
-		return ts
-	}
-	return t.Format("2006-01-02 15:04")
 }
 
 func (s *Scopes) handleKey(ev *tcell.EventKey) *tcell.EventKey {
@@ -99,7 +88,7 @@ func (s *Scopes) SelectedDescribe() (string, string, bool) {
 	sc := s.items[row-1]
 	esc := tview.Escape
 	body := fmt.Sprintf("scope:      %s\nconnectors: %d\nchunks:     %d\nlast:       %s",
-		esc(sc.Scope), sc.Connectors, sc.Chunks, esc(sc.LastIndexed))
+		esc(sc.Scope), sc.Connectors, sc.Chunks, esc(output.HumanTimeStr(sc.LastIndexed)))
 	return sc.Scope, body, true
 }
 func (s *Scopes) OnSelectionChange(cb func()) { s.onSelect = cb }

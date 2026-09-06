@@ -3,7 +3,7 @@ kind: Connector
 metadata:
   name: bad-jdbc
   connector_type: jdbc-generic
-  tags: [erp]
+  scopes: [erp]
 spec:
   connection:
     url: jdbc:postgresql://db.acme.io:5432/billing
@@ -15,5 +15,4 @@ spec:
         mode: full
         pk_columns: [id]
         chunk_size: 50000
-  target:
-    tags: [erp]
+  target: {}

@@ -3,6 +3,7 @@ kind: Connector
 metadata:
   name: stripe-prod
   connector_type: rest-generic
+  scopes: [crm, customers]
 spec:
   base_url: https://api.stripe.com
   auth:
@@ -23,4 +24,3 @@ spec:
         kind: hybrid
         table: stripe_customers
         unique_key: $.id
-        tags: [crm, customers]

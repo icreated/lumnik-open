@@ -7,6 +7,118 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.6.2 — 2026-09-07
+
+The same tree as upstream v1.6.0 for everything that ships here, published under the next free
+number: this edition's release proofs refused v1.6.0 and v1.6.1, each time on one upstream test
+that could only run in the monorepo. Both tests are fixed; nothing that ships here changed. Read
+the v1.6.0 entry below for what is new.
+
+## v1.6.0 — 2026-09-07
+
+Six days of using the product on a deployed stack, sixty-six fixes upstream. Two migrations run
+at startup (identity V16–V18); one manifest field changes name — read **Changed** first. The
+chat surface is a closed module and its changes are not listed here.
+
+### Changed — read before upgrading
+- **A connector's métier scope is declared in `metadata.scopes`.** The two older fields,
+  `metadata.tags` and `spec.target.tags`, are refused at `lm apply` with the line to paste in
+  their place. Rename the field; nothing else in the manifest moves. `lm connector tag` /
+  `retag` became `lm connector scope ls|set|add|rm|sync`; `lm csv ingest --tag` is gone and
+  `--scope` may be repeated. Stored data, JSON fields and API routes are unchanged, so an older
+  `lm` keeps working against this hub — but a `scopes:` manifest applied to an **older hub** is
+  accepted and silently unscoped. Upgrade the hub before the manifests.
+- `lm run get`'s cell-error line now reads *"N cell(s) a hook could not process — the rows were
+  still written"*: a hook may leave a value intact and still count it (see `fix-mojibake` below).
+- `to-uuid` gains `on-invalid: null | generate | keep` for a cell that holds something
+  unreadable. The default is `null`; a manifest that relied on `generate: true` minting an id
+  over junk like `N/A` must now say `on-invalid: generate` — no invented identifier unless asked
+  for by name.
+
+### Security
+- **The caller's identity comes from the token, never from a request header.** Five hub doors
+  read an `X-User-Id` header the caller could write: one let any user read and change another
+  user's default scope; manual DLQ discards and manual runs were recorded in the audit trail
+  against user 0. The header is no longer read anywhere.
+- **The event stream (`/api/platform/events/stream`, the TUI's live feed) returned every
+  tenant's events to any integrator** — run errors, secret names, business row values. It is now
+  bound to the caller's tenant.
+- A user bound to some scopes could apply a connector manifest declaring scopes they do not hold;
+  the connector door now refuses with the same `403 scope not granted` as the entity door.
+
+### Fixed
+- **Some reads answered empty or 404 under row-level security** because the tenant binding is
+  transaction-scoped and those doors read outside one: `lm secret list` printed `(no secrets)`
+  over a stored secret, `lm secret describe` 404'd, `lm integration test` answered 404 on every
+  hub, org create/update failed every parent lookup, and the superadmin's tenant list counted
+  0 orgs / 0 users for every other tenant. All corrected; a build-time check refuses any new
+  door of that shape.
+- **A fresh install had no user row for the bundled `integrator`**, so `lm scope set` answered
+  404 and every door that loads the user behaved as if nobody were there. The install now seeds
+  it (V16), seeds tenant 11 with `hubadmin` — which had never been able to log in (V17) — and the
+  PWA's client emits the same `user_id` claim as `lm`, so both reach one hub row.
+- **A `kotlin` cell hook could exhaust the hub's memory** on a large file: the script engine
+  retained a generated class per evaluated row. Scripts are now compiled once and evaluated per
+  row — 2 000 evaluations went from 42.8 s to 12 ms with no retained memory. Same for
+  `after_process: custom_kotlin` file hooks.
+- **CSV rows and hooks no longer lose values silently:**
+  - a row with more values than the header declares is quarantined to the DLQ with its raw
+    values, not trimmed and counted as written;
+  - `split` keeps trailing empty parts, creates every declared column (`null` when a part is
+    missing) and counts a value whose part count differs from `into`;
+  - `fix-mojibake` declines a cell it cannot repair losslessly (CJK, `€`, emoji beside
+    double-encoded Latin text) and leaves it as it was, counted — it used to write `?`; it also
+    repairs past the first line of a multi-line cell;
+  - `lower` / `upper` / `titlecase` touch text cells only (a date, an amount or bytes pass
+    through untouched, so the column keeps its type) and no longer follow the server's locale;
+    the REST `TO_LOWER` / `TO_UPPER` promotes likewise;
+  - `regex-extract` refuses a bad `groups` key at apply time instead of silently skipping it — a
+    negative key used to abort the whole chunk — and a non-match still creates the declared
+    columns as `null`, counted;
+  - `map-columns` refuses the four bad rename shapes at the csv `lm apply` door and at the flat
+    `lm connector apply` door, as the jdbc door already did; a renamed column whose value is
+    `null` keeps its place instead of vanishing from the table;
+  - a `lookup` whose `table:` is not a map and a `filter-where` with a bad regex are refused with
+    the hook and knob named, instead of a silent no-op or a stack trace;
+  - a malformed hook entry (`- [a, b]`) is refused in a csv mapping as it already was in a jdbc
+    one, instead of being dropped.
+- **Deleting and re-creating:** `lm connector delete` on a table feeding a fused entity answered
+  500 — it now refuses with a 409 naming the entity and the gesture, and `lm entity delete
+  <name>` exists to perform it; re-ingesting a deleted one-shot under the same name 500'd; a
+  one-shot's dormant endpoint was missing from `GET …/endpoints` and `lm endpoint purge` on it
+  500'd.
+- **Re-ingesting under an existing name** is now a gesture, not an error: `lm csv ingest` on a
+  name that belongs to an earlier one-shot re-reads the file into the same table (rows dedup by
+  the stored key, new columns added), and the result line says so. A name that belongs to a
+  configured connector still refuses with a 409 and the two ways out.
+- `lm connector apply` given a CSV, or a `kind:` manifest, now says which it is and names the
+  command that takes it (`lm csv ingest` / `lm apply`) instead of a YAML unmarshal error or an
+  anonymous 500. The CLI reference no longer calls the two apply doors the same upsert.
+- Every date column in `lm` tables and the TUI renders in your local timezone (13 sites);
+  `lm connector list` gains a LAST RUN column so a stale `Failed` carries its date.
+- `lm dlq list --run` and `--connector` accept the 8-character run prefix and the connector
+  name; `lm run list` is newest-first; `lm connector pause` / `resume` print what they did;
+  `lm dlq list` shows the connector's name next to its id.
+- Every hub 404 carries a body naming what was missing (`lm` used to print "no details from the
+  server"); an unmatched route answers JSON instead of an HTML page.
+- `deploy/selfhost/up.sh`: the bootstrap superuser named in `.env` is verified against the
+  database volume on every run; a regenerated `.env` claiming a role the volume does not hold is
+  corrected instead of believed.
+- The TUI's live event tail could skip events committed in the same instant as one already
+  shown; it now cursors by id.
+- A one-shot's `ext.*` table grouped its grants so that one missing role silently cost the
+  read-only role both its `SELECT` and its schema `USAGE`; each grant now stands alone.
+
+### Added
+- `lm entity delete <name>` · `lm connector scope …` · `make -C lm install` (build and install
+  `lm` into `~/.local/bin` in one step) · `to-uuid: on-invalid` · a bad hook parameter is refused
+  before the first row, even on an empty chunk.
+- Docs: real `lm` screens on the integrator pages (login, apply, run, DLQ, secrets, sources,
+  views…); *Transformers* rewritten with every hook's input → output table and one real manifest
+  running all of them (`docs/connectors/csv/60-s3-every-transformer.yaml`); *CSV & files* with
+  every transport's screens and the drop-folder cursor traced run by run; the from-source upgrade
+  loop and its trap (`docs/operations/upgrade.md`).
+
 ## v1.5.3 — 2026-09-01
 
 An evening of real first-install testing; every catch fixed the same day.

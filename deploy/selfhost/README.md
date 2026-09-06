@@ -106,10 +106,11 @@ Runbook: [deploy/tls/README.md](../tls/README.md) — also summarized on the
 ## Postgres bootstrap user
 
 Fresh installs bootstrap Postgres as superuser **`lumnik`**, and `up.sh` records that
-name in `.env`. If `.env` does not say (an install created by an older `up.sh`), the
-script asks the running database which name the volume was initialized with — `lumnik`,
-or the legacy `adempiere` on pre-rename volumes — and records the answer, so healthcheck,
-backup and restore keep working. No action needed either way.
+name in `.env`. The data volume is the authority: on every run the script verifies the
+recorded name against the running database, and when `.env` is silent (older installs)
+or wrong (a regenerated `.env` over an existing volume), it asks the database which name
+the volume was initialized with — `lumnik`, or the legacy `adempiere` on pre-rename
+volumes — and corrects `.env`. No action needed either way.
 
 ## Backup & restore
 

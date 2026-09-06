@@ -27,6 +27,7 @@ public class RoleResource {
 
     @GET
     @Operation(summary = "List active roles for a tenant")
+    @Transactional
     public List<RoleDto> listAll(@PathParam("tenantId") Long tenantId) {
         requireTenant(tenantId);
         return roles.listAll().stream().map(RoleDto::from).toList();
@@ -35,6 +36,7 @@ public class RoleResource {
     @GET
     @Path("/{id}")
     @Operation(summary = "Get role by ID")
+    @Transactional
     public RoleDto findById(@PathParam("tenantId") Long tenantId, @PathParam("id") Long id) {
         return RoleDto.from(requireRole(tenantId, id));
     }

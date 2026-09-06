@@ -211,7 +211,10 @@ per-install password for each through the Keycloak admin API once the stack is h
 Re-running `up.sh` heals older installs that still carry a historical default.
 
 - `integrator` — tenant 1, password in `.env` as `INTEGRATOR_PASSWORD`; change it before anything real.
-- `hubadmin` — admin, tenant 11, password in `.env` as `HUBADMIN_PASSWORD`.
+- `hubadmin` — superadmin, tenant 11 (the tenant the bundled realm has always given it),
+  password in `.env` as `HUBADMIN_PASSWORD`.
+
+Both accounts and both tenants are seeded by the hub at install.
 
 (`--oidc-client-id` defaults to `lm-cli`, the bundled realm's client — set it only against
 your own IdP.) After `lm login`, every `lm` call is Bearer-authenticated; verify with the

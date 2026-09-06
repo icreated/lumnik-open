@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.connector.handler;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.config.EncoderConfig;
 import io.restassured.config.RestAssuredConfig;
@@ -24,7 +25,7 @@ class CsvFileConnectorApplyHandlerIT {
               name: csv-apply-%d
               connector_type: csv-file
               tenant: 1
-              tags: [crm]
+              scopes: [crm, billing]
             spec:
               transport:
                 kind: sftp
@@ -36,13 +37,11 @@ class CsvFileConnectorApplyHandlerIT {
                 has_header: true
               schedule: "0 6 * * *"
               after_process: archive
-              target:
-                tags: [crm, billing]
+              target: {}
             """.formatted(System.nanoTime());
 
         String connectorId = given().config(YAML_CFG)
-            .header("X-Tenant-Id", "1")
-            .header("X-User-Id", "1")
+            .headers(TestIdentity.tenantAndUser(1))
             .contentType("application/yaml")
             .body(yaml)
         .when().post("/api/platform/connectors/apply")
@@ -57,8 +56,7 @@ class CsvFileConnectorApplyHandlerIT {
         // scheduler selects on it (WHERE c.schedule IS NOT NULL); config-only storage
         // meant an applied manifest never scheduled a single run.
         given()
-            .header("X-Tenant-Id", "1")
-            .header("X-User-Id", "1")
+            .headers(TestIdentity.tenantAndUser(1))
         .when().get("/api/platform/connectors/" + connectorId)
         .then()
             .statusCode(200)

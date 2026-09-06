@@ -23,7 +23,7 @@ class JdbcConnectorTypeDialectTest {
 
     private static Map<String, Object> base() {
         return new HashMap<>(Map.of(
-            "url", "jdbc:postgresql://localhost:5432/piscine",
+            "url", "jdbc:postgresql://localhost:5432/legacy_erp",
             "user", "legacy_erp",
             "schema", "legacy_erp",
             "name", "c_order",

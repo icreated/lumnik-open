@@ -9,6 +9,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/icreated/lumnik-open/lm/internal/client"
+	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/icreated/lumnik-open/lm/internal/tui/style"
 	"github.com/rivo/tview"
 )
@@ -133,14 +134,13 @@ func (o *Observations) SelectedDescribe() (string, string, bool) {
 		return "", "", false
 	}
 	esc := tview.Escape
-	stamp := func(t time.Time) string { return t.Format("2006-01-02 15:04:05") }
 	var b strings.Builder
 	fmt.Fprintf(&b, "[yellow]%s — %s[white]\n\n", esc(it.Workflow), esc(it.DocKey))
 	fmt.Fprintf(&b, "state:           %s\n", esc(it.State))
-	fmt.Fprintf(&b, "since:           %s\n", stamp(it.Since))
-	fmt.Fprintf(&b, "first observed:  %s\n", stamp(it.FirstObservedAt))
+	fmt.Fprintf(&b, "since:           %s\n", output.HumanTimeSeconds(&it.Since))
+	fmt.Fprintf(&b, "first observed:  %s\n", output.HumanTimeSeconds(&it.FirstObservedAt))
 	if it.AlertedAt != nil {
-		fmt.Fprintf(&b, "alerted:         %s\n", stamp(*it.AlertedAt))
+		fmt.Fprintf(&b, "alerted:         %s\n", output.HumanTimeSeconds(it.AlertedAt))
 	} else {
 		b.WriteString("alerted:         —\n")
 	}

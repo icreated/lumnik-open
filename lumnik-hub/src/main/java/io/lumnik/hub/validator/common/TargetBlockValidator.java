@@ -15,11 +15,10 @@ public final class TargetBlockValidator {
 
     public static ConfigDef configDef() {
         return new ConfigDef()
-            .optional("tags", Type.LIST, Importance.MEDIUM,
-                "RAG scope tags — enables tag-based filtering", List.of())
+            // The scope is not a target concern: it lives at metadata.scopes (ScopesValidator).
             .optional("indexes", Type.LIST, Importance.LOW,
                 "Postgres indexes on the hub table", List.of())
-            // C3: tags + indexes are the whole runtime-read target surface — typos warn.
+            // C3: indexes is the whole runtime-read target surface — typos warn.
             .closed();
     }
 

@@ -71,10 +71,19 @@ public class DataRowResource {
     // 3. SELECT * from the dynamic table. Schema/table come from the system's own
     // connector.dynamic_table registry; quoting them the way the writer created them
     // keeps this defense-in-depth.
+    //
+    // tenant_id IN THE QUERY, and it is load-bearing here: this runs on the admin datasource
+    // (BYPASSRLS), and a dynamic table holds many tenants' rows isolated only by RLS on the
+    // default datasource — which does not apply to admin. A _row_hash is a hash of the row's
+    // content, so two tenants with identical data share one, and without this predicate the
+    // read could return another tenant's row. DynamicTableWriter stamps tenant_id on every
+    // dynamic table, so the column is always there.
     String fqn = quoteIdent(tableSchema) + "." + quoteIdent(tableName);
     try (Connection c = adminDs.getConnection();
-         PreparedStatement ps = c.prepareStatement("SELECT * FROM " + fqn + " WHERE _row_hash = ?")) {
+         PreparedStatement ps = c.prepareStatement(
+             "SELECT * FROM " + fqn + " WHERE _row_hash = ? AND tenant_id = ?")) {
       ps.setString(1, rowHash);
+      ps.setLong(2, tenant);
       try (ResultSet rs = ps.executeQuery()) {
         if (!rs.next()) return Response.status(404).build();
         var meta = rs.getMetaData();

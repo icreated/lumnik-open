@@ -63,7 +63,7 @@ are none"*.
 
 > I have no data declared for this scope yet, so I can't answer that. Ingest a source for this scope first.
 
-**Do next:** apply a connector with `target.tags: [<your-scope>]` and run it.
+**Do next:** apply a connector with `metadata.scopes: [<your-scope>]` and run it.
 
 ### 2. Abstention exit — the model's honest "I can't"
 
@@ -103,8 +103,8 @@ gets `403 scope not granted` before any SQL is even generated.)
 
 > I won't run this: '<schema.table>' is not a table in this scope (declared: …). The query may not read data outside this métier's declared scope.
 
-**Do next:** switch to the scope that owns the table (`lm scopes`), or tag the connector into
-this scope and re-run it.
+**Do next:** switch to the scope that owns the table (`lm scopes`), or add this scope to the
+connector's `metadata.scopes` and re-run it.
 
 ### 5. Undocumented-column guard
 

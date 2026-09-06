@@ -2,6 +2,11 @@
 build: ## Build the lm binary at lm/lm
 	go build -o lm ./cmd/lm
 
+.PHONY: install
+install: build ## Build and install lm into ~/.local/bin (the PATH copy — a stale one wears new hints badly)
+	install -d $(HOME)/.local/bin
+	install -m 0755 lm $(HOME)/.local/bin/lm
+
 .PHONY: test
 test: ## Run the whole untagged Go suite (internal/ + cmd/) — the per-PR gate; the live TestOTK is behind //go:build otk and cannot be reached from here
 	go test ./...

@@ -26,6 +26,18 @@ public class WebhookDeliveryRepository implements PanacheRepository<WebhookDeliv
             .page(0, Math.min(Math.max(limit, 1), 500)).list();
     }
 
+    /**
+     * One delivery of one tenant by id, or {@code null} — the tenant IN THE QUERY.
+     * {@code WebhookDelivery} maps {@code tenantId} itself rather than through {@code TenantedEntity}
+     * (it has no audit/org columns — it is a ledger row), so it carries the predicate here rather
+     * than inheriting it or going through {@code Require.owned}. Replaces
+     * fetch-then-{@code Objects.equals(getTenantId())} at the two replay doors, so another tenant's
+     * delivery is never materialised to be refused.
+     */
+    public WebhookDelivery findForTenant(Long id, Long tenantId) {
+        return find("id = ?1 AND tenantId = ?2", id, tenantId).firstResult();
+    }
+
     /** Every integration's deliveries for one tenant, FAILURES FIRST then newest — the order is
      *  the server's promise to the :outputs screen, which renders it and never re-derives it. */
     public List<WebhookDelivery> recentForTenant(long tenantId, int limit) {

@@ -162,7 +162,7 @@ cannot see what the method returned.
 
 Scripts receive three bindings: `event` (`LifecycleEvent`, null for action hooks), `entity`,
 `ctx` (`HookContext`). Loaded and compiled by `KotlinScriptHost`
-(`KotlinScriptHost.java:39-77`), which resolves `script:` as a classpath resource — there is
+(`KotlinScriptHost.java`), which resolves `script:` as a classpath resource — there is
 no filesystem-path option, see **Trust boundary** below.
 
 ```kotlin

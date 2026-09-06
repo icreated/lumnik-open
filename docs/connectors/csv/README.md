@@ -25,6 +25,8 @@ lm connector run csv-local-simple
 | `50-kotlin-row-hook.yaml` | Kotlin escape hatch: a `spec.mapping.cell` hook (`normalize-date.kts`) rewrites the legacy `DD/MM/YYYY` date to ISO `YYYY-MM-DD` at ingest time. |
 | `30-sftp-key.yaml` | Remote pull over SFTP (creds via env var named by `password_env`). |
 | `40-s3-prefix.yaml` | Every `.csv` under an S3 / MinIO prefix (creds via `access_key_env` / `secret_key_env`). |
+| `45-s3-headerless-archive.yaml` | A headerless, tab-separated export under an S3 prefix (`parser.columns`), archived to another bucket after commit. |
+| `60-s3-every-transformer.yaml` | One S3 export run through **every** `spec.mapping` transformer (all but `aggregator`) — the walk-through lives in [transformers.md](../transformers.md#one-manifest-every-transformer). |
 
 > **Remote cursor:** remote connectors (`sftp`, `s3`) track a per-file watermark — each run ingests
 > only files newer than the last processed one; replays are idempotent via `_row_hash` dedup.

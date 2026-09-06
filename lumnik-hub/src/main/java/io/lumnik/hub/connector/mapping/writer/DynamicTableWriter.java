@@ -174,6 +174,16 @@ public class DynamicTableWriter {
       Set.of(ID, ROW_HASH, INGESTED_AT, SOURCE, RUN_ID, MAPPING_VERSION, TENANT_ID);
 
   /**
+   * The system columns as a message renders them: comma-separated, alphabetical. The TreeSet is
+   * load-bearing — {@code SYSTEM_COLUMNS} is a {@code Set.of()} whose iteration order is
+   * unspecified, so rendering it directly makes any test asserting the message flaky. Written
+   * once here, where the set lives, because three call sites had copied the same subtlety.
+   */
+  public static String systemColumnList() {
+    return String.join(", ", new TreeSet<>(SYSTEM_COLUMNS));
+  }
+
+  /**
    * Refuses payload columns that collide with {@link #SYSTEM_COLUMNS}. Static + package-visible so
    * the refusal can be pinned without a datasource.
    *
@@ -190,7 +200,7 @@ public class DynamicTableWriter {
         if (SYSTEM_COLUMNS.contains(col)) {
           throw new ConfigValidationException(
               "source column '" + col + "' collides with a hub system column "
-              + "(" + String.join(", ", new TreeSet<>(SYSTEM_COLUMNS)) + "); "
+              + "(" + systemColumnList() + "); "
               + "it must reach the hub under another name — "
               + "jdbc: source.tables[].rename; "
               + "csv: a map-columns row hook under spec.mapping; "

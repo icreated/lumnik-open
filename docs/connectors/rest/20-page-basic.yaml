@@ -21,7 +21,7 @@ kind: Connector
 metadata:
   name: rest-page
   connector_type: rest-generic
-  tags: [demo]
+  scopes: [demo]
 
 spec:
   base_url: http://localhost:8081

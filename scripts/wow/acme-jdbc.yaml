@@ -1,0 +1,26 @@
+# A TEMPLATE, not a manifest to apply as-is: tests/10-wow-e2e.sh substitutes the
+# WOW_SRC_URL placeholder below from scripts/wow/.env before calling `lm apply`. The
+# variable is named plainly here rather than in placeholder form — written the other
+# way, this very line gets substituted too. The source URL is site-specific and lives
+# only in that gitignored file; 00-smoke.sh reads it from there.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: wow-atelier-c_order
+  connector_type: jdbc-generic
+  tenant: 1
+  scopes: [atelier]
+spec:
+  connection:
+    url: ${WOW_SRC_URL}
+    user: adempiere
+    password_env: WOW_SRC_PASSWORD
+  defaults:
+    schema: adempiere
+  source:
+    tables:
+      - name: c_order
+        mode: full
+        pk_columns: [c_order_id]
+  target:
+    table_prefix: t_

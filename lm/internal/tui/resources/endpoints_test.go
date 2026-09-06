@@ -1,10 +1,12 @@
 package resources
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/icreated/lumnik-open/lm/internal/types"
+	"github.com/rivo/tview"
 )
 
 func TestEndpoints_renderRows(t *testing.T) {
@@ -36,6 +38,28 @@ func TestEndpoints_renderRows(t *testing.T) {
 	}
 	if rows[1][4] != "" {
 		t.Errorf("second row last_run should be empty, got: %s", rows[1][4])
+	}
+	if want := now.In(time.Local).Format("2006-01-02 15:04"); rows[0][4] != want {
+		t.Errorf("first row LAST_RUN = %q, want %q (local, minute precision)", rows[0][4], want)
+	}
+}
+
+// The describe panel's "last_run_at:" line goes to second precision, matching every other
+// detail pane (sources, dlq, outputs, observations); the table cell one row up stays at
+// minute precision, matching every other table. Expected value computed, not hardcoded.
+func TestEndpoints_describeLastRunIsLocalSecondsPrecision(t *testing.T) {
+	now := time.Date(2026, 5, 24, 10, 0, 7, 0, time.UTC)
+	want := "last_run_at:     " + now.In(time.Local).Format("2006-01-02 15:04:05")
+
+	p := &Endpoints{table: tview.NewTable()}
+	p.endpoints = []types.Endpoint{{Name: "charges", LastRunAt: &now}}
+	p.table.Select(1, 0) // no render() call needed: selectedItem reads p.endpoints directly
+	_, body, ok := p.SelectedDescribe()
+	if !ok {
+		t.Fatal("describe !ok")
+	}
+	if !strings.Contains(body, want) {
+		t.Errorf("describe body missing %q:\n%s", want, body)
 	}
 }
 

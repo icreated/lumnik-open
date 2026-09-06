@@ -82,6 +82,57 @@ class AskToSqlAgentIT {
     }
 
     @Test
+    void an_ambiguous_filter_discloses_the_ids_so_the_next_question_can_name_one() {
+        seedDuplicatePartners();
+        // The SQL a live qwen2.5-coder emits for "how many orders has bpartner X" — measured, not
+        // invented: at temperature 0 it chose this scalar-subquery shape 10 times out of 10.
+        Mockito.when(chatPort.chat(Mockito.anyString())).thenReturn(
+            "SELECT count(*) FROM connector.t_dup_order WHERE c_bpartner_id = "
+            + "(SELECT c_bpartner_id FROM connector.t_dup_partner WHERE name = 'ACME')");
+
+        AskResult r = agent.ask(7L, "dup", "how many orders has partner ACME");
+
+        assertThat(r.answer())
+            .as("the ids are the point: they are what makes the next question answerable")
+            .contains("1000123").contains("1000456")
+            .contains("Ask again");
+        assertThat(r.rowCount()).as("nothing was answered — an ambiguity is not a result").isZero();
+    }
+
+    @Test
+    void a_failure_that_is_not_an_ambiguity_reports_the_database_rather_than_guessing() {
+        seedDuplicatePartners();
+        // 'ghost' is declared in the card and exists in no table: the guards pass, Postgres refuses.
+        Mockito.when(chatPort.chat(Mockito.anyString()))
+            .thenReturn("SELECT ghost FROM connector.t_dup_order");
+
+        AskResult r = agent.ask(7L, "dup", "list the ghosts");
+
+        assertThat(r.answer())
+            .as("this message used to name an unqualified table as the likely cause — on a "
+                + "qualified query it sent its reader to the wrong place")
+            .doesNotContain("unqualified")
+            .contains("ghost");
+    }
+
+    /** Two partner rows under ONE name — the arrangement that makes a scalar subquery fail. */
+    private void seedDuplicatePartners() {
+        agent.seedDdl("CREATE TABLE IF NOT EXISTS connector.t_dup_partner (c_bpartner_id bigint, name text)");
+        agent.seedDdl("CREATE TABLE IF NOT EXISTS connector.t_dup_order (c_bpartner_id bigint)");
+        agent.seedDdl("TRUNCATE connector.t_dup_partner");
+        agent.seedDdl("TRUNCATE connector.t_dup_order");
+        agent.seedDdl("INSERT INTO connector.t_dup_partner VALUES (1000123, 'ACME'), (1000456, 'ACME')");
+        agent.seedDdl("INSERT INTO connector.t_dup_order VALUES (1000123), (1000123)");
+        store.save(7L, "dup", new SchemaCard("dup", List.of(
+            new SchemaCard.Table("connector.t_dup_order", "Order", List.of(
+                new SchemaCard.Column("c_bpartner_id", "bigint", "Partner"),
+                new SchemaCard.Column("ghost", "text", "Ghost"))),
+            new SchemaCard.Table("connector.t_dup_partner", "Partner", List.of(
+                new SchemaCard.Column("c_bpartner_id", "bigint", "Partner"),
+                new SchemaCard.Column("name", "text", "Name"))))));
+    }
+
+    @Test
     void rejectedSqlDegradesCleanlyWithoutRunning() {
         Mockito.when(chatPort.chat(Mockito.anyString()))
             .thenReturn("UPDATE connector.t_demo_order SET grandtotal = 0");
@@ -146,7 +197,11 @@ class AskToSqlAgentIT {
 
         assertThat(r.rowCount()).isEqualTo(0);
         assertThat(r.answer()).doesNotContain("LEAKED");      // the secret never surfaces
-        assertThat(r.answer()).contains("schema-qualified");  // honest, actionable degraded result, not a 500
+        // Honest, actionable degraded result, not a 500. This asserted the word "schema-qualified"
+        // while the message invented that cause for every failure; it now carries Postgres' own
+        // words, which say the bare name did not resolve — the very property under test, stated by
+        // the database rather than guessed by us.
+        assertThat(r.answer()).contains("t_other_metier").contains("does not exist");
     }
 
     @Test

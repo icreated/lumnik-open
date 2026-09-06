@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.connector;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.config.EncoderConfig;
 import io.restassured.config.RestAssuredConfig;
@@ -23,7 +24,7 @@ class ConnectorApplyResourceIT {
           name: test-apply-%d
           connector_type: rest-generic
           tenant: 1
-          tags: [crm, test]
+          scopes: [crm, test]
         spec:
           base_url: https://api.example.com
           auth:
@@ -43,7 +44,6 @@ class ConnectorApplyResourceIT {
                 kind: hybrid
                 table: ext.contacts
                 unique_key: "$.id"
-                tags: [crm]
                 promote:
                   - { name: name, path: "$.name", type: text }
         """.formatted(System.nanoTime());
@@ -52,8 +52,7 @@ class ConnectorApplyResourceIT {
     void apply_creates_connector_and_endpoints() {
         given()
             .config(YAML_CFG)
-            .header("X-Tenant-Id", "1")
-            .header("X-User-Id", "1")
+            .headers(TestIdentity.tenantAndUser(1))
             .contentType("application/yaml")
             .body(YAML_BODY)
         .when().post("/api/platform/connectors/apply")
@@ -92,7 +91,6 @@ class ConnectorApplyResourceIT {
                     kind: hybrid
                     table: ext.items
                     unique_key: "$.id"
-                    tags: [test]
                     promote:
                       - { name: name, path: "$.name", type: text }
             """.formatted(System.nanoTime());
@@ -100,8 +98,7 @@ class ConnectorApplyResourceIT {
         // First apply
         String connectorId = given()
             .config(YAML_CFG)
-            .header("X-Tenant-Id", "1")
-            .header("X-User-Id", "1")
+            .headers(TestIdentity.tenantAndUser(1))
             .contentType("application/yaml")
             .body(body)
         .when().post("/api/platform/connectors/apply")
@@ -113,8 +110,7 @@ class ConnectorApplyResourceIT {
         // Second apply — same YAML, same connector should be returned
         given()
             .config(YAML_CFG)
-            .header("X-Tenant-Id", "1")
-            .header("X-User-Id", "1")
+            .headers(TestIdentity.tenantAndUser(1))
             .contentType("application/yaml")
             .body(body)
         .when().post("/api/platform/connectors/apply")
@@ -128,8 +124,7 @@ class ConnectorApplyResourceIT {
     void apply_returns_400_when_name_missing() {
         given()
             .config(YAML_CFG)
-            .header("X-Tenant-Id", "1")
-            .header("X-User-Id", "1")
+            .headers(TestIdentity.tenantAndUser(1))
             .contentType("application/yaml")
             .body("apiVersion: connectors.lumnik.io/v1\nkind: RestConnector\nmetadata:\n  tenant: 1\nspec:\n  base_url: https://x.com\n")
         .when().post("/api/platform/connectors/apply")
@@ -158,8 +153,7 @@ class ConnectorApplyResourceIT {
     void apply_refuses_manifest_whose_tenant_differs_from_context() {
         given()
             .config(YAML_CFG)
-            .header("X-Tenant-Id", "1")
-            .header("X-User-Id", "1")
+            .headers(TestIdentity.tenantAndUser(1))
             .contentType("application/yaml")
             .body(YAML_BODY.replace("tenant: 1", "tenant: 2"))
         .when().post("/api/platform/connectors/apply")

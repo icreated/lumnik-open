@@ -3,7 +3,7 @@ kind: Connector
 metadata:
   name: acme-erp-pg
   connector_type: jdbc-generic
-  tags: [erp]
+  scopes: [erp, billing]
 spec:
   connection:
     url: jdbc:postgresql://db.acme.io:5432/billing
@@ -26,5 +26,4 @@ spec:
         watermark_column: ts
         pk_columns: [invoice_id, line_no]
   schedule: "*/15 * * * *"
-  target:
-    tags: [erp, billing]
+  target: {}

@@ -1,5 +1,6 @@
 package io.lumnik.hub.webhook;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.lumnik.hub.event.consumer.SchedulerPausedProfile;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
@@ -74,7 +75,7 @@ class WebhookRetryDeletedEndpointIT {
             "SELECT id FROM core.webhook_endpoint WHERE name = 'del-ep'").getSingleResult()).longValue();
 
         RestAssured.given()
-            .header("X-Tenant-ID", "1").header("X-User-ID", "1")
+            .headers(TestIdentity.tenantAndUser(1))
             .contentType("application/json").body("{\"eventType\":\"org.created\"}")
             .when().post("/api/tenants/1/integrations/" + id + "/test")
             .then().statusCode(404);

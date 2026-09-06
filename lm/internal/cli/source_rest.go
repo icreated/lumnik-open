@@ -64,7 +64,7 @@ func newSourceRestRunCmd() *cobra.Command {
 
 func newSourceRestFromOpenApiCmd() *cobra.Command {
 	var name, output string
-	var tags []string
+	var scopes []string
 	var apply bool
 	cmd := &cobra.Command{
 		Use:   "from-openapi <url>",
@@ -75,7 +75,7 @@ func newSourceRestFromOpenApiCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			body, err := cli.RestFromOpenApi(args[0], name, tags)
+			body, err := cli.RestFromOpenApi(args[0], name, scopes)
 			if err != nil {
 				return err
 			}
@@ -105,7 +105,7 @@ func newSourceRestFromOpenApiCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "connector name (required)")
-	cmd.Flags().StringSliceVar(&tags, "tag", nil, "tags (repeatable)")
+	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "métier scope(s) written to the manifest's metadata.scopes (repeatable)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "write to file instead of stdout")
 	cmd.Flags().BoolVar(&apply, "apply", false, "upsert directly after generation (requires --name)")
 	_ = cmd.MarkFlagRequired("name")

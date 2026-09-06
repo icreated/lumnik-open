@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/icreated/lumnik-open/lm/internal/types"
@@ -22,19 +21,11 @@ func filterRunsByConnector(runs []types.Run, connectorID string) []types.Run {
 }
 
 func runRow(r types.Run) []string {
-	started := ""
-	if !r.StartedAt.IsZero() {
-		started = r.StartedAt.Format(time.RFC3339)
-	}
-	ended := ""
-	if r.EndedAt != nil {
-		ended = r.EndedAt.Format(time.RFC3339)
-	}
 	return []string{
 		shortID(r.ID), r.ConnectorLabel(), r.Status,
 		fmt.Sprintf("%d", r.RecordsIn), fmt.Sprintf("%d", r.RecordsOut),
 		fmt.Sprintf("%d", r.RecordsSkipped), fmt.Sprintf("%d", r.DeadLetterCount),
-		started, ended,
+		output.HumanTime(&r.StartedAt), output.HumanTime(r.EndedAt),
 	}
 }
 
@@ -102,11 +93,18 @@ func newRunCmd() *cobra.Command {
 					return err
 				}
 			}
-			// cell_errors counts CELLS a parse hook could not read and nulled — the row was
-			// still written, so this is a lead, not a quarantine. Same stderr door as above.
+			// cell_errors counts CELLS a hook did not deliver as declared. FOUR shapes: EMPTIED (a
+			// parse hook could not read the value), LEFT AS IT ARRIVED (fix-mojibake declined to
+			// repair it; split left it in place with some `into` columns unfilled), or REPLACED by
+			// a value the source never sent (to-uuid on-invalid: generate), or OVERWRITTEN by a value
+			// it did send from another column (map-columns renaming onto a name the row already had
+			// - the only shape produced outside the cell tier).
+			// The row was written in all four, so this is a lead, not a quarantine - and the wording
+			// must not claim any one shape for all of them. A PR that adds a counting site extends
+			// this list and the one in docs/connectors/transformers.md.
 			if run.CellErrors > 0 {
 				if _, err := fmt.Fprintf(cmd.ErrOrStderr(),
-					"⚠ %d cell(s) emptied by a parse hook that could not read the value\n",
+					"⚠ %d cell(s) a hook did not deliver as declared — the rows were still written\n",
 					run.CellErrors); err != nil {
 					return err
 				}

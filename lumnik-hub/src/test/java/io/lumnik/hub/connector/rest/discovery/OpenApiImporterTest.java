@@ -38,6 +38,9 @@ class OpenApiImporterTest {
         assertTrue(manifest.contains("name: demo"), manifest);
         assertTrue(manifest.contains("kind: cursor"), manifest);
         assertTrue(manifest.contains("path: /v1/things"), manifest);
+        // The import writes the scope where the validator reads it — and nowhere else.
+        assertTrue(manifest.contains("  scopes: [test]"), manifest);
+        assertFalse(manifest.contains("tags:"), manifest);
     }
 
     /**

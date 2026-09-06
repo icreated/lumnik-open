@@ -3,6 +3,7 @@ package io.lumnik.common.security;
 import java.util.Collection;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -16,6 +17,30 @@ import java.util.stream.Collectors;
 public final class ScopeGrants {
 
     private static final String PREFIX = "scope:";
+
+    /**
+     * What a scope NAME may be, wherever one is written: kind:Connector {@code metadata.scopes},
+     * kind:Entity {@code scopes}, {@code PUT /connectors/{id}/tags}. Lowercase, a letter first,
+     * then letters/digits/_/-, at most 41 characters — the name becomes the case-sensitive
+     * Keycloak role {@code scope:<name>} and the {@code --scope} a person types, so {@code CRM}
+     * and {@code crm} must not be two scopes. One rule in one place: three copies used to exist
+     * and two of them disagreed (a scope apply accepted, scope set refused). The role is spelled
+     * {@code scope:<name>}; the name itself has no colon.
+     */
+    public static final Pattern IDENTIFIER = Pattern.compile("^[a-z][a-z0-9_-]{0,40}$");
+
+    /**
+     * The refusal for a scope name that breaks {@link #IDENTIFIER}, or empty when it is fine — the
+     * sentence every declarer shows (connector apply, entity apply, {@code scope set}), so it
+     * cannot drift between them.
+     */
+    public static Optional<String> nameProblem(String name) {
+        if (name == null || name.isBlank()) return Optional.of("scope must not be blank");
+        if (!IDENTIFIER.matcher(name).matches()) {
+            return Optional.of("scope must be lowercase, start with a letter, then letters/digits/_/- (max 41): " + name);
+        }
+        return Optional.empty();
+    }
 
     /**
      * The single source of the refusal a bound user gets outside their grants — served as

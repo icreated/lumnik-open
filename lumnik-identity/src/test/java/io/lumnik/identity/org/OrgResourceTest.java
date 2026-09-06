@@ -8,7 +8,6 @@ import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import static io.restassured.RestAssured.given;
@@ -67,6 +66,24 @@ class OrgResourceTest {
             .then().statusCode(201);
 
         given().contentType(ContentType.JSON).body(body)
+            .when().post("/api/tenants/" + tenantId + "/orgs")
+            .then().statusCode(409);
+    }
+
+    /** The entity strips the code before it is stored; the duplicate check must compare the same value. */
+    @Test
+    void duplicateOrgCodeWithSurroundingWhitespaceIsRejected() {
+        given().contentType(ContentType.JSON)
+            .body("""
+                {"code": "PAD", "name": "Padded Org"}
+                """)
+            .when().post("/api/tenants/" + tenantId + "/orgs")
+            .then().statusCode(201);
+
+        given().contentType(ContentType.JSON)
+            .body("""
+                {"code": " PAD ", "name": "Padded Org again"}
+                """)
             .when().post("/api/tenants/" + tenantId + "/orgs")
             .then().statusCode(409);
     }
@@ -139,10 +156,8 @@ class OrgResourceTest {
             .body("active", equalTo(false));
     }
 
+    /** The tenant is in the {@code codeExists} query, so this holds on any datasource, filter or not. */
     @Test
-    @Disabled("Cross-tenant uniqueness is enforced by Hibernate tenantFilter + RLS; " +
-              "verified in TenantHubIsolationIT. Without the filter active in " +
-              "module-level tests, codeExists() sees all tenants.")
     void sameCodeInDifferentTenantsIsAllowed() {
         Tenant other = new Tenant("OTEST2", "Other Tenant");
         long otherId = createTenant(other);

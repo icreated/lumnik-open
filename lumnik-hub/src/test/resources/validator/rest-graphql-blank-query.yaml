@@ -3,6 +3,7 @@ kind: Connector
 metadata:
   name: graphql-blank-query
   connector_type: rest-generic
+  scopes: [orders]
 spec:
   base_url: https://api.example.com
   graphql_path: /graphql
@@ -21,4 +22,3 @@ spec:
         kind: hybrid
         table: ext.orders
         unique_key: "$.id"
-        tags: [orders]

@@ -1,5 +1,6 @@
 package io.lumnik.hub.webhook;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.client.WireMock;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
@@ -128,7 +129,7 @@ class PlatformDeliveryReplayIT {
     @Test
     void replaying_to_a_deleted_integration_is_refused() {
         softDelete("replay-probe-live");
-        given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        given().headers(TestIdentity.tenantAndUser(1))
             .when().post("/api/platform/deliveries/" + idOf("replay.probe.live") + "/replay")
             .then().statusCode(404);
         wm.verify(0, WireMock
@@ -144,7 +145,7 @@ class PlatformDeliveryReplayIT {
     @Test
     void the_list_shows_a_deleted_integration_as_deleted() {
         softDelete("replay-probe-live");
-        given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        given().headers(TestIdentity.tenantAndUser(1))
             .when().get("/api/platform/deliveries")
             .then().statusCode(200)
             .body("find { it.eventType == 'replay.probe.live' }.integration", equalTo("(deleted)"));
@@ -159,7 +160,7 @@ class PlatformDeliveryReplayIT {
 
     @Test
     void replaying_another_tenants_delivery_is_a_404_not_a_403() {
-        given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        given().headers(TestIdentity.tenantAndUser(1))
             .when().post("/api/platform/deliveries/" + theirs + "/replay")
             .then().statusCode(404);
     }
@@ -167,7 +168,7 @@ class PlatformDeliveryReplayIT {
     @Test
     void replaying_my_own_delivery_records_a_new_attempt() {
         assertThat(attemptCount("replay.probe.mine")).isEqualTo(1);
-        given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        given().headers(TestIdentity.tenantAndUser(1))
             .when().post("/api/platform/deliveries/" + mine + "/replay")
             .then().statusCode(200);
         assertThat(attemptCount("replay.probe.mine"))
@@ -181,7 +182,7 @@ class PlatformDeliveryReplayIT {
     @Test
     void a_successful_replay_records_succeeded_true() {
         wm.stubFor(post("/live").willReturn(aResponse().withStatus(200)));
-        given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        given().headers(TestIdentity.tenantAndUser(1))
             .when().post("/api/platform/deliveries/" + idOf("replay.probe.live") + "/replay")
             .then().statusCode(200);
         assertThat(newestSucceeded("replay.probe.live"))
@@ -196,7 +197,7 @@ class PlatformDeliveryReplayIT {
     void the_old_tenant_in_url_replay_address_still_works() {
         assertThat(attemptCount("replay.probe.mine")).isEqualTo(1);
         given().contentType("application/json")
-            .header("X-Tenant-ID", "1").header("X-User-ID", "1")
+            .headers(TestIdentity.tenantAndUser(1))
             .when().post("/api/tenants/1/integrations/" + mineEndpoint
                 + "/deliveries/" + mine + "/replay")
             .then().statusCode(200)

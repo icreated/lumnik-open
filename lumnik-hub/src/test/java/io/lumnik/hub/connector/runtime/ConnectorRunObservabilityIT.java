@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.runtime;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.domain.Connector;
@@ -74,8 +75,7 @@ class ConnectorRunObservabilityIT {
 
     String runId =
         given()
-            .header("X-Tenant-ID", "1")
-            .header("X-User-ID", "1")
+            .headers(TestIdentity.tenantAndUser(1))
             .contentType(ContentType.JSON)
             .when()
             .post("/api/platform/connectors/{id}/run", connectorId.toString())

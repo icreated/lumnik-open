@@ -63,3 +63,30 @@ func TestEntityApply_400(t *testing.T) {
 	require.ErrorAs(t, err, &apiErr)
 	assert.Equal(t, 400, apiErr.Status)
 }
+
+func TestEntityDelete_success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodDelete, r.Method)
+		assert.Equal(t, "/api/entities/Customer", r.URL.Path)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := New(config.Context{Server: srv.URL})
+	require.NoError(t, c.EntityDelete("Customer"))
+}
+
+func TestEntityDelete_404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprint(w, `{"error":"entity nope not found"}`)
+	}))
+	defer srv.Close()
+
+	c := New(config.Context{Server: srv.URL})
+	err := c.EntityDelete("nope")
+	require.Error(t, err)
+	var apiErr *APIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusNotFound, apiErr.Status)
+}

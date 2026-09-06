@@ -1,5 +1,6 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.tenant.TenantContext;
@@ -163,12 +164,12 @@ class CustomerWowFusionIT {
               ville: city
         """.formatted(entityName, siebelTable, csvTable);
 
-    given().config(YAML_CFG).header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().config(YAML_CFG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(manifest)
         .post("/api/entities/apply").then().statusCode(200);
 
     // 4a. C-100: name AGREES across both sources; email+city gap-filled from CSV; no conflict.
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/" + entityName + "?customer_code=C-100")
         .then().statusCode(200)
         .body("size()", equalTo(1))
@@ -178,7 +179,7 @@ class CustomerWowFusionIT {
         .body("[0]._conflicts", equalTo("{}"));
 
     // 4b. C-200: name CONFLICTS — representative = Siebel ('Marie', listing order); ledger keeps both.
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/" + entityName + "?customer_code=C-200")
         .then().statusCode(200)
         .body("size()", equalTo(1))
@@ -191,7 +192,7 @@ class CustomerWowFusionIT {
         .body("[0]._conflicts", containsString(csvTable));
 
     // 4c. C-300: present ONLY in the CSV export — still fused, no conflict.
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/" + entityName + "?customer_code=C-300")
         .then().statusCode(200)
         .body("size()", equalTo(1))

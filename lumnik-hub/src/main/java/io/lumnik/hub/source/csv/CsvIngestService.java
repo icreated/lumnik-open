@@ -2,6 +2,7 @@ package io.lumnik.hub.source.csv;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.common.tenant.CurrentTenantHolder;
+import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.api.sources.CsvIngestForm;
 import io.lumnik.hub.api.sources.CsvIngestResult;
 import io.lumnik.hub.api.sources.CsvIngestResult.PromoteColumn;
@@ -10,9 +11,15 @@ import io.lumnik.hub.connector.csv.CsvFileReader.Config;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget.HybridJsonb;
+import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.PromotedColumn;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.SqlType;
+import io.lumnik.hub.ask.DiscoveryService;
+import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
 import io.lumnik.hub.connector.mapping.writer.MultiTargetWriter;
+import io.lumnik.hub.connector.domain.Connector;
+import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
+import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.naming.Identifiers;
 import io.lumnik.hub.connector.naming.JsonPaths;
 import io.lumnik.hub.connector.transport.AfterProcessAction;
@@ -23,10 +30,16 @@ import io.lumnik.hub.connector.transport.hook.FileSourceHookRunner;
 import io.lumnik.hub.connector.transport.hook.HookScriptRefusedException;
 import io.lumnik.hub.connector.transport.hook.HookSpec;
 import io.lumnik.hub.connector.transport.metrics.FileSourceMetrics;
+import io.lumnik.extraction.spi.ExtractedChunk;
+import io.lumnik.extraction.spi.ExtractionSink;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
+import jakarta.transaction.Status;
+import jakarta.transaction.Synchronization;
+import jakarta.transaction.TransactionSynchronizationRegistry;
 import org.jboss.logging.Logger;
 
 import java.io.File;
@@ -66,11 +79,42 @@ public class CsvIngestService {
 
     private static final String LOCAL = "local";
 
+    /**
+     * The name belongs to a CONFIGURED connector — refused (409). A dormant one-shot twin
+     * is not refused: re-ingesting it is one more breath (see the breath block below).
+     */
+    public static class DuplicateIngestName extends RuntimeException {
+        DuplicateIngestName(String name) {
+            super("the name '" + name + "' belongs to a configured connector — "
+                + "pass a different --name, or delete that connector first (lm connector delete)");
+        }
+    }
+
+    /** An existing dormant one-shot under this (tenant, name): the body a breath reuses. */
+    private record PriorOneShot(UUID connectorId, UUID endpointId, List<String> oldTags,
+                                String uniqueKey, List<PromotedColumn> storedPromote) {}
+
+    /** One post-commit move: index under {@code tags}, rediscover {@code tags ∪ oldTags}. */
+    private record AskableMove(UUID connectorId, String tableName, List<String> tags,
+                               List<String> oldTags, List<PromotedColumn> promoted, int rows) {
+        List<String> rediscoverTags() {
+            List<String> all = new ArrayList<>(tags);
+            for (String t : oldTags) if (!all.contains(t)) all.add(t);
+            return all;
+        }
+    }
+
     private static final int DEFAULT_SAMPLE_ROWS = 100;
     private static final int BATCH_SIZE = 500;
     private static final ObjectMapper JSON = new ObjectMapper();
 
     @Inject EntityManager em;
+    @Inject ConnectorRepository connectors;
+    @Inject ConnectorEndpointRepository endpoints;
+    @Inject DiscoveryService discovery;
+    @Inject Instance<ExtractionSink> sinks;
+    @Inject DynamicTableRegistry dynamicTables;
+    @Inject TransactionSynchronizationRegistry txSync;
     @Inject MultiTargetWriter writer;
     @Inject FileSourceRegistry fileSourceRegistry;
     @Inject FileSourceHookRunner hooks;
@@ -145,19 +189,45 @@ public class CsvIngestService {
         );
         String tableName = "ext." + name;
 
+        // A taken name forks three ways at the threshold (never as the unique constraint's
+        // anonymous 500): free → first breath; a dormant one-shot twin → ONE MORE BREATH
+        // (reuse the connector, dedup by key, refresh card and descriptor); a configured
+        // connector → the honest 409. One entity query answers all three; the race window
+        // between this read and the write is closed by the guarded upsert below.
+        PriorOneShot prior = findPrior(tenantId, name);
+        boolean breath = prior != null;
+
         // Honour caller's format hints, auto-detect the rest, then sample to infer the schema.
         Config cfg = buildConfig(file.toPath(), form);
         int sampleLimit = (form.sampleRows != null && form.sampleRows > 0) ? form.sampleRows : DEFAULT_SAMPLE_ROWS;
         List<Map<String, Object>> sample = new ArrayList<>(sampleLimit);
         readWithLimit(file.toPath(), cfg, sampleLimit, sample);
-        List<PromotedColumn> promoted = inferSchema(sample);
+        List<PromotedColumn> inferred = inferSchema(sample);
+        // Stored columns keep their names, order and TYPES (the table's are fixed);
+        // genuinely new columns append — the writer's schema evolution adds them.
+        List<PromotedColumn> promoted = breath ? mergePromote(prior.storedPromote(), inferred) : inferred;
 
-        UUID connectorId = UUID.randomUUID();
-        insertDormantConnector(connectorId, tenantId, name, callerFile);
+        UUID connectorId = breath ? prior.connectorId() : UUID.randomUUID();
+        if (breath) {
+            // A managed row has ONE writer: findPrior's entity lives in the persistence
+            // context, and setTags below dirties it — a native upsert here was silently
+            // reverted by the stale entity's full-column flush at commit (review catch,
+            // pinned by the scope-migration breath test). Config rides the same flush.
+            connectors.findById(connectorId).setConfig(connectorConfigMap(callerFile));
+        } else {
+            upsertDormantConnector(connectorId, tenantId, name, callerFile);
+        }
+        // The scope is a tag, and tags are what SchemaCardRefresher and rediscover walk —
+        // without them the one-shot has no scope to be askable under. Entity gesture, the
+        // ConnectorTagsResource pattern. On a breath the command's scope WINS (re-ingesting
+        // is a re-publication act) — and the old scopes get a rediscover so their cards let go.
+        List<String> connectorTags = connectorTags(form);
+        connectors.findById(connectorId).setTags(connectorTags);
 
-        UUID endpointId = UUID.randomUUID();
-        String uniqueKey = promoted.isEmpty() ? "$.id" : JsonPaths.member(promoted.get(0).name());
-        insertDormantEndpoint(endpointId, connectorId, tenantId, name, callerFile, tableName, uniqueKey, promoted);
+        UUID endpointId = breath ? prior.endpointId() : UUID.randomUUID();
+        String uniqueKey = breath ? prior.uniqueKey()
+            : (promoted.isEmpty() ? "$.id" : JsonPaths.member(promoted.get(0).name()));
+        upsertDormantEndpoint(endpointId, connectorId, tenantId, name, callerFile, tableName, uniqueKey, promoted);
 
         var target = new MappingTarget(null, null, null,
             new HybridJsonb(tableName, uniqueKey, promoted, endpointId));
@@ -168,36 +238,158 @@ public class CsvIngestService {
             .map(pc -> new PromoteColumn(pc.name(), pc.type().name().toLowerCase(), sampleLimit))
             .toList();
 
+        // The askable moves ride AFTER the commit (the registry-retry posture): the card
+        // builder and the sink read committed state, and a failure of either must never
+        // fail an ingest whose rows are already durable.
+        AskableMove move = new AskableMove(connectorId, tableName, connectorTags,
+            breath ? prior.oldTags() : List.of(), promoted, rowsWritten);
+        if (txSync.getTransactionKey() != null) {
+            txSync.registerInterposedSynchronization(new Synchronization() {
+                @Override public void beforeCompletion() { /* nothing to flush */ }
+                @Override public void afterCompletion(int status) {
+                    if (status == Status.STATUS_COMMITTED) makeAskableAfterCommit(tenantId, move);
+                }
+            });
+        }
+
         return new CsvIngestResult(
             connectorId, endpointId, tableName,
             rowsRead, rowsWritten, 0,
-            resultCols, List.of()
+            resultCols, List.of(),
+            connectorTags, sinks.isResolvable(), breath
         );
     }
 
-    /** Insert the dormant (enabled=false) connector row for an inspected CSV ingest. */
-    private void insertDormantConnector(UUID connectorId, long tenantId, String name, String sourceFileName) {
-        em.createNativeQuery(
+    /**
+     * The dormant one-shot twin under (tenant, name) as a breath body, {@code null} when the
+     * name is free — a configured connector's name throws the 409 here. One entity query;
+     * the ORM's own mappings replace hand-parsing (tags are a mapped List, config a mapped
+     * Map, and the target block goes through THE parser, transform preserved).
+     */
+    private PriorOneShot findPrior(long tenantId, String name) {
+        Connector c = connectors
+            .find("tenantId = ?1 and name = ?2 and deletedAt is null", tenantId, name)
+            .firstResult();
+        if (c == null) return null;
+        boolean dormantOneShot = "csv-file".equals(c.getTypeId()) && !c.isEnabled()
+            && Boolean.TRUE.equals(c.getConfig().get("dormant"));
+        if (!dormantOneShot) throw new DuplicateIngestName(name);
+        var endpoint = endpoints.findByName(c.getId(), name).orElseThrow(() ->
+            new IllegalStateException("dormant one-shot '" + name + "' has no endpoint row"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> target = (Map<String, Object>) endpoint.getConfig().getOrDefault("target", Map.of());
+        HybridJsonbSpec spec = HybridJsonbSpec.fromTargetConfig(target);
+        return new PriorOneShot(c.getId(), endpoint.getId(), List.copyOf(c.getTags()),
+            spec.uniqueKeyPath() != null ? spec.uniqueKeyPath() : "$.id", spec.promote());
+    }
+
+    /** Stored columns first (names, order and types are the table's); new ones append. */
+    private static List<PromotedColumn> mergePromote(List<PromotedColumn> stored, List<PromotedColumn> inferred) {
+        Map<String, PromotedColumn> byName = new LinkedHashMap<>();
+        for (PromotedColumn pc : stored) byName.put(pc.name(), pc);
+        for (PromotedColumn pc : inferred) byName.putIfAbsent(pc.name(), pc);
+        return new ArrayList<>(byName.values());
+    }
+
+    /** The scope is first (it keys the card), then the caller's extra tags. */
+    private static List<String> connectorTags(CsvIngestForm form) {
+        List<String> tags = new ArrayList<>();
+        tags.add(form.scope != null && !form.scope.isBlank() ? form.scope.trim() : "system");
+        if (form.tags != null) {
+            for (String t : form.tags.split(",")) {
+                if (!t.isBlank() && !tags.contains(t.trim())) tags.add(t.trim());
+            }
+        }
+        return tags;
+    }
+
+    /**
+     * One command, an askable table (spec 2026-09-02): after the ingest commits, register
+     * the descriptor chunk (one per table — per-row indexing stays the configured
+     * connector's territory) and rediscover each tag so the schema card exists. Both
+     * fail soft with the SchemaCardRefresher contract: the rows are durable, and
+     * {@code lm source rediscover} remains the manual recovery.
+     */
+    private void makeAskableAfterCommit(long tenantId, AskableMove move) {
+        UUID connectorId = move.connectorId();
+        String tableName = move.tableName();
+        List<String> tags = move.tags();
+        List<PromotedColumn> promoted = move.promoted();
+        int rows = move.rows();
+        // Ensure the registry row exists before rediscovering — the writer schedules its own
+        // after-commit retry, but interposed-synchronization ORDER is not ours to rely on.
+        // register() is an upsert, so meeting the retry is harmless either way. Business
+        // columns only: the registerIfNeeded contract (what the card may advertise).
+        try {
+            String[] parts = tableName.split("\\.", 2);
+            Map<String, String> cols = new LinkedHashMap<>();
+            cols.put("external_id", "TEXT");
+            for (PromotedColumn pc : promoted) cols.put(pc.name(), pc.type().ddl);
+            cols.put("data", "JSONB");
+            dynamicTables.register(tenantId, "hybrid:" + tableName, parts[0], parts[1], cols, connectorId);
+        } catch (RuntimeException e) {
+            LOG.warnf("one-shot registry upsert failed for %s: %s", tableName, e.getMessage());
+        }
+        try {
+            StringBuilder text = new StringBuilder("Table ").append(tableName)
+                .append(" (one-shot CSV ingest, ").append(rows).append(" rows). Columns: external_id");
+            for (PromotedColumn pc : promoted) {
+                text.append(", ").append(pc.name()).append(" (").append(pc.type().name().toLowerCase()).append(")");
+            }
+            text.append(", data (jsonb). Tags: ").append(String.join(", ", tags)).append(".");
+            ExtractedChunk chunk = new ExtractedChunk("table", "csv-oneshot", tableName,
+                text.toString(), Map.of("rows", String.valueOf(rows)));
+            for (ExtractionSink sink : sinks) {
+                sink.index(tenantId, "oneshot:" + tableName, tags, List.of(chunk));
+            }
+        } catch (RuntimeException e) {
+            LOG.warnf("one-shot descriptor indexing failed for %s (rows are durable): %s",
+                tableName, e.getMessage());
+        }
+        for (String tag : move.rediscoverTags()) {
+            try {
+                TenantContext.callAsSystem(() ->
+                    QuarkusTransaction.requiringNew().call(() -> discovery.rediscover(tenantId, tag)));
+            } catch (Exception e) {
+                LOG.warnf("one-shot rediscover failed for scope '%s' — manual `lm source rediscover` remains available: %s",
+                    tag, e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Upsert the dormant (enabled=false) connector row — one statement serves the first
+     * breath and every later one, and the {@code dormant} guard closes the threshold's
+     * read-write race fail-closed: losing the race to a configured connector updates
+     * nothing, and zero rows IS the 409 (never the constraint's anonymous 500).
+     */
+    private void upsertDormantConnector(UUID connectorId, long tenantId, String name, String sourceFileName) {
+        int rows = em.createNativeQuery(
             "INSERT INTO connector.connector" +
             " (id, tenant_id, org_id, name, type_id, config, enabled)" +
-            " VALUES (:id, :tid, 0, :name, 'csv-file', CAST(:cfg AS jsonb), false)")
+            " VALUES (:id, :tid, 0, :name, 'csv-file', CAST(:cfg AS jsonb), false)" +
+            " ON CONFLICT (tenant_id, name) DO UPDATE SET config = EXCLUDED.config" +
+            " WHERE connector.config->>'dormant' = 'true'")
             .setParameter("id", connectorId)
             .setParameter("tid", tenantId)
             .setParameter("name", name)
             .setParameter("cfg", buildConnectorConfig(sourceFileName))
             .executeUpdate();
+        if (rows == 0) throw new DuplicateIngestName(name);
     }
 
-    /** Insert the dormant endpoint row carrying the inferred target config. */
-    // S107: the parameters are the endpoint row's columns, passed straight to one INSERT.
+    /** Upsert the dormant endpoint row carrying the (possibly merged) target config. */
+    // S107: the parameters are the endpoint row's columns, passed straight to one statement.
     @SuppressWarnings("java:S107")
-    private void insertDormantEndpoint(UUID endpointId, UUID connectorId, long tenantId, String name,
+    private void upsertDormantEndpoint(UUID endpointId, UUID connectorId, long tenantId, String name,
                                        String sourceFileName, String tableName, String uniqueKey,
                                        List<PromotedColumn> promoted) {
         em.createNativeQuery(
             "INSERT INTO connector.connector_endpoint" +
             " (id, connector_id, tenant_id, org_id, name, path, config, enabled)" +
-            " VALUES (:id, :cid, :tid, 0, :name, :path, CAST(:cfg AS jsonb), false)")
+            " VALUES (:id, :cid, :tid, 0, :name, :path, CAST(:cfg AS jsonb), false)" +
+            " ON CONFLICT (connector_id, name) DO UPDATE" +
+            " SET path = EXCLUDED.path, config = EXCLUDED.config")
             .setParameter("id", endpointId)
             .setParameter("cid", connectorId)
             .setParameter("tid", tenantId)
@@ -345,6 +537,8 @@ public class CsvIngestService {
         UUID lastEndpointId  = UUID.randomUUID();
         String tableName = "ext." + slugify(form.name != null ? form.name : "remote_ingest");
         List<PromoteColumn> promoteCols = new ArrayList<>();
+        List<String> allScopes = new ArrayList<>();
+        boolean anyRefreshed = false;
 
         for (FileDescriptor descriptor : files) {
             CsvIngestResult perFile;
@@ -363,10 +557,13 @@ public class CsvIngestService {
             if (perFile.connectorId() != null) lastConnectorId = perFile.connectorId();
             if (perFile.endpointId()  != null) lastEndpointId  = perFile.endpointId();
             if (perFile.tableName()   != null) tableName        = perFile.tableName();
+            for (String t : perFile.askableScopes()) if (!allScopes.contains(t)) allScopes.add(t);
+            anyRefreshed |= perFile.refreshed();
         }
 
         return new CsvIngestResult(lastConnectorId, lastEndpointId, tableName,
-            totalRowsRead, totalRowsWritten, 0, promoteCols, List.of());
+            totalRowsRead, totalRowsWritten, 0, promoteCols, List.of(),
+            allScopes, sinks.isResolvable(), anyRefreshed);
     }
 
     /**
@@ -581,13 +778,17 @@ public class CsvIngestService {
 
     // ── JSON config builders ──────────────────────────────────────────────────
 
+    private static Map<String, Object> connectorConfigMap(String fileName) {
+        return Map.of(
+            "kind", "csv-file",
+            "path", fileName,
+            "dormant", true
+        );
+    }
+
     private String buildConnectorConfig(String fileName) {
         try {
-            return JSON.writeValueAsString(Map.of(
-                "kind", "csv-file",
-                "path", fileName,
-                "dormant", true
-            ));
+            return JSON.writeValueAsString(connectorConfigMap(fileName));
         } catch (Exception e) {
             throw new RuntimeException(e);
         }

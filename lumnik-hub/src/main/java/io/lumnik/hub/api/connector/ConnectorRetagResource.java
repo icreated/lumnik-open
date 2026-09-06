@@ -1,6 +1,7 @@
 package io.lumnik.hub.api.connector;
 
 import io.lumnik.extraction.spi.ChunkRetagger;
+import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
@@ -26,7 +27,7 @@ public class ConnectorRetagResource {
   @Transactional
   public Response retag(@PathParam("id") UUID id) {
     var c = repo.findById(id);
-    if (c == null) return Response.status(404).build();
+    if (c == null) return ApiErrors.notFound("connector " + id + " not found");
     var tags = c.getTags() != null ? c.getTags() : List.<String>of();
 
     // Through the seam, never the rag schema directly (Act 2 dry-run). No store on the

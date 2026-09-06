@@ -28,6 +28,16 @@ if [ ! -d "$SITE" ]; then
   exit 2
 fi
 
+# This script grades an ARTIFACT, not the sources. Run alone against a site built before the
+# edit under test, it reports the OLD pages green — which is exactly how a renamed heading
+# shipped with a dead link into it: three local runs passed, the publish workflow failed.
+# Refuse a site older than any doc, rather than grading the wrong thing quietly.
+if [ -n "$(find docs mkdocs.yml -newer "$SITE" -print -quit 2>/dev/null)" ]; then
+  echo "✗ '$SITE' is older than docs/ — it would grade the previous build." >&2
+  echo "  Run 'make docs-build' (it builds, then calls this)." >&2
+  exit 2
+fi
+
 python3 - "$SITE" <<'PY'
 import re, sys, pathlib, posixpath
 

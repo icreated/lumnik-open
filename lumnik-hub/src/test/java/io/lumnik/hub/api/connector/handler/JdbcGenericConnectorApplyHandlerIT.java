@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.connector.handler;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.config.EncoderConfig;
 import io.restassured.config.RestAssuredConfig;
@@ -24,7 +25,7 @@ class JdbcGenericConnectorApplyHandlerIT {
               name: jdbc-apply-%d
               connector_type: jdbc-generic
               tenant: 1
-              tags: [erp]
+              scopes: [erp, billing]
             spec:
               connection:
                 url: jdbc:postgresql://db.acme.io:5432/billing
@@ -46,13 +47,11 @@ class JdbcGenericConnectorApplyHandlerIT {
                     watermark_column: ts
                     pk_columns: [invoice_id, line_no]
               schedule: "*/15 * * * *"
-              target:
-                tags: [erp, billing]
+              target: {}
             """.formatted(System.nanoTime());
 
         String connectorId = given().config(YAML_CFG)
-            .header("X-Tenant-Id", "1")
-            .header("X-User-Id", "1")
+            .headers(TestIdentity.tenantAndUser(1))
             .contentType("application/yaml")
             .body(yaml)
         .when().post("/api/platform/connectors/apply")
@@ -66,8 +65,7 @@ class JdbcGenericConnectorApplyHandlerIT {
         // A10: the manifest cron must land on the Connector.schedule COLUMN (the
         // scheduler's WHERE clause) — not only in the config JSON.
         given()
-            .header("X-Tenant-Id", "1")
-            .header("X-User-Id", "1")
+            .headers(TestIdentity.tenantAndUser(1))
         .when().get("/api/platform/connectors/" + connectorId)
         .then()
             .statusCode(200)

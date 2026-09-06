@@ -1,7 +1,9 @@
 package io.lumnik.hub.hook;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.tenant.TenantContextFilter;
+import io.lumnik.identity.Require;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
@@ -34,7 +36,7 @@ public class HookResource {
         Optional<HookBinding> b = registry.allBindings().stream()
             .filter(h -> h.id().equals(id)).findFirst();
         return b.<Response>map(v -> Response.ok(summarize(v)).build())
-                .orElse(Response.status(404).build());
+                .orElseGet(() -> ApiErrors.notFound("hook " + id + " not found"));
     }
 
     @POST @Path("/{hookId}/toggle")
@@ -46,6 +48,9 @@ public class HookResource {
             ? queryTenantId
             : TenantContextFilter.CURRENT_TENANT.get();
         if (tenantId == null) throw new BadRequestException("Tenant required");
+        // Same gate, same reason as HookOverrideResource: the switch this reaches is effective
+        // now, and lm_admin says nothing about which tenant.
+        Require.callerOwnsTenant(tenantId);
         boolean hookExists = registry.allBindings().stream().anyMatch(h -> h.id().equals(hookId));
         if (!hookExists) throw new NotFoundException("Unknown hook id: " + hookId);
         overrideStore.set(tenantId, hookId, body.enabled());

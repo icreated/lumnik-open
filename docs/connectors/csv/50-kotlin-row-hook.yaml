@@ -22,8 +22,9 @@
 # ----------------------------------
 # The host injects two top-level bindings into the script:
 #   bindings["cells"]   — MutableMap<String, Any?> — the current row's columns; mutate in-place.
-#   bindings["context"] — Map<String, Any?>          — the hook's own params.context values from the
-#                          manifest (read-only; e.g. `context: { defaultCountry: FR }` under the hook).
+#   bindings["context"] — Map<String, Any?>          — a copy of the hook's own params.context values from
+#                          the manifest (e.g. `context: { defaultCountry: FR }` under the hook); rebuilt
+#                          per row, so a mutation reaches nothing — treat it as read-only.
 # Changes to "cells" are visible to subsequent hooks in the chain and to the sink writer.
 
 apiVersion: connectors.lumnik.io/v1
@@ -31,7 +32,7 @@ kind: Connector
 metadata:
   name: csv-kotlin-hook           # unique connector name within the workspace
   connector_type: csv-file
-  tags: [demo]
+  scopes: [demo]
 
 spec:
   transport:
@@ -43,8 +44,7 @@ spec:
 
   after_process: none
 
-  target:
-    tags: [demo]
+  target: {}
 
   mapping:
     cell:

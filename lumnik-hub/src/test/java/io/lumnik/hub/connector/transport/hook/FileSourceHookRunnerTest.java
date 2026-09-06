@@ -101,6 +101,17 @@ class FileSourceHookRunnerTest {
     }
 
     @Test
+    void a_script_without_transform_leaves_the_stream_untouched() {
+        // The class contract: an undefined function is a no-op.
+        var hook = new HookSpec("kotlin", "test/only-should-process.kt");
+        var file = new FileDescriptor("/x.csv", 100, Instant.now(), null);
+        InputStream in = new ByteArrayInputStream("data".getBytes(StandardCharsets.UTF_8));
+        assertSame(in, runner.transform(hook, file, in));
+        assertDoesNotThrow(() -> runner.postProcess(hook, file, null));
+        assertTrue(runner.shouldProcess(hook, file, null));
+    }
+
+    @Test
     void shouldProcess_still_loads_a_legitimate_classpath_hook() {
         // reference/skip-if-too-small.kt — same fixture already exercised by
         // SkipIfTooSmallHookTest — must keep working after the refusal is added.

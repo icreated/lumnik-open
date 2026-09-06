@@ -27,6 +27,7 @@ public class UserResource {
 
     @GET
     @Operation(summary = "List active users for a tenant")
+    @Transactional
     public List<UserDto> listAll(@PathParam("tenantId") Long tenantId) {
         requireTenant(tenantId);
         return users.listAll().stream().map(UserDto::from).toList();
@@ -35,6 +36,7 @@ public class UserResource {
     @GET
     @Path("/{id}")
     @Operation(summary = "Get user by ID")
+    @Transactional
     public UserDto findById(@PathParam("tenantId") Long tenantId, @PathParam("id") Long id) {
         return UserDto.from(requireUser(tenantId, id));
     }

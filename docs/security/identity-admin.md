@@ -9,8 +9,11 @@ This page walks each gesture in the bundled console — no Keycloak manual requi
 `user_id` (which row), and the realm roles (`lm_*` for permissions, `scope:*` for métier
 fences). The bundled realm `lumnik` already carries the protocol mappers that turn the
 user attributes `tenant_id` / `user_id` into those claims — you only set attributes and
-roles on users. Outside the open edition, first login **JIT-provisions** the hub row; SCIM
-deprovisions it ([SCIM](scim.md)).
+roles on users. A user *with* a `user_id` is bound to that row directly and never
+provisioned — the bundled `integrator` (`user_id=1`) has its row seeded at install, and a
+`user_id` that names no row still authenticates but the doors that need the row (default
+scope) answer 404. Outside the open edition, a user *without* one is **JIT-provisioned** at
+first login; SCIM deprovisions it ([SCIM](scim.md)).
 
 Console: `http://localhost:8180` → realm **lumnik** (admin credentials from your `.env`).
 The realm ships with **brute-force detection on** (temporary lockout at Keycloak's

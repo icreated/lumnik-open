@@ -7,6 +7,7 @@ import java.util.UUID;
 public record DlqAdminDto(
     UUID id,
     UUID connectorId,
+    String connectorName,
     UUID runId,
     String skipReason,
     String errorMessage,
@@ -16,9 +17,10 @@ public record DlqAdminDto(
     String payload,
     String skipDetail
 ) {
-  public static DlqAdminDto from(ConnectorDeadLetter d) {
+  /** connectorName may be null (hub could not resolve it); clients fall back to the id, as for runs. */
+  public static DlqAdminDto from(ConnectorDeadLetter d, String connectorName) {
     return new DlqAdminDto(
-        d.getId(), d.getConnectorId(), d.getRunId(),
+        d.getId(), d.getConnectorId(), connectorName, d.getRunId(),
         d.getSkipReason(), d.getErrorMessage(),
         d.getAttempts(), d.getResolution(),
         d.getCapturedAt(),

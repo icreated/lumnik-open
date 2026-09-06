@@ -9,7 +9,8 @@ the analytic acts use `curl` because **there is no `lm` command for analytic ask
 
 - Platform on `:8080` — `mvn quarkus:dev -pl lumnik-hub -am`
   (the platform's own env must hold `WOW_SRC_PASSWORD` so `password_env` resolves at run time).
-- Source `piscine` (Adempiere) on `:5432`, hub Postgres on `:5433`, Ollama up.
+- The Adempiere source on `:5432` — its URL is `WOW_SRC_URL` in `.env`, never in a
+  tracked file — hub Postgres on `:5433`, Ollama up.
 - `scripts/wow/.env` filled in (gitignored). Keys: `WOW_SERVER WOW_TENANT_ID WOW_SCOPE
   WOW_SRC_URL WOW_SRC_USER WOW_SRC_PASSWORD WOW_HUB_HOST WOW_HUB_PORT WOW_HUB_DB
   WOW_RO_USER WOW_RO_PASSWORD`.

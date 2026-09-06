@@ -271,15 +271,9 @@ public class CsvFileConnectorType implements ConnectorType {
 
   /** Parses a JSON array of single-key hook objects into {@link HookInvocation} list. */
   private static List<HookInvocation> parseHooks(JsonNode arr) {
-    if (arr == null || !arr.isArray()) return List.of();
-    List<HookInvocation> out = new ArrayList<>(arr.size());
-    for (JsonNode entry : arr) {
-      if (entry.isObject() && entry.size() == 1) {
-        var f = entry.fields().next();
-        out.add(new HookInvocation(f.getKey(), f.getValue()));
-      }
-    }
-    return out;
+    // Shared with MappingLoader so csv and manifest/jdbc mappings refuse a malformed hook the same
+    // way (this used to silently DROP a bad entry, where MappingLoader threw).
+    return HookInvocation.parseList(arr);
   }
 
   // -----------------------------------------------------------------------

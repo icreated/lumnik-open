@@ -22,9 +22,27 @@ flowchart TB
 ## 1. Read the run
 
 ```bash
-lm run list --connector my-erp    # newest first — find the run
+lm run list --connector my-erp    # newest first — find yours
 lm run get <RUN_ID>               # IN, OUT, SKIPPED, DEAD-LETTERS
 ```
+
+Two of those, as the terminal shows them — a run that failed outright, and a run that
+completed but set rows aside:
+
+```
+$ lm run get 3ccd21eb
+ID        CONNECTOR  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+3ccd21eb  products   Failed  0   0    0        0             2026-09-05 05:38  2026-09-05 05:38
+✖ run failed: SFTP connect failed: DefaultConnectFuture[lumnik@sftp.example.internal/<unresolved>:22]: Failed (UnresolvedAddressException) to execute: null
+
+$ lm run get f0466804
+ID        CONNECTOR  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+f0466804  orders     Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
+⚠ 2 rows quarantined — see: lm dlq list --run f0466804-0824-4eb4-8aa2-54e263dccafe
+```
+
+The first one never read a row: the SFTP host name does not resolve — a network or manifest
+problem, fixed outside the hub. The second read everything and quarantined two rows.
 
 Three shapes of trouble, three directions:
 
@@ -50,10 +68,32 @@ lm dlq list --run <RUN_ID>    # every quarantined row: reason, attempts, message
 lm dlq get <ID>               # the full detail — including the offending payload
 ```
 
+`--run` takes the run's **full** id — the one `lm run get` prints in its warning (the 8-character
+prefix from the table is refused with `invalid UUID`). `dlq get` accepts the prefix — keep
+the same `--run` on it, so the prefix is resolved against the list you just read.
+
+```
+$ lm dlq list --run f0466804-0824-4eb4-8aa2-54e263dccafe
+ID        CONNECTOR  RUN       REASON           ATTEMPTS  MESSAGE
+66384fc7  487ed9d1   f0466804  MalformedSource  1         /tmp/exports/orders.csv:9 — Index for header 'status' is 2…
+c58de40c  487ed9d1   f0466804  MalformedSource  1         /tmp/exports/orders.csv:8 — Record has 6 values but only 5…
+
+$ lm dlq get 66384fc7 --run f0466804-0824-4eb4-8aa2-54e263dccafe
+ID:        66384fc7-cf2e-4ad9-bc0a-6d09376ca8c7
+Reason:    MalformedSource
+Attempts:  1
+Message:   /tmp/exports/orders.csv:9 — Index for header 'status' is 2 but CSVRecord only has 2 values!
+Detail:    {"file":"/tmp/exports/orders.csv","line":9,"message":"Index for header 'status' is 2 but CSVRecord only has 2 values!"}
+Payload:   {"raw":["ORD-1008","C-006"],"file":"/tmp/exports/orders.csv","line":9}
+```
+
+Line 9 stopped after two values. The payload is the row as the source sent it — the fix is
+in the export.
+
 | Reason | What it means | Where to look |
 |---|---|---|
 | `MalformedSource` | the source row itself is broken — encoding, truncated line | the file or export; a [transformer](../connectors/transformers.md) can often repair it at the door |
-| `MappingFailed` | the mapping (or a [hook](../connectors/transformers.md)) threw on this row | `lm mapping get` — the template and its overrides |
+| `MappingFailed` | a [hook](../connectors/transformers.md) emitted nothing for this row without declaring a drop — the engine's net against silent drops. A hook that *throws* never lands here: it fails the chunk, and the run | `lm mapping get` — the template and its overrides |
 | `ValidationFailed` | the row broke a declared expectation | the manifest's declaration vs. the data's reality |
 | `WriteFailed` | the database write failed | the target table — types, drift; the hub logs have the SQL error |
 

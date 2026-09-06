@@ -34,3 +34,4 @@ lm/dist/
 /site/
 /.venv-docs/
 backups/
+analyse-ports.yml

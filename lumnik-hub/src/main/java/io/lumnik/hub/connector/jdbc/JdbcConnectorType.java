@@ -16,6 +16,7 @@ import io.lumnik.hub.connector.mapping.spec.ErrorPolicy;
 import io.lumnik.hub.connector.mapping.spec.HookInvocation;
 import io.lumnik.hub.connector.mapping.spec.MappingSpec;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget;
+import io.lumnik.hub.connector.mapping.MapColumnsRules;
 import io.lumnik.hub.connector.mapping.writer.DynamicTableWriter;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.sql.SqlIdentifiers;
@@ -200,38 +201,20 @@ public class JdbcConnectorType implements ConnectorType {
   }
 
   /**
-   * Refuses a {@code rename} map that would reach the writer broken: a null target (a manifest
-   * typo — {@code rename:\n  id:} — with a colon and nothing after it; not a deliberate value),
-   * a target that is not a plain identifier (it becomes a column name in DDL), a target that is
-   * itself a hub system column (renaming a source column INTO the collision defeats the point),
-   * or two source columns renamed onto the same target (one of them would be silently lost). A
-   * source column that happens to be a system column name is not itself an error — that is
-   * exactly the case this knob exists to resolve.
+   * Refuses a {@code rename} the hub cannot honour. The rules are {@link MapColumnsRules}; this
+   * door throws on the FIRST violation, where the two apply-time doors accumulate all of them.
+   *
+   * <p>The one thing local to here: a source column that happens to BE a system column is not an
+   * error — resolving exactly that collision is what this knob exists for. Only a rename INTO one
+   * is refused.
    */
   static void validateRename(Map<String, ?> rename) {
-    if (rename == null || rename.isEmpty()) return;
-    Set<String> targets = new HashSet<>();
-    for (Map.Entry<String, ?> e : rename.entrySet()) {
-      if (e.getValue() == null) {
-        throw new ConfigValidationException(
-            "config key 'rename." + e.getKey() + "' must not be null — a manifest column with a "
-            + "colon and nothing after it is not a rename target");
-      }
-      String target = String.valueOf(e.getValue());
-      if (!SqlIdentifiers.isPlainIdentifier(target)) {
-        throw new ConfigValidationException(
-            "config key 'rename." + e.getKey() + "' must be a plain identifier "
-            + "(letters, digits, underscore; not starting with a digit): " + target);
-      }
-      if (DynamicTableWriter.SYSTEM_COLUMNS.contains(target)) {
-        throw new ConfigValidationException(
-            "config key 'rename." + e.getKey() + "' targets '" + target
-            + "', a hub system column (" + String.join(", ", new TreeSet<>(DynamicTableWriter.SYSTEM_COLUMNS)) + ")");
-      }
-      if (!targets.add(target)) {
-        throw new ConfigValidationException(
-            "config key 'rename' targets '" + target + "' from more than one source column");
-      }
+    // The rule takes a node; this door is the one that has a Map, so it converts here rather
+    // than making the shared rule carry two shapes of the same loop.
+    var violations = MapColumnsRules.checkRename(MAPPER.valueToTree(rename));
+    if (!violations.isEmpty()) {
+      var v = violations.get(0);
+      throw new ConfigValidationException("config key '" + v.path() + "' " + v.reason());
     }
   }
 

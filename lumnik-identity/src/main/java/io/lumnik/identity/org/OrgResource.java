@@ -7,6 +7,7 @@ import io.lumnik.identity.geo.AddressInput;
 import io.lumnik.identity.geo.Coords;
 import io.lumnik.identity.geo.Geocoder;
 import io.lumnik.identity.tenant.TenantRepository;
+import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import jakarta.validation.Valid;
@@ -40,6 +41,7 @@ public class OrgResource {
 
     @GET
     @Operation(summary = "List active organizations for a tenant")
+    @Transactional
     public List<OrgDto> listAll(@PathParam("tenantId") Long tenantId) {
         requireTenant(tenantId);
         return orgs.listAll().stream().map(OrgDto::from).toList();
@@ -48,6 +50,7 @@ public class OrgResource {
     @GET
     @Path("/{id}")
     @Operation(summary = "Get organization by ID")
+    @Transactional
     public OrgDto findById(@PathParam("tenantId") Long tenantId, @PathParam("id") Long id) {
         return OrgDto.from(requireOrg(tenantId, id));
     }
@@ -56,11 +59,16 @@ public class OrgResource {
     @Operation(summary = "Create an organization")
     public Response create(@PathParam("tenantId") Long tenantId, @Valid OrgCommands.Create cmd) {
         requireTenant(tenantId);
-        if (orgs.codeExists(cmd.code()))
-            throw new ClientErrorException("Org code already exists: " + cmd.code(), Response.Status.CONFLICT);
-        if (cmd.parentOrgId() != null) {
-            requireOrg(tenantId, cmd.parentOrgId());
-        }
+        // The checks read identity.org, whose RLS policy is bound with SET LOCAL — transaction-scoped.
+        // They run before the transaction on purpose (see below), so they open their own: read
+        // outside one, every parent was a 404 and a duplicate code reached the unique constraint.
+        QuarkusTransaction.requiringNew().run(() -> {
+            if (orgs.codeExists(tenantId, cmd.code()))
+                throw new ClientErrorException("Org code already exists: " + cmd.code(), Response.Status.CONFLICT);
+            if (cmd.parentOrgId() != null) {
+                requireOrg(tenantId, cmd.parentOrgId());
+            }
+        });
 
         // Geocoding is a blocking HTTP round-trip; resolve it before opening a transaction so a
         // slow/hung Nominatim call never holds a DB connection.
@@ -80,11 +88,15 @@ public class OrgResource {
     @Operation(summary = "Update organization name, description, and hierarchy")
     public OrgDto update(@PathParam("tenantId") Long tenantId, @PathParam("id") Long id,
                          @Valid OrgCommands.Update cmd) {
-        Organization o = requireOrg(tenantId, id);
-        if (cmd.parentOrgId() != null) {
-            requireOrg(tenantId, cmd.parentOrgId());
-            requireNoCycle(tenantId, id, cmd.parentOrgId());
-        }
+        // Same reason as create(): these reads need a transaction of their own to see the tenant.
+        Organization o = QuarkusTransaction.requiringNew().call(() -> {
+            Organization current = requireOrg(tenantId, id);
+            if (cmd.parentOrgId() != null) {
+                requireOrg(tenantId, cmd.parentOrgId());
+                requireNoCycle(tenantId, id, cmd.parentOrgId());
+            }
+            return current;
+        });
 
         // Same as create(): resolve the geocode before the transaction, using the pre-update
         // (still-current) coordinates/timestamp to decide whether a re-geocode is even needed.
@@ -122,6 +134,7 @@ public class OrgResource {
     @GET
     @Path("/tree")
     @Operation(summary = "Get org tree, optionally rooted at a specific org")
+    @Transactional
     public List<OrgTreeNodeDto> tree(
             @PathParam("tenantId") Long tenantId,
             @QueryParam("root")  Long rootId,

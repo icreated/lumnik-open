@@ -15,22 +15,26 @@ import java.util.Map;
 public class MaskHook implements CellHook {
 
   @Override
-  public void apply(Map<String, Object> row, JsonNode params, MappingState s) {
-    String col = params.path("column").asText();
-    int keepLast = params.path("keep-last").asInt(0);
-    int keepFirst = params.path("keep-first").asInt(0);
+  public void validateParams(JsonNode params) {
+    // Empty and multi-character are the same defect seen from two sides. asText("*") returns ""
+    // for a PRESENT-but-empty node, so the default never applies and charAt(0) threw; a longer
+    // value did not throw, it was silently truncated by charAt(0), so `mask-char: "**"` masked
+    // with one '*' and the manifest quietly meant something other than what it said. Refusing
+    // both, once per spec, is what makes the message true of the code in apply().
     String maskCharText = params.path("mask-char").asText("*");
     if (maskCharText.length() != 1) {
-      // Empty and multi-character are the same defect seen from two sides. asText("*") returns ""
-      // for a PRESENT-but-empty node, so the default never applies and charAt(0) threw; a longer
-      // value did not throw, it was silently truncated by charAt(0), so `mask-char: "**"` masked
-      // with one '*' and the manifest quietly meant something other than what it said. Refusing
-      // both is what makes the message above true of the code below.
       throw new MappingValidationException(
           "mask hook: 'mask-char' must be exactly one character (got "
               + (maskCharText.isEmpty() ? "an empty value" : "\"" + maskCharText + "\"") + ")");
     }
-    char maskChar = maskCharText.charAt(0);
+  }
+
+  @Override
+  public void apply(Map<String, Object> row, JsonNode params, MappingState s) {
+    String col = params.path("column").asText();
+    int keepLast = params.path("keep-last").asInt(0);
+    int keepFirst = params.path("keep-first").asInt(0);
+    char maskChar = params.path("mask-char").asText("*").charAt(0);
 
     Object v = row.get(col);
     if (v == null) return;

@@ -1,5 +1,6 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.quarkus.agroal.DataSource;
@@ -77,7 +78,7 @@ class EntityConflictsIT {
       st.execute("INSERT INTO connector.t_confl_erp VALUES (2,'C-900','Bob')");
       st.execute("INSERT INTO connector.t_confl_csv VALUES (2,'C-900','Robert','b@x.fr')");
     }
-    given().config(YAML_CFG).header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().config(YAML_CFG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
   }
@@ -103,7 +104,7 @@ class EntityConflictsIT {
 
   @Test
   void aggregate_lists_only_disagreeing_rows() {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .when().get("/api/entities/conflicts")
         .then().statusCode(200)
         .body("findAll { it.entity == 'ConflictProbe' }", hasSize(1))
@@ -114,7 +115,7 @@ class EntityConflictsIT {
 
   @Test
   void rls_keeps_other_tenants_conflicts_invisible() {
-    given().header("X-Tenant-ID", "2").header("X-User-ID", "2")
+    given().headers(TestIdentity.tenantAndUser(2, 2))
         .when().get("/api/entities/conflicts")
         .then().statusCode(200)
         .body("findAll { it.entity == 'ConflictProbe' && it.key == 'C-200' }", hasSize(0))
@@ -123,7 +124,7 @@ class EntityConflictsIT {
 
   @Test
   void limit_caps_the_aggregate() {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .when().get("/api/entities/conflicts?limit=1")
         .then().statusCode(200)
         .body("size()", Matchers.lessThanOrEqualTo(1));
@@ -134,7 +135,7 @@ class EntityConflictsIT {
     try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
       st.execute("DROP VIEW IF EXISTS connector.\"v_conflictprobe\"");
     }
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .when().get("/api/entities/conflicts")
         .then().statusCode(200)
         .body("findAll { it.entity == 'ConflictProbe' }", hasSize(0));
@@ -173,7 +174,7 @@ class EntityConflictsIT {
       st.execute("INSERT INTO connector.t_confl_broken VALUES (1,'K-1','a')");
       st.execute("INSERT INTO connector.t_confl_broken VALUES (1,'K-1','b')");
     }
-    given().config(YAML_CFG).header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().config(YAML_CFG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(BROKEN_FIRST_MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
 
@@ -181,7 +182,7 @@ class EntityConflictsIT {
       st.execute("DROP VIEW IF EXISTS connector.\"v_brokenfirst\"");
     }
 
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .when().get("/api/entities/conflicts")
         .then().statusCode(200)
         .body("findAll { it.entity == 'BrokenFirst' }", hasSize(0))

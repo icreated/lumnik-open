@@ -1,7 +1,10 @@
 package io.lumnik.hub.api.connector;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
+import io.lumnik.hub.connector.mapping.MapColumnsRules;
 import io.lumnik.hub.connector.repository.ConnectorCursorEntityRepository;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
@@ -35,6 +38,7 @@ public class EndpointResource {
     @Inject EntityManager em;
     @Inject RestHttpClient http;
     @Inject AuthProviderRegistry authReg;
+    @Inject ObjectMapper json;
 
     /** Schemas dynamic ingestion writes to — the only ones an endpoint purge may target. */
     private static final Set<String> PURGEABLE_SCHEMAS = Set.of("connector", "ext");
@@ -42,8 +46,8 @@ public class EndpointResource {
     @GET
     @Transactional
     public Response list(@PathParam("cid") UUID cid) {
-        if (connRepo.findById(cid) == null) return Response.status(404).build();
-        List<EndpointDto> dtos = epRepo.listByConnector(cid).stream()
+        if (connRepo.findById(cid) == null) return ApiErrors.notFound("connector " + cid + " not found");
+        List<EndpointDto> dtos = epRepo.listAllByConnector(cid).stream()
             .map(EndpointDto::from)
             .toList();
         return Response.ok(dtos).build();
@@ -54,7 +58,7 @@ public class EndpointResource {
     @Transactional
     public Response get(@PathParam("cid") UUID cid, @PathParam("eid") UUID eid) {
         ConnectorEndpoint ep = resolveEndpoint(cid, eid);
-        if (ep == null) return Response.status(404).build();
+        if (ep == null) return ApiErrors.notFound("endpoint " + eid + " not found under connector " + cid);
         return Response.ok(EndpointDto.from(ep)).build();
     }
 
@@ -64,7 +68,18 @@ public class EndpointResource {
     public Response update(@PathParam("cid") UUID cid, @PathParam("eid") UUID eid,
                            EndpointDto body) {
         ConnectorEndpoint ep = resolveEndpoint(cid, eid);
-        if (ep == null) return Response.status(404).build();
+        if (ep == null) return ApiErrors.notFound("endpoint " + eid + " not found under connector " + cid);
+
+        // The sibling of ConnectorAdminResource: this door persisted config with no validation.
+        // A jdbc table's rename lives here, and a rename INTO a hub system column kills the run
+        // (JdbcConnectorType.validateRename) — refuse it at write time, same rule, same shape.
+        if (body.config() != null) {
+            Response bad = MapColumnsRules.firstStoredConfigViolation(json.valueToTree(body.config()))
+                .map(v -> Response.status(400).type(MediaType.APPLICATION_JSON)
+                    .entity(ApiErrors.error("config '" + v.path() + "' " + v.reason())).build())
+                .orElse(null);
+            if (bad != null) return bad;
+        }
 
         if (body.method() != null) ep.setMethod(body.method());
         if (body.path() != null) ep.setPath(body.path());
@@ -80,7 +95,7 @@ public class EndpointResource {
     @Transactional
     public Response delete(@PathParam("cid") UUID cid, @PathParam("eid") UUID eid) {
         ConnectorEndpoint ep = resolveEndpoint(cid, eid);
-        if (ep == null) return Response.status(404).build();
+        if (ep == null) return ApiErrors.notFound("endpoint " + eid + " not found under connector " + cid);
         ep.softDelete();
         return Response.status(204).build();
     }
@@ -92,7 +107,7 @@ public class EndpointResource {
     @Transactional
     public Response test(@PathParam("cid") UUID cid, @PathParam("eid") UUID eid) throws Exception {
         ConnectorEndpoint ep = resolveEndpoint(cid, eid);
-        if (ep == null) return Response.status(404).build();
+        if (ep == null) return ApiErrors.notFound("endpoint " + eid + " not found under connector " + cid);
 
         Connector conn = connRepo.findById(cid);
         String baseUrl = (String) conn.getConfig().getOrDefault("base_url", "");
@@ -124,7 +139,7 @@ public class EndpointResource {
     @Transactional
     public Response resetCursor(@PathParam("cid") UUID cid, @PathParam("eid") UUID eid) {
         ConnectorEndpoint ep = resolveEndpoint(cid, eid);
-        if (ep == null) return Response.status(404).build();
+        if (ep == null) return ApiErrors.notFound("endpoint " + eid + " not found under connector " + cid);
 
         // Cursor entity keyed by connectorId; for endpoint-level cursors we store endpoint id
         var cursor = cursorRepo.findById(ep.getId());
@@ -143,7 +158,7 @@ public class EndpointResource {
     @Transactional
     public Response purge(@PathParam("cid") UUID cid, @PathParam("eid") UUID eid) {
         ConnectorEndpoint ep = resolveEndpoint(cid, eid);
-        if (ep == null) return Response.status(404).build();
+        if (ep == null) return ApiErrors.notFound("endpoint " + eid + " not found under connector " + cid);
 
         Map<String, Object> cfg = ep.getConfig();
         Object targetCfg = cfg != null ? cfg.get("target") : null;
@@ -175,9 +190,26 @@ public class EndpointResource {
         }
         String fqn = quoteIdent(parts[0]) + "." + quoteIdent(parts[1]);
 
+        // Purge is by endpoint, so the table must carry endpoint_id — the hybrid tables
+        // (ext.* and connector.<hybrid>) do; a connector.t_* table (DynamicTableWriter) has no
+        // endpoint column and is not purgeable this way. The schema allowlist gates by SCHEMA, but
+        // "has endpoint_id" is a per-TABLE property, so check it here and fail cleanly (400) rather
+        // than let the native DELETE raise a raw 500.
+        Number hasCol = (Number) em.createNativeQuery(
+            "SELECT count(*) FROM information_schema.columns "
+          + "WHERE table_schema = ? AND table_name = ? AND column_name = 'endpoint_id'")
+            .setParameter(1, parts[0])
+            .setParameter(2, parts[1])
+            .getSingleResult();
+        if (hasCol.intValue() == 0) {
+            return Response.status(400)
+                .entity(Map.of("error", "table " + table + " is not purgeable by endpoint (no endpoint_id column)"))
+                .build();
+        }
+
         // Native query: delete all rows for this endpoint
         int rows = em.createNativeQuery(
-            "DELETE FROM " + fqn + " WHERE _endpoint_id = ?")
+            "DELETE FROM " + fqn + " WHERE endpoint_id = ?")
             .setParameter(1, ep.getId())
             .executeUpdate();
 

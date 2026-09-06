@@ -15,6 +15,7 @@ public class ConnectorValidationService {
 
     public ValidationResult validate(JsonNode manifest) {
         List<ValidationError> envelopeErrs = EnvelopeValidator.validate(manifest);
+        envelopeErrs.addAll(ScopesValidator.errors(manifest));
         if (!envelopeErrs.isEmpty()) {
             return new ValidationResult(envelopeErrs, List.of());
         }
@@ -33,6 +34,7 @@ public class ConnectorValidationService {
         List<ValidationError> all = new ArrayList<>();
         all.addAll(ConfigDefRunner.run(v.configDef(), spec, "spec"));
         all.addAll(v.validateCrossField(spec));
+        all.addAll(ScopesValidator.warnings(manifest));
 
         List<ValidationError> errors = new ArrayList<>();
         List<ValidationError> warnings = new ArrayList<>();

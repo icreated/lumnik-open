@@ -3,7 +3,7 @@ kind: Connector
 metadata:
   name: acme-sched-bad
   connector_type: kafka
-  tags: [erp]
+  scopes: [erp]
 spec:
   name: orders
   brokers: "broker1:9092,broker2:9092"
@@ -11,5 +11,4 @@ spec:
   format: json
   schedule: "every tuesday"
   poll_timeout_ms: 2000
-  target:
-    tags: [erp]
+  target: {}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/icreated/lumnik-open/lm/internal/client"
+	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/icreated/lumnik-open/lm/internal/tui/style"
 	"github.com/icreated/lumnik-open/lm/internal/types"
 	"github.com/rivo/tview"
@@ -83,10 +84,10 @@ func (p *Endpoints) renderHeader() {
 func (p *Endpoints) renderRows() [][]string {
 	rows := make([][]string, 0, len(p.endpoints))
 	for _, e := range p.endpoints {
-		lastRun := ""
-		if e.LastRunAt != nil {
-			lastRun = e.LastRunAt.Format("2006-01-02 15:04:05")
-		}
+		// Minute precision, matching every other table cell (runs, connector, migrations,
+		// scopes) — endpoints was the one table still at second precision, for no reason
+		// tied to this column's meaning.
+		lastRun := output.HumanTime(e.LastRunAt)
 		enabled := "yes"
 		if !e.Enabled {
 			enabled = "no"
@@ -159,10 +160,7 @@ func (p *Endpoints) SelectedDescribe() (string, string, bool) {
 	if !ok {
 		return "", "", false
 	}
-	lastRun := ""
-	if ep.LastRunAt != nil {
-		lastRun = ep.LastRunAt.Format("2006-01-02 15:04:05")
-	}
+	lastRun := output.HumanTimeSeconds(ep.LastRunAt)
 	enabled := "false"
 	if ep.Enabled {
 		enabled = "true"

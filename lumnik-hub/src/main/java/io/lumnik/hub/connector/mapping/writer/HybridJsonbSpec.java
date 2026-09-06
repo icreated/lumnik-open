@@ -1,6 +1,10 @@
 package io.lumnik.hub.connector.mapping.writer;
 
+import io.lumnik.hub.sql.SqlIdentifiers;
+
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -11,6 +15,38 @@ import java.util.Optional;
  * @param promote       Columns to extract and store in typed Postgres columns
  */
 public record HybridJsonbSpec(String table, String uniqueKeyPath, List<PromotedColumn> promote) {
+
+    /**
+     * The one parser of the endpoint {@code target} block — every reader consumes THIS,
+     * never a private re-parse (a third inline copy once silently dropped {@code transform}).
+     * Carries the DDL-injection guard: {@code table} goes verbatim into admin-datasource DDL,
+     * so this factory must not trust its caller either.
+     */
+    @SuppressWarnings("unchecked")
+    public static HybridJsonbSpec fromTargetConfig(Map<String, Object> t) {
+        if (t == null) throw new IllegalArgumentException("endpoint config missing 'target'");
+        String table = (String) t.get("table");
+        if (!SqlIdentifiers.isPlainQualifiedIdentifier(table)) {
+            throw new IllegalArgumentException(
+                "target.table must be a plain identifier or schema.table pair (letters, digits, underscore; "
+                    + "not starting with a digit): " + table);
+        }
+        String key = (String) t.get("unique_key");
+        List<Map<String, Object>> rawPromote =
+            (List<Map<String, Object>>) t.getOrDefault("promote", List.of());
+        List<PromotedColumn> promote = new ArrayList<>();
+        for (Map<String, Object> p : rawPromote) {
+            Object transformRaw = p.get("transform");
+            promote.add(new PromotedColumn(
+                (String) p.get("name"),
+                (String) p.get("path"),
+                SqlType.valueOf(String.valueOf(p.get("type")).toUpperCase()),
+                transformRaw != null
+                    ? Optional.of(Transform.valueOf(String.valueOf(transformRaw).toUpperCase()))
+                    : Optional.empty()));
+        }
+        return new HybridJsonbSpec(table, key, promote);
+    }
 
     public record PromotedColumn(String name, String jsonPath, SqlType type, Optional<Transform> transform) {}
 

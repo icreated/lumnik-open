@@ -46,7 +46,7 @@ public class DeadLetterCapture {
   }
 
   @Transactional
-  public void discard(UUID dlqId, Long userId) {
+  public void discard(UUID dlqId, long userId) {
     var dlq = repo.findById(dlqId);
     if (dlq == null) return;
     dlq.setResolution("DISCARDED");
@@ -55,7 +55,7 @@ public class DeadLetterCapture {
   }
 
   @Transactional
-  public void markReplayed(UUID dlqId, UUID newRunId, Long userId) {
+  public void markReplayed(UUID dlqId, UUID newRunId, long userId) {
     var dlq = repo.findById(dlqId);
     if (dlq == null) return;
     dlq.setResolution("REPLAYED");

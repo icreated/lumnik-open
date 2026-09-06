@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.rest;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.Test;
 
@@ -25,8 +26,7 @@ class RestDiscoveryResourceIT {
     void from_openapi_returns_yaml_manifest() {
         // Use the platform's own OpenAPI document — always available in test mode
         given()
-            .header("X-Tenant-Id", "1")
-            .header("X-User-Id", "1")
+            .headers(TestIdentity.tenantAndUser(1))
             .contentType("application/json")
             .body(Map.of(
                 "url", "http://localhost:8081/q/openapi",
@@ -42,8 +42,7 @@ class RestDiscoveryResourceIT {
     @Test
     void from_openapi_returns_400_when_url_missing() {
         given()
-            .header("X-Tenant-Id", "1")
-            .header("X-User-Id", "1")
+            .headers(TestIdentity.tenantAndUser(1))
             .contentType("application/json")
             .body(Map.of("name", "myconnector"))
         .when().post("/api/platform/sources/rest/from-openapi")
@@ -54,8 +53,7 @@ class RestDiscoveryResourceIT {
     @Test
     void probe_returns_400_when_baseUrl_missing() {
         given()
-            .header("X-Tenant-Id", "1")
-            .header("X-User-Id", "1")
+            .headers(TestIdentity.tenantAndUser(1))
             .contentType("application/json")
             .body(Map.of("endpointPath", "/v1/items"))
         .when().post("/api/platform/sources/rest/probe")
@@ -68,8 +66,7 @@ class RestDiscoveryResourceIT {
         // We point at a host that won't exist — prober should throw and the
         // endpoint should propagate a 5xx (not 4xx, not silently 200).
         given()
-            .header("X-Tenant-Id", "1")
-            .header("X-User-Id", "1")
+            .headers(TestIdentity.tenantAndUser(1))
             .contentType("application/json")
             .body(Map.of(
                 "baseUrl", "https://this-host-does-not-exist.lumnik.invalid",

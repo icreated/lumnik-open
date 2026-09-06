@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/icreated/lumnik-open/lm/internal/types"
@@ -58,12 +57,8 @@ func newHookCmd() *cobra.Command {
 		Short: "Apply a hook from YAML file",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			file, _ := cmd.Flags().GetString("file")
-			data, err := os.ReadFile(file)
+			payload, err := decodeManifest(file, "hook")
 			if err != nil {
-				return err
-			}
-			var payload map[string]any
-			if err := yaml.Unmarshal(data, &payload); err != nil {
 				return err
 			}
 			c, err := ClientFromCmd(cmd)

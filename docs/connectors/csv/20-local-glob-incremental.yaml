@@ -7,19 +7,19 @@
 #
 # How the cursor works
 # --------------------
-# The hub persists a cursor record per connector run: { file, rowsProcessed }.
-# On the next run the reader skips already-processed rows within a file and
-# picks up new files that match the glob but were absent in previous runs.
-# Dropping a cursor (lm connector reset csv-local-glob) triggers a full reload.
-#
-# memory pressure for large files and allows partial-file crash recovery.
+# The reader commits a cursor { file, rowsProcessed } after every 500-row chunk that another
+# chunk follows; the run's LAST chunk (end of stream) saves nothing. The next run resumes from
+# the last saved position: the rest of that file, then every file that sorts AFTER it in the
+# lexically ordered glob result — so name incoming files monotonically (date-prefixed).
+# A file that fits in one chunk therefore leaves no cursor and is simply re-read; the table
+# deduplicates by _row_hash either way. Walk-through: docs/connectors/csv.md.
 
 apiVersion: connectors.lumnik.io/v1
 kind: Connector
 metadata:
   name: csv-local-glob            # unique connector name within the workspace
   connector_type: csv-file
-  tags: [demo]
+  scopes: [demo]
 
 spec:
   transport:
@@ -34,7 +34,6 @@ spec:
   after_process: none             # keep source files in place; cursor handles incrementalism
 
   target:
-    tags: [demo]
     indexes:                  # Postgres indexes created with the table (ask-to-SQL perf lever).
       - columns: [email]      # v1: ensured at table creation and on column evolution; to add an
                               # index to an existing unchanged table, purge/recreate the connector.

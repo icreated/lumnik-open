@@ -3,12 +3,11 @@ kind: Connector
 metadata:
   name: acme-events
   connector_type: kafka
-  tags: [erp]
+  scopes: [erp]
 spec:
   name: orders
   brokers: "broker1:9092,broker2:9092"
   topic: erp.orders.v1
   format: json
   poll_timeout_ms: 2000
-  target:
-    tags: [erp]
+  target: {}

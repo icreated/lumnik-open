@@ -29,7 +29,7 @@ public class OpenApiImporter {
         // tenant is deliberately NOT pinned — apply refuses a manifest whose declared tenant
         // is not the authenticated one, so a hardcoded value made every draft un-appliable.
         sb.append("  name: ").append(name).append('\n').append("  connector_type: rest-generic\n");
-        if (tags != null && !tags.isEmpty()) sb.append("  tags: [").append(String.join(", ", tags)).append("]\n");
+        if (tags != null && !tags.isEmpty()) sb.append("  scopes: [").append(String.join(", ", tags)).append("]\n");
         sb.append("spec:\n  base_url: ").append(api.getServers().get(0).getUrl()).append('\n');
         sb.append("  auth: { kind: bearer, token_env: ").append(safeName.toUpperCase(Locale.ROOT)).append("_API_KEY }\n");
         sb.append("  endpoints:\n");

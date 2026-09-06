@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.connector;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
@@ -37,8 +38,7 @@ class ConnectorAdminResourceTest {
     });
 
     given()
-      .header("X-Tenant-Id", "1")
-      .header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().get("/api/platform/connectors")
       .then().statusCode(200)
         .body("$.size()", greaterThanOrEqualTo(1))
@@ -49,7 +49,7 @@ class ConnectorAdminResourceTest {
   @Test
   void create_then_update_then_delete() {
     var created = given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .contentType("application/json")
       .body("""
         {"tenantId":1,"name":"crud-test","typeId":"hello-world","config":{"count":5}}
@@ -60,7 +60,7 @@ class ConnectorAdminResourceTest {
         .extract().jsonPath().getString("id");
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .contentType("application/json")
       .body("""
         {"tenantId":1,"name":"crud-test","typeId":"hello-world","config":{"count":99}}
@@ -70,7 +70,7 @@ class ConnectorAdminResourceTest {
         .body("config.count", Matchers.equalTo(99));
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().delete("/api/platform/connectors/" + created)
       .then().statusCode(204);
   }
@@ -78,7 +78,7 @@ class ConnectorAdminResourceTest {
   @Test
   void run_triggers_engine_and_returns_run_id() {
     var id = given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .contentType("application/json")
       .body("""
         {"tenantId":1,"name":"action-test","typeId":"hello-world","config":{"count":10}}
@@ -87,7 +87,7 @@ class ConnectorAdminResourceTest {
       .then().statusCode(201).extract().jsonPath().getString("id");
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().post("/api/platform/connectors/" + id + "/run")
       .then().statusCode(202)
         .body("runId", notNullValue());

@@ -3,7 +3,7 @@ kind: Connector
 metadata:
   name: s3-import
   connector_type: csv-file
-  tags: [analytics]
+  scopes: [analytics]
 spec:
   transport:
     kind: s3
@@ -11,5 +11,4 @@ spec:
   parser:
     has_header: true
   after_process: none
-  target:
-    tags: [analytics]
+  target: {}

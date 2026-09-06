@@ -38,6 +38,39 @@ class CsvIngestResourceIT {
     }
 
     /**
+     * The breath: re-ingesting the same one-shot name answers 200 with refreshed=true —
+     * one more inspiration, never catch #8's 409 (which now guards only configured
+     * connectors' names) and never the anonymous 500 the installer originally hit.
+     */
+    @Test
+    void re_ingesting_the_same_name_answers_200_refreshed() throws Exception {
+        File csv = Files.createTempFile("it_dup_", ".csv").toFile();
+        Files.writeString(csv.toPath(), "id,email\n1,a@x\n");
+        String name = "it_dup_" + System.nanoTime();
+
+        RestAssured.given()
+            .header("X-Tenant-Id", "1")
+            .multiPart("file", csv)
+            .multiPart("name", name)
+            .multiPart("scope", "system")
+            .post("/api/platform/sources/csv/ingest")
+            .then().statusCode(200);
+
+        RestAssured.given()
+            .header("X-Tenant-Id", "1")
+            .multiPart("file", csv)
+            .multiPart("name", name)
+            .multiPart("scope", "system")
+            .post("/api/platform/sources/csv/ingest")
+            .then()
+            .statusCode(200)
+            .body("refreshed", equalTo(true))
+            .body("rowsWritten", equalTo(1));
+
+        csv.delete();
+    }
+
+    /**
      * A11: the refusal has to reach the human. An IllegalArgumentException from the service is an
      * unmapped 500 whose message Quarkus withholds in prod — a refusal nobody can read teaches
      * nothing, so this endpoint answers 400 and says why.

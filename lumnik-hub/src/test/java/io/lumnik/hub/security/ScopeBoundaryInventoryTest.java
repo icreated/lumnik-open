@@ -1,6 +1,7 @@
 package io.lumnik.hub.security;
 
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.testkit.sources.SourceTree;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -37,25 +38,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class ScopeBoundaryInventoryTest {
 
+  private static final Path RESOURCES_ROOT = SourceTree.of("lumnik-hub", "io/lumnik/hub").root();
+
   /**
-   * Resolved rather than hardcoded: surefire runs with the module as cwd, but an IDE or a custom
-   * runner may use the reactor root. A guardrail that only works under one runner is a guardrail
-   * someone will quietly stop running.
+   * Touching any of these means the door is working inside a métier scope. The first two are
+   * the scope's SCHEMA; the third is the scope's DECLARATION — a door that reads
+   * {@code metadata.scopes} off a manifest is about to stamp those scopes on something, and
+   * the connector apply door did exactly that for months without asking. Its scope side-effect
+   * is asynchronous (SchemaCardRefresher, on the run-completed event), so the schema signal
+   * alone never saw it.
    */
-  private static final Path RESOURCES_ROOT = resolveResourcesRoot();
-
-  private static Path resolveResourcesRoot() {
-    Path fromModule = Path.of("src/main/java/io/lumnik/hub");
-    Path fromReactor = Path.of("lumnik-hub/src/main/java/io/lumnik/hub");
-    if (Files.isDirectory(fromModule)) return fromModule;
-    if (Files.isDirectory(fromReactor)) return fromReactor;
-    throw new IllegalStateException(
-        "cannot locate the hub resources from " + Path.of("").toAbsolutePath()
-            + " — the scope inventory cannot police what it cannot find");
-  }
-
-  /** Touching either of these means the door is working inside one métier scope's schema. */
-  private static final List<String> SCOPE_TOUCHING = List.of("SchemaCardStore", "DiscoveryService");
+  private static final List<String> SCOPE_TOUCHING =
+      List.of("SchemaCardStore", "DiscoveryService", "ApplyUpsert.scopes(");
 
   /**
    * Doors that touch a scope's schema and deliberately do NOT bind to it. Each needs a reason a
@@ -115,7 +109,7 @@ class ScopeBoundaryInventoryTest {
 
   /** Does this door work inside one métier scope's schema? Comments do not count as code. */
   static boolean touchesAScope(String javaSource) {
-    String code = code(javaSource);
+    String code = SourceTree.code(javaSource);
     return SCOPE_TOUCHING.stream().anyMatch(code::contains);
   }
 
@@ -144,20 +138,8 @@ class ScopeBoundaryInventoryTest {
    * calls count.
    */
   static boolean consultsScopeGrants(String javaSource) {
-    String code = code(javaSource);
+    String code = SourceTree.code(javaSource);
     return DECIDING_CALLS.stream().anyMatch(code::contains);
-  }
-
-  /**
-   * The source with comments AND import lines removed. A sentence about the rule never passes for
-   * the rule, and a type someone forgot to stop importing is not a type the door uses — the same
-   * mention-is-not-use test applied to both predicates, so neither can be tripped by a leftover.
-   */
-  private static String code(String javaSource) {
-    return javaSource
-        .replaceAll("(?s)/\\*.*?\\*/", " ")
-        .replaceAll("(?m)//[^\n]*", " ")
-        .replaceAll("(?m)^\\s*import\\s+[^;]+;", " ");
   }
 
   private static Path find(String fileName) throws IOException {

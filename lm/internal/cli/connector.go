@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
@@ -44,9 +43,10 @@ func newConnectorCmd() *cobra.Command {
 			}
 			format, _ := cmd.Flags().GetString("output")
 			return output.Print(cmd.OutOrStdout(), format,
-				[]string{"NAME", "TYPE", "TENANT", "SCHED", "STATUS"}, cs,
+				[]string{"NAME", "TYPE", "TENANT", "SCHED", "STATUS", "LAST RUN"}, cs,
 				func(c types.Connector) []string {
-					return []string{c.Name, c.TypeID, fmt.Sprintf("%d", c.TenantID), c.Schedule, c.Status}
+					return []string{c.Name, c.TypeID, fmt.Sprintf("%d", c.TenantID), c.Schedule,
+						c.Status, output.HumanTime(c.LastRunAt)}
 				})
 		},
 	})
@@ -75,15 +75,16 @@ func newConnectorCmd() *cobra.Command {
 
 	apply := &cobra.Command{
 		Use:   "apply",
-		Short: "Create or update a connector from YAML",
+		Short: "Create or update a connector from its `get` YAML (flat fields, not a manifest)",
+		Long: "Create or update a connector from the FLAT stored fields — tenantId, name, typeId,\n" +
+			"schedule, enabled, config — which is what `lm connector get` writes. The designed loop is\n" +
+			"`get` → edit → `apply`, the same one the TUI runs against $EDITOR.\n\n" +
+			"A `kind: Connector` manifest goes to `lm apply -f` instead: different format,\n" +
+			"different endpoint. Hand one here and this command says so rather than posting it.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			file, _ := cmd.Flags().GetString("file")
-			data, err := os.ReadFile(file)
+			payload, err := decodeManifest(file, "connector")
 			if err != nil {
-				return err
-			}
-			var payload map[string]any
-			if err := yaml.Unmarshal(data, &payload); err != nil {
 				return err
 			}
 			c, err := ClientFromCmd(cmd)
@@ -160,7 +161,11 @@ func newConnectorCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return c.ConnectorPause(id)
+			if err := c.ConnectorPause(id); err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "paused:", args[0])
+			return nil
 		},
 	})
 
@@ -176,13 +181,20 @@ func newConnectorCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return c.ConnectorResume(id)
+			if err := c.ConnectorResume(id); err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "resumed:", args[0])
+			return nil
 		},
 	})
 
-	tag := &cobra.Command{Use: "tag", Short: "Manage connector tags"}
+	// The scope is the métier boundary a bound user must hold (scope:<name>) to read what the
+	// connector ingests — declared as metadata.scopes in the manifest. The wire keeps the field
+	// name `tags` (GET/PUT /connectors/{id}/tags), so an older lm keeps talking to a newer hub.
+	scope := &cobra.Command{Use: "scope", Short: "Manage the connector's métier scopes"}
 
-	tag.AddCommand(&cobra.Command{
+	scope.AddCommand(&cobra.Command{
 		Use:  "ls NAME",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -205,8 +217,8 @@ func newConnectorCmd() *cobra.Command {
 		},
 	})
 
-	tag.AddCommand(&cobra.Command{
-		Use:  "set NAME TAGS",
+	scope.AddCommand(&cobra.Command{
+		Use:  "set NAME SCOPES",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
@@ -217,18 +229,18 @@ func newConnectorCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			tags := splitTags(args[1])
+			tags := client.SplitScopes(args[1])
 			out, err := c.ConnectorSetTags(id, tags)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "tags:", strings.Join(out, ","))
+			fmt.Fprintln(cmd.OutOrStdout(), "scopes:", strings.Join(out, ","))
 			return nil
 		},
 	})
 
-	tag.AddCommand(&cobra.Command{
-		Use:  "add NAME TAG",
+	scope.AddCommand(&cobra.Command{
+		Use:  "add NAME SCOPE",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
@@ -254,13 +266,13 @@ func newConnectorCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "tags:", strings.Join(out, ","))
+			fmt.Fprintln(cmd.OutOrStdout(), "scopes:", strings.Join(out, ","))
 			return nil
 		},
 	})
 
-	tag.AddCommand(&cobra.Command{
-		Use:  "rm NAME TAG",
+	scope.AddCommand(&cobra.Command{
+		Use:  "rm NAME SCOPE",
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
@@ -285,16 +297,14 @@ func newConnectorCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "tags:", strings.Join(out, ","))
+			fmt.Fprintln(cmd.OutOrStdout(), "scopes:", strings.Join(out, ","))
 			return nil
 		},
 	})
 
-	cn.AddCommand(tag)
-
-	cn.AddCommand(&cobra.Command{
-		Use:   "retag NAME",
-		Short: "Propagate connector tags to its rag.chunk rows",
+	scope.AddCommand(&cobra.Command{
+		Use:   "sync NAME",
+		Short: "Re-stamp the connector's indexed chunks with its current scopes",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
@@ -313,18 +323,7 @@ func newConnectorCmd() *cobra.Command {
 			return nil
 		},
 	})
+	cn.AddCommand(scope)
 
 	return cn
-}
-
-func splitTags(s string) []string {
-	parts := strings.Split(s, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }

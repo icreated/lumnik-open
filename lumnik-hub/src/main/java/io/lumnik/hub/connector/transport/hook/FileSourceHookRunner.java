@@ -2,18 +2,17 @@ package io.lumnik.hub.connector.transport.hook;
 
 import io.lumnik.hub.connector.transport.FileDescriptor;
 import io.lumnik.hub.connector.transport.FileSource;
+import io.lumnik.hub.hook.KotlinScriptHost;
+import io.lumnik.hub.hook.kts.KtsScriptRunner;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
-import javax.script.Invocable;
-import javax.script.ScriptEngine;
-import javax.script.ScriptEngineManager;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Invokes Kotlin (.kts) hook scripts at three extension points in the file-source pipeline
+ * Invokes Kotlin hook scripts (the shipped ones are {@code reference/*.kt}; any Kotlin script
+ * source on the classpath works) at three extension points in the file-source pipeline
  * (one-shot {@code lm csv ingest} only — connector manifests refuse these hooks at validate).
  *
  * <p>Scripts define top-level functions with well-known names:
@@ -27,27 +26,27 @@ import java.util.concurrent.ConcurrentHashMap;
  * corresponding method is a no-op (shouldProcess defaults to {@code true},
  * transform returns the original stream).
  *
- * <p>Each script is compiled once and cached by {@code scriptRef}.
- * Each script gets its own {@link ScriptEngine} instance so that top-level
- * function definitions are isolated between scripts.
+ * <p>Each script is compiled once by {@link KotlinScriptHost} (its cache, hot-reload included);
+ * each call instantiates it and invokes the function by name — per file, that cost is nothing.
  */
 @ApplicationScoped
 public class FileSourceHookRunner {
 
     private static final Logger LOG = Logger.getLogger(FileSourceHookRunner.class);
 
-    /** Cache: scriptRef → engine already loaded with the compiled script. */
-    private final ConcurrentHashMap<String, ScriptEngine> cache = new ConcurrentHashMap<>();
+    private static final String PREFIX = "META-INF/hooks/connectors/csv-file/";
+
+    @Inject KotlinScriptHost scriptHost;
 
     public boolean shouldProcess(HookSpec hook, FileDescriptor file, FileSource source) {
         if (hook == null) return true;
-        Object result = invoke(hook, "shouldProcess", file, source);
+        Object result = invoke(hook, "shouldProcess", true, file, source);
         return result instanceof Boolean b ? b : true;
     }
 
     public InputStream transform(HookSpec hook, FileDescriptor file, InputStream raw) {
         if (hook == null) return raw;
-        Object result = invoke(hook, "transform", file, raw);
+        Object result = invoke(hook, "transform", raw, file, raw);
         if (result instanceof InputStream is) return is;
         throw new IllegalStateException(
             "Hook " + hook.scriptRef() + "#transform() must return InputStream, got: "
@@ -56,77 +55,52 @@ public class FileSourceHookRunner {
 
     public void postProcess(HookSpec hook, FileDescriptor file, Object result) {
         if (hook == null) return;
-        invoke(hook, "postProcess", file, result);
+        invoke(hook, "postProcess", null, file, result);
     }
 
     // --- internals ---
 
-    private Object invoke(HookSpec hook, String fnName, Object... args) {
+    /** Calls the script's {@code fnName}; {@code ifUndefined} when the script does not define it. */
+    private Object invoke(HookSpec hook, String fnName, Object ifUndefined, Object... args) {
+        KtsScriptRunner.Script script = load(hook.scriptRef());   // a refusal passes through as-is
         try {
-            ScriptEngine engine = cache.computeIfAbsent(hook.scriptRef(), this::loadEngine);
-            return ((Invocable) engine).invokeFunction(fnName, args);
-        } catch (NoSuchMethodException e) {
-            // Script does not define this function — treat as no-op.
-            LOG.debugf("Hook %s does not define %s() — skipping", hook.scriptRef(), fnName);
-            return null;
-        } catch (HookScriptRefusedException e) {
-            // A refused script_ref — surface as-is (not wrapped) so callers can map it to a 4xx.
-            // Narrowed from IllegalArgumentException: a hook script's OWN IllegalArgumentException
-            // must NOT be mistaken for a script_ref refusal — it belongs in the generic wrap below,
-            // same as every other script failure.
-            throw e;
+            KtsScriptRunner.ScriptFunction fn = script.function(fnName, args.length);
+            if (fn == null) {
+                LOG.debugf("Hook %s does not define %s() — skipping", hook.scriptRef(), fnName);
+                return ifUndefined;
+            }
+            return fn.call(args);
         } catch (Exception e) {
+            // The script's own failure or shape — wrapped, never the refusal's type.
             throw new RuntimeException(
                 "Hook " + hook.scriptRef() + "#" + fnName + "() failed: " + e.getMessage(), e);
         }
     }
 
-    private ScriptEngine loadEngine(String scriptRef) {
-        ScriptEngine engine = new ScriptEngineManager().getEngineByExtension("kts");
-        if (engine == null) {
-            throw new IllegalStateException(
-                "Kotlin script engine not available — verify kotlin-scripting-jsr223 is on the classpath");
-        }
-        String source;
-        try {
-            source = loadScript(scriptRef);
-        } catch (HookScriptRefusedException e) {
-            throw e; // a refusal, not a compile failure — surface as-is
-        } catch (Exception e) {
-            throw new RuntimeException("Hook compile failed for: " + scriptRef, e);
-        }
-        try {
-            engine.eval(source);
-            LOG.infof("Loaded and compiled hook script: %s", scriptRef);
-            return engine;
-        } catch (Exception e) {
-            throw new RuntimeException("Hook compile failed for: " + scriptRef, e);
-        }
-    }
-
     /**
      * Resolves {@code scriptRef} strictly under {@code META-INF/hooks/connectors/csv-file/} on the
-     * classpath. Hooks are one-shot-CLI-only by design (see class javadoc); the HTTP-reachable CSV
-     * ingest path must never be able to read an arbitrary filesystem path, so no absolute-path
-     * fallback exists here at all — every ref is a classpath lookup, and anything that could steer
-     * that lookup outside the intended prefix is refused up front.
+     * classpath, then instantiates it. Hooks are one-shot-CLI-only by design (see class javadoc);
+     * the HTTP-reachable CSV ingest path must never be able to read an arbitrary filesystem path,
+     * so no absolute-path fallback exists here at all — every ref is a classpath lookup, and
+     * anything that could steer that lookup outside the intended prefix is refused up front.
+     * A refused script_ref surfaces as-is (not wrapped) so callers can map it to a 4xx.
      */
-    private String loadScript(String scriptRef) throws Exception {
+    private KtsScriptRunner.Script load(String scriptRef) {
         if (!isSafeScriptRef(scriptRef)) {
             // Deliberately does not echo scriptRef back: it may be an absolute filesystem path,
             // and this refusal must not disclose server-side layout to the caller.
             throw new HookScriptRefusedException(
-                "Invalid hook script_ref: must be a relative path under "
-                + "META-INF/hooks/connectors/csv-file/ (no absolute paths, '..' segments, "
-                + "backslashes, or URL schemes)");
+                "Invalid hook script_ref: must be a relative path under " + PREFIX
+                + " (no absolute paths, '..' segments, backslashes, or URL schemes)");
         }
-        var stream = Thread.currentThread().getContextClassLoader()
-            .getResourceAsStream("META-INF/hooks/connectors/csv-file/" + scriptRef);
-        if (stream == null) {
+        String path = PREFIX + scriptRef;
+        if (Thread.currentThread().getContextClassLoader().getResource(path) == null) {
             throw new HookScriptRefusedException("Hook script not found on classpath: " + scriptRef);
         }
-        try (stream) {
-            return new String(stream.readAllBytes(), StandardCharsets.UTF_8);
+        try {
+            return scriptHost.instantiate(path);
+        } catch (Exception e) {   // compile error, or a script body that throws at load
+            throw new RuntimeException("Hook load failed for: " + scriptRef, e);
         }
     }
 

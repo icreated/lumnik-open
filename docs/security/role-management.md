@@ -113,13 +113,14 @@ Full semantics: [Scopes → Binding users to scopes](../rag/scopes.md#binding-us
 
 ## Troubleshooting
 
-Three different refusals all read as "a 403", and they come from three different gates:
+These answers come from different gates:
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `403` with an **empty body** | `PermissionInterceptor` — the caller's roles include none of the endpoint's `@RequiresPermission(...)` values (e.g. `/api/views/apply`, `/api/workflows/apply` both require `lm_integrator` this way) | Grant the missing role; check the endpoint's `@RequiresPermission` value |
 | `403 {"error":"scope not granted"}` | The métier-scope gate (above) — the caller has one or more `scope:<tag>` roles but none intersect the resource's scopes | Grant the missing `scope:<tag>`, or remove all scope roles to go unscoped ([The entity-read scope gate](#the-entity-read-scope-gate)) |
 | `403` plain text `missing role lm_integrator` | `PlatformApiAuthFilter` gates every `/api/platform/*` path directly, ahead of any `@RequiresPermission` the resource itself declares | Grant `lm_integrator`; this is a *separate* gate from the empty-body case above — same missing role, different mechanism |
+| `404 {"error":"no user record on this hub for user_id N"}` on `lm scope` | The login's `user_id` attribute names a hub user row that does not exist (the bundled accounts are seeded at install) | Point the attribute at an existing row's id, or drop it so first login creates the row (outside the open edition) — [BYO IdP](byo-idp.md#troubleshooting) |
 | No `403` at all, even for an obviously wrong role, in dev/test | `lumnik.security.dev-bypass=true` (default in `%dev`/`%test`) injects the fixed set `{lm_superadmin, lm_admin, lm_user}` on every request | Set it `false` and supply a real JWT to test refusals ([Dev-bypass](#dev-bypass)) |
 
 ## Release security checklist

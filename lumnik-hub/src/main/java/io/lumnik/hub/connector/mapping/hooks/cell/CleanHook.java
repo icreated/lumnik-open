@@ -24,7 +24,7 @@ public class CleanHook implements CellHook {
 
     for (String col : columns) {
       Object v = row.get(col);
-      if (v == null || !(v instanceof String str2)) continue;
+      if (!(v instanceof String str2)) continue;   // instanceof already excludes null
       String str = str2;
       // Strip BOM (U+FEFF)
       if (!str.isEmpty() && str.charAt(0) == '\uFEFF') str = str.substring(1);

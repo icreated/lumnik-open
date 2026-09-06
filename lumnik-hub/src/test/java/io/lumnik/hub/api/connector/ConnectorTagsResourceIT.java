@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.connector;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
@@ -39,7 +40,7 @@ class ConnectorTagsResourceIT {
   void get_tags_returns_empty_when_not_set() throws Exception {
     String id = createConnector(1L, "empty-tags-" + System.nanoTime());
 
-    given().header("X-Tenant-Id", "1").header("X-User-Id", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .when().get("/api/platform/connectors/" + id + "/tags")
         .then().statusCode(200).body("$", empty());
   }
@@ -48,13 +49,13 @@ class ConnectorTagsResourceIT {
   void put_tags_replaces_list() throws Exception {
     String id = createConnector(1L, "set-tags-" + System.nanoTime());
 
-    given().header("X-Tenant-Id", "1").header("X-User-Id", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .contentType("application/json")
         .body(List.of("compta", "paie"))
         .when().put("/api/platform/connectors/" + id + "/tags")
         .then().statusCode(200).body("$", containsInAnyOrder("compta", "paie"));
 
-    given().header("X-Tenant-Id", "1").header("X-User-Id", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .when().get("/api/platform/connectors/" + id + "/tags")
         .then().statusCode(200).body("$", containsInAnyOrder("compta", "paie"));
   }
@@ -63,13 +64,13 @@ class ConnectorTagsResourceIT {
   void put_tags_rejects_invalid_format() throws Exception {
     String id = createConnector(1L, "bad-tags-" + System.nanoTime());
 
-    given().header("X-Tenant-Id", "1").header("X-User-Id", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .contentType("application/json")
         .body(List.of("UPPERCASE_BAD"))
         .when().put("/api/platform/connectors/" + id + "/tags")
         .then().statusCode(400);
 
-    given().header("X-Tenant-Id", "1").header("X-User-Id", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .contentType("application/json")
         .body(List.of("with space"))
         .when().put("/api/platform/connectors/" + id + "/tags")
@@ -78,7 +79,7 @@ class ConnectorTagsResourceIT {
 
   @Test
   void put_tags_returns_404_for_unknown_connector() {
-    given().header("X-Tenant-Id", "1").header("X-User-Id", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .contentType("application/json")
         .body(List.of("compta"))
         .when().put("/api/platform/connectors/00000000-0000-0000-0000-000000000000/tags")

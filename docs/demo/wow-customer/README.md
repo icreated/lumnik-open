@@ -92,7 +92,7 @@ failure they cause is silent, so run their ✔ checks:
   (It's a fake *Siebel*: it speaks XML, as the real one would.) Without it the
   Siebel run below fails — and only `lm run list` will tell you.
 - The `lm` binary on PATH (needs Go 1.25+ — the floor is `lm/go.mod`):
-  `(cd lm && go build -o lm ./cmd/lm) && sudo mv lm/lm /usr/local/bin/lm`
+  `make -C lm install` — builds and copies it to `~/.local/bin`, no `sudo`
   — or, on Windows, `lm.exe` ([Deploy on Windows, step 6](../../deploy-windows.md)).
 
 **Point `lm` at the stack and log in.** The bundled realm ships a demo integrator

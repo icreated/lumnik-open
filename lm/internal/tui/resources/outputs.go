@@ -9,6 +9,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/icreated/lumnik-open/lm/internal/client"
+	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/icreated/lumnik-open/lm/internal/tui/style"
 	"github.com/rivo/tview"
 )
@@ -155,7 +156,7 @@ func (o *Outputs) SelectedDescribe() (string, string, bool) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[yellow]%s — %s[white]\n\n", esc(it.Integration), esc(it.EventType))
 	fmt.Fprintf(&b, "status:     %s\n", esc(statusLabel(it)))
-	fmt.Fprintf(&b, "attempted:  %s\n", it.AttemptedAt.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&b, "attempted:  %s\n", output.HumanTimeSeconds(&it.AttemptedAt))
 	fmt.Fprintf(&b, "duration:   %dms\n", it.DurationMs)
 	if it.Error != "" {
 		fmt.Fprintf(&b, "\n── error ──\n%s\n", esc(it.Error))

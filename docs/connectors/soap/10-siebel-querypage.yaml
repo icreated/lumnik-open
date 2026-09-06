@@ -5,6 +5,7 @@ kind: Connector
 metadata:
   name: siebel-customers
   connector_type: rest-generic
+  scopes: [crm, customers, siebel]
 spec:
   base_url: https://siebel.example.com
   auth:
@@ -31,6 +32,5 @@ spec:
         kind: hybrid
         table: ext.siebel_customers
         unique_key: "$.Id"
-        tags: ["crm", "customers", "siebel"]
         promote:
           - { name: name, path: "$.Name", type: text }

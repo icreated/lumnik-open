@@ -14,7 +14,7 @@ kind: Connector
 metadata:
   name: csv-sftp
   connector_type: csv-file
-  tags: [demo]
+  scopes: [demo]
 
 spec:
   transport:
@@ -36,5 +36,4 @@ spec:
 
   after_process: none              # validator vocab: archive|delete|move|none ('none' = leave file in place)
 
-  target:
-    tags: [demo]
+  target: {}

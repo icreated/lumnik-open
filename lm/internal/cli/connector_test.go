@@ -38,31 +38,6 @@ func TestConnectorList(t *testing.T) {
 	}
 }
 
-func TestSplitTags(t *testing.T) {
-	cases := []struct {
-		in   string
-		want []string
-	}{
-		{"compta,paie", []string{"compta", "paie"}},
-		{"  compta , paie ", []string{"compta", "paie"}},
-		{"single", []string{"single"}},
-		{",,,", []string{}},
-		{"", []string{}},
-	}
-	for _, c := range cases {
-		got := splitTags(c.in)
-		if len(got) != len(c.want) {
-			t.Errorf("splitTags(%q) len = %d, want %d", c.in, len(got), len(c.want))
-			continue
-		}
-		for i := range got {
-			if got[i] != c.want[i] {
-				t.Errorf("splitTags(%q)[%d] = %q, want %q", c.in, i, got[i], c.want[i])
-			}
-		}
-	}
-}
-
 func TestConnectorApply(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -87,5 +62,61 @@ func TestConnectorApply(t *testing.T) {
 	cmd.SetArgs([]string{"connector", "apply", "-f", tmp})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestConnectorPause_printsPaused(t *testing.T) {
+	connID := "cccccccc-1111-2222-3333-444444444444"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/platform/connectors":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": connID, "name": "acme"}})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/pause"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": connID, "enabled": false})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"connector", "pause", "acme"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "paused: acme") {
+		t.Errorf("expected 'paused: acme', got: %s", buf.String())
+	}
+}
+
+func TestConnectorResume_printsResumed(t *testing.T) {
+	connID := "dddddddd-1111-2222-3333-444444444444"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/platform/connectors":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": connID, "name": "acme"}})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/resume"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": connID, "enabled": true})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"connector", "resume", "acme"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "resumed: acme") {
+		t.Errorf("expected 'resumed: acme', got: %s", buf.String())
 	}
 }

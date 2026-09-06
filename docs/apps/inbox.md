@@ -10,6 +10,23 @@ lm inbox --all           # include disposed ones, marked [traité]
 lm inbox ack 42          # dispose of decision 42
 ```
 
+A process watching an orders table for `status=ON HOLD` just fired; then a human disposes of it:
+
+```
+$ lm inbox
+ID  QUAND        PROCESS        MESSAGE                                       ENTITY_KEY
+50  à l'instant  order-on-hold  Order ORD-1011 for C-007 is on hold (860.00)  ef68325b1cfbee9eb96f42c72a48d21d2c53922f144a26b855a4142bfbb94949
+$ lm inbox ack 50
+acked.
+$ lm inbox
+ID  QUAND  PROCESS  MESSAGE  ENTITY_KEY
+$ lm inbox --all
+ID  QUAND  PROCESS        MESSAGE                                                ENTITY_KEY
+50  1min   order-on-hold  Order ORD-1011 for C-007 is on hold (860.00) [traité]  ef68325b1cfbee9eb96f42c72a48d21d2c53922f144a26b855a4142bfbb94949
+```
+
+The inbox speaks French — `QUAND` (when) is a humanized age, `à l'instant` is "just now", and
+`[traité]` marks a disposed entry. `ENTITY_KEY` is the row's content hash, printed whole.
 In the TUI, `:inbox` shows the same fold live — `a` acks, `A` toggles disposed entries.
 
 API: `GET /api/inbox?limit&all`, `POST /api/inbox/{id}/ack` — requires the `lm_user` role.

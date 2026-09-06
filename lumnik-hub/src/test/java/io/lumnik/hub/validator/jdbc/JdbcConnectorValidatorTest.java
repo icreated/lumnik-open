@@ -72,12 +72,6 @@ class JdbcConnectorValidatorTest {
             && e.message().contains("dialect")));
     }
 
-    @Test void missingTargetTags_isWarningNotError() throws Exception {
-        ValidationResult r = service.validate(load("jdbc-no-tags.yaml"));
-        assertTrue(r.isValid());
-        assertTrue(r.warnings().stream().anyMatch(w -> w.path().equals("spec.target.tags")));
-    }
-
     @Test void rename_blessedCase_noError() throws Exception {
         ValidationResult r = service.validate(load("jdbc-rename-valid.yaml"));
         assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());

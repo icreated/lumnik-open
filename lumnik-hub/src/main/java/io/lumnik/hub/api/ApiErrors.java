@@ -31,6 +31,23 @@ public final class ApiErrors {
             .entity(error(ScopeGrants.REFUSAL)).build();
     }
 
+    /**
+     * The uniform 401: {@code {"error": …}} in the same dress as {@link #scopeNotGranted()}. Both
+     * Require* guards answer through here — {@code RequireTenant} used to build its own without a
+     * content type, which is the gap the 403 helper's javadoc above already describes.
+     */
+    public static Response unauthorized(String reason) {
+        return Response.status(401).type(MediaType.APPLICATION_JSON).entity(error(reason)).build();
+    }
+
+    /**
+     * A 404 that says what is missing, in the same dress — a bare {@code Response.status(404)}
+     * reaches {@code lm} as "no details from the server".
+     */
+    public static Response notFound(String what) {
+        return Response.status(404).type(MediaType.APPLICATION_JSON).entity(error(what)).build();
+    }
+
     /** The {@code {"error": message}} body. */
     public static Map<String, Object> error(String message) {
         return Map.of(KEY, message);

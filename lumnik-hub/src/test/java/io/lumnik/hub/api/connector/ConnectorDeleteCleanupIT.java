@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.connector;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.api.types.RunTrigger;
@@ -61,7 +62,7 @@ class ConnectorDeleteCleanupIT {
         assertThat(scalar("SELECT count(*) FROM connector.connector_run WHERE connector_id='" + id + "'"))
             .isGreaterThanOrEqualTo(1L);
 
-        given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        given().headers(TestIdentity.tenantAndUser(1))
             .when().delete("/api/platform/connectors/" + id)
             .then().statusCode(204);
 

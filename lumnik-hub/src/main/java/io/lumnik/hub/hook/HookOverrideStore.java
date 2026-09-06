@@ -1,6 +1,6 @@
 package io.lumnik.hub.hook;
 
-import io.lumnik.hub.tenant.TenantContextFilter;
+import io.lumnik.hub.scheduler.TenantScope;
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -40,16 +40,8 @@ public class HookOverrideStore {
     @PostConstruct
     void init() {
         if (activeLoader == null) {
-            activeLoader = (tenantId, hookId) -> {
-                Long prev = TenantContextFilter.CURRENT_TENANT.get();
-                try {
-                    TenantContextFilter.CURRENT_TENANT.set(tenantId);
-                    return repo.find(tenantId, hookId).map(HookTenantOverride::isEnabled).orElse(null);
-                } finally {
-                    if (prev == null) TenantContextFilter.CURRENT_TENANT.remove();
-                    else TenantContextFilter.CURRENT_TENANT.set(prev);
-                }
-            };
+            activeLoader = (tenantId, hookId) -> TenantScope.get(tenantId,
+                () -> repo.find(tenantId, hookId).map(HookTenantOverride::isEnabled).orElse(null));
         }
     }
 
@@ -66,73 +58,39 @@ public class HookOverrideStore {
 
     @Transactional
     public void setScript(Long tenantId, String hookId, String scriptContent) {
-        Long prev = TenantContextFilter.CURRENT_TENANT.get();
-        try {
-            TenantContextFilter.CURRENT_TENANT.set(tenantId);
-            Optional<HookTenantOverride> existing = repo.find(tenantId, hookId);
-            HookTenantOverride entity;
-            if (existing.isPresent()) {
-                entity = existing.get();
-            } else {
-                entity = new HookTenantOverride(tenantId, hookId, true);
-            }
+        TenantScope.run(tenantId, () -> {
+            HookTenantOverride entity = repo.find(tenantId, hookId)
+                .orElseGet(() -> new HookTenantOverride(tenantId, hookId, true));
             entity.setScriptContent(scriptContent);
             entity.setEnabled(true);
             entity.setUpdatedAt(OffsetDateTime.now());
             repo.persist(entity);
-        } finally {
-            if (prev == null) TenantContextFilter.CURRENT_TENANT.remove();
-            else TenantContextFilter.CURRENT_TENANT.set(prev);
-        }
+        });
         invalidate(tenantId, hookId);
     }
 
     @Transactional(Transactional.TxType.SUPPORTS)
     public Optional<String> findScript(Long tenantId, String hookId) {
         if (tenantId == null) return Optional.empty();
-        Long prev = TenantContextFilter.CURRENT_TENANT.get();
-        try {
-            TenantContextFilter.CURRENT_TENANT.set(tenantId);
-            return repo.find(tenantId, hookId)
-                .map(HookTenantOverride::getScriptContent)
-                .filter(s -> s != null && !s.isBlank());
-        } finally {
-            if (prev == null) TenantContextFilter.CURRENT_TENANT.remove();
-            else TenantContextFilter.CURRENT_TENANT.set(prev);
-        }
+        return TenantScope.get(tenantId, () -> repo.find(tenantId, hookId)
+            .map(HookTenantOverride::getScriptContent)
+            .filter(s -> s != null && !s.isBlank()));
     }
 
     @Transactional
     public void deleteOverride(Long tenantId, String hookId) {
-        Long prev = TenantContextFilter.CURRENT_TENANT.get();
-        try {
-            TenantContextFilter.CURRENT_TENANT.set(tenantId);
-            repo.find(tenantId, hookId).ifPresent(repo::delete);
-        } finally {
-            if (prev == null) TenantContextFilter.CURRENT_TENANT.remove();
-            else TenantContextFilter.CURRENT_TENANT.set(prev);
-        }
+        TenantScope.run(tenantId, () -> repo.find(tenantId, hookId).ifPresent(repo::delete));
         invalidate(tenantId, hookId);
     }
 
     @Transactional
     public void set(Long tenantId, String hookId, boolean enabled) {
-        Long prev = TenantContextFilter.CURRENT_TENANT.get();
-        try {
-            TenantContextFilter.CURRENT_TENANT.set(tenantId);
-            Optional<HookTenantOverride> existing = repo.find(tenantId, hookId);
-            if (existing.isPresent()) {
-                HookTenantOverride e = existing.get();
+        TenantScope.run(tenantId, () -> repo.find(tenantId, hookId)
+            .ifPresentOrElse(e -> {
                 e.setEnabled(enabled);
                 e.setUpdatedAt(OffsetDateTime.now());
                 repo.persist(e);
-            } else {
-                repo.persist(new HookTenantOverride(tenantId, hookId, enabled));
-            }
-        } finally {
-            if (prev == null) TenantContextFilter.CURRENT_TENANT.remove();
-            else TenantContextFilter.CURRENT_TENANT.set(prev);
-        }
+            }, () -> repo.persist(new HookTenantOverride(tenantId, hookId, enabled))));
         invalidate(tenantId, hookId);
     }
 }

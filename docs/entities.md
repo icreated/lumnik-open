@@ -23,7 +23,7 @@
 | `sources[]` | yes (≥1) | ordered list — **the order is the merge priority** (first source wins a disagreement) |
 | `sources[].table` | yes | the connector dynamic table in the `connector` schema |
 | `sources[].map` | yes (≥1) | `source column → canonical column`, per source |
-| `scopes` | no | métier tags whose chat can ask about this entity — an entity with no scopes is simply not discoverable |
+| `scopes` | no | métier scopes whose chat can ask about this entity — an entity with no scopes is simply not discoverable |
 | `columns` | no | per-canonical-column [grounding](#the-columns-grounding-block) |
 
 The canonical shape is the ordered union of every source's `map` values. The names
@@ -100,6 +100,25 @@ the calling tenant, so the fused entity is askable in its métiers immediately. 
 refresh is best-effort: a discovery failure never fails the apply (the card can be rebuilt
 via rediscovery).
 
+## Remove
+
+```bash
+lm entity delete Customer
+# → deleted: Customer
+```
+
+`DELETE /api/entities/{name}` (`lm_admin`) is the inverse of apply: it drops the entity's
+view, deletes its manifest, and rediscovers its scopes so the card drops it — atomically,
+same asymmetry as apply (a scope-bound integrator must hold **all** the entity's scopes to
+remove it). An unknown name is a `404`. Removing the entity is also what frees a connector
+whose table feeds it: `lm connector delete` is refused with a `409` naming the entity until
+you delete the entity first.
+
+An entity is **shared across tenants** — the manifest and its view are global; only the rows
+they expose are tenant-scoped by RLS. So delete, like apply, acts for the whole deployment: a
+tenant's `lm_admin` removes the entity everyone sees, and (as with apply) a second hub instance
+picks the change up on its next rediscover.
+
 ## Read API
 
 ```
@@ -154,8 +173,9 @@ match key:
 - **Paging** — `?limit=` (default 100, clamped 1…1000), spread across entities in order.
 - **RLS** — same datasource and `security_invoker` views as the per-entity read; another
   tenant's disagreements are invisible, not filtered.
-- An entity whose compiled view is missing (a connector deleted out from under its
-  manifest) is logged and skipped; the rest of the aggregate still answers.
+- An entity whose compiled view is missing (its source table dropped by a direct DB edit —
+  `lm connector delete` cannot do this, it is refused while the entity stands) is logged and
+  skipped; the rest of the aggregate still answers.
 
 ```bash
 curl -s 'http://localhost:8080/api/entities/conflicts?limit=20' \
@@ -181,7 +201,7 @@ Every refusal is a `400` from apply, quoting the exact problem:
 | `source '…' maps duplicate canonical column (case-insensitive): …` | two source columns feeding one canonical column in the same source | keep one |
 | `canonical column '…' conflicts with '…' across sources (case-insensitive collision); use one consistent case` | `email` vs `Email` would silently become two SQL columns | one consistent spelling |
 | `source '…' does not map the match column: …` | every source must produce the match column, **same case** — else its rows could never be matched | add it to that source's `map` |
-| `scope must be a simple identifier (letters, digits, _ or -): …` | scopes are tags, not expressions | rename the tag |
+| `scope must be lowercase, start with a letter, then letters/digits/_/- (max 41): …` | a scope is a name — the same rule as connector scopes, see [Scopes](rag/scopes.md) | rename the scope |
 | `columns references unknown canonical column '…' (known: …)` | grounding for a column that doesn't exist — almost always a typo | use a canonical name |
 | `column '…' has a blank allowed value` / `column '…' has an allowed value with leading/trailing whitespace (would never exact-match): '…'` | a domain value that can never match makes the guard lie | trim or remove it |
 
@@ -209,6 +229,32 @@ lm conflicts list
 
 **Result:** every fused entity's open disagreements in one command — scope and paging rules
 are in [Aggregated conflicts](#aggregated-conflicts) above.
+
+```
+$ lm conflicts list
+ENTITY    KEY    COLUMNS  SOURCES
+Customer  C-004  city     t_customers,t_crm_contacts
+```
+
+One customer, one column, two sources that disagree. Which source said what is on the
+record's detail — through a [`kind: View`](apps/views.md) over the entity:
+
+```
+$ lm view C-004 -f customers-view.yaml
+Customers / C-004
+
+  Customer code   C-004
+  Name            Boulangerie Morel
+  City            Lyon
+  Segment         GOLD
+
+  (!) Où les sources divergent
+  City   t_customers «Lyon» · t_crm_contacts «Villeurbanne»
+```
+
+The block under *Où les sources divergent* ("where the sources diverge") is the `_conflicts`
+ledger, rendered. The representative value follows source order (`t_customers` is listed
+first); the other value is kept, not dropped.
 
 ## Troubleshooting
 

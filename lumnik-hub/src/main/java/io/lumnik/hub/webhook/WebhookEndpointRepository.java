@@ -13,6 +13,29 @@ public class WebhookEndpointRepository implements PanacheRepository<WebhookEndpo
     }
 
     /**
+     * {@link #findLiveById}'s tenant-scoped twin, for the doors that take the id from the request:
+     * live AND ours, in one predicate. A bare {@code findById} cannot carry the tenant — Hibernate
+     * never filters by-id lookups, and RLS is the only thing behind it — so the doors that update,
+     * delete, replay through or test an endpoint by a path id resolve it through a predicate here
+     * or through {@code Require.owned}, never through {@code findById}.
+     */
+    public WebhookEndpoint findLiveForTenant(Long id, Long tenantId) {
+        return find("id = ?1 AND tenantId = ?2 AND archivedAt IS NULL AND deletedAt IS NULL",
+                    id, tenantId).firstResult();
+    }
+
+    /** Whether this tenant has an endpoint by this id — 0 or 1, without hydrating the row. */
+    public long countForTenant(Long id, Long tenantId) {
+        return count("id = ?1 AND tenantId = ?2", id, tenantId);
+    }
+
+    /** Every live endpoint of one tenant, newest rule first — the list door's whole query. */
+    public List<WebhookEndpoint> listLiveForTenant(Long tenantId) {
+        return list("tenantId = ?1 AND archivedAt IS NULL AND deletedAt IS NULL ORDER BY name",
+                    tenantId);
+    }
+
+    /**
      * The retry path's counterpart to {@link #findEnabledForEvent}: the same liveness rule, by id.
      *
      * <p>A plain {@code findById} filters nothing, and {@code softDelete()} stamps only

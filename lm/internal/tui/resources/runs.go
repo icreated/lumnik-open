@@ -11,6 +11,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/icreated/lumnik-open/lm/internal/client"
+	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/icreated/lumnik-open/lm/internal/tui/style"
 	"github.com/icreated/lumnik-open/lm/internal/types"
 	"github.com/rivo/tview"
@@ -312,9 +313,9 @@ func (r *Runs) SelectedDescribe() (string, string, bool) {
 	fmt.Fprintf(&b, "connector:       %s\n", esc(run.ConnectorID))
 	fmt.Fprintf(&b, "status:          %s %s\n", statusFor(run.Status).glyph(), esc(run.Status))
 	fmt.Fprintf(&b, "trigger:         %s\n", esc(run.TriggeredBy))
-	fmt.Fprintf(&b, "started:         %s\n", run.StartedAt.Format(time.RFC3339))
+	fmt.Fprintf(&b, "started:         %s\n", output.HumanTimeSeconds(&run.StartedAt))
 	if run.EndedAt != nil {
-		fmt.Fprintf(&b, "finished:        %s\n", run.EndedAt.Format(time.RFC3339))
+		fmt.Fprintf(&b, "finished:        %s\n", output.HumanTimeSeconds(run.EndedAt))
 		fmt.Fprintf(&b, "duration:        %s\n", run.EndedAt.Sub(run.StartedAt).Truncate(time.Millisecond))
 	}
 	fmt.Fprintf(&b, "records_in:      %d\n", run.RecordsIn)

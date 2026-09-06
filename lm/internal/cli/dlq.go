@@ -3,6 +3,8 @@ package cli
 import (
 	"fmt"
 
+	"github.com/google/uuid"
+	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/icreated/lumnik-open/lm/internal/types"
 	"github.com/spf13/cobra"
@@ -11,6 +13,29 @@ import (
 // dlqServerLimitCap mirrors DlqAdminResource's server-side clamp (max 200); the client
 // clamps to it so the truncation hint compares len against the EFFECTIVE limit.
 const dlqServerLimitCap = 200
+
+// resolveDlqFilters reads --connector/--run and turns a name or abbreviated id into the full id the
+// hub's UUID-typed filters require, so `dlq list --run <8 chars>` and `--connector NAME` work like
+// their run/connector siblings instead of failing "invalid UUID". Empty flags stay empty (no filter).
+func resolveDlqFilters(c *client.Client, cmd *cobra.Command) (connectorID, runID string, err error) {
+	connectorID, _ = cmd.Flags().GetString("connector")
+	runID, _ = cmd.Flags().GetString("run")
+	// A well-formed UUID passes through unchanged: it keeps a full id filtering even when it names a
+	// since-deleted connector whose dead-letters outlive it, and skips a needless connector list.
+	// Validate the SHAPE, not just the length — connector names carry no pattern constraint, so a
+	// 36-character name must still resolve rather than be mistaken for an id and forwarded raw.
+	if connectorID != "" && uuid.Validate(connectorID) != nil {
+		if connectorID, err = resolveConnectorID(c, connectorID); err != nil {
+			return "", "", err
+		}
+	}
+	if runID != "" {
+		if runID, err = resolveRunID(c, runID); err != nil {
+			return "", "", err
+		}
+	}
+	return connectorID, runID, nil
+}
 
 func newDlqCmd() *cobra.Command {
 	d := &cobra.Command{Use: "dlq", Short: "Dead letter queue operations"}
@@ -23,8 +48,10 @@ func newDlqCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			conn, _ := cmd.Flags().GetString("connector")
-			run, _ := cmd.Flags().GetString("run")
+			conn, run, err := resolveDlqFilters(c, cmd)
+			if err != nil {
+				return err
+			}
 			limit, _ := cmd.Flags().GetInt("limit")
 			// Clamp to the hub's own [1, dlqServerLimitCap] range so the client and server behave
 			// identically — a nonsense --limit 0/negative becomes 1 (forwarded), not the server default.
@@ -44,7 +71,7 @@ func newDlqCmd() *cobra.Command {
 				[]string{"ID", "CONNECTOR", "RUN", "REASON", "ATTEMPTS", "MESSAGE"}, items,
 				func(d types.DeadLetter) []string {
 					return []string{
-						shortID(d.ID), shortID(d.ConnectorID), shortID(d.RunID),
+						shortID(d.ID), d.ConnectorLabel(), shortID(d.RunID),
 						d.SkipReason, fmt.Sprintf("%d", d.Attempts), truncate(d.ErrorMessage, 60),
 					}
 				}); err != nil {
@@ -67,8 +94,10 @@ func newDlqCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			conn, _ := cmd.Flags().GetString("connector")
-			run, _ := cmd.Flags().GetString("run")
+			conn, run, err := resolveDlqFilters(c, cmd)
+			if err != nil {
+				return err
+			}
 			id, err := resolveDlqID(c, conn, run, args[0])
 			if err != nil {
 				return err
@@ -90,8 +119,10 @@ func newDlqCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			conn, _ := cmd.Flags().GetString("connector")
-			run, _ := cmd.Flags().GetString("run")
+			conn, run, err := resolveDlqFilters(c, cmd)
+			if err != nil {
+				return err
+			}
 			id, err := resolveDlqID(c, conn, run, args[0])
 			if err != nil {
 				return err
@@ -116,8 +147,10 @@ func newDlqCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			conn, _ := cmd.Flags().GetString("connector")
-			run, _ := cmd.Flags().GetString("run")
+			conn, run, err := resolveDlqFilters(c, cmd)
+			if err != nil {
+				return err
+			}
 			id, err := resolveDlqID(c, conn, run, args[0])
 			if err != nil {
 				return err
@@ -128,6 +161,8 @@ func newDlqCmd() *cobra.Command {
 			}
 			w := cmd.OutOrStdout()
 			fmt.Fprintf(w, "ID:        %s\n", dl.ID)
+			fmt.Fprintf(w, "Connector: %s\n", dl.ConnectorNameAndID())
+			fmt.Fprintf(w, "Run:       %s\n", dl.RunID)
 			fmt.Fprintf(w, "Reason:    %s\n", dl.SkipReason)
 			fmt.Fprintf(w, "Attempts:  %d\n", dl.Attempts)
 			fmt.Fprintf(w, "Message:   %s\n", dl.ErrorMessage)

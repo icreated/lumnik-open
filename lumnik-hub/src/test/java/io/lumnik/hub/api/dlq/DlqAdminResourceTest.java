@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.dlq;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.api.types.SkipReason;
@@ -26,6 +27,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.startsWith;
 
 @QuarkusTest
 class DlqAdminResourceTest {
@@ -40,7 +42,7 @@ class DlqAdminResourceTest {
   @Test
   void list_returns_empty_or_existing_entries() {
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().get("/api/platform/dlq")
       .then().statusCode(200);
   }
@@ -50,7 +52,7 @@ class DlqAdminResourceTest {
     UUID runId = seedRunWithDeadLetter();
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .queryParam("run", runId.toString())
       .when().get("/api/platform/dlq")
       .then().statusCode(200)
@@ -60,9 +62,29 @@ class DlqAdminResourceTest {
   }
 
   @Test
+  void list_and_get_carry_the_connector_name_like_the_run_ledger() throws Exception {
+    // Like /runs, the queue names the connector for humans next to the id it keeps for scripts.
+    UUID runId = seedRunWithDeadLetter();   // seeds a connector named dlq-admin-test-<nanos>
+
+    String dlqId = given()
+      .headers(TestIdentity.tenantAndUser(1))
+      .queryParam("run", runId.toString())
+      .when().get("/api/platform/dlq")
+      .then().statusCode(200)
+        .body("connectorName", hasItem(startsWith("dlq-admin-test-")))
+      .extract().path("[0].id");
+
+    given()
+      .headers(TestIdentity.tenantAndUser(1))
+      .when().get("/api/platform/dlq/" + dlqId)
+      .then().statusCode(200)
+        .body("connectorName", startsWith("dlq-admin-test-"));
+  }
+
+  @Test
   void get_unknown_id_is_404() {
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().get("/api/platform/dlq/" + UUID.randomUUID())
       .then().statusCode(404);
   }
@@ -72,7 +94,7 @@ class DlqAdminResourceTest {
     UUID dlqId = seedRunWithDeadLetterReturnDlqId();
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().get("/api/platform/dlq/" + dlqId)
       .then().statusCode(200)
         .body("skipReason", notNullValue())
@@ -100,7 +122,7 @@ class DlqAdminResourceTest {
     });
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().get("/api/platform/dlq/" + dlqId)
       .then().statusCode(404);
   }
@@ -125,7 +147,7 @@ class DlqAdminResourceTest {
     });
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().get("/api/platform/dlq")
       .then().statusCode(200)
         .body("findAll { it.id == '" + dlqId + "' }.size()", equalTo(0));
@@ -137,7 +159,7 @@ class DlqAdminResourceTest {
     UUID dlqId = seedRunWithDeadLetterForTenant(2L);
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().get("/api/platform/dlq/" + dlqId)
       .then().statusCode(404);
   }
@@ -145,7 +167,7 @@ class DlqAdminResourceTest {
   @Test
   void list_malformed_run_uuid_returns_400() {
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .queryParam("run", "not-a-uuid")
       .when().get("/api/platform/dlq")
       .then().statusCode(400);

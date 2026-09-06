@@ -49,8 +49,7 @@ public class SavedViewsResource {
   public Response get(@PathParam("name") String name) {  // inherits JSON+YAML; every response sets type()
     Optional<SavedViewStore.Row> row = store.find(name);
     if (row.isEmpty()) {
-      return Response.status(404).type(MediaType.APPLICATION_JSON)
-          .entity(ApiErrors.error("no saved view named '" + name + "'")).build();
+      return ApiErrors.notFound("no saved view named '" + name + "'");
     }
     if (!ScopeGrants.allows(row.get().scope())) {
       return ApiErrors.scopeNotGranted();

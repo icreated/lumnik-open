@@ -1,6 +1,8 @@
 package io.lumnik.hub.validator.csv;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.MissingNode;
+import io.lumnik.hub.connector.mapping.MapColumnsRules;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.validator.ConfigDef;
 import io.lumnik.hub.validator.ConfigDef.Importance;
@@ -62,11 +64,11 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
         errs.addAll(headerlessNeedsColumns(spec));
         errs.addAll(scheduleCronIsValid(spec));
         errs.addAll(windowValid(spec));
-        errs.addAll(targetTagsAdvised(spec));
         errs.addAll(TargetBlockValidator.validateIndexes(
             spec.path(TARGET).path("indexes"), "spec.target.indexes"));
         errs.addAll(aggregatorRefused(spec));
         errs.addAll(validateRowAfterSplitRowRefused(spec));
+        errs.addAll(mapColumnsRefused(spec));
         return errs;
     }
 
@@ -162,11 +164,10 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
             .orElseGet(List::of);
     }
 
-    private static List<ValidationError> targetTagsAdvised(JsonNode spec) {
-        if (!spec.path(TARGET).path("tags").isMissingNode()) return List.of();
-        return List.of(new ValidationError("spec.target.tags", Severity.WARNING,
-            "no tags defined — RAG scope filtering will be impossible",
-            List.of("Add: target.tags: [\"crm\", \"billing\"]")));
+    /** The declared row hooks, or nothing — three refusals below start with this same question. */
+    private static JsonNode rowHooksOf(JsonNode spec) {
+        JsonNode row = spec.path("mapping").path("row");
+        return row.isArray() ? row : MissingNode.getInstance();
     }
 
     /**
@@ -177,8 +178,7 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
      * blocks are CLOSED (C3) — the generic unknown-key WARNING covers them, no duplicate here.
      */
     private static List<ValidationError> aggregatorRefused(JsonNode spec) {
-        JsonNode rowHooks = spec.path("mapping").path("row");
-        if (!rowHooks.isArray()) return List.of();
+        JsonNode rowHooks = rowHooksOf(spec);
         List<ValidationError> errs = new ArrayList<>();
         for (int i = 0; i < rowHooks.size(); i++) {
             if (rowHooks.get(i).has("aggregator")) {
@@ -195,6 +195,38 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
     }
 
     /**
+     * The csv door for map-columns' own rules — the one that did not exist. jdbc had two doors on
+     * these rules and csv had none, which is backwards: jdbc's rename is a narrow config key the
+     * hub assembles, csv's is written BY HAND in spec.mapping. A bad rename was accepted by
+     * `lm apply`, scheduled, and killed the run on its first row.
+     *
+     * <p>The rule is {@code MapColumnsRules}, shared with both jdbc doors and with the hook. This
+     * one accumulates, so an integrator sees every problem in the block at once rather than the
+     * first — which is the whole point of refusing before the run instead of during it. The hook
+     * still refuses at run time as a backstop: the template mapping path reaches it without
+     * passing any connector validator.
+     */
+    private static List<ValidationError> mapColumnsRefused(JsonNode spec) {
+        JsonNode rowHooks = rowHooksOf(spec);
+        List<ValidationError> errs = new ArrayList<>();
+        for (int i = 0; i < rowHooks.size(); i++) {
+            JsonNode params = rowHooks.get(i).path("map-columns");
+            if (params.isMissingNode()) continue;
+            String base = "spec.mapping.row[" + i + "].map-columns";
+            List<MapColumnsRules.Violation> violations = new ArrayList<>();
+            violations.addAll(MapColumnsRules.checkRename(params.path("rename")));
+            violations.addAll(MapColumnsRules.checkDrop(params.path("drop")));
+            for (MapColumnsRules.Violation v : violations) {
+                // The path goes in the path field; lm prints it on its own line above the
+                // message, so repeating it in the text reads as a stutter.
+                errs.add(new ValidationError(base + "." + v.path(), Severity.ERROR, v.reason(),
+                    List.of("Example: map-columns: { rename: { CUST_NM: name }, drop: [flag] }")));
+            }
+        }
+        return errs;
+    }
+
+    /**
      * split-row fans one source row into N fragments; a validate-row placed after it would drop
      * failing fragments one at a time instead of once per source row, so the mapping tier can
      * record more drops than source rows — corrupting {@code records_out} into a negative count
@@ -203,8 +235,7 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
      * catches it at validate/apply time instead of mid-run.
      */
     private static List<ValidationError> validateRowAfterSplitRowRefused(JsonNode spec) {
-        JsonNode rowHooks = spec.path("mapping").path("row");
-        if (!rowHooks.isArray()) return List.of();
+        JsonNode rowHooks = rowHooksOf(spec);
         int splitAt = -1;
         for (int i = 0; i < rowHooks.size(); i++) {
             if (rowHooks.get(i).has("split-row")) {

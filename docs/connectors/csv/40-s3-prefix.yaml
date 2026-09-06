@@ -10,7 +10,7 @@ kind: Connector
 metadata:
   name: csv-s3
   connector_type: csv-file
-  tags: [demo]
+  scopes: [demo]
 
 spec:
   transport:
@@ -28,5 +28,4 @@ spec:
 
   after_process: none
 
-  target:
-    tags: [demo]
+  target: {}

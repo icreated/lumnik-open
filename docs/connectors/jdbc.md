@@ -19,7 +19,7 @@ kind: Connector
 metadata:
   name: acme-erp-pg
   connector_type: jdbc-generic
-  tags: [erp]
+  scopes: [erp, billing]
 spec:
   connection:
     url: jdbc:postgresql://db.acme.io:5432/billing
@@ -31,8 +31,7 @@ spec:
         mode: watermark
         watermark_column: updated_at
         pk_columns: [invoice_id]
-  target:
-    tags: [erp, billing]
+  target: {}
 ```
 
 ```bash
@@ -59,6 +58,26 @@ printf '%s\n' "$DB_PASSWORD" | lm source jdbc add my-source --url ... --user ...
 lm source jdbc list-tables my-source
 ```
 
+What `test` and `discover` print — run here against the hub's own PostgreSQL, the one base
+at hand; your ERP's will list its own schemas and tables:
+
+```
+$ printf '%s\n' "$DB_PASSWORD" | lm source jdbc test --url jdbc:postgresql://postgres:5432/lumnik --user lumnik_readonly
+OK       : true
+Dialect  : postgres
+Version  : 16.15 (Debian 16.15-1.pgdg12+2)
+Latency  : 30 ms
+Schemas  : connector, core, ext, identity, information_schema, pg_catalog, platform, public, rag
+$ printf '%s\n' "$DB_PASSWORD" | lm source jdbc discover --url jdbc:postgresql://postgres:5432/lumnik --user lumnik_readonly --schema connector
+SCHEMA     NAME                            ROWS  COLS PK                   WATERMARK
+connector  connector_run                     16    26 id                   updated_at
+connector  t_crm_contacts                    -1    11 id                   _ingested_at
+connector  t_customers                       -1    12 id                   _ingested_at
+connector  t_orders                          -1    12 id                   _ingested_at
+```
+
+`ROWS` is the planner's estimate (`-1` when the table was never analyzed), and `WATERMARK`
+is the column `add` will suggest for incremental reads.
 - `test` — connection check: dialect, server version, latency, visible schemas.
 - `discover` — lists tables with row estimates, columns, PK and a suggested watermark column.
 - `add` — creates one connector per table plus a mapping. `--interactive` opens a TUI
@@ -208,9 +227,9 @@ read load away from business-hours traffic — see [Sizing & load tests](../oper
 
 ## Target
 
-`target.tags` enables RAG scope filtering — strongly recommended. The connector warns at
-validate-time if missing. Tags are what make the ingested rows discoverable to scoped
-chat — see [Scopes](../rag/scopes.md).
+The métier scope is not a target concern — it is declared on the connector, as
+`metadata.scopes` (see [Scopes](../rag/scopes.md)); the connector warns at validate-time when
+none is declared. What lands under `target` is about the hub table itself.
 
 Tables are created in the `connector` schema as `connector.t_<name>` (one per declared source
 table). A source column sharing one of the seven reserved names above (see the warning under
@@ -258,7 +277,7 @@ below.
 | No two `rename` sources target the same column | ERROR | `spec.source.tables[i].rename` |
 | `schedule` (if present) is a valid cron | ERROR | `spec.schedule` |
 | `window` (if present) is `HH:MM-HH:MM` | ERROR | `spec.window` |
-| `target.tags` present | WARNING | `spec.target.tags` |
+| `metadata.scopes` declared | WARNING | `metadata.scopes` |
 
 ## How to…
 

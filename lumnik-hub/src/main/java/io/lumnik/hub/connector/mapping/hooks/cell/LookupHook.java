@@ -14,6 +14,19 @@ import java.util.Map;
 public class LookupHook implements CellHook {
 
   @Override
+  public void validateParams(JsonNode params) {
+    // A present-but-non-object `table` makes every lookup miss in silence — table.has(key) is false
+    // on a scalar/array, so a mis-typed table quietly changes nothing. A bare `table:` (null) or an
+    // absent one is "no table" (all keep), the house convention; only a present non-object is refused.
+    JsonNode table = params.path("table");
+    if (!table.isMissingNode() && !table.isNull() && !table.isObject()) {
+      throw new MappingValidationException(
+          "lookup hook: 'table' must be a map of value to replacement (got "
+          + MappingValidationException.typeName(table) + ")");
+    }
+  }
+
+  @Override
   public void apply(Map<String, Object> row, JsonNode params, MappingState s) {
     String col = params.path("column").asText();
     Object v = row.get(col);

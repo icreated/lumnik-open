@@ -1,5 +1,6 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.AskResult;
 import io.lumnik.extraction.spi.ask.SchemaCard;
@@ -75,7 +76,7 @@ class EntityRagChatIT {
       st.execute("INSERT INTO connector.t_chat_csv VALUES (7,'C-2','Lyon')");
       st.execute("DELETE FROM connector.entity_manifest WHERE name = 'chatcustomer'");
     }
-    given().config(YAML_CFG).header("X-Tenant-ID", "7").header("X-User-ID", "1")
+    given().config(YAML_CFG).headers(TestIdentity.tenantAndUser(7))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
   }

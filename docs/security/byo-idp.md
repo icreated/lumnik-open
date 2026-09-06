@@ -56,8 +56,12 @@ and — if you use the PWA — the SPA client (public + PKCE). See the
 | `aud` | **yes** | Exactly `lumnik-backend` — the hub pins this audience; a token without it never gets past the OIDC layer (401). |
 | `tenant_id` | **yes** | The seeded tenant id, as an integer. |
 | `groups` | **yes** | The realm-role array: `lm_user`, `lm_integrator`, `lm_admin`, plus any `scope:<tag>` grants — literal lumnik role names, flat, no hierarchy ([Role management](role-management.md)). |
-| `user_id` | no | Only if your IdP knows lumnik's internal user id (the bundled realm does; a customer IdP normally cannot). When absent, JIT resolves the user from `iss` + the subject claim — the normal external-IdP posture. |
+| `user_id` | no | Only if your IdP knows lumnik's internal user id (the bundled realm does, and the hub seeds the row it names at install; a customer IdP normally cannot). When absent, JIT resolves the user from `iss` + the subject claim — the normal external-IdP posture (closed edition — see the 401 row in troubleshooting). A `user_id` that names no row still authenticates, but the doors that need the row answer 404. |
 | `name`, `email` | no | Profile fields, used only at first-login creation. |
+
+The bundled accounts occupy `(tenant 1, integrator)` and `(tenant 11, hubadmin)` on every hub;
+an IdP whose subject claim is a username must not reuse those logins in those tenants
+(`uq_user_login`).
 
 The subject side of the identity key defaults to `sub`; override with
 `OIDC_SUBJECT_CLAIM` when your IdP has a more stable claim (see the Entra note
@@ -181,6 +185,7 @@ the kind port-forward).
 | `401 {"error":"missing subject/issuer claim"}` | No `user_id` claim *and* the subject claim is absent | Check `OIDC_SUBJECT_CLAIM` names a claim the IdP actually emits |
 | `401 {"error":"no external identity resolution in this edition (user_id claim required)"}` | No `user_id` claim, and the running build is the open-source edition (no JIT) | Deploy the default self-host/Helm build (JIT ships there) |
 | `401 {"error":"subject/issuer claim too long"}` | `iss` or subject exceeds 255 chars — rejected, never truncated: truncating the key would change the identity | Use a shorter stable claim (e.g. Entra `oid`) |
+| `404 {"error":"no user record on this hub for user_id N"}` on `lm scope` / `…/users/me/scope` | The IdP emits a `user_id` that names no hub row | Point it at an existing hub row id, or drop it so JIT resolves the user (401 row above: not in the open edition) |
 | First login 500, logs show `fk_user_tenant` | Tenant row not seeded — JIT creates users, never tenants | Seed the tenant (checklist above), retry |
 | `403 {"error":"user is deactivated"}` | Identity exists but was deactivated (e.g. SCIM departure) | Reactivate via admin — JIT never resurrects |
 | 403 on every endpoint despite valid login | `groups` claim missing or carrying IdP-native names instead of `lm_*` | Map realm roles into `groups` as literal lumnik role names |

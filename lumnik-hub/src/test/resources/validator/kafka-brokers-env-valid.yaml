@@ -3,6 +3,7 @@ kind: Connector
 metadata:
   name: acme-events
   connector_type: kafka
+  scopes: [erp]
 spec:
   name: orders
   brokers_env: KAFKA_BROKERS
@@ -13,5 +14,4 @@ spec:
     kind: sasl-plain
     username_env: KAFKA_USER
     password_env: KAFKA_PASSWORD
-  target:
-    tags: [erp]
+  target: {}

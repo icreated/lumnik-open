@@ -58,6 +58,7 @@ func renderRest(m restManifestFields) string {
 	fmt.Fprintf(&b, "metadata:\n")
 	fmt.Fprintf(&b, "  name: %q\n", m.name)
 	fmt.Fprintf(&b, "  connector_type: rest-generic\n")
+	fmt.Fprintf(&b, "  scopes: [\"otk\"]\n")
 	fmt.Fprintf(&b, "spec:\n")
 	fmt.Fprintf(&b, "  base_url: %q\n", m.baseURL)
 	if m.authKind != "" {
@@ -96,8 +97,6 @@ func renderRest(m restManifestFields) string {
 			}
 		}
 	}
-	fmt.Fprintf(&b, "  target:\n")
-	fmt.Fprintf(&b, "    tags: [\"otk\"]\n")
 	return b.String()
 }
 

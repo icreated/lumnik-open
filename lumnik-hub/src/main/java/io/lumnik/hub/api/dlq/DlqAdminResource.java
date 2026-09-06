@@ -1,8 +1,11 @@
 package io.lumnik.hub.api.dlq;
 
+import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.connector.domain.ConnectorDeadLetter;
+import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.repository.ConnectorDeadLetterRepository;
 import io.lumnik.hub.connector.runtime.DeadLetterCapture;
+import io.lumnik.hub.tenant.RequireUser;
 import io.lumnik.hub.tenant.TenantContextFilter;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
@@ -10,7 +13,6 @@ import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
-import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
@@ -28,6 +30,7 @@ import java.util.UUID;
 public class DlqAdminResource {
 
   @Inject ConnectorDeadLetterRepository repo;
+  @Inject ConnectorRepository connectors;
   @Inject DeadLetterCapture capture;
 
   @GET
@@ -49,7 +52,8 @@ public class DlqAdminResource {
       // by-run/by-connector branches and GET /{id} — the unfiltered list must not leak erased payloads.
       entries = repo.findAllActive(capped);
     }
-    return entries.stream().map(DlqAdminDto::from).toList();
+    var names = connectors.namesById(entries.stream().map(ConnectorDeadLetter::getConnectorId).distinct().toList());
+    return entries.stream().map(d -> DlqAdminDto.from(d, names.get(d.getConnectorId()))).toList();
   }
 
   @GET
@@ -61,16 +65,16 @@ public class DlqAdminResource {
     // Also treat soft-deleted rows as absent: GDPR-erased payload must not be fetchable by UUID.
     Long tenantId = TenantContextFilter.current();
     var d = repo.find("id = ?1 and tenantId = ?2 and deletedAt is null", id, tenantId).firstResult();
-    if (d == null) return Response.status(404).build();
-    return Response.ok(DlqAdminDto.from(d)).build();
+    if (d == null) return ApiErrors.notFound("DLQ entry " + id + " not found");
+    var names = connectors.namesById(List.of(d.getConnectorId()));
+    return Response.ok(DlqAdminDto.from(d, names.get(d.getConnectorId()))).build();
   }
 
   @POST
   @Path("{id}/discard")
   @Transactional
-  public Response discard(@PathParam("id") UUID id, @HeaderParam("X-User-Id") String userIdStr) {
-    Long userId = userIdStr != null ? safeParseLong(userIdStr) : 0L;
-    capture.discard(id, userId);
+  public Response discard(@PathParam("id") UUID id) {
+    capture.discard(id, RequireUser.current());
     return Response.status(204).build();
   }
 
@@ -78,10 +82,8 @@ public class DlqAdminResource {
   @Path("{id}/replayed")
   @Transactional
   public Response markReplayed(@PathParam("id") UUID id,
-                                @HeaderParam("X-User-Id") String userIdStr,
                                 @QueryParam("newRunId") UUID newRunId) {
-    Long userId = userIdStr != null ? safeParseLong(userIdStr) : 0L;
-    capture.markReplayed(id, newRunId, userId);
+    capture.markReplayed(id, newRunId, RequireUser.current());
     return Response.status(204).build();
   }
 
@@ -96,9 +98,5 @@ public class DlqAdminResource {
               .type(MediaType.APPLICATION_JSON)
               .build());
     }
-  }
-
-  private static Long safeParseLong(String s) {
-    try { return Long.parseLong(s); } catch (NumberFormatException e) { return 0L; }
   }
 }

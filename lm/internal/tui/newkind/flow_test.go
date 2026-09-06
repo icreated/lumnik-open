@@ -42,9 +42,9 @@ func TestFormatIssues(t *testing.T) {
 	out := FormatIssues(
 		[]Issue{{Path: "spec.transport.bucket", Message: "required field missing",
 			Recommendations: []string{"Add: bucket: my-bucket"}}},
-		[]Issue{{Path: "spec.target.tags", Message: "no tags defined"}})
+		[]Issue{{Path: "metadata.scopes", Message: "no scopes declared"}})
 	for _, want := range []string{"spec.transport.bucket", "required field missing",
-		"Add: bucket: my-bucket", "WARN", "spec.target.tags"} {
+		"Add: bucket: my-bucket", "WARN", "metadata.scopes"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("FormatIssues output missing %q:\n%s", want, out)
 		}

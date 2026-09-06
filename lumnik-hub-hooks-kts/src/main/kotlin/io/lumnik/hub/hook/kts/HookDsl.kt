@@ -3,7 +3,7 @@ package io.lumnik.hub.hook.kts
 /**
  * Lightweight DSL helpers for Kotlin hook scripts.
  *
- * Scripts receive hub types (LifecycleEvent, HookContext) via JSR-223 bindings.
+ * Scripts receive hub types (LifecycleEvent, HookContext) through the `bindings` property.
  * This module has no compile-time dependency on lumnik-hub to avoid a circular
  * Maven dependency; hub types are resolved at runtime from the classloader.
  *

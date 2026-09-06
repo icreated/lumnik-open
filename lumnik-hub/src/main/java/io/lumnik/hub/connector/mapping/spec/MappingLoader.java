@@ -138,17 +138,7 @@ public final class MappingLoader {
   }
 
   private static List<HookInvocation> parseHooks(JsonNode arr) {
-    List<HookInvocation> out = new ArrayList<>();
-    if (arr == null || !arr.isArray()) return out;
-    for (JsonNode entry : arr) {
-      if (!entry.isObject() || entry.size() != 1) {
-        throw new MappingValidationException(
-            "each hook must be an object with one key, got: " + entry);
-      }
-      var field = entry.fields().next();
-      out.add(new HookInvocation(field.getKey(), field.getValue()));
-    }
-    return out;
+    return HookInvocation.parseList(arr);
   }
 
   private static ErrorPolicy parseErrorPolicy(JsonNode n) {

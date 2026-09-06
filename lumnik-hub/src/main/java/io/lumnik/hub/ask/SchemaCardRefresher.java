@@ -1,6 +1,7 @@
 package io.lumnik.hub.ask;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.event.ConnectorRunCompleted;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
@@ -58,14 +59,16 @@ public class SchemaCardRefresher {
         }
     }
 
-    private boolean schemaChangedDuring(ConnectorRunCompleted ev) throws Exception {
+    private boolean schemaChangedDuring(ConnectorRunCompleted ev) {
         Instant since = ev.runStartedAt().minus(CLOCK_SLACK);
-        try (var con = adminDs.getConnection();
-             var ps = con.prepareStatement(
-                 "SELECT 1 FROM connector.dynamic_table WHERE connector_id = ? AND updated_at >= ? LIMIT 1")) {
-            ps.setObject(1, ev.connectorId());
-            ps.setTimestamp(2, Timestamp.from(since));
-            try (var rs = ps.executeQuery()) { return rs.next(); }
-        }
+        return Jdbc.queryOne(adminDs, "SchemaCardRefresher.schemaChangedDuring",
+            // tenant_id is redundant with a UUID connector id, and stays: this runs on the admin
+            // datasource, where nothing else scopes a read, and the guard over that datasource
+            // asks every query naming a tenanted table to say whose rows it means.
+            "SELECT 1 FROM connector.dynamic_table WHERE tenant_id = ? AND connector_id = ? "
+            + "AND updated_at >= ? LIMIT 1",
+            ps -> { ps.setLong(1, ev.tenantId()); ps.setObject(2, ev.connectorId());
+                    ps.setTimestamp(3, Timestamp.from(since)); },
+            rs -> true).isPresent();
     }
 }

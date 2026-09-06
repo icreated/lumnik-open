@@ -9,6 +9,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/icreated/lumnik-open/lm/internal/client"
+	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/icreated/lumnik-open/lm/internal/tui/style"
 	"github.com/icreated/lumnik-open/lm/internal/types"
 	"github.com/rivo/tview"
@@ -93,7 +94,7 @@ func (d *DLQ) applySort() {
 		}
 		switch idx {
 		case 0:
-			return a.ConnectorID < b.ConnectorID
+			return a.ConnectorLabel() < b.ConnectorLabel()
 		case 1:
 			return a.CapturedAt.Before(b.CapturedAt)
 		case 2:
@@ -114,7 +115,7 @@ func (d *DLQ) render() {
 			idCell.SetTextColor(errorColor)
 		}
 		d.table.SetCell(row, 0, idCell)
-		d.table.SetCell(row, 1, dataCell(shortDlqID(it.ConnectorID)).SetExpansion(1))
+		d.table.SetCell(row, 1, dataCell(it.ConnectorLabel()).SetExpansion(1))
 		d.table.SetCell(row, 2, dataCell(shortDlqID(it.RunID)).SetExpansion(1))
 		d.table.SetCell(row, 3, dataCell(it.SkipReason).SetExpansion(1))
 		d.table.SetCell(row, 4, tview.NewTableCell(fmt.Sprintf("%d", it.Attempts)).SetExpansion(1))
@@ -177,11 +178,11 @@ func (d *DLQ) SelectedDescribe() (string, string, bool) {
 	esc := tview.Escape
 	var b strings.Builder
 	fmt.Fprintf(&b, "id:          %s\n", esc(it.ID))
-	fmt.Fprintf(&b, "connector:   %s\n", esc(it.ConnectorID))
+	fmt.Fprintf(&b, "connector:   %s\n", esc(it.ConnectorNameAndID()))
 	fmt.Fprintf(&b, "run:         %s\n", esc(it.RunID))
 	fmt.Fprintf(&b, "reason:      %s\n", esc(it.SkipReason))
 	fmt.Fprintf(&b, "attempts:    %d\n", it.Attempts)
-	fmt.Fprintf(&b, "captured:    %s\n", it.CapturedAt.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(&b, "captured:    %s\n", output.HumanTimeSeconds(&it.CapturedAt))
 	fmt.Fprintf(&b, "\n── error ──\n%s\n", esc(it.ErrorMessage))
 	if it.Payload != "" {
 		payload := it.Payload

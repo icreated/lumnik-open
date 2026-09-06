@@ -3,12 +3,40 @@
 #   lm apply -f <manifest>  ·  lm connector run <name>  ·  lm source rediscover/schema
 #   (acts: curl mode=analytic — no lm command for analytic ask yet)
 # Requires: platform on :8080 with WOW_SRC_PASSWORD in ITS environment (for password_env),
-# piscine on :5432, hub on :5433, Ollama up.
+# the Adempiere source on :5432, hub on :5433, Ollama up.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# apply_template <file> — render ${WOW_SRC_URL} from .env, then apply.
+# The source URL is site-specific, so it lives in the gitignored .env and never in a
+# tracked manifest — the same place 00-smoke.sh already reads it from. Unset,
+# lib.sh's `set -u` stops us here rather than applying a connector pointed at nothing.
+#
+# Bash substitution, not sed: in a sed REPLACEMENT `&` stands for the whole match, and a
+# JDBC URL carries one the moment it has two query parameters. Measured, not feared —
+# `?ssl=true&sslmode=require` rendered as `?ssl=true${WOW_SRC_URL}sslmode=require`, a
+# manifest that applies cleanly and points at the wrong database. `\` and the `|`
+# delimiter are the same trap; on this side nothing is special.
+apply_template() {
+  local body rendered rc
+  body="$(<"$1")" || return 1
+  rendered="$(mktemp "${TMPDIR:-/tmp}/wow-manifest.XXXXXX")" || return 1
+  printf '%s\n' "${body//\${WOW_SRC_URL\}/$WOW_SRC_URL}" > "$rendered" || { rm -f "$rendered"; return 1; }
+  # A placeholder nobody wired renders as itself and applies without complaint — the same
+  # silent-wrong-URL failure by another route. Refuse instead. Values only: a comment
+  # may legitimately mention a placeholder, and the first version of this check duly
+  # refused the manifest whose own header explained the mechanism.
+  if grep -q '^[^#]*\${' "$rendered"; then
+    echo "  unrendered placeholder left in $(basename "$1") — is it a var .env does not set?" >&2
+    rm -f "$rendered"; return 1
+  fi
+  lm apply -f "$rendered"; rc=$?
+  rm -f "$rendered"
+  return $rc
+}
+
 hdr "apply manifests (declarative connectors)"
-lm apply -f "$WOW_DIR/piscine-jdbc.yaml"   && ok "applied wow-atelier-c_order" || bad "apply c_order"
-lm apply -f "$WOW_DIR/piscine-atelier.yaml" && ok "applied wow-atelier-rest"    || bad "apply rest"
+apply_template "$WOW_DIR/acme-jdbc.yaml"    && ok "applied wow-atelier-c_order" || bad "apply c_order"
+apply_template "$WOW_DIR/acme-atelier.yaml" && ok "applied wow-atelier-rest"    || bad "apply rest"
 
 hdr "run connectors (async; lm connector run resolves name→id)"
 lm connector run wow-atelier-c_order && ok "triggered c_order" || bad "run c_order"

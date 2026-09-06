@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.mapping;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.lumnik.hub.connector.mapping.MappingTemplateRegistry;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -20,7 +21,7 @@ class MappingAdminResourceTest {
     templates.register(tid, "id: " + tid + "\nversion: 1\ntarget: foo");
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().get("/api/platform/mappings")
       .then().statusCode(200)
         .body("findAll { it.id == '" + tid + "' }[0].id", notNullValue());
@@ -40,7 +41,7 @@ class MappingAdminResourceTest {
     templates.register(tid, "id: " + tid + "\nversion: 1\ntarget: foo");
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().get("/api/platform/mappings/" + tid)
       .then().statusCode(200)
         .body("id", Matchers.equalTo(tid));
@@ -52,7 +53,7 @@ class MappingAdminResourceTest {
     templates.register(tid, "id: " + tid + "\nversion: 1\ntarget: foo");
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .queryParam("raw", true)
       .when().get("/api/platform/mappings/" + tid)
       .then().statusCode(200)

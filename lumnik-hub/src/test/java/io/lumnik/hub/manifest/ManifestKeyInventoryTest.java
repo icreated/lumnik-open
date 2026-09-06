@@ -1,5 +1,6 @@
 package io.lumnik.hub.manifest;
 
+import io.lumnik.testkit.sources.SourceTree;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -37,7 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class ManifestKeyInventoryTest {
 
-  private static final Path MAIN = resolveMain();
+  private static final SourceTree TREE = SourceTree.of("lumnik-hub", "io/lumnik/hub");
 
   /**
    * Kinds whose key inventory deliberately lives elsewhere. Each needs a reason a reader can check
@@ -59,15 +60,6 @@ class ManifestKeyInventoryTest {
       "ViewDetailResource.java",
       "POST /api/views/detail — the same body, from the same store, for the same reason.");
 
-  private static Path resolveMain() {
-    Path fromModule = Path.of("src/main/java/io/lumnik/hub");
-    Path fromReactor = Path.of("lumnik-hub/src/main/java/io/lumnik/hub");
-    if (Files.isDirectory(fromModule)) return fromModule;
-    if (Files.isDirectory(fromReactor)) return fromReactor;
-    throw new IllegalStateException("cannot locate the hub sources from "
-        + Path.of("").toAbsolutePath() + " — this inventory cannot police what it cannot find");
-  }
-
   @Test
   void everyManifestParserNamesTheKeysItDoesNotHonour() throws IOException {
     Map<String, String> missing = new LinkedHashMap<>();
@@ -78,7 +70,7 @@ class ManifestKeyInventoryTest {
       seen.add(name);
       if (EXEMPT_PARSERS.containsKey(name)) continue;
 
-      String code = code(Files.readString(p));
+      String code = SourceTree.code(Files.readString(p));
       List<String> absent = new ArrayList<>();
       if (!code.contains("unknownKeys")) absent.add("unknownKeys");
       if (!code.contains("honoredSurface")) absent.add("honoredSurface");
@@ -101,7 +93,7 @@ class ManifestKeyInventoryTest {
     List<String> seen = new ArrayList<>();
 
     for (Path p : sources("Resource.java")) {
-      String code = code(Files.readString(p));
+      String code = SourceTree.code(Files.readString(p));
       if (!code.contains("ManifestParser")) continue;   // not a manifest door
 
       String name = p.getFileName().toString();
@@ -140,7 +132,7 @@ class ManifestKeyInventoryTest {
     for (Map.Entry<String, String> e : EXEMPT_DOORS.entrySet()) {
       Path p = find(e.getKey());
       if (p == null) { stale.add(e.getKey() + " — no such source any more"); continue; }
-      if (!code(Files.readString(p)).contains("ManifestParser")) {
+      if (!SourceTree.code(Files.readString(p)).contains("ManifestParser")) {
         stale.add(e.getKey() + " — no longer parses a manifest, so the exemption says nothing");
       }
       if (e.getValue().isBlank()) stale.add(e.getKey() + " — exempted without a reason");
@@ -155,32 +147,20 @@ class ManifestKeyInventoryTest {
 
   @Test
   void aMentionInACommentOrAnImportIsNotAnImplementation() {
-    assertThat(code("import io.lumnik.hub.manifest.ManifestKeys;\nclass P {}"))
+    assertThat(SourceTree.code("import io.lumnik.hub.manifest.ManifestKeys;\nclass P {}"))
         .as("an import must not satisfy either rule").doesNotContain("ManifestKeys");
-    assertThat(code("class P { /* unknownKeys is not needed here */ }"))
+    assertThat(SourceTree.code("class P { /* unknownKeys is not needed here */ }"))
         .as("a comment explaining the absence is not the thing").doesNotContain("unknownKeys");
-    assertThat(code("class P { List<String> unknownKeys(String y) { return List.of(); } }"))
+    assertThat(SourceTree.code("class P { List<String> unknownKeys(String y) { return List.of(); } }"))
         .as("a real declaration is").contains("unknownKeys");
   }
 
   private static List<Path> sources(String suffix) throws IOException {
-    try (Stream<Path> files = Files.walk(MAIN)) {
-      return files.filter(f -> f.getFileName().toString().endsWith(suffix)).sorted().toList();
-    }
+    return TREE.javaFiles(suffix);
   }
 
   private static Path find(String fileName) throws IOException {
-    try (Stream<Path> files = Files.walk(MAIN)) {
-      return files.filter(f -> f.getFileName().toString().equals(fileName)).findFirst().orElse(null);
-    }
-  }
-
-  /** Comments and imports removed: a mention is not a use, on either rule. */
-  private static String code(String javaSource) {
-    return javaSource
-        .replaceAll("(?s)/\\*.*?\\*/", " ")
-        .replaceAll("(?m)//[^\n]*", " ")
-        .replaceAll("(?m)^\\s*import\\s+[^;]+;", " ");
+    return TREE.find(fileName).orElse(null);
   }
 
   private static String pathOf(String code) {

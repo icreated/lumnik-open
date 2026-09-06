@@ -12,8 +12,8 @@ System integrators and installers.
 <div class="lm-meta-item" markdown>
 <strong>Outcome</strong>
 
-One live connector and rows you can see. The question comes after you promote it — see
-<a href="#what-makes-a-scope-answerable">what makes a scope answerable</a>.
+One live connector, rows you can see, and a first question answered in the scope you named —
+see <a href="#what-makes-a-scope-answerable">what makes a scope answerable</a>.
 </div>
 <div class="lm-meta-item" markdown>
 <strong>Before this page</strong>
@@ -35,38 +35,27 @@ CSV or REST first. Recurrence and polish come after proof.
 `lm` builds from source (Go 1.25+ — the floor is `lm/go.mod`) — today's official install path:
 
 ```bash
-cd lm && go build -o lm ./cmd/lm
-# then put ./lm on your PATH, e.g.:  sudo mv lm /usr/local/bin/
+cd lm && make install   # builds, then copies to ~/.local/bin (no sudo)
 ```
+
+If the shell cannot find `lm` afterwards, `~/.local/bin` is not on your `PATH` — add it, or run
+the binary in place as `./lm`.
 
 > Pre-built binaries (GitHub Releases) and a Homebrew tap will arrive with the public opening —
 > they are part of the publication ritual, not shipped yet.
 
 ### Run lumnik
 
-See the [deploy docs](../deploy.md) (Docker Compose recommended for a single customer). The
-lumnik JVM must have `LUMNIK_SECRET_MASTER_KEY` set at startup (validated — the JVM refuses to
-start without it).
+See the [deploy docs](../deploy.md) — `deploy/selfhost/up.sh` for a single customer. It
+generates every secret the hub needs into `.env` (mode 600), `LUMNIK_SECRET_MASTER_KEY`
+included — nothing to set by hand, and nothing to regenerate.
 
-> **Already done by `up.sh`.** If you came from the Deploy page, `deploy/selfhost/up.sh`
-> generated `LUMNIK_SECRET_MASTER_KEY` into `.env` (mode 600) — do not regenerate it. The manual
-> recipe below is only for the non-compose paths:
->
-> - **systemd**: `openssl rand -base64 32` → `EnvironmentFile=/etc/lumnik/.env`
-> - **Kubernetes**: a Secret mounted as an env var
+> Running the JVM outside compose (systemd, Kubernetes)? Set `LUMNIK_SECRET_MASTER_KEY`
+> yourself (`openssl rand -base64 32`) — the hub refuses to start without it.
 
-!!! info "Three gestures here are not in every build"
-    The ask (`lm ask`, once a scope is answerable) posts to `POST /api/platform/rag/chat`;
-    `lm source schema`, in
-    [Scenario A](#scenario-a-stripe-via-openapi)'s troubleshooting note, calls
-    `GET /api/platform/rag/schema`; and so does the `lm source rediscover` that same command
-    prints when a card comes back empty. All three doors live in `lumnik-rag` — a module the
-    **open edition does not carry**, along with every `ChatPort`/`EmbeddingPort`
-    implementation, which lives in `lumnik-llm-langchain`. The hub carries a resource on that
-    same `/api/platform/rag` base path, but it serves only `/status` and `/reindex`, so on an
-    open build those three answer `404` — including the two you reach for when an ask returns
-    nothing. An open-edition install runs every other gesture on this page: it ingests,
-    promotes, maps, runs and serves.
+!!! info "Three gestures are not in the open edition"
+    `lm ask`, `lm source schema` and `lm source rediscover` answer `404` on an open-edition
+    hub — the chat lives in the closed edition. Everything else on this page runs there.
     See [which edition you installed](../editions.md#which-edition-am-i-running).
 
 ### Point `lm` at the hub
@@ -77,6 +66,27 @@ lm config set-context selfhost --server http://localhost:8080 \
 lm config use-context selfhost
 lm login   # prints a URL + device code — demo user: integrator (password: INTEGRATOR_PASSWORD in .env)
 ```
+
+`lm login` prints a link and a code, then waits — open the link in any browser, sign in as
+`integrator`, and the terminal continues on its own:
+
+```
+$ lm login
+To sign in, open:
+  http://localhost:8180/realms/lumnik/device?user_code=EYQP-LLJN
+and enter code: EYQP-LLJN
+
+Waiting...
+```
+
+The round trip is proven when a listing answers:
+
+```
+$ lm connector list
+NAME  TYPE  TENANT  SCHED  STATUS  LAST RUN
+```
+
+An empty table is the right answer on a fresh hub — nothing is registered yet.
 
 Every scenario below assumes this context: on the deployed stack, **each `lm` call is
 Bearer-authenticated** — without `lm login`, everything returns `401`.
@@ -134,18 +144,16 @@ lm secret set STRIPE_API_KEY sk_test_xxx
 #    (Stripe publishes the spec on GitHub; api.stripe.com/openapi.json is NOT a URL — 404)
 lm source rest from-openapi \
     https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json \
-    --name stripe --tag billing -o stripe.yaml
+    --name stripe --scope billing -o stripe.yaml
 
 # 3. Check it before you apply it
 lm validate -f stripe.yaml
 ```
 
-!!! note "Validate answers in two passes when the envelope is wrong"
+!!! note "Validate stops at the envelope"
 
-    The envelope (`kind`, `metadata.connector_type`) is checked first and validation
-    **returns there** if it found anything — so a manifest you edited by hand can report its
-    envelope faults on one run and its endpoint faults only on the next. A generated manifest
-    passes both, but the two-pass shape is worth knowing before you start editing.
+    If `kind` or `metadata.connector_type` is wrong, validate reports only that. Fix it and
+    run validate again to see the rest.
 
 That spec is about 8 MB and lists Stripe's whole surface, so the generated manifest is long —
 budget a minute for the fetch and the read, and expect to delete most of the endpoints before
@@ -157,16 +165,14 @@ triggers the first ingestion. Two things that cost an hour if you learn them the
 - **Endpoint ids are slugged from the whole path**, not the resource: Stripe's `/v1/charges`
   becomes `v1-charges`. The gesture is `lm endpoint disable stripe/v1-charges`, never
   `stripe/charges` — lookup is exact-match and an unknown name is simply not found.
-- **`lm apply` already enables every endpoint it writes**, and `lm endpoint enable` only
-  flips that flag — it starts nothing. A connector ingests on a schedule only when its
-  `spec.schedule` cron is set **and the connector itself is enabled**; apply creates a *new*
-  connector enabled, so on this path both hold, while one that arrived dormant by another road
-  needs `lm connector resume` as well. A run you ask for by hand needs neither. Use
-  `lm endpoint disable` to narrow a noisy import instead.
+- **`lm endpoint enable` starts nothing** — it only flips a flag. Scheduled ingestion needs
+  `spec.schedule` *and* an enabled connector (`lm connector resume` if it was registered
+  dormant by a one-shot); `lm connector run` needs neither. Use `lm endpoint disable` to
+  narrow a noisy import.
 
-Then talk to the data — **naming the scope**. A connector's tags *are* its scopes, so the
-`--tag billing` above is what `--scope billing` here reaches; an ask with no `--scope` goes
-to the `system` corpus, which is not where this connector put anything:
+Then ask **in the scope you declared** — the same word you gave `from-openapi`. Without
+`--scope`, the ask goes to your default scope (`lm scope`) — `system` on a fresh install —
+where this connector put nothing:
 
 ```bash
 lm ask "how many charges above 1000?" --scope billing
@@ -189,13 +195,28 @@ lm ask "how many charges above 1000?" --scope billing
 ## Scenario B — one-shot CSV
 
 ```bash
-lm csv ingest customers.csv --scope sales --tag demo
-# (a one-shot leaves the scope un-askable — see below)
+lm csv ingest customers.csv --scope sales
+# askable at once in that scope — the last line of the output gives the question to try
 ```
 
-The ingest creates a dormant connector (`enabled=false`, no scheduler) + endpoint + an
-`ext.<name>` table. It indexes no RAG corpus — the one-shot writes rows, not chunks.
-Promotion to recurring ingestion comes
+What it prints, on a three-row stock file:
+
+```
+$ lm csv ingest stock.csv --scope retail --name stock-count
+Ingested stock.csv into ext.stock_count
+  • rows written:    3
+  • promoted cols:   4
+      - sku (text)
+      - label (text)
+      - qty (bigint)
+      - warehouse (text)
+
+  • askable:         scope 'retail' — try: lm ask --scope retail "how many rows are in ext.stock_count?"
+A dormant connector is registered — see `lm connector list`.
+```
+The one-shot writes the rows into an `ext.<name>` table and registers a dormant connector —
+nothing runs again on its own, and no run appears in `lm run list`. The scope is askable
+right away, on an edition that carries the chat. Promotion to recurring ingestion comes
 [after the demo](#from-demo-to-production).
 
 ## Scenario C — combined
@@ -207,11 +228,11 @@ lm secret set STRIPE_API_KEY sk_test_xxx
 lm apply -f stripe.yaml        # the REST manifest from Scenario A
 lm csv ingest contacts.csv --scope billing
 lm connector run stripe        # apply enabled the endpoints; this is what starts a run
-# (neither half of this scenario makes the scope answerable — see below)
+# the CSV half is askable at once; the API half joins the scope once this run completes
 ```
 
-Both halves land in the same scope on purpose — the connector's `--tag billing` and the
-ingest's `--scope billing` — which is what lets one question span the API and the file.
+Both halves land in the same scope on purpose — `--scope billing` on the connector's
+`from-openapi` and on the ingest — which is what lets one question span the API and the file.
 
 ## Scenario D — nightly SFTP export
 
@@ -221,9 +242,18 @@ The most common shape: a customer ERP exports to an SFTP server every night.
 lm secret set ACME_SFTP_KEY -      # paste the private SSH key on stdin, Ctrl+D
 lm csv ingest sftp://lumnik@sftp.acme.io/export/billing-latest.csv \
     --key-secret ACME_SFTP_KEY --scope billing --name acme-billing
-# (ask only after you promote it and it runs — see below)
+# askable at once; recurrence is what the promotion below adds
 ```
 
+```
+$ lm secret set SFTP_EXPORT_PASSWORD - --description "nightly export server"
+Created secret "SFTP_EXPORT_PASSWORD"
+$ lm secret list
+NAME                           ROTATED_AT                     DESCRIPTION
+SFTP_EXPORT_PASSWORD           -                              nightly export server
+```
+
+The value is never printed back — not by `list`, not by any API. Lose it, write it again.
 To switch to daily recurrence you **declare** it: the one-shot leaves no manifest behind and
 nothing exports one, so you write the `csv-file` manifest yourself — fields on
 [CSV & files](../connectors/csv.md) — and put it through the same
@@ -236,13 +266,14 @@ connector, enabled from birth, and both then ingest the same files. Confirm with
 `lm connector list` before you write the manifest.
 
 ```bash
-$EDITOR acme-nightly.yaml   # a csv-file manifest with metadata.name: acme_billing — the name
-                            # lm connector list shows. spec.transport (kind: sftp, host:, user:,
-                            # path: /export/*.csv, key_env: ACME_SFTP_KEY,
-                            # host_key_fingerprint: "SHA256:…" — the connector refuses to
-                            # connect without it), spec.parser and
-                            # spec.target are all required blocks; spec.schedule: "0 6 * * *",
-                            # after_process: move, archive_path: /archive/
+$EDITOR acme-nightly.yaml   # a csv-file manifest: metadata.name: acme_billing (the name
+                            # lm connector list shows), metadata.scopes: [billing] (or the
+                            # tables stay un-askable — validate warns), spec.transport
+                            # (kind: sftp, host:, user:, path: /export/*.csv,
+                            # key_env: ACME_SFTP_KEY, host_key_fingerprint: "SHA256:…" —
+                            # refused without it), spec.parser, spec.target: {},
+                            # spec.schedule: "0 6 * * *", after_process: move,
+                            # archive_path: /archive/
 lm validate -f acme-nightly.yaml   # names any block you left out, field by field
 lm apply -f acme-nightly.yaml
 lm connector resume acme_billing   # apply upserts by name and never flips enabled: the connector
@@ -256,7 +287,7 @@ lm secret set AWS_ACCESS_KEY_ID AKIA...
 lm secret set AWS_SECRET_ACCESS_KEY ...
 lm csv ingest s3://acme-exports/billing/ \
     --region eu-west-3 --suffix .csv --scope billing
-# (a one-shot leaves the scope un-askable — see below)
+# askable at once in that scope
 ```
 
 Those two secret names are not decoration — they are the **defaults** the S3 source looks up
@@ -307,10 +338,9 @@ Keeps the value out of shell history and `ps -ef`.
 ### Production security
 
 - **Master-key rotation**: planned for v1.1 (`lm secret rotate-master-key`)
-- **Audit**: every secret **write** (create/update/delete), plus each read that hits the
-  database, emits `platform.secret.{created,updated,deleted,read}` events
-  into the outbox (SOC 2)
-- **RBAC**: create/update/delete require the realm role `lm_admin` (`@RequiresPermission("lm_admin")` on `SecretResource`, matched flat against the JWT's roles — there is no separate permission registry)
+- **Audit**: every secret write, and every read from the database, emits a
+  `platform.secret.{created,updated,deleted,read}` event
+- **RBAC**: creating, updating and deleting secrets requires the realm role `lm_admin`
 - **No REST endpoint ever returns a secret's value** — if the installer loses it, they rewrite it
 
 ## How to…
@@ -324,6 +354,21 @@ lm run list --connector <connector>
 lm run get <ID>
 ```
 
+```
+$ lm connector list
+NAME          TYPE      TENANT  SCHED  STATUS     LAST RUN
+customers     csv-file  1              Completed  2026-09-05 05:38
+orders        csv-file  1              Completed  2026-09-05 05:38
+products      csv-file  1              Failed     2026-09-05 05:38
+crm-contacts  csv-file  1              Completed  2026-09-05 05:39
+$ lm run list --connector orders
+ID        CONNECTOR  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+f0466804  orders     Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
+$ lm run get f0466804
+ID        CONNECTOR  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+f0466804  orders     Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
+⚠ 2 rows quarantined — see: lm dlq list --run f0466804-0824-4eb4-8aa2-54e263dccafe
+```
 **Result:** one row per connector run — `IN`, `OUT`, `SKIPPED`, `DEAD-LETTERS` — and the
 arithmetic `IN = OUT + SKIPPED` holds on every run, so every row read is accounted for,
 written or dropped. `lm run get` also names a failure and points at `lm dlq list --run <ID>`
@@ -331,46 +376,41 @@ when rows were quarantined.
 
 Two ways to end up staring at an empty table:
 
-- **No run has happened.** The scheduler picks a connector up only when **two** things hold
-  together: its `spec.schedule` cron is set *and* the connector is enabled. A manifest applied
-  without a cron waits forever — and so does one whose cron you just added, if the connector
-  was registered dormant by a one-shot, because apply upserts by name and never flips
-  `enabled`. `lm connector resume <name>` is the other half. `lm connector run <name>` starts
-  a run by hand without either — enabling an endpoint does not.
-- **You took a one-shot path.** `lm csv ingest` is not a connector run: it prints its own
-  summary (rows written, promoted columns) and records no run row, so Scenarios
-  B, D and E leave `lm run list` empty by design.
+- **No run has happened.** Scheduled runs need `spec.schedule` *and* an enabled connector;
+  apply never flips `enabled`, so a connector registered dormant by a one-shot needs
+  `lm connector resume <name>` too. `lm connector run <name>` starts one by hand regardless.
+- **You took a one-shot path.** `lm csv ingest` records no run — Scenarios B, D and E leave
+  `lm run list` empty by design.
 
 ### Take the demo back off the customer's machine
 
 ```bash
-lm connector list                                     # the registered (slugified) names
-lm endpoint purge acme_billing/acme_billing --force   # the one-shot's endpoint
+lm connector list               # the registered (slugified) names
 lm connector delete acme_billing
 ```
 
-**Result:** the purge deletes every `ext.*` row that endpoint wrote; the delete then takes
-the connector row, its endpoints with it, its `connector.t_*` tables and its RAG chunks.
-Order matters, and specifically for a **one-shot**: its `ext.*` table is not in the
-dynamic-table registry, so the delete alone would leave that table behind — the purge is
-the only handle on those rows, and deleting the connector first cascades the endpoints
-away, taking that handle with them. (An *applied* REST connector's registered `ext.*`
-tables are dropped by the delete itself.)
+```
+$ lm connector delete stock_demo
+deleted: stock_demo
+```
 
-**Two endpoints, one purge.** A connector can carry more than one, and Scenario D produces
-exactly that — but they do not come off the machine the same way. The one-shot registers its
-endpoint under the *same* slugified name as its connector (hence `acme_billing/acme_billing`)
-and writes into an `ext.<name>` table; that table is what the purge empties, and nothing else
-touches it. The later `lm apply -f` of the recurring manifest registers a second endpoint
-under the fixed name **`default`**, which writes into the dynamic table
-`connector.t_acme_billing` — and `lm connector delete` drops that one itself. Do not reach for
-`lm endpoint purge acme_billing/default`: that endpoint's config is `{"name": …}` with no
-`target` key, so the call answers `400 no target.table found in endpoint config` and always
-will.
+One gesture takes everything with it: the connector, its endpoints, its hub table
+(`connector.t_<name>` for a manifest connector, `ext.<name>` for a one-shot) and every RAG
+chunk it produced. A connector whose table feeds a [fused entity](../entities.md) is the
+exception — the entity's view depends on the table, so the delete is **refused** and names
+the entity to remove first:
 
-What survives all of this is the empty `ext.<name>` table itself: the connector delete
-deliberately drops only tables it created under `connector.t_`, so the shell of the one-shot
-table stays until someone drops it in the database.
+```
+$ lm connector delete cust-csv
+Error: API error 409: table connector.t_cust_csv feeds entity customer — remove the entity first (lm entity delete customer)
+$ lm entity delete customer
+deleted: customer
+$ lm connector delete cust-csv
+deleted: cust-csv
+```
+
+(The entity name in the message is lowercase — the hub derives it from the view name
+`connector.v_customer`, and `lm entity delete` resolves the name case-insensitively.)
 
 ## What makes a scope answerable
 
@@ -378,17 +418,11 @@ table stays until someone drops it in the database.
 model is touched — is to load a **schema card** for the scope. No card, no answer:
 the ask refuses immediately.
 
-Cards are written only when a **connector run completes and something changed in the dynamic-table
-registry**. One shape on this page never reaches that:
-
-- **A one-shot `lm csv ingest` records no run at all.** It registers a dormant connector and
-  writes rows, and stops there — nothing to complete, nothing to refresh, so the scope
-  stays un-askable until promoted to a real connector.
-
-**Two paths work**: a connector writing to a dynamic table (`connector.t_*`) and a REST
-connector writing a `hybrid` target (`ext.*`). Either way the recipe is the same: apply the
-manifest, make sure the connector is enabled (`lm connector resume` if it arrived dormant),
-run it, and the card appears on its own. That is the promotion described under Scenario D.
+A card is written three ways: when a **connector run completes** with a new or changed
+table (Scenario A, after its first run), when a **one-shot `lm csv ingest` commits**
+(Scenarios B, D and E — askable the moment the command returns), and when an
+[entity](../entities.md) is applied over the scope. Nothing to configure: the card appears
+on its own, and `lm source schema --scope <tag>` shows what it holds.
 
 ## Troubleshooting
 
@@ -400,5 +434,7 @@ run it, and the card appears on its own. That is the promotion described under S
 | `429 Too Many Requests` from the vendor | too many calls for the quota | edit `default_rate_limit: 50/s` in the YAML, then `lm apply -f` |
 | `lumnik.secret.master-key is too short` at JVM startup | env var missing or < 16 chars | regenerate with `openssl rand -base64 32` + export; restart the JVM |
 | `secret with this name already exists` on `secret set` | transparent update not handled | `lm secret rm NAME --force` then `set`; or the CLI already falls back to update on 409 |
+| `403 {"error":"scope not granted"}` on `lm apply` | your user holds `scope:` roles and the manifest declares a scope you do not hold (or none) | declare only scopes you hold, or apply as a user with no `scope:` role |
+| `WARN metadata.scopes — no scopes declared` on validate | the manifest names no métier, so its tables will not be askable | add `scopes: [<scope>]` under `metadata` |
 
 For connector details: [REST](../connectors/rest.md).

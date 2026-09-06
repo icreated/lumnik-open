@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.meta;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.Test;
 
@@ -12,8 +13,7 @@ class VersionResourceTest {
   @Test
   void version_returns_server_version() {
     given()
-      .header("X-Tenant-Id", "1")
-      .header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().get("/api/platform/version")
       .then().statusCode(200)
         .body("version", notNullValue())

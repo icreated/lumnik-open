@@ -91,26 +91,55 @@ class RlsDdlCharacterizationTest {
     }
 
     /**
-     * The hybrid writer emits the same policy for its {@code ext.*} tables, and now grants the same
-     * set as {@link DynamicTableWriter} — including sequence usage — still grouped into ONE guarded
-     * block (composition stays per-writer; the grant set is harmonised).
+     * The hybrid writer emits the same policy for its {@code ext.*} tables, grants the same set as
+     * {@link DynamicTableWriter} — including sequence usage — and now, like it, gives each grant
+     * its OWN guarded block.
      */
     @Test
     void hybrid_jsonb_writer_emits_the_same_tenant_isolation_ddl() throws SQLException {
+        assertThat(hybridStatements()).containsSubsequence(
+            "ALTER TABLE \"ext\".\"stripe_charges\" ENABLE ROW LEVEL SECURITY",
+            POLICY_ON_EXT_TABLE,
+            "DO $lumnik_rls$ BEGIN   GRANT INSERT, SELECT, UPDATE, DELETE ON \"ext\".\"stripe_charges\" TO lumnik_app; "
+            + "EXCEPTION WHEN OTHERS THEN NULL; END $lumnik_rls$",
+            "DO $lumnik_rls$ BEGIN   GRANT SELECT ON \"ext\".\"stripe_charges\" TO lumnik_readonly; "
+            + "EXCEPTION WHEN OTHERS THEN NULL; END $lumnik_rls$",
+            "DO $lumnik_rls$ BEGIN   GRANT USAGE, SELECT ON SEQUENCE \"ext\".\"stripe_charges_id_seq\" TO lumnik_app; "
+            + "EXCEPTION WHEN OTHERS THEN NULL; END $lumnik_rls$");
+    }
+
+    /**
+     * The rule the literals above are one instance of: <b>one grant per guarded block</b>.
+     *
+     * <p>{@code EXCEPTION WHEN OTHERS} aborts its block, so a grant that fails takes every grant
+     * after it in the same block down with it — silently, since the handler swallows. That is not
+     * a remote possibility: {@code RlsDdl.guarded}'s own javadoc notes the target roles may not
+     * exist at all. Grouping put {@code lumnik_readonly}'s SELECT second behind
+     * {@code lumnik_app}'s DML, and the schema USAGE for readonly second behind the app's, so one
+     * missing role silently cost ask-to-SQL both of its grants — on a table the schema card
+     * advertises as askable.
+     *
+     * <p>Asserted as a property rather than as more literals, so a grant added later is covered
+     * without anyone remembering this file exists.
+     */
+    @Test
+    void every_grant_rides_its_own_guarded_block() throws SQLException {
+        for (String sql : hybridStatements()) {
+            if (!sql.contains("GRANT ")) continue;
+            assertThat(sql)
+                .as("one grant per guarded block, else a failing sibling cancels the rest")
+                .containsOnlyOnce("GRANT ");
+        }
+    }
+
+    private static List<String> hybridStatements() throws SQLException {
         HybridJsonbWriter writer = new HybridJsonbWriter();
         Statement st = mock(Statement.class);
         Connection c = mock(Connection.class);
         when(c.createStatement()).thenReturn(st);
 
         writer.createTable(c, new HybridJsonbSpec("ext.stripe_charges", "$.id", List.of()));
-
-        assertThat(executed(st)).containsSubsequence(
-            "ALTER TABLE \"ext\".\"stripe_charges\" ENABLE ROW LEVEL SECURITY",
-            POLICY_ON_EXT_TABLE,
-            "DO $lumnik_rls$ BEGIN   GRANT INSERT, SELECT, UPDATE, DELETE ON \"ext\".\"stripe_charges\" TO lumnik_app; "
-            + "  GRANT SELECT ON \"ext\".\"stripe_charges\" TO lumnik_readonly; "
-            + "  GRANT USAGE, SELECT ON SEQUENCE \"ext\".\"stripe_charges_id_seq\" TO lumnik_app; "
-            + "EXCEPTION WHEN OTHERS THEN NULL; END $lumnik_rls$");
+        return executed(st);
     }
 
     /** Both writers must emit a byte-identical policy statement modulo the table reference. */

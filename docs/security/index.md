@@ -206,7 +206,7 @@ these are softened here — collect them for a risk register directly from this 
   `JitUserProvisioner` on the classpath the open edition has no other way to resolve a
   first login.
 - **Result:** `TenantContextFilter` fails closed — `401 {"error":"no external identity
-  resolution in this edition (user_id claim required)"}` (`TenantContextFilter.java:195`).
+  resolution in this edition (user_id claim required)"}`.
   Plan the account lifecycle, and the edition, accordingly.
   [Bring your own IdP](byo-idp.md#the-model) · [SCIM deprovisioning](scim.md)
 - **Three of the four rate-limited endpoints don't exist on the open edition either.**

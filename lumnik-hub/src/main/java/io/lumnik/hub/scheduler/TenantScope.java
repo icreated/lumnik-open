@@ -5,6 +5,7 @@ import io.lumnik.hub.tenant.TenantContextFilter;
 import org.jboss.logging.MDC;
 
 import java.util.concurrent.Callable;
+import java.util.function.Supplier;
 
 /**
  * Utility for scheduler jobs that need to run work per-tenant.
@@ -31,6 +32,28 @@ public final class TenantScope {
             CurrentTenantHolder.set(tenantId);
             MDC.put(MDC_TENANT_ID,tenantId);
             work.run();
+        } finally {
+            restore(previous);
+        }
+    }
+
+    /**
+     * {@link #call} for work that throws nothing — the shape a read has.
+     *
+     * <p>Both ThreadLocals, which is the whole point of coming here instead of setting one by
+     * hand. {@code TenantContextFilter.CURRENT_TENANT} is what Hibernate's {@code tenantFilter}
+     * reads; {@code CurrentTenantHolder} is what {@code TenantConnectionInterceptor} reads to
+     * bind the GUC. Setting only the first works right up until the caller is
+     * {@code @Transactional} — where the Hibernate filter is not enabled at all — and then the
+     * switch is inert and the query silently answers for the CALLER's tenant instead.
+     */
+    public static <T> T get(Long tenantId, Supplier<T> work) {
+        Long previous = TenantContextFilter.current();
+        try {
+            TenantContextFilter.CURRENT_TENANT.set(tenantId);
+            CurrentTenantHolder.set(tenantId);
+            MDC.put(MDC_TENANT_ID, tenantId);
+            return work.get();
         } finally {
             restore(previous);
         }

@@ -25,7 +25,7 @@ kind: Connector
 metadata:
   name: kafka-erp-exports            # unique connector name within the workspace
   connector_type: kafka              # selects the Kafka connector implementation
-  tags: [demo]
+  scopes: [demo]
 
 spec:
   name: erp_events                   # logical/table name → target table connector.t_erp_events

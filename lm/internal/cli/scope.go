@@ -27,7 +27,7 @@ func newScopesCmd() *cobra.Command {
 				[]string{"SCOPE", "CONNECTORS", "CHUNKS", "LAST INDEXED"}, scopes,
 				func(s client.RagScope) []string {
 					return []string{s.Scope, fmt.Sprintf("%d", s.Connectors),
-						fmt.Sprintf("%d", s.Chunks), s.LastIndexed}
+						fmt.Sprintf("%d", s.Chunks), output.HumanTimeStr(s.LastIndexed)}
 				})
 		},
 	}

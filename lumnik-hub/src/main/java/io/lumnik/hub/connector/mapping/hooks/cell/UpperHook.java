@@ -6,8 +6,11 @@ import io.lumnik.hub.connector.mapping.hooks.CellHook;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import jakarta.enterprise.context.ApplicationScoped;
 
+import java.util.Locale;
 import java.util.Map;
 
+/** Uppercases text cells. Same type guard and locale pinning as {@link LowerHook}, for the same
+ * two reasons. */
 @ApplicationScoped
 @HookId("upper")
 public class UpperHook implements CellHook {
@@ -16,7 +19,8 @@ public class UpperHook implements CellHook {
   public void apply(Map<String, Object> row, JsonNode params, MappingState s) {
     for (String col : CleanHook.columnList(params, row)) {
       Object v = row.get(col);
-      if (v != null) row.put(col, v.toString().toUpperCase());
+      if (!(v instanceof String str)) continue;
+      row.put(col, str.toUpperCase(Locale.ROOT));
     }
   }
 }

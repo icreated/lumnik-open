@@ -1,5 +1,6 @@
 package io.lumnik.hub.workflow;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
@@ -36,7 +37,7 @@ class WorkflowObservationsReadIT {
 
     @Test
     void observations_are_flattened_stillest_first_and_tenant_bound() {
-        given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        given().headers(TestIdentity.tenantAndUser(1))
             .when().get("/api/platform/workflows/observations")
             .then().statusCode(200)
             .body("findAll { it.docKey.startsWith('OBSREAD-') }", hasSize(2))
@@ -47,7 +48,7 @@ class WorkflowObservationsReadIT {
 
     @Test
     void limit_is_honored() {
-        given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        given().headers(TestIdentity.tenantAndUser(1))
             .when().get("/api/platform/workflows/observations?limit=1")
             .then().statusCode(200)
             .body("size()", equalTo(1));

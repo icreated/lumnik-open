@@ -16,6 +16,17 @@
    the container `unhealthy` — it never restarts it. Watch
    `docker compose -f docker-compose.selfhost.yml logs -f hub` until healthy.
 
+## Running from source
+
+```bash
+git pull
+make -C lm install                 # updates the lm CLI in your PATH
+./deploy/selfhost/up.sh --build    # updates the hub
+```
+
+Both are safe to run every time. Your data is kept; migrations run at the hub's next
+boot (rules and time budgets above).
+
 ## Rules the migrations follow
 
 - One shared Flyway version namespace across `core`, `connector` and `platform`

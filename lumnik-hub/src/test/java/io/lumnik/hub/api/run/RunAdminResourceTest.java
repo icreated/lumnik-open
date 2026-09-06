@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.run;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.api.types.SkipReason;
@@ -16,11 +17,13 @@ import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
 import org.junit.jupiter.api.Test;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 import static io.restassured.RestAssured.given;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.notNullValue;
@@ -38,7 +41,7 @@ class RunAdminResourceTest {
   @Test
   void list_returns_recent_runs() {
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .queryParam("limit", 10)
       .when().get("/api/platform/runs")
       .then().statusCode(200)
@@ -50,7 +53,7 @@ class RunAdminResourceTest {
     UUID runId = seedRunWithDeadLetters(2);
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().get("/api/platform/runs/" + runId)
       .then().statusCode(200)
         .body("deadLetterCount", equalTo(2));
@@ -62,7 +65,7 @@ class RunAdminResourceTest {
     String idStr = runId.toString();
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .queryParam("limit", 50)
       .when().get("/api/platform/runs")
       .then().statusCode(200)
@@ -80,7 +83,7 @@ class RunAdminResourceTest {
     UUID runId = seedRunWithRecordsSkipped(3);
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().get("/api/platform/runs/" + runId)
       .then().statusCode(200)
         .body("recordsSkipped", equalTo(3));
@@ -97,7 +100,7 @@ class RunAdminResourceTest {
     UUID runId = seedRunWithCellErrors(5);
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().get("/api/platform/runs/" + runId)
       .then().statusCode(200)
         .body("cellErrors", equalTo(5));
@@ -114,22 +117,128 @@ class RunAdminResourceTest {
     UUID runId = seedNamedRun(name);
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().get("/api/platform/runs/" + runId)
       .then().statusCode(200)
         .body("connectorName", equalTo(name));
 
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .queryParam("limit", 50)
       .when().get("/api/platform/runs")
       .then().statusCode(200)
         .body("findAll { it.id == '" + runId + "' }.connectorName", hasItem(equalTo(name)));
   }
 
+  /**
+   * The ledger is read top-down for "what just happened", so the list must be newest first —
+   * {@code findAll()} alone is unordered. Two runs an hour apart on one connector; the newer must
+   * appear before the older in the response.
+   */
+  @Test
+  void get_other_tenant_run_is_404() throws Exception {
+    // Same guard as the DLQ ledger: EntityManager.find() bypasses the tenant filter, so the
+    // by-id read carries an explicit tenantId predicate — RLS is the floor, this is the belt.
+    UUID runId = seedRunForTenant(2L);
+
+    given()
+      .headers(TestIdentity.tenantAndUser(1))
+      .when().get("/api/platform/runs/" + runId)
+      .then().statusCode(404);
+  }
+
+  @Test
+  void list_is_newest_first() throws Exception {
+    UUID[] ids = seedTwoRunsOldThenNew();
+    String older = ids[0].toString();
+    String newer = ids[1].toString();
+
+    List<String> order = given()
+      .headers(TestIdentity.tenantAndUser(1))
+      .queryParam("limit", 200)
+      .when().get("/api/platform/runs")
+      .then().statusCode(200)
+      .extract().path("id");
+
+    assertThat(order.indexOf(newer))
+      .as("the newer run must appear before the older one")
+      .isGreaterThanOrEqualTo(0)
+      .isLessThan(order.indexOf(older));
+  }
+
   // ── helpers ──────────────────────────────────────────────────────────────────
 
+  /** Seeds one connector with two Completed runs an hour apart; returns {older, newer} ids. */
+  private UUID[] seedTwoRunsOldThenNew() throws Exception {
+    return TenantContext.callAsSystem(() -> {
+      try {
+        utx.begin();
+
+        Connector c = new Connector();
+        c.setTenantId(1L);
+        c.setName("run-order-" + System.nanoTime());
+        c.setTypeId("csv-file");
+        c.setConfig(Map.of("kind", "csv-file"));
+        connectors.persist(c);
+        connectors.flush();
+
+        ConnectorRun older = new ConnectorRun();
+        older.setTenantId(1L);
+        older.setConnectorId(c.getId());
+        older.setStatus("Completed");
+        older.setSyncMode("full");
+        older.setTriggeredBy("Manual");
+        older.setStartedAt(Instant.now().minusSeconds(3600));
+        runs.persist(older);
+
+        ConnectorRun newer = new ConnectorRun();
+        newer.setTenantId(1L);
+        newer.setConnectorId(c.getId());
+        newer.setStatus("Completed");
+        newer.setSyncMode("full");
+        newer.setTriggeredBy("Manual");
+        newer.setStartedAt(Instant.now());
+        runs.persist(newer);
+        runs.flush();
+
+        utx.commit();
+        return new UUID[]{older.getId(), newer.getId()};
+      } catch (Exception e) {
+        utx.rollback();
+        throw e;
+      }
+    });
+  }
+
   /** Seeds a connector with the given name and one Completed run; returns the run id. */
+  private UUID seedRunForTenant(long tenantId) throws Exception {
+    return TenantContext.callAsSystem(() -> {
+      try {
+        utx.begin();
+        Connector c = new Connector();
+        c.setTenantId(tenantId);
+        c.setName("run-admin-tenant-" + tenantId + "-" + System.nanoTime());
+        c.setTypeId("csv-file");
+        c.setConfig(Map.of("kind", "csv-file"));
+        connectors.persist(c);
+        connectors.flush();
+        ConnectorRun run = new ConnectorRun();
+        run.setTenantId(tenantId);
+        run.setConnectorId(c.getId());
+        run.setStatus("Completed");
+        run.setSyncMode("full");
+        run.setTriggeredBy("Manual");
+        runs.persist(run);
+        runs.flush();
+        utx.commit();
+        return run.getId();
+      } catch (Exception e) {
+        utx.rollback();
+        throw e;
+      }
+    });
+  }
+
   private UUID seedNamedRun(String name) throws Exception {
     return TenantContext.callAsSystem(() -> {
       try {

@@ -19,7 +19,7 @@ kind: Connector
 metadata:
   name: rest-offset                  # unique connector name within the workspace
   connector_type: rest-generic       # selects the REST connector implementation
-  tags: [demo]
+  scopes: [demo]
 
 spec:
   base_url: http://localhost:8081    # the docker-compose 'wiremock' service (port 8081→8080)

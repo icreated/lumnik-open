@@ -56,33 +56,49 @@ type Run struct {
 	DeadLetterCount int64      `json:"deadLetterCount"`
 }
 
-// ConnectorLabel is what a human should read in a CONNECTOR column: the
-// connector's name when the hub sent it, else the shortened id (older hubs).
-// One answer shared by the CLI table and the TUI panel, so they cannot drift.
-func (r Run) ConnectorLabel() string {
-	if r.ConnectorName != "" {
-		return r.ConnectorName
+// ConnectorLabel is what a human should read in a CONNECTOR column — see connectorLabel.
+func (r Run) ConnectorLabel() string { return connectorLabel(r.ConnectorName, r.ConnectorID) }
+
+// ConnectorLabel — the same rule, for the dead-letter queue.
+func (d DeadLetter) ConnectorLabel() string { return connectorLabel(d.ConnectorName, d.ConnectorID) }
+
+// ConnectorNameAndID is the detail-view form: "name (full id)" — the name for the
+// reader, the id for the script — or just the id when the hub sent no name.
+func (d DeadLetter) ConnectorNameAndID() string {
+	if d.ConnectorName == "" {
+		return d.ConnectorID
 	}
-	if len(r.ConnectorID) > 8 {
-		return r.ConnectorID[:8]
+	return d.ConnectorName + " (" + d.ConnectorID + ")"
+}
+
+// connectorLabel: the connector's name when the hub sent it, else the shortened
+// id (older hubs). One answer shared by the CLI tables and the TUI panels, so
+// they cannot drift.
+func connectorLabel(name, id string) string {
+	if name != "" {
+		return name
 	}
-	return r.ConnectorID
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 // DeadLetter is one record the mapping pipeline could not process: why it was
 // skipped or errored, how many attempts were made, its resolution state, and
 // (when captured) the offending payload.
 type DeadLetter struct {
-	ID           string    `json:"id"`
-	ConnectorID  string    `json:"connectorId"`
-	RunID        string    `json:"runId"`
-	SkipReason   string    `json:"skipReason"`
-	ErrorMessage string    `json:"errorMessage"`
-	Attempts     int       `json:"attempts"`
-	Resolution   string    `json:"resolution,omitempty"`
-	CapturedAt   time.Time `json:"capturedAt"`
-	Payload      string    `json:"payload,omitempty"`
-	SkipDetail   string    `json:"skipDetail,omitempty"`
+	ID            string    `json:"id"`
+	ConnectorID   string    `json:"connectorId"`
+	ConnectorName string    `json:"connectorName"` // absent on hubs older than the dlq-names change
+	RunID         string    `json:"runId"`
+	SkipReason    string    `json:"skipReason"`
+	ErrorMessage  string    `json:"errorMessage"`
+	Attempts      int       `json:"attempts"`
+	Resolution    string    `json:"resolution,omitempty"`
+	CapturedAt    time.Time `json:"capturedAt"`
+	Payload       string    `json:"payload,omitempty"`
+	SkipDetail    string    `json:"skipDetail,omitempty"`
 }
 
 // Hook is one registered lifecycle hook: its type, the entity it targets, its

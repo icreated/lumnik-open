@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.connector;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorRun;
@@ -48,7 +49,7 @@ class ConnectorAdminResourceIT {
       return cc.getId().toString();
     });
 
-    given().header("X-Tenant-Id", "1").header("X-User-Id", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .when().get("/api/platform/connectors")
         .then().statusCode(200)
                .body("find { it.id == '" + connectorId + "' }.status", equalTo("SUCCESS"))

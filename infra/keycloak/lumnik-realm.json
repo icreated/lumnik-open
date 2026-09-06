@@ -49,6 +49,20 @@
           }
         },
         {
+          "name": "user_id",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "user_id",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "user_id",
+            "jsonType.label": "long"
+          }
+        },
+        {
           "name": "groups",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-usermodel-realm-role-mapper",
@@ -174,6 +188,9 @@
       "attributes": {
         "tenant_id": [
           "11"
+        ],
+        "user_id": [
+          "2"
         ]
       },
       "realmRoles": [

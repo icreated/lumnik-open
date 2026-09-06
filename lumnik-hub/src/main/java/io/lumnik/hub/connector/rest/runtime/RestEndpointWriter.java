@@ -52,37 +52,9 @@ public class RestEndpointWriter implements ItemWriter<Map<String, Object>> {
     }
 
     /** Parses the {@link HybridJsonbSpec} (table / unique key / promote) from the endpoint target config. */
-    @SuppressWarnings("unchecked")
     HybridJsonbSpec parseHybridSpec(Map<String, Object> t) {
-        if (t == null) throw new IllegalArgumentException("endpoint config missing 'target'");
-        String table = (String) t.get("table");
-        // DDL-injection boundary (layer 2, alongside the escaping fix in RlsDdl): `table` is read
-        // verbatim from the manifest and handed straight to HybridJsonbWriter's DDL, executed on the
-        // BYPASSRLS admin datasource — this path bypasses MappingLoader.parseTable entirely, so it
-        // must not trust its caller either.
-        if (!SqlIdentifiers.isPlainQualifiedIdentifier(table)) {
-            throw new IllegalArgumentException(
-                "target.table must be a plain identifier or schema.table pair (letters, digits, underscore; "
-                    + "not starting with a digit): " + table);
-        }
-        String key   = (String) t.get("unique_key");
-
-        List<Map<String, Object>> rawPromote =
-            (List<Map<String, Object>>) t.getOrDefault("promote", List.of());
-
-        List<PromotedColumn> promote = new ArrayList<>();
-        for (Map<String, Object> p : rawPromote) {
-            String typeStr = String.valueOf(p.get("type")).toUpperCase();
-            Object transformRaw = p.get("transform");
-            Optional<Transform> transform = transformRaw != null
-                ? Optional.of(Transform.valueOf(String.valueOf(transformRaw).toUpperCase()))
-                : Optional.empty();
-            promote.add(new PromotedColumn(
-                (String) p.get("name"),
-                (String) p.get("path"),
-                SqlType.valueOf(typeStr),
-                transform));
-        }
-        return new HybridJsonbSpec(table, key, promote);
+        // The parse (and its DDL-identifier guard) lives on the spec itself — one parser,
+        // every reader. This wrapper stays for the writer's existing call sites and tests.
+        return HybridJsonbSpec.fromTargetConfig(t);
     }
 }

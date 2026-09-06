@@ -29,6 +29,7 @@ public class RoleOrgAccessResource {
 
     @GET
     @Operation(summary = "List active org grants for a role")
+    @Transactional
     public List<RoleOrgAccessDto> listAll(@PathParam("tenantId") Long tenantId,
                                           @PathParam("roleId") Long roleId) {
         requireRole(tenantId, roleId);

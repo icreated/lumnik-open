@@ -27,7 +27,7 @@ class ConnectorApplyValidationTest {
               auth: { kind: bearer }
               endpoints:
                 - { id: x, path: /x, method: GET }
-              target: { table_prefix: x_, tags: [x] }
+              target: { table_prefix: x_ }
             """;
         given().config(YAML_CFG).contentType("application/yaml").body(yaml)
             .header("X-Tenant-Id", "1")   // tenant now required in context before validation

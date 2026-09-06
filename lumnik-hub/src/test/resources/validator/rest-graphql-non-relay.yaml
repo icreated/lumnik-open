@@ -3,6 +3,7 @@ kind: Connector
 metadata:
   name: graphql-non-relay
   connector_type: rest-generic
+  scopes: [t]
 spec:
   base_url: https://api.example.com
   graphql_path: /graphql
@@ -19,4 +20,3 @@ spec:
         kind: hybrid
         table: ext.x
         unique_key: "$.id"
-        tags: [t]

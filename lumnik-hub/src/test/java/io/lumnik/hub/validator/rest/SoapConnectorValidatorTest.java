@@ -29,7 +29,7 @@ class SoapConnectorValidatorTest {
           "pagination":{"kind":"soap","page_size":100,
             "last_page_path":"$.Body.Out.LastPage",
             "response_path":"$.Body.Out.ListOfCustomer.Customer"},
-          "target":{"table":"ext.cust","unique_key":"$.Id","tags":["crm"]}
+          "target":{"table":"ext.cust","unique_key":"$.Id"}
         }]}""";
 
     @Test

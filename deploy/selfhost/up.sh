@@ -92,17 +92,19 @@ fi
 echo "==> aligning database role passwords to .env"
 pg_cid="$("${COMPOSE[@]}" ps -q postgres)"
 env_val() { grep "^$1=" .env | cut -d= -f2-; }
-# Superuser name: .env is believed when it speaks; when it is silent, ASK THE VOLUME —
-# the name is frozen into PGDATA at first init, and guessing from the age of .env once
-# pinned 'adempiere' onto fresh 'lumnik' volumes (an install's own second run broke it).
-# pg_isready ignores auth, so it waits for the server regardless of the role name.
+# Superuser name: the VOLUME outranks the claim. The name is frozen into PGDATA at first
+# init; .env can be silent (older installs) or WRONG (a regenerated .env stamps 'lumnik'
+# over a pre-rename volume — deleting .env on a living stack did exactly that). So the
+# claimed name is verified against the running database, and discovery runs whenever the
+# claim is absent or false. pg_isready ignores auth, so it waits under any name.
 pg_super="$(env_val POSTGRES_USER)" || [ $? -eq 1 ]
 for _ in $(seq 1 30); do
   docker exec "$pg_cid" pg_isready -U "${pg_super:-lumnik}" -d lumnik >/dev/null 2>&1 && break
   sleep 2
 done
-if [[ -z "$pg_super" ]]; then
-  if docker exec "$pg_cid" psql -U lumnik -d lumnik -tAc 'SELECT 1' >/dev/null 2>&1; then
+super_works() { docker exec "$pg_cid" psql -U "$1" -d lumnik -tAc 'SELECT 1' >/dev/null 2>&1; }
+if [[ -z "$pg_super" ]] || ! super_works "$pg_super"; then
+  if super_works lumnik; then
     pg_super=lumnik
   else
     pg_super=adempiere   # pre-rename volume — the only other name ever bootstrapped

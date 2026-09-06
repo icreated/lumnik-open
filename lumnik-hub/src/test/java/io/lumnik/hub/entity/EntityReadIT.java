@@ -1,5 +1,6 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.quarkus.agroal.DataSource;
@@ -65,14 +66,14 @@ class EntityReadIT {
           + "(1,'r1','Alice','GOLD',5000),(1,'r2','Bob','SILVER',1000),(2,'r9','Zoe','GOLD',9000)");
     }
     given().config(YAML_CFG)
-        .header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        .headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
   }
 
   @Test
   void tenant1_sees_only_its_rows_with_renamed_columns() {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/customer")
         .then().statusCode(200)
         .body("size()", equalTo(2))
@@ -83,7 +84,7 @@ class EntityReadIT {
 
   @Test
   void tenant2_is_isolated() {
-    given().header("X-Tenant-ID", "2").header("X-User-ID", "2")
+    given().headers(TestIdentity.tenantAndUser(2, 2))
         .get("/api/entities/customer")
         .then().statusCode(200)
         .body("size()", equalTo(1))
@@ -92,7 +93,7 @@ class EntityReadIT {
 
   @Test
   void filters_by_canonical_column() {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/customer?segment=GOLD")
         .then().statusCode(200)
         .body("size()", equalTo(1))
@@ -101,7 +102,7 @@ class EntityReadIT {
 
   @Test
   void paginates_with_limit() {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/customer?limit=1")
         .then().statusCode(200)
         .body("size()", equalTo(1));
@@ -109,7 +110,7 @@ class EntityReadIT {
 
   @Test
   void unknown_entity_is_404() throws Exception {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/nope")
         .then().statusCode(404);
 
@@ -125,7 +126,7 @@ class EntityReadIT {
 
   @Test
   void filters_by_numeric_column() {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/customer?credit_limit=5000")
         .then().statusCode(200)
         .body("size()", equalTo(1))
@@ -135,11 +136,11 @@ class EntityReadIT {
   @Test
   void paginates_deterministically() {
     // Fetch page 0 (limit=1, offset=0) and page 1 (limit=1, offset=1)
-    JsonPath page0 = given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    JsonPath page0 = given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/customer?limit=1&offset=0")
         .then().statusCode(200).body("size()", equalTo(1))
         .extract().jsonPath();
-    JsonPath page1 = given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    JsonPath page1 = given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/customer?limit=1&offset=1")
         .then().statusCode(200).body("size()", equalTo(1))
         .extract().jsonPath();
@@ -151,7 +152,7 @@ class EntityReadIT {
     assertThat(id0).isNotEqualTo(id1);
 
     // Together they must cover exactly the 2 tenant-1 rows
-    JsonPath full = given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    JsonPath full = given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/customer")
         .then().statusCode(200).body("size()", equalTo(2))
         .extract().jsonPath();
@@ -161,7 +162,7 @@ class EntityReadIT {
     assertThat(allIds).contains(id0, id1);
 
     // Re-run page 0 to confirm order is stable across requests
-    JsonPath page0Again = given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    JsonPath page0Again = given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/customer?limit=1&offset=0")
         .then().statusCode(200).extract().jsonPath();
     assertThat(page0Again.getString("[0].id")).isEqualTo(id0);

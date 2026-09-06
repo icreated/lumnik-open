@@ -29,6 +29,7 @@ public class UserRoleResource {
 
     @GET
     @Operation(summary = "List active role assignments for a user")
+    @Transactional
     public List<UserRoleDto> listAll(@PathParam("tenantId") Long tenantId,
                                      @PathParam("userId") Long userId) {
         requireUser(tenantId, userId);

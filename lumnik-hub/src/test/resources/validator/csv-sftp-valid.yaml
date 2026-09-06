@@ -3,7 +3,7 @@ kind: Connector
 metadata:
   name: acme-billing
   connector_type: csv-file
-  tags: [crm]
+  scopes: [crm, billing]
 spec:
   transport:
     kind: sftp
@@ -15,5 +15,4 @@ spec:
     has_header: true
   schedule: "0 6 * * *"
   after_process: archive
-  target:
-    tags: [crm, billing]
+  target: {}

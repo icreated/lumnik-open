@@ -3,8 +3,10 @@ package io.lumnik.hub.api.connector;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
+import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.connector.handler.ApplyResult;
+import io.lumnik.hub.api.connector.handler.ApplyUpsert;
 import io.lumnik.hub.api.connector.handler.ConnectorApplyHandler;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.hub.validator.ConnectorValidationService;
@@ -46,6 +48,14 @@ public class ConnectorApplyResource {
             return Response.status(400).entity(ApiErrors.error(
                 "manifest metadata.tenant (" + doc.path(METADATA).path(TENANT).asLong()
                     + ") does not match the authenticated tenant (" + tenant + ")")).build();
+        }
+
+        // A WRITE door asks allowsAll, not allowsAny — the same gate EntityApplyResource has, on the
+        // door that had none. Reads accept an overlap; publishing into a list you only partly hold
+        // widens the scopes you do not, and a scopeless connector is not a bound user's to create:
+        // they could never see it. Before validation, so a refused caller learns nothing else.
+        if (!ScopeGrants.allowsAll(ApplyUpsert.scopes(doc.path(METADATA)))) {
+            return ApiErrors.scopeNotGranted();
         }
 
         ValidationResult vr = validationService.validate(doc);

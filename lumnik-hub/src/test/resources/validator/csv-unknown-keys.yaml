@@ -3,7 +3,7 @@ kind: Connector
 metadata:
   name: nightly-export
   connector_type: csv-file
-  tags: [billing]
+  scopes: [billing]
 spec:
   transport:
     kind: local
@@ -13,5 +13,4 @@ spec:
     empy_check: true
   after_process: none
   target:
-    tags: [billing]
     tabel_prefix: t_

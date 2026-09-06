@@ -119,13 +119,6 @@
             <artifactId>quarkus-qute</artifactId>
         </dependency>
 
-        <!-- ── Kotlin scripting via JSR-223 ──────────────────────────── -->
-        <!-- Version (root pom's kotlin.version) must match what Quarkus BOM pulls transitively
-             (2.0.21) to avoid version skew between scripting-jsr223 and compiler-embeddable. -->
-        <dependency>
-            <groupId>org.jetbrains.kotlin</groupId>
-            <artifactId>kotlin-scripting-jsr223</artifactId>
-        </dependency>
         <dependency>
             <groupId>io.lumnik</groupId>
             <artifactId>lumnik-hub-hooks-kts</artifactId>

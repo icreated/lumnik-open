@@ -105,9 +105,9 @@ Four pages answer "what needs me":
 `:ask` is analytic chat — ask your data a question in plain language and it comes
 back as generated SQL plus rows plus a plain-language answer. `Enter` submits, `y`
 yanks the generated SQL, `e` exports the result rows to a CSV file, `n` clears the
-input for a new question. The scope it asks against comes from `:scopes` — `Enter`
-on a row there sets the active scope for the rest of the session (shown in the
-header, and it's what `:ask` uses on the next question).
+input for a new question. The scope it asks against is the session scope shown in the
+header: seeded at startup from your default (`lm scope`), changed with `:scopes` →
+`Enter` or `:scope <tag>` for the rest of the session.
 
 `:view` opens a [`kind:View`](../how-it-works.md#five-kinds-two-families) manifest file
 and renders it — `Enter` opens the suggested living example on an empty path, or type
@@ -142,7 +142,7 @@ share one path.
 
 `:modules` lists installed business modules. `:hooks` lists installed Kotlin hooks;
 `^L` reloads the selected one. `:migrations` shows Flyway status per schema.
-`:scopes` lists the tenant's per-métier scopes (connector tags) — `Enter` sets the
+`:scopes` lists the tenant's per-métier scopes (declared as `metadata.scopes` on connectors and entities) — `Enter` sets the
 active one, as noted above.
 
 ## Key reference

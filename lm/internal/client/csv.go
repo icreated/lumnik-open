@@ -42,6 +42,9 @@ type CsvIngestResult struct {
 	RowsSkipped    int                `json:"rowsSkipped"`
 	PromoteColumns []CsvIngestPromote `json:"promoteColumns"`
 	Warnings       []string           `json:"warnings"`
+	AskableScopes  []string           `json:"askableScopes"`
+	ChatAvailable  bool               `json:"chatAvailable"`
+	Refreshed      bool               `json:"refreshed"`
 	Scope          string             `json:"-"` // echoed back for output
 	SourceFile     string             `json:"-"`
 }

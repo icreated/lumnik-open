@@ -17,11 +17,11 @@ if lm connector list; then ok "connector list"; else bad "connector list failed"
 hdr "lm migration status"
 if lm migration status >/dev/null 2>&1; then ok "migration status"; else bad "migration status failed"; fi
 
-hdr "lm source jdbc test (piscine connectivity, password via stdin)"
+hdr "lm source jdbc test (source connectivity, password via stdin)"
 if printf '%s\n' "${WOW_SRC_PASSWORD:-}" | lm source jdbc test --url "${WOW_SRC_URL}" --user "${WOW_SRC_USER}"; then
   ok "jdbc source reachable: ${WOW_SRC_URL}"
 else
-  bad "jdbc source test failed (is piscine up on localhost:5432?)"
+  bad "jdbc source test failed (is the source up at ${WOW_SRC_URL}?)"
 fi
 
 hdr "lm source schema --scope ${WOW_SCOPE}"

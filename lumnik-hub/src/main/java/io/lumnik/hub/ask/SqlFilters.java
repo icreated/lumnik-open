@@ -1,5 +1,6 @@
 package io.lumnik.hub.ask;
 
+import io.lumnik.extraction.spi.ask.SqlLexer;
 import io.lumnik.extraction.spi.ask.SqlLexer.Kind;
 import io.lumnik.extraction.spi.ask.SqlLexer.Token;
 
@@ -8,7 +9,8 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Extracts the bare-column = string-literal filters that {@link DomainGuard} and
+ * Extracts the lexical shapes the ask pipeline reasons about — the bare-column filters that
+ * {@link DomainGuard} and
  * {@link UndocumentedColumnGuard} both inspect: {@code col = 'v'} / {@code col <> 'v'} /
  * {@code col != 'v'} / {@code col IN ('a','b')} / {@code col NOT IN ('a','b')}. Purely LEXICAL — no policy: the guards apply their own
  * semantic checks (declared? in-domain? a niladic keyword?). A numeric RHS, a qualified/quoted/cast column,
@@ -20,6 +22,42 @@ final class SqlFilters {
 
     /** A bare-column filter against one or more string literals. {@code column} is the original-case text. */
     record Filter(String column, List<String> values) {}
+
+    /**
+     * The parenthesised {@code SELECT} that follows an {@code =}, returned as its ORIGINAL text so
+     * the caller can run it — {@code AmbiguousFilterGuard} uses it to say which rows a filter
+     * matched when PostgreSQL refused a multi-row scalar subquery.
+     *
+     * <p>Token offsets are what make this a slice rather than a re-serialisation: {@code Token}
+     * carries {@code [start, end)} precisely "so a caller can rewrite one token without re-scanning
+     * the text". An earlier version hand-scanned instead, on the written claim that no offsets
+     * existed — they do, and the scanner it justified had no idea what a comment was, so it read
+     * {@code -- id = (SELECT …)} as code and offered ids from a query nobody ran.
+     *
+     * <p>Fail-open like the rest of this class: an unrecognised shape returns empty.
+     */
+    static Optional<String> scalarSubquery(String sql) {
+        if (sql == null) return Optional.empty();
+        List<Token> tokens = SqlLexer.tokenize(sql);
+        for (int i = 0; i + 2 < tokens.size(); i++) {
+            if (!isOp(tokens.get(i), "=") || !isPunct(tokens.get(i + 1), "(")) continue;
+            if (!isKeyword(tokens.get(i + 2), "select")) continue;
+            int close = matchingParen(tokens, i + 1);
+            if (close < 0) continue;
+            return Optional.of(sql.substring(tokens.get(i + 1).end(), tokens.get(close).start()).trim());
+        }
+        return Optional.empty();
+    }
+
+    /** The index of the {@code )} closing the {@code (} at {@code open}, or -1 when unbalanced. */
+    private static int matchingParen(List<Token> tokens, int open) {
+        int depth = 0;
+        for (int i = open; i < tokens.size(); i++) {
+            if (isPunct(tokens.get(i), "(")) depth++;
+            else if (isPunct(tokens.get(i), ")") && --depth == 0) return i;
+        }
+        return -1;
+    }
 
     /** Every literal filter the domain guard can enforce. (S3776: a guard chain plus two shapes.) */
     static List<Filter> columnLiteralFilters(List<Token> tokens) {

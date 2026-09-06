@@ -9,8 +9,6 @@ import io.lumnik.hub.hook.KotlinScriptHost;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -47,12 +45,21 @@ public class KotlinCellHook implements CellHook {
   @Inject KotlinScriptHost scriptHost;
 
   @Override
-  public void apply(Map<String, Object> row, JsonNode params, MappingState state) {
-    String scriptPath = params.path("script").asText();
-    if (scriptPath.isEmpty()) {
+  public void validateParams(JsonNode params) {
+    // 'script' presence is manifest shape, invariant across rows — refuse once per spec, so
+    // `kotlin: {}` fails before any row rather than only when a row arrives. (Script load, compile
+    // and execution depend on runtime state and stay in apply.) Missing/null/blank all count as
+    // absent — a bare `script:` is null, whose asText() is the literal "null", not "".
+    JsonNode script = params.path("script");
+    if (script.isMissingNode() || script.isNull() || script.asText().isBlank()) {
       throw new MappingValidationException("kotlin hook: 'script' is required");
     }
-    String source = loadScript(scriptPath);
+    classpathResource(script.asText());   // the `classpath:` shape is invariant too — refused once here
+  }
+
+  @Override
+  public void apply(Map<String, Object> row, JsonNode params, MappingState state) {
+    String resource = classpathResource(params.path("script").asText());
 
     Map<String, Object> context = new HashMap<>();
     if (params.has(CONTEXT)) {
@@ -65,26 +72,20 @@ public class KotlinCellHook implements CellHook {
     bindings.put(CONTEXT, context);
 
     try {
-      scriptHost.executeSource(source, bindings);
+      // Read and compiled once per path by the host — this runs once per ROW.
+      scriptHost.execute(resource, bindings);
     } catch (Exception e) {
       throw new MappingValidationException("kotlin hook script failed: " + e.getMessage(), e);
     }
   }
 
-  private String loadScript(String path) {
+  private static String classpathResource(String path) {
     if (path.startsWith("classpath:")) {
-      String resource = path.substring("classpath:".length());
-      try (InputStream in = Thread.currentThread().getContextClassLoader()
-          .getResourceAsStream(resource)) {
-        if (in == null) {
-          throw new MappingValidationException("script not found: " + path);
-        }
-        return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-      } catch (MappingValidationException e) {
-        throw e;
-      } catch (Exception e) {
-        throw new MappingValidationException("script load failed: " + e.getMessage(), e);
+      String resource = path.substring("classpath:".length()).trim();
+      if (resource.isEmpty()) {
+        throw new MappingValidationException("kotlin hook: 'classpath:' needs a resource path, got: " + path);
       }
+      return resource;
     }
     throw new MappingValidationException("only classpath: scripts supported in v1, got: " + path);
   }

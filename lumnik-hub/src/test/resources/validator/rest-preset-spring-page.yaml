@@ -1,6 +1,6 @@
 apiVersion: connectors.lumnik.io/v1
 kind: Connector
-metadata: { name: preset-spring, connector_type: rest-generic }
+metadata: { name: preset-spring, connector_type: rest-generic, scopes: [x] }
 spec:
   base_url: https://api.example.com
   endpoints:
@@ -8,4 +8,4 @@ spec:
       path: /items
       method: GET
       pagination: { kind: spring-page }
-      target: { kind: hybrid, table: x_items, unique_key: "$.id", tags: [x] }
+      target: { kind: hybrid, table: x_items, unique_key: "$.id" }

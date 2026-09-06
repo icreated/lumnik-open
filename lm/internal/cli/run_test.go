@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/icreated/lumnik-open/lm/internal/types"
 )
@@ -38,6 +39,40 @@ func TestRunRow_prefersConnectorName(t *testing.T) {
 	bare := runRow(types.Run{ID: "r2", ConnectorID: "cbcdc361-dead-beef"})
 	if bare[1] != "cbcdc361" {
 		t.Errorf("CONNECTOR cell should fall back to the short id, got %q", bare[1])
+	}
+}
+
+// STARTED/ENDED must render like every other date column in the CLI (output.HumanTime:
+// reader-local, "2006-01-02 15:04") — before this, runRow formatted them by hand with
+// time.RFC3339, so a run table printed "2026-09-03T13:43:24.11856Z" while lm connector
+// list's LAST RUN column, one command over, printed "2026-09-03 15:43". Expected value
+// computed the same way HumanTime's own test computes it, not hardcoded, so this does not
+// depend on the machine running it being on any particular timezone.
+func TestRunRow_datesRenderHuman(t *testing.T) {
+	started := time.Date(2026, 9, 3, 13, 43, 24, 118560000, time.UTC)
+	ended := time.Date(2026, 9, 3, 13, 43, 55, 465597000, time.UTC)
+	wantStarted := started.In(time.Local).Format("2006-01-02 15:04")
+	wantEnded := ended.In(time.Local).Format("2006-01-02 15:04")
+
+	row := runRow(types.Run{ID: "r1", ConnectorID: "c1", StartedAt: started, EndedAt: &ended})
+	if row[7] != wantStarted {
+		t.Errorf("STARTED cell = %q, want %q (was RFC3339 before the fix)", row[7], wantStarted)
+	}
+	if row[8] != wantEnded {
+		t.Errorf("ENDED cell = %q, want %q (was RFC3339 before the fix)", row[8], wantEnded)
+	}
+}
+
+// A run still in flight has no EndedAt, and a run the hub never actually started (should not
+// happen, but the zero value is reachable) has no StartedAt either — both must render empty,
+// not "0001-01-01" or a nil-pointer panic.
+func TestRunRow_zeroAndNilDatesRenderEmpty(t *testing.T) {
+	row := runRow(types.Run{ID: "r1", ConnectorID: "c1"})
+	if row[7] != "" {
+		t.Errorf("STARTED cell for a zero time = %q, want empty", row[7])
+	}
+	if row[8] != "" {
+		t.Errorf("ENDED cell for a still-running run (nil EndedAt) = %q, want empty", row[8])
 	}
 }
 

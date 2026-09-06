@@ -195,6 +195,17 @@ lm observations list          # the tape: what has not moved, stillest first
 `lm workflow list` shows NAME | TABLE | COLUMN | SCOPE | ENABLED; `lm workflow get NAME`
 fetches the stored manifest YAML verbatim (the edit round-trip: get, edit, apply again).
 
+```
+$ lm workflow apply -f order-workflow.yaml
+{"name":"order-lifecycle","scope":"retail","table":"connector.t_orders","column":"status","dataTruth":{"undeclared":[{"value":"ON HOLD","rows":1}],"unobserved":[],"nullOrBlank":0,"tableMissing":false,"keyColumnMissing":false,"checkUnavailable":false,"unavailableReason":null}}
+$ lm workflow list
+NAME             TABLE               COLUMN  SCOPE   ENABLED
+order-lifecycle  connector.t_orders  status  retail  true
+```
+
+Here the export carries one order in `ON HOLD`, a value the manifest never declared — the
+report names it and the apply still lands.
+
 The whole `/api/workflows` surface (`POST /apply`, `GET` list, `GET /{name}/manifest`) requires
 the **`lm_integrator`** role — declaring a lifecycle is integrator work, not the tenant-wide
 admin door `kind:Process` sits behind. Every apply is recorded in the audit trail (actor,

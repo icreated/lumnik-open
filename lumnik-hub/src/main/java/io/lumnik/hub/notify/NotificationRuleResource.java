@@ -1,6 +1,7 @@
 package io.lumnik.hub.notify;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -46,6 +47,7 @@ public class NotificationRuleResource {
                              String recipient, String template, Boolean enabled) {}
 
     @GET
+    @Transactional
     public List<RuleDto> list() {
         return repo.list("tenantId = ?1 ORDER BY id", RequireTenant.current())
                    .stream().map(RuleDto::from).toList();
@@ -80,7 +82,7 @@ public class NotificationRuleResource {
     @Transactional
     public Response delete(@PathParam("id") Long id) {
         long deleted = repo.delete("id = ?1 AND tenantId = ?2", id, RequireTenant.current());
-        return deleted == 0 ? Response.status(404).build() : Response.noContent().build();
+        return deleted == 0 ? ApiErrors.notFound("notification rule " + id + " not found") : Response.noContent().build();
     }
 
     private static Response bad(String message) {

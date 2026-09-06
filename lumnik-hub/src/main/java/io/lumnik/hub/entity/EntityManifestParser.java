@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.manifest.ManifestKeys;
 import jakarta.enterprise.context.ApplicationScoped;
 
@@ -174,11 +175,7 @@ public class EntityManifestParser {
 
   private static void requireScopes(EntityManifest m) {
     for (String sc : m.scopes()) {
-      if (sc == null || sc.isBlank())
-        throw new IllegalArgumentException("scopes contains a blank entry");
-      if (!sc.matches("[A-Za-z0-9_-]+"))
-        throw new IllegalArgumentException(
-            "scope must be a simple identifier (letters, digits, _ or -): " + sc);
+      ScopeGrants.nameProblem(sc).ifPresent(msg -> { throw new IllegalArgumentException(msg); });
     }
   }
 

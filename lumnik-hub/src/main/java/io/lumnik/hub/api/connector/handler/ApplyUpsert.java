@@ -7,8 +7,10 @@ import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.validator.JsonNodes;
 
+import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import java.util.stream.StreamSupport;
 
 /**
  * The find-or-create preamble every connector apply handler shares.
@@ -35,7 +37,7 @@ public final class ApplyUpsert {
         });
 
         conn.setConfig(config.apply(conn));
-        conn.setTags(TagsMerger.merge(meta, spec));
+        conn.setTags(scopes(meta));
         // A10: the scheduler selects on the COLUMN (WHERE c.schedule IS NOT NULL) — the
         // config copy alone never scheduled anything. Absent cron on re-apply = unschedule.
         conn.setSchedule(JsonNodes.textOrNull(spec.path("schedule")));
@@ -47,6 +49,22 @@ public final class ApplyUpsert {
             repo.flush();
         }
         return conn;
+    }
+
+    /**
+     * {@code metadata.scopes} as a list, whatever the node holds: a non-list reads as no scopes.
+     * Two readers, in this order — the apply door's scope gate, BEFORE validation (a bound user is
+     * refused a scopeless or foreign manifest without learning anything else), then the handlers,
+     * after {@code ScopesValidator} has refused any malformed list. The connector's {@code tags}
+     * column keeps its name: the wire and the storage are not the manifest. This
+     * replaced a merger that unioned {@code metadata.tags} with {@code spec.target.tags} and, for
+     * REST, read a root {@code target} that does not exist — endpoint tags never arrived.
+     */
+    public static List<String> scopes(JsonNode meta) {
+        JsonNode s = meta.path("scopes");
+        if (!s.isArray()) return List.of();
+        // distinct() on an ordered stream keeps declared order at O(n) — the OTK pushes 10k here.
+        return StreamSupport.stream(s.spliterator(), false).map(JsonNode::asText).distinct().toList();
     }
 
     /** Find the connector's endpoint by name or create it, write the shared fields and persist when new. */

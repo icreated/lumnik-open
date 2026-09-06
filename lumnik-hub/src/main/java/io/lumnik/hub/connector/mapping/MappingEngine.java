@@ -72,6 +72,8 @@ public class MappingEngine {
       MappingState state,
       boolean endOfStream) {
 
+    validateHookParams(spec);
+
     List<Map<String, Object>> rows = new ArrayList<>(input);
     state.counters().rowsIn().addAndGet(rows.size());
 
@@ -82,6 +84,27 @@ public class MappingEngine {
 
     state.counters().rowsOut().addAndGet(rows.size());
     return rows;
+  }
+
+  /**
+   * Resolve and validate every row/cell hook ONCE, before any row. Params are invariant across the
+   * chunk, so a param-shape refusal that hooks used to run per row — and that slipped through
+   * entirely on an empty chunk, since {@code apply()} never fired — now fires here, exactly once.
+   * An UNKNOWN hook is refused here too, for the same reason: the apply tiers name it, but they name
+   * it inside the per-row loop, which an empty chunk skips. (Dataset hooks need no line here — their
+   * apply tier iterates invocations, not rows, so it already refuses an unknown one on an empty chunk.)
+   */
+  private void validateHookParams(MappingSpec spec) {
+    for (HookInvocation inv : spec.row()) {
+      RowHook hook = catalog.row(inv.name());
+      if (hook == null) throw new MappingValidationException("unknown row hook: " + inv.name());
+      hook.validateParams(inv.params());
+    }
+    for (HookInvocation inv : spec.cell()) {
+      CellHook hook = catalog.cell(inv.name());
+      if (hook == null) throw new MappingValidationException("unknown cell hook: " + inv.name());
+      hook.validateParams(inv.params());
+    }
   }
 
   /** Tier 1: dataset hooks (one-shot, may rewrite the whole chunk). */

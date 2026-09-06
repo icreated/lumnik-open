@@ -42,15 +42,20 @@ class HybridJsonbWriterInjectionTest {
         writer.createTable(c, new HybridJsonbSpec(schema + ".t", "$.id", List.of()));
 
         List<String> executed = executed(st);
-        String expectedGrantBlock = RlsDdl.guarded(
-            RlsDdl.grantSchemaUsageApp(schema),
-            RlsDdl.grantSchemaUsageReadonly(schema));
+        // One grant per guarded block (a shared block is cancelled by its first failing statement),
+        // so the routing is proven twice — once per block, each still built by RlsDdl.guarded
+        // itself rather than by re-deriving the tag here.
+        String appBlock = RlsDdl.guarded(RlsDdl.grantSchemaUsageApp(schema));
+        String readonlyBlock = RlsDdl.guarded(RlsDdl.grantSchemaUsageReadonly(schema));
 
-        assertThat(executed).contains(expectedGrantBlock);
+        assertThat(executed).contains(appBlock, readonlyBlock);
 
         // The schema's own embedded "$$" must not forge a second matching pair of the chosen tag —
-        // it appears exactly twice (open + close), same proof shape as RlsDdlInjectionTest.
-        assertThat(countOccurrences(expectedGrantBlock, TAG)).isEqualTo(2);
+        // it appears exactly twice (open + close) in EACH block, same proof shape as
+        // RlsDdlInjectionTest. Splitting must not hand the hostile name a third occurrence to
+        // pair off against.
+        assertThat(countOccurrences(appBlock, TAG)).isEqualTo(2);
+        assertThat(countOccurrences(readonlyBlock, TAG)).isEqualTo(2);
     }
 
     private static List<String> executed(Statement st) throws SQLException {

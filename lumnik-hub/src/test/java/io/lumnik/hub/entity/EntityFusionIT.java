@@ -1,5 +1,6 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.quarkus.agroal.DataSource;
@@ -74,14 +75,14 @@ class EntityFusionIT {
       // C-300: exists ONLY in csv (no erp row) -> pure gap-fill, the entity is still fused -> _conflicts {}
       st.execute("INSERT INTO connector.t_fuse_csv VALUES (1,'C-300','Solo','solo@x.fr','Nice')");
     }
-    given().config(YAML_CFG).header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().config(YAML_CFG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
   }
 
   @Test
   void gap_fill_and_agreement_yield_empty_conflicts() {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/fusedcustomer?customer_code=C-100")
         .then().statusCode(200)
         .body("size()", equalTo(1))
@@ -93,7 +94,7 @@ class EntityFusionIT {
 
   @Test
   void conflict_keeps_erp_representative_and_surfaces_the_ledger() {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/fusedcustomer?customer_code=C-200")
         .then().statusCode(200)
         .body("size()", equalTo(1))
@@ -110,7 +111,7 @@ class EntityFusionIT {
   @Test
   void entity_present_in_only_one_source_is_still_fused() {
     // C-300 has no ERP row at all; the CSV row alone produces the fused entity with no conflict.
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/fusedcustomer?customer_code=C-300")
         .then().statusCode(200)
         .body("size()", equalTo(1))

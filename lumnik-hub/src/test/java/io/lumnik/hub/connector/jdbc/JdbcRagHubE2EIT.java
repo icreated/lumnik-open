@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.jdbc;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.http.ContentType;
 import org.junit.jupiter.api.*;
@@ -48,7 +49,7 @@ class JdbcRagHubE2EIT {
   @Test
   @Order(1)
   void add_three_tables_as_jdbc_source() {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .contentType(ContentType.JSON)
         .body(Map.of(
             "sourceName", "legacy-erp-e2e",
@@ -68,7 +69,7 @@ class JdbcRagHubE2EIT {
   @Test
   @Order(2)
   void list_tables_returns_three_registered_connectors() {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .when().get("/api/platform/sources/jdbc/legacy-erp-e2e/tables")
         .then().statusCode(200)
                .body("tables.size()", is(3));

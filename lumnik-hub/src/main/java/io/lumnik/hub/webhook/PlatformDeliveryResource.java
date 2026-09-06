@@ -11,7 +11,6 @@ import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 
 /**
  * What the substrate sent out, and whether it arrived — flattened across every integration.
@@ -70,14 +69,13 @@ public class PlatformDeliveryResource {
     @POST @Path("/{id}/replay")
     @Transactional
     public WebhookDeliveryService.DeliveryResult replay(@PathParam("id") Long id) {
-        WebhookDelivery d = deliveries.findById(id);
-        // getTenantId() is a Long: compare with equals, never ==, or two identical ids outside
-        // the Integer cache would compare false and hide a tenant's own delivery from them.
-        if (d == null || !Objects.equals(d.getTenantId(), RequireTenant.current()))
-            throw new NotFoundException();
-        // Deleting an integration closes this door too — see WebhookEndpointRepository.findLiveById.
-        WebhookEndpoint e = endpoints.findLiveById(d.getEndpointId());
-        if (e == null) throw new NotFoundException();
+        // Scoped in the query: another tenant's delivery is never materialised to be refused.
+        WebhookDelivery d = deliveries.findForTenant(id, RequireTenant.current());
+        if (d == null) throw new NotFoundException("delivery " + id + " not found");
+        // The endpoint id comes from a delivery already proven ours, so it is not a request input;
+        // scoping it to the tenant anyway keeps the last by-id lookup on this path off findLiveById.
+        WebhookEndpoint e = endpoints.findLiveForTenant(d.getEndpointId(), RequireTenant.current());
+        if (e == null) throw new NotFoundException("endpoint for delivery " + id + " not found");
         return replayService.replay(e, d);
     }
 }

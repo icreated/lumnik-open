@@ -1,10 +1,8 @@
 package io.lumnik.hub.tenant;
 
 import io.lumnik.common.tenant.CurrentTenantHolder;
+import io.lumnik.hub.api.ApiErrors;
 import jakarta.ws.rs.WebApplicationException;
-import jakarta.ws.rs.core.Response;
-
-import java.util.Map;
 
 /**
  * Tenant comes ONLY from the auth-resolved context (JWT in prod, validated header in
@@ -20,8 +18,8 @@ public final class RequireTenant {
     public static long current() {
         Long t = CurrentTenantHolder.get();
         if (t == null || t <= 0) {
-            throw new WebApplicationException(Response.status(401)
-                .entity(Map.of("error", "no tenant in security context")).build());
+            throw new WebApplicationException(
+                ApiErrors.unauthorized("no tenant in security context"));
         }
         return t;
     }

@@ -6,7 +6,7 @@
 #   lm connector run shop
 apiVersion: connectors.lumnik.io/v1
 kind: Connector
-metadata: { name: shop, connector_type: rest-generic, tags: [commerce] }
+metadata: { name: shop, connector_type: rest-generic, scopes: [commerce] }
 spec:
   base_url: https://myshop.example.com
   graphql_path: /api/graphql        # the single POST endpoint (default: /graphql)

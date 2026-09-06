@@ -5,6 +5,7 @@ import io.lumnik.hub.connector.api.types.SkipReason;
 import io.lumnik.hub.connector.mapping.MappingState;
 import io.lumnik.hub.connector.mapping.hooks.DatasetHook;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
+import io.lumnik.hub.connector.mapping.hooks.RegexParams;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.ArrayList;
@@ -25,7 +26,11 @@ public class FilterWhereHook implements DatasetHook {
     if (column.isEmpty()) return rows;
 
     String equals = params.has("equals") ? params.get("equals").asText() : null;
-    Pattern regex = params.has("regex") ? Pattern.compile(params.get("regex").asText()) : null;
+    // A bad regex is a typed refusal naming the hook and the 'regex' knob, not a raw
+    // PatternSyntaxException stack trace; a container-node regex is refused too, not flattened to ""
+    // and silently ignored. filter-where is one-shot per chunk, so this fires even on an empty chunk.
+    String regexStr = RegexParams.patternText("filter-where", "regex", params.path("regex"));
+    Pattern regex = regexStr.isEmpty() ? null : RegexParams.compileOrRefuse("filter-where", "regex", regexStr);
     Set<String> in = parseIn(params);
 
     List<Map<String, Object>> out = new ArrayList<>();

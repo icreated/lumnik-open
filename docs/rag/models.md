@@ -31,6 +31,9 @@ The analytic model translates a question into one read-only SQL query
 qwen2.5-coder is far better than llama3.2 at SQL over many columns. It is ~4.7 GB
 (`ollama pull qwen2.5-coder:7b`). Override with `ASK_SQL_MODEL`.
 
+It runs at **temperature 0**, deliberately: the same question asked twice renders the same SQL
+and gets the same answer. Raising it makes answers unreproducible.
+
 ### Judge — faithfulness eval (`gemma4`)
 
 The judge scores whether generated SQL faithfully answers the question — **offline/eval only,
@@ -79,7 +82,9 @@ below apply.
 
 Timeouts are fixed at `120s` for all three clients in the module config
 (`lumnik-llm-langchain/src/main/resources/application.properties`); like any Quarkus runtime
-property they can be overridden per deployment if a slow model needs more.
+property they can be overridden per deployment if a slow model needs more. The same file fixes
+the **analytic and judge temperatures at `0`**; the conversational chat model keeps the
+provider's default.
 
 Three further properties — `lumnik.llm.chat.provider` (default `ollama`),
 `lumnik.llm.embedding.provider` (default `ollama-nomic`), `lumnik.llm.embedding.dimension`
@@ -135,6 +140,8 @@ default. The procedure, from the module's own config:
 2. **Configure the OpenAI client** — `quarkus.langchain4j.openai.api-key` and the
    `quarkus.langchain4j.openai.*-model.model-name` properties for chat/embedding (and
    `quarkus.langchain4j.openai.analytic.*` / `…judge.*` for the named models you switched).
+   Carry `temperature=0` over for whichever of `analytic` / `judge` you move — it belongs to
+   the client you switch to, and OpenAI's default is `1.0`.
 
 3. **Match the embedding dimension** — set `RAG_EMBEDDING_DIM` to the OpenAI model's dimension
    (e.g. 1536 for `text-embedding-3-small`) **and** migrate the `VECTOR(768)` column + re-index,
@@ -144,13 +151,14 @@ default. The procedure, from the module's own config:
 
 ## Traps
 
-!!! warning "Named models do not inherit base-url or timeout"
+!!! warning "Named models do not inherit base-url, timeout or temperature"
     In quarkus-langchain4j, a named model (`analytic`, `judge`) inherits **nothing** from the
-    default client — neither `base-url` nor `timeout`. lumnik's shipped config compensates
-    explicitly (`…ollama.analytic.base-url` and `…ollama.judge.base-url` both follow
-    `OLLAMA_BASE_URL`, each with its own `timeout=120s`). If you ever add another named model,
-    repeat that wiring — otherwise it silently falls back to `localhost:11434` and breaks
-    wherever the hub runs in a container while Ollama is on the host.
+    default client — not `base-url`, not `timeout`, not `temperature`. lumnik's shipped config
+    sets all three explicitly (`…ollama.analytic.*` and `…ollama.judge.*` follow
+    `OLLAMA_BASE_URL`, each with `timeout=120s` and `temperature=0`). If you ever add another
+    named model, repeat all three. A missing `base-url` breaks loudly — the model falls back to
+    `localhost:11434` and fails wherever the hub runs in a container while Ollama is on the
+    host. A missing `temperature` does not: the model answers, just not the same way twice.
 
 !!! warning "Changing the embedding dimension = migrate + re-index"
     `RAG_EMBEDDING_DIM` only tells pgvector what to expect; the `rag.chunk` column is fixed at

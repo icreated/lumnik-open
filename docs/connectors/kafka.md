@@ -62,7 +62,7 @@ lm connector run kafka-erp-exports
 | `poll_timeout_ms` | no | consumer poll timeout, range **[100, 60000]**, default `2000` |
 | `max_poll_records` | no | max records per consumer poll; positive integer, default `500`; clamped to the engine chunk size (500) |
 | `auth` | no | `kind: none` (default) or `kind: sasl-plain` with `username_env` + `password_env` (+ optional `security_protocol`) |
-| `target.tags` | no | tags for RAG scope filtering — see [Tags for scoped chat](#tags-for-scoped-chat) |
+| `metadata.scopes` | no | the métier scope(s) the topic's rows are askable in — see [Scopes for chat](#scopes-for-chat) |
 
 With `sasl-plain`, `auth.security_protocol` overrides the wire protocol — default `SASL_SSL`;
 set `SASL_PLAINTEXT` for a SASL broker without TLS. The value lands verbatim in the consumer's
@@ -73,12 +73,11 @@ whatever the topic carries lands whole in that connector's table. If a topic mul
 several event types together, give each event stream its own topic when you need them
 separated into different tables.
 
-### Tags for scoped chat
+### Scopes for chat
 
-Declare `target: { tags: [...] }` in `spec` (or `tags:` at the top level under `metadata`) to
-make ingested rows discoverable in [scoped chat](../rag/scopes.md) — the same mechanism CSV
-and JDBC connectors use. One difference from those two: the kafka validator does not warn at
-validate-time if tags are missing, so nothing will remind you to add them.
+Declare `scopes: [...]` under `metadata` to make ingested rows discoverable in
+[scoped chat](../rag/scopes.md) — the same field, and the same validate-time warning when it
+is missing, as every other connector kind.
 
 ## Continuous consumption
 
@@ -175,7 +174,7 @@ in the TUI ([CLI & TUI](../cli/lm-reference.md)): `:dlq`.
 - [Overview](index.md) — apply/validate flow shared by all connectors.
 - [Transformers](transformers.md) — what runs, and doesn't, at ingestion (kafka runs
   carry none of these hooks).
-- [Scopes](../rag/scopes.md) — how `target.tags` makes ingested rows discoverable in chat.
+- [Scopes](../rag/scopes.md) — how `metadata.scopes` makes ingested rows discoverable in chat.
 - Events *out* of the hub (outbox, `data.row.changed`) power the
   [Process rung](../apps/processes.md) of the ladder.
 - [Diagnosing a failed run](../recipes/diagnose-a-run.md)

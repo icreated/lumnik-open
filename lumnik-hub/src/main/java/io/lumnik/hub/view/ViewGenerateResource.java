@@ -60,8 +60,7 @@ public class ViewGenerateResource {
 
         Optional<SchemaCard> card = cards.load(tenant, scope);
         if (card.isEmpty()) {
-            return Response.status(404).type(MediaType.APPLICATION_JSON).entity(ApiErrors.error(
-                "no schema for scope '" + scope + "' — run discovery first")).build();
+            return ApiErrors.notFound("no schema for scope '" + scope + "' — run discovery first");
         }
 
         ViewGenerateAgent.Outcome out = agent.generate(card.get(), scope, req.description());

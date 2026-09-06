@@ -64,7 +64,7 @@ One endpoint, two modes, selected by the `mode` field:
 |---|---|---|---|
 | `question` | string | the natural-language question — **required** (blank → 400) | — |
 | `mode` | string | `"analytic"` (case-insensitive) = text-to-SQL over the ingested hub; anything else or absent = semantic retrieval + chat | semantic |
-| `scope` | string | the métier tag. `"all"` and blank mean "no specific scope". Semantic: filters retrieval to chunks carrying the tag. Analytic: names the schema card to ask over — an unscoped user falls back to `system`; a scope-bound user **must** name a granted scope | none / `system` |
+| `scope` | string | the métier tag. `"all"` = no specific scope; blank or absent = **your default** (`lm scope set`) if set, else none. Semantic: filters retrieval to chunks carrying the tag. Analytic: names the schema card to ask over — a scope-bound user must name, or default to, a granted scope ([scopes](scopes.md#binding-users-to-scopes-opt-in)). | your default / `system` |
 | `corpus` | string | **semantic only**: restrict retrieval to one corpus (usually a connector source, see [corpora](#corpora)) | all corpora |
 | `topK` | integer | **semantic only**: how many chunks to retrieve as context | 10 |
 
@@ -179,8 +179,9 @@ scope outside a bound user's grants → `403 {"error":"scope not granted"}`.
 GET /api/platform/rag/scopes      (lm_integrator)
 ```
 
-Lists the scopes that exist in this tenant — remember, [a scope is a connector
-tag](scopes.md#a-scope-is-a-connector-tag), so this is derived from the ingested chunks:
+Lists the scopes that exist in this tenant — remember, [a scope is declared on the
+connector](scopes.md#a-scope-is-declared-on-the-connector), so this is derived from the
+ingested chunks:
 
 ```json
 [
@@ -191,6 +192,13 @@ tag](scopes.md#a-scope-is-a-connector-tag), so this is derived from the ingested
 
 `lastIndexed` is an ISO instant, or `""` if unknown. A scope-bound user sees **only their
 granted métiers** in this list.
+
+### Your default scope
+
+`GET` / `PUT /api/platform/users/me/scope` read and set the default the chat doors use when a
+request names no scope (`{"defaultScope": "compta"}`; empty string clears it). Both answer
+`404 {"error":"no user record on this hub for user_id N"}` when your token names a hub user id
+that has no row on this hub ([BYO IdP](../security/byo-idp.md#troubleshooting)).
 
 ## Corpora
 

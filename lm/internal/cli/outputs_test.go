@@ -6,9 +6,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestOutputsList_printsDeliveriesWithRawTimestamps(t *testing.T) {
+// WHEN renders like every other date column (output.HumanTime), not the raw ISO string the
+// hub sends — see observations_test.go's TestObservationsList_printsTapeInLocalTime for why
+// -o json/yaml already cover the scriptable case. Expected value computed, not hardcoded.
+func TestOutputsList_printsDeliveriesInLocalTime(t *testing.T) {
 	// Three rows so the status column's branches are all exercised, not just the 502 case:
 	// an HTTP failure, a success, and a failure that never got a response at all.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -36,10 +40,18 @@ func TestOutputsList_printsDeliveriesWithRawTimestamps(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 	got := out.String()
+	attempted, err := time.Parse(time.RFC3339, "2026-08-15T09:12:04Z")
+	if err != nil {
+		t.Fatalf("the sample timestamp must parse: %v", err)
+	}
+	wantWhen := attempted.In(time.Local).Format("2006-01-02 15:04")
 	for _, want := range []string{"INTEGRATION", "n8n-prod", "decision.dormant.commande", "502",
-		"connect timed out", "2026-08-15T09:12:04Z", "ok", "no response", "slack-alerts"} {
+		"connect timed out", wantWhen, "ok", "no response", "slack-alerts"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("output missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "2026-08-15T09:12:04Z") {
+		t.Errorf("WHEN should render local-formatted, not the raw ISO string:\n%s", got)
 	}
 }

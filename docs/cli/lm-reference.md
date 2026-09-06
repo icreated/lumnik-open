@@ -39,8 +39,9 @@ hubs (sent as `X-Tenant-ID` / `X-User-ID` headers); a real hub ignores them.
 | Command | What it does |
 |---|---|
 | `lm validate -f FILE` | validate without applying — field-by-field errors, exit code 1 on error |
-| `lm apply -f FILE` | apply a connector manifest |
+| `lm apply -f FILE` | apply a `kind: Connector` manifest — upserts by (tenant, `metadata.name`), so re-applying an edited file updates it. Not to be confused with `lm connector apply`, which takes those flat stored fields instead |
 | `lm entity apply -f FILE` | apply a `kind: Entity` fusion manifest |
+| `lm entity delete NAME` | remove an entity — drops its view, deletes the manifest, rediscovers its scopes (`lm_admin`; the inverse of `entity apply`). This is what frees a connector blocked by the 409 below |
 | `lm process apply -f FILE` / `lm process list` | apply/list `kind: Process` notify rules |
 | `lm workflow apply -f FILE` | apply a [`kind: Workflow`](../apps/workflows.md) lifecycle — prints the data-truth report |
 | `lm describe connector-type KIND` | field reference for a connector kind |
@@ -49,22 +50,41 @@ hubs (sent as `X-Tenant-ID` / `X-User-ID` headers); a real hub ignores them.
 
 | Command | What it does |
 |---|---|
-| `lm connector list/get/apply/delete` | manage connector instances (`apply -f` = same upsert as `lm apply`). **`delete` erases the connector's data**: its mirror tables (`connector.t_*` and registered REST `ext.*`) are dropped, registry rows removed, and every RAG chunk it produced dies with it — this is the [erasure gesture](../security/gdpr.md#the-rights-in-practice). Exception: a one-shot's `ext.*` table is not registered — purge its endpoint first ([quickstart](../quickstart/installer.md#from-demo-to-production)) |
+| `lm connector list/get/apply/delete` | manage connector instances. **`connector apply -f` is not `lm apply -f`**: it takes the FLAT stored fields (`tenantId`, `name`, `typeId`, `schedule`, `enabled`, `config`) — the shape `lm connector get` writes — and is how you edit one field without rewriting a manifest; `lm apply -f` takes a `kind: Connector` manifest. Handing a manifest to `connector apply` is refused with the command that opens. **`delete` erases the connector's data**: its mirror tables (`connector.t_*` and registered REST `ext.*`) are dropped, registry rows removed, and every RAG chunk it produced dies with it — this is the [erasure gesture](../security/gdpr.md#the-rights-in-practice). A one-shot's `ext.*` table goes the same way. A table a fused entity depends on blocks the delete with a `409` naming the entity — `lm entity delete NAME` frees it |
 | `lm connector run NAME` | trigger an immediate run |
 | `lm connector pause/resume NAME` | stop/restart scheduling |
-| `lm connector tag ls/set/add/rm` · `retag` | manage tags (scopes); `retag` propagates to existing chunks |
+| `lm connector scope ls/set/add/rm/sync` | manage the connector's métier scopes; `sync` re-stamps its already-indexed chunks |
 | `lm endpoint enable/disable/reset-cursor/purge C/E` | per-endpoint scheduler + cursor; `purge` deletes the endpoint's `ext.*` rows (`--force` skips the prompt) |
-| `lm source rest test/probe/from-openapi` | probe a REST source, generate a manifest from OpenAPI (`from-openapi URL --name N` required; `--tag` repeatable, `-o FILE` writes to a file, `--apply` upserts straight to the hub; `source rest run` is a stub — use `lm connector run`) |
+| `lm source rest test/probe/from-openapi` | probe a REST source, generate a manifest from OpenAPI (`from-openapi URL --name N` required; `--scope` repeatable, `-o FILE` writes to a file, `--apply` upserts straight to the hub; `source rest run` is a stub — use `lm connector run`) |
 | `lm source jdbc …` | test/discover a JDBC source, list tables |
 | `lm source schema --scope TAG` / `lm source rediscover --scope TAG` | show / rebuild the scope's SchemaCard (`--scope` is required) |
-| `lm csv ingest FILE\|sftp://…\|s3://…` | one-shot CSV ingest (dormant connector, `ext.*` table; no RAG corpus) — full SFTP/S3 flag surface: see [CSV & files](../connectors/csv.md) |
+| `lm csv ingest FILE\|sftp://…\|s3://…` | one-shot CSV ingest (dormant connector, `ext.*` table; askable at once in the scope you pass, no run recorded) — full SFTP/S3 flag surface: see [CSV & files](../connectors/csv.md) |
+
+```
+$ lm connector list
+NAME          TYPE      TENANT  SCHED  STATUS     LAST RUN
+customers     csv-file  1              Completed  2026-09-05 05:38
+orders        csv-file  1              Completed  2026-09-05 05:38
+products      csv-file  1              Failed     2026-09-05 05:38
+$ lm csv ingest stock.csv --scope retail --name stock-count
+Ingested stock.csv into ext.stock_count
+  • rows written:    3
+  • promoted cols:   4
+      - sku (text)
+      - label (text)
+      - qty (bigint)
+      - warehouse (text)
+
+  • askable:         scope 'retail' — try: lm ask --scope retail "how many rows are in ext.stock_count?"
+A dormant connector is registered — see `lm connector list`.
+```
 
 ## Data, runs & answers
 
 | Command | What it does |
 |---|---|
-| `lm run list/get ID` | connector runs (records in/out/skip, per-run transparency) (`list`: `--connector NAME`, `--limit N`) |
-| `lm dlq list/get ID` | dead-letter entries (reason + offending row) (`--connector` / `--run` filter every subcommand; `list --limit N`) |
+| `lm run list/get ID` | connector runs (records in/out/skip, per-run transparency) (`list`: newest first, `--connector NAME`, `--limit N`) |
+| `lm dlq list/get ID` | dead-letter entries (reason + offending row) (`--run` takes the run's id or its 8-char abbreviation; `--connector` takes the connector's id or name; `list --limit N`) |
 | `lm dlq replayed/discard ID` | mark an entry handled (`replayed --new-run-id RUN` links it to the run that replayed it) |
 | `lm conflicts list` | fused-entity rows whose sources still disagree (`--limit N`) |
 | `lm observations list` | the workflow tape: watched documents, stillest first (`--limit N`) |
@@ -78,20 +98,32 @@ hubs (sent as `X-Tenant-ID` / `X-User-ID` headers); a real hub ignores them.
 | `lm data tables` / `lm data row HASH` | dynamic tables; the raw row behind a citation |
 | `lm mapping list/get/apply` | mapping templates + per-tenant overrides (`get --raw` = the raw template YAML; `apply -f FILE`) |
 | `lm secret set/list/describe/rm` | encrypted-at-rest secrets; values never returned (`set NAME -` reads stdin; `set --description "…"`; `rm --force` skips the prompt). **`rm` does no reference check**: a connector still naming the secret fails against its source at the next run |
+The two tables you will read most:
+
+```
+$ lm run list --connector orders
+ID        CONNECTOR  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+f0466804  orders     Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
+$ lm dlq list --run f0466804-0824-4eb4-8aa2-54e263dccafe
+ID        CONNECTOR  RUN       REASON           ATTEMPTS  MESSAGE
+66384fc7  487ed9d1   f0466804  MalformedSource  1         /tmp/exports/orders.csv:9 — Index for header 'status' is 2…
+c58de40c  487ed9d1   f0466804  MalformedSource  1         /tmp/exports/orders.csv:8 — Record has 6 values but only 5…
+```
 !!! tip "The ID columns are abbreviated — and the abbreviation works"
 
     `lm run list` and `lm dlq list` shorten ids to their first 8 characters so the table fits a
     terminal. What they show is what `get`, `discard` and `replayed` accept: paste the 8 characters
     back and the id is resolved for you. An ambiguous prefix is refused rather than guessed, and
-    `-o yaml` prints every id in full.
+    `-o yaml` prints every id in full. The `--run` and `--connector` filters resolve the same way:
+    `--run` accepts the 8-character abbreviation, and `--connector` accepts the connector's name.
 
 ## Ask your data
 
 | Command | What it does |
 |---|---|
-| `lm ask [--scope S] "question"` | analytic text-to-SQL over the fused hub — prints the answer, a `data as of` line (the scope's last completed run) **and the SQL that ran** ([the five guards](../transparency/ask-honesty.md) apply); a [scope-bound](../rag/scopes.md#binding-users-to-scopes-opt-in) user must name a granted scope or gets `403 scope not granted` |
+| `lm ask [--scope S] "question"` | analytic text-to-SQL over the fused hub — prints the answer, a `data as of` line (the scope's last completed run) **and the SQL that ran** ([the five guards](../transparency/ask-honesty.md) apply); a [scope-bound](../rag/scopes.md#binding-users-to-scopes-opt-in) user must name a granted scope or gets `403 scope not granted` — without `--scope`, asks your default (`lm scope set TAG`; same 403 if not granted) |
 | `lm chat` | interactive REPL chat — in-REPL commands: `:corpus NAME` (or `all`), `:topK N`, `:clear`, `:help`, `:exit` |
-| `lm scopes` / `lm scope` / `lm scope set TAG` | list scopes (a scope-bound user sees only their granted métiers); show/set your default |
+| `lm scopes` / `lm scope` / `lm scope set TAG` | list scopes (a scope-bound user sees only their granted métiers); show/set your default (`404 no user record on this hub…` means your login points at a hub user id that does not exist — [Tenants, users & scopes](../security/identity-admin.md)) |
 | `lm rag search/status/reindex` | semantic search (`--top-k N`, default 5); corpus status; re-index of the **platform corpus** (manifests/API/hooks — ingested-row chunks are written at ingestion and erased with their connector) |
 
 ## The apps ladder

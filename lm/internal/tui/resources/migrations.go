@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
+	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/icreated/lumnik-open/lm/internal/types"
 	"github.com/rivo/tview"
 )
@@ -52,7 +53,7 @@ func (m *Migrations) Refresh() {
 		m.table.SetCell(row, 0, dataCell(s.Schema).SetExpansion(1))
 		m.table.SetCell(row, 1, dataCell(s.CurrentVersion).SetExpansion(1))
 		m.table.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("%d", s.Pending)).SetExpansion(1))
-		m.table.SetCell(row, 3, tview.NewTableCell(s.LastApplied.Format("2006-01-02 15:04")).SetExpansion(1))
+		m.table.SetCell(row, 3, tview.NewTableCell(output.HumanTime(&s.LastApplied)).SetExpansion(1))
 	}
 	_ = types.MigrationStatus{}
 }

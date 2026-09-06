@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.data;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.test.junit.QuarkusTest;
 import org.junit.jupiter.api.Test;
 
@@ -11,7 +12,7 @@ class DataTablesResourceTest {
   @Test
   void list_returns_200_with_array() {
     given()
-      .header("X-Tenant-Id", "1").header("X-User-Id", "test")
+      .headers(TestIdentity.tenantAndUser(1))
       .when().get("/api/platform/data/tables")
       .then().statusCode(200);
   }

@@ -27,7 +27,7 @@ kind: Connector
 metadata:
   name: event-hubs-telemetry         # unique connector name within the workspace
   connector_type: kafka              # real engine type; the vendor alias is spec.preset below
-  tags: [demo, azure]
+  scopes: [demo, azure]
 
 spec:
   preset: event-hubs                 # vendor preset — expands to a real kafka config at apply time

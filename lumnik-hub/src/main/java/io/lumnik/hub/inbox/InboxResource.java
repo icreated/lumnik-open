@@ -3,6 +3,7 @@ package io.lumnik.hub.inbox;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.hub.tenant.TenantContextFilter;
@@ -19,11 +20,8 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -55,7 +53,6 @@ public class InboxResource {
         long tenant = RequireTenant.current();
         int lim = Math.min(Math.max(limit, 1), 200);
 
-        List<InboxEntry> out = new ArrayList<>();
         String ackMatch = "SELECT 1 FROM core.event_outbox a WHERE a.tenant_id = d.tenant_id "
                         + "AND a.event_type = '" + ACK_TYPE + "' "
                         + "AND a.payload->>'decision_id' = d.id::text";
@@ -67,17 +64,9 @@ public class InboxResource {
                    + "FROM core.event_outbox d WHERE d.tenant_id = ? AND d.event_type LIKE 'decision.%' "
                    + (all ? "" : "AND NOT EXISTS (" + ackMatch + ") ")
                    + "ORDER BY d.id DESC LIMIT ?";
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setLong(1, tenant);
-            ps.setInt(2, lim);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    out.add(shape(rs));
-                }
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("InboxResource.list: " + e.getMessage(), e);
-        }
+        List<InboxEntry> out = Jdbc.query(adminDs, "InboxResource.list", sql,
+            ps -> { ps.setLong(1, tenant); ps.setInt(2, lim); },
+            this::shape);
         return Response.ok(out).build();
     }
 
@@ -95,41 +84,28 @@ public class InboxResource {
         Long userId = TenantContextFilter.currentUser();
         String by = userId != null ? String.valueOf(userId) : "unknown";
 
-        // One connection for the whole ack: verify then emit, as a single unit of work.
-        try (Connection c = adminDs.getConnection()) {
-            // Honest verification: the id must be THIS tenant's decision — a foreign id is
-            // indistinguishable from a nonexistent one (no cross-tenant existence leak).
-            String entity;
-            String entityKey;
-            try (PreparedStatement ps = c.prepareStatement(
-                     "SELECT entity, entity_key FROM core.event_outbox "
-                   + "WHERE id = ? AND tenant_id = ? AND event_type LIKE 'decision.%'")) {
-                ps.setLong(1, id);
-                ps.setLong(2, tenant);
-                try (ResultSet rs = ps.executeQuery()) {
-                    if (!rs.next()) {
-                        return Response.status(404).entity(Map.of("error",
-                            "no decision " + id + " in your inbox")).build();
-                    }
-                    entity = rs.getString(1);
-                    entityKey = rs.getString(2);
-                }
-            }
-
-            String payload = mapper.writeValueAsString(Map.of("decision_id", id, "by", by));
-            try (PreparedStatement ps = c.prepareStatement(ACK_SQL)) {
-                ps.setLong(1, tenant);
-                ps.setString(2, ACK_TYPE);
-                ps.setString(3, "user:" + by);
-                ps.setString(4, entity);
-                ps.setString(5, entityKey);
-                ps.setString(6, payload);
-                ps.setString(7, "ack:" + id);
-                ps.executeUpdate();   // 0 rows on re-ack (dedup) — same honest 200 either way
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("InboxResource.ack: " + e.getMessage(), e);
+        // Verify then emit — two autocommit statements, each its own connection (they never
+        // shared a transaction). Honest verification: the id must be THIS tenant's decision;
+        // a foreign id is indistinguishable from a nonexistent one (no cross-tenant leak).
+        var decision = Jdbc.queryOne(adminDs, "InboxResource.ack.verify",
+            "SELECT entity, entity_key FROM core.event_outbox "
+                + "WHERE id = ? AND tenant_id = ? AND event_type LIKE 'decision.%'",
+            ps -> { ps.setLong(1, id); ps.setLong(2, tenant); },
+            rs -> new String[]{rs.getString(1), rs.getString(2)});
+        if (decision.isEmpty()) {
+            return Response.status(404).entity(Map.of("error",
+                "no decision " + id + " in your inbox")).build();
         }
+
+        Jdbc.update(adminDs, "InboxResource.ack", ACK_SQL, ps -> {
+            ps.setLong(1, tenant);
+            ps.setString(2, ACK_TYPE);
+            ps.setString(3, "user:" + by);
+            ps.setString(4, decision.get()[0]);
+            ps.setString(5, decision.get()[1]);
+            ps.setString(6, mapper.writeValueAsString(Map.of("decision_id", id, "by", by)));
+            ps.setString(7, "ack:" + id);
+        });   // 0 rows on re-ack (dedup) — same honest 200 either way
         return Response.ok(Map.of("acked", true)).build();
     }
 

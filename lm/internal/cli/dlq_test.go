@@ -13,7 +13,7 @@ import (
 func TestDlqList(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode([]map[string]any{
-			{"id": "d1", "connectorId": "c1", "runId": "r1", "skipReason": "BAD_RECORD", "errorMessage": "boom", "attempts": 1},
+			{"id": "d1", "connectorId": "11111111-2222-3333-4444-555555555555", "connectorName": "orders-csv", "runId": "r1", "skipReason": "BAD_RECORD", "errorMessage": "boom", "attempts": 1},
 		})
 	}))
 	defer srv.Close()
@@ -27,17 +27,31 @@ func TestDlqList(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "d1") {
-		t.Errorf("unexpected: %s", buf.String())
+	out := buf.String()
+	if !strings.Contains(out, "d1") || !strings.Contains(out, "orders-csv") {
+		t.Errorf("the table names the connector, like run list: %s", out)
+	}
+	if strings.Contains(out, "11111111") {
+		t.Errorf("a named connector must not also print its id in the table: %s", out)
 	}
 }
 
-func TestDlqList_runFilter(t *testing.T) {
+func TestDlqList_runFilter_resolvesAbbreviatedId(t *testing.T) {
+	// The hub's `run` filter is a UUID; an 8-char abbreviation copied from `run list` must be
+	// resolved to the full id before it is sent, or the hub answers "invalid UUID".
+	full := "aaaaaaaa-1111-2222-3333-444444444444"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("run") != "r-7" {
-			t.Errorf("run param = %q, want r-7", r.URL.Query().Get("run"))
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/platform/runs"):
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": full}})
+		case r.URL.Path == "/api/platform/dlq":
+			if got := r.URL.Query().Get("run"); got != full {
+				t.Errorf("dlq run param = %q, want the resolved full id %q", got, full)
+			}
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": "d9", "runId": full, "skipReason": "ValidationFailed"}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
 		}
-		_ = json.NewEncoder(w).Encode([]map[string]any{{"id": "d9", "runId": "r-7", "skipReason": "ValidationFailed"}})
 	}))
 	defer srv.Close()
 	setupCfg(t, srv.URL)
@@ -46,11 +60,43 @@ func TestDlqList_runFilter(t *testing.T) {
 	buf := new(bytes.Buffer)
 	cmd.SetOut(buf)
 	cmd.SetErr(buf)
-	cmd.SetArgs([]string{"dlq", "list", "--run", "r-7"})
+	cmd.SetArgs([]string{"dlq", "list", "--run", "aaaaaaaa"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), "d9") {
+		t.Errorf("unexpected: %s", buf.String())
+	}
+}
+
+func TestDlqList_connectorFilter_resolvesName(t *testing.T) {
+	// `--connector NAME` must resolve to the connector's UUID before hitting the UUID-typed filter.
+	connID := "bbbbbbbb-1111-2222-3333-444444444444"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/platform/connectors"):
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": connID, "name": "orders-csv"}})
+		case r.URL.Path == "/api/platform/dlq":
+			if got := r.URL.Query().Get("connector"); got != connID {
+				t.Errorf("dlq connector param = %q, want the resolved id %q", got, connID)
+			}
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": "d1", "connectorId": connID}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"dlq", "list", "--connector", "orders-csv"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "d1") {
 		t.Errorf("unexpected: %s", buf.String())
 	}
 }
@@ -168,6 +214,7 @@ func TestDlqGet_showsReasonDetailPayload(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id": "d3000000-0000-0000-0000-000000000003", "skipReason": "ValidationFailed",
+			"connectorId": "11111111-2222-3333-4444-555555555555", "connectorName": "orders-csv",
 			"errorMessage": "amount < 0", "skipDetail": `{"violations":["amount < 0"]}`,
 			"payload": `{"amount":-5}`,
 		})
@@ -184,7 +231,9 @@ func TestDlqGet_showsReasonDetailPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := buf.String()
-	for _, want := range []string{"ValidationFailed", "amount < 0", `"amount":-5`, "violations"} {
+	// Connector: the name for the reader AND the full id for the script.
+	for _, want := range []string{"ValidationFailed", "amount < 0", `"amount":-5`, "violations",
+		"Connector: orders-csv (11111111-2222-3333-4444-555555555555)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in: %s", want, out)
 		}
@@ -237,5 +286,42 @@ func TestDlqReplayed_withoutFlag_omitsNewRunId(t *testing.T) {
 	}
 	if strings.Contains(rawQuery, "newRunId") {
 		t.Errorf("newRunId must be omitted when the flag is absent, got query %q", rawQuery)
+	}
+}
+
+func TestDlqList_connectorFilter_resolves36CharName(t *testing.T) {
+	// A connector name has no pattern constraint, so a 36-char name must still be resolved — not
+	// mistaken for a UUID and forwarded raw (the length-only check bug Copilot caught).
+	name := "orders" + strings.Repeat("x", 30) // exactly 36 chars, not a UUID
+	if len(name) != 36 {
+		t.Fatalf("test setup: name is %d chars, want 36", len(name))
+	}
+	connID := "bbbbbbbb-1111-2222-3333-444444444444"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/platform/connectors"):
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": connID, "name": name}})
+		case r.URL.Path == "/api/platform/dlq":
+			if got := r.URL.Query().Get("connector"); got != connID {
+				t.Errorf("dlq connector param = %q, want the resolved id %q (name not passed through)", got, connID)
+			}
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": "d1", "connectorId": connID}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"dlq", "list", "--connector", name})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "d1") {
+		t.Errorf("unexpected: %s", buf.String())
 	}
 }

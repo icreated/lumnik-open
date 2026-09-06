@@ -9,6 +9,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/editor"
+	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/icreated/lumnik-open/lm/internal/tui/style"
 	"github.com/icreated/lumnik-open/lm/internal/types"
 	"github.com/rivo/tview"
@@ -16,17 +17,17 @@ import (
 )
 
 type Sources struct {
-	table     *tview.Table
-	client    *client.Client
-	items     []types.Connector
-	app       *tview.Application
-	mu        sync.Mutex
-	onError   func(string)
-	toast     func(string)
-	sortCol   *style.ColumnSort
-	onSelect  func()
-	onEnter   func(connectorID, kind string) // wired by App: REST → :endpoints, others → :runs
-	onTagEdit func(id string, current []string)
+	table       *tview.Table
+	client      *client.Client
+	items       []types.Connector
+	app         *tview.Application
+	mu          sync.Mutex
+	onError     func(string)
+	toast       func(string)
+	sortCol     *style.ColumnSort
+	onSelect    func()
+	onEnter     func(connectorID, kind string) // wired by App: REST → :endpoints, others → :runs
+	onScopeEdit func(id string, current []string)
 }
 
 func NewSources(app *tview.Application, c *client.Client, onError, toast func(string)) *Sources {
@@ -55,13 +56,14 @@ func NewSources(app *tview.Application, c *client.Client, onError, toast func(st
 // SetOnEnter is called by the App to wire Enter → :endpoints (rest) or :runs (others).
 func (c *Sources) SetOnEnter(fn func(connectorID, kind string)) { c.onEnter = fn }
 
-// SetOnTagEdit is wired by the App so pressing `t` opens a tag-edit modal.
-func (c *Sources) SetOnTagEdit(fn func(string, []string)) { c.onTagEdit = fn }
+// SetOnScopeEdit is wired by the App so pressing `t` opens the scope-edit modal (the key
+// predates the rename; `s` is sort).
+func (c *Sources) SetOnScopeEdit(fn func(string, []string)) { c.onScopeEdit = fn }
 
 func (c *Sources) View() tview.Primitive { return c.table }
 
 func (c *Sources) Hints() string {
-	return "e: edit  t: tags  d: describe  ^R: run  ^P: pause  Del: delete  y: yank  s: sort  Enter: → endpoints/runs  r: refresh"
+	return "e: edit  t: scopes  d: describe  ^R: run  ^P: pause  Del: delete  y: yank  s: sort  Enter: → endpoints/runs  r: refresh"
 }
 
 func (c *Sources) setHeader() {
@@ -72,7 +74,7 @@ func (c *Sources) setHeader() {
 		"TENANT",
 		c.sortCol.HeaderLabel(2),
 		c.sortCol.HeaderLabel(3),
-		"TAGS",
+		"SCOPES",
 	}
 	for i, h := range headers {
 		c.table.SetCell(0, i, tview.NewTableCell(h).SetSelectable(false).SetExpansion(1).SetTextColor(tcell.ColorYellow))
@@ -243,8 +245,8 @@ func (c *Sources) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 		if row < 1 || row-1 >= len(c.items) {
 			return ev
 		}
-		if c.onTagEdit != nil {
-			c.onTagEdit(c.items[row-1].ID, c.items[row-1].Tags)
+		if c.onScopeEdit != nil {
+			c.onScopeEdit(c.items[row-1].ID, c.items[row-1].Tags)
 		}
 		return nil
 		// 'd' is NOT intercepted here — it bubbles up to App.bindGlobalKeys → toggleDescribe
@@ -368,7 +370,7 @@ func (c *Sources) SelectedDescribe() (string, string, bool) {
 		fmt.Fprintf(&b, "\n── last run ──\n")
 		fmt.Fprintf(&b, "status:    %s %s\n", connectorGlyph(*full), esc(full.Status))
 		if full.LastRunAt != nil {
-			fmt.Fprintf(&b, "at:        %s\n", full.LastRunAt.Format("2006-01-02 15:04:05"))
+			fmt.Fprintf(&b, "at:        %s\n", output.HumanTimeSeconds(full.LastRunAt))
 		}
 	}
 	if len(full.Config) > 0 {

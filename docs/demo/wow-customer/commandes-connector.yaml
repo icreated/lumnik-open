@@ -12,10 +12,9 @@ kind: Connector
 metadata:
   name: commandes-csv                # -> connector.t_commandes_csv
   connector_type: csv-file
-  tags: [demo]
+  scopes: [demo]
 spec:
-  target:                            # the target block itself is required (ConfigDef error if absent)
-    tags: [demo]                     # tags is recommended: silences a warning + gives the RAG scope its filter
+  target: {}  # the target block itself is required (ConfigDef error if absent)
   transport:
     kind: local
     # Path AS SEEN BY THE HUB. On the self-host stack the demo folder is mounted at /demo

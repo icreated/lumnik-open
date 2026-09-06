@@ -165,7 +165,6 @@ public class RestConnectorValidator implements ConnectorValidator {
         errs.addAll(headersStayAtConnectorLevel(endpoint, basePath));
         validatePagination(endpoint.path(PAGINATION), basePath + ".pagination", errs);
         validatePromote(endpoint.path("target").path("promote"), basePath + ".target.promote", errs);
-        errs.addAll(targetTagsAdvised(endpoint, basePath));
     }
 
     /**
@@ -280,14 +279,6 @@ public class RestConnectorValidator implements ConnectorValidator {
         return List.of(new ValidationError(basePath + ".headers", Severity.ERROR,
             "per-endpoint headers are not supported in this release; declare headers at spec.headers",
             List.of("Move the headers block up to spec.headers (connector level)")));
-    }
-
-    /** tags are merged from per-endpoint target (TagsMerger); warn when absent here. */
-    private static List<ValidationError> targetTagsAdvised(JsonNode endpoint, String basePath) {
-        if (!endpoint.path("target").path("tags").isMissingNode()) return List.of();
-        return List.of(new ValidationError(basePath + ".target.tags", Severity.WARNING,
-            "no tags defined — RAG scope filtering will be impossible",
-            List.of("Add: target.tags: [\"crm\", \"customers\"]")));
     }
 
     /** Per-kind required pagination keys — exactly what each strategy reads to extract items + advance. */

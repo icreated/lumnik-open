@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.sources;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.http.ContentType;
 import org.junit.jupiter.api.*;
@@ -47,7 +48,7 @@ class JdbcSourceResourceIT {
   @Test
   @Order(1)
   void test_endpoint_returns_ok_for_valid_credentials() {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .contentType(ContentType.JSON)
         .body(Map.of("url", jdbcUrl, "user", "u", "password", "p"))
         .when().post("/api/platform/sources/jdbc/test")
@@ -64,7 +65,7 @@ class JdbcSourceResourceIT {
     // and the wrong password in the request body is ignored — the endpoint returns 200.
     // If no pool exists, Hikari fails to connect and returns 502.
     // Both 200 (pool hit) and 502 (no pool, auth fails) are acceptable here.
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .contentType(ContentType.JSON)
         .body(Map.of("url", jdbcUrl, "user", "u", "password", "WRONG"))
         .when().post("/api/platform/sources/jdbc/test")
@@ -74,7 +75,7 @@ class JdbcSourceResourceIT {
   @Test
   @Order(3)
   void discover_returns_business_tables() {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .contentType(ContentType.JSON)
         .body(Map.of("url", jdbcUrl, "user", "u", "password", "p",
             "schema", "public", "skipPatterns", List.of("t_*", "ad_*"), "includeViews", false))
@@ -87,7 +88,7 @@ class JdbcSourceResourceIT {
   @Test
   @Order(4)
   void add_creates_n_connectors() {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .contentType(ContentType.JSON)
         .body(Map.of(
             "sourceName", "legacy-erp-prod",
@@ -105,7 +106,7 @@ class JdbcSourceResourceIT {
   @Test
   @Order(5)
   void add_is_idempotent_on_duplicate_name() {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .contentType(ContentType.JSON)
         .body(Map.of(
             "sourceName", "legacy-erp-prod",
@@ -121,7 +122,7 @@ class JdbcSourceResourceIT {
   @Test
   @Order(6)
   void list_tables_returns_added_connectors() {
-    given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+    given().headers(TestIdentity.tenantAndUser(1))
         .when().get("/api/platform/sources/jdbc/legacy-erp-prod/tables")
         .then().statusCode(200)
               .body("tables.size()", greaterThanOrEqualTo(2));

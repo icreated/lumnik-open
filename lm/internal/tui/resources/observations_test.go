@@ -71,6 +71,43 @@ func TestObservationsDescribeNamesTheObservationRelativeSince(t *testing.T) {
 	}
 }
 
+// The describe panel's since/first observed/alerted lines render local, second precision
+// (output.HumanTimeSeconds) — not the raw RFC3339Nano the hub sends and not UTC dressed up
+// as local, which is what the local `stamp` closure this replaced did (no .In(time.Local)).
+// Expected value computed, not hardcoded, so this does not depend on the machine running it
+// being on any particular timezone.
+func TestObservationsDescribe_timestampsAreLocal(t *testing.T) {
+	since, err := time.Parse(time.RFC3339, "2026-08-01T10:00:00Z")
+	if err != nil {
+		t.Fatalf("the sample timestamp must parse: %v", err)
+	}
+	firstObserved := since.Add(-2 * time.Hour)
+	alerted := since.Add(90 * time.Minute)
+
+	o := &Observations{table: tview.NewTable(), items: []client.Observation{
+		{Workflow: "commande", DocKey: "CMD-1", State: "draft",
+			Since: since, FirstObservedAt: firstObserved, AlertedAt: &alerted},
+	}}
+	o.render()
+	o.table.Select(1, 0)
+	_, body, ok := o.SelectedDescribe()
+	if !ok {
+		t.Fatal("SelectedDescribe returned !ok for a selected row")
+	}
+	for _, want := range []string{
+		"since:           " + since.In(time.Local).Format("2006-01-02 15:04:05"),
+		"first observed:  " + firstObserved.In(time.Local).Format("2006-01-02 15:04:05"),
+		"alerted:         " + alerted.In(time.Local).Format("2006-01-02 15:04:05"),
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("describe body missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "2026-08-01T10:00:00Z") {
+		t.Errorf("describe body should render local-formatted, not the raw ISO string:\n%s", body)
+	}
+}
+
 func TestObservationsDescribeEmptyWithoutSelection(t *testing.T) {
 	o := &Observations{table: tview.NewTable()}
 	if _, _, ok := o.SelectedDescribe(); ok {

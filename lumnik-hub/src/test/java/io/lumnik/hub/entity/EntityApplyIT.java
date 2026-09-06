@@ -1,5 +1,6 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.quarkus.agroal.DataSource;
@@ -77,7 +78,7 @@ class EntityApplyIT {
               ROW_ID: id
         """;
     given().config(YAML_CFG)
-        .header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        .headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(orphan)
         .post("/api/entities/apply")
         .then().statusCode(409)
@@ -89,7 +90,7 @@ class EntityApplyIT {
   @Test
   void apply_creates_the_view() throws Exception {
     given().config(YAML_CFG)
-        .header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        .headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply")
         .then().statusCode(200)
@@ -108,7 +109,7 @@ class EntityApplyIT {
   @Test
   void apply_persists_manifest_to_db() throws Exception {
     given().config(YAML_CFG)
-        .header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        .headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply")
         .then().statusCode(200);
@@ -157,7 +158,7 @@ class EntityApplyIT {
   void invalid_manifest_returns_400() {
     String bad = MANIFEST.replace("kind: Entity", "kind: Connector");
     given().config(YAML_CFG)
-        .header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        .headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(bad)
         .post("/api/entities/apply")
         .then().statusCode(400);

@@ -5,19 +5,21 @@
 #   lm connector run csv-local-simple
 #
 # Every run re-reads the whole file (after_process: none means the source is
-# never moved or deleted, and there is no cursor — suitable for small reference
-# files that are expected to be fully replaced on each load cycle).
+# never moved or deleted; a file that fits in one 500-row chunk leaves no cursor
+# behind) and the table deduplicates by _row_hash — suitable for small reference
+# files that are expected to be fully replaced on each load cycle.
 
 apiVersion: connectors.lumnik.io/v1
 kind: Connector
 metadata:
   name: csv-local-simple          # unique connector name within the workspace
   connector_type: csv-file        # selects the CSV-file connector implementation
-  tags: [demo]                    # arbitrary labels; forwarded to the target table metadata
+  scopes: [demo]                  # the métier(s) this table is askable in — a scope-bound user needs scope:demo
 
 spec:
   transport:
-    kind: local                   # file is on the local filesystem (no remote fetch)
+    kind: local                   # no remote fetch — the path below is on the HUB's filesystem,
+                                  # not on yours (mount a volume, or use sftp/s3 / lm csv ingest)
     path: docs/connectors/csv/data/customers.csv   # plain path = single file
 
   parser:
@@ -25,5 +27,4 @@ spec:
 
   after_process: none             # leave the source file untouched after ingestion
 
-  target:
-    tags: [demo]                  # tags persisted on the hub-side table descriptor
+  target: {}

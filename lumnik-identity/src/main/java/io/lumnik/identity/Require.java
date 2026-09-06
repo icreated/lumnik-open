@@ -20,12 +20,23 @@ public final class Require {
         return repo.findByIdOptional(id).orElseThrow(() -> notFound(label, id));
     }
 
-    /** The row must exist AND belong to {@code tenantId}; a mismatch 404s exactly like absence. */
+    /**
+     * The row must exist AND belong to {@code tenantId}; a mismatch 404s exactly like absence.
+     *
+     * <p>The tenant is IN THE QUERY, not a check after the fetch. Fetch-then-check —
+     * {@code findByIdOptional(id)} then {@code getTenantId().equals(tenantId)} — resolves another
+     * tenant's row into the JVM before refusing it: an existence oracle, and the timing of the
+     * refusal differs from a true absence. This asks the database the whole question at once, so a
+     * foreign row is never materialised and the two cases are indistinguishable from outside. It is
+     * also the layer that does not depend on RLS: Hibernate's tenantFilter never applies to a
+     * by-id lookup and is off inside a transaction, so on the admin/owner-superuser harness this
+     * predicate is the ONLY thing that answers 404 rather than 200.
+     */
     public static <T extends TenantedEntity> T owned(PanacheRepository<T> repo, Long id,
                                                      Long tenantId, String label) {
-        T entity = found(repo, id, label);
-        if (!entity.getTenantId().equals(tenantId)) throw notFound(label, id);
-        return entity;
+        return repo.find("id = ?1 AND tenantId = ?2", id, tenantId)
+                   .firstResultOptional()
+                   .orElseThrow(() -> notFound(label, id));
     }
 
     /**

@@ -47,6 +47,14 @@ public class CsvIngestResource {
      * this resource (declared inside it), so no other endpoint's error contract moves, and the
      * shape matches the house's — {@code {"error": "..."}}.
      */
+    /** A taken ingest name is a conflict with its own gestures, not an anonymous 500. */
+    @ServerExceptionMapper
+    public Response duplicate(CsvIngestService.DuplicateIngestName e) {
+        return Response.status(Response.Status.CONFLICT)
+            .entity(Map.of("error", e.getMessage()))
+            .build();
+    }
+
     @ServerExceptionMapper
     public Response refused(IllegalArgumentException e) {
         // A message-less IllegalArgumentException is legal Java, and Map.of rejects null values —

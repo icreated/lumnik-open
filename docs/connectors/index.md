@@ -45,6 +45,7 @@ if you haven't set those up yet.
     metadata:
       name: <kebab-case-name>
       connector_type: <csv-file|jdbc-generic|rest-generic|kafka>
+      scopes: [<métier>]          # the scope(s) this connector's tables are askable in
     spec:
       # type-specific — see your connector's page
       ...
@@ -57,6 +58,27 @@ if you haven't set those up yet.
    (add `spec.window: "22:00-07:00"` to fence scheduled runs into a UTC time window —
    the end is exclusive, so `07:00` keeps that `06:00` slot inside)
    (cron, evaluated in UTC — this example fires daily at 06:00 UTC).
+
+    What the three commands print, on a small orders export:
+
+    ```
+    $ lm validate -f orders.yaml
+    ✓ orders.yaml — valid
+    $ lm apply -f orders.yaml
+    {"name":"orders","connectorId":"487ed9d1-58d5-4120-969c-dc448910e1f2","endpointsApplied":1}
+    $ lm connector run orders
+    run scheduled: f0466804-0824-4eb4-8aa2-54e263dccafe
+    ```
+
+    "Scheduled" is not "done" — the ledger is where the result lands, a few seconds later:
+
+    ```
+    $ lm run list --connector orders
+    ID        CONNECTOR  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+    f0466804  orders     Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
+    ```
+
+    Ten rows read, eight written, two set aside with their reason (`lm dlq list`).
 5. Watch it in the TUI ([CLI & TUI](../cli/lm-reference.md)): `:sources` (connectors),
    `:runs` (history), `:dlq` (rejected rows — set aside instead of failing the run,
    inspected with `lm dlq list`).
@@ -99,12 +121,12 @@ Fix errors above before running 'lm apply -f bad.yaml'.
 ### Warnings only (still valid, exit 0)
 
 ```
-$ lm validate -f notags.yaml
-! notags.yaml — 0 error(s), 1 warning(s)
+$ lm validate -f noscopes.yaml
+! noscopes.yaml — 0 error(s), 1 warning(s)
 
-  WARN     spec.target.tags
-           no tags defined — RAG scope filtering will be impossible
-           → Add: target.tags: ["crm", "customers"]
+  WARN     metadata.scopes
+           no scopes declared — the connector's tables will not be askable in any métier
+           → Add: scopes: [compta]  (the métier a user must hold as scope:compta)
 ```
 
 ### Exit codes

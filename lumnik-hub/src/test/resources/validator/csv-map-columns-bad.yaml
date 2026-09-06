@@ -1,0 +1,26 @@
+# Every map-columns shape the door must refuse, in one manifest — an apply-time refusal
+# accumulates, so one `lm apply` should name them all rather than the first.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: legacy-export
+  connector_type: csv-file
+  scopes: [billing]
+spec:
+  transport:
+    kind: local
+    path: /imports/*.csv
+  parser:
+    has_header: true
+  after_process: none
+  mapping:
+    row:
+      - map-columns:
+          rename:
+            CUST_NM: tenant_id        # a hub system column
+            A: same
+            B: same                   # two sources onto one target
+            C: "not an identifier"
+            D:                        # a colon and nothing after it
+          drop: internal_flag         # not a list
+  target: {}

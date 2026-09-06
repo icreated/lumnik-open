@@ -32,6 +32,32 @@ lm view C-200 -f clients-view.yaml                # one record's detail (matched
                                                   # first declared column — here customer_code)
 ```
 
+What the filtered list and the detail print, on a view over a fused Customer entity:
+
+```
+$ lm view -f customers-view.yaml --filter city=Lyon
+Customers · city=Lyon
+
+Customer code  Name                City  Segment
+C-001          Atelier Bernard     Lyon  GOLD
+C-004          Boulangerie Morel   Lyon  GOLD
+C-008          Librairie Fontaine  Lyon  BRONZE
+
+$ lm view C-004 -f customers-view.yaml
+Customers / C-004
+
+  Customer code   C-004
+  Name            Boulangerie Morel
+  City            Lyon
+  Segment         GOLD
+
+  (!) Où les sources divergent
+  City   t_customers «Lyon» · t_crm_contacts «Villeurbanne»
+```
+
+Column headers are the `label`s the entity manifest declares. The detail ends with the
+`_conflicts` ledger when the sources disagree on that record — under the French heading
+*Où les sources divergent*, "where the sources diverge".
 For the CLI the manifest stays a **file you hold** — `lm view` posts it to
 `POST /api/views/render` (list) or `POST /api/views/detail` (one record) and prints the result.
 (A third endpoint, `POST /api/views/generate`, writes a manifest *for* you — see
@@ -50,6 +76,14 @@ The CLI speaks to the store too:
 | `lm view apply -f FILE` | validate-then-upsert into the store |
 | `lm view list` | lists views: `NAME` \| `SCOPE` \| `TITLE` |
 | `lm view get NAME` | the manifest YAML verbatim (`-o file` saves it) |
+
+```
+$ lm view apply -f customers-view.yaml
+applied: customers-desk (scope retail)
+$ lm view list
+NAME            SCOPE   TITLE
+customers-desk  retail  Customers
+```
 
 That's the full round-trip: generate a manifest on one machine, apply it, get it back on
 another.

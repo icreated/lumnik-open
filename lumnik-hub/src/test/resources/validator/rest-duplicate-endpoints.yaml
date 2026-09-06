@@ -3,6 +3,7 @@ kind: Connector
 metadata:
   name: x
   connector_type: rest-generic
+  scopes: [x]
 spec:
   base_url: https://api.example.com
   auth:
@@ -23,7 +24,6 @@ spec:
         kind: hybrid
         table: x_a
         unique_key: $.id
-        tags: [x]
     - id: customers
       path: /b
       method: GET
@@ -38,4 +38,3 @@ spec:
         kind: hybrid
         table: x_b
         unique_key: $.id
-        tags: [x]

@@ -1,6 +1,10 @@
 package client
 
-import "github.com/icreated/lumnik-open/lm/internal/types"
+import (
+	"strings"
+
+	"github.com/icreated/lumnik-open/lm/internal/types"
+)
 
 // ConnectorList lists every connector in the tenant via GET /api/platform/connectors.
 func (c *Client) ConnectorList() ([]types.Connector, error) {
@@ -20,8 +24,10 @@ func (c *Client) ConnectorGet(id string) (*types.Connector, error) {
 	return &out, nil
 }
 
-// ConnectorCreate creates a connector from a raw manifest payload via
-// POST /api/platform/connectors.
+// ConnectorCreate creates a connector from the FLAT admin payload — ConnectorCreateRequest is
+// (tenantId, name, typeId, schedule, enabled, config) — via POST /api/platform/connectors, not
+// from a manifest, whatever the name suggests.
+// A kind: Connector manifest goes to ApplyManifest instead.
 func (c *Client) ConnectorCreate(payload map[string]any) (*types.Connector, error) {
 	var out types.Connector
 	if err := c.POST("/api/platform/connectors", payload, &out); err != nil {
@@ -96,4 +102,19 @@ func (c *Client) ConnectorRetag(id string) (map[string]any, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// SplitScopes parses the comma-separated form both the CLI (`scope set NAME a,b`) and the
+// TUI's scope prompt take: trimmed, empties dropped. One parser for the value
+// ConnectorSetTags sends — the two surfaces used to carry byte-identical copies.
+func SplitScopes(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

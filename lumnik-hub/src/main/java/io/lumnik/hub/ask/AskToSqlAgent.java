@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /** Orchestrates NL to SQL to SqlGuard to read-only query to NL answer. */
 @ApplicationScoped
@@ -138,9 +139,20 @@ public class AskToSqlAgent implements AskPort {
             rows = runReadOnly(tenantId, safeSql);
         } catch (RuntimeException e) {
             LOG.warn("AskToSqlAgent read failed for scope " + scope, e);
-            return new AskResult("I couldn't run that query. One likely cause is an unqualified table name "
-                + "(tables must be schema-qualified, e.g. connector.<table>); if it persists, re-run "
-                + "discovery for this scope.", safeSql, List.of(), 0);
+            // A filter that names more than one row is the one failure we can turn into a next
+            // step rather than a dead end — see AmbiguousFilterGuard.
+            if (AmbiguousFilterGuard.isAmbiguity(e)) {
+                var disclosure = discloseAmbiguity(tenantId, safeSql);
+                if (disclosure.isPresent()) {
+                    return new AskResult(disclosure.get(), safeSql, List.of(), 0);
+                }
+            }
+            // Report the refusal, do not attribute it: this message used to name an unqualified
+            // table as the likely cause, and was wrong on the very failure that prompted the fix —
+            // a perfectly qualified query, refused for a multi-row subquery.
+            return new AskResult("I couldn't run that query — the database refused it: "
+                + AmbiguousFilterGuard.rootMessage(e) + " The SQL is below; if it looks wrong for this scope, re-run "
+                + "discovery.", safeSql, List.of(), 0);
         }
 
         // Honesty over a deceptive "none": never let a 0-row result be phrased as a confident negative.
@@ -164,6 +176,51 @@ public class AskToSqlAgent implements AskPort {
 
     private String dataAsOf(long tenantId, String scope) {
         return freshness.lastCompletedRun(tenantId, scope).map(Instant::toString).orElse(null);
+    }
+
+    /**
+     * Turn a multi-row scalar subquery into a next step: run that subquery on its own and name
+     * what it matched, so the asker can put an id where an ambiguous name was.
+     *
+     * <p>{@code SqlGuard} runs again because the fragment needs its OWN bound — the outer query's
+     * LIMIT does not travel into it, and {@code SqlGuard} adds no table or column of its own.
+     *
+     * <p>{@code LeakGuard} and {@code UndocumentedColumnGuard} do NOT run again, and the reason is
+     * an inclusion rather than an equivalence to be argued: the fragment is literally
+     * {@code sql.substring(…)} of {@code safeSql} ({@code SqlFilters.scalarSubquery} slices it by
+     * token offsets), and both guards walk EVERY position of the token stream they are given —
+     * {@code LeakGuard.firstUndeclaredRead} loops the whole list checking each
+     * {@code schema.table}, {@code UndocumentedColumnGuard} loops every filter
+     * {@code SqlFilters} finds. Neither knows what a clause is. So every qualified table and every
+     * literal filter inside this fragment was inspected when they ran over the whole statement at
+     * the top of {@code ask}, and a substring can introduce neither a table nor a column that was
+     * not there. Re-running them read like rigour and bought nothing.
+     *
+     * <p>Every failure along the way — unrecognised shape, refusal, empty result — falls back to
+     * the plain refusal: a disclosure that cannot be built must never cost the caller the message
+     * they were owed.
+     */
+    private Optional<String> discloseAmbiguity(long tenantId, String safeSql) {
+        try {
+            Optional<String> fragment = SqlFilters.scalarSubquery(safeSql);
+            if (fragment.isEmpty()) return Optional.empty();
+
+            List<Map<String,Object>> matches = runReadOnly(tenantId, guard.check(fragment.get()));
+            if (matches.size() < 2) return Optional.empty();   // not the ambiguity we promised to explain
+
+            // One column is guaranteed here, not assumed: Postgres answers a multi-column scalar
+            // subquery with "subquery must return only one column" (42601), never the 21000 that
+            // put us in this branch — verified against the server. So the first key IS the column.
+            String label = matches.get(0).keySet().iterator().next();
+            List<String> values = matches.stream().map(r -> String.valueOf(r.get(label))).toList();
+            // SqlGuard caps the probe at MAX_ROWS, so a bigger duplicate set comes back truncated;
+            // the message must then say "at least" rather than present a ceiling as a total.
+            return Optional.of(
+                AmbiguousFilterGuard.message(label, values, matches.size() >= MAX_ROWS));
+        } catch (RuntimeException e) {
+            LOG.debugf("ambiguity disclosure unavailable, falling back: %s", e.getMessage());
+            return Optional.empty();
+        }
     }
 
     /**

@@ -1,6 +1,9 @@
 package client
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"net/url"
+)
 
 // EntityApply sends a raw YAML entity manifest to the hub.
 // Content-Type: application/yaml. Returns raw JSON response.
@@ -10,4 +13,10 @@ func (c *Client) EntityApply(yaml []byte) (json.RawMessage, error) {
 		return nil, err
 	}
 	return json.RawMessage(data), nil
+}
+
+// EntityDelete removes an entity manifest via DELETE /api/entities/{name}: the hub drops the
+// entity's view, deletes its manifest row, and rediscovers its scopes so the RAG card drops it.
+func (c *Client) EntityDelete(name string) error {
+	return c.DELETE("/api/entities/" + url.PathEscape(name))
 }

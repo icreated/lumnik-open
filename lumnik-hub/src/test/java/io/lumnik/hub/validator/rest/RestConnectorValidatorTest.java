@@ -118,12 +118,6 @@ class RestConnectorValidatorTest {
         assertTrue(r.errors().stream().anyMatch(e -> e.message().contains("duplicate endpoint id")));
     }
 
-    @Test void noTags_isWarningNotError() throws Exception {
-        ValidationResult r = service.validate(load("rest-no-tags.yaml"));
-        assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
-        assertTrue(r.warnings().stream().anyMatch(w -> w.path().equals("spec.endpoints[0].target.tags")));
-    }
-
     @Test void malformedPromote_isError() throws Exception {
         ValidationResult r = service.validate(load("rest-bad-promote.yaml"));
         assertFalse(r.isValid());

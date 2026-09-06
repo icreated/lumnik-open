@@ -1,5 +1,6 @@
 package io.lumnik.hub.webhook;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
@@ -74,7 +75,7 @@ class PlatformDeliveryReadIT {
 
     @Test
     void deliveries_are_flattened_failures_first_and_tenant_bound() {
-        given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        given().headers(TestIdentity.tenantAndUser(1))
             .when().get("/api/platform/deliveries")
             .then().statusCode(200)
             .body("findAll { it.eventType.startsWith('outputs.probe') }", hasSize(3))
@@ -89,7 +90,7 @@ class PlatformDeliveryReadIT {
 
     @Test
     void limit_is_honored() {
-        given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        given().headers(TestIdentity.tenantAndUser(1))
             .when().get("/api/platform/deliveries?limit=1")
             .then().statusCode(200)
             .body("size()", equalTo(1));

@@ -65,3 +65,45 @@ func TestEntityApplyCmd_serverError_returnsError(t *testing.T) {
 		t.Fatal("expected error on 400, got nil")
 	}
 }
+
+func TestEntityDeleteCmd_printsDeleted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/entities/Customer" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"entity", "delete", "Customer"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "deleted: Customer") {
+		t.Errorf("expected 'deleted: Customer' in output, got: %s", buf.String())
+	}
+}
+
+func TestEntityDeleteCmd_serverError_returnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprint(w, `{"error":"entity nope not found"}`)
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"entity", "delete", "nope"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected error on 404, got nil")
+	}
+}

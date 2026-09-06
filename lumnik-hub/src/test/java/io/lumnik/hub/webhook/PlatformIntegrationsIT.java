@@ -1,5 +1,6 @@
 package io.lumnik.hub.webhook;
 
+import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.specification.RequestSpecification;
 import org.junit.jupiter.api.MethodOrderer;
@@ -49,7 +50,7 @@ class PlatformIntegrationsIT {
 
     @Test @Order(3)
     void another_tenant_does_not_see_it() {
-        given().header("X-Tenant-ID", "6002").header("X-User-ID", "1")
+        given().headers(TestIdentity.tenantAndUser(6002))
             .get("/api/platform/integrations")
         .then().statusCode(200)
             .body("find { it.name == 'n8n-it' }", nullValue());

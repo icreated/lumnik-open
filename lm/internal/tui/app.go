@@ -161,26 +161,24 @@ func newApp(c *client.Client) *App {
 	})
 	a.pages.AddPage("ask", a.askPage.View(), true, false)
 	a.scopesPage.SetOnEnter(func(tag string) {
-		a.currentScope = tag
-		a.header.SetScope(tag)
-		a.askPage.SetScope(tag)
+		a.setScope(tag)
 		a.refreshCurrent()
 	})
-	a.sourcesPage.SetOnTagEdit(func(id string, current []string) {
+	a.sourcesPage.SetOnScopeEdit(func(id string, current []string) {
 		input := tview.NewInputField().
-			SetLabel(" Tags (comma-separated): ").
+			SetLabel(" Scopes (comma-separated): ").
 			SetText(strings.Join(current, ",")).
 			SetFieldWidth(60)
 		input.SetDoneFunc(func(key tcell.Key) {
 			a.tv.SetRoot(a.rootFlex, true)
 			if key == tcell.KeyEnter {
-				tags := splitTagsField(input.GetText())
-				if _, err := a.client.ConnectorSetTags(id, tags); err != nil {
-					a.showError("set tags: " + err.Error())
+				scopes := client.SplitScopes(input.GetText())
+				if _, err := a.client.ConnectorSetTags(id, scopes); err != nil {
+					a.showError("set scopes: " + err.Error())
 					return
 				}
 				a.sourcesPage.Refresh()
-				a.footer.SetToast(a.tv, "✓ tags updated", 2*time.Second)
+				a.footer.SetToast(a.tv, "✓ scopes updated", 2*time.Second)
 			}
 		})
 		modal := tview.NewFlex().SetDirection(tview.FlexRow).
@@ -521,9 +519,7 @@ func (a *App) showPalette() {
 			if tag == "" {
 				return
 			}
-			a.currentScope = tag
-			a.header.SetScope(tag)
-			a.askPage.SetScope(tag)
+			a.setScope(tag)
 			a.footer.SetToast(a.tv, "✓ scope: "+tag, 2*time.Second)
 			return
 		}
@@ -630,6 +626,23 @@ func (a *App) refreshIfActive(name string) {
 	}
 }
 
+// setScope is the one place the session scope changes: the value :ask sends, and what the
+// header shows. Three writers (the :scopes page, the :scope command, the startup seed) must
+// never disagree.
+func (a *App) setScope(tag string) {
+	a.currentScope = tag
+	a.header.SetScope(tag)
+	a.askPage.SetScope(tag)
+}
+
+// seedScope applies a default read at startup only while the session is still unscoped: a
+// scope the user picked before the reply landed must win over it.
+func (a *App) seedScope(tag string) {
+	if a.currentScope == "" {
+		a.setScope(tag)
+	}
+}
+
 func Run(c *client.Client) error {
 	a := newApp(c)
 	a.header.SetContext("local")
@@ -642,17 +655,14 @@ func Run(c *client.Client) error {
 	a.startLive()
 	go a.liveTicker()
 	go resources.QueueUpdate(a.tv, func() { a.switchTo("sources") })
-	return a.tv.Run()
-}
-
-func splitTagsField(s string) []string {
-	parts := strings.Split(s, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
+	// The hub asks the user's default scope when a request names none (#394), so a header
+	// reading "system" would lie for a user with one. Seed the session from it — after the
+	// loop is pumping, like the landing data; a failed read (auth-dead, no user row) just
+	// leaves the session unscoped, which is what the server falls back to as well.
+	go func() {
+		if s, err := c.GetMyScope(); err == nil && s != "" {
+			resources.QueueUpdate(a.tv, func() { a.seedScope(s) })
 		}
-	}
-	return out
+	}()
+	return a.tv.Run()
 }

@@ -119,8 +119,9 @@ public class HybridJsonbWriter {
      * the missing link that kept every hybrid scope un-answerable (HybridTargetSchemaCardIT).
      * Key {@code hybrid:<table>}: unique per endpoint target, and immune to the
      * UNIQUE(tenant_id, mapping_id) trap — two endpoints of one mapping write two tables and
-     * get two registry rows. The card itself still only appears when a completed RUN triggers
-     * rediscover, which is why the run-less one-shot CSV path stays un-askable unchanged.
+     * get two registry rows. For connector runs the card appears when the completed RUN
+     * triggers rediscover; the run-less one-shot CSV path rediscoveres its own scopes after
+     * its ingest commits (spec 2026-09-02) — one command, an askable table.
      */
     private void registerIfNeeded(HybridJsonbSpec spec, long tenantId, UUID connectorId) {
         String key = spec.table() + "|" + tenantId;
@@ -232,9 +233,12 @@ public class HybridJsonbWriter {
                 // Routed through RlsDdl.guarded (not hand-rolled here) so this DO block shares RlsDdl's
                 // single dollar-quote tag and gets the same DDL-injection protection as every other
                 // grant, instead of carrying its own bare-$$ copy of that logic.
-                s.execute(RlsDdl.guarded(
-                    RlsDdl.grantSchemaUsageApp(schemaName),
-                    RlsDdl.grantSchemaUsageReadonly(schemaName)));
+                // One grant, one block: EXCEPTION WHEN OTHERS aborts its block, so a pair sharing
+                // one would let a missing lumnik_app silently cost lumnik_readonly its USAGE — and
+                // without USAGE on the schema, ask-to-SQL cannot reach the table whatever its own
+                // grants say.
+                s.execute(RlsDdl.guarded(RlsDdl.grantSchemaUsageApp(schemaName)));
+                s.execute(RlsDdl.guarded(RlsDdl.grantSchemaUsageReadonly(schemaName)));
             }
 
             StringBuilder sb = new StringBuilder("CREATE TABLE IF NOT EXISTS ")
@@ -259,11 +263,13 @@ public class HybridJsonbWriter {
             // Tenant isolation: the same policy the connector.t_* tables get, from RlsDdl.
             s.execute(RlsDdl.enableRowLevelSecurity(schemaName, tableName));
             s.execute(RlsDdl.tenantIsolationPolicy(schemaName, tableName));
-            // All grants in ONE guarded block — grants now match DynamicTableWriter's set
-            // (app DML, readonly select, sequence usage); composition stays per-writer.
-            s.execute(RlsDdl.guarded(RlsDdl.grantAppDml(schemaName, tableName),
-                                     RlsDdl.grantReadonlySelect(schemaName, tableName),
-                                     RlsDdl.grantSequenceUsage(schemaName, tableName + "_id_seq")));
+            // One grant per guarded block, the DynamicTableWriter shape. Grouped, the readonly
+            // SELECT sat second behind the app's DML: a failing first statement aborted the block
+            // and took it with it, swallowed, leaving a table the schema card advertises as
+            // askable and the ask role cannot read.
+            s.execute(RlsDdl.guarded(RlsDdl.grantAppDml(schemaName, tableName)));
+            s.execute(RlsDdl.guarded(RlsDdl.grantReadonlySelect(schemaName, tableName)));
+            s.execute(RlsDdl.guarded(RlsDdl.grantSequenceUsage(schemaName, tableName + "_id_seq")));
         }
     }
 
@@ -334,14 +340,16 @@ public class HybridJsonbWriter {
         ps.addBatch();
     }
 
-    private Object applyTransform(Object raw, Optional<Transform> t) {
+    // package-private static: a pure function of (raw, transform), so a unit test can drive it
+    // under a forced locale without standing up the writer.
+    static Object applyTransform(Object raw, Optional<Transform> t) {
         if (raw == null || t.isEmpty()) return raw;
         return switch (t.get()) {
             case FROM_EPOCH    -> OffsetDateTime.ofInstant(
                                     Instant.ofEpochSecond(((Number) raw).longValue()), ZoneOffset.UTC);
             case PARSE_ISO8601 -> OffsetDateTime.parse(String.valueOf(raw));
-            case TO_LOWER      -> String.valueOf(raw).toLowerCase();
-            case TO_UPPER      -> String.valueOf(raw).toUpperCase();
+            case TO_LOWER      -> String.valueOf(raw).toLowerCase(Locale.ROOT);
+            case TO_UPPER      -> String.valueOf(raw).toUpperCase(Locale.ROOT);
             case TRIM          -> String.valueOf(raw).trim();
             case TO_JSON_STRING -> {
                 try { yield JSON.writeValueAsString(raw); }
@@ -392,6 +400,19 @@ public class HybridJsonbWriter {
             throw new IllegalArgumentException("blank identifier segment");
         }
         return quoteTable(fqTable);
+    }
+
+    /**
+     * Forget one table's cached schema + registration marker — called when the table is dropped
+     * (connector delete / purge) so a re-ingest under the same name re-reads an empty
+     * information_schema and recreates the table, instead of trusting a stale cache, skipping
+     * {@code CREATE TABLE}, and inserting into a relation that no longer exists.
+     */
+    public void forget(String table) {
+        if (table == null) return;
+        schemaCache.remove(table);
+        // registered keys are always "<table>|<tenantId>" (registerIfNeeded), so match by that prefix.
+        registered.removeIf(k -> k.startsWith(table + "|"));
     }
 
     /**

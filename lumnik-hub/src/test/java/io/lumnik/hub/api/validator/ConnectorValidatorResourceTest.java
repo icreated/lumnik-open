@@ -19,6 +19,7 @@ class ConnectorValidatorResourceTest {
             metadata:
               name: x
               connector_type: rest-generic
+              scopes: [x]
             spec:
               base_url: https://api.example.com
               auth: { kind: bearer, token_env: T }
@@ -27,7 +28,7 @@ class ConnectorValidatorResourceTest {
                   path: /x
                   method: GET
                   pagination: { kind: cursor, cursor_param: after, cursor_path: "$.data[-1:].id", has_more_path: "$.has_more", response_path: "$.data" }
-                  target: { kind: hybrid, table: ext.x, unique_key: "$.id", tags: [x], promote: [{ name: n, path: "$.n", type: text }] }
+                  target: { kind: hybrid, table: ext.x, unique_key: "$.id", promote: [{ name: n, path: "$.n", type: text }] }
             """;
         given()
             .config(config().encoderConfig(
@@ -48,6 +49,7 @@ class ConnectorValidatorResourceTest {
             metadata:
               name: x
               connector_type: rest-generic
+              scopes: [x]
             spec:
               base_url: https://api.example.com
               auth: { kind: bearer, token_env: T }
@@ -56,7 +58,7 @@ class ConnectorValidatorResourceTest {
                   path: /x
                   method: GET
                   pagination: { kind: cursor, cursor_param: after, cursor_path: "$.data[-1:].id", has_more_path: "$.has_more", response_path: "$.data" }
-                  target: { kind: hybrid, table: ext.x, unique_key: "$.id", tags: [x] }
+                  target: { kind: hybrid, table: ext.x, unique_key: "$.id" }
             """;
         given()
             .config(config().encoderConfig(

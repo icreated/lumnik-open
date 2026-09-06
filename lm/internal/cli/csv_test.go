@@ -161,3 +161,99 @@ func TestCsvIngestSummary_doesNotPromiseAnAskThatCannotAnswer(t *testing.T) {
 	}
 	t.Logf("the summary a reader now sees:\n%s", out.String())
 }
+
+// The new hub reports askable scopes (spec 2026-09-02): with the door present the
+// summary hands the reader a copy-pasteable lm ask command; without it, the plain
+// pre-askable summary — never a tease.
+func TestCsvIngestSummary_promisesAskWhenTheHubMadeItTrue(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"connectorId":"00000000-0000-0000-0000-000000000001","endpointId":"00000000-0000-0000-0000-000000000002","tableName":"ext.test","rowsRead":2,"rowsWritten":2,"promoteColumns":[],"warnings":[],"askableScopes":["sales"],"chatAvailable":true}`)
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	dir := t.TempDir()
+	csv := filepath.Join(dir, "test.csv")
+	if err := os.WriteFile(csv, []byte("id\n1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rootCmd := NewRootCmd()
+	rootCmd.SetArgs([]string{"csv", "ingest", csv, "--scope", "sales"})
+	out := &strings.Builder{}
+	rootCmd.SetOut(out)
+	rootCmd.SetErr(out)
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("execute: %v (out=%s)", err, out.String())
+	}
+	for _, want := range []string{"askable", "lm ask", "how many rows", "--scope sales", "ext.test"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("summary does not mention %q:\n%s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "nothing indexed") {
+		t.Errorf("summary keeps the pre-askable line despite askable scopes:\n%s", out.String())
+	}
+}
+
+func TestCsvIngestSummary_staysTruthfulWithoutTheChatDoor(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"connectorId":"00000000-0000-0000-0000-000000000001","endpointId":"00000000-0000-0000-0000-000000000002","tableName":"ext.test","rowsRead":2,"rowsWritten":2,"promoteColumns":[],"warnings":[],"askableScopes":["sales"],"chatAvailable":false}`)
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	dir := t.TempDir()
+	csv := filepath.Join(dir, "test.csv")
+	if err := os.WriteFile(csv, []byte("id\n1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rootCmd := NewRootCmd()
+	rootCmd.SetArgs([]string{"csv", "ingest", csv, "--scope", "sales"})
+	out := &strings.Builder{}
+	rootCmd.SetOut(out)
+	rootCmd.SetErr(out)
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("execute: %v (out=%s)", err, out.String())
+	}
+	// The doorless build keeps the plain summary entirely: the silently-built schema card
+	// is internal accounting, and a paid feature's absence is not announced (GraphQL rule).
+	for _, forbidden := range []string{"lm ask", "lm chat", "schema card", "pro edition", "askable"} {
+		if strings.Contains(out.String(), forbidden) {
+			t.Errorf("doorless summary mentions %q:\n%s", forbidden, out.String())
+		}
+	}
+	for _, want := range []string{"ext.test", "lm connector list"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("doorless summary lost the plain line %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// The breath: a refreshed re-ingest says so, instead of repeating the first-time line.
+func TestCsvIngestSummary_saysBreathOnRefresh(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"connectorId":"00000000-0000-0000-0000-000000000001","endpointId":"00000000-0000-0000-0000-000000000002","tableName":"ext.test","rowsRead":3,"rowsWritten":3,"promoteColumns":[],"warnings":[],"askableScopes":["sales"],"chatAvailable":true,"refreshed":true}`)
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	dir := t.TempDir()
+	csv := filepath.Join(dir, "test.csv")
+	if err := os.WriteFile(csv, []byte("id\n1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	rootCmd := NewRootCmd()
+	rootCmd.SetArgs([]string{"csv", "ingest", csv, "--scope", "sales"})
+	out := &strings.Builder{}
+	rootCmd.SetOut(out)
+	rootCmd.SetErr(out)
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("execute: %v (out=%s)", err, out.String())
+	}
+	if !strings.Contains(out.String(), "Re-ingested") || !strings.Contains(out.String(), "one more breath") {
+		t.Errorf("a refreshed ingest must say so:\n%s", out.String())
+	}
+}
