@@ -43,7 +43,7 @@ public final class SqlLexer {
         int i = 0;
         while (i < n) {
             char c = sql.charAt(i);
-            if (Character.isWhitespace(c))       { i++; continue; }
+            if (isAsciiWhitespace(c))            { i++; continue; }
             if (sql.startsWith("--", i))         { i = skipLineComment(sql, i, n); continue; }
             if (sql.startsWith("/*", i))         { i = skipBlockComment(sql, i, n); continue; }
             if (c == '\'')                       { i = readString(sql, i, n, out); continue; }
@@ -118,7 +118,8 @@ public final class SqlLexer {
     }
 
     /**
-     * A Postgres identifier: a Unicode letter or {@code _}, then letters, digits or {@code _}.
+     * A Postgres identifier, whose character class is defined by {@link #isIdentStart} below — the
+     * server's, not Java's.
      *
      * <p>This was ASCII-only, on the theory that a non-ASCII name stayed fail-open. It did not. An
      * accent only ends the identifier — the LETTERS AFTER IT start a fresh one, so {@code crédit = 'X'}
@@ -155,8 +156,52 @@ public final class SqlLexer {
         return i + 1;
     }
 
-    private static boolean isIdentStart(char c) { return c == '_' || Character.isLetter(c); }
-    private static boolean isIdentPart(char c) { return c == '_' || Character.isLetterOrDigit(c); }
+    /**
+     * The identifier character class is the SERVER's: PostgreSQL's scanner reads
+     * {@code [A-Za-z_\200-\377]} to start a name and adds digits and {@code $} to continue it — any byte
+     * with the high bit set is an identifier char to it, letter or not. Measured on PostgreSQL 16, each
+     * created quoted then read UNQUOTED: {@code a€b}, {@code a$b}, {@code a«b}, {@code aéb}, and even
+     * {@code a<U+3000>b} and {@code a<U+00A0>b} all resolve; only a leading {@code $} is a syntax error.
+     *
+     * <p>{@code Character.isLetter} was the wrong oracle, and it failed the same way the ASCII-only
+     * version before it did (see {@link #readIdent}): the chars it rejected did not stay fail-open, they
+     * ENDED the name and let the tail start a fresh one, so {@code montant_€_ht = '42'} offered the guards
+     * a bare {@code _ht} and earned a refusal naming a column nobody wrote — while the message listed the
+     * real column as known, in the same sentence. Widening to the server's class is what removes the
+     * phantom rather than papering over it.
+     *
+     * <p>{@code $} in CONTINUATION ONLY is load-bearing, not a detail: it is why widening does not blind
+     * {@code SqlGuard}'s dollar-quoting refusal. The opening {@code $} of a {@code $$…$$} or
+     * {@code $tag$…$tag$} body can never be absorbed into a name, so it still arrives as a bare OP
+     * token. The case this does NOT cover is the one where agreement makes it moot: in {@code a$tag$…}
+     * the {@code $} does get absorbed, and the server absorbs it too (its scanner takes the longest
+     * match at that position), so what we read as one name it also reads as one name.
+     */
+    private static boolean isIdentStart(char c) {
+        return c == '_' || isAsciiLetter(c) || c >= 0x80;
+    }
+
+    private static boolean isIdentPart(char c) {
+        return isIdentStart(c) || isAsciiDigit(c) || c == '$';
+    }
+
+    private static boolean isAsciiLetter(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    }
+
+    /**
+     * The five characters the SERVER separates tokens on, spelled out rather than delegated: measured on
+     * PostgreSQL 16, {@code a<FF>b} splits into two names while {@code a<VT>b} and {@code a<FS>b} are a
+     * syntax error — the server treats VT and the FS/GS/RS/US controls as neither whitespace nor
+     * identifier characters. {@code Character.isWhitespace} is true for all six, so delegating to it
+     * would have left this predicate wider than the sentence describing it, and Java is not the oracle
+     * here. It matters at all because this branch runs BEFORE the identifier branch: Java also calls
+     * U+2028 and U+3000 whitespace, and the server calls them identifier characters, so a name carrying
+     * one would keep being split however wide {@link #isIdentStart} grew.
+     */
+    private static boolean isAsciiWhitespace(char c) {
+        return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+    }
 
     /** Numbers stay ASCII: a non-ASCII digit is not a bound, a page size, or anything we should read. */
     private static boolean isAsciiDigit(char c) { return c >= '0' && c <= '9'; }

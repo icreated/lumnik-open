@@ -26,8 +26,9 @@ func ClientFromCmd(cmd *cobra.Command) (*client.Client, error) {
 	if v, _ := cmd.Flags().GetString("server"); v != "" {
 		ctx.Server = v
 	}
-	if v, _ := cmd.Flags().GetString("token"); v != "" {
-		ctx.Token = v
+	tokenOverride, _ := cmd.Flags().GetString("token")
+	if tokenOverride != "" {
+		ctx.Token = tokenOverride
 	}
 	// The effective context name (explicit --context, else current-context) is what
 	// refreshed tokens must be persisted to — never blindly current-context.
@@ -35,5 +36,12 @@ func ClientFromCmd(cmd *cobra.Command) (*client.Client, error) {
 	if effectiveName == "" {
 		effectiveName = cfg.CurrentContext
 	}
-	return client.NewForContext(effectiveName, ctx), nil
+	c := client.NewForContext(effectiveName, ctx)
+	if tokenOverride != "" {
+		// Typed on the command line: it IS the token, not a fallback queued behind
+		// the stored session. See client.PinStaticToken for why this is not done by
+		// clearing ctx.Access.
+		c.PinStaticToken()
+	}
+	return c, nil
 }

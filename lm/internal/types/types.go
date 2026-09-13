@@ -15,11 +15,13 @@ type Module struct {
 // Connector is a configured data-ingestion connector: its type, schedule,
 // enabled state, freeform manifest config, tags, and last-known run status.
 type Connector struct {
-	ID        string         `json:"id" yaml:"id"`
-	TenantID  int64          `json:"tenantId" yaml:"tenantId"`
-	Name      string         `json:"name" yaml:"name"`
-	TypeID    string         `json:"typeId" yaml:"typeId"`
-	Schedule  string         `json:"schedule,omitempty" yaml:"schedule,omitempty"`
+	ID       string `json:"id" yaml:"id"`
+	TenantID int64  `json:"tenantId" yaml:"tenantId"`
+	Name     string `json:"name" yaml:"name"`
+	TypeID   string `json:"typeId" yaml:"typeId"`
+	Schedule string `json:"schedule,omitempty" yaml:"schedule,omitempty"`
+	// Window fences the SCHEDULED runs to a UTC time slot, HH:MM-HH:MM, beside Schedule's cron.
+	Window    string         `json:"window,omitempty" yaml:"window,omitempty"`
 	Enabled   bool           `json:"enabled" yaml:"enabled"`
 	Config    map[string]any `json:"config" yaml:"config"`
 	Tags      []string       `json:"tags" yaml:"tags"`
@@ -43,6 +45,8 @@ type Run struct {
 	ID              string     `json:"id"`
 	ConnectorID     string     `json:"connectorId"`
 	ConnectorName   string     `json:"connectorName"` // absent on hubs older than the ledger-names change
+	EndpointID      string     `json:"endpointId"`    // empty for a run with no endpoint, and on older hubs
+	EndpointName    string     `json:"endpointName"`
 	Status          string     `json:"status"`
 	StartedAt       time.Time  `json:"startedAt"`
 	EndedAt         *time.Time `json:"endedAt,omitempty"`
@@ -56,11 +60,19 @@ type Run struct {
 	DeadLetterCount int64      `json:"deadLetterCount"`
 }
 
-// ConnectorLabel is what a human should read in a CONNECTOR column — see connectorLabel.
-func (r Run) ConnectorLabel() string { return connectorLabel(r.ConnectorName, r.ConnectorID) }
+// ConnectorLabel is what a human should read in a CONNECTOR column — see nameOrShortID.
+func (r Run) ConnectorLabel() string { return nameOrShortID(r.ConnectorName, r.ConnectorID) }
+
+// EndpointLabel is what a human should read in an ENDPOINT column — the same rule one level
+// down. It is what tells the sibling rows of one fan-out apart: a connector writes one run row
+// per endpoint, so a two-table jdbc connector logs two rows that differ only in their counters
+// until this cell names the table each one read. Empty for a run with no endpoint at all — a row
+// predating endpoints, or one whose endpoint was hard-deleted — because a placeholder there
+// would read as a name.
+func (r Run) EndpointLabel() string { return nameOrShortID(r.EndpointName, r.EndpointID) }
 
 // ConnectorLabel — the same rule, for the dead-letter queue.
-func (d DeadLetter) ConnectorLabel() string { return connectorLabel(d.ConnectorName, d.ConnectorID) }
+func (d DeadLetter) ConnectorLabel() string { return nameOrShortID(d.ConnectorName, d.ConnectorID) }
 
 // ConnectorNameAndID is the detail-view form: "name (full id)" — the name for the
 // reader, the id for the script — or just the id when the hub sent no name.
@@ -71,10 +83,10 @@ func (d DeadLetter) ConnectorNameAndID() string {
 	return d.ConnectorName + " (" + d.ConnectorID + ")"
 }
 
-// connectorLabel: the connector's name when the hub sent it, else the shortened
-// id (older hubs). One answer shared by the CLI tables and the TUI panels, so
-// they cannot drift.
-func connectorLabel(name, id string) string {
+// nameOrShortID: the name when the hub sent it, else the shortened id (older hubs,
+// or a row the hub could not resolve), else empty. One answer shared by the CLI
+// tables and the TUI panels, so they cannot drift.
+func nameOrShortID(name, id string) string {
 	if name != "" {
 		return name
 	}
@@ -132,6 +144,23 @@ type Endpoint struct {
 	Enabled       bool       `json:"enabled"`
 	LastRunAt     *time.Time `json:"lastRunAt,omitempty"`
 	LastRunStatus string     `json:"lastRunStatus,omitempty"`
+}
+
+// PreflightVerdict is what one endpoint answered to `lm source rest test`: the outcome of the
+// single request an ingestion run would have sent first, with nothing written.
+//
+// Items is what the run's own pagination strategy would have read out of that page. A 2xx with
+// zero items is the shape that used to land as a green empty sync, so the pre-flight reports it
+// rather than leaving OK to speak for it.
+type PreflightVerdict struct {
+	Endpoint string `json:"endpoint"`
+	Method   string `json:"method"`
+	URL      string `json:"url"`
+	Status   int    `json:"status"`
+	OK       bool   `json:"ok"`
+	Items    int    `json:"items"`
+	Detail   string `json:"detail"`
+	Sample   string `json:"sample"`
 }
 
 // CursorState is an endpoint's persisted read position, used to resume

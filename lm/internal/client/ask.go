@@ -16,17 +16,22 @@ type AskResult struct {
 	Columns  []string   // ordered column names (taken from the first row)
 	Rows     [][]string // each row aligned to Columns, values stringified
 	DataAsOf string     // ISO end of the scope's last completed run; "" when unknown
+	// OtherDoors names, as hub tokens ("lifecycle", "conflicts"), the doors that CAN answer when
+	// this one abstains; usually empty. Rendering a token is each surface's own job — see the
+	// hub's AskResult for why the wire carries tokens and not commands.
+	OtherDoors []string
 }
 
 // analyticWire mirrors the platform AnalyticResponse JSON
 // ({answer, sql, rowCount, rows:[{...}]}). Rows stay raw so we can recover the
 // column order that unmarshalling into a Go map would discard.
 type analyticWire struct {
-	Answer   string            `json:"answer"`
-	SQL      string            `json:"sql"`
-	RowCount int               `json:"rowCount"`
-	Rows     []json.RawMessage `json:"rows"`
-	DataAsOf string            `json:"dataAsOf"`
+	Answer     string            `json:"answer"`
+	SQL        string            `json:"sql"`
+	RowCount   int               `json:"rowCount"`
+	Rows       []json.RawMessage `json:"rows"`
+	DataAsOf   string            `json:"dataAsOf"`
+	OtherDoors []string          `json:"otherDoors"`
 }
 
 // RagAsk runs an analytic question over the ingested hub via mode=analytic.
@@ -42,12 +47,13 @@ func (c *Client) RagAsk(question, scope string) (*AskResult, error) {
 	}
 	cols, rows := parseRows(wire.Rows)
 	return &AskResult{
-		Answer:   wire.Answer,
-		SQL:      wire.SQL,
-		RowCount: wire.RowCount,
-		Columns:  cols,
-		Rows:     rows,
-		DataAsOf: wire.DataAsOf,
+		Answer:     wire.Answer,
+		SQL:        wire.SQL,
+		RowCount:   wire.RowCount,
+		Columns:    cols,
+		Rows:       rows,
+		DataAsOf:   wire.DataAsOf,
+		OtherDoors: wire.OtherDoors,
 	}, nil
 }
 

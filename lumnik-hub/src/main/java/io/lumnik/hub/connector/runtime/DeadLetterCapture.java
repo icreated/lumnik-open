@@ -30,7 +30,7 @@ public class DeadLetterCapture {
     dlq.setConnectorId(connectorId);
     dlq.setRunId(runId);
     dlq.setPayload(payload);
-    dlq.setSkipReason(reasonName(reason));
+    dlq.setSkipReason(reason.persistedName());
     dlq.setSkipDetail(mapper.valueToTree(reason));
     dlq.setErrorMessage(reasonMessage(reason));
     repo.persist(dlq);
@@ -39,7 +39,7 @@ public class DeadLetterCapture {
     // benign ones), but the ingestion RUNTIME never routes a benign skip here today (BenignSkipNoDlqIT:
     // duplicates are skipped, not dead-lettered) — this guard keeps lumnik_dead_letters_total correct
     // even if a future path ever dead-letters a benign skip.
-    if (!(reason instanceof SkipReason.Duplicate) && !(reason instanceof SkipReason.PolicyExcluded)) {
+    if (!reason.benign()) {
       metrics.recordDeadLetter(dlq.getSkipReason());
     }
     return dlq.getId();
@@ -74,17 +74,6 @@ public class DeadLetterCapture {
     var connector = connectors.findById(connectorId);
     if (connector == null) throw new IllegalArgumentException("Connector not found: " + connectorId);
     return connector.getTenantId();
-  }
-
-  private String reasonName(SkipReason r) {
-    return switch (r) {
-      case SkipReason.MappingFailed m    -> "MappingFailed";
-      case SkipReason.ValidationFailed v -> "ValidationFailed";
-      case SkipReason.WriteFailed w      -> "WriteFailed";
-      case SkipReason.Duplicate d        -> "Duplicate";
-      case SkipReason.PolicyExcluded p   -> "PolicyExcluded";
-      case SkipReason.MalformedSource m  -> "MalformedSource";
-    };
   }
 
   private String reasonMessage(SkipReason r) {

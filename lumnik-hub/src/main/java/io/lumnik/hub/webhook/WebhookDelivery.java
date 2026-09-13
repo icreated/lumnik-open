@@ -5,6 +5,8 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.Mutability;
+import io.lumnik.hub.connector.persistence.converters.ImmutableJsonNodePlan;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -34,6 +36,7 @@ public class WebhookDelivery {
     private String eventType;
 
     @JdbcTypeCode(SqlTypes.JSON)
+    @Mutability(ImmutableJsonNodePlan.class)
     @Column(name = "payload", nullable = false, columnDefinition = "jsonb")
     private JsonNode payload;
 

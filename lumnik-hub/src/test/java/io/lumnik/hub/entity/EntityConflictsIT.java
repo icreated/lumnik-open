@@ -1,14 +1,12 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.AfterEach;
@@ -51,9 +49,6 @@ class EntityConflictsIT {
             email: email
       """;
 
-  static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config().encoderConfig(
-      EncoderConfig.encoderConfig().encodeContentTypeAs("application/yaml", ContentType.TEXT));
-
   @BeforeEach
   void seedAndApply() throws Exception {
     try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
@@ -78,7 +73,7 @@ class EntityConflictsIT {
       st.execute("INSERT INTO connector.t_confl_erp VALUES (2,'C-900','Bob')");
       st.execute("INSERT INTO connector.t_confl_csv VALUES (2,'C-900','Robert','b@x.fr')");
     }
-    given().config(YAML_CFG).headers(TestIdentity.tenantAndUser(1))
+    given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
   }
@@ -174,7 +169,7 @@ class EntityConflictsIT {
       st.execute("INSERT INTO connector.t_confl_broken VALUES (1,'K-1','a')");
       st.execute("INSERT INTO connector.t_confl_broken VALUES (1,'K-1','b')");
     }
-    given().config(YAML_CFG).headers(TestIdentity.tenantAndUser(1))
+    given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(BROKEN_FIRST_MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
 

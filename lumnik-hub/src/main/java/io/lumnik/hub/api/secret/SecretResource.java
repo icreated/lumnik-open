@@ -2,6 +2,7 @@ package io.lumnik.hub.api.secret;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.secret.PgcryptoSecretResolver;
 import io.lumnik.hub.secret.SecretEvents;
 import io.lumnik.hub.secret.SecretRepository;
@@ -83,9 +84,10 @@ public class SecretResource {
                 .entity(Map.of("error", "name and value required")).build();
         }
 
+        // Through ApiErrors, which sets the content type this door was missing: the CLI's create →
+        // 409 → update fallback reads the status, but anything reading the body got it undressed.
         if (repo.findByName(tid, req.name()).isPresent()) {
-            return Response.status(Response.Status.CONFLICT)
-                .entity(Map.of("error", "secret with this name already exists")).build();
+            return ApiErrors.conflict("secret with this name already exists");
         }
 
         // Encrypt via pgcrypto in-DB. The id is generated here (not gen_random_uuid() in SQL) so

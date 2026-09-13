@@ -37,7 +37,7 @@ func TestJdbcAddReturnsCreatedEntries(t *testing.T) {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		_ = json.NewEncoder(w).Encode(JdbcAddResponse{
-			Created: []JdbcAddEntry{{ConnectorName: "x", MappingName: "y"}},
+			Created: []JdbcAddEntry{{ConnectorName: "x"}},
 		})
 	}))
 	defer srv.Close()
@@ -52,21 +52,29 @@ func TestJdbcAddReturnsCreatedEntries(t *testing.T) {
 	}
 }
 
-func TestJdbcDiscoverSendsSchema(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var got JdbcDiscoverRequest
-		_ = json.NewDecoder(r.Body).Decode(&got)
-		if got.Schema != "myschema" {
-			t.Errorf("schema not forwarded: %s", got.Schema)
-		}
-		_ = json.NewEncoder(w).Encode(JdbcDiscoverResponse{Tables: []JdbcTable{{Name: "t1"}}})
-	}))
-	defer srv.Close()
-
-	c := New(config.Context{Server: srv.URL})
-	resp, err := c.JdbcDiscover(JdbcDiscoverRequest{Schema: "myschema"})
-	if err != nil || len(resp.Tables) != 1 {
-		t.Fatalf("unexpected: %+v err=%v", resp, err)
+func TestJdbcRequestsSendSchema(t *testing.T) {
+	cases := []struct {
+		name string
+		call func(c *Client) error
+	}{
+		{"discover", func(c *Client) error { _, err := c.JdbcDiscover(JdbcDiscoverRequest{Schema: "erp"}); return err }},
+		{"add", func(c *Client) error { _, err := c.JdbcAdd(JdbcAddRequest{SourceName: "s", Schema: "erp"}); return err }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var got map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&got)
+				if got["schema"] != "erp" {
+					t.Errorf("schema not forwarded: %v", got["schema"])
+				}
+				_, _ = w.Write([]byte("{}"))
+			}))
+			defer srv.Close()
+			if err := tc.call(New(config.Context{Server: srv.URL})); err != nil {
+				t.Fatalf("unexpected: %v", err)
+			}
+		})
 	}
 }
 

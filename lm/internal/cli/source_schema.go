@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 
+	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -21,6 +22,12 @@ func newSourceSchemaCmd() *cobra.Command {
 				return err
 			}
 			out := cmd.OutOrStdout()
+			// -o is a persistent root flag, so it arrives here whether or not this command
+			// looks at it. The card is nested (scope -> tables -> columns) and is the input of
+			// the manifest-generation loop, so the machine formats hand back the card itself.
+			if format, _ := cmd.Flags().GetString("output"); format != "table" {
+				return output.PrintObject(out, format, card)
+			}
 			fmt.Fprintf(out, "scope: %s\n", card.Scope)
 			if len(card.Tables) == 0 {
 				fmt.Fprintln(out, "(no tables — run 'lm source rediscover --scope "+scope+"')")

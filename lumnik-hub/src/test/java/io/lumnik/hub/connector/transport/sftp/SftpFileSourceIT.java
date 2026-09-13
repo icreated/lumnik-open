@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.transport.sftp;
 
+import io.lumnik.hub.connector.secret.SecretRefs;
 import io.lumnik.hub.connector.transport.AfterProcessAction;
 import org.apache.sshd.client.SshClient;
 import org.apache.sshd.client.session.ClientSession;
@@ -12,7 +13,6 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Map;
-import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -47,7 +47,7 @@ class SftpFileSourceIT {
 
     @Test
     void list_open_delete_round_trip() throws Exception {
-        var factory = new SftpFileSourceFactory((Function<String, String>) name -> null);
+        var factory = new SftpFileSourceFactory(SecretRefs.environmentOnly(name -> null));
         var source = (SftpFileSource) factory.build(Map.of(
             "host", "localhost",
             "port", port,
@@ -75,7 +75,7 @@ class SftpFileSourceIT {
 
     @Test
     void openAt_uses_a_positioned_handle_read_to_start_exactly_at_the_requested_byte_offset() throws Exception {
-        var factory = new SftpFileSourceFactory((Function<String, String>) name -> null);
+        var factory = new SftpFileSourceFactory(SecretRefs.environmentOnly(name -> null));
         var source = (SftpFileSource) factory.build(Map.of(
             "host", "localhost",
             "port", port,

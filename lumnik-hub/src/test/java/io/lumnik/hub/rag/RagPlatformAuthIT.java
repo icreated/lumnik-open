@@ -23,7 +23,7 @@ import static org.hamcrest.Matchers.containsString;
  * inside {@code RagResourceIT}, where failsafe's {@code **}{@code /*IT.java} discovery never found
  * it: the suite reported {@code RagResourceIT} with 2 tests, and this one had NEVER RUN. Being dead
  * is also what let it keep a wrong expectation — it asserted 403 for an ANONYMOUS request, which the
- * filter answers 401. Its sibling {@code RagSchemaResourceClosedIT} had already hit and documented
+ * filter answers 401. Its sibling {@code SchemaCardAdminAuthIT} had already hit and documented
  * that same 403 → 401 correction; a test that cannot fail cannot carry the lesson.
  *
  * @see io.lumnik.hub.auth.PlatformAuthIT the same distinction, made correctly all along

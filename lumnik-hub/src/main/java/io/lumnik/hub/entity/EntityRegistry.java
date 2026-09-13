@@ -1,18 +1,22 @@
 package io.lumnik.hub.entity;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.quarkus.agroal.DataSource;
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 
+import java.sql.Array;
 import java.sql.Connection;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 @ApplicationScoped
@@ -81,6 +85,31 @@ public class EntityRegistry {
       m = find(name);
     }
     return m;
+  }
+
+  /**
+   * The scopes STORED on this name, read from the row rather than from the map, or empty when the
+   * name is free — the apply door's re-homing check ({@code ApplyScopeBoundary}).
+   *
+   * <p>Not {@link #findReloadingIfMissing}: that answers from the cache whenever the key is present,
+   * and a cache HIT is exactly the stale case here. Another hub instance may have re-applied the
+   * entity into a different scope set, and this map would still hold the old one — a security
+   * decision must not be made on a copy that can be behind. A cold-path read on apply.
+   *
+   * <p>An empty list is a real answer (a scopeless entity), distinct from an absent row.
+   */
+  public Optional<List<String>> storedScopes(String name) {
+    if (name == null) return Optional.empty();
+    return Jdbc.queryOne(adminDsInstance.get(), "EntityRegistry.storedScopes",
+        "SELECT scopes FROM connector.entity_manifest WHERE name = ?",
+        ps -> ps.setString(1, name.toLowerCase(Locale.ROOT)),
+        rs -> {
+          Array arr = rs.getArray(1);
+          if (arr == null) return List.of();
+          // Arrays.asList, not List.of: a NULL element in the text[] would make List.of throw, and
+          // a malformed row must be REFUSED (allowsAll sees a tag nobody holds), not answered 500.
+          return Arrays.asList((String[]) arr.getArray());
+        });
   }
 
   /** Drop a manifest from the in-memory map (its row is removed from the DB by the compiler). */

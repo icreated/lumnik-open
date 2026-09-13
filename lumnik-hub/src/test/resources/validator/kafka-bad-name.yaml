@@ -1,0 +1,12 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: acme-events
+  connector_type: kafka
+spec:
+  # `9orders` cannot become `connector.t_9orders` — an identifier may not start with a digit.
+  # Measured at the kafka bench (campaign of 2026-09-11): it validated clean, then applied as a 500.
+  name: 9orders
+  brokers: "broker1:9092"
+  topic: acme.orders
+  format: json

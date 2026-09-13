@@ -1,28 +1,5 @@
 package client
 
-// RagSearchHit is one scored hit from the v1 RAG search endpoint.
-type RagSearchHit struct {
-	Score   float64 `json:"score"`
-	Snippet string  `json:"snippet"`
-	Source  string  `json:"source"`
-}
-
-// RagSearchResult wraps the hits returned by RagSearch.
-type RagSearchResult struct {
-	Results []RagSearchHit `json:"results"`
-}
-
-// RagSearch runs a similarity search over the RAG corpus via
-// POST /api/platform/rag/search, returning up to topK hits.
-func (c *Client) RagSearch(query string, topK int) (*RagSearchResult, error) {
-	var out RagSearchResult
-	body := map[string]any{"query": query, "topK": topK}
-	if err := c.POST("/api/platform/rag/search", body, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
-}
-
 // RagStatus reports the RAG index's corpus size (chunk count) and when it was
 // last reindexed.
 type RagStatus struct {
@@ -44,20 +21,24 @@ func (c *Client) RagReindex() error {
 	return c.POST("/api/platform/rag/reindex", map[string]any{}, nil)
 }
 
-// === RAG Hub v2 (platform endpoints) ===
-
-// RagSearchHitV2 is one scored search result from the v2 RAG search endpoint,
-// keyed to the source row's content hash, with its indexed metadata attached.
-type RagSearchHitV2 struct {
+// RagSearchHit is one scored search result from the RAG search endpoint. Ref
+// names the chunk whatever it is — the row hash for an ingested row,
+// workflow/<name> for a declared lifecycle; RowHash is empty unless it IS a row.
+//
+// A second struct spelled score/snippet/source used to sit beside this one and
+// decode the very same endpoint, so `lm rag search` rendered a zero score and two
+// empty columns for every hit (#484). One endpoint, one struct.
+type RagSearchHit struct {
 	RowHash    string         `json:"rowHash"`
+	Ref        string         `json:"ref"`
 	Content    string         `json:"content"`
 	Similarity float64        `json:"similarity"`
 	Metadata   map[string]any `json:"metadata"`
 }
 
-// RagSearchResponseV2 wraps the hits returned by RagSearchV2.
-type RagSearchResponseV2 struct {
-	Results []RagSearchHitV2 `json:"results"`
+// RagSearchResponse wraps the hits returned by RagSearch.
+type RagSearchResponse struct {
+	Results []RagSearchHit `json:"results"`
 }
 
 // RagChatResponse is the hub's answer to a RAG chat question, with citations
@@ -74,14 +55,14 @@ type RagCorpus struct {
 	ChunkCount int64  `json:"chunkCount"`
 }
 
-// RagSearchV2 runs a similarity search over corpus (or the default corpus when
+// RagSearch runs a similarity search over corpus (or the default corpus when
 // empty) via POST /api/platform/rag/search, returning up to topK hits.
-func (c *Client) RagSearchV2(query string, topK int, corpus string) (*RagSearchResponseV2, error) {
+func (c *Client) RagSearch(query string, topK int, corpus string) (*RagSearchResponse, error) {
 	body := map[string]any{"query": query, "topK": topK}
 	if corpus != "" {
 		body["corpus"] = corpus
 	}
-	var out RagSearchResponseV2
+	var out RagSearchResponse
 	if err := c.POST("/api/platform/rag/search", body, &out); err != nil {
 		return nil, err
 	}
@@ -90,16 +71,13 @@ func (c *Client) RagSearchV2(query string, topK int, corpus string) (*RagSearchR
 
 // RagChat asks a natural-language question over corpus (or the default corpus
 // when empty) via POST /api/platform/rag/chat, returning a cited answer.
+//
+// Unscoped: the server answers from the caller's own default scope. It used to
+// build the same request body as RagChatScoped minus the one key — two functions
+// posting to one endpoint, so the next field added to the body would land in one
+// and be missed by the other.
 func (c *Client) RagChat(question string, corpus string, topK int) (*RagChatResponse, error) {
-	body := map[string]any{"question": question, "topK": topK}
-	if corpus != "" {
-		body["corpus"] = corpus
-	}
-	var out RagChatResponse
-	if err := c.POSTSlow("/api/platform/rag/chat", body, &out); err != nil {
-		return nil, err
-	}
-	return &out, nil
+	return c.RagChatScoped(question, corpus, "", topK)
 }
 
 // RagCorpora lists the RAG corpora available to the caller via

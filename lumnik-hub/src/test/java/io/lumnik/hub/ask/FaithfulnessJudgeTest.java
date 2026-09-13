@@ -106,7 +106,9 @@ class FaithfulnessJudgeTest {
     assertThat(prompt.getValue())
         .contains("how many in Lyon?")
         .contains("SELECT count(*) FROM connector.v_customer")
-        .contains("connector.v_customer") // the schema (card.toPrompt) is included
+        // The CARD is included, and this must be a line only the card can produce: `v_customer` alone
+        // is already inside the SQL asserted above, so it could not have failed on its own.
+        .contains("TABLE \"connector\".\"v_customer\"")
         .containsIgnoringCase("LIMIT") // tells the judge the auto-injected safety LIMIT is not an unfaithfulness
         .containsIgnoringCase("LEFT JOIN"); // the JOIN-TYPE hint: "each X" + INNER drops unmatched X = unfaithful
   }

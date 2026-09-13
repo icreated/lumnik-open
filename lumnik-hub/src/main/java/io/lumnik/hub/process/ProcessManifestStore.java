@@ -59,6 +59,29 @@ public class ProcessManifestStore {
         }, rs -> rs.getString(1));
     }
 
+    /** Removes one process for good. Existence is the caller's question, answered by findScope. */
+    public void delete(long tenantId, String name) {
+        String sql = "DELETE FROM core.process_manifest WHERE tenant_id = ? AND name = ?";
+        Jdbc.update(adminDs, "ProcessManifestStore.delete", sql, ps -> {
+            ps.setLong(1, tenantId);
+            ps.setString(2, name);
+        });
+    }
+
+    /**
+     * Flips the {@code enabled} column — the switch that decided whether a process fires and had
+     * no hand to reach it. Like {@link #delete}, existence is already the caller's question.
+     */
+    public void setEnabled(long tenantId, String name, boolean enabled) {
+        String sql = "UPDATE core.process_manifest SET enabled = ?, updated_at = NOW() "
+            + "WHERE tenant_id = ? AND name = ?";
+        Jdbc.update(adminDs, "ProcessManifestStore.setEnabled", sql, ps -> {
+            ps.setBoolean(1, enabled);
+            ps.setLong(2, tenantId);
+            ps.setString(3, name);
+        });
+    }
+
     public List<StoredProcess> listByTenant(long tenantId) {
         return query("SELECT yaml_text, enabled FROM core.process_manifest WHERE tenant_id = ? ORDER BY name",
                 ps -> ps.setLong(1, tenantId));

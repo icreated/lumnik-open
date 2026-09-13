@@ -4,11 +4,9 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
+import io.lumnik.hub.testsupport.YamlBody;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import io.restassured.specification.RequestSpecification;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,10 +36,6 @@ import static org.hamcrest.Matchers.hasSize;
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class WorkflowRlsIT {
 
-    private static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config()
-        .encoderConfig(EncoderConfig.encoderConfig()
-            .encodeContentTypeAs("application/yaml", ContentType.TEXT));
-
     private static final String YAML = """
         apiVersion: apps.lumnik.io/v1
         kind: Workflow
@@ -68,7 +62,7 @@ class WorkflowRlsIT {
     }
 
     private static RequestSpecification as(String tenant) {
-        return given().config(YAML_CFG).header("X-Tenant-ID", tenant).header("X-User-ID", tenant);
+        return given().config(YamlBody.CONFIG).header("X-Tenant-ID", tenant).header("X-User-ID", tenant);
     }
 
     /** Count inside a tenant GUC transaction — the same idiom as ConnectorRunRlsIT. */

@@ -3,10 +3,13 @@ package io.lumnik.hub.workflow;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.extraction.spi.ExtractionSink;
+import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.rag.chunk.WorkflowChunkBuilder;
+import io.lumnik.hub.sql.SqlFailureText;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.inject.Instance;
@@ -22,7 +25,6 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
-import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -87,6 +89,13 @@ public class WorkflowApplyResource {
             return ApiErrors.scopeNotGranted();
         }
 
+        // …and the NAME is the other half of the address. store.upsert conflicts on
+        // (tenant_id, name) and sets scope = EXCLUDED.scope, so declaring into a scope you hold
+        // under a name that belongs to one you do not would re-home that lifecycle — manifest,
+        // chunk and observation ledger — into a métier its owner does not hold. Same words as the
+        // check above, so the two refusals are indistinguishable (#509).
+        ApplyScopeBoundary.refuseUnlessCallerHoldsScope(store.findScope(tenant, m.name()));
+
         // The scope must be a real, discovered scope. A typo'd `scope: demoo` used to be
         // accepted in silence: 200, clean report — and a chunk tagged with a scope nobody
         // holds, so every scope-bound user never retrieves it and the chat resumes inventing
@@ -97,21 +106,39 @@ public class WorkflowApplyResource {
         // doors answering the identical condition ("this scope has no schema card yet") with
         // different status codes is the drift that makes an integrator — and lm — special-case
         // one kind for no reason. kind:Workflow is kind:Process's sibling in the same house.
-        if (cards.load(tenant, m.scope()).isEmpty()) {
+        Optional<SchemaCard> card = cards.load(tenant, m.scope());
+        if (card.isEmpty()) {
             return Response.status(404).entity(ApiErrors.error(
                 "no schema for scope '" + m.scope() + "' — run discovery first")).build();
+        }
+
+        // …and the table must not belong to a métier this caller does not hold. The scope check
+        // above answers "may you declare INTO this scope"; it says nothing about which table you
+        // then point at, so a scope-bound integrator could name another métier's ingest table and
+        // read up to LIMIT distinct values of any column of it out of the data-truth report below.
+        // The sibling door already refuses this — ViewResolver.findTable resolves the table against
+        // the scope's card — and a workflow had no equivalent.
+        //
+        // Three cases, and only the third is refused, which is what keeps declaring-before-ingesting
+        // legal: the table is in MY card (fine), in NO card (fine — it may simply not be ingested
+        // yet, the `tableMissing` case), or in someone else's alone (refused). A table may appear in
+        // several cards, so "mine" is checked first rather than inferred from the other query.
+        if (!card.get().tableNames().contains(m.table())
+                && cards.findOtherScopeAdvertising(tenant, m.scope(), m.table()).isPresent()) {
+            return Response.status(400).entity(ApiErrors.error(
+                "spec.on.table " + m.table() + " belongs to another métier's scope — a workflow may "
+                    + "only watch a table of its own scope. Declare it in the scope that owns the "
+                    + "table, or point at a table of '" + m.scope() + "'")).build();
         }
 
         // A column has exactly one lifecycle. Without this, renaming a workflow and re-applying
         // leaves the old manifest AND its chunk alive: two declared graphs over the same column,
         // both retrieved, and the chat must choose — the confident-wrong failure this feature
         // exists to prevent.
-        Optional<String> owner = store.findOtherOnColumn(tenant, m.table(), m.column(), m.name());
+        Optional<WorkflowManifestStore.ColumnOwner> owner =
+            store.findOtherOnColumn(tenant, m.table(), m.column(), m.name());
         if (owner.isPresent()) {
-            return Response.status(400).entity(ApiErrors.error(
-                "column " + m.table() + "." + m.column() + " already has a declared lifecycle: "
-                    + "workflow '" + owner.get() + "' — a column has exactly one lifecycle; "
-                    + "re-apply under the name '" + owner.get() + "' to update it")).build();
+            return ApiErrors.badRequest(columnTaken(m, owner.get()));
         }
 
         // store.upsert / truth.check throw a bare RuntimeException on anything beyond the
@@ -154,16 +181,36 @@ public class WorkflowApplyResource {
         }
     }
 
+    /**
+     * The refusal for a column that already carries a lifecycle — and how much of the owner it
+     * may say.
+     *
+     * <p>The NAME is what makes this actionable ("re-apply under that name to update it"), and it
+     * is also a name out of another métier's card when the caller does not hold the owner's scope.
+     * {@code WorkflowManifestStore.findOtherOnColumn} says why the lookup itself cannot be
+     * scope-filtered; the consequence is that the boundary is drawn here, in the wording (#516).
+     * Reaching it at all takes a table advertised in BOTH cards: the check just above refuses a
+     * table that belongs only to another scope.
+     *
+     * <p>The foreign branch still says the column is taken and by a métier the caller does not
+     * hold, because a refusal that named nothing would send an integrator to guess the name and
+     * meet a 403 there instead. Naming "another métier's scope" is the same disclosure the table
+     * check above already makes at this very door.
+     */
+    private static String columnTaken(WorkflowManifest m, WorkflowManifestStore.ColumnOwner owner) {
+        String head = "column " + m.table() + "." + m.column() + " already has a declared lifecycle";
+        if (!ScopeGrants.allows(owner.scope())) {
+            return head + ", in a métier you do not hold — a column has exactly one lifecycle; "
+                + "ask the integrator who owns that scope, or watch another column";
+        }
+        return head + ": workflow '" + owner.name() + "' — a column has exactly one lifecycle; "
+            + "re-apply under the name '" + owner.name() + "' to update it";
+    }
+
     private static final String UNIQUE_VIOLATION_SQLSTATE = "23505";
 
     private static boolean isUniqueViolation(Throwable e) {
-        for (Throwable t = e; t != null; t = t.getCause()) {
-            if (t instanceof SQLException se
-                && UNIQUE_VIOLATION_SQLSTATE.equals(se.getSQLState())) {
-                return true;
-            }
-        }
-        return false;
+        return UNIQUE_VIOLATION_SQLSTATE.equals(SqlFailureText.sqlStateOf(e));
     }
 
     @GET

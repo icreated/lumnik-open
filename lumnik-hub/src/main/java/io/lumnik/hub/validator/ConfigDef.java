@@ -36,6 +36,27 @@ public final class ConfigDef {
         return this;
     }
 
+    /**
+     * An optional field whose TYPE refusal carries a hint. {@code requireEnum} could always word
+     * its own refusal; {@code optional} could not, so a block that wanted to teach the shape of
+     * its value had to repeat the type check by hand in a cross-field rule — and then one mistake
+     * came back as two errors ({@code spec.headers}, {@code spec.target.indexes}). The
+     * declaration owns the shape; this is how it keeps the sentence that made the refusal useful.
+     */
+    public ConfigDef optionalHinted(String name, Type type, Importance imp, String doc,
+                                     Object defaultValue, String hint) {
+        // Fail fast and say what to do instead: a null hint is not a hintless hinted field, it is
+        // a call that meant optional(). Without this, List.of(null) throws from inside the JDK at
+        // the first validate request — an NPE whose stack trace names neither the key nor this
+        // method. Coercing null to no recommendations would be the wrong mercy: it would ship a
+        // refusal that teaches nothing, which is the silence this whole key-set work removes.
+        Objects.requireNonNull(hint, () -> "optionalHinted(\"" + name + "\") needs a hint — "
+            + "call optional() when the type refusal needs no sentence of its own");
+        fields.put(name, new FieldSpec(name, type, imp, doc, defaultValue, false, null, null,
+            List.of(hint), null));
+        return this;
+    }
+
     public ConfigDef requireEnum(String name, Importance imp, String doc, String... allowed) {
         Function<JsonNode, Optional<String>> v = node -> {
             String s = node.asText();
@@ -50,6 +71,17 @@ public final class ConfigDef {
 
     public ConfigDef requireNested(String name, Importance imp, String doc, ConfigDef sub) {
         fields.put(name, new FieldSpec(name, Type.NESTED, imp, doc, null, true, null, null, List.of(), sub));
+        return this;
+    }
+
+    /**
+     * A block that may be omitted, with its key set attached. Without this, an optional block can
+     * only be declared as {@code optional(name, Type.NESTED, …)} — which leaves {@code nested} null,
+     * so {@link ConfigDefRunner}'s recursion (and the unknown-key sweep with it) is unreachable for
+     * the whole block, and the sweep has to be called by hand from a cross-field rule instead.
+     */
+    public ConfigDef optionalNested(String name, Importance imp, String doc, ConfigDef sub) {
+        fields.put(name, new FieldSpec(name, Type.NESTED, imp, doc, null, false, null, null, List.of(), sub));
         return this;
     }
 

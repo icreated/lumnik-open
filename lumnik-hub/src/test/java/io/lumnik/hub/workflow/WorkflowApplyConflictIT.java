@@ -2,11 +2,9 @@ package io.lumnik.hub.workflow;
 
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.testsupport.YamlBody;
 import io.quarkus.test.InjectMock;
 import io.quarkus.test.junit.QuarkusTest;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -32,10 +30,6 @@ import static org.hamcrest.Matchers.containsString;
 class WorkflowApplyConflictIT {
 
     private static final String TENANT = "7305";
-
-    private static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config()
-        .encoderConfig(EncoderConfig.encoderConfig()
-            .encodeContentTypeAs("application/yaml", ContentType.TEXT));
 
     private static final String YAML = """
         apiVersion: apps.lumnik.io/v1
@@ -70,7 +64,7 @@ class WorkflowApplyConflictIT {
         Mockito.doThrow(new RuntimeException("WorkflowManifestStore.upsert: " + unique.getMessage(), unique))
             .when(store).upsert(Mockito.anyLong(), Mockito.any(), Mockito.anyString());
 
-        given().config(YAML_CFG).header("X-Tenant-ID", TENANT).header("X-User-ID", "1")
+        given().config(YamlBody.CONFIG).header("X-Tenant-ID", TENANT).header("X-User-ID", "1")
             .contentType("application/yaml").body(YAML)
             .when().post("/api/workflows/apply")
             .then().statusCode(400)

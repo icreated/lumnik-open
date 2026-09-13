@@ -9,6 +9,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 import java.util.List;
@@ -132,6 +133,44 @@ class AskToSqlAgentIT {
                 new SchemaCard.Column("name", "text", "Name"))))));
     }
 
+    /**
+     * The whole chain over names the source chose, which is the part no unit test reaches: the card is
+     * SAVED and reloaded (a JSON round trip through {@code SchemaCardStore}) before the prompt is built,
+     * the guards see a quoted name and must pass it through untouched, and Postgres keys the answer's
+     * row by the source's own name. Why those three names, and what a bare rendering did to them, is on
+     * {@code SchemaCard}'s renderer and in {@code SchemaCardToPromptTest}.
+     */
+    @Test
+    void aColumnNameTheSourceChoseIsAskableEndToEnd() {
+        agent.seedDdl("CREATE TABLE IF NOT EXISTS connector.t_kafka_orders "
+            + "(documentno text, \"c_bpartner.id\" text, \"Partner Name\" text)");
+        agent.seedDdl("TRUNCATE connector.t_kafka_orders");
+        agent.seedDdl("INSERT INTO connector.t_kafka_orders VALUES ('SO-9', 'BP-7', 'Grand Compte')");
+        store.save(7L, "kafka", new SchemaCard("kafka", List.of(
+            new SchemaCard.Table("connector.t_kafka_orders", "Kafka Orders", List.of(
+                new SchemaCard.Column("documentno", "text", "Document No"),
+                new SchemaCard.Column("c_bpartner.id", "text", "c_bpartner.id"),
+                new SchemaCard.Column("Partner Name", "text", "Partner Name"))))));
+        Mockito.when(chatPort.chat(Mockito.anyString()))
+            .thenReturn("SELECT \"Partner Name\", \"c_bpartner.id\" FROM \"connector\".\"t_kafka_orders\"")
+            .thenReturn("One order, for Grand Compte.");
+
+        AskResult r = agent.ask(7L, "kafka", "list the partner name and its id");
+
+        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
+        Mockito.verify(chatPort, Mockito.atLeastOnce()).chat(prompt.capture());
+        assertThat(prompt.getAllValues().get(0))
+            .as("the STORED card, reloaded, must still render a name the model can copy into SQL")
+            .contains("\"c_bpartner.id\" text")
+            .contains("\"Partner Name\" text")
+            .contains("TABLE \"connector\".\"t_kafka_orders\"");
+        assertThat(r.rowCount()).as("the guards must pass a quoted name through untouched").isEqualTo(1);
+        assertThat(r.rows().get(0))
+            .as("the row keys are the source's own names, not a sanitized echo")
+            .containsEntry("c_bpartner.id", "BP-7")
+            .containsEntry("Partner Name", "Grand Compte");
+    }
+
     @Test
     void rejectedSqlDegradesCleanlyWithoutRunning() {
         Mockito.when(chatPort.chat(Mockito.anyString()))
@@ -221,7 +260,7 @@ class AskToSqlAgentIT {
 
         AskResult r = agent.ask(7L, "demo", "what is the meaning of life?");
 
-        assertThat(r.answer()).isEqualTo(AbstentionGuard.CANNOT_ANSWER_MESSAGE);
+        assertThat(r.answer()).startsWith(AbstentionGuard.CANNOT_ANSWER_MESSAGE);
         assertThat(r.rowCount()).isEqualTo(0);
         Mockito.verify(chatPort, Mockito.times(1)).chat(Mockito.anyString()); // gen only, never phrasing
     }

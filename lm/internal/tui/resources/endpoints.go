@@ -122,6 +122,8 @@ func endpointStatusColor(status string) tcell.Color {
 		return tcell.NewRGBColor(0xEF, 0x44, 0x44) // red
 	case KindRunning:
 		return tcell.NewRGBColor(0xFF, 0x8C, 0x00) // amber
+	case KindPartial:
+		return tcell.NewRGBColor(0xEA, 0xB3, 0x08) // yellow — finished, but not whole
 	case KindCancelled:
 		return tcell.NewRGBColor(0x6B, 0x72, 0x80) // gray — didn't finish
 	}

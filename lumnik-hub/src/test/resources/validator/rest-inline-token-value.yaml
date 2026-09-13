@@ -1,0 +1,27 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: stripe-inline-token
+  connector_type: rest-generic
+  scopes: [crm, customers]
+spec:
+  base_url: https://api.stripe.com
+  auth:
+    kind: bearer
+    token_value: dev-only-literal-token-not-a-name
+  endpoints:
+    - id: customers
+      path: /v1/customers
+      method: GET
+      pagination:
+        kind: page
+        page_param: page
+        size_param: size
+        size: 100
+        start_page: 1
+        has_more_path: $.has_more
+        response_path: $.data
+      target:
+        kind: hybrid
+        table: stripe_customers
+        unique_key: $.id

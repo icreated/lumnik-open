@@ -91,7 +91,7 @@ class ChunkAccountingIT {
         TenantContext.runAsSystem(() -> {
             ConnectorRun run = fixture();
             ChunkResult res = exec.executeChunk(run, typeReturning(outcome, finalChunk), endpointOf(run),
-                                                ConnectorCursor.empty());
+                                                ConnectorCursor.empty(), null);
             ConnectorRun after = runs.findById(run.getId());
 
             assertThat(after.getRecordsIn()).as("%s — records read", label).isEqualTo(BATCH);
@@ -116,7 +116,7 @@ class ChunkAccountingIT {
         TenantContext.runAsSystem(() -> {
             ConnectorRun run = fixture();
             ChunkResult res = exec.executeChunk(run, typeReturning(refused, finalChunk), endpointOf(run),
-                                                ConnectorCursor.empty());
+                                                ConnectorCursor.empty(), null);
 
             assertThat(res).as("%s — the chunk failed", label).isInstanceOf(ChunkResult.Failure.class);
             ConnectorRun after = runs.findById(run.getId());
@@ -171,7 +171,7 @@ class ChunkAccountingIT {
             long dlqBefore = deadLetters.count();
 
             exec.executeChunk(run, typeWithMalformed(good, malformed, finalChunk), endpointOf(run),
-                              ConnectorCursor.empty());
+                              ConnectorCursor.empty(), null);
             ConnectorRun after = runs.findById(run.getId());
 
             assertThat(after.getRecordsIn()).as("read = good + malformed").isEqualTo(good + malformed);
@@ -201,7 +201,7 @@ class ChunkAccountingIT {
         TenantContext.runAsSystem(() -> {
             ConnectorRun run = fixture();
             exec.executeChunk(run, typeWithCellErrors(cellErrors, finalChunk), endpointOf(run),
-                              ConnectorCursor.empty());
+                              ConnectorCursor.empty(), null);
             ConnectorRun after = runs.findById(run.getId());
 
             assertThat(after.getCellErrors()).as("the cell tally is folded in exactly once")
@@ -230,7 +230,7 @@ class ChunkAccountingIT {
             long dlqBefore = deadLetters.count();
 
             exec.executeChunk(run, typeEmptyButOpenWithMalformed(malformed), endpointOf(run),
-                              ConnectorCursor.empty());
+                              ConnectorCursor.empty(), null);
             ConnectorRun after = runs.findById(run.getId());
 
             assertThat(after.getRecordsIn()).as("the malformed rows WERE read").isEqualTo(malformed);

@@ -119,11 +119,10 @@ func (d *DLQ) render() {
 		d.table.SetCell(row, 2, dataCell(shortDlqID(it.RunID)).SetExpansion(1))
 		d.table.SetCell(row, 3, dataCell(it.SkipReason).SetExpansion(1))
 		d.table.SetCell(row, 4, tview.NewTableCell(fmt.Sprintf("%d", it.Attempts)).SetExpansion(1))
-		msg := it.ErrorMessage
-		if len(msg) > 60 {
-			msg = msg[:60] + "…"
-		}
-		d.table.SetCell(row, 5, dataCell(msg).SetExpansion(2))
+		// The same message, the same width, the same rule as `lm dlq list` — this used to slice
+		// BYTES and could cut a rune in half (#498).
+		d.table.SetCell(row, 5,
+			dataCell(output.Truncate(it.ErrorMessage, output.DlqMessageWidth)).SetExpansion(2))
 	}
 }
 

@@ -14,8 +14,9 @@ import (
 //
 // Law 1b: dlqCount <= recordsSkipped — the DLQ is a subset of skipped, never
 // more (dlq ⊆ skipped). It is not equality: deadLetterCount excludes benign
-// skip reasons (Duplicate/PolicyExcluded, per BENIGN_REASONS in
-// ConnectorDeadLetterRepository.countByRun), so a benign mapping drop is
+// skip reasons (Duplicate/PolicyExcluded, per SkipReason.BENIGN_NAMES — the
+// one home the hub keeps them in, read by countByRun, ChunkExecutor and
+// DeadLetterCapture alike), so a benign mapping drop is
 // skipped but never dead-lettered. A violation here (dlq > skipped) means the
 // DLQ holds rows the skip counter never counted. HIGH.
 //

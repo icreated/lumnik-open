@@ -6,6 +6,8 @@ import io.lumnik.hub.connector.persistence.converters.JsonNodeConverter;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.Mutability;
+import io.lumnik.hub.connector.persistence.converters.ImmutableJsonNodePlan;
 import org.hibernate.annotations.ColumnTransformer;
 
 import java.time.Instant;
@@ -30,6 +32,7 @@ public class ConnectorCursorEntity extends TenantedEntity {
   private UUID connectorId;
 
   @Convert(converter = JsonNodeConverter.class)
+  @Mutability(ImmutableJsonNodePlan.class)
   @Column(name = "cursor_value", nullable = false, columnDefinition = "jsonb")
   @ColumnTransformer(write = "?::jsonb", read = "cursor_value::text")
   private JsonNode cursorValue;

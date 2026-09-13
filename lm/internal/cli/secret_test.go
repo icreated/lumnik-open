@@ -133,3 +133,38 @@ func TestSecretRm_Force(t *testing.T) {
 		t.Errorf("unexpected output: %s", buf.String())
 	}
 }
+
+// `lm secret list -o json` is the pre-flight a pipeline runs before an apply: are the secrets
+// this environment references actually set? -o being a persistent root flag, it was accepted
+// here and ignored, so a pipeline asking for JSON got a column-aligned page instead.
+//
+// The second assertion is the one that matters more: a value must not travel even when the
+// server sends one. SecretMeta has no value field, so the decode drops it — this pins that,
+// because the day someone adds one for another reason, the leak would be silent and here.
+func TestSecretListHonoursJsonAndNeverCarriesAValue(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":"s1","name":"ERP_PASSWORD","description":"prod","rotatedAt":"2026-09-01T10:00:00Z","value":"hunter2"}]`))
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"secret", "list", "-o", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	var got []map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("-o json must emit parseable JSON, got %q: %v", buf.String(), err)
+	}
+	if len(got) != 1 || got[0]["name"] != "ERP_PASSWORD" {
+		t.Fatalf("the metadata must survive: %v", got)
+	}
+	if strings.Contains(buf.String(), "hunter2") {
+		t.Errorf("a secret value reached stdout: %s", buf.String())
+	}
+}

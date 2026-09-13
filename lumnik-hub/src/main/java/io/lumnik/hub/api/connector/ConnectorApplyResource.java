@@ -5,9 +5,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.api.connector.handler.ApplyResult;
 import io.lumnik.hub.api.connector.handler.ApplyUpsert;
 import io.lumnik.hub.api.connector.handler.ConnectorApplyHandler;
+import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.hub.validator.ConnectorValidationService;
 import io.lumnik.hub.validator.ValidationResult;
@@ -29,6 +31,7 @@ public class ConnectorApplyResource {
 
     @Inject ConnectorValidationService validationService;
     @Inject Instance<ConnectorApplyHandler> handlers;
+    @Inject ConnectorRepository connectors;
 
     @POST
     @Path("/apply")
@@ -58,6 +61,14 @@ public class ConnectorApplyResource {
             return ApiErrors.scopeNotGranted();
         }
 
+        // …and the NAME is the other half of the address. ApplyUpsert.connector finds this tenant's
+        // connector by (tenantId, name) and overwrites its tags, schedule, window and endpoints, so
+        // a caller who holds every scope they DECLARE can still take over a connector that lives in
+        // scopes they do not — or narrow it out of one by re-applying a subset. Same words as the
+        // check above, and before validation for the same reason (#509).
+        ApplyScopeBoundary.refuseUnlessCallerHolds(
+            connectors.scopesOf(tenant, doc.path(METADATA).path("name").asText()));
+
         ValidationResult vr = validationService.validate(doc);
         if (!vr.isValid()) return Response.status(400).entity(vr).build();
 
@@ -69,7 +80,10 @@ public class ConnectorApplyResource {
         }
 
         ApplyResult result = handler.apply(doc, tenant);
-        return Response.ok(result).build();
+        // The advisories the validator produced above ride the success body: on this path they
+        // have no other way out, and the one they warn about most — no scopes, so nothing the
+        // connector ingests is askable in any métier — is silent everywhere else (#531).
+        return Response.ok(result.withWarnings(vr.warnings())).build();
     }
 
     private ConnectorApplyHandler findHandler(String kind) {

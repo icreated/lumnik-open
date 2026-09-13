@@ -18,6 +18,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
+import static io.lumnik.hub.sql.SqlIdentifiers.quoteTable;
 import static io.lumnik.hub.workflow.WorkflowManifestParser.norm;
 
 /**
@@ -27,8 +29,9 @@ import static io.lumnik.hub.workflow.WorkflowManifestParser.norm;
  * Runs on the READONLY (RLS-enforced) datasource under the caller's tenant — the check must
  * never see another tenant's values, and a report has no business holding a writable
  * connection. Same idiom as ViewDataReader. Caller must be @Transactional (SET LOCAL
- * precondition, see TenantRlsScope). Table/column identifiers are grammar-checked at parse
- * time (TABLE_RX/COLUMN_RX) — JDBC cannot bind an identifier, so the grammar is the guard.
+ * precondition, see TenantRlsScope). JDBC cannot bind an identifier, so every table and column
+ * is interpolated QUOTED (SqlIdentifiers) — the escaping is the guard, which is what lets a
+ * workflow watch the name the source actually chose ("Statut Commande", "MONTANT_€").
  */
 @ApplicationScoped
 public class WorkflowDataTruth {
@@ -51,9 +54,10 @@ public class WorkflowDataTruth {
      *        ingesting is a valid order of operations.
      * @param keyColumnMissing {@code spec.on.key} names a column the table does not have. Same
      *        "declared but not yet real" family as {@code tableMissing} — and the only signal a
-     *        typo'd key ever produces: it passes the identifier grammar, applies with a clean 200,
-     *        and then makes the dormancy sweep fail 42703 on every tick, in silence, forever.
-     *        Reported, never refused: declaring before ingesting is legitimate.
+     *        typo'd key ever produces: it applies with a clean 200, and then makes the dormancy
+     *        sweep fail 42703 on every tick, in silence, forever. Reported, never refused —
+     *        nothing at the door can tell a typo from a column not yet ingested, and declaring
+     *        before ingesting is legitimate.
      * @param checkUnavailable the confrontation could not be run at all (statement timeout,
      *        dropped column, revoked grant…). It means "we could not confront the data", NOT
      *        "the data agrees": the other fields of a degraded report are empty by ignorance.
@@ -93,10 +97,10 @@ public class WorkflowDataTruth {
     }
 
     private Observed confrontTheData(long tenantId, WorkflowGraph g) throws SQLException {
-        // Identifiers are parse-time grammar-guarded (TABLE_RX/COLUMN_RX) and the graph came from a
-        // re-parsed manifest — the standing injection invariant. Read-only datasource, tenant-scoped.
-        String sql = "SELECT " + g.column() + "::text AS v, COUNT(*) FROM " + g.table()
-            + " GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT " + LIMIT;
+        // Read-only datasource, tenant-scoped. Quoting keeps a hostile name a NAME, so the worst
+        // this statement can do is answer 42703 and degrade the report.
+        String sql = "SELECT " + quoteIdent(g.column()) + "::text AS v, COUNT(*) FROM "
+            + quoteTable(g.table()) + " GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT " + LIMIT;
         Map<String, Long> seen = new LinkedHashMap<>();
         long nullOrBlank = 0L;
         try (Connection c = readonlyDs.getConnection()) {
@@ -148,17 +152,26 @@ public class WorkflowDataTruth {
     }
 
     /**
-     * Does the table actually carry this column? Asked of the catalog, with BOUND parameters — a
+     * Does the table actually carry this column? Asked of the catalog with every part BOUND — a
      * {@code SELECT <key> FROM <table>} probe would answer by raising 42703, which aborts the
      * caller's transaction and would make the answer cost more than the question. Never throws for
      * "missing": absence of a row IS the answer.
+     *
+     * <p>Same shape as {@code ViewDetailReader.hasConflictsColumn}, and deliberately: three bound
+     * parameters mean no identifier appears in this statement at all, so the name being free costs
+     * nothing here. The alternative — {@code to_regclass(?)} — takes text but PARSES it as an
+     * identifier, and a bare fqn would then answer NULL for any table whose name is not
+     * lower-case-plain (measured on PG 16: {@code to_regclass('connector.t_Orders')} is NULL), i.e.
+     * a false {@code keyColumnMissing} on the one flag a typo'd key raises.
      */
     private static boolean hasColumn(Connection c, String table, String column) throws SQLException {
-        String sql = "SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass(?) "
-            + "AND attname = ? AND attnum > 0 AND NOT attisdropped";
+        int dot = table.indexOf('.');
+        String sql = "SELECT 1 FROM information_schema.columns "
+            + "WHERE table_schema = ? AND table_name = ? AND column_name = ?";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setString(1, table);
-            ps.setString(2, column);
+            ps.setString(1, dot < 0 ? "" : table.substring(0, dot));
+            ps.setString(2, dot < 0 ? table : table.substring(dot + 1));
+            ps.setString(3, column);
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next();
             }

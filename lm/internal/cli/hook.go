@@ -57,7 +57,11 @@ func newHookCmd() *cobra.Command {
 		Short: "Apply a hook from YAML file",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			file, _ := cmd.Flags().GetString("file")
-			payload, err := decodeManifest(file, "hook")
+			body, err := readManifest(cmd, file)
+			if err != nil {
+				return err
+			}
+			payload, err := decodeManifest(body, file, "hook")
 			if err != nil {
 				return err
 			}
@@ -73,7 +77,7 @@ func newHookCmd() *cobra.Command {
 			return nil
 		},
 	}
-	apply.Flags().StringP("file", "f", "", "Path to hook YAML")
+	apply.Flags().StringP("file", "f", "", "Path to hook YAML, or - for stdin")
 	_ = apply.MarkFlagRequired("file")
 	h.AddCommand(apply)
 

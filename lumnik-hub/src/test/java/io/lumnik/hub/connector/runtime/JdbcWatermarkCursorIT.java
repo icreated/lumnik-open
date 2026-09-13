@@ -30,37 +30,28 @@ import java.util.concurrent.Callable;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Characterises what ACTUALLY happens when a jdbc-generic connector is created with
- * {@code mode: watermark} but NO {@code watermark-column} — the exact shape of the live
- * legacy-ERP connectors (see /tmp/wc.json). This was investigated as the suspected cause of
- * the WOW Plan 3 runaway ([[project-wow-real-db-run]]); this test DISPROVES that hypothesis.
+ * A {@code jdbc-generic} endpoint with {@code mode: watermark} but NO {@code watermark_column} —
+ * the exact shape of the live legacy-ERP connectors that were suspected of causing the WOW Plan 3
+ * runaway. It is a misconfiguration {@code JdbcConnectorType.validateConfig} refuses at apply time;
+ * this test covers the rows that predate that check, or were written straight to the database.
  *
- * <p>Observed behaviour (proven by this test, stack captured in the run log):
- * <ul>
- *   <li><b>Chunk 1</b> (empty cursor): {@link JdbcQueryBuilder} emits no {@code WHERE}
- *       (hasCursor=false) and skips the watermark in {@code ORDER BY} (watermarkColumn==null),
- *       so it reads a full page and {@link JdbcChunkReader#buildNextCursor} stores a PK-only
- *       cursor (col=""). → {@code Success}.</li>
- *   <li><b>Chunk 2</b> (cursor now has a PK → hasCursor=true): the {@code WHERE} branch calls
- *       {@code dialect.quoteIdentifier(watermarkColumn)} with {@code null} →
- *       {@code IllegalArgumentException: identifier must not be null or blank}
- *       ({@code JdbcQueryBuilder:29} → {@code PostgresDialect.quoteIdentifier:28}). The
- *       {@code ChunkExecutor} catch turns it into {@code ChunkResult.Failure}.</li>
- * </ul>
+ * <p>Expected: the reader REFUSES on the first chunk, naming what is missing. The refusal reaches
+ * the engine as {@link ChunkResult.Failure} and the run is marked Failed — the misconfiguration is
+ * contained, not a runaway, and not a silent full scan either.
  *
- * <p>So the engine ingests ONE chunk then marks the run <b>Failed</b> — it does NOT loop
- * forever. The misconfiguration is contained (not a runaway), though the failure is cryptic
- * and late (chunk 2, not config time). The real runaway cause is therefore still elsewhere;
- * the proven-good path is {@link JdbcFullScanCursorIT} (full mode + valid PK, GREEN).
- *
- * <p>This test is GREEN: it asserts chunk 1 succeeds and chunk 2 fails fast with the
- * identifier error — a regression guard pinning the current (sub-optimal) behaviour.
+ * <p>History: containment used to be an ACCIDENT. Nothing refused anything; the {@code WHERE} branch
+ * simply called {@code quoteIdentifier(null)} on chunk 2 and the {@code IllegalArgumentException}
+ * ("identifier must not be null or blank") happened to fail the run. Generalising the query builder
+ * to a whole-key keyset removed that accident — the query became valid, and watermark mode quietly
+ * became a full scan. The refusal is explicit now, so that what contains this misconfiguration is a
+ * decision rather than a side effect.
  */
 @QuarkusTest
 class JdbcWatermarkCursorIT {
 
-    private static final int CHUNK = 500;
-    private static final int ROW_COUNT = 1200;   // > 2 * CHUNK → chunk 2 is a full page too
+    // A handful of rows: the reader refuses before it opens a connection, so the count only has
+    // to be non-zero — enough that a regression shows up as Success(processed > 0), not Success(0).
+    private static final int ROW_COUNT = 12;
 
     @Inject ChunkExecutor exec;
     @Inject ConnectorTypeRegistry registry;
@@ -145,25 +136,17 @@ class JdbcWatermarkCursorIT {
 
                 ConnectorType type = registry.find("jdbc-generic");
 
-                // Chunk 1 — empty cursor: reads a full page, builds a PK-only next cursor.
-                ChunkResult r1 = inTx(() -> exec.executeChunk(reload(run.getId()), type, endpoint, ConnectorCursor.empty()));
+                // Chunk 1 — the reader cannot page on a watermark it does not have, and says so
+                // instead of reading anything.
+                ChunkResult r1 = inTx(() -> exec.executeChunk(reload(run.getId()), type, endpoint, ConnectorCursor.empty(), null));
                 assertThat(r1)
-                    .as("chunk 1 should succeed (no WHERE yet): %s", r1)
-                    .isInstanceOf(ChunkResult.Success.class);
-                ChunkResult.Success s1 = (ChunkResult.Success) r1;
-                assertThat(s1.processed()).as("chunk 1 reads a full page").isEqualTo(CHUNK);
-
-                // Chunk 2 — fed chunk 1's PK cursor: the WHERE branch now needs the watermark
-                // identifier, which is null → fail fast (NOT an infinite re-read).
-                ChunkResult r2 = inTx(() -> exec.executeChunk(reload(run.getId()), type, endpoint, s1.nextCursor()));
-                assertThat(r2)
-                    .as("chunk 2 must fail fast (watermark mode + null watermark-column), "
-                        + "proving this misconfig is CONTAINED, not a runaway: %s", r2)
+                    .as("chunk 1 must refuse (watermark mode, no watermark_column), proving this "
+                        + "misconfig is CONTAINED — neither a runaway nor a silent full scan: %s", r1)
                     .isInstanceOf(ChunkResult.Failure.class);
-                ChunkResult.Failure f2 = (ChunkResult.Failure) r2;
-                assertThat(f2.message())
-                    .as("the failure is the null watermark identifier")
-                    .contains("null or blank");
+                ChunkResult.Failure f1 = (ChunkResult.Failure) r1;
+                assertThat(f1.message())
+                    .as("the refusal names the mode and the missing key: %s", f1.message())
+                    .contains("watermark").contains("watermark_column");
 
             } catch (Exception e) { throw new RuntimeException(e); }
         });

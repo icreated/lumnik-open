@@ -53,6 +53,17 @@ public final class ScopeGrants {
 
     private ScopeGrants() {}
 
+    /**
+     * The grants as a refusal log line renders them: sorted, so the same refusal always logs the
+     * same text (a Set renders in hash order), or {@code (unscoped)}. Every door that logs a scope
+     * refusal renders through here — one shape for the operator's SIEM rule.
+     */
+    public static String grantedForLog() {
+        return granted()
+            .map(g -> g.stream().sorted().collect(Collectors.joining(", ", "[", "]")))
+            .orElse("(unscoped)");
+    }
+
     /** Empty = unscoped user (tenant-wide); present = the bound set, prefix stripped. */
     public static Optional<Set<String>> granted() {
         Set<String> scopes = CurrentRolesHolder.get().stream()

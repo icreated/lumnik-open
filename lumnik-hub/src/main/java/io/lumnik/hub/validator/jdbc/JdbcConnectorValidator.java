@@ -8,6 +8,7 @@ import io.lumnik.hub.validator.ConfigDef.Importance;
 import io.lumnik.hub.validator.ConfigDef.Type;
 import io.lumnik.hub.validator.ConfigDefRunner;
 import io.lumnik.hub.validator.ConnectorValidator;
+import io.lumnik.hub.validator.JsonNodes;
 import io.lumnik.hub.validator.ValidationError;
 import io.lumnik.hub.validator.ValidationError.Severity;
 import io.lumnik.hub.validator.common.CronField;
@@ -41,18 +42,48 @@ public class JdbcConnectorValidator implements ConnectorValidator {
                 SourceBlockValidator.configDef())
             .optional("schedule", Type.STRING, Importance.MEDIUM,
                 "Cron expression for recurring ingestion", null)
+            // schedule's twin, read by the SHARED apply preamble (ApplyUpsert); declared and
+            // checked through WindowField, which owns both wordings for all four connector types.
+            .optional("window", Type.STRING, Importance.MEDIUM, WindowField.DOC, null)
             .requireNested("target", Importance.HIGH, "Target persistence",
-                TargetBlockValidator.configDef());
+                TargetBlockValidator.configDef())
+            .closed();
     }
 
     @Override
     public List<ValidationError> validateCrossField(JsonNode spec) {
         List<ValidationError> errs = new ArrayList<>();
         validateDialect(spec.path("connection"), errs);
+        adviseAgainstInlinePassword(spec.path("connection"), errs);
         validateTables(spec.path("defaults"), spec.path("source").path("tables"), errs);
-        validateSchedule(spec.path("schedule"), errs);
-        validateWindow(spec.path("window"), errs);
+        CronField.check(spec.path("schedule"), errs,
+            "Example: schedule: \"*/15 * * * *\" (every 15 minutes)");
+        WindowField.check(spec.path("window"), errs);
         return errs;
+    }
+
+    /**
+     * An inline credential that silently WINS: {@code resolvePassword} in {@code JdbcConnectorType}
+     * reads {@code password} before it looks at {@code password_env}, so a manifest that reads safe
+     * because it names an env var is overridden by a line above it. The precedence lived only in
+     * the field's own description, which nobody reads while editing YAML.
+     *
+     * <p>A warning, not a refusal: the field is a documented dev/test affordance and refusing it
+     * outside a dev profile would break it. What was missing is a mark at the moment it is used —
+     * and since #531 that mark survives {@code lm apply}, not just {@code lm validate}.
+     *
+     * <p>REST's {@code spec.auth.token_value} is the sibling inline credential and carries its own
+     * advisory. Overriding a twin is jdbc's alone: there, {@code token_env} is read first.
+     */
+    private void adviseAgainstInlinePassword(JsonNode conn, List<ValidationError> errs) {
+        // blankOrNull, not a bare presence check: resolvePassword skips an empty string and falls
+        // through to password_env, so an advisory there would claim a precedence that does not happen.
+        if (JsonNodes.blankOrNull(conn.path("password"))) return;
+        errs.add(new ValidationError("spec.connection.password", Severity.WARNING,
+            "plain-text password in the manifest — it takes precedence over password_env, "
+                + "so the secret that env var names is never read",
+            List.of("Remove it: password_env already names the env var the hub reads",
+                "Keep it only in a manifest that is never committed — dev/test")));
     }
 
     /** The URL scheme and the declared dialect must agree and name a dialect v1 supports. */
@@ -155,17 +186,4 @@ public class JdbcConnectorValidator implements ConnectorValidator {
         }
     }
 
-    private void validateSchedule(JsonNode sched, List<ValidationError> errs) {
-        if (sched.isMissingNode() || sched.isNull()) return;
-        CronField.validCron().apply(sched).ifPresent(msg ->
-            errs.add(new ValidationError("spec.schedule", Severity.ERROR, msg,
-                List.of("Example: schedule: \"*/15 * * * *\" (every 15 minutes)"))));
-    }
-
-    private void validateWindow(JsonNode window, List<ValidationError> errs) {
-        if (window.isMissingNode() || window.isNull()) return;
-        WindowField.validWindow().apply(window).ifPresent(msg ->
-            errs.add(new ValidationError("spec.window", Severity.ERROR, msg,
-                List.of("Example: window: \"22:00-06:00\" (UTC; scheduled runs are skipped outside it)"))));
-    }
 }

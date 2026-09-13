@@ -89,7 +89,7 @@ class ChunkExecutorSkipRoutingTest {
 
   /**
    * Same shape as {@link SkipRoutingType}, but the sole skip is a {@code Duplicate} — the other
-   * benign reason in {@code ConnectorDeadLetterRepository.BENIGN_REASONS} alongside
+   * benign reason in {@code SkipReason.BENIGN_NAMES} alongside
    * {@code PolicyExcluded}. Must count toward {@code records_skipped} and must NEVER reach the DLQ.
    */
   static final class DuplicateSkipType implements ConnectorType {
@@ -188,7 +188,7 @@ class ChunkExecutorSkipRoutingTest {
     SkipRoutingType type = new SkipRoutingType();
 
     ChunkResult result = TenantContext.callAsSystem(
-        () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty()));
+        () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty(), null));
 
     assertThat(result).isInstanceOf(ChunkResult.Success.class);
 
@@ -208,7 +208,7 @@ class ChunkExecutorSkipRoutingTest {
   }
 
   /**
-   * Aligns the DLQ exemption with {@code ConnectorDeadLetterRepository.BENIGN_REASONS}: Duplicate
+   * Aligns the DLQ exemption with {@code SkipReason.BENIGN_NAMES}: Duplicate
    * is as benign as PolicyExcluded — a {@code PartialWrite} skip for that reason must count toward
    * {@code records_skipped} but never reach the DLQ.
    */
@@ -217,7 +217,7 @@ class ChunkExecutorSkipRoutingTest {
     DuplicateSkipType type = new DuplicateSkipType();
 
     ChunkResult result = TenantContext.callAsSystem(
-        () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty()));
+        () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty(), null));
 
     assertThat(result).isInstanceOf(ChunkResult.Success.class);
 
@@ -237,12 +237,12 @@ class ChunkExecutorSkipRoutingTest {
     CellErrorProbeType type = new CellErrorProbeType();
 
     ChunkResult first = TenantContext.callAsSystem(
-        () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty()));
+        () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty(), null));
     assertThat(first).isInstanceOf(ChunkResult.Success.class);
     assertThat(persistedRun().getCellErrors()).as("first chunk reports 3 cell errors").isEqualTo(3);
 
     ChunkResult second = TenantContext.callAsSystem(
-        () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty()));
+        () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty(), null));
     assertThat(second).isInstanceOf(ChunkResult.Success.class);
     assertThat(persistedRun().getCellErrors())
         .as("second chunk's 2 cell errors accumulate onto the first chunk's 3")

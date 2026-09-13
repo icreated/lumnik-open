@@ -6,12 +6,10 @@ import (
 	"time"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
-	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/spf13/cobra"
 )
 
 func newInboxCmd() *cobra.Command {
-	var limit int
 	var all bool
 	cmd := &cobra.Command{
 		Use:   "inbox",
@@ -21,18 +19,17 @@ func newInboxCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			entries, err := c.InboxList(limit, all)
+			entries, err := c.InboxList(pageLimit(cmd), all)
 			if err != nil {
 				return err
 			}
-			format, _ := cmd.Flags().GetString("output")
 			now := time.Now()
-			return output.Print(cmd.OutOrStdout(), format,
+			return printPage(cmd,
 				[]string{"ID", "QUAND", "PROCESS", "MESSAGE", "ENTITY_KEY"}, entries,
 				func(e client.InboxEntry) []string { return inboxRow(e, now) })
 		},
 	}
-	cmd.Flags().IntVar(&limit, "limit", 50, "How many recent decisions to list (1-200)")
+	addPageLimitFlag(cmd, 50, client.InboxPageCap, "How many recent decisions to list (1-200)")
 	cmd.Flags().BoolVar(&all, "all", false, "Include disposed (acked) decisions, marked [traité]")
 
 	ack := &cobra.Command{

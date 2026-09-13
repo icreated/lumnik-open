@@ -56,7 +56,8 @@ public class HelloWorldConnectorType implements ConnectorType {
           .mapToObj(i -> new HelloRecord(i, "Hello #" + i, Instant.now()))
           .toList();
 
-      if (take == remaining) return new ReadResult.EndOfStream<>(records);
+      // Every non-empty chunk is HasMore: the engine persists a cursor only from HasMore, a loaded
+      // EndOfStream would forfeit its tail (see ReadResult). The stream ends on the read above.
       return new ReadResult.HasMore<>(records, Cursors.offset(offset + take, chunkSize));
     }
   }

@@ -3,11 +3,9 @@ package io.lumnik.hub.view;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.testsupport.YamlBody;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,10 +19,6 @@ import static org.hamcrest.Matchers.*;
 
 @QuarkusTest
 class ViewRenderResourceIT {
-
-    private static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config()
-        .encoderConfig(EncoderConfig.encoderConfig()
-            .encodeContentTypeAs("application/yaml", ContentType.TEXT));
 
     @Inject SchemaCardStore store;
 
@@ -70,7 +64,7 @@ class ViewRenderResourceIT {
 
     @Test
     void rendersTitleColumnsAndRows() {
-        given().config(YAML_CFG).header("X-Tenant-Id", "1").contentType("application/yaml").body(MANIFEST)
+        given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml").body(MANIFEST)
         .when().post("/api/views/render")
         .then().statusCode(200)
             .body("title", is("Desk"))
@@ -95,7 +89,7 @@ class ViewRenderResourceIT {
            + "VALUES (1, '00000000-0000-0000-0000-00000000b6f2', 'Completed', 'Incremental', 'test', "
            + "'2026-08-21T05:00:00Z', '2026-08-21T05:04:00Z')");
 
-        given().config(YAML_CFG).header("X-Tenant-Id", "1").contentType("application/yaml").body(MANIFEST)
+        given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml").body(MANIFEST)
         .when().post("/api/views/render")
         .then().statusCode(200)
             .body("dataAsOf", startsWith("2026-08-21T05:04"));
@@ -104,7 +98,7 @@ class ViewRenderResourceIT {
     @Test
     void refusesAnUnknownColumn_400() {
         String bad = MANIFEST.replace("[customer_code, name]", "[customer_code, nope]");
-        given().config(YAML_CFG).header("X-Tenant-Id", "1").contentType("application/yaml").body(bad)
+        given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml").body(bad)
         .when().post("/api/views/render")
         .then().statusCode(400)
             .body("error", containsString("nope"));
@@ -113,21 +107,21 @@ class ViewRenderResourceIT {
     @Test
     void unknownScope_404() {
         String ghost = MANIFEST.replace("scope: desk", "scope: ghost");
-        given().config(YAML_CFG).header("X-Tenant-Id", "1").contentType("application/yaml").body(ghost)
+        given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml").body(ghost)
         .when().post("/api/views/render")
         .then().statusCode(404);
     }
 
     @Test
     void withoutTenantInContext_401() {
-        given().config(YAML_CFG).contentType("application/yaml").body(MANIFEST)
+        given().config(YamlBody.CONFIG).contentType("application/yaml").body(MANIFEST)
         .when().post("/api/views/render")
         .then().statusCode(401);
     }
 
     @Test
     void filtersRowsWithEqualityAndContains() {
-        given().config(YAML_CFG).header("X-Tenant-Id", "1").contentType("application/yaml")
+        given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml")
             .queryParam("filter", "name~ali")
             .body(MANIFEST)
         .when().post("/api/views/render")
@@ -137,7 +131,7 @@ class ViewRenderResourceIT {
 
     @Test
     void refusesAFilterOnAColumnTheViewDoesNotShow_400() {
-        given().config(YAML_CFG).header("X-Tenant-Id", "1").contentType("application/yaml")
+        given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml")
             .queryParam("filter", "segment=GOLD")   // MANIFEST does not show segment
             .body(MANIFEST)
         .when().post("/api/views/render")
@@ -147,7 +141,7 @@ class ViewRenderResourceIT {
 
     @Test
     void refusesAnOutOfDomainValue_400_withTheAllowedList() {
-        given().config(YAML_CFG).header("X-Tenant-Id", "1").contentType("application/yaml")
+        given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml")
             .queryParam("filter", "segment=PLATINUM")
             .body(MANIFEST_WITH_SEGMENT)
         .when().post("/api/views/render")
@@ -158,7 +152,7 @@ class ViewRenderResourceIT {
 
     @Test
     void containsOnADomainColumnIsASearchNotAnAssertion() {
-        given().config(YAML_CFG).header("X-Tenant-Id", "1").contentType("application/yaml")
+        given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml")
             .queryParam("filter", "segment~GO")
             .body(MANIFEST_WITH_SEGMENT)
         .when().post("/api/views/render")

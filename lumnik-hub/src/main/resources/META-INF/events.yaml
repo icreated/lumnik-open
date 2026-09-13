@@ -40,6 +40,16 @@ events:
       records_out: long
       duration_ms: long
       tables:      map
+  - type: connector.run.partial
+    description: "A connector endpoint run ended below the target it gave itself: it wrote everything it read, and did not read everything there was."
+    payload:
+      run_id:        string
+      endpoint_id:   string
+      records_in:    long
+      records_out:   long
+      duration_ms:   long
+      tables:        map
+      error_message: string
   - type: connector.run.cancelled
     description: "A connector endpoint run was cancelled."
     payload:

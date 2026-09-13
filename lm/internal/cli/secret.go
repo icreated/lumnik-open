@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -27,20 +28,18 @@ func newSecretCmd() *cobra.Command {
 func newSecretSetCmd() *cobra.Command {
 	var description string
 	cmd := &cobra.Command{
-		Use:   "set <NAME> <VALUE>",
-		Short: "Create or update a secret. Use '-' as VALUE to read from stdin.",
-		Args:  cobra.ExactArgs(2),
+		Use:   "set <NAME> [VALUE]",
+		Short: "Create or update a secret. Omit VALUE to be prompted; '-' reads stdin until EOF.",
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, raw := args[0], args[1]
-			value := raw
-			if isStdinSentinel(raw) {
-				b, err := io.ReadAll(os.Stdin)
-				if err != nil {
-					return err
-				}
-				value = strings.TrimRight(string(b), "\n\r")
-			}
+			name := args[0]
+			// Same order as the guided jdbc flow: a context that is missing must say so before
+			// the caller types a secret, not after.
 			c, err := ClientFromCmd(cmd)
+			if err != nil {
+				return err
+			}
+			value, err := secretValue(cmd, args)
 			if err != nil {
 				return err
 			}
@@ -75,6 +74,12 @@ func newSecretListCmd() *cobra.Command {
 			secrets, err := c.SecretList()
 			if err != nil {
 				return err
+			}
+			// -o is a persistent root flag: asked for JSON here, a pipeline used to get this
+			// page of columns. The metadata is safe to emit — SecretMeta has no value field,
+			// and the values are write-only at the hub.
+			if format, _ := cmd.Flags().GetString("output"); format != "table" {
+				return output.PrintObject(cmd.OutOrStdout(), format, secrets)
 			}
 			if len(secrets) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "(no secrets)")
@@ -141,6 +146,41 @@ func newSecretRmCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
 	return cmd
+}
+
+// secretValue resolves the value from the three ways it can arrive, and says what each costs.
+//
+//   - no VALUE, at a keyboard: prompted, not echoed. This is the form the docs teach.
+//   - VALUE is '-': read until EOF, unchanged — a PEM key is many lines, and a reader that
+//     stopped at the first would store a truncated secret and still print "Created".
+//   - VALUE given: kept working because scripts pass it, but it was in `ps` while the command
+//     ran and it is in the shell history afterwards, so it does not stay silent.
+//
+// With no VALUE and no keyboard there is nothing to prompt and nothing declared to read: guessing
+// stdin there would swallow whatever a surrounding loop was reading, so it refuses instead.
+func secretValue(cmd *cobra.Command, args []string) (string, error) {
+	name := args[0]
+	if len(args) == 1 {
+		tty, ok := terminalIn(cmd)
+		if !ok {
+			return "", fmt.Errorf("no VALUE given and stdin is not a terminal — use `lm secret set %s -` to read it from stdin", name)
+		}
+		return promptSecret(cmd, tty, "Value for "+name)
+	}
+	if !isStdinSentinel(args[1]) {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: the value was visible in `ps` and is now in your shell history"+
+			" — `lm secret set %s` prompts for it instead, `lm secret set %s -` reads it from stdin\n", name, name)
+		return args[1], nil
+	}
+	if _, ok := terminalIn(cmd); ok {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: reading until EOF ("+eofGesture()+") from the terminal — what you type stays"+
+			" on screen; `lm secret set %s` prompts without echo\n", name)
+	}
+	b, err := io.ReadAll(cmd.InOrStdin())
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(string(b), "\n\r"), nil
 }
 
 func isStdinSentinel(s string) bool { return s == "-" }

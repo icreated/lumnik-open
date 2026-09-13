@@ -4,6 +4,7 @@ import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.ask.DiscoveryService;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.BadRequestException;
@@ -39,7 +40,13 @@ public class EntityApplyResource {
     try {
       m = parser.parse(body);
     } catch (IllegalArgumentException e) {
-      throw new BadRequestException(e.getMessage());
+      // Through ApiErrors, NOT `new BadRequestException(message)`: that constructor sets the JAVA
+      // exception's message and leaves the RESPONSE bodyless, so every refusal EntityManifestParser
+      // raises — the twelve docs/entities.md tables as "quoting the exact problem" — reached lm as
+      // "400 (no details from the server)", and nothing was logged either. The throw-shaped twin of
+      // the bare Response.status(404) sites #418 fixed; ApiErrors.notFound's javadoc already names
+      // this exact failure mode for its own status.
+      throw new BadRequestException(ApiErrors.badRequest(e.getMessage()));
     }
     // C3, for the kind that never got it. Jackson deserializes this manifest with
     // FAIL_ON_UNKNOWN_PROPERTIES=false, so a key the record does not declare is dropped in silence:
@@ -64,6 +71,13 @@ public class EntityApplyResource {
     if (!ScopeGrants.allowsAll(m.scopes())) {
       throw new WebApplicationException(ApiErrors.scopeNotGranted());
     }
+
+    // …and the NAME is the other half of the address. EntityViewCompiler.apply conflicts on (name)
+    // and sets scopes = EXCLUDED.scopes, so a caller who holds every scope they DECLARE can still
+    // rewrite a manifest that lives in scopes they do not — re-homing it, or simply narrowing it out
+    // of a métier by re-applying a subset. Same words as the check above (#509).
+    ApplyScopeBoundary.refuseUnlessCallerHolds(registry.storedScopes(m.name()));
+
     try {
       compiler.apply(m, body);
     } catch (MissingSourceTableException e) {

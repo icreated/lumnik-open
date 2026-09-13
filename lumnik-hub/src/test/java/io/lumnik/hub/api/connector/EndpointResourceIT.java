@@ -100,6 +100,27 @@ class EndpointResourceIT {
             .then().statusCode(404);
     }
 
+    /**
+     * The pre-flight route had no test at all — which is how `lm source rest test` shipped sending
+     * an endpoint id of "*" that this UUID path param could never bind. These pin the guard around
+     * it; the composition itself is unit-tested in {@code RestPreflightTest}.
+     */
+    @Test
+    void test_returns_404_for_wrong_connector() {
+        given().headers(TestIdentity.tenantAndUser(1))
+            .when().post("/api/platform/connectors/00000000-0000-0000-0000-000000000000/endpoints/"
+                         + endpointId + "/test")
+            .then().statusCode(404);
+    }
+
+    @Test
+    void test_returns_404_for_an_unknown_endpoint() {
+        given().headers(TestIdentity.tenantAndUser(1))
+            .when().post("/api/platform/connectors/" + connectorId
+                         + "/endpoints/00000000-0000-0000-0000-000000000000/test")
+            .then().statusCode(404);
+    }
+
     @Test
     void update_changes_endpoint_fields() {
         given().headers(TestIdentity.tenantAndUser(1))

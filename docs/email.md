@@ -19,7 +19,9 @@ lm notify rm <ID>
 
 `--events` takes an exact type or a prefix ending in `.*` — the vocabulary is the
 [event registry](outputs.md#the-event-registry). Over HTTP (`POST /api/notifications`)
-a rule can also carry an `entity_filter` narrowing it to one ingested table.
+a rule can also carry an `entity_filter` narrowing it to one ingested table. It must be that
+table's **full name** — `connector.t_customers`, the name an event carries as its entity — and the
+door refuses anything else rather than storing a rule that can never match.
 
 ## Templates
 

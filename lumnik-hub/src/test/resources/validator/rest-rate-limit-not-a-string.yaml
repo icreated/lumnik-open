@@ -1,0 +1,25 @@
+# `default_rate_limit: 100` — a number where the "count/window" string belongs. The declaration
+# refuses the shape; the cross-field rule must not read asText() off it as well.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: stripe-rate-number
+  connector_type: rest-generic
+  scopes: [crm]
+spec:
+  base_url: https://api.stripe.com
+  default_rate_limit: 100
+  endpoints:
+    - id: customers
+      path: /v1/customers
+      method: GET
+      pagination:
+        kind: cursor
+        cursor_param: starting_after
+        cursor_path: $.data[-1:].id
+        has_more_path: $.has_more
+        response_path: $.data
+      target:
+        kind: hybrid
+        table: stripe_customers
+        unique_key: $.id

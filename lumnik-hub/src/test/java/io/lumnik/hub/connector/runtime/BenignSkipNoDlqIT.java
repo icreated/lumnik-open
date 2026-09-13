@@ -36,7 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>Law 1 in {@code lm/test/otk/checks/reconcile.go ReconcileCounts} asserts
  * {@code recordsIn == recordsOut + dlqCount}. That equality depends on
- * {@code ConnectorDeadLetterRepository.countByRun} excluding BENIGN_REASONS
+ * {@code ConnectorDeadLetterRepository.countByRun} excluding {@code SkipReason.BENIGN_NAMES}
  * (Duplicate/PolicyExcluded). The exclusion is only correct while benign skips produce
  * NO dead-letter row — if a skip that was excluded from dlqCount is also not in
  * recordsOut, Law 1 would silently drop rows from the accounting.

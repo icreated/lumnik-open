@@ -51,7 +51,7 @@ public class RowEventGate {
                 ps.setLong(1, tenantId);
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
-                        if (matches(rs.getString(1)) && EntityFilters.passes(rs.getString(2), table)) return true;
+                        if (matchesRowChanged(rs.getString(1)) && EntityFilters.passes(rs.getString(2), table)) return true;
                     }
                 }
             }
@@ -75,12 +75,20 @@ public class RowEventGate {
     }
 
     private static boolean matchesAny(String[] patterns) {
-        for (String p : patterns) if (matches(p)) return true;
+        for (String p : patterns) if (matchesRowChanged(p)) return true;
         return false;
     }
 
-    /** Same contract as WebhookEndpoint.matches / NotificationRule.matches: exact or "prefix.*". */
-    private static boolean matches(String p) {
+    /**
+     * Does this subscription pattern reach {@code data.row.changed}? Same contract as
+     * {@code WebhookEndpoint.matches} / {@code NotificationRule.matches}: exact, or "prefix.*".
+     *
+     * <p>Public because it is also the question a write door must ask before judging an
+     * {@code entity_filter}: only for THIS event family is the entity a table a connector's row
+     * writer fills. A {@code decision.dormant.*} rule's entity is the workflow's watched table,
+     * which may be a fused view — refusing that on the row-event rule would be a false refusal.
+     */
+    public static boolean matchesRowChanged(String p) {
         return DATA_ROW_CHANGED.equals(p)
             || (p != null && p.endsWith(".*") && DATA_ROW_CHANGED.startsWith(p.substring(0, p.length() - 2)));
     }

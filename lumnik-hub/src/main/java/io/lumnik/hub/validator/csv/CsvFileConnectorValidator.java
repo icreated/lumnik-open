@@ -40,8 +40,17 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
                 "archive", "delete", "move", "none")
             .optional("archive_path", Type.STRING, Importance.LOW,
                 "Destination for `move` action", null)
+            // Two keys the root of a csv spec really carries, declared so closing does not accuse
+            // them. `mapping` is consumed by MappingLoader (and shipped manifests carry it); its
+            // INSIDE stays open — closing that would need an audit of the whole hook vocabulary.
+            // `window` is read by the SHARED apply preamble (ApplyUpsert); declared and checked
+            // through WindowField, which owns both wordings for all four connector types.
+            .optional("mapping", Type.NESTED, Importance.MEDIUM,
+                "Dataset/row/cell transformer hooks — see the transformers page", null)
+            .optional("window", Type.STRING, Importance.MEDIUM, WindowField.DOC, null)
             .requireNested(TARGET, Importance.HIGH, "Target persistence",
-                TargetBlockValidator.configDef());
+                TargetBlockValidator.configDef())
+            .closed();
     }
 
     /**
@@ -63,7 +72,7 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
         errs.addAll(oneShotOnlyTransportKeys(tr));
         errs.addAll(headerlessNeedsColumns(spec));
         errs.addAll(scheduleCronIsValid(spec));
-        errs.addAll(windowValid(spec));
+        WindowField.check(spec.path("window"), errs);
         errs.addAll(TargetBlockValidator.validateIndexes(
             spec.path(TARGET).path("indexes"), "spec.target.indexes"));
         errs.addAll(aggregatorRefused(spec));
@@ -147,21 +156,10 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
     }
 
     private static List<ValidationError> scheduleCronIsValid(JsonNode spec) {
-        JsonNode sched = spec.path("schedule");
-        if (sched.isMissingNode() || sched.isNull()) return List.of();
-        return CronField.validCron().apply(sched)
-            .map(msg -> List.of(new ValidationError("spec.schedule", Severity.ERROR, msg,
-                List.of("Example: schedule: \"0 6 * * *\" (daily at 06:00 UTC)"))))
-            .orElseGet(List::of);
-    }
-
-    private static List<ValidationError> windowValid(JsonNode spec) {
-        JsonNode window = spec.path("window");
-        if (window.isMissingNode() || window.isNull()) return List.of();
-        return WindowField.validWindow().apply(window)
-            .map(msg -> List.of(new ValidationError("spec.window", Severity.ERROR, msg,
-                List.of("Example: window: \"22:00-06:00\" (UTC; scheduled runs are skipped outside it)"))))
-            .orElseGet(List::of);
+        List<ValidationError> errs = new ArrayList<>();
+        CronField.check(spec.path("schedule"), errs,
+            "Example: schedule: \"0 6 * * *\" (daily at 06:00 UTC)");
+        return errs;
     }
 
     /** The declared row hooks, or nothing — three refusals below start with this same question. */

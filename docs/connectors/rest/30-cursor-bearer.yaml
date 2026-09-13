@@ -13,7 +13,7 @@
 #
 # Auth: bearer — the platform sends `Authorization: Bearer <token>`.
 # The token is NEVER inline: `token_env` names an env var the platform holds.
-# Use `lm secret set REST_DEMO_TOKEN <value>` (DB secret store, resolved first; OS env is the fallback).
+# Use `lm secret set REST_DEMO_TOKEN` (DB secret store, resolved first; OS env is the fallback).
 #
 # Pagination: cursor — opaque cursor extracted from the last record of each page.
 

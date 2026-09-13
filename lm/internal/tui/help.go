@@ -12,6 +12,29 @@ var paletteEntries = []string{"new", "ask", "inbox", "modules", "sources", "proc
 // paletteAliases maps old mechanism spellings to their canonical usage name.
 var paletteAliases = map[string]string{"connectors": "sources"}
 
+// mutatingKeyEntries is the curated single source of truth for keys that
+// change state on a resource page (never a read-only nav key like d/y/s/r/Enter);
+// help_test.go asserts each one has a bullet row under its :page in helpBody, so
+// a mutating key added to a page's Hints() but not to helpBody is caught here.
+var mutatingKeyEntries = []struct{ page, key string }{
+	{"sources", "e"},
+	{"sources", "R"},
+	{"sources", "^P"},
+	{"sources", "Del"},
+	{"sources", "t"},
+	{"dlq", "^R"},
+	{"dlq", "^D"},
+	{"outputs", "^R"},
+	{"inbox", "a"},
+	{"inbox", "A"},
+	{"view", "a"},
+	{"hooks", "^L"},
+	{"runs", "c"},
+	{"processes", "e"},
+	{"processes", "^P"},
+	{"processes", "Del"},
+}
+
 const helpBody = `[yellow]Global keys[white]
   :       open command palette (type a resource name)
   q       quit (when no input has focus)
@@ -27,6 +50,7 @@ const helpBody = `[yellow]Global keys[white]
                      R   trigger immediate run (also ^R)
                      ^P  pause / resume (toggle)
                      Del delete (no confirmation)
+                     t   edit scope tags
                      Enter  REST → its :endpoints · others → its :runs
   :conflicts      where your sources disagree — the fused rows still in dispute
                      d      the full ledger: which source said what
@@ -61,6 +85,7 @@ const helpBody = `[yellow]Global keys[white]
   :endpoints      REST endpoints (Enter from a REST source filters here)
                      Enter  jump to the endpoint's runs
   :runs           recent connector runs (live updates)
+                     c   request cancellation (only while Running)
   :dlq            dead-letter queue (live updates)
                      ^R  mark replayed
                      ^D  discard
@@ -70,6 +95,8 @@ const helpBody = `[yellow]Global keys[white]
   :modules        installed business modules
   :processes      declared kind:Process rules
                      e   edit the stored manifest (validate → apply loop)
+                     ^P  enable / disable (toggle) — the manifest stays, it just stops firing
+                     Del delete (no confirmation)
 `
 
 func (a *App) showHelp() {

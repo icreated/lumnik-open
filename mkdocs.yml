@@ -66,8 +66,10 @@ exclude_docs: |
   superpowers/
   snapshot/
   studies/
-  demo/
-  !demo/wow-customer/README.md
+  # Anchored: this is docs/demo/, the internal WOW harness — NOT docs/connectors/rest/demo/,
+  # the bench the REST page tells the reader to run, which has to ship with the site.
+  /demo/
+  !/demo/wow-customer/README.md
   dev-setup.md
   connectors/csv/README.md
   connectors/rest/README.md
@@ -76,6 +78,7 @@ nav:
   - Home: index.md
   - Parcours — the guided path: parcours.md
   - The two editions: editions.md
+  - Where lumnik stands: where-lumnik-stands.md
   - Deploy lumnik: deploy.md
   - Deploy on Windows: deploy-windows.md
   - Prerequisites — prepare the ground: quickstart/prerequisites.md
@@ -93,14 +96,19 @@ nav:
     - JDBC: connectors/jdbc.md
     - REST:
       - REST: connectors/rest.md
+      - Pagination: connectors/rest/pagination.md
+      - The demo API: connectors/rest/demo-api.md
       - GraphQL: connectors/graphql.md
       - SOAP: connectors/soap.md
-    - Kafka: connectors/kafka.md
+    - Kafka:
+      - Kafka: connectors/kafka.md
+      - The demo broker: connectors/kafka/demo-broker.md
     - Transformers: connectors/transformers.md
   - Entities — fuse: entities.md
   - CLI & TUI:
     - CLI reference: cli/lm-reference.md
     - The TUI: cli/tui.md
+    - Integration as code: integration-as-code.md
   - Ask your data:
     - The five guards: transparency/ask-honesty.md
     - Scopes: rag/scopes.md
@@ -112,6 +120,7 @@ nav:
     - Workflows — declare: apps/workflows.md
     - Inbox — decide: apps/inbox.md
     - The métier PWA: apps/pwa.md
+    - The demo desk: apps/demo-desk.md
   - Honesty & transparency: transparency/ingestion-honesty.md
   - Architecture — the why: architecture.md
   - Reversibility & exit: reversibility.md

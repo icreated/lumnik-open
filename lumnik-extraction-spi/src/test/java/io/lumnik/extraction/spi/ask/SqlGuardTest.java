@@ -55,6 +55,9 @@ class SqlGuardTest {
     static Stream<Arguments> acceptances() {
         return Stream.of(
             Arguments.of("a plain projection", "SELECT documentno FROM c_order"),
+            // $ continues a Postgres identifier (measured: a$b, created quoted, resolves unquoted), so
+            // this is a column name — not the dollar-quoted body the guard refuses one table below.
+            Arguments.of("a column name carrying a dollar sign", "SELECT a$b FROM c_order"),
             Arguments.of("a CTE", "WITH x AS (SELECT 1) SELECT * FROM x"),
             Arguments.of("a customer living in a town called Grant",
                          "SELECT * FROM c_order WHERE city = 'Grant'"),
@@ -122,6 +125,19 @@ class SqlGuardTest {
                          "SELECT * FROM (SELECT * FROM c_line LIMIT 3) z"));
     }
 
+    /**
+     * A character Java calls whitespace and the server does not cannot be used to hide the bound.
+     * {@code LIMIT<U+3000>1000000} lexes as ONE identifier now — which is what the server reads too, so
+     * the statement is refused either way — and the guard must still emit a bound of its own rather
+     * than treat the fragment as an existing one.
+     */
+    @Test
+    void anExoticSpaceCannotSuppressTheBound() {
+        assertThat(effectiveText(guard.check("SELECT x FROM c_order LIMIT\u30001000000")))
+            .as("a bound the guard cannot read is not a bound it may trust")
+            .containsIgnoringCase("limit " + MAX);
+    }
+
     @ParameterizedTest(name = "{0} does not count as the answer's bound")
     @MethodSource("nestedBounds")
     void aBoundInANestedScopeDoesNotSatisfyTheGuard(String rule, String sql) {
@@ -151,6 +167,33 @@ class SqlGuardTest {
     void refusesSqlWhoseMeaningDependsOnWhereTheCommentOrLiteralEnds(String rule, String sql) {
         assertThatThrownBy(() -> guard.check(sql))
             .as("%s — Postgres and the lexer read this differently, so it must not run", rule)
+            .isInstanceOf(SqlGuard.SqlRejectedException.class);
+    }
+
+    /**
+     * The denylist reads NAMES, and a zero-width character makes a different name — for the server
+     * too, which is what makes this fail-open safe rather than a bypass. Measured on PostgreSQL 16
+     * under the empty {@code search_path}: {@code pg_catalog<U+200B>.pg_tables} answers
+     * {@code relation "pg_catalog<U+200B>.pg_tables" does not exist} and
+     * {@code pg_sleep<U+200B>(1)} answers {@code function pg_sleep<U+200B>(integer) does not exist}.
+     *
+     * <p>Before the identifier class became the server's, our lexer split such a name and the denylist
+     * caught the fragment. The agreement is the stronger property: a name we read as ONE token is a
+     * name the server reads as one token, so an entry stepped around here can only name something
+     * that does not exist. Pinned so the reasoning is visible if the class ever narrows again.
+     */
+    @Test
+    void aZeroWidthCharacterMakesADifferentName_whichTheServerCannotResolveEither() {
+        String evaded = "pg_catalog\u200B";
+
+        assertThat(SqlLexer.tokenize(evaded + ".pg_tables").get(0).text())
+            .as("one token, and not the banned name — the same reading the server gives it")
+            .isEqualTo(evaded);
+        assertThat(effectiveText(guard.check("SELECT * FROM " + evaded + ".pg_tables")))
+            .as("so the denylist does not fire, and the server refuses an object that does not exist")
+            .contains(evaded);
+        assertThatThrownBy(() -> guard.check("SELECT * FROM pg_catalog.pg_tables"))
+            .as("the real name is still refused here, before it reaches the server")
             .isInstanceOf(SqlGuard.SqlRejectedException.class);
     }
 

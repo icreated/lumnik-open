@@ -3,11 +3,9 @@ package io.lumnik.hub.workflow;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.testsupport.YamlBody;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import io.restassured.specification.RequestSpecification;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Assertions;
@@ -36,10 +34,6 @@ class WorkflowApplyIT {
     // RestAssured has no built-in encoder for "application/yaml" — without this, a String body
     // sent with that content-type is mangled. Copied verbatim from ProcessApplyResourceIT /
     // EntityApplyIT, the existing green apply ITs.
-    private static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config()
-        .encoderConfig(EncoderConfig.encoderConfig()
-            .encodeContentTypeAs("application/yaml", ContentType.TEXT));
-
     private static final String YAML = """
         apiVersion: apps.lumnik.io/v1
         kind: Workflow
@@ -90,7 +84,7 @@ class WorkflowApplyIT {
     // X-Tenant-ID / X-User-ID headers (TenantContextFilter) and grants ALL roles — including
     // lm_integrator — automatically (RequiresPermission javadoc). No @TestProfile needed.
     private static RequestSpecification asIntegrator() {
-        return given().config(YAML_CFG).header("X-Tenant-ID", TENANT).header("X-User-ID", "1");
+        return given().config(YamlBody.CONFIG).header("X-Tenant-ID", TENANT).header("X-User-ID", "1");
     }
 
     @Test
@@ -198,5 +192,56 @@ class WorkflowApplyIT {
             Assertions.assertTrue(rs.getLong(1) >= 1,
                 "a green workflow apply must land in core.audit_outbox");
         }
+    }
+
+    private static final String OTHER_TABLE = "connector.t_wf_other_metier";
+    private static final String CROSS_SCOPE_YAML = YAML
+        .replace("name: wf-apply-it", "name: wf-cross-scope-it")
+        .replace("connector.t_wf_apply_it", OTHER_TABLE);
+
+    /**
+     * The scope check answers "may you declare INTO this scope"; it says nothing about which table
+     * you then point at. Without this refusal a scope-bound integrator could name another métier's
+     * ingest table and read its values back out of the data-truth report — up to LIMIT distinct
+     * values of any column, with row counts, on a 200. Intra-tenant, and refused everywhere else:
+     * `kind:Process` requires its trigger table to be in the card, `kind:View` resolves columns
+     * against it, and a workflow required nothing.
+     */
+    @Test
+    @Order(10)
+    void a_table_belonging_to_another_metier_is_refused() {
+        cards.save(Long.parseLong(TENANT), "registry", new SchemaCard("rh", List.of(
+            new SchemaCard.Table(OTHER_TABLE, "Paie", List.of(
+                new SchemaCard.Column("salaire_net", "text", "Salaire net"))))));
+
+        asIntegrator()
+            .contentType("application/yaml").body(CROSS_SCOPE_YAML)
+            .when().post("/api/workflows/apply")
+            .then().statusCode(400)
+            .body("error", containsString(OTHER_TABLE))
+            .body("error", containsString("another métier"));
+    }
+
+    /**
+     * …and the two legal cases stay legal, which is the whole reason this is not simply
+     * "the table must be in my card" the way `kind:Process` has it. A table in NO card is the
+     * declare-before-ingest case — pinned by {@code apply_upserts_and_reports_data_truth} above,
+     * which asserts {@code tableMissing} on a 200. A table in MY card is the ordinary case, and it
+     * must not be caught by the other-scope query when several cards advertise the same table.
+     */
+    @Test
+    @Order(11)
+    void the_same_table_in_my_own_card_is_accepted_even_when_another_scope_has_it_too() {
+        cards.save(Long.parseLong(TENANT), "registry", new SchemaCard("rh", List.of(
+            new SchemaCard.Table(OTHER_TABLE, "Paie", List.of(
+                new SchemaCard.Column("salaire_net", "text", "Salaire net"))))));
+        cards.save(Long.parseLong(TENANT), "registry", new SchemaCard("demo", List.of(
+            new SchemaCard.Table(OTHER_TABLE, "Commandes", List.of(
+                new SchemaCard.Column("statut", "text", "Statut"))))));
+
+        asIntegrator()
+            .contentType("application/yaml").body(CROSS_SCOPE_YAML)
+            .when().post("/api/workflows/apply")
+            .then().statusCode(200);
     }
 }

@@ -1,6 +1,6 @@
 import { html, useEffect, useRef } from '../html.mjs';
 import { Refusal } from './refusal.mjs';
-import { dataAsOfLabel } from '../format.mjs';
+import { dataAsOfLabel, doorGesture } from '../format.mjs';
 
 // D1-D6: the Chat tab — ported from the spike's renderChat/sendQuestion/bubble (m/index.html
 // ~L518-565). Thread state (`log`/`setLog`) is LIFTED to app.mjs so it survives tab switches
@@ -11,7 +11,7 @@ const WAITING = '… je regarde tes données';
 // question into a door that is not there. See capabilities.mjs — absence is proven, not assumed.
 const ABSENT = "Le chat n'est pas installé sur cette version de lumnik. Les fiches et les décisions fonctionnent normalement.";
 
-export function Chat({ api, scope, log, setLog, available = true }) {
+export function Chat({ api, scope, log, setLog, available = true, onOpenFiches }) {
   const inputRef = useRef(null);
 
   useEffect(() => {
@@ -32,7 +32,10 @@ export function Chat({ api, scope, log, setLog, available = true }) {
       // D3: an answer that ran NO sql is an abstention — the honest refusal wears amber, not a SQL bubble
       reply = a.sql
         ? { role: 'bot', text: a.answer || '(réponse vide)', sql: a.sql, rowCount: a.rowCount, dataAsOf: a.dataAsOf }
-        : { role: 'refusal', kind: 'abstention', text: a.answer || '(réponse vide)' };
+        // #515: `otherDoors` is the abstention's own sentence as tokens, so this surface can
+        // offer the door it has (format.mjs doorGesture) instead of parsing prose for it.
+        : { role: 'refusal', kind: 'abstention', text: a.answer || '(réponse vide)',
+            doors: a.otherDoors || [] };
     } catch (e) {
       if (e.kind === 'auth') { setLog(withMe); return; } // 401 already flips the screen — no spurious bubble
       // D4 said one tone for every failure — right while every failure WAS an answer-level
@@ -51,7 +54,7 @@ export function Chat({ api, scope, log, setLog, available = true }) {
     <div class="chat-col">
       <div class="msgs">
         ${log.length === 0 ? html`<div class="bubble bot">${available ? HINT : ABSENT}</div>` : null}
-        ${log.map(m => html`<${Bubble} m=${m} />`)}
+        ${log.map(m => html`<${Bubble} m=${m} onOpenFiches=${onOpenFiches} />`)}
       </div>
       ${available
         ? html`
@@ -65,10 +68,17 @@ export function Chat({ api, scope, log, setLog, available = true }) {
   `;
 }
 
-function Bubble({ m }) {
+function Bubble({ m, onOpenFiches }) {
   if (m.role === 'me') return html`<div class="bubble me">${m.text}</div>`;
   if (m.role === 'wait') return html`<div class="bubble wait">${m.text}</div>`;
-  if (m.role === 'refusal') return html`<${Refusal} kind=${m.kind} message=${m.text} />`;
+  if (m.role === 'refusal') return html`
+    <div>
+      <${Refusal} kind=${m.kind} message=${m.text} />
+      ${(m.doors || []).map(doorGesture).filter(Boolean).map(label => html`
+        <button class="door" onClick=${() => onOpenFiches && onOpenFiches()}>${label}</button>
+      `)}
+    </div>
+  `;
   return html`
     <div class="bubble bot">
       ${m.text}

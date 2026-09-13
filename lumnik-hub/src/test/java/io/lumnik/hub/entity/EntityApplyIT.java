@@ -1,22 +1,25 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
 import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.stream.Stream;
 
 import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -33,9 +36,6 @@ class EntityApplyIT {
   @Inject EntityRegistry registry;
 
   // RestAssured doesn't know application/yaml natively; treat it as TEXT.
-  static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config().encoderConfig(
-      EncoderConfig.encoderConfig().encodeContentTypeAs("application/yaml", ContentType.TEXT));
-
   static final String MANIFEST = """
       kind: Entity
       name: Customer
@@ -77,7 +77,7 @@ class EntityApplyIT {
             map:
               ROW_ID: id
         """;
-    given().config(YAML_CFG)
+    given().config(YamlBody.CONFIG)
         .headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(orphan)
         .post("/api/entities/apply")
@@ -89,7 +89,7 @@ class EntityApplyIT {
 
   @Test
   void apply_creates_the_view() throws Exception {
-    given().config(YAML_CFG)
+    given().config(YamlBody.CONFIG)
         .headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply")
@@ -108,7 +108,7 @@ class EntityApplyIT {
 
   @Test
   void apply_persists_manifest_to_db() throws Exception {
-    given().config(YAML_CFG)
+    given().config(YamlBody.CONFIG)
         .headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply")
@@ -154,13 +154,62 @@ class EntityApplyIT {
         .isInstanceOf(RuntimeException.class);
   }
 
-  @Test
-  void invalid_manifest_returns_400() {
-    String bad = MANIFEST.replace("kind: Entity", "kind: Connector");
-    given().config(YAML_CFG)
+  /**
+   * Every refusal {@code docs/entities.md} tables, with the message it promises — not merely the
+   * status. Asserting only {@code statusCode(400)} is what let the door ship a bodyless refusal:
+   * {@code EntityManifestParser} pins the RULES, and a rule and its DELIVERY are two claims.
+   *
+   * <p>Each case names the rule and a fragment of the exact text, so a reworded refusal fails here
+   * rather than silently breaking the documented contract.
+   */
+  static Stream<Arguments> refusals() {
+    return Stream.of(
+        Arguments.of("wrong kind",
+            MANIFEST.replace("kind: Entity", "kind: Connector"),
+            "kind must be 'Entity'"),
+        Arguments.of("name is not an identifier",
+            MANIFEST.replace("name: Customer", "name: my-customer"),
+            "name must be a simple identifier"),
+        Arguments.of("no match column",
+            MANIFEST.replace("match: [id]", "match: []"),
+            "match must declare at least one column"),
+        Arguments.of("duplicate match column",
+            MANIFEST.replace("match: [id]", "match: [id, ID]"),
+            "match declares a duplicate column"),
+        Arguments.of("no sources",
+            """
+            kind: Entity
+            name: Customer
+            match: [id]
+            sources: []
+            """,
+            "sources must have at least one source"),
+        Arguments.of("reserved canonical column",
+            MANIFEST.replace("NAME: name", "NAME: _src"),
+            "is reserved"),
+        Arguments.of("duplicate canonical column in one source",
+            MANIFEST.replace("OU_TYPE_CD: segment", "OU_TYPE_CD: name"),
+            "maps duplicate canonical column"),
+        Arguments.of("source does not map the match column in the same case",
+            MANIFEST.replace("ROW_ID: id", "ROW_ID: Id"),
+            "does not map the match column"),
+        Arguments.of("scope is not a legal role name",
+            MANIFEST.replace("match: [id]", "match: [id]\nscopes: [Clients]"),
+            "scope must be lowercase"),
+        Arguments.of("grounding names a column that does not exist",
+            MANIFEST.replace("match: [id]", "match: [id]\ncolumns:\n  NAME:\n    label: Nom"),
+            "columns references unknown canonical column"));
+  }
+
+  @ParameterizedTest(name = "{0}")
+  @MethodSource("refusals")
+  void refusal_carries_its_message(String rule, String badManifest, String expected) {
+    given().config(YamlBody.CONFIG)
         .headers(TestIdentity.tenantAndUser(1))
-        .contentType("application/yaml").body(bad)
+        .contentType("application/yaml").body(badManifest)
         .post("/api/entities/apply")
-        .then().statusCode(400);
+        .then().statusCode(400)
+        .contentType(ContentType.JSON)
+        .body("error", Matchers.containsString(expected));
   }
 }

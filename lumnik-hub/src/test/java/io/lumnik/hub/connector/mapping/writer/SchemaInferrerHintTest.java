@@ -58,8 +58,11 @@ class SchemaInferrerHintTest {
   void pgTypeForSqlType_maps_numerics_temporals_and_falls_back_to_text() {
     assertThat(SchemaInferrer.pgTypeForSqlType(Types.NUMERIC)).isEqualTo("NUMERIC(18,4)");
     assertThat(SchemaInferrer.pgTypeForSqlType(Types.DECIMAL)).isEqualTo("NUMERIC(18,4)");
-    assertThat(SchemaInferrer.pgTypeForSqlType(Types.INTEGER)).isEqualTo("NUMERIC(18,4)");
-    assertThat(SchemaInferrer.pgTypeForSqlType(Types.BIGINT)).isEqualTo("NUMERIC(18,4)");
+    // A source's INTEGER answers BIGINT because an Integer VALUE does (#497); the two roads must
+    // meet, or a sparse column created from the hint would refuse the values that fill it later.
+    assertThat(SchemaInferrer.pgTypeForSqlType(Types.INTEGER)).isEqualTo("BIGINT");
+    assertThat(SchemaInferrer.pgTypeForSqlType(Types.BIGINT)).isEqualTo("BIGINT");
+    assertThat(SchemaInferrer.pgTypeForSqlType(Types.SMALLINT)).isEqualTo("BIGINT");
     assertThat(SchemaInferrer.pgTypeForSqlType(Types.DOUBLE)).isEqualTo("NUMERIC(18,4)");
     assertThat(SchemaInferrer.pgTypeForSqlType(Types.TIMESTAMP)).isEqualTo("TIMESTAMPTZ");
     assertThat(SchemaInferrer.pgTypeForSqlType(Types.TIMESTAMP_WITH_TIMEZONE)).isEqualTo("TIMESTAMPTZ");

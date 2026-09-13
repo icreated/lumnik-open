@@ -22,15 +22,15 @@ class HybridJsonbTransformLocaleTest {
     Locale previous = Locale.getDefault();
     try {
       Locale.setDefault(Locale.forLanguageTag("tr"));   // Turkish: I↔ı, i↔İ under the default locale
-      assertThat(HybridJsonbWriter.applyTransform("TITLE", Optional.of(Transform.TO_LOWER)))
+      assertThat(HybridJsonbWriter.applyTransform("TITLE", Optional.of(Transform.TO_LOWER), "title"))
           .isEqualTo("title");
-      assertThat(HybridJsonbWriter.applyTransform("title", Optional.of(Transform.TO_UPPER)))
+      assertThat(HybridJsonbWriter.applyTransform("title", Optional.of(Transform.TO_UPPER), "title"))
           .isEqualTo("TITLE");
       // The case a default-locale toLowerCase()/toUpperCase() gets wrong under `tr`:
-      assertThat(HybridJsonbWriter.applyTransform("I", Optional.of(Transform.TO_LOWER)))
+      assertThat(HybridJsonbWriter.applyTransform("I", Optional.of(Transform.TO_LOWER), "title"))
           .as("ASCII 'I' must lower-case to ASCII 'i', not the dotless 'ı'")
           .isEqualTo("i");
-      assertThat(HybridJsonbWriter.applyTransform("i", Optional.of(Transform.TO_UPPER)))
+      assertThat(HybridJsonbWriter.applyTransform("i", Optional.of(Transform.TO_UPPER), "title"))
           .as("ASCII 'i' must upper-case to ASCII 'I', not the dotted 'İ'")
           .isEqualTo("I");
     } finally {

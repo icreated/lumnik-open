@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
-	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -24,16 +23,14 @@ func newConflictsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			limit, _ := cmd.Flags().GetInt("limit")
-			items, err := c.ConflictList(limit)
+			items, err := c.ConflictList(pageLimit(cmd))
 			if err != nil {
 				return err
 			}
-			format, _ := cmd.Flags().GetString("output")
-			return output.Print(cmd.OutOrStdout(), format, conflictHeaders, items, conflictRow)
+			return printPage(cmd, conflictHeaders, items, conflictRow)
 		},
 	}
-	list.Flags().Int("limit", 200, "max conflicts to list")
+	addPageLimitFlag(list, 200, client.ConflictsPageCap, "max conflicts to list")
 	root.AddCommand(list)
 	return root
 }

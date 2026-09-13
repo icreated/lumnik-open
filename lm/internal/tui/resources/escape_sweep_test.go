@@ -243,7 +243,7 @@ func TestDlqDescribeBodyEscapes(t *testing.T) {
 
 func TestRunsDescribeBodyEscapes(t *testing.T) {
 	r := &Runs{table: tview.NewTable(),
-		sort: style.NewColumnSort([]string{"CONNECTOR", "STATUS", "STARTED", "DURATION"})}
+		sort: style.NewColumnSort(runSortColumns)}
 	r.items = []types.Run{{ID: "1", ConnectorID: evil, Status: evil,
 		TriggeredBy: evil, ErrorMessage: evil}}
 	r.render()

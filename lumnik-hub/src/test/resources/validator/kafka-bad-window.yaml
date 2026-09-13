@@ -1,0 +1,15 @@
+# `window` fences scheduled runs to a UTC HH:MM-HH:MM slot. The shared apply preamble reads it
+# for EVERY connector type, kafka included — so kafka owes it the refusal its twins already give.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: acme-events-bad-window
+  connector_type: kafka
+  scopes: [erp]
+spec:
+  name: orders
+  brokers: "broker1:9092"
+  topic: erp.orders.v1
+  format: json
+  schedule: "0 6 * * *"
+  window: "22h-6h"

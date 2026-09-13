@@ -1,0 +1,16 @@
+# `poll_timeout` / `max_poll`: keys the connector reads nowhere. Accepted, persisted, and
+# displayed back by `lm connector get` as if they meant something (bench 2026-09-11, finding 11).
+# The manifest stays VALID — an unknown key is a warning. What it owes is the name.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: acme-events-typo
+  connector_type: kafka
+  scopes: [erp]
+spec:
+  name: orders
+  brokers: "broker1:9092"
+  topic: erp.orders.v1
+  format: json
+  poll_timeout: 50
+  max_poll: 9

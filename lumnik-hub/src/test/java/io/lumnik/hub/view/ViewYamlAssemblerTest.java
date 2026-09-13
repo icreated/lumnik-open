@@ -29,7 +29,7 @@ class ViewYamlAssemblerTest {
         ViewManifest m = new ViewManifest("clients-gold", "clients", "connector.v_customer",
             "Clients gold", List.of("customer_code", "name", "segment"));
 
-        String yaml = assembler.assemble(m, List.of());
+        String yaml = assembler.assemble(m, List.of(), "les clients");
 
         ViewManifest back = parser.parse(yaml);
         assertEquals(m, back);
@@ -40,7 +40,7 @@ class ViewYamlAssemblerTest {
     void quotingHostileTitle_survivesTheRoundTrip() {
         ViewManifest m = new ViewManifest("desk", "clients", "connector.v_customer",
             "Clients: \"gold\" & #vip", List.of("name"));
-        ViewManifest back = parser.parse(assembler.assemble(m, List.of()));
+        ViewManifest back = parser.parse(assembler.assemble(m, List.of(), "les clients"));
         assertEquals("Clients: \"gold\" & #vip", back.title());
     }
 
@@ -48,7 +48,7 @@ class ViewYamlAssemblerTest {
     void nullTitle_isOmittedAndParsesBackAsNull() {
         ViewManifest m = new ViewManifest("desk", "clients", "connector.v_customer",
             null, List.of("name"));
-        ViewManifest back = parser.parse(assembler.assemble(m, List.of()));
+        ViewManifest back = parser.parse(assembler.assemble(m, List.of(), "les clients"));
         assertNull(back.title());
     }
 
@@ -57,32 +57,83 @@ class ViewYamlAssemblerTest {
         ViewManifest m = new ViewManifest("clients-gold-lyon", "clients", "connector.v_customer",
             "Clients gold de Lyon", List.of("customer_code", "name", "segment"));
 
-        String yaml = assembler.assemble(m, List.of("segment=GOLD", "city~Lyon"));
+        String yaml = assembler.assemble(m, List.of("segment=GOLD", "city~Lyon"), "les clients gold de Lyon");
 
-        String firstLine = yaml.lines().findFirst().orElseThrow();
         assertEquals("# lm view -f clients-gold-lyon.yaml --filter 'segment=GOLD' --filter 'city~Lyon'",
-            firstLine);
+            commandLine(yaml));
         // The comment must not break parsing.
         assertEquals(m, parser.parse(yaml));
     }
 
     @Test
-    void noFilters_noCommentLine() {
+    void noFilters_theHeaderSaysSoInsteadOfSayingNothing() {
+        // #489: a generated view can silently drop a condition of the description. When it drops
+        // ALL of them there was no comment at all, so the one case where the gap is total was
+        // also the one case the reader was told nothing about.
         ViewManifest m = new ViewManifest("desk", "clients", "connector.v_customer",
             "Desk", List.of("name"));
-        String yaml = assembler.assemble(m, List.of());
-        assertFalse(yaml.startsWith("#"));
-        assertTrue(yaml.startsWith("apiVersion:"));
+        String yaml = assembler.assemble(m, List.of(), "les commandes en litige");
+
+        assertEquals(List.of(
+            "# asked for: les commandes en litige",
+            "# kept: no condition — this view lists every row of connector.v_customer"),
+            yaml.lines().takeWhile(l -> l.startsWith("#")).toList());
+        assertEquals(m, parser.parse(yaml));
+    }
+
+    @Test
+    void theHeaderEchoesTheDescriptionAndTheConditionsKept() {
+        // The gap the ticket measured: "les commandes en litige de plus de 500 euros" came back
+        // with amount>500 and no status filter, and nothing said the other half had been dropped.
+        ViewManifest m = new ViewManifest("litiges", "desk", "connector.t_orders",
+            "Litiges > 500", List.of("order_no", "amount"));
+
+        String yaml = assembler.assemble(m, List.of("amount>500"),
+            "les commandes en litige de plus de 500 euros");
+
+        assertEquals(List.of(
+            "# asked for: les commandes en litige de plus de 500 euros",
+            "# kept: amount>500 — a condition of that description not listed here is NOT enforced",
+            "# lm view -f litiges.yaml --filter 'amount>500'"),
+            yaml.lines().takeWhile(l -> l.startsWith("#")).toList());
+    }
+
+    @Test
+    void aMultiLineDescription_isCollapsedNotInjected() {
+        // The description is user text landing in a YAML comment, and a comment ends at the first
+        // line break: a second line would be read as manifest. Collapsed, never refused — it is
+        // display text, not a value that means something.
+        ViewManifest m = new ViewManifest("desk", "clients", "connector.v_customer",
+            "Desk", List.of("name"));
+
+        String yaml = assembler.assemble(m, List.of(), "les clients\nkind: hacked\u2028et: aussi");
+
+        assertEquals("# asked for: les clients kind: hacked et: aussi", yaml.lines().findFirst().orElseThrow());
+        assertEquals(m, parser.parse(yaml));
+    }
+
+    @Test
+    void aVeryLongDescription_isClippedToKeepTheHeaderReadable() {
+        ViewManifest m = new ViewManifest("desk", "clients", "connector.v_customer",
+            "Desk", List.of("name"));
+        String yaml = assembler.assemble(m, List.of(), "x".repeat(400));
+        String first = yaml.lines().findFirst().orElseThrow();
+        assertTrue(first.endsWith("…"), first);
+        assertTrue(first.length() < 240, "header line length " + first.length());
+    }
+
+    /** The ready-to-run command line of the header, wherever it sits among the comments. */
+    private static String commandLine(String yaml) {
+        return yaml.lines().filter(l -> l.startsWith("# lm view")).findFirst().orElseThrow();
     }
 
     @Test
     void apostropheInAFilterValue_isPosixEscapedInTheComment() {
         ViewManifest m = new ViewManifest("desk", "clients", "connector.v_customer",
             "Desk", List.of("name"));
-        String yaml = assembler.assemble(m, List.of("name~L'Oréal"));
-        String firstLine = yaml.lines().findFirst().orElseThrow();
+        String yaml = assembler.assemble(m, List.of("name~L'Oréal"), "les clients L'Oréal");
         Assertions.assertEquals(
-            "# lm view -f desk.yaml --filter 'name~L'\\''Oréal'", firstLine);
+            "# lm view -f desk.yaml --filter 'name~L'\\''Oréal'", commandLine(yaml));
     }
 
     @Test
@@ -92,11 +143,11 @@ class ViewYamlAssemblerTest {
         ViewManifest m = new ViewManifest("desk", "clients", "connector.v_customer",
             "Desk", List.of("name"));
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-            () -> assembler.assemble(m, List.of("name~a\nkind: hacked")));
+            () -> assembler.assemble(m, List.of("name~a\nkind: hacked"), "d"));
         assertTrue(e.getMessage().contains("line break"));
 
         IllegalArgumentException cr = assertThrows(IllegalArgumentException.class,
-            () -> assembler.assemble(m, List.of("name~a\rkind: hacked")));
+            () -> assembler.assemble(m, List.of("name~a\rkind: hacked"), "d"));
         assertTrue(cr.getMessage().contains("line break"));
     }
 
@@ -108,7 +159,7 @@ class ViewYamlAssemblerTest {
             "Desk", List.of("name"));
         for (String sep : List.of("\u0085", "\u2028", "\u2029")) {
             IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> assembler.assemble(m, List.of("name~a" + sep + "kind: hacked")),
+                () -> assembler.assemble(m, List.of("name~a" + sep + "kind: hacked"), "d"),
                 "separator U+" + Integer.toHexString(sep.charAt(0)));
             assertTrue(e.getMessage().contains("line break"));
         }
@@ -120,11 +171,11 @@ class ViewYamlAssemblerTest {
             "Desk", List.of("name"));
 
         IllegalArgumentException nul = assertThrows(IllegalArgumentException.class,
-            () -> assembler.assemble(m, Arrays.asList((String) null)));
+            () -> assembler.assemble(m, Arrays.asList((String) null), "d"));
         assertTrue(nul.getMessage().contains("null or blank"));
 
         IllegalArgumentException blank = assertThrows(IllegalArgumentException.class,
-            () -> assembler.assemble(m, List.of("   ")));
+            () -> assembler.assemble(m, List.of("   "), "d"));
         assertTrue(blank.getMessage().contains("null or blank"));
     }
 }

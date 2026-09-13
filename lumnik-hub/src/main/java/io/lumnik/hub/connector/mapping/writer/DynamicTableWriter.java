@@ -11,6 +11,7 @@ import io.lumnik.hub.event.RowEventGate;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.jboss.logging.Logger;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -20,13 +21,14 @@ import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
 
@@ -45,6 +47,8 @@ import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
  */
 @ApplicationScoped
 public class DynamicTableWriter {
+
+  private static final Logger LOG = Logger.getLogger(DynamicTableWriter.class);
 
   @Inject SchemaInferrer inferrer;
   @Inject DynamicTableRegistry registry;
@@ -94,7 +98,7 @@ public class DynamicTableWriter {
     Map<String, String> registered = registry.findSchema(tenantId, mappingId);
     registered = registered == null
         ? createSchema(spec, rows, sourceTypeHints, tenantId, mappingId, connectorId)
-        : evolveSchema(spec, rows, registered, tenantId, mappingId, connectorId);
+        : evolveSchema(spec, rows, registered, sourceTypeHints, tenantId, mappingId, connectorId);
 
     insertRows(spec, rows, systemContexts, tenantId, registered, connectorId);
   }
@@ -111,29 +115,75 @@ public class DynamicTableWriter {
     return inferred;
   }
 
-  /** Subsequent writes: ALTER TABLE for any columns not seen before, then re-register the schema. */
+  /**
+   * Subsequent writes: ALTER TABLE for any columns not seen before, then re-register the schema.
+   *
+   * <p>The new column is typed from the chunk that introduces it, by the same inferrer and the
+   * same source hints the first chunk used. It used to be added as TEXT, always: type inference
+   * ran only in {@link #createSchema}, so a number or a boolean a producer added on day two froze
+   * to its string form — {@code "42"}, {@code "true"} — and a nested object to JSON text rather
+   * than jsonb, silently, with no warning and no report. Schema drift is a kafka topic's daily
+   * bread and a jdbc source gains columns the same way, so "later" is not a rare path (#485).
+   *
+   * <p>The bound is the chunk: inference reads only the rows in hand, exactly as creation does,
+   * and a column all-NULL across them falls back to its source hint and then to TEXT. The line is
+   * logged because a schema decision taken from a partial sample is one an operator may want to
+   * revisit — that gesture is `lm endpoint reset-cursor` once the producer has settled.
+   */
   private Map<String, String> evolveSchema(MappingTarget.Table spec, List<Map<String, Object>> rows,
-                                           Map<String, String> registered, Long tenantId,
+                                           Map<String, String> registered,
+                                           Map<String, String> sourceTypeHints, Long tenantId,
                                            String mappingId, UUID connectorId) {
     Set<String> newCols = detectNewColumns(rows, registered);
-    if (newCols.isEmpty()) return registered;
+    Set<String> tooNarrow = widenings(rows, registered);
+    if (newCols.isEmpty() && tooNarrow.isEmpty()) return registered;
 
-    Map<String, String> updated = new HashMap<>(registered);
-    for (String col : newCols) {
-      alterAddColumn(spec, col, "TEXT");
-      updated.put(col, "TEXT");
+    Map<String, String> updated = new LinkedHashMap<>(registered);
+
+    if (!tooNarrow.isEmpty()) {
+      widenColumns(spec, tooNarrow);
+      for (String col : tooNarrow) updated.put(col, NUMERIC);
+      LOG.infof("%s.%s: %d column(s) widened to %s by this chunk's first fractional value: %s",
+          spec.schema(), spec.name(), tooNarrow.size(), NUMERIC, String.join(", ", tooNarrow));
     }
+
+    if (!newCols.isEmpty()) {
+      Map<String, String> inferred = inferrer.infer(rows, sourceTypeHints);
+      for (String col : newCols) {
+        String pgType = inferred.getOrDefault(col, "TEXT");
+        alterAddColumn(spec, col, pgType);
+        updated.put(col, pgType);
+      }
+      // In the order they were ADDED, which is now the chunk's own order and therefore the
+      // table's — the sort this line used to carry existed only to make an unordered set
+      // deterministic, and it read as a different order from the one `\d` shows.
+      LOG.infof("%s.%s: %d column(s) added mid-run, typed from this chunk: %s",
+          spec.schema(), spec.name(), newCols.size(),
+          newCols.stream().map(c -> c + " " + updated.get(c)).collect(Collectors.joining(", ")));
+      // Index DDL only has something to do when a column appeared; widening one changes no index.
+      createIndexes(spec);
+    }
+
     // Run all DDL BEFORE advancing the registry — mirrors the creation branch, where register()
     // is the last step (the "commit" of successful DDL). If createIndexes throws, the registry
     // stays in its pre-evolution state so the next run re-detects newCols and retries; ALTER and
     // index DDL are both IF NOT EXISTS, so the retry is safe.
-    createIndexes(spec);
     registry.register(tenantId, mappingId, spec.schema(), spec.name(), updated, connectorId);
     return updated;
   }
 
+  /**
+   * Columns this chunk carries that the registry has never seen, in the order the chunk presents
+   * them.
+   *
+   * <p>ORDERED, and that is load-bearing: {@code evolveSchema} adds them by iterating this set,
+   * and Postgres's physical column order follows the order columns are ADDED. A {@code HashSet}
+   * here meant a producer adding three fields on day two got them in hash order — the exact
+   * scramble #496 removed from the creation path, left standing on the path schema drift actually
+   * takes (caught in review).
+   */
   private Set<String> detectNewColumns(List<Map<String, Object>> rows, Map<String, String> registered) {
-    Set<String> newCols = new HashSet<>();
+    Set<String> newCols = new LinkedHashSet<>();
     for (var r : rows) {
       for (String k : r.keySet()) {
         if (!registered.containsKey(k)) newCols.add(k);
@@ -143,8 +193,53 @@ public class DynamicTableWriter {
   }
 
   private void alterAddColumn(MappingTarget.Table spec, String column, String pgType) {
-    String fqn = quoteIdent(spec.schema()) + '.' + quoteIdent(spec.name());
-    exec("ALTER TABLE " + fqn + " ADD COLUMN IF NOT EXISTS " + quoteIdent(column) + " " + pgType);
+    exec("ALTER TABLE " + fqn(spec) + " ADD COLUMN IF NOT EXISTS " + quoteIdent(column) + " " + pgType);
+  }
+
+  /** The widening pair, read from the inferrer that emits them: {@code bigint -> numeric(18,4)}. */
+  private static final String BIGINT = SchemaInferrer.BIGINT;
+  private static final String NUMERIC = SchemaInferrer.NUMERIC;
+
+  /**
+   * The registered {@code BIGINT} columns this chunk feeds a number that is not whole.
+   *
+   * <p>{@link SchemaInferrer} types a column of whole numbers {@code BIGINT} so a whole number
+   * reads as one (#497) — but it only ever sees the chunk in hand, and a {@code credit_limit} of
+   * {@code 1000, 2000} in the first chunk can be {@code 748.5} in the fifth. Without this, that
+   * fifth chunk's INSERT would die ("column is of type bigint but expression is of type double
+   * precision") and take the run with it, for what is a cosmetic gain.
+   *
+   * <p>ONE direction and ONE pair. {@code bigint → numeric(18,4)} loses nothing, so it needs no
+   * arbitration; every other drift stays what it was — the first chunk types the column, and a
+   * value that cannot be bound to it is the source contradicting itself. Pure and
+   * package-visible so the detection can be pinned without a datasource.
+   */
+  static Set<String> widenings(List<Map<String, Object>> rows, Map<String, String> registered) {
+    Set<String> out = new LinkedHashSet<>();
+    for (Map<String, Object> row : rows) {
+      for (Map.Entry<String, Object> e : row.entrySet()) {
+        if (BIGINT.equals(registered.get(e.getKey()))
+            && e.getValue() instanceof Number && !SchemaInferrer.isIntegral(e.getValue())) {
+          out.add(e.getKey());
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Widens every too-narrow column of this chunk in ONE statement.
+   * {@code ALTER COLUMN TYPE} rewrites the whole table under an ACCESS EXCLUSIVE lock, so a
+   * statement per column would rewrite it once per column and take the lock once per column —
+   * three narrowed columns discovered together, three full rewrites. Postgres accepts the
+   * comma-separated form and pays for one. (Its {@code ADD COLUMN} neighbour above stays a
+   * statement per column on purpose: adding a column without a default is metadata-only.)
+   */
+  private void widenColumns(MappingTarget.Table spec, Set<String> columns) {
+    String alters = columns.stream()
+        .map(c -> "ALTER COLUMN " + quoteIdent(c) + " TYPE " + NUMERIC)
+        .collect(Collectors.joining(", "));
+    exec("ALTER TABLE " + fqn(spec) + " " + alters);
   }
 
   // ── DDL ────────────────────────────────────────────────────────────────────

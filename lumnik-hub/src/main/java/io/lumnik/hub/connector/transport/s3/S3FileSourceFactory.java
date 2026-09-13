@@ -1,8 +1,8 @@
 package io.lumnik.hub.connector.transport.s3;
 
+import io.lumnik.hub.connector.secret.SecretRefs;
 import io.lumnik.hub.connector.transport.FileSource;
 import io.lumnik.hub.connector.transport.FileSourceFactory;
-import io.lumnik.hub.secret.SecretResolver;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -14,30 +14,14 @@ import software.amazon.awssdk.services.s3.S3ClientBuilder;
 
 import java.net.URI;
 import java.util.Map;
-import java.util.Optional;
-import java.util.function.Function;
 
 @ApplicationScoped
 public class S3FileSourceFactory implements FileSourceFactory {
 
-    private final Function<String, String> envLookup;
-    private final SecretResolver secrets;
+    private final SecretRefs secrets;
 
     @Inject
-    public S3FileSourceFactory(SecretResolver secrets) {
-        this(name -> {
-            String v = System.getProperty(name);
-            return v != null ? v : System.getenv(name);
-        }, secrets);
-    }
-
-    /** Test ctor with stub env lookup and no-op secret resolver. */
-    public S3FileSourceFactory(Function<String, String> envLookup) {
-        this(envLookup, name -> Optional.empty());
-    }
-
-    public S3FileSourceFactory(Function<String, String> envLookup, SecretResolver secrets) {
-        this.envLookup = envLookup;
+    public S3FileSourceFactory(SecretRefs secrets) {
         this.secrets = secrets;
     }
 
@@ -56,8 +40,8 @@ public class S3FileSourceFactory implements FileSourceFactory {
         String prefix    = (String) cfg.getOrDefault("prefix", "");
         String suffix    = (String) cfg.getOrDefault("suffix", "");
 
-        String accessKey = secrets.resolve(accessEnv).orElse(envLookup.apply(accessEnv));
-        String secretKey = secrets.resolve(secretEnv).orElse(envLookup.apply(secretEnv));
+        String accessKey = secrets.lookup(accessEnv);
+        String secretKey = secrets.lookup(secretEnv);
         if (accessKey == null || secretKey == null) {
             throw new IllegalStateException(
                 "S3 credentials unavailable (access_key_env=" + accessEnv + ", secret_key_env=" + secretEnv + ")");

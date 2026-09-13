@@ -13,15 +13,23 @@ import java.util.Optional;
  * {@link DomainGuard} and
  * {@link UndocumentedColumnGuard} both inspect: {@code col = 'v'} / {@code col <> 'v'} /
  * {@code col != 'v'} / {@code col IN ('a','b')} / {@code col NOT IN ('a','b')}. Purely LEXICAL — no policy: the guards apply their own
- * semantic checks (declared? in-domain? a niladic keyword?). A numeric RHS, a qualified/quoted/cast column,
+ * semantic checks (declared? in-domain? a niladic keyword?). A numeric RHS, a qualified or cast column,
  * a function-wrapped column, and a non-clean IN list never yield a filter (the deliberate fail-opens).
+ * A QUOTED name is not among them: {@code SchemaCard} renders every column quoted, since that is the only
+ * form a model can copy for a name carrying a dot, a space or a currency sign — so excluding quoted
+ * identifiers would blind both guards to the filters the model actually writes.
  */
 final class SqlFilters {
 
     private SqlFilters() {}
 
-    /** A bare-column filter against one or more string literals. {@code column} is the original-case text. */
-    record Filter(String column, List<String> values) {}
+    /**
+     * A column filter against one or more string literals. {@code column} is the original-case text with
+     * any quotes stripped; {@code quoted} says how the query spelled it, which is the only thing that
+     * separates a column NAMED like a keyword from the keyword itself — Postgres draws that line at the
+     * quotes, and so must every reader of this record.
+     */
+    record Filter(String column, List<String> values, boolean quoted) {}
 
     /**
      * The parenthesised {@code SELECT} that follows an {@code =}, returned as its ORIGINAL text so
@@ -63,20 +71,29 @@ final class SqlFilters {
     static List<Filter> columnLiteralFilters(List<Token> tokens) {
         List<Filter> filters = new ArrayList<>();
         for (int i = 0; i < tokens.size(); i++) {
-            if (!isBareColumnRef(tokens, i)) continue;
+            if (!isColumnRef(tokens, i)) continue;
             filterAt(tokens, i).ifPresent(filters::add);
         }
         return filters;
     }
 
     /**
-     * A bare identifier: not quoted, not qualified ({@code a.b}), not a cast target ({@code ::type}),
-     * and not {@code NOT} — a logical operator lexes as an identifier, and reading it as one made
-     * {@code segment NOT IN (…)} refuse a DECLARED column under the name "NOT".
+     * An identifier naming a column: quoted or not, but not qualified ({@code a.b}), not a cast target
+     * ({@code ::type}), and not a BARE {@code NOT} — the logical operator lexes as an identifier, and
+     * reading it as one made {@code segment NOT IN (…)} refuse a DECLARED column under the name "NOT".
+     * Quoted, {@code "not"} is an ordinary column name to Postgres, so the exclusion tests
+     * {@code !quoted()} — the shape {@link #isKeyword} two methods below has always used.
+     *
+     * <p>Quoted was excluded until the card started advertising quoted names (see the class comment).
+     * Postgres resolves {@code "col"} to the same column as {@code col} for a lower-case name, both
+     * guards fold case before comparing, and the lexer hands over the UNQUOTED text — so inspecting it
+     * needs nothing else. Function-wrapping stays excluded, but by the token that FOLLOWS the name
+     * ({@code lower(col)} is followed by {@code )}, never by an operator), not by this predicate.
      */
-    private static boolean isBareColumnRef(List<Token> tokens, int i) {
+    private static boolean isColumnRef(List<Token> tokens, int i) {
         Token col = tokens.get(i);
-        if (col.kind() != Kind.IDENT || col.quoted() || col.text().equalsIgnoreCase("not")) return false;
+        if (col.kind() != Kind.IDENT) return false;
+        if (!col.quoted() && col.text().equalsIgnoreCase("not")) return false;
         Token prev = i > 0 ? tokens.get(i - 1) : null;
         return prev == null || !(isPunct(prev, ".") || isOp(prev, "::"));
     }
@@ -88,18 +105,18 @@ final class SqlFilters {
         Token op = tokens.get(i + 1);
         if (isComparison(op)) {
             if (i + 2 < tokens.size() && tokens.get(i + 2).kind() == Kind.STRING) {
-                return Optional.of(new Filter(col.text(), List.of(tokens.get(i + 2).text())));
+                return Optional.of(new Filter(col.text(), List.of(tokens.get(i + 2).text()), col.quoted()));
             }
             return Optional.empty();
         }
         if (isKeyword(op, "in") && i + 2 < tokens.size() && isPunct(tokens.get(i + 2), "(")) {
-            return cleanStringList(tokens, i + 3).map(values -> new Filter(col.text(), values));
+            return cleanStringList(tokens, i + 3).map(values -> new Filter(col.text(), values, col.quoted()));
         }
         // `col NOT IN ('a','b')` — the same filter, negated. The guards treat it like `<>` already does:
         // a value outside a declared domain is a value the model invented, whichever way the test runs.
         if (isKeyword(op, "not") && i + 3 < tokens.size() && isKeyword(tokens.get(i + 2), "in")
                 && isPunct(tokens.get(i + 3), "(")) {
-            return cleanStringList(tokens, i + 4).map(values -> new Filter(col.text(), values));
+            return cleanStringList(tokens, i + 4).map(values -> new Filter(col.text(), values, col.quoted()));
         }
         return Optional.empty();
     }

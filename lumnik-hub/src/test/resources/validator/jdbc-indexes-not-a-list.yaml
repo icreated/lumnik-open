@@ -1,0 +1,33 @@
+# `indexes: "email"` — a string where a list belongs, on the per-table declaration. The shape is
+# the declaration's refusal (optionalHinted carries the sentence); validateIndexes must not repeat it.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: acme-erp-bad-indexes
+  connector_type: jdbc-generic
+  scopes: [erp, billing]
+spec:
+  connection:
+    url: jdbc:postgresql://db.acme.io:5432/billing
+    user: ro_user
+    password_env: ACME_DB_PASSWORD
+  defaults:
+    schema: public
+  source:
+    tables:
+      - name: invoices
+        mode: watermark
+        watermark_column: updated_at
+        pk_columns: [id]
+      - name: customers
+        mode: full
+        pk_columns: [id]
+        indexes: "email"
+      - name: line_items
+        schema: billing
+        mode: watermark
+        watermark_column: ts
+        pk_columns: [invoice_id, line_no]
+  schedule: "*/15 * * * *"
+  window: "22:00-06:00"
+  target: {}

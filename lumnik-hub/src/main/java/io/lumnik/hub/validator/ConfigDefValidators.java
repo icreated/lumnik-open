@@ -1,9 +1,9 @@
 package io.lumnik.hub.validator;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.lumnik.hub.connector.rest.Urls;
 import io.lumnik.hub.sql.SqlIdentifiers;
 
-import java.net.URI;
 import java.util.Optional;
 import java.util.function.Function;
 import java.util.regex.Pattern;
@@ -12,20 +12,9 @@ public final class ConfigDefValidators {
 
     private ConfigDefValidators() {}
 
+    /** The rule itself lives in {@link Urls#whyNotAbsolute}, where the runtime can reach it too. */
     public static Function<JsonNode, Optional<String>> isUrl() {
-        return v -> {
-            String s = v.asText();
-            if (s.isBlank()) return Optional.of("must not be blank");
-            try {
-                URI u = new URI(s);
-                if (u.getScheme() == null || u.getHost() == null) {
-                    return Optional.of("must be an absolute URL (scheme + host)");
-                }
-                return Optional.empty();
-            } catch (Exception e) {
-                return Optional.of("must be a valid URL: " + e.getMessage());
-            }
-        };
+        return v -> Urls.whyNotAbsolute(v.asText());
     }
 
     public static Function<JsonNode, Optional<String>> matchesRegex(String pattern, String desc) {
@@ -59,5 +48,19 @@ public final class ConfigDefValidators {
             ? Optional.empty()
             : Optional.of("must be a plain identifier or schema.table pair "
                 + "(letters, digits, underscore; not starting with a digit)");
+    }
+
+    /**
+     * The same rule unqualified: the value becomes ONE identifier, so a {@code schema.table} pair is
+     * wrong here — {@code "t_" + name} would compose {@code t_orders.items}.
+     *
+     * @param becomes what the value is concatenated into, named in the refusal so the reader learns
+     *                why the rule exists rather than only that it exists
+     */
+    public static Function<JsonNode, Optional<String>> plainIdentifier(String becomes) {
+        return v -> SqlIdentifiers.isPlainIdentifier(v.asText())
+            ? Optional.empty()
+            : Optional.of("must be a plain identifier (letters, digits, underscore; not starting "
+                + "with a digit) — it becomes " + becomes);
     }
 }

@@ -1,6 +1,8 @@
 package io.lumnik.hub.connector.rest.discovery;
 
+import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.naming.Identifiers;
+import io.lumnik.hub.connector.rest.Urls;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.parser.OpenAPIV3Parser;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -10,12 +12,36 @@ import java.util.*;
 public class OpenApiImporter {
 
     public String importFromUrl(String url, String name, List<String> tags) {
-        OpenAPI api = new OpenAPIV3Parser().read(url);
+        // What a URL holding no spec actually does, measured rather than assumed: OpenAPIV3Parser
+        // does not answer null — it raises a NullPointerException from inside itself (it iterates
+        // its own null message list) for an unreachable host AND for a reachable page that is not a
+        // spec. Escaping here, that reached the operator as Internal Server Error plus an error id,
+        // with the URL they mistyped nowhere in the answer. Naming it is this class's business:
+        // what the failure means is knowledge the caller does not have.
+        OpenAPI api;
+        try {
+            api = new OpenAPIV3Parser().read(url);
+        } catch (RuntimeException unreadable) {
+            throw new ConnectorException(unreadableSpec(url), unreadable);
+        }
+        if (api == null) throw new ConnectorException(unreadableSpec(url));   // belt: not observed
         return toManifest(api, name, tags);
+    }
+
+    /**
+     * The URL is shown through {@link Urls#forDisplay}: a spec URL legally carries userinfo, and a
+     * signed one carries a token in its query, either of which would otherwise land in a 502 body
+     * and a hub log. Host and path survive, because a refusal that cannot say WHICH url it is about
+     * helps nobody.
+     */
+    private static String unreadableSpec(String url) {
+        return "no OpenAPI spec could be read at " + Urls.forDisplay(url)
+            + " — unreachable, not a spec, or not parseable";
     }
 
     public String importFromYaml(String yaml, String name, List<String> tags) {
         OpenAPI api = new OpenAPIV3Parser().readContents(yaml).getOpenAPI();
+        if (api == null) throw new ConnectorException("the supplied document is not a parseable OpenAPI spec");
         return toManifest(api, name, tags);
     }
 

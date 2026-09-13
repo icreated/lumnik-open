@@ -11,7 +11,7 @@ import (
 func newEndpointCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "endpoint",
-		Short: "Manage REST connector endpoints",
+		Short: "Manage a connector's endpoints (jdbc: one per table; rest: one per spec.endpoints[])",
 	}
 	cmd.AddCommand(
 		newEndpointActionCmd("enable", func(cmd *cobra.Command, c *client.Client, cid, eid string) error {

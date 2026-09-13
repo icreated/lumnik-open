@@ -31,7 +31,8 @@ public record ViewSuggestion(String table, String title, List<String> columns,
         }
     }
 
-    private static String abbreviate(String s) {
+    /** Package-visible: {@link ViewYamlAssembler} clips the echoed description to the same bound. */
+    static String abbreviate(String s) {
         return s.length() <= 200 ? s : s.substring(0, 200) + "…";
     }
 }

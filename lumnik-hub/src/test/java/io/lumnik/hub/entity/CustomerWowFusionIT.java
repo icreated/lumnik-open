@@ -1,5 +1,6 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import io.agroal.api.AgroalDataSource;
@@ -13,9 +14,6 @@ import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.runtime.ConnectorEngine;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
 import org.junit.jupiter.api.AfterAll;
@@ -68,9 +66,6 @@ class CustomerWowFusionIT {
   AgroalDataSource adminDs;
 
   static WireMockServer wm;
-
-  static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config().encoderConfig(
-      EncoderConfig.encoderConfig().encodeContentTypeAs("application/yaml", ContentType.TEXT));
 
   // Unique per run: dodges the CSV dynamic_table registry AND the hybrid in-memory schemaCache.
   String suffix;
@@ -164,7 +159,7 @@ class CustomerWowFusionIT {
               ville: city
         """.formatted(entityName, siebelTable, csvTable);
 
-    given().config(YAML_CFG).headers(TestIdentity.tenantAndUser(1))
+    given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(manifest)
         .post("/api/entities/apply").then().statusCode(200);
 

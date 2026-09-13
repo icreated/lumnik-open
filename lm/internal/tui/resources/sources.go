@@ -177,6 +177,8 @@ func connectorColor(ct types.Connector) tcell.Color {
 		return tcell.NewRGBColor(0xEF, 0x44, 0x44) // red
 	case KindRunning:
 		return tcell.NewRGBColor(0xFF, 0x8C, 0x00) // amber
+	case KindPartial:
+		return tcell.NewRGBColor(0xEA, 0xB3, 0x08) // yellow — finished, but not whole
 	case KindCancelled:
 		return tcell.NewRGBColor(0x6B, 0x72, 0x80) // gray — didn't finish
 	}
@@ -193,6 +195,8 @@ func connectorGlyph(ct types.Connector) string {
 		return "●"
 	case KindRunning:
 		return "▶"
+	case KindPartial:
+		return "◐"
 	case KindCancelled:
 		return "─"
 	}
@@ -301,7 +305,7 @@ func (c *Sources) runNow() {
 		// Silence on success cost the rehearsal a freeze-by-retry (carnet #4):
 		// the human MUST see that ^R landed.
 		if c.toast != nil {
-			c.toast("run scheduled: " + tview.Escape(sel.Name))
+			c.toast("run scheduled: " + sel.Name)
 		}
 	}
 }
@@ -361,6 +365,9 @@ func (c *Sources) SelectedDescribe() (string, string, bool) {
 	fmt.Fprintf(&b, "tenant:    %d\n", full.TenantID)
 	fmt.Fprintf(&b, "type_id:   %s\n", esc(full.TypeID))
 	fmt.Fprintf(&b, "schedule:  %s\n", esc(full.Schedule))
+	// Beside the cron, never instead of it: a panel showing one without the other answers half of
+	// "when does this run?" (#499).
+	fmt.Fprintf(&b, "window:    %s\n", esc(full.Window))
 	enabled := "✗ false"
 	if full.Enabled {
 		enabled = "✓ true"

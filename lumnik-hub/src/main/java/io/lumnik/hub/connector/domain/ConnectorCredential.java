@@ -5,6 +5,8 @@ import io.lumnik.common.domain.TenantedEntity;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.Mutability;
+import io.lumnik.hub.connector.persistence.converters.ImmutableJsonNodePlan;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -34,6 +36,7 @@ public class ConnectorCredential extends TenantedEntity {
   private byte[] iv;
 
   @JdbcTypeCode(SqlTypes.JSON)
+  @Mutability(ImmutableJsonNodePlan.class)
   @Column(columnDefinition = "jsonb")
   private JsonNode metadata;
 

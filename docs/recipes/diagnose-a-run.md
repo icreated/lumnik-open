@@ -31,13 +31,13 @@ completed but set rows aside:
 
 ```
 $ lm run get 3ccd21eb
-ID        CONNECTOR  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-3ccd21eb  products   Failed  0   0    0        0             2026-09-05 05:38  2026-09-05 05:38
+ID        CONNECTOR  ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+3ccd21eb  products   default   Failed  0   0    0        0             2026-09-05 05:38  2026-09-05 05:38
 ✖ run failed: SFTP connect failed: DefaultConnectFuture[lumnik@sftp.example.internal/<unresolved>:22]: Failed (UnresolvedAddressException) to execute: null
 
 $ lm run get f0466804
-ID        CONNECTOR  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-f0466804  orders     Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
+ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+f0466804  orders     default   Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
 ⚠ 2 rows quarantined — see: lm dlq list --run f0466804-0824-4eb4-8aa2-54e263dccafe
 ```
 
@@ -104,7 +104,7 @@ and it is not counted as one. The distinction is the point:
 ## 3. Fix, re-run, close the loop
 
 Re-running after a failure is safe by design: a jdbc/CSV run resumes on its cursor — no
-duplicates, no gaps ([watermark resume](../connectors/jdbc.md#watermark-resume-composite-cursor));
+duplicates, no gaps ([how jdbc cursors resume](../connectors/jdbc.md#cursors-resume-restart-reset));
 a REST run re-reads and upserts idempotently.
 
 ```bash

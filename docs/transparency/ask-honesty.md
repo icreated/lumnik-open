@@ -65,6 +65,12 @@ are none"*.
 
 **Do next:** apply a connector with `metadata.scopes: [<your-scope>]` and run it.
 
+A stored schema that cannot be **read** is refused the same way and says so, rather than failing
+somewhere later with an error id: the name of a table or a column is what every part of the ask
+dereferences, so a card carrying one that names nothing is unusable rather than degraded.
+
+> The stored schema card for scope '<scope>' cannot be read (…) — re-run discovery, or apply the entity again, to replace it.
+
 ### 2. Abstention exit — the model's honest "I can't"
 
 **Trigger:** the SQL-generation model concludes the question doesn't map to the declared schema
@@ -74,6 +80,31 @@ and emits its sentinel (`NO_ANSWER`) instead of guessing a query.
 
 **Do next:** rephrase using the columns the scope actually declares (`lm view` shows them), or
 ingest/declare the missing data.
+
+When the scope holds something text-to-SQL structurally cannot read, the refusal says so. It names
+the **fact**, never a command — the same `answer` string is served to `lm ask`, to the PWA (which
+renders it as plain text) and to anything else on the API, so the gesture is the client's to offer
+and each already has one. Below, *what the refusal adds* and *where you go next* are therefore two
+different things.
+
+Two questions abstain for the same reason — the schema card advertises an entity's canonical
+columns and nothing else — and for both the answer exists one step away:
+
+- **"why can't this document move on?"** — a declared `kind:Workflow` lifecycle lives in the scope's
+  RAG corpus, which text-to-SQL never reads.
+    - *The refusal adds:* this scope **does** declare a lifecycle, and the question is answered from
+      that declaration rather than from the data.
+    - *Where you go next:* the semantic chat door — `lm chat`, or `POST /api/rag/chat` without
+      `mode: analytic`.
+- **"where do the ERP and the CRM disagree?"** — a fused entity's `_conflicts` ledger is a jsonb
+  column that is deliberately **not** on the card.
+    - *The refusal adds:* the disagreement **is** recorded, row by row, on each fused record.
+    - *Where you go next:* `lm conflicts list <entity>`, or the record's detail view in the PWA.
+
+Neither is answered by the analytic door itself, on purpose. Reading lifecycle text would have the
+SQL generator reasoning over prose, and advertising a jsonb column on a card that types every
+column `text` would have it writing `_conflicts->>…` against a column declared as text — the
+confident-wrong these guards exist to prevent, once in each direction.
 
 !!! note "Sometimes the abstention fires before a more specific guard"
     If you ask about a value that is outside a declared domain (e.g. a `segment` that doesn't
@@ -143,6 +174,32 @@ The value/column/table guards inspect only **clean, unambiguous** SQL shapes (ba
 compared to string literals). A function-wrapped column (`lower(col) = …`), a qualified alias, or
 an ambiguous name across tables is deliberately *not* refused — better to miss one check than to
 block a legitimate query on a parsing glitch. The guards are a floor of honesty, not a cage.
+
+## Names the source chose
+
+A column keeps the name its source gave it: a JSON field named `c_bpartner.id`, a CSV header
+`Partner Name`, an ERP column `MONTANT_€`. The schema card the model reads names every column
+**quoted**, so all three are ordinary askable columns — the generated SQL quotes them, and the
+answer comes back with the row keyed by the source's own name.
+
+Bare, none of them could work, and not for a subtle reason: a dot reads as the *table*.*column*
+separator, so the query asks about a table that does not exist; a space cannot be read as one name
+at all; and an unquoted name case-folds to lowercase and stops matching a mixed-case column. The
+model is told to use the listed names exactly and never invent one — given a name it cannot copy,
+it had nothing honest left to do.
+
+This matters most where there is no rename. A kafka manifest carries no mapping hooks, so the
+producer's field name *is* the column name; a CSV or JDBC source can also
+[rename on the way in](../connectors/jdbc.md#per-table-keys), but nothing has to.
+
+The guards read such a name as **one** identifier, the way the server does — including a name
+carrying a currency sign, a guillemet or a `$`. A refusal about `montant_€_ht` names
+`montant_€_ht`, never a fragment of it.
+
+The same holds one rung up the ladder: a
+[`kind:Workflow`](../apps/workflows.md#names-the-source-chose) declares its lifecycle over the
+column's real name too, so the graph the chat answers from and the column it answers about are
+spelled the same way.
 
 ## When a wrong number lands anyway
 

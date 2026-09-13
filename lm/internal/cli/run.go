@@ -4,32 +4,25 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/icreated/lumnik-open/lm/internal/types"
 	"github.com/spf13/cobra"
 )
 
-// filterRunsByConnector keeps only runs belonging to the given connector id.
-func filterRunsByConnector(runs []types.Run, connectorID string) []types.Run {
-	out := make([]types.Run, 0, len(runs))
-	for _, r := range runs {
-		if r.ConnectorID == connectorID {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
 func runRow(r types.Run) []string {
 	return []string{
-		shortID(r.ID), r.ConnectorLabel(), r.Status,
+		shortID(r.ID), r.ConnectorLabel(), r.EndpointLabel(), r.Status,
 		fmt.Sprintf("%d", r.RecordsIn), fmt.Sprintf("%d", r.RecordsOut),
 		fmt.Sprintf("%d", r.RecordsSkipped), fmt.Sprintf("%d", r.DeadLetterCount),
 		output.HumanTime(&r.StartedAt), output.HumanTime(r.EndedAt),
 	}
 }
 
-var runHeaders = []string{"ID", "CONNECTOR", "STATUS", "IN", "OUT", "SKIPPED", "DEAD-LETTERS", "STARTED", "ENDED"}
+// ENDPOINT sits next to CONNECTOR because it is the second half of the same address: a connector
+// writes one run row per endpoint (`lm endpoint reset-cursor <connector>/<endpoint>` addresses the
+// pair), so without it a two-table connector's rows read identically.
+var runHeaders = []string{"ID", "CONNECTOR", "ENDPOINT", "STATUS", "IN", "OUT", "SKIPPED", "DEAD-LETTERS", "STARTED", "ENDED"}
 
 func newRunCmd() *cobra.Command {
 	r := &cobra.Command{Use: "run", Short: "Inspect connector runs"}
@@ -42,24 +35,20 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			limit, _ := cmd.Flags().GetInt("limit")
-			runs, err := c.RunList(limit)
+			conn, _ := cmd.Flags().GetString("connector")
+			connectorID, err := resolveConnectorFilter(c, conn)
 			if err != nil {
 				return err
 			}
-			if conn, _ := cmd.Flags().GetString("connector"); conn != "" {
-				id, err := resolveConnectorID(c, conn)
-				if err != nil {
-					return err
-				}
-				runs = filterRunsByConnector(runs, id)
+			runs, err := c.RunList(connectorID, "", pageLimit(cmd))
+			if err != nil {
+				return err
 			}
-			format, _ := cmd.Flags().GetString("output")
-			return output.Print(cmd.OutOrStdout(), format, runHeaders, runs, runRow)
+			return printPage(cmd, runHeaders, runs, runRow)
 		},
 	}
 	list.Flags().String("connector", "", "filter by connector name or id")
-	list.Flags().Int("limit", 50, "max runs to list")
+	addPageLimitFlag(list, 50, client.RunsPageCap, "max runs to list")
 	r.AddCommand(list)
 
 	r.AddCommand(&cobra.Command{
@@ -124,6 +113,32 @@ func newRunCmd() *cobra.Command {
 				}
 			}
 			return nil
+		},
+	})
+
+	r.AddCommand(&cobra.Command{
+		Use:   "cancel ID",
+		Short: "Request cancellation of an in-flight run",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := ClientFromCmd(cmd)
+			if err != nil {
+				return err
+			}
+			id, err := resolveRunID(c, args[0])
+			if err != nil {
+				return err
+			}
+			if err := c.RunCancel(id); err != nil {
+				return err
+			}
+			// The 202 is a request recorded, not a run stopped — the run ends after the
+			// current chunk at the earliest. This is not a query result, so — same stdout/
+			// stderr contract as the alerts above — it goes to stderr, keeping stdout clean
+			// for every output format and machine consumer (incl. the OTK).
+			_, err = fmt.Fprintf(cmd.ErrOrStderr(),
+				"• cancellation requested — the run ends after the current chunk; re-read with: lm run get %s\n", id)
+			return err
 		},
 	})
 	return r

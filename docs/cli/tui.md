@@ -48,19 +48,30 @@ dismiss it for now (it reappears on the next request that needs the dead session
 | `ENABLED` | `:sources` | whether the connector is on at all |
 | `Enter` | `:sources` | REST source → drills into `:endpoints`; any other kind → jumps straight to `:runs`, filtered to that connector |
 | `SCHEDULE`, `LAST_RUN`, `STATUS` | `:endpoints` | per endpoint — for a REST source, this is where to check "did it even fire?" without leaving the table |
-| `Enter` | `:endpoints` | drills into that endpoint's own `:runs` |
+| `Enter` | `:endpoints` | drills into that endpoint's own `:runs` — the title says `[endpoint=…]`, and `Esc` clears it |
 | `at:` (under `── last run ──`) | `d` describe panel, any source | the exact last-run time, even when it isn't a table column |
 
 In `:sources`: `s` cycles the sort column, `e` opens the connector's YAML in
 `$EDITOR` for a live edit, `R` (or `^R`) triggers a run now, `^P` pauses or resumes
 it, `Del` deletes it (no confirmation), `t` edits its tags.
 
-**Reading a run.** `:runs` lists `CONNECTOR`, `STATUS`, `STARTED`, `DURATION`,
-`RECORDS` (in/out/skip) and `TRIGGER` per row. Select one and press `d` for the full
+**Reading a run.** `:runs` lists `CONNECTOR`, `ENDPOINT`, `STATUS`, `STARTED`, `DURATION`,
+`RECORDS` (in/out/skip) and `TRIGGER` per row — one row per endpoint, which is why the endpoint
+is named: a connector reading two tables writes two rows that differ in nothing else. Select one and press `d` for the full
 record — the same fields plus the run's id, chunk count, and, when the run failed,
 a final `error:` section with the failure message in full.
 
-`STATUS` takes exactly four values. The table below decodes every one of them, in the
+**Stopping a run.** Select a `Running` row and press `c` to request cancellation.
+That is a request, not a stop: the chunk in flight keeps going, and the run ends
+only at the next chunk boundary — it can still finish normally if that chunk was
+already reaching the end of its data. A toast confirms once the hub has recorded
+the request. Pressing `c` on a row that already left `Running`, or on a run no
+chunk loop on this hub is watching (an orphan the boot-time reaper hasn't caught
+yet — it clears such rows to `Failed` at the hub's next restart — or one just
+triggered a moment ago and not yet registered — retry then), toasts the hub's own
+refusal instead of doing nothing silently.
+
+`STATUS` takes exactly five values. The table below decodes every one of them, in the
 order to check when a run's outcome isn't obvious:
 
 | What you see | What happened | Where the detail lives |
@@ -69,6 +80,7 @@ order to check when a run's outcome isn't obvious:
 | `STATUS` = `Failed` | A connection or manifest problem (source unreachable, bad credentials, a refused config) failed the *run itself* | The `error:` section in `d`'s full record |
 | `STATUS` = `Completed`, a row is in `:dlq` | A quality failure on that one row (e.g. `validate-row`) | `:dlq` — reason and payload |
 | `STATUS` = `Completed`, row counted in `skip` but not in `:dlq` | The row was excluded by a declared filter (`filter-where`, `skip-empty-rows`), not rejected | The `skip` figure in `RECORDS` |
+| `STATUS` = `Partial` | The run ended **below the target it gave itself** — it read less than the source held when it started. Nothing broke and nothing was written twice: the position is kept and the next run resumes from it. Two causes: the reader stopped on its own budget (a topic feeding only unparsable messages), or the run began past records the source had already deleted underneath its stored position | The `error:` section in `d`'s full record names the target and what was not reached |
 | `STATUS` = `Cancelled` | Either cancelled by a user mid-run, or this run was skipped because another run for the same endpoint was already active | The `error:` section in `d`'s full record — `cancelled by user` or `skipped: another run is already active for this endpoint` |
 | No entry in `:runs` at all | Nothing failed — the schedule hasn't fired yet | `:sources` / `:endpoints`, not `:runs` |
 
@@ -151,6 +163,7 @@ active one, as noted above.
 |---|---|---|
 | `:` `r` `d` `y` `q` `?` `Esc` | global | palette · refresh · describe · yank row · quit · help · close |
 | `s` | `:sources` `:runs` `:dlq` | cycle the sort column |
+| `c` | `:runs` | request cancellation of the selected run (only meaningful while `STATUS` = `Running`) |
 | `e` / `R` (or `^R`) / `^P` / `Del` / `t` | `:sources` | edit YAML in `$EDITOR` · run now · pause/resume · delete · edit tags |
 | `Enter` | `:sources` | REST → its `:endpoints`; others → its `:runs` |
 | `Enter` / `Esc` | `:endpoints` | the endpoint's `:runs` · back to `:sources` |

@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.connector.rest.discovery.OpenApiImporter;
 import io.lumnik.hub.validator.ConnectorValidationService;
+import io.lumnik.hub.testsupport.ValidationWarnings;
+import io.lumnik.hub.validator.ValidationError;
 import io.lumnik.hub.validator.ValidationResult;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -91,6 +93,53 @@ class RestConnectorValidatorTest {
     @Test void validManifest_passes() throws Exception {
         ValidationResult r = service.validate(load("rest-valid.yaml"));
         assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
+        // The anti-lie guard of the closed root: every connector-level key this fixture carries —
+        // schedule, window, headers, auth — is one the door really reads.
+        assertEquals(List.of(), ValidationWarnings.unknownKeyPaths(r),
+            () -> "no honored key may be called unknown: " + r.warnings());
+    }
+
+    /**
+     * The root was the unswept tier: `base_urls`, `headerz` and `windo` were accepted and
+     * persisted while a typo inside `auth` — a closed block — was named. Closing it took five
+     * declarations, because the door reads five keys this ConfigDef did not list: `auth`,
+     * `headers`, `defaults`, `graphql_path` and `window`. The manifest stays VALID.
+     */
+    @Test void misspelledRootKeys_areNamed() throws Exception {
+        ValidationResult r = service.validate(load("rest-unknown-root-keys.yaml"));
+        assertTrue(r.isValid(), () -> "an unknown key is a warning, not a refusal: " + r.errors());
+        assertEquals(List.of("spec.base_urls", "spec.headerz", "spec.windo"),
+            ValidationWarnings.unknownKeyPaths(r),
+            () -> "all three root typos must be named, got warnings: " + r.warnings());
+    }
+
+    /** Same family as headers: the declaration owns the shape, the cross-field rule the value. */
+    @Test void rateLimitThatIsNotAString_isRefusedExactlyOnce() throws Exception {
+        ValidationResult r = service.validate(load("rest-rate-limit-not-a-string.yaml"));
+        assertFalse(r.isValid());
+        assertEquals(1, r.errors().stream()
+                .filter(e -> e.path().equals("spec.default_rate_limit")).count(),
+            () -> "one defect, one refusal: " + r.errors());
+    }
+
+    /** `graphql_path` is read by the apply handler, so a graphql manifest must not be accused. */
+    @Test void graphqlManifest_carriesNoUnknownKey() throws Exception {
+        ValidationResult r = service.validate(load("rest-graphql-non-relay.yaml"));
+        assertEquals(List.of(), ValidationWarnings.unknownKeyPaths(r),
+            () -> "graphql_path is load-bearing at apply: " + r.warnings());
+    }
+
+    /**
+     * The 500 the declaration closes, at this tier; the door's own witness is
+     * {@code ConnectorApplyValidationTest}, where it was measured. `validateAuth` cannot catch
+     * this one — it returns early on a non-object — so the type check had to come from declaring
+     * the block.
+     */
+    @Test void authThatIsNotABlock_isRefusedInsteadOfBreakingTheApplyDoor() throws Exception {
+        ValidationResult r = service.validate(load("rest-auth-not-object.yaml"));
+        assertFalse(r.isValid(), "a string where a block belongs must not reach the handler");
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.auth")),
+            () -> "the refusal must name spec.auth, got: " + r.errors());
     }
 
     @Test void missingTokenEnv_whenBearer_isError() throws Exception {
@@ -105,6 +154,46 @@ class RestConnectorValidatorTest {
         assertTrue(r.errors().stream().anyMatch(e ->
             e.path().equals("spec.auth.token_env") && e.message().contains("bearer")),
             () -> "expected bearer null token_env rejected, got: " + r.errors());
+    }
+
+    /**
+     * The sibling of jdbc's inline {@code password}, and the reason the ticket's "the only such
+     * field across all manifest kinds" was wrong (#530): {@code token_value} is a literal bearer
+     * token, declared dev-only, consumed as-is by {@code BearerAuthProviderFactory}. The hazard is
+     * not precedence — {@code token_env} is read first, so nothing is silently overridden — it is a
+     * secret in a file the integrator is told to commit. A warning: the field stays usable.
+     */
+    @Test void inlineTokenValue_isAdvisedAgainst() throws Exception {
+        ValidationResult r = service.validate(load("rest-inline-token-value.yaml"));
+        assertTrue(r.isValid(), () -> "a documented dev/test affordance is not refused: " + r.errors());
+
+        List<ValidationError> advisories = r.warnings().stream()
+            .filter(w -> w.path().equals("spec.auth.token_value")).toList();
+        assertEquals(1, advisories.size(), () -> "one field, one advisory: " + r.warnings());
+        assertFalse(advisories.get(0).recommendations().isEmpty(),
+            "an advisory an integrator can act on carries the line to write instead");
+    }
+
+    /**
+     * …and only under {@code kind: bearer}, where the sentence is true. {@code token_value} is
+     * declared optional for every kind and nothing but the bearer factory reads it, so warning
+     * about a "literal bearer token" on a basic-auth manifest would name something that is not
+     * there. A secret in a key the runtime ignores is a different finding; the CI grep the docs
+     * give bans the line whatever the kind (Copilot round 2).
+     */
+    @Test void tokenValue_underAnotherKind_drawsNoBearerAdvisory() throws Exception {
+        ValidationResult r = service.validate(load("rest-token-value-not-bearer.yaml"));
+        assertEquals(List.of(), r.warnings().stream()
+                .filter(w -> w.path().equals("spec.auth.token_value")).toList(),
+            () -> "the advisory speaks only where its wording holds: " + r.warnings());
+    }
+
+    /** A manifest that names its secret hears nothing about it. */
+    @Test void tokenEnvAlone_drawsNoAdvisory() throws Exception {
+        ValidationResult r = service.validate(load("rest-valid.yaml"));
+        assertEquals(List.of(), r.warnings().stream()
+                .filter(w -> w.path().startsWith("spec.auth")).toList(),
+            () -> "nothing to advise when no literal is present: " + r.warnings());
     }
 
     @Test void cursorPagination_withoutCursorPath_isError() throws Exception {
@@ -330,5 +419,16 @@ class RestConnectorValidatorTest {
         JsonNode doc = mapper.valueToTree(new Yaml().load(manifest));
         ValidationResult r = service.validate(doc);
         assertTrue(r.isValid(), () -> "the hub rejects its own generated manifest: " + r.errors());
+    }
+    /**
+     * Declaring `headers` as a LIST gave the runner the shape check that `validateHeaders` used to
+     * do by hand — so the hand check had to stop, or one mistake would be reported twice. Counted,
+     * because that is the only way a duplicate shows.
+     */
+    @Test void headersThatIsNotAList_isRefusedExactlyOnce() throws Exception {
+        ValidationResult r = service.validate(load("rest-headers-not-a-list.yaml"));
+        assertFalse(r.isValid());
+        assertEquals(1, r.errors().stream().filter(e -> e.path().equals("spec.headers")).count(),
+            () -> "one defect, one refusal: " + r.errors());
     }
 }

@@ -3,6 +3,7 @@ package io.lumnik.hub.validator.csv;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.validator.ConnectorValidationService;
+import io.lumnik.hub.testsupport.ValidationWarnings;
 import io.lumnik.hub.validator.ValidationResult;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.InputStream;
+import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 @QuarkusTest
@@ -176,17 +178,25 @@ class CsvFileConnectorValidatorTest {
             () -> "expected a columns-required error for columns: null, got: " + r.errors());
     }
 
-    // C3 (closed blocks first): a typo'd key in a CLOSED block warns instead of no-oping
-    // silently forever.
-    @Test void unknownKeysInClosedBlocks_warn() throws Exception {
+    // C3 (closed blocks first), now at every tier: a typo'd key — in a block or at the root —
+    // warns instead of no-oping silently forever.
+    @Test void unknownKeys_atEveryTier_warn() throws Exception {
         ValidationResult r = service.validate(load("csv-unknown-keys.yaml"));
         assertTrue(r.isValid(), () -> "unknown-key warnings must not fail apply: " + r.errors());
-        assertTrue(r.warnings().stream().anyMatch(w ->
-                w.path().equals("spec.parser.empy_check") && w.message().contains("unknown")),
-            () -> "expected an unknown-key warning for parser.empy_check, got: " + r.warnings());
-        assertTrue(r.warnings().stream().anyMatch(w ->
-                w.path().equals("spec.target.tabel_prefix") && w.message().contains("unknown")),
-            () -> "expected an unknown-key warning for target.tabel_prefix, got: " + r.warnings());
+        // One fixture, both tiers: two typos inside closed blocks, and two at the ROOT — the tier
+        // that was unswept until `mapping` and `window` were declared. Declaring them was the
+        // price of closing: accusing either would have been a warning that lies.
+        assertEquals(
+            List.of("spec.after_proces", "spec.parser.empy_check", "spec.target.tabel_prefix", "spec.windo"),
+            ValidationWarnings.unknownKeyPaths(r),
+            () -> "every typo, and nothing else, must be named: " + r.warnings());
+    }
+
+    /** The witness that `mapping` is declared rather than accused — shipped manifests carry it. */
+    @Test void mappingManifest_carriesNoUnknownKey() throws Exception {
+        ValidationResult r = service.validate(load("csv-mapping-stateless-row.yaml"));
+        assertEquals(List.of(), ValidationWarnings.unknownKeyPaths(r),
+            () -> "mapping is load-bearing (MappingLoader reads it): " + r.warnings());
     }
 
     // Dead knobs (tribunal B1/B2): parser.chunk_size and target.table_prefix are parsed by

@@ -12,6 +12,16 @@ the frozen ERP*. The CLI binary is `lm` (the lumen symbol).
 
 Read-only entry: ingest first, risk nothing. lumnik never writes into your ERP.
 
+## Where it stands
+
+**beta.** lumnik no longer grows surfaces — the recent work is fixes, not new subsystems. What is
+not here is not here on purpose, and every page says so in its own words. What we do not know yet:
+nobody outside the team that wrote it has run lumnik in production.
+
+[Where lumnik stands](/docs/where-lumnik-stands.md) gathers the whole boundary on one page — what
+is deliberately absent, what is started and not finished, and the two things that have to be true
+before that word goes away.
+
 ## What's in the box
 
 - **Connectors, declarative-first** — JDBC, CSV (local + remote), REST (11 pagination

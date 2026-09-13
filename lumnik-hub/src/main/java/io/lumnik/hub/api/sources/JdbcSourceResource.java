@@ -1,20 +1,20 @@
 package io.lumnik.hub.api.sources;
 
+import io.lumnik.hub.connector.jdbc.ColumnDescriptor;
+import io.lumnik.hub.sql.SqlIdentifiers;
+import io.quarkus.narayana.jta.QuarkusTransaction;
+import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.sources.JdbcSourceDtos.*;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorCredential;
-import io.lumnik.hub.connector.domain.ConnectorMapping;
 import io.lumnik.hub.connector.domain.ConnectorRun;
 import io.lumnik.hub.connector.jdbc.HikariPoolRegistry;
 import io.lumnik.hub.connector.jdbc.JdbcConnectionConfig;
 import io.lumnik.hub.connector.jdbc.JdbcConnectorType;
-import io.lumnik.hub.connector.jdbc.MappingYamlBuilder;
 import io.lumnik.hub.connector.jdbc.SchemaIntrospector;
 import io.lumnik.hub.connector.jdbc.TableDescriptor;
-import io.lumnik.hub.connector.jdbc.TemplateGenerator;
 import io.lumnik.hub.connector.repository.ConnectorCredentialRepository;
-import io.lumnik.hub.connector.repository.ConnectorMappingRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.repository.ConnectorRunRepository;
 import io.lumnik.common.security.RequiresPermission;
@@ -41,11 +41,8 @@ public class JdbcSourceResource {
   private static final Logger LOG = Logger.getLogger(JdbcSourceResource.class);
 
   @Inject SchemaIntrospector introspector;
-  @Inject TemplateGenerator templateGenerator;
-  @Inject MappingYamlBuilder yamlBuilder;
   @Inject ConnectorRepository connectorRepo;
   @Inject ConnectorCredentialRepository credentialRepo;
-  @Inject ConnectorMappingRepository mappingRepo;
   @Inject ConnectorRunRepository runRepo;
   @Inject SecretCipher cipher;
   @Inject HikariPoolRegistry poolRegistry;
@@ -96,7 +93,7 @@ public class JdbcSourceResource {
     } catch (IllegalArgumentException e) {
       return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
     }
-    String schema = req.schema() != null ? req.schema() : "public";
+    String schema = req.schemaOrDefault();
     try {
       List<TableDescriptor> tables = introspector.discover(
           cc, schema, req.skipPatterns(), req.includeViews());
@@ -123,40 +120,64 @@ public class JdbcSourceResource {
       return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
     }
 
-    TemplateGenerator.Mode mode = resolveMode(req.templateMode());
-    UUID credentialId = findOrCreateCredential(req, tenantId);
-
-    List<AddResultEntry> created = new ArrayList<>();
-    List<AddResultEntry> skipped = new ArrayList<>();
-
+    // Every table is introspected and checked BEFORE anything is persisted: a refusal names its
+    // table and leaves nothing behind (a normal return commits this transaction).
+    List<PreparedTable> prepared = new ArrayList<>();
     for (AddTableRequest tableReq : req.tables()) {
       String connectorName = req.sourceName() + "--" + tableReq.table();
-
-      // Idempotency: skip if connector already exists for this tenant
       Connector existing = connectorRepo
           .find("name = ?1 AND tenantId = ?2", connectorName, tenantId)
           .firstResult();
-      if (existing != null) {
-        skipped.add(new AddResultEntry(existing.getId(), existing.getMappingId(),
-            existing.getName(), connectorName + "-mapping", "skipped"));
+      if (existing != null) {                      // idempotent on the connector name
+        prepared.add(new PreparedTable(tableReq, connectorName, existing, null, null));
         continue;
       }
-
       try {
-        created.add(addTable(tableReq, req, cc, mode, credentialId, tenantId, connectorName));
+        TableDescriptor td = introspector.describe(cc, req.schemaOrDefault(), tableReq.table());
+        prepared.add(new PreparedTable(tableReq, connectorName, null, td, buildConnectorConfig(req, cc, td, tableReq)));
+      } catch (ConfigValidationException refused) {
+        return Response.status(400).entity(ApiErrors.error(refused.getMessage())).build();
       } catch (Exception e) {
-        LOG.errorf(e, "Failed to add connector for table %s", tableReq.table());
+        LOG.errorf(e, "Failed to describe table %s", tableReq.table());
         return Response.status(502).entity(ApiErrors.error(
             "Failed processing table '" + tableReq.table() + "': " + e.getMessage())).build();
+      }
+    }
+
+    UUID credentialId = findOrCreateCredential(req, tenantId);
+    List<AddResultEntry> created = new ArrayList<>();
+    List<AddResultEntry> skipped = new ArrayList<>();
+    for (PreparedTable p : prepared) {
+      if (p.existing() != null) {
+        skipped.add(new AddResultEntry(p.existing().getId(), p.existing().getName(), "skipped"));
+        continue;
+      }
+      try {
+        created.add(persistTable(p, req, credentialId, tenantId));
+      } catch (Exception e) {
+        LOG.errorf(e, "Failed to add connector for table %s", p.tableReq().table());
+        QuarkusTransaction.setRollbackOnly();      // all or nothing: no half-added source
+        return Response.status(502).entity(ApiErrors.error(
+            "Failed processing table '" + p.tableReq().table() + "': " + e.getMessage())).build();
       }
     }
 
     return Response.ok(new AddResponse(created, skipped)).build();
   }
 
-  /** Find the per-(sourceName, tenant) Basic credential, creating it on first use. Returns its id. */
+  /** One requested table after introspection and checks; {@code existing} set when its connector already exists. */
+  private record PreparedTable(AddTableRequest tableReq, String connectorName, Connector existing,
+                               TableDescriptor td, Map<String, Object> config) {}
+
+  /**
+   * The per-(sourceName, tenant) Basic credential, created on first use and otherwise refreshed
+   * with the request's user:password — the value this add just introspected with, and the one
+   * every later run must authenticate with (a rotated password re-added would otherwise leave the
+   * runs on the old secret). Returns its id.
+   */
   private UUID findOrCreateCredential(AddRequest req, Long tenantId) {
     String credName = req.sourceName() + "--credential";
+    byte[] secret = cipher.encrypt(req.user() + ":" + req.password());
     ConnectorCredential cred = credentialRepo
         .find("name = ?1 AND tenantId = ?2", credName, tenantId)
         .firstResult();
@@ -165,55 +186,61 @@ public class JdbcSourceResource {
       cred.setTenantId(tenantId);
       cred.setName(credName);
       cred.setKind("Basic");
-      cred.setCiphertext(cipher.encrypt(req.user() + ":" + req.password()));
       cred.setIv(new byte[0]);
+      cred.setCiphertext(secret);
       credentialRepo.persist(cred);
+    } else {
+      cred.setCiphertext(secret);
     }
     return cred.getId();
   }
 
-  /** Describe one table, generate its mapping, and persist the mapping + connector. */
-  private AddResultEntry addTable(AddTableRequest tableReq, AddRequest req, JdbcConnectionConfig cc,
-                                  TemplateGenerator.Mode mode, UUID credentialId, Long tenantId,
-                                  String connectorName) {
-    TableDescriptor td = introspector.describe(cc, "public", tableReq.table());
-    String template = templateGenerator.generate(td, List.of(), mode);
-
-    var spec = yamlBuilder.build(req.sourceName(), td, template);
-    String yamlContent = yamlBuilder.dumpYaml(spec);
-
-    String mappingName = connectorName + "-mapping";
-    ConnectorMapping mapping = new ConnectorMapping();
-    mapping.setTenantId(tenantId);
-    mapping.setName(mappingName);
-    mapping.setTargetEntity(td.schema() + "." + td.name());
-    mapping.setSpecFormat("yaml");
-    mapping.setSpecContent(yamlContent);
-    mappingRepo.persist(mapping);
-
+  /**
+   * Persist the connector for one prepared table.
+   *
+   * <p>No mapping row is written. The guided add used to persist a {@code connector.connector_mapping}
+   * row named {@code <connector>-mapping} and point the connector at it — a row nothing ever read
+   * back: the {@code MappingResolver} bound into every {@code ConnectorContext} is an identity stub,
+   * and the mapping a jdbc run actually executes is built from the connector's own config by
+   * {@link JdbcConnectorType#dumpSpec}. What the row did have was {@code UNIQUE (tenant_id, name)},
+   * which {@code connector delete} left behind — so re-adding a deleted table died at COMMIT with an
+   * anonymous 500, and no command could remove the orphan.
+   */
+  private AddResultEntry persistTable(PreparedTable p, AddRequest req,
+                                      UUID credentialId, Long tenantId) {
     Connector connector = new Connector();
     connector.setTenantId(tenantId);
-    connector.setName(connectorName);
+    connector.setName(p.connectorName());
     connector.setTypeId(JdbcConnectorType.TYPE_ID);
-    connector.setConfig(buildConnectorConfig(req, cc, td, tableReq));
+    connector.setConfig(p.config());
     connector.setCredentialId(credentialId);
-    connector.setMappingId(mapping.getId());
     if (req.scheduleCron() != null && !req.scheduleCron().isBlank()) {
       connector.setSchedule(req.scheduleCron());
     }
     connectorRepo.persist(connector);
 
-    return new AddResultEntry(connector.getId(), mapping.getId(), connectorName, mappingName, "created");
+    return new AddResultEntry(connector.getId(), p.connectorName(), "created");
   }
 
+  /** The connector config for one table, or a refusal naming the table and the reason. */
   private Map<String, Object> buildConnectorConfig(AddRequest req, JdbcConnectionConfig cc,
                                                    TableDescriptor td, AddTableRequest tableReq) {
-    String effectiveMode = tableReq.mode() != null ? tableReq.mode() : "watermark";
-    String watermarkCol = tableReq.watermark();
-    if (watermarkCol == null || watermarkCol.isBlank()) {
-      watermarkCol = td.suggestedWatermark().orElse(null);
+    String table = td.schema() + "." + td.name();
+    if (!SqlIdentifiers.isPlainIdentifier(td.name())) {
+      throw new ConfigValidationException("table " + table + ": the name is not a plain identifier (letters, digits, "
+          + "underscore; not starting with a digit) — jdbc-generic names its hub table after it; expose a plain-named view");
     }
-    List<String> pk = td.primaryKey().isEmpty() ? List.of("id") : td.primaryKey();
+    if (td.primaryKey().isEmpty()) {
+      throw new ConfigValidationException("table " + table
+          + " has no primary key — jdbc-generic pages by primary key; declare pk_columns in a manifest instead");
+    }
+    String watermarkCol = tableReq.watermark() == null || tableReq.watermark().isBlank()
+        ? td.suggestedWatermark().orElse(null) : tableReq.watermark();
+    String mode = tableReq.mode() == null || tableReq.mode().isBlank()
+        ? (watermarkCol == null ? "full" : "watermark") : tableReq.mode();
+    if (!"watermark".equals(mode) && !"full".equals(mode)) {
+      throw new ConfigValidationException("table " + table + ": mode '" + mode + "' is not one of watermark, full");
+    }
 
     Map<String, Object> config = new LinkedHashMap<>();
     config.put("url", req.url());
@@ -221,10 +248,20 @@ public class JdbcSourceResource {
     config.put("dialect", cc.dialectId());
     config.put("table-schema", td.schema());
     config.put("table-name", td.name());
-    config.put("mode", effectiveMode);
-    config.put("pk-columns", pk);
-    if (watermarkCol != null) config.put("watermark-column", watermarkCol);
-    config.put("chunk-size", 500);
+    config.put("mode", mode);
+    config.put("pk-columns", td.primaryKey());
+    if ("watermark".equals(mode)) {
+      if (watermarkCol == null) {
+        throw new ConfigValidationException("table " + table
+            + ": mode watermark needs a watermark column and none was given or could be suggested — use mode full");
+      }
+      // The runtime quotes identifiers, so the column is persisted as the catalog spells it.
+      String column = watermarkCol;
+      String catalogName = td.columns().stream().map(ColumnDescriptor::name)
+          .filter(column::equalsIgnoreCase).findFirst()
+          .orElseThrow(() -> new ConfigValidationException("table " + table + " has no column '" + column + "' to watermark on"));
+      config.put("watermark-column", catalogName);
+    }
     return config;
   }
 
@@ -265,16 +302,5 @@ public class JdbcSourceResource {
     }
 
     return Response.ok(new ListTablesResponse(sourceName, tables)).build();
-  }
-
-  // ── Helpers ──────────────────────────────────────────────────────────────────
-
-  private static TemplateGenerator.Mode resolveMode(String templateMode) {
-    if (templateMode == null) return TemplateGenerator.Mode.HEURISTIC_ONLY;
-    return switch (templateMode.toLowerCase(Locale.ROOT)) {
-      case "llm-first", "llm_first" -> TemplateGenerator.Mode.LLM_FIRST;
-      case "dump", "dump-1-1", "dump_1_1" -> TemplateGenerator.Mode.DUMP_1_1;
-      default -> TemplateGenerator.Mode.HEURISTIC_ONLY;
-    };
   }
 }

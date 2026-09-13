@@ -1,194 +1,281 @@
-# kind: Entity — canonical fusion
+# kind: Entity — fuse
 
-> An entity fuses N legacy sources into **one canonical, queryable thing**. Each source keeps
-> landing in its own dynamic table; the manifest declares how their columns map onto one
-> canonical shape and which column matches rows across systems — the hub compiles that into a
-> SQL view, and every disagreement between sources is preserved in a `_conflicts` ledger
-> instead of being silently resolved.
+> Fuse N legacy tables into **one canonical, queryable thing**. Each source keeps landing in
+> its own table; the manifest says how their columns map onto one shape and which column
+> identifies the same real-world row across systems. The hub compiles that into a SQL view —
+> and every disagreement between sources is kept in a `_conflicts` ledger on the row, never
+> silently resolved.
 
-## The real manifest (from the WOW demo)
+| | |
+|---|---|
+| **Kind** | `Entity` |
+| **Compiles to** | `connector.v_<name>` — a `security_invoker` view, RLS inherited from every source |
+| **Sources** | any table in the `connector` schema: a CSV, JDBC or Kafka connector's `t_*` |
+| **Apply** | `lm entity apply` — `lm_admin`; validate-then-compile, atomic |
+| **Read** | `GET /api/entities/{name}` — `lm_user`, scope-bound; `lm view`, `lm ask` |
+| **Edition** | Open |
+
+The ERP has a customer table, the CRM has another, and the two have never agreed on a single
+name. An entity does not pick a winner and forget the loser: it declares the priority, exposes
+one row per customer, and writes down — per row, per column — where the systems still disagree.
+That ledger is what a [`kind: View`](apps/views.md) shows under *Où les sources divergent*, and
+what `lm conflicts list` aggregates across every entity you can read.
+
+## Features
+
+- **[Priority is the source order, per column.](#fusion-semantics)** The first source that has a
+  value wins that column; a source that has none lets the next one fill the gap, which is never
+  a conflict.
+- **[Nothing is dropped.](#the-_conflicts-ledger)** Two distinct non-null values for one column land
+  in the row's `_conflicts` ledger with the source that said each.
+- **[Grounding for the surfaces above.](#the-columns-grounding-block)** Labels a view renders,
+  descriptions the chat reads, and a `values` domain the filters enforce — refusing what is
+  outside it rather than returning an empty table.
+- **[Askable immediately.](#askable-immediately)** Applying an entity rediscovers its scopes'
+  schema cards; the fused view is in the chat's vocabulary before the next question.
+- **[Refused before compiled.](#refusals)** A manifest that cannot compile is not saved, and every
+  refusal is a `400` that says exactly what to change.
+- **[The delete interlock.](#remove)** A connector whose table feeds an entity cannot be deleted
+  until the entity is — a `409` that names both.
+
+## Quickstart
+
+!!! note "Every screen on this page reads the demo desk that ships with the repo"
+    Two customer exports that disagree and an order book, under `docs/apps/demo/`. Three
+    commands land them; the hand count of what the fusion must give is on
+    [The demo desk](apps/demo-desk.md).
 
 ```yaml
---8<-- "docs/demo/wow-customer/customer-entity.yaml"
+--8<-- "docs/apps/demo/entities/10-customer.yaml"
 ```
 
-## Fields
+```
+$ lm entity apply -f docs/apps/demo/entities/10-customer.yaml
+Applied entity "AcmeCustomer" → connector."v_acmecustomer"
+```
+
+There is no `lm entity validate`: apply is validate-then-compile, and a manifest that would not
+compile is refused before anything is written. Read the result through the API — the view is
+named after the entity, lower-cased:
+
+```
+$ curl -s 'http://localhost:8080/api/entities/acmecustomer?city=Lyon' -H "Authorization: Bearer $TOKEN" | jq
+[
+  {
+    "code": "P-1000",
+    "name": "Hydraulique Lyon 1000",
+    "city": "Lyon",
+    "segment": "GOLD",
+    "credit_limit": "500",
+    "email": "contact@hydraulique-lyon.example",
+    "_conflicts": "{\"name\": [{\"src\": \"t_acme_desk_erp\", \"value\": \"Hydraulique Lyon 1000\"}, {\"src\": \"t_acme_desk_crm\", \"value\": \"HYDRAULIQUE LYON\"}]}"
+  },
+  {
+    "code": "P-1008",
+    "name": "Filtration Lyon 1008",
+    "city": "Lyon",
+    "segment": "GOLD",
+    "credit_limit": "1596",
+    "email": "contact@filtration-lyon.example",
+    "_conflicts": "{\"city\": [{\"src\": \"t_acme_desk_erp\", \"value\": \"Lyon\"}, {\"src\": \"t_acme_desk_crm\", \"value\": \"Villeurbanne\"}]}"
+  }
+]
+```
+
+Two customers in Lyon — and on each, the CRM disagrees with the ERP about something. The ERP
+is listed first in `sources[]`, so its value is the one in the column; the CRM's is in the
+ledger. Fourteen rows in all: twelve from the ERP, two the CRM alone knows, and the CRM's row
+with no customer code is absent, because a `NULL` match key can be matched to nothing.
+
+Where the systems disagree, across every entity at once:
+
+```
+$ lm conflicts list
+ENTITY        KEY     COLUMNS  SOURCES
+AcmeCustomer  P-1000  name     t_acme_desk_erp,t_acme_desk_crm
+AcmeCustomer  P-1002  city     t_acme_desk_erp,t_acme_desk_crm
+AcmeCustomer  P-1008  city     t_acme_desk_erp,t_acme_desk_crm
+```
+
+Three rows in dispute, exactly the three the hand count predicted. P-1005 is not one of them:
+the ERP had no city for it, the CRM did, and the fused row simply carries Aarhus.
+
+## The manifest
 
 | Field | Required | Meaning |
 |---|---|---|
 | `kind` | yes | must be `Entity` |
-| `name` | yes | simple identifier (letters, digits, `_`) — becomes the SQL view `connector.v_<name>` (lower-cased) advertised to the chat |
+| `name` | yes | a simple identifier (letters, digits, `_`) — becomes the view `connector.v_<name>`, lower-cased, and the name the chat advertises |
+| `label` | no | the entity's human name — a `kind: View` that declares no `title:` is headed with it, and the schema card shows it beside the view name. Without one, both fall back to `name` |
 | `description` | no | free text for humans |
-| `match` | yes (≥1) | canonical column(s) that identify the same real-world row across sources (composite if >1) — **every source must map every match column**, same case |
-| `sources[]` | yes (≥1) | ordered list — **the order is the merge priority** (first source wins a disagreement) |
-| `sources[].table` | yes | the connector dynamic table in the `connector` schema |
-| `sources[].map` | yes (≥1) | `source column → canonical column`, per source |
-| `scopes` | no | métier scopes whose chat can ask about this entity — an entity with no scopes is simply not discoverable |
+| `match` | yes (≥ 1) | the canonical column(s) that identify the same real-world row across sources; several make a composite key. **Every source must map every match column, in the same case** |
+| `sources[]` | yes (≥ 1) | ordered — **the order is the merge priority**; the first source wins a disagreement |
+| `sources[].table` | yes | the source's dynamic table in the `connector` schema, without the schema prefix (`t_acme_desk_erp`) |
+| `sources[].map` | yes (≥ 1) | `source column: canonical column`, per source |
+| `scopes` | no | the métier scopes whose chat and views may read this entity — an entity with none is not discoverable by anyone |
 | `columns` | no | per-canonical-column [grounding](#the-columns-grounding-block) |
 
-The canonical shape is the ordered union of every source's `map` values. The names
-`_conflicts`, `_src` and `_ord` are reserved. Canonical names are case-sensitive SQL
-identifiers, so `email` in one source and `Email` in another is refused as an
-accidental collision, not silently split into two columns.
+The canonical shape is the ordered union of every source's `map` values. `_conflicts`, `_src`
+and `_ord` are reserved. Canonical names are case-sensitive SQL identifiers, so `email` in one
+source and `Email` in another is refused as an accidental collision rather than silently split
+into two columns. **Every value is `text`** in the compiled view — `credit_limit` reads `"500"`,
+not `500` — which is what lets sources of different types fuse at all; cast where you consume.
+
+The key set is closed: `scope:` for `scopes:` is named, not dropped —
+
+```
+$ lm entity apply -f docs/apps/demo/entities/63-refused-unknown-key.yaml
+Error: API error 400: unknown key(s) in the manifest: scope — kind:Entity honors root {apiVersion, columns, description, kind, match, name, scopes, sources}, sources[] {map, table}
+```
+
+— because without that guard the entity would apply with an empty scope list and a clean 200,
+visible to no métier and askable by nobody.
 
 ## Fusion semantics
 
 ```mermaid
 flowchart LR
-  s1[("cust_siebel<br/>C-200 · name: Marie")] --> f
-  s2[("t_cust_csv<br/>C-200 · name: MARIE A.")] --> f
-  f["fusion — union of all sources,<br/>grouped by the match column"] --> c[("v_customer<br/>C-200 · name: Marie<br/>first non-null, source order")]
-  f -.-> k["_conflicts<br/>name: Marie ↔ MARIE A.<br/>nothing silently dropped"]
+  s1[("t_acme_desk_erp<br/>P-1000 · name: Hydraulique Lyon 1000")] --> f
+  s2[("t_acme_desk_crm<br/>P-1000 · company: HYDRAULIQUE LYON")] --> f
+  f["fusion — union of all sources,<br/>grouped by the match column"] --> c[("v_acmecustomer<br/>P-1000 · name: Hydraulique Lyon 1000<br/>first non-null, source order")]
+  f -.-> k["_conflicts<br/>name: Hydraulique Lyon 1000 ↔ HYDRAULIQUE LYON<br/>nothing silently dropped"]
 ```
 
-The compiled view unions all sources and groups by the `match` column(s):
+The compiled view unions every source and groups by the `match` column(s):
 
-- a source row whose match column is `NULL` is **excluded** (it cannot be matched to anything);
-- for every other column, the representative value is the **first non-null by source
-  order** — source 1 wins over source 2, and a source that has no value simply lets the
-  next one fill the gap;
-- when sources genuinely **disagree** (more than one distinct non-null value), the
-  representative still follows source order, and *all* values land in the `_conflicts`
-  ledger — nothing is silently dropped.
+- a source row whose match column is `NULL` is **excluded** — it cannot be matched to anything;
+- for every other column, the representative is the **first non-null by source order**. The
+  choice is made **per column, independently**: a source that wins `name` has no claim on `city`;
+- a **`NULL` is not an opinion**: a source with no value lets the next one fill the gap, and that
+  is never recorded as a conflict. Only two or more *distinct non-null* values are;
+- when sources genuinely **disagree**, the representative still follows source order, and *all*
+  the values land in the `_conflicts` ledger.
 
-`_conflicts` is a JSON object, one key per disputed column, empty (`{}`) when everyone
-agrees. From the demo, C-200's name disputed between Siebel and the CSV:
+Flip the order and nothing but the representatives changes. `20-crm-first.yaml` lists the CRM
+first over the same two tables:
+
+```
+$ lm entity apply -f docs/apps/demo/entities/20-crm-first.yaml
+Applied entity "AcmeCustomerCrmFirst" → connector."v_acmecustomercrmfirst"
+$ curl -s 'http://localhost:8080/api/entities/acmecustomercrmfirst?code=P-1000' -H "Authorization: Bearer $TOKEN" | jq
+[
+  {
+    "code": "P-1000",
+    "name": "HYDRAULIQUE LYON",
+    "city": "Lyon",
+    "email": "contact@hydraulique-lyon.example",
+    "segment": "GOLD",
+    "credit_limit": "500",
+    "_conflicts": "{\"name\": [{\"src\": \"t_acme_desk_crm\", \"value\": \"HYDRAULIQUE LYON\"}, {\"src\": \"t_acme_desk_erp\", \"value\": \"Hydraulique Lyon 1000\"}]}"
+  }
+]
+```
+
+Same fourteen rows, same three disputes; P-1000 now reads `HYDRAULIQUE LYON`, and `segment` —
+which the CRM does not carry — still comes from the ERP.
+
+The view is compiled `security_invoker`, so it inherits each base table's row-level security:
+every tenant sees only its own rows through the fusion, with no per-entity policy to maintain.
+
+### The `_conflicts` ledger
+
+One JSON object per row, one key per disputed column, `{}` — never `null` — when everyone
+agrees:
 
 ```json
 {
-  "name": [
-    { "src": "cust_siebel", "value": "Marie" },
-    { "src": "t_cust_csv",  "value": "MARIE A." }
+  "city": [
+    { "src": "t_acme_desk_erp", "value": "Lyon" },
+    { "src": "t_acme_desk_crm", "value": "Villeurbanne" }
   ]
 }
 ```
 
-The view is compiled `security_invoker`, so it inherits each base table's Row-Level
-Security: every tenant sees only its own rows through the fusion, with no per-entity policy.
+It rides on every read of the entity, it is what a [`kind: View`](apps/views.md) renders at the
+foot of a record's detail, and `GET /api/entities/conflicts` aggregates it — see
+[Aggregated conflicts](#aggregated-conflicts). It is **not** a column the chat can query: the
+schema card advertises the canonical columns and nothing else, so *"where do the ERP and the CRM
+disagree?"* is a question for `lm conflicts list`, not for `lm ask`.
 
 ## The `columns:` grounding block
 
 This is where you teach the surfaces what a column *means* — the input the
-[ask guards](transparency/ask-honesty.md) enforce:
+[ask guards](transparency/ask-honesty.md) enforce and the labels a view renders:
 
 | Key | Meaning |
 |---|---|
-| `label` | human display name — shown by `kind: View` and the schema card instead of the raw canonical name |
-| `description` | business meaning, fed to the SQL-generation prompt so the model stops guessing |
+| `label` | the human name — a `kind: View` prints it as the column header and the detail's field name; the schema card shows it beside the raw name |
+| `description` | the business meaning, fed to the SQL-generation prompt so the model stops guessing |
 | `example` | an example value, same purpose |
 | `values` | the allowed domain — a filter on any other value is **refused, not run** (the [domain guard](transparency/ask-honesty.md#6-domain-guard-the-declared-values-contract)) |
 
-A grounded column must exist in the canonical shape (typos are refused at apply), and a
-declared value may not be blank or carry leading/trailing whitespace — it would never
-exact-match and would silently zero-row.
-
-## Apply
-
-```bash
-lm entity apply -f customer-entity.yaml
-# → Applied entity "Customer" → connector."v_customer"
-```
-
-The CLI posts the YAML to `POST /api/entities/apply` (`lm_admin`, body
-`application/yaml`) and receives `{name, view}`. Apply is validate-then-compile: the
-manifest is parsed and refused with a `400` on any problem below, then the view is
-(re)created and the manifest upserted **atomically** — a manifest that cannot compile is
-not saved.
-
-If the entity declares `scopes`, apply also **rediscovers each scope's schema card** for
-the calling tenant, so the fused entity is askable in its métiers immediately. This
-refresh is best-effort: a discovery failure never fails the apply (the card can be rebuilt
-via rediscovery).
-
-## Remove
-
-```bash
-lm entity delete Customer
-# → deleted: Customer
-```
-
-`DELETE /api/entities/{name}` (`lm_admin`) is the inverse of apply: it drops the entity's
-view, deletes its manifest, and rediscovers its scopes so the card drops it — atomically,
-same asymmetry as apply (a scope-bound integrator must hold **all** the entity's scopes to
-remove it). An unknown name is a `404`. Removing the entity is also what frees a connector
-whose table feeds it: `lm connector delete` is refused with a `409` naming the entity until
-you delete the entity first.
-
-An entity is **shared across tenants** — the manifest and its view are global; only the rows
-they expose are tenant-scoped by RLS. So delete, like apply, acts for the whole deployment: a
-tenant's `lm_admin` removes the entity everyone sees, and (as with apply) a second hub instance
-picks the change up on its next rediscover.
-
-## Read API
+After the quickstart's manifest, the scope's card carries the labels:
 
 ```
-GET /api/entities/{name}
+$ lm source schema --scope desk
+…
+connector.v_acmecustomer
+  code                     text           — Code client
+  name                     text           — Raison sociale
+  city                     text           — Ville
+  segment                  text           — Segment
+  credit_limit             text           — Encours autorisé
+  email                    text           — Email
 ```
 
-`lm_user`. Returns the fused rows as JSON, every row carrying its `_conflicts` ledger
-(as JSON text, `"{}"` when no conflict). Unknown entity → `404`.
-
-- **Scope boundary** — the read is scope-bound like the rest of the app surface: a
-  scope-bound user who holds none of the entity's scopes gets the uniform
-  `403 {"error":"scope not granted"}` (see [Scopes](rag/scopes.md)).
-- **Filters** — `?<canonical-col>=value`, exact match, repeatable across columns (AND).
-  Unlike `kind: View` filters, an unknown parameter is **ignored**, not refused;
-  `_conflicts` is not filterable.
-- **Paging** — `?limit=` (default 100, clamped to 1…1000) and `?offset=` (default 0).
-  Rows are ordered by the canonical columns, so pages are deterministic.
-
-```bash
-curl -s 'http://localhost:8080/api/entities/customer?city=Lyon&limit=10' \
-     -H "Authorization: Bearer $TOKEN" | jq
-```
-
-Reads go through the RLS-enforced datasource and the `security_invoker` view — the
-response is tenant-scoped by your JWT, nothing else to configure.
-
-## Aggregated conflicts
-
-The read above answers "show me this entity"; this one answers the question the
-`_conflicts` ledger raises but a per-row read cannot: **where do my sources still
-disagree, across every entity I may read?**
+and a filter outside the declared domain is refused wherever the entity is read:
 
 ```
-GET /api/entities/conflicts
+$ lm view -f docs/apps/demo/views/10-customers.yaml --filter segment=PLATINUM
+Error: API error 400: 'PLATINUM' is not an allowed value for segment (allowed: GOLD, SILVER, BRONZE)
 ```
 
-`lm_user`. Returns one row per fused record still in dispute, ordered by entity then
-match key:
+A grounded column must exist in the canonical shape (a typo is refused at apply), and a declared
+value may not be blank or carry leading or trailing whitespace — it would never exact-match and
+would silently zero-row:
 
-```json
-[{"entity": "Customer",
-  "key": "C-200",
-  "columns": ["name"],
-  "conflicts": {"name": [{"src": "t_erp", "value": "Marie"},
-                         {"src": "t_csv", "value": "MARIE A."}]}}]
+```
+$ lm entity apply -f docs/apps/demo/entities/64-refused-domain-whitespace.yaml
+Error: API error 400: column 'segment' has an allowed value with leading/trailing whitespace (would never exact-match): ' SILVER'
 ```
 
-- **Scope boundary — silently skipped, never refused.** A scope-bound user's aggregate
-  simply omits the entities they hold no scope for. This is the one place the uniform
-  `403 {"error":"scope not granted"}` does *not* apply: an aggregate shows what you are
-  allowed to see, and a non-granted entity is indistinguishable from a conflict-free one.
-- **Paging** — `?limit=` (default 100, clamped 1…1000), spread across entities in order.
-- **RLS** — same datasource and `security_invoker` views as the per-entity read; another
-  tenant's disagreements are invisible, not filtered.
-- An entity whose compiled view is missing (its source table dropped by a direct DB edit —
-  `lm connector delete` cannot do this, it is refused while the entity stands) is logged and
-  skipped; the rest of the aggregate still answers.
+## Askable immediately
 
-```bash
-curl -s 'http://localhost:8080/api/entities/conflicts?limit=20' \
-     -H "Authorization: Bearer $TOKEN" | jq
+If the entity declares `scopes`, apply rediscovers each scope's schema card for the calling
+tenant, so the fused view is in the chat's vocabulary at once:
+
+```
+$ lm ask --scope desk "Combien de clients GOLD sont à Lyon, et quel est leur encours autorisé total ?"
+There are 2 GOLD customers in Lyon with a total encours autorisé of 2096.
+  data as of: 2026-09-13T00:39:29.573902Z (last completed run)
+
+  SQL: SELECT COUNT(*) AS customer_count, SUM(credit_limit::numeric) AS total_credit_limit
+FROM "connector"."v_acmecustomer"
+WHERE city = 'Lyon' AND segment = 'GOLD'
 ```
 
-From `lm`: `lm conflicts list` for the scriptable view, or the `:conflicts` screen in the
-TUI — `ENTITY · KEY · COLUMNS · SOURCES`, with `d` opening the full ledger, which source
-said what.
+The model read the label *Encours autorisé* from the grounding, cast the `text` column itself,
+and answered over the fused view rather than either source. That refresh is best-effort: a
+discovery failure never fails the apply, and `lm source rediscover --scope <tag>` rebuilds a card
+by hand.
 
-## Validation refusals
+## Refusals
 
-Every refusal is a `400` from apply, quoting the exact problem:
+Every refusal is a `400` from apply, quoting the exact problem. The ones an integrator meets
+first, each pinned by a file under `docs/apps/demo/entities/`:
+
+```
+$ lm entity apply -f docs/apps/demo/entities/60-refused-no-match-column.yaml
+Error: API error 400: source 't_acme_desk_crm' does not map the match column: code
+$ lm entity apply -f docs/apps/demo/entities/61-refused-case-collision.yaml
+Error: API error 400: canonical column 'email' conflicts with 'Email' across sources (case-insensitive collision); use one consistent case
+$ lm entity apply -f docs/apps/demo/entities/62-refused-reserved.yaml
+Error: API error 400: source 't_acme_desk_erp': canonical column '_src' is reserved
+$ lm entity apply -f docs/apps/demo/entities/65-refused-missing-table.yaml
+Error: API error 409: source relation "connector.t_acme_desk_nowhere" does not exist — the entity fuses tables its source connectors create; run the source connectors first, then apply again
+```
+
+The last one is a `409`, not a `400`: the manifest is fine, the world is not ready for it yet.
 
 | Refusal | Meaning | Fix |
 |---|---|---|
@@ -200,77 +287,134 @@ Every refusal is a `400` from apply, quoting the exact problem:
 | `source '…': canonical column '…' is reserved` | `_conflicts`, `_src`, `_ord` belong to the fusion machinery | pick another canonical name |
 | `source '…' maps duplicate canonical column (case-insensitive): …` | two source columns feeding one canonical column in the same source | keep one |
 | `canonical column '…' conflicts with '…' across sources (case-insensitive collision); use one consistent case` | `email` vs `Email` would silently become two SQL columns | one consistent spelling |
-| `source '…' does not map the match column: …` | every source must produce the match column, **same case** — else its rows could never be matched | add it to that source's `map` |
-| `scope must be lowercase, start with a letter, then letters/digits/_/- (max 41): …` | a scope is a name — the same rule as connector scopes, see [Scopes](rag/scopes.md) | rename the scope |
-| `columns references unknown canonical column '…' (known: …)` | grounding for a column that doesn't exist — almost always a typo | use a canonical name |
-| `column '…' has a blank allowed value` / `column '…' has an allowed value with leading/trailing whitespace (would never exact-match): '…'` | a domain value that can never match makes the guard lie | trim or remove it |
+| `source '…' does not map the match column: …` | every source must produce the match column, same case — else its rows could never be matched | add it to that source's `map` |
+| `scope must be lowercase, start with a letter, then letters/digits/_/- (max 41): …` | a scope is a Keycloak role name — the same rule as connector scopes, see [Scopes](rag/scopes.md) | rename the scope |
+| `unknown key(s) in the manifest: …` | a key `kind:Entity` does not honor — `scope:` for `scopes:` | the message lists what it honors |
+| `columns references unknown canonical column '…' (known: …)` | grounding for a column that does not exist — almost always a typo | use a canonical name |
+| `column '…' has a blank allowed value` / `… has an allowed value with leading/trailing whitespace …` | a domain value that can never match makes the guard lie | trim or remove it |
+| `409 source relation "…" does not exist — … run the source connectors first` | a `sources[].table` no connector has created yet | run the source connector, then re-apply |
+
+## Read API
+
+```
+GET /api/entities/{name}
+```
+
+`lm_user`. The fused rows as JSON, every row carrying its `_conflicts` ledger as JSON text
+(`"{}"` when no conflict). The lookup is case-insensitive; an unknown entity is a `404`.
+
+- **Scope boundary** — the read is scope-bound like the rest of the app surface: a scope-bound
+  user who holds none of the entity's scopes gets the uniform `403 {"error":"scope not granted"}`
+  (see [Scopes](rag/scopes.md)).
+- **Filters** — `?<canonical-col>=value`, exact match, repeatable across columns (AND). Unlike a
+  view's filters, an unknown parameter is **ignored**, not refused; `_conflicts` is not filterable.
+- **Paging** — `?limit=` (default 100, clamped to 1…1000) and `?offset=` (default 0). Rows are
+  ordered by the canonical columns, so pages are deterministic.
+
+Reads go through the RLS-enforced datasource and the `security_invoker` view — the response is
+tenant-scoped by your JWT, nothing else to configure.
+
+### Aggregated conflicts
+
+The per-entity read answers "show me this entity"; this one answers the question the ledger
+raises but a per-row read cannot: **where do my sources still disagree, across every entity I
+may read?**
+
+```
+GET /api/entities/conflicts
+```
+
+`lm_user`. One row per fused record still in dispute, ordered by entity then match key —
+`lm conflicts list` prints it, and the TUI's `:conflicts` screen opens the full ledger under `d`.
+
+- **Scope boundary — silently narrowed, never refused.** A scope-bound user's aggregate simply
+  omits the entities they hold no scope for. This is the one place the uniform `403` does *not*
+  apply: an aggregate shows what you are allowed to see, and a non-granted entity is
+  indistinguishable from a conflict-free one.
+- **Paging** — `?limit=` (default 100, clamped 1…1000), spread across entities in order.
+- An entity whose compiled view is missing (its source table dropped by a direct DB edit — `lm
+  connector delete` cannot do this, it is refused while the entity stands) is logged and skipped;
+  the rest of the aggregate still answers.
+
+## Remove
+
+```
+$ lm connector delete acme-desk-crm
+Error: API error 409: table connector.t_acme_desk_crm feeds entity acmecustomer — remove the entity first (lm entity delete acmecustomer)
+$ lm entity delete AcmeCustomerCrmFirst
+deleted: AcmeCustomerCrmFirst
+```
+
+`DELETE /api/entities/{name}` (`lm_admin`) is the inverse of apply: it drops the view and deletes
+the manifest in one transaction, then rediscovers its scopes so the cards drop it — best-effort,
+like apply's refresh. A scope-bound
+integrator must hold **all** the entity's scopes to remove it, the same asymmetry as apply. An
+unknown name is a `404`.
+
+An entity is **shared across tenants**: the manifest and its view are deployment-global, only
+the rows they expose are tenant-scoped by RLS. Delete, like apply, acts for the whole deployment,
+and a second hub instance picks the change up on its next rediscover.
 
 ## How to…
 
 ### Fuse two systems' customer tables
 
 ```bash
-lm entity apply -f customer-entity.yaml
-# → Applied entity "Customer" → connector."v_customer"
-
-curl -s 'http://localhost:8080/api/entities/customer' \
-     -H "Authorization: Bearer $TOKEN" | jq
+lm entity apply -f docs/apps/demo/entities/10-customer.yaml
+curl -s 'http://localhost:8080/api/entities/acmecustomer' -H "Authorization: Bearer $TOKEN" | jq
 ```
 
-**Result:** one canonical row per `match` key, unioned from every declared source — the
-first source in `sources[]` wins a disagreement, and every disagreement is also kept in
-that row's `_conflicts` ledger, never silently dropped.
+**Result:** one canonical row per `match` key, unioned from every declared source — the first
+source in `sources[]` wins a disagreement, and every disagreement is kept in that row's
+`_conflicts` ledger.
 
-### See where the systems disagree, across every entity at once
-
-```bash
-lm conflicts list
-```
-
-**Result:** every fused entity's open disagreements in one command — scope and paging rules
-are in [Aggregated conflicts](#aggregated-conflicts) above.
+### See which source said what, on one record
 
 ```
-$ lm conflicts list
-ENTITY    KEY    COLUMNS  SOURCES
-Customer  C-004  city     t_customers,t_crm_contacts
-```
+$ lm view P-1008 -f docs/apps/demo/views/10-customers.yaml
+Clients ACME / P-1008
 
-One customer, one column, two sources that disagree. Which source said what is on the
-record's detail — through a [`kind: View`](apps/views.md) over the entity:
-
-```
-$ lm view C-004 -f customers-view.yaml
-Customers / C-004
-
-  Customer code   C-004
-  Name            Boulangerie Morel
-  City            Lyon
-  Segment         GOLD
+  Code client        P-1008
+  Raison sociale     Filtration Lyon 1008
+  Ville              Lyon
+  Segment            GOLD
+  Encours autorisé   1596
 
   (!) Où les sources divergent
-  City   t_customers «Lyon» · t_crm_contacts «Villeurbanne»
+  Ville   t_acme_desk_erp «Lyon» · t_acme_desk_crm «Villeurbanne»
 ```
 
-The block under *Où les sources divergent* ("where the sources diverge") is the `_conflicts`
-ledger, rendered. The representative value follows source order (`t_customers` is listed
-first); the other value is kept, not dropped.
+**Result:** the record's ledger, rendered under *Où les sources divergent* ("where the sources
+diverge"); a record everyone agrees on ends with *✓ toutes les sources concordent* instead. The
+view is [`kind: View`](apps/views.md), one file over the entity.
+
+### Give the fusion a third opinion
+
+Add a third entry to `sources[]` — a legacy table, a Kafka topic's `t_*` — mapping the match
+column and whatever else it knows. **Result:** columns only that source has appear in the shape;
+a three-way disagreement lists three entries in the ledger; the source that wins one column has
+no claim on another.
 
 ## Troubleshooting
 
 | Symptom | Cause | Gesture |
 |---|---|---|
-| `404` on `GET /api/entities/{name}` | no entity by that name has been applied (lookup is case-insensitive, so casing isn't it) | check the name against what `apply` reported, or apply the manifest |
+| `404` on `GET /api/entities/{name}` | no entity by that name has been applied (lookup is case-insensitive, so casing is not it) | check the name against what `apply` reported, or apply the manifest |
 | `403 {"error":"scope not granted"}` on a read | you hold none of the entity's `scopes` | ask an integrator to grant one of those `scope:` roles |
-| apply refused `409`: `source … — the entity fuses tables its source connectors create; run the source connectors first, then apply again` | a `sources[].table` doesn't exist yet — that source connector never ran | run/apply the source connector, then reapply the entity |
-| an entity is missing from `/api/entities/conflicts` | either you hold none of its `scopes` (silently skipped), or its compiled view is gone (e.g. a source connector was deleted) — both are logged, neither refused | check your scope grants, or check the hub log for "compiled view missing" |
-| entity applied fine, but chat can't discuss it | no `scopes` declared — an entity with none is simply not discoverable | add `scopes:` and reapply; apply rediscovers each declared scope's card for you |
-| `403` with an **empty body** (not `{"error": "…"}` like the scope refusal above) | you don't hold the role the endpoint requires (`lm_admin` for apply, `lm_user` for reads) | check your roles — `GET /api/bff/v1/me` returns them under `roles` — then ask an admin to grant the missing one |
+| apply refused `409`: `source relation … does not exist` | a `sources[].table` does not exist yet — that source connector never ran | run the source connector, then re-apply |
+| `lm connector delete` refused `409`: `table … feeds entity …` | the interlock — the entity still fuses that table | `lm entity delete <name>` first |
+| a row you expected is missing from the fusion | its match column is `NULL` in that source — excluded by construction | give it a key at the source, or accept that it cannot be matched |
+| the wrong system's value shows | source order is the priority, per column | reorder `sources[]`; the other value is in `_conflicts` either way |
+| a number is a string (`"500"`) | every fused value is `text` | cast where you consume; `lm ask` does it by itself |
+| an entity is missing from `lm conflicts list` | you hold none of its `scopes` (silently narrowed), or its compiled view is gone — both logged, neither refused | check your grants, or the hub log for "compiled view missing" |
+| entity applied fine, but chat cannot discuss it | no `scopes` declared | add `scopes:` and re-apply; apply rediscovers the cards for you |
+| `403` with an **empty body** | you do not hold the role the endpoint requires (`lm_admin` for apply and delete, `lm_user` for reads) | `GET /api/bff/v1/me` returns your roles under `roles` |
 
 ## See also
 
-- [WOW demo](demo/wow-customer/README.md) — the full fusion walkthrough, two legacy sources to one Customer.
-- [Ask honesty — the guards](transparency/ask-honesty.md) — what the `columns:` grounding feeds.
-- [kind: View](apps/views.md) — see the fused entity; the detail shows one record's `_conflicts` ledger.
-- [CLI & TUI reference](cli/lm-reference.md) — `lm conflicts list` and the `:conflicts` screen, every open disagreement at once.
-- [Scopes](rag/scopes.md) — the boundary the read API answers within.
+- [The demo desk](apps/demo-desk.md) — the sources every screen here reads, and the hand count
+- [kind: View](apps/views.md) — see the fused entity; the detail shows one record's ledger
+- [WOW demo](demo/wow-customer/README.md) — the full fusion walkthrough, two legacy sources to one Customer
+- [Ask honesty — the guards](transparency/ask-honesty.md) — what the `columns:` grounding feeds
+- [Scopes](rag/scopes.md) — the boundary the read API answers within
+- [CLI & TUI reference](cli/lm-reference.md) — `lm conflicts list` and the `:conflicts` screen

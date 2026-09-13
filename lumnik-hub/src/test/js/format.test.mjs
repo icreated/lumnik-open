@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { since, cell, dataAsOfLabel } from '../../main/resources/META-INF/resources/app/src/format.mjs';
+import { since, cell, dataAsOfLabel, doorGesture } from '../../main/resources/META-INF/resources/app/src/format.mjs';
 
 test('since(): 30s → "il y a 1 min" (Math.max(1,...) floors sub-minute to 1)', () => {
   const now = Date.parse('2026-07-12T10:00:30Z');
@@ -52,4 +52,14 @@ test('dataAsOfLabel: names the freshness in métier words, absent stays absent',
   assert.equal(dataAsOfLabel(null, now), null);
   assert.equal(dataAsOfLabel(undefined, now), null);
   assert.equal(dataAsOfLabel('', now), null);
+});
+
+test('doorGesture renders only the doors this surface actually has', () => {
+  // The wording promises what the button reaches — the fiches — not the detail screen one tap
+  // further where the disagreements are actually shown (#515).
+  assert.equal(doorGesture('conflicts'), 'Ouvrir les fiches — les désaccords sont sur chaque fiche');
+  assert.equal(doorGesture('lifecycle'), null);
+  // A token from a newer hub is silence, never text rendered raw.
+  assert.equal(doorGesture('a-door-from-a-newer-hub'), null);
+  assert.equal(doorGesture(undefined), null);
 });

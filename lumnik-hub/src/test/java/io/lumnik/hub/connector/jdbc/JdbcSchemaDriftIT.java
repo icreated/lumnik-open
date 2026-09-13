@@ -49,7 +49,7 @@ class JdbcSchemaDriftIT {
 
     // ── First read: 'note' column does not exist yet ──────────────────────────
     ReadResult<Map<String, Object>> r1 = r.read(10, ConnectorCursor.empty(), null);
-    Map<String, Object> first = ((ReadResult.EndOfStream<Map<String, Object>>) r1).records().get(0);
+    Map<String, Object> first = ((ReadResult.HasMore<Map<String, Object>>) r1).records().get(0);
     assertFalse(first.containsKey("note"), "Column 'note' must not exist before ALTER TABLE");
 
     // ── Add a column and update the row ──────────────────────────────────────
@@ -63,7 +63,7 @@ class JdbcSchemaDriftIT {
     // Using ConnectorCursor.empty() so the watermark filter starts from epoch,
     // guaranteeing the updated row is returned regardless of prior cursor state.
     ReadResult<Map<String, Object>> r2 = r.read(10, ConnectorCursor.empty(), null);
-    Map<String, Object> updated = ((ReadResult.EndOfStream<Map<String, Object>>) r2).records().get(0);
+    Map<String, Object> updated = ((ReadResult.HasMore<Map<String, Object>>) r2).records().get(0);
     assertTrue(updated.containsKey("note"), "Column 'note' must appear after ALTER TABLE");
     assertEquals("hello", updated.get("note"));
 

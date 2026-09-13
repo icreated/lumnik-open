@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.rest.discovery;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
+import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.validator.ConfigDefRunner;
 import io.lumnik.hub.validator.EnvelopeValidator;
 import io.lumnik.hub.validator.ValidationError;
@@ -14,6 +15,38 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.*;
 
 class OpenApiImporterTest {
+
+    /**
+     * What a spec URL that is not a spec must do. Measured before it was written down: the parser
+     * does not answer null for an unreachable or non-spec document — it raises a
+     * NullPointerException from inside itself. Escaping the importer, that reached the operator as
+     * {@code Internal Server Error} plus an error id, with the URL they mistyped nowhere in sight.
+     *
+     * <p>Named here rather than dressed at the resource, because what the failure MEANS is this
+     * class's knowledge: a blanket catch one layer up would have to report a genuine defect in our
+     * own manifest build as the customer's network.
+     */
+    @Test void a_url_that_holds_no_spec_is_refused_by_name() {
+        var refused = assertThrows(ConnectorException.class,
+            () -> new OpenApiImporter().importFromUrl("http://localhost:1/no-such-spec", "nope", List.of()));
+
+        assertTrue(refused.getMessage().contains("http://localhost:1/no-such-spec"), refused.getMessage());
+    }
+
+    /**
+     * The refusal names the URL through {@link io.lumnik.hub.connector.rest.Urls#forDisplay}: a
+     * spec URL legally carries userinfo, and this message reaches a 502 body and a hub log. The
+     * rule itself is pinned in {@code UrlsTest}; what is asserted here is that this door uses it.
+     */
+    @Test void a_refused_spec_url_is_shown_without_its_credentials() {
+        var refused = assertThrows(ConnectorException.class,
+            () -> new OpenApiImporter().importFromUrl(
+                "http://user:s3cr3t@localhost:1/no-such-spec?token=abc", "nope", List.of()));
+
+        assertFalse(refused.getMessage().contains("s3cr3t"), refused.getMessage());
+        assertFalse(refused.getMessage().contains("abc"), refused.getMessage());
+        assertTrue(refused.getMessage().contains("no-such-spec"), refused.getMessage());
+    }
 
     @Test void parses_minimal_openapi() {
         String yaml = """

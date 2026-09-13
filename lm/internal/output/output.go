@@ -52,3 +52,22 @@ func Print[T any](w io.Writer, format string, headers []string, rows []T, toRow 
 		return fmt.Errorf("unknown output format: %s (want table|json|yaml)", format)
 	}
 }
+
+// PrintObject renders ONE value in a machine format. It exists next to Print because a nested
+// document — a schema card, tables inside a scope — is not a row table: flattening it to print it
+// would drop exactly what a generator downstream reads.
+//
+// "table" is refused rather than approximated: the caller owns the human rendering, which is the
+// only one that can decide what a page of nested data looks like.
+func PrintObject(w io.Writer, format string, v any) error {
+	switch format {
+	case "json":
+		enc := json.NewEncoder(textsafe.Unwrap(w))
+		enc.SetIndent("", "  ")
+		return enc.Encode(v)
+	case "yaml":
+		return yaml.NewEncoder(textsafe.Unwrap(w)).Encode(v)
+	default:
+		return fmt.Errorf("unknown output format: %s (want json|yaml)", format)
+	}
+}

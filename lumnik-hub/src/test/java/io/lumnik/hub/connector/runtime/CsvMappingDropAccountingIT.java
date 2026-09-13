@@ -175,7 +175,7 @@ class CsvMappingDropAccountingIT {
 
     private ConnectorRun latestRun(UUID connectorId) {
         return TenantContext.callAsSystem(() ->
-            runs.findLatestByConnector(connectorId)
+            runs.findLatestActiveByConnector(connectorId)
                 .orElseThrow(() -> new AssertionError("expected a run for connector " + connectorId)));
     }
 

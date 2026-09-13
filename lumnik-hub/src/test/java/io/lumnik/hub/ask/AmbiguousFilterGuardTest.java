@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
+import io.lumnik.hub.sql.SqlFailureText;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -52,7 +54,7 @@ class AmbiguousFilterGuardTest {
             new Failure("a two-step cause cycle terminates too — initCause only refuses self-causation",
                 twoStepCycle(), false),
             new Failure("a cardinality violation buried below the walk's bound is simply not found",
-                buried(cardinality, AmbiguousFilterGuard.MAX_CAUSE_DEPTH + 5), false)
+                buried(cardinality, SqlFailureText.MAX_CAUSE_DEPTH + 5), false)
         ).map(Arguments::of);
     }
 
@@ -134,7 +136,7 @@ class AmbiguousFilterGuardTest {
     @ParameterizedTest(name = "{0}")
     @MethodSource("roots")
     void the_root_message_is_the_databases_words_and_the_walk_always_ends(Root root) {
-        assertThat(AmbiguousFilterGuard.rootMessage(root.thrown())).isEqualTo(root.expected());
+        assertThat(SqlFailureText.rootMessage(root.thrown())).isEqualTo(root.expected());
     }
 
     @Test

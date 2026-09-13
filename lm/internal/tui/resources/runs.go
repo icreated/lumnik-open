@@ -26,6 +26,7 @@ const (
 	runStatusSuccess            // ● green
 	runStatusFailure            // ● red
 	runStatusRunning            // ▶ amber
+	runStatusPartial            // ◐ yellow
 	runStatusDisabled           // ─ grey
 )
 
@@ -37,6 +38,8 @@ func (s runStatus) color() tcell.Color {
 		return tcell.NewRGBColor(0xEF, 0x44, 0x44)
 	case runStatusRunning:
 		return tcell.NewRGBColor(0xFF, 0x8C, 0x00)
+	case runStatusPartial:
+		return tcell.NewRGBColor(0xEA, 0xB3, 0x08) // yellow — finished, but not whole
 	case runStatusDisabled:
 		return tcell.NewRGBColor(0x6B, 0x72, 0x80)
 	}
@@ -51,6 +54,8 @@ func (s runStatus) glyph() string {
 		return "●"
 	case runStatusRunning:
 		return "▶"
+	case runStatusPartial:
+		return "◐"
 	case runStatusDisabled:
 		return "─"
 	}
@@ -73,11 +78,34 @@ func statusFor(s string) runStatus {
 		return runStatusFailure
 	case KindRunning:
 		return runStatusRunning
+	case KindPartial:
+		return runStatusPartial
 	case KindCancelled:
 		return runStatusDisabled
 	}
 	return runStatusUnknown
 }
+
+// runSortColumns are the sortable columns of the :runs table, in table order. One list, read by
+// the page and by every test that builds a bare page: it was hand-written in eight places, and a
+// ColumnSort shorter than the header row it labels renders a blank title over real data — so
+// adding a column meant getting eight copies right, or shipping that.
+var runSortColumns = []string{"CONNECTOR", "ENDPOINT", "STATUS", "STARTED", "DURATION"}
+
+// The rendered cell of each column. The first five are runSortColumns in order — that identity is
+// what lets a sort index address a cell — and RECORDS/TRIGGER are the un-sortable tail setHeader
+// appends. Naming them keeps the sort switch and the render calls on ONE ladder: inserting a
+// column is a constant, a case and a SetCell, not a renumbering of two lists that fails silently
+// when only one is done.
+const (
+	colConnector = iota
+	colEndpoint
+	colStatus
+	colStarted
+	colDuration
+	colRecords
+	colTrigger
+)
 
 // ── Runs resource page ──
 
@@ -90,11 +118,16 @@ type Runs struct {
 	fetching atomic.Bool
 	dirty    atomic.Bool
 	sort     *style.ColumnSort
-	filterID string // connector_id filter, empty = no filter
+	// The drill-downs, at most one of them set: :sources leads here by connector, :endpoints by
+	// endpoint. They are two questions, not two halves of one — an endpoint already names its
+	// connector — so setting either clears the other.
+	filterID         string // connector_id filter, empty = no filter
+	filterEndpointID string // endpoint_id filter, empty = no filter
 	onSelect func()
+	toast    func(string)
 }
 
-func NewRuns(app *tview.Application, c *client.Client) *Runs {
+func NewRuns(app *tview.Application, c *client.Client, toast func(string)) *Runs {
 	t := tview.NewTable().SetBorders(false).SetSelectable(true, false)
 	t.SetTitle(" :runs ").SetBorder(true)
 	style.ApplyChrome(t.Box)
@@ -103,7 +136,8 @@ func NewRuns(app *tview.Application, c *client.Client) *Runs {
 		table:  t,
 		client: c,
 		app:    app,
-		sort:   style.NewColumnSort([]string{"CONNECTOR", "STATUS", "STARTED", "DURATION"}),
+		toast:  toast,
+		sort:   style.NewColumnSort(runSortColumns),
 	}
 	r.setHeader()
 	t.SetInputCapture(r.handleKey)
@@ -118,22 +152,19 @@ func NewRuns(app *tview.Application, c *client.Client) *Runs {
 func (r *Runs) View() tview.Primitive { return r.table }
 
 func (r *Runs) Hints() string {
-	base := "d: describe  y: yank  s: sort  r: refresh"
-	if r.filterID != "" {
+	base := "d: describe  y: yank  s: sort  c: cancel  r: refresh"
+	if r.FilterActive() {
 		base = "Esc: clear filter  " + base
 	}
 	return base
 }
 
 func (r *Runs) setHeader() {
-	headers := []string{
-		r.sort.HeaderLabel(0),
-		r.sort.HeaderLabel(1),
-		r.sort.HeaderLabel(2),
-		r.sort.HeaderLabel(3),
-		"RECORDS",
-		"TRIGGER",
+	headers := make([]string, 0, len(runSortColumns)+2)
+	for i := range runSortColumns {
+		headers = append(headers, r.sort.HeaderLabel(i))
 	}
+	headers = append(headers, "RECORDS", "TRIGGER")
 	for i, h := range headers {
 		r.table.SetCell(0, i, tview.NewTableCell(h).SetSelectable(false).SetExpansion(1))
 	}
@@ -142,25 +173,46 @@ func (r *Runs) setHeader() {
 func (r *Runs) ApplyEvent(_ map[string]any) { r.Refresh() }
 
 // SetFilter restricts the listing to runs of a single connector. Empty = all.
-func (r *Runs) SetFilter(connectorID string) {
+func (r *Runs) SetFilter(connectorID string) { r.setFilters(connectorID, "", "conn") }
+
+// SetEndpointFilter restricts the listing to runs of a single ENDPOINT — the question the
+// :endpoints drill-down asks. A connector fans out over its endpoints and writes one run row per
+// endpoint, so the connector filter cannot answer it: this page used to receive an endpoint id
+// through SetFilter and compare it against each run's connector id, which nothing satisfies.
+func (r *Runs) SetEndpointFilter(endpointID string) { r.setFilters("", endpointID, "endpoint") }
+
+func (r *Runs) setFilters(connectorID, endpointID, label string) {
+	r.mu.Lock()
 	r.filterID = connectorID
-	if connectorID != "" {
-		short := connectorID
-		if len(short) > 8 {
-			short = short[:8]
+	r.filterEndpointID = endpointID
+	r.mu.Unlock()
+	if id := connectorID + endpointID; id != "" {
+		if len(id) > 8 {
+			id = id[:8]
 		}
-		r.table.SetTitle(fmt.Sprintf(" :runs [conn=%s] ", short))
+		r.table.SetTitle(fmt.Sprintf(" :runs [%s=%s] ", label, id))
 	} else {
 		r.table.SetTitle(" :runs ")
 	}
 	r.Refresh()
 }
 
-// FilterActive returns true if a connector filter is set.
-func (r *Runs) FilterActive() bool { return r.filterID != "" }
+// FilterActive returns true if either drill-down is in force.
+func (r *Runs) FilterActive() bool {
+	connectorID, endpointID := r.filters()
+	return connectorID != "" || endpointID != ""
+}
 
-// ClearFilter wipes the filter and refreshes.
-func (r *Runs) ClearFilter() { r.SetFilter("") }
+// filters reads the drill-downs under the lock: Refresh below carries them into the fetch
+// goroutine, so they are no longer UI-thread-only fields.
+func (r *Runs) filters() (connectorID, endpointID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.filterID, r.filterEndpointID
+}
+
+// ClearFilter wipes both drill-downs and refreshes.
+func (r *Runs) ClearFilter() { r.setFilters("", "", "") }
 
 // Refresh fetches OFF the UI thread — a blocking RunList on the main thread,
 // re-triggered by every live SSE event (ApplyEvent), starved input and froze
@@ -168,7 +220,8 @@ func (r *Runs) ClearFilter() { r.SetFilter("") }
 // coalesces a burst into one in-flight request; the render lands via QueueUpdate.
 func (r *Runs) Refresh() {
 	if r.app == nil { // tests construct a bare page
-		list, err := r.client.RunList(200)
+		connectorID, endpointID := r.filters()
+		list, err := r.client.RunList(connectorID, endpointID, client.RunsPageCap)
 		r.renderList(list, err)
 		return
 	}
@@ -179,7 +232,10 @@ func (r *Runs) Refresh() {
 	go func() {
 		defer r.fetching.Store(false)
 		for {
-			list, err := r.client.RunList(200)
+			// Re-read the drill-downs each round: one that lands mid-flight sets the dirty flag,
+			// and the extra pass it buys must ask the question the user is now asking.
+			connectorID, endpointID := r.filters()
+			list, err := r.client.RunList(connectorID, endpointID, client.RunsPageCap)
 			QueueUpdate(r.app, func() { r.renderList(list, err) })
 			// If any refresh was requested during this fetch, do exactly one more
 			// so the last event's state is never left unrendered.
@@ -198,15 +254,6 @@ func (r *Runs) renderList(list []types.Run, err error) {
 		r.setHeader()
 		r.table.SetCell(1, 0, dataCell(fmt.Sprintf("ERROR: %v", err)))
 		return
-	}
-	if r.filterID != "" {
-		filtered := list[:0]
-		for _, run := range list {
-			if run.ConnectorID == r.filterID {
-				filtered = append(filtered, run)
-			}
-		}
-		list = filtered
 	}
 	r.items = list
 	r.applySort()
@@ -229,13 +276,15 @@ func (r *Runs) applySort() {
 			a, b = b, a
 		}
 		switch idx {
-		case 0:
+		case colConnector:
 			return a.ConnectorLabel() < b.ConnectorLabel()
-		case 1:
+		case colEndpoint:
+			return a.EndpointLabel() < b.EndpointLabel()
+		case colStatus:
 			return a.Status < b.Status
-		case 2:
+		case colStarted:
 			return a.StartedAt.Before(b.StartedAt)
-		case 3:
+		case colDuration:
 			return durationOf(a) < durationOf(b)
 		}
 		return false
@@ -263,12 +312,13 @@ func (r *Runs) render() {
 		if run.EndedAt != nil {
 			duration = run.EndedAt.Sub(run.StartedAt).Truncate(time.Millisecond).String()
 		}
-		r.table.SetCell(row, 0, dataCell(run.ConnectorLabel()).SetExpansion(1))
-		r.table.SetCell(row, 1, statusCell(run.Status, statusFor(run.Status)))
-		r.table.SetCell(row, 2, tview.NewTableCell(startedLabel(run.StartedAt, now)).SetExpansion(1))
-		r.table.SetCell(row, 3, tview.NewTableCell(duration).SetExpansion(1))
-		r.table.SetCell(row, 4, tview.NewTableCell(fmt.Sprintf("%d/%d/%d", run.RecordsIn, run.RecordsOut, run.RecordsSkipped)).SetExpansion(1))
-		r.table.SetCell(row, 5, dataCell(run.TriggeredBy).SetExpansion(1))
+		r.table.SetCell(row, colConnector, dataCell(run.ConnectorLabel()).SetExpansion(1))
+		r.table.SetCell(row, colEndpoint, dataCell(run.EndpointLabel()).SetExpansion(1))
+		r.table.SetCell(row, colStatus, statusCell(run.Status, statusFor(run.Status)))
+		r.table.SetCell(row, colStarted, tview.NewTableCell(startedLabel(run.StartedAt, now)).SetExpansion(1))
+		r.table.SetCell(row, colDuration, tview.NewTableCell(duration).SetExpansion(1))
+		r.table.SetCell(row, colRecords, tview.NewTableCell(fmt.Sprintf("%d/%d/%d", run.RecordsIn, run.RecordsOut, run.RecordsSkipped)).SetExpansion(1))
+		r.table.SetCell(row, colTrigger, dataCell(run.TriggeredBy).SetExpansion(1))
 	}
 }
 
@@ -297,7 +347,34 @@ func (r *Runs) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 		r.Refresh()
 		return nil
 	}
+	if ev.Rune() == 'c' {
+		r.cancel()
+		return nil
+	}
 	return ev
+}
+
+// cancel requests cancellation of the selected run. A 202 only means the request
+// was recorded — the chunk loop reads the flag at the next chunk boundary, so
+// this never claims the run stopped (mirrors `lm run cancel`'s stderr wording).
+// A refusal (already ended, not in flight, not found) carries the hub's own
+// reason via APIError — toasted unchanged rather than replaced by a generic
+// failure.
+func (r *Runs) cancel() {
+	run, ok := r.selected()
+	if !ok {
+		return
+	}
+	if err := r.client.RunCancel(run.ID); err != nil {
+		if r.toast != nil {
+			r.toast(err.Error())
+		}
+		return
+	}
+	if r.toast != nil {
+		r.toast(fmt.Sprintf("cancellation requested: %s %s — ends after the current chunk",
+			run.ConnectorLabel(), shortRunID(run.ID)))
+	}
 }
 
 // Describable
@@ -311,6 +388,11 @@ func (r *Runs) SelectedDescribe() (string, string, bool) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "id:              %s\n", esc(run.ID))
 	fmt.Fprintf(&b, "connector:       %s\n", esc(run.ConnectorID))
+	// The run read ONE endpoint of that connector; the counters below are that endpoint's, so
+	// naming it is what makes them readable. Omitted, not blanked, for a run that has none.
+	if label := run.EndpointLabel(); label != "" {
+		fmt.Fprintf(&b, "endpoint:        %s\n", esc(label))
+	}
 	fmt.Fprintf(&b, "status:          %s %s\n", statusFor(run.Status).glyph(), esc(run.Status))
 	fmt.Fprintf(&b, "trigger:         %s\n", esc(run.TriggeredBy))
 	fmt.Fprintf(&b, "started:         %s\n", output.HumanTimeSeconds(&run.StartedAt))

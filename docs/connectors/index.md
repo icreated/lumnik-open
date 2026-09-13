@@ -74,8 +74,8 @@ if you haven't set those up yet.
 
     ```
     $ lm run list --connector orders
-    ID        CONNECTOR  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-    f0466804  orders     Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
+    ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+    f0466804  orders     default   Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
     ```
 
     Ten rows read, eight written, two set aside with their reason (`lm dlq list`).
@@ -93,7 +93,7 @@ watermark advanced. How the *user* perceives that age is an open question the
 | Command | Purpose |
 |---|---|
 | `lm validate -f manifest.yaml` | Validate without applying. Exit 0 if valid (warnings allowed), 1 if errors. |
-| `lm apply -f manifest.yaml` | Apply — the same checks gate the server: on errors nothing is written and you get the same field-by-field report. |
+| `lm apply -f manifest.yaml` | Apply — the same checks gate the server: on errors nothing is written and you get the same field-by-field report. Warnings do not block the apply; they are printed **on stderr** after it, so stdout stays the JSON body. |
 | `lm describe connector-type <kind>` | Show the schema (fields, types, required/optional, docs) for a connector type — run it any time, before writing a single line of YAML. |
 
 ### Valid
@@ -128,6 +128,23 @@ $ lm validate -f noscopes.yaml
            no scopes declared — the connector's tables will not be askable in any métier
            → Add: scopes: [compta]  (the métier a user must hold as scope:compta)
 ```
+
+`lm apply` prints the same report, on **stderr**, after the JSON body it writes to stdout —
+so the advice reaches the integrator who skips `lm validate`, without a pipe reading the body
+ever seeing it:
+
+```
+$ lm apply -f noscopes.yaml
+{"name":"noscopes","connectorId":"487ed9d1-58d5-4120-969c-dc448910e1f2","endpointsApplied":1}
+! noscopes.yaml — 0 error(s), 1 warning(s)
+
+  WARN     metadata.scopes
+           no scopes declared — the connector's tables will not be askable in any métier
+           → Add: scopes: [compta]  (the métier a user must hold as scope:compta)
+```
+
+The exit code is 0 either way: a warning has never failed a validate, and a CI gate built on
+that must not start failing here.
 
 ### Exit codes
 

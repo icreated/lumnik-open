@@ -17,6 +17,9 @@ public interface JdbcDialect {
   /** List user-visible tables in a schema, excluding system tables. */
   List<String> listTables(Connection conn, String schema) throws SQLException;
 
+  /** Whether {@code schema.table} is a base table — one catalog lookup by name, no listing. */
+  boolean tableExists(Connection conn, String schema, String table) throws SQLException;
+
   /** Describe columns for a table (name, jdbc type, nullable). */
   List<ColumnDescriptor> listColumns(Connection conn, String schema, String table) throws SQLException;
 

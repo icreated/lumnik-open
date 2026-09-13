@@ -1,0 +1,21 @@
+# Root-level typos, the level jdbc leaves unswept: `schedul` for `schedule`, `windo` for `window`.
+# Both are accepted and persisted today, and `lm connector get` shows them back.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: acme-erp-typo
+  connector_type: jdbc-generic
+  scopes: [erp]
+spec:
+  connection:
+    url: jdbc:postgresql://db.acme.io:5432/billing
+    user: ro_user
+    password_env: ACME_DB_PASSWORD
+  source:
+    tables:
+      - name: invoices
+        mode: full
+        pk_columns: [id]
+  schedul: "*/15 * * * *"
+  windo: "22:00-06:00"
+  target: {}

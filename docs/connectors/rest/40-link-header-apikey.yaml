@@ -14,7 +14,7 @@
 # Auth: api-key — the platform injects a custom header on every request.
 # `in: header` + `name: X-API-Key` + `value_env: REST_DEMO_APIKEY` means every
 # request carries  `X-API-Key: <value of REST_DEMO_APIKEY>`.
-# Use `lm secret set REST_DEMO_APIKEY <value>` (DB secret store, resolved first; OS env is the fallback).
+# Use `lm secret set REST_DEMO_APIKEY` (DB secret store, resolved first; OS env is the fallback).
 #
 # Pagination: link-header — follows Link rel=next until it disappears.
 

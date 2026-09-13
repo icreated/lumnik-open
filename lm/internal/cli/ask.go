@@ -32,9 +32,44 @@ func newAskCmd() *cobra.Command {
 				cmd.Println()
 				fmt.Fprintf(cmd.OutOrStdout(), "  SQL: %s\n", res.SQL)
 			}
+			printOtherDoors(cmd, res.OtherDoors, scope)
 			return nil
 		},
 	}
 	ask.Flags().String("scope", "", "The métier scope whose fused data to query")
 	return ask
+}
+
+// gestureFor maps a hub door token to the command THIS binary offers for it, or "" when it has
+// none — an unknown token is silence, never printed raw. (The hub sends tokens rather than
+// commands because the gesture differs per surface: the TUI names a page, the PWA a tab.)
+func gestureFor(door, scope string) string {
+	suffix := ""
+	if scope != "" {
+		suffix = " --scope " + scope
+	}
+	switch door {
+	case "lifecycle":
+		return "lm chat" + suffix + "  — the declared lifecycle is retrieved there, not by SQL"
+	case "conflicts":
+		return "lm conflicts list" + suffix + "  — where this scope's sources disagree, row by row"
+	default:
+		return ""
+	}
+}
+
+func printOtherDoors(cmd *cobra.Command, doors []string, scope string) {
+	var lines []string
+	for _, d := range doors {
+		if g := gestureFor(d, scope); g != "" {
+			lines = append(lines, g)
+		}
+	}
+	if len(lines) == 0 {
+		return
+	}
+	cmd.Println()
+	for _, l := range lines {
+		fmt.Fprintf(cmd.OutOrStdout(), "  try: %s\n", l)
+	}
 }

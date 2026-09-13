@@ -76,6 +76,19 @@ public class SavedViewStore {
     return out;
   }
 
+  /**
+   * The scope of the row this name addresses, or empty when the name is free. The apply door's
+   * re-homing check ({@code ApplyScopeBoundary}) — the whole row is not wanted there, only who owns
+   * the name, and {@link #find} would drag the yaml along for a question about one column.
+   * Lowercased on read like {@link #find}, because {@link #upsert} lowercases on write.
+   */
+  public Optional<String> findScope(String name) {
+    return Jdbc.queryOne(adminDs.get(), "SavedViewStore.findScope",
+        "SELECT scope FROM connector.saved_view WHERE name = ?",
+        ps -> ps.setString(1, name.toLowerCase(Locale.ROOT)),
+        rs -> rs.getString(1));
+  }
+
   public Optional<Row> find(String name) {
     // lowercase on read like EntityRegistry.find — apply lowercases on write, so a
     // hand-typed 'Clients-Desk' must reach the same row as 'clients-desk'

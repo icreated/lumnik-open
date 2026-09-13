@@ -20,8 +20,14 @@ public class JdbcSourceDtos {
   }
   public record TestResponse(boolean ok, String dialect, String version, long latencyMs, List<String> schemas) {}
 
+  /** The source schema a request names; {@code public} when absent or blank. */
+  static String schemaOrDefault(String schema) {
+    return schema == null || schema.isBlank() ? "public" : schema.strip();
+  }
+
   public record DiscoverRequest(String url, String user, String password,
                                 String schema, List<String> skipPatterns, boolean includeViews) {
+    public String schemaOrDefault() { return JdbcSourceDtos.schemaOrDefault(schema); }
     @Override public String toString() {
       return "DiscoverRequest[url=" + url + USER_FIELD + user + ", password=***, schema=" + schema
           + ", skipPatterns=" + skipPatterns + ", includeViews=" + includeViews + "]";
@@ -30,16 +36,16 @@ public class JdbcSourceDtos {
   public record DiscoverResponse(List<TableDescriptor> tables) {}
 
   public record AddTableRequest(String table, String watermark, String mode) {}
-  public record AddRequest(String sourceName, String url, String user, String password,
-                           List<AddTableRequest> tables, String templateMode, String scheduleCron) {
+  public record AddRequest(String sourceName, String url, String user, String password, String schema,
+                           List<AddTableRequest> tables, String scheduleCron) {
+    public String schemaOrDefault() { return JdbcSourceDtos.schemaOrDefault(schema); }
     @Override public String toString() {
       return "AddRequest[sourceName=" + sourceName + ", url=" + url + USER_FIELD + user
-          + ", password=***, tables=" + tables + ", templateMode=" + templateMode
+          + ", password=***, schema=" + schema + ", tables=" + tables
           + ", scheduleCron=" + scheduleCron + "]";
     }
   }
-  public record AddResultEntry(UUID connectorId, UUID mappingId, String connectorName,
-                                String mappingName, String status) {}
+  public record AddResultEntry(UUID connectorId, String connectorName, String status) {}
   public record AddResponse(List<AddResultEntry> created, List<AddResultEntry> skipped) {}
 
   public record ListedTable(String table, String connectorName, UUID connectorId,

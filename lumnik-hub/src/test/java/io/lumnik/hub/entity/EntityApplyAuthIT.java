@@ -1,11 +1,9 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.hub.testsupport.YamlBody;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
@@ -30,9 +28,6 @@ class EntityApplyAuthIT {
         }
     }
 
-    static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config().encoderConfig(
-            EncoderConfig.encoderConfig().encodeContentTypeAs("application/yaml", ContentType.TEXT));
-
     static final String VALID_MANIFEST = """
             kind: Entity
             name: Customer
@@ -45,7 +40,7 @@ class EntityApplyAuthIT {
 
     @Test
     void apply_noJwt_returns401() {
-        given().config(YAML_CFG)
+        given().config(YamlBody.CONFIG)
                 .contentType("application/yaml")
                 .body(VALID_MANIFEST)
                 .post("/api/entities/apply")

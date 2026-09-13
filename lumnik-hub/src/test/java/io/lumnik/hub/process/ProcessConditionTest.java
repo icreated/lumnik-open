@@ -146,4 +146,15 @@ class ProcessConditionTest {
         ProcessConditionResolver.validateMessage("Nouveau client {cname} à {ville}", t);
         ProcessConditionResolver.validateMessage("no placeholders", t);
     }
+
+    @Test
+    void refusesAQuotedValue_theWhenConditionThatCouldNeverBeTrue() {
+        // #503, the ticket's own shape. `segment='GOLD'` was already refused here — but for the
+        // wrong reason (out of domain), and a column with no declared domain had nothing to say:
+        // the condition was accepted, compared against the seven characters 'Marie', and the
+        // process sat enabled and silent for ever. One grammar, so one refusal for both kinds.
+        assertThatThrownBy(() -> ProcessConditionResolver.resolve(List.of("name='Marie'"), table))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("name=Marie");
+    }
 }

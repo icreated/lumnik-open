@@ -36,20 +36,29 @@ public class WorkflowManifestStore {
         });
     }
 
+    /** Another workflow already declaring a (table, column), and the scope it was declared in. */
+    public record ColumnOwner(String name, String scope) {}
+
     /**
-     * The name of another workflow already declaring this exact (table, column) for this tenant.
+     * The workflow already declaring this exact (table, column) for this tenant, if any.
      * A column has exactly one lifecycle: a rename must not leave two contradictory declared
      * graphs over the same column, both retrieved, the chat forced to choose between them.
+     *
+     * <p>Deliberately NOT scope-filtered — the rule is one lifecycle per column for the TENANT,
+     * so a foreign owner must still stop the apply. Its SCOPE rides along because the refusal's
+     * wording depends on it: the owner's name is what makes the message actionable, and it is a
+     * name from another métier's card when the caller does not hold that scope (#516). Deciding
+     * that is the door's job; handing it what it needs to decide is this method's.
      */
-    public Optional<String> findOtherOnColumn(long tenantId, String table, String column, String name) {
-        String sql = "SELECT name FROM core.workflow_manifest "
+    public Optional<ColumnOwner> findOtherOnColumn(long tenantId, String table, String column, String name) {
+        String sql = "SELECT name, scope FROM core.workflow_manifest "
             + "WHERE tenant_id = ? AND on_table = ? AND on_column = ? AND name <> ? ORDER BY name LIMIT 1";
         return Jdbc.queryOne(adminDs, "WorkflowManifestStore.findOtherOnColumn", sql, ps -> {
             ps.setLong(1, tenantId);
             ps.setString(2, table);
             ps.setString(3, column);
             ps.setString(4, name);
-        }, rs -> rs.getString(1));
+        }, rs -> new ColumnOwner(rs.getString(1), rs.getString(2)));
     }
 
     /**
@@ -62,6 +71,26 @@ public class WorkflowManifestStore {
             ps.setLong(1, tenantId);
             ps.setString(2, name);
         }, rs -> rs.getString(1));
+    }
+
+    /**
+     * Does this tenant declare ANY enabled lifecycle in this scope? A yes/no, answered by the
+     * database — the abstention signpost needs no graph.
+     *
+     * <p>Deliberately NOT {@code WorkflowRegistry.all(tenant)}: that is the SERVING path, and its
+     * invariant is that every read re-parses the stored YAML ("Do not memoize this"). Asking it a
+     * boolean costs a SELECT of every yaml_text plus a full parse per row, all discarded but one
+     * bit. The denormalized {@code scope} column exists for lookups exactly like this one — which
+     * is also why the registry's warning not to trust {@code on_table}/{@code on_column} does not
+     * apply here: nothing is being served, only counted.
+     */
+    public boolean anyInScope(long tenantId, String scope) {
+        String sql = "SELECT 1 FROM core.workflow_manifest "
+            + "WHERE tenant_id = ? AND scope = ? AND enabled LIMIT 1";
+        return Jdbc.queryOne(adminDs, "WorkflowManifestStore.anyInScope", sql, ps -> {
+            ps.setLong(1, tenantId);
+            ps.setString(2, scope);
+        }, rs -> rs.getInt(1)).isPresent();
     }
 
     /** The stored manifest yaml for one workflow, if it exists — the TUI edit round-trip. */

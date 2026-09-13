@@ -21,7 +21,11 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
+import io.lumnik.hub.sql.SqlFailureText;
+
+import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteTable;
 import static io.lumnik.hub.workflow.WorkflowManifestParser.norm;
 import static io.quarkus.scheduler.Scheduled.ConcurrentExecution.SKIP;
@@ -57,6 +61,28 @@ public class WorkflowDormancySweep {
     private static final String TENANTS_SQL =
         "SELECT DISTINCT tenant_id FROM core.workflow_manifest WHERE enabled";
 
+    /**
+     * The SQLSTATEs that mean <em>the declaration outran the data</em>: the trigger table is gone
+     * (42P01), or the status/key column is (42703 — a dropped column, or a {@code spec.on.key}
+     * typo, which applies with a clean 200 and only ever shows up here).
+     *
+     * <p>Two codes, named one by one rather than the whole 42 class. A syntax error is also class
+     * 42, and one of those would be OUR defect in the statement this class builds — the last thing
+     * that should go quiet.
+     */
+    private static final Map<String, String> DECLARATION_OUTRAN_DATA = Map.of(
+        "42P01", "the table no longer exists",
+        "42703", "a declared column no longer exists");
+
+    /**
+     * (tenant, workflow) → the reason already reported, so a standing condition is said ONCE.
+     *
+     * <p>In memory, not in a table: a restart re-saying it once is the right amount of noise for a
+     * condition that is still true, and the alternative is a migration and a row to keep in step
+     * with a manifest that can be re-applied at any moment.
+     */
+    private final Map<String, String> stoodDown = new ConcurrentHashMap<>();
+
     @Inject WorkflowRegistry registry;
     @Inject WorkflowObservationStore observations;
     @Inject ObjectMapper json;
@@ -76,13 +102,71 @@ public class WorkflowDormancySweep {
                 if (g.dormancy() == null || g.key() == null) continue;
                 try {
                     sweepOne(tenant, g);
+                    noteSweepSucceeded(tenant, g);
                 } catch (RuntimeException e) {
                     // fail-closed per workflow: never let one broken declaration stop the rest
-                    LOG.errorf(e, "dormancy sweep failed for tenant %d workflow %s — skipped",
-                        tenant, g.name());
+                    noteSweepFailed(tenant, g, e);
                 }
             }
         }
+    }
+
+    /**
+     * What a failed tick says. A declaration the schema no longer matches gets ONE line and then
+     * silence; everything else keeps the error it always had, on every tick.
+     *
+     * <p>The entities campaign of 2026-09-12 deleted a connector under a live kind:Workflow and the
+     * sweep logged the same ERROR every fifteen minutes from then on, with no delete for a workflow
+     * to make it stop (#492). A missing table is not an incident that repeats — it is a state, and a
+     * state is worth saying once.
+     *
+     * <p>A statement timeout, a revoked grant, an exhausted pool stay loud on purpose: those are
+     * transient or operational, an operator is meant to see them recur, and standing down from them
+     * would make this fix the reason the next outage passed unnoticed.
+     *
+     * <p>Package-private for {@code WorkflowDormancySweepQuietTest}.
+     */
+    void noteSweepFailed(long tenant, WorkflowGraph g, RuntimeException e) {
+        String sqlState = SqlFailureText.sqlStateOf(e);
+        String what = sqlState == null ? null : DECLARATION_OUTRAN_DATA.get(sqlState);
+        if (what == null) {
+            LOG.errorf(e, "dormancy sweep failed for tenant %d workflow %s — skipped",
+                tenant, g.name());
+            return;
+        }
+        // Comparing against the PREVIOUS value is what makes a condition that CHANGES (the table
+        // came back, but spec.on.key now names a column that is not there) news again instead of
+        // being swallowed as "already said" — a_condition_that_changes_is_news_again pins it, and
+        // two_tenants_of_the_same_workflow_name_are_two_conditions pins the other half.
+        //
+        // What is in the key and what is in the value is stated once, on the field. Two rounds of
+        // review went on this line because it re-described the map from memory and drifted both
+        // times ("the reason is part of the key", then "the key is the workflow"); the description
+        // that was right the whole time is the one that sits next to the declaration.
+        String alreadySaid = stoodDown.put(key(tenant, g), sqlState);
+        if (sqlState.equals(alreadySaid)) return;
+        LOG.warnf("dormancy sweep standing down for tenant %d workflow %s: %s (%s.%s, SQLSTATE %s)."
+            + " Nothing further will be logged for it until the sweep succeeds again — re-ingest the"
+            + " source, or re-apply the workflow against a table that exists.",
+            tenant, g.name(), what, g.table(), g.column(), sqlState);
+    }
+
+    /**
+     * A tick that worked. Silent, unless it is the one that ends a stand-down — re-ingesting the
+     * source recreates the table and the sweep resumes by itself, which is worth exactly one line.
+     * Clearing the mark also re-arms the warning, so a second disappearance is said again instead
+     * of inheriting the first one's silence.
+     */
+    void noteSweepSucceeded(long tenant, WorkflowGraph g) {
+        if (stoodDown.remove(key(tenant, g)) != null) {
+            LOG.infof("dormancy sweep resumed for tenant %d workflow %s — %s.%s is readable again",
+                tenant, g.name(), g.table(), g.column());
+        }
+    }
+
+    /** Tenant AND workflow: one métier's table vanishing is not another tenant's news. */
+    private static String key(long tenant, WorkflowGraph g) {
+        return tenant + ":" + g.name();
     }
 
     private void sweepOne(long tenant, WorkflowGraph g) {
@@ -146,19 +230,23 @@ public class WorkflowDormancySweep {
     }
 
     private Map<String, String> latestStatePerKey(long tenant, WorkflowGraph g) {
-        // Identifiers are parse-time grammar-guarded (TABLE_RX/COLUMN_RX); the graph came
-        // from the registry, i.e. from a re-parsed manifest — the standing injection invariant.
-        String sql = "SELECT DISTINCT ON (" + g.key() + ") " + g.key() + "::text, "
-            + g.column() + "::text FROM " + quoteTable(g.table())
-            + " WHERE tenant_id = ? AND " + g.key() + " IS NOT NULL AND btrim(" + g.key() + "::text) <> '' AND "
-            + g.column() + " IS NOT NULL AND btrim(" + g.column() + "::text) <> '' "
+        // JDBC cannot bind an identifier, so each one is interpolated QUOTED — the escaping is the
+        // guard, and the name is whatever the source called it ("Statut Commande", "N° Commande").
+        // Bare, those are not a miss but a SYNTAX ERROR, and the per-workflow net above would
+        // swallow it as a logged skip: a declared dormancy that never fires, on every tick, forever.
+        String key = quoteIdent(g.key());
+        String column = quoteIdent(g.column());
+        String sql = "SELECT DISTINCT ON (" + key + ") " + key + "::text, "
+            + column + "::text FROM " + quoteTable(g.table())
+            + " WHERE tenant_id = ? AND " + key + " IS NOT NULL AND btrim(" + key + "::text) <> '' AND "
+            + column + " IS NOT NULL AND btrim(" + column + "::text) <> '' "
             // `id DESC` is not decoration: `_ingested_at` defaults to now(), the TRANSACTION
             // timestamp, so every row of one ingest chunk shares it EXACTLY — and two rows for the
             // same business key in one chunk is routine in legacy exports. Without a tiebreaker
             // DISTINCT ON picks arbitrarily, the sweep flip-flops between the two versions, and the
             // append-only journal fills with transitions that never happened. Every dynamic table
             // has `id BIGSERIAL PRIMARY KEY` (DynamicTableWriter), so this is a total order.
-            + "ORDER BY " + g.key() + ", _ingested_at DESC, id DESC";
+            + "ORDER BY " + key + ", _ingested_at DESC, id DESC";
         Map<String, String> out = new LinkedHashMap<>();
         try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setLong(1, tenant);

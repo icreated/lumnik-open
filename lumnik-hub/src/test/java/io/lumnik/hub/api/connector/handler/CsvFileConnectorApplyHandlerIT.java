@@ -1,10 +1,8 @@
 package io.lumnik.hub.api.connector.handler;
 
+import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.test.junit.QuarkusTest;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import org.junit.jupiter.api.Test;
 
 import static io.restassured.RestAssured.given;
@@ -12,10 +10,6 @@ import static org.hamcrest.Matchers.*;
 
 @QuarkusTest
 class CsvFileConnectorApplyHandlerIT {
-
-    private static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config()
-        .encoderConfig(EncoderConfig.encoderConfig()
-            .encodeContentTypeAs("application/yaml", ContentType.TEXT));
 
     @Test void apply_csvSftp_creates_connector_and_one_endpoint() {
         String yaml = """
@@ -40,7 +34,7 @@ class CsvFileConnectorApplyHandlerIT {
               target: {}
             """.formatted(System.nanoTime());
 
-        String connectorId = given().config(YAML_CFG)
+        String connectorId = given().config(YamlBody.CONFIG)
             .headers(TestIdentity.tenantAndUser(1))
             .contentType("application/yaml")
             .body(yaml)

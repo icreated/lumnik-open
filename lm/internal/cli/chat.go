@@ -13,7 +13,11 @@ import (
 
 type chatSession struct {
 	corpus string
-	topK   int
+	// scope is the métier this REPL is aimed at — the `scope` field of POST
+	// /api/platform/rag/chat. Empty hands the question back to the server, which
+	// falls back to the user's default (`lm scope set`), then to 'system'.
+	scope string
+	topK  int
 }
 
 func newChatCmd() *cobra.Command {
@@ -30,7 +34,8 @@ func newChatCmd() *cobra.Command {
 			fmt.Fprintln(cmd.OutOrStdout(), "lm chat — type :help for commands, :exit to quit")
 			scanner := bufio.NewScanner(os.Stdin)
 			for {
-				fmt.Fprintf(cmd.OutOrStdout(), "\n[corpus=%s topK=%d] > ", coalesceStr(session.corpus, "*"), session.topK)
+				fmt.Fprintf(cmd.OutOrStdout(), "\n[corpus=%s scope=%s topK=%d] > ",
+					coalesceStr(session.corpus, "*"), coalesceStr(session.scope, "default"), session.topK)
 				if !scanner.Scan() {
 					return nil
 				}
@@ -44,7 +49,7 @@ func newChatCmd() *cobra.Command {
 					}
 					continue
 				}
-				res, err := c.RagChat(line, session.corpus, session.topK)
+				res, err := c.RagChatScoped(line, session.corpus, session.scope, session.topK)
 				if err != nil {
 					fmt.Fprintln(cmd.ErrOrStderr(), "ERROR:", err)
 					continue
@@ -71,6 +76,7 @@ func handleSlash(cmd *cobra.Command, s *chatSession, line string) (exit bool) {
 	case ":help", ":h":
 		fmt.Fprintln(cmd.OutOrStdout(), `Commands:
   :corpus NAME     Scope chat to a corpus (or 'all' / '*' for all)
+  :scope TAG       Bind chat to one métier scope (or 'default' for your own)
   :topK N          Set retrieval top-K
   :clear           Clear screen
   :help / :h       Show this help
@@ -87,6 +93,20 @@ func handleSlash(cmd *cobra.Command, s *chatSession, line string) (exit bool) {
 			s.corpus = val
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), "corpus →", coalesceStr(s.corpus, "*"))
+	case ":scope":
+		if len(parts) < 2 {
+			fmt.Fprintln(cmd.OutOrStdout(), "current scope:", coalesceStr(s.scope, "default"))
+			return false
+		}
+		val := strings.TrimSpace(parts[1])
+		// 'default' is this command's 'all': it hands the choice back to the server, which
+		// answers from the user's own default scope rather than from a scope named here.
+		if val == "default" {
+			s.scope = ""
+		} else {
+			s.scope = val
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), "scope →", coalesceStr(s.scope, "default"))
 	case ":topK":
 		if len(parts) < 2 {
 			fmt.Fprintln(cmd.OutOrStdout(), "current topK:", s.topK)

@@ -78,12 +78,19 @@ class ViewGenerateAgentTest {
             agent().generate(card(), "clients", "les clients gold de Lyon", chat);
 
         assertEquals(ViewGenerateAgent.Outcome.Status.OK, out.status());
-        assertTrue(out.yaml().startsWith(
-            "# lm view -f clients_gold_de_lyon.yaml --filter 'segment=GOLD' --filter 'city~Lyon'"));
+        // The header states what was asked and what the view narrows on, then the runnable
+        // command — the reader compares the two halves at a glance (#489).
+        assertEquals(List.of(
+            "# asked for: les clients gold de Lyon",
+            "# kept: segment=GOLD, city~Lyon — a condition of that description not listed here is NOT enforced",
+            "# lm view -f clients_gold_de_lyon.yaml --filter 'segment=GOLD' --filter 'city~Lyon'"),
+            out.yaml().lines().takeWhile(l -> l.startsWith("#")).toList());
         assertTrue(out.yaml().contains("table: \"connector.v_customer\"")
                 || out.yaml().contains("table: connector.v_customer"));
         // The prompt grounds the model in the card and the description.
-        assertTrue(chat.prompts.get(0).contains("connector.v_customer"));
+        // The card's own rendering, not a substring of it: `v_customer` alone also appears in the
+        // table label and would pass with the grounding gone or the quoting regressed.
+        assertTrue(chat.prompts.get(0).contains("TABLE \"connector\".\"v_customer\""));
         assertTrue(chat.prompts.get(0).contains("les clients gold de Lyon"));
     }
 
@@ -238,5 +245,77 @@ class ViewGenerateAgentTest {
         ViewGenerateAgent.Outcome out = agent().generate(card(), "clients", "les clients", chat);
         assertEquals(ViewGenerateAgent.Outcome.Status.FAILED, out.status());
         assertTrue(out.message().contains("columns"));
+    }
+
+    /**
+     * #483 — the model spells a value the way SQL does ('GOLD'), and the domain gate compared the
+     * quoted string: 2/2 deterministic failures on any column carrying a domain, the one corrective
+     * retry included. Quotes are never meaningful in the view grammar, so they are shed once,
+     * before the gate — and the first answer stands (no retry).
+     */
+    @Test
+    void aQuotedDomainValue_isShedBeforeTheGate() {
+        FakeChat chat = new FakeChat(GOOD.replace("segment=GOLD", "segment='GOLD'"));
+        ViewGenerateAgent.Outcome out =
+            agent().generate(card(), "clients", "les clients gold de Lyon", chat);
+
+        assertEquals(ViewGenerateAgent.Outcome.Status.OK, out.status(), String.valueOf(out.message()));
+        Assertions.assertThat(out.yaml()).contains("segment=GOLD").doesNotContain("'GOLD'");
+        assertEquals(1, chat.prompts.size(), "the shed value must not cost a corrective retry");
+    }
+
+    /**
+     * #483's silent half: a column with no declared domain has nothing to refuse the quotes, so
+     * {@code city='Lyon'} was accepted and the view then filtered on the literal quotes — a
+     * lying zero-row table, which ViewFilter's own honesty line forbids.
+     */
+    @Test
+    void aQuotedValueOnADomainlessColumn_isShedToo_soTheViewCannotLieEmpty() {
+        FakeChat chat = new FakeChat(GOOD.replace("city~Lyon", "city='Lyon'"));
+        ViewGenerateAgent.Outcome out =
+            agent().generate(card(), "clients", "les clients de Lyon", chat);
+
+        assertEquals(ViewGenerateAgent.Outcome.Status.OK, out.status(), String.valueOf(out.message()));
+        Assertions.assertThat(out.yaml()).contains("city=Lyon").doesNotContain("'Lyon'");
+    }
+
+    // ── The filter column the model left out of its selection (#505) ─────────────
+
+    @Test
+    void aFilterOnAColumnTheModelDidNotSelect_addsTheColumnInsteadOfRefusing() {
+        // Measured 3/3 on 2026-09-13: for "les clients gold de Lyon" the model selects two
+        // columns and filters on a third, the gate refuses ("the view does not show it"), and the
+        // one corrective retry carries that exact sentence without adding the column. The rule is
+        // right — a view that filters on a column it does not show cannot be read honestly — so
+        // it is SATISFIED rather than weakened: the user asked for gold customers, segment
+        // belongs in the view, and it lands last so the model's reading order survives.
+        FakeChat chat = new FakeChat(
+            "{\"table\":\"connector.v_customer\",\"title\":\"Clients gold de Lyon\","
+            + "\"columns\":[\"name\",\"city\"],"
+            + "\"filters\":[\"segment=GOLD\",\"city~Lyon\"]}");
+
+        ViewGenerateAgent.Outcome out =
+            agent().generate(card(), "clients", "les clients gold de Lyon", chat);
+
+        assertEquals(ViewGenerateAgent.Outcome.Status.OK, out.status());
+        Assertions.assertThat(out.yaml())
+            .contains("- \"name\"", "- \"city\"", "- \"segment\"")
+            .contains("--filter 'segment=GOLD'");
+        // One model call: the answer was rescued, not retried.
+        Assertions.assertThat(chat.prompts).hasSize(1);
+    }
+
+    @Test
+    void aFilterOnAColumnTheTABLEDoesNotHave_keepsItsRefusal() {
+        // The bound: only a column the card's table really has can be added. An invented one is
+        // still the honest failure it was — otherwise the rescue would manufacture a column.
+        String bad = "{\"table\":\"connector.v_customer\",\"title\":\"Clients\","
+            + "\"columns\":[\"name\"],\"filters\":[\"region=RA\"]}";
+        FakeChat chat = new FakeChat(bad, bad);
+
+        ViewGenerateAgent.Outcome out = agent().generate(card(), "clients", "les clients", chat);
+
+        assertEquals(ViewGenerateAgent.Outcome.Status.FAILED, out.status());
+        Assertions.assertThat(out.message()).contains("region");
     }
 }

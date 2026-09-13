@@ -7,6 +7,91 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.7.0 — 2026-09-14
+
+Six days of running the product against real sources — a live JDBC database, and a REST / GraphQL /
+SOAP service the reader can start — rather than asserting about it. Five migrations run at startup,
+one of them **deletes rows** and one **revokes a grant**: read **Changed** before upgrading. The
+chat surface, the model bindings and the Kafka connector are closed modules and their changes are
+not listed here.
+
+This release also adds [**Where lumnik stands**](/docs/where-lumnik-stands.md) — one page carrying
+the whole boundary: what is deliberately absent, what is started and not finished, and the one
+thing we do not know yet. lumnik is **beta**, and that page says exactly what the word covers.
+
+### Changed — read before upgrading
+- **A cursor left by a different configuration is discarded, and the table is read again from the
+  start.** Switching an endpoint between `full` and `watermark`, or changing the cursor column or
+  the primary key, used to resume from the old position without saying so — a table of 100 rows
+  reported 0 of 100, then 50 of 100. The stale position is now refused with a warning in the log,
+  and the next run re-reads the table in full. Expect that one re-ingestion after any such change.
+  `lm endpoint reset-cursor` asks for it on purpose.
+- **A bounded run can end `Partial`.** A run that drains to the head of the data it found reports
+  `Partial` rather than `Success`. If you parse run status, handle the fifth value.
+- **Five migrations**, applied at startup:
+    - One **removes the per-table mapping rows** `lm source jdbc add` used to write. Nothing ever
+      read them back, and they held a name that `connector delete` never released — so a table you
+      deleted could never be added again. Deleting them fixes that; no configuration of yours moves.
+    - Three make a **deleted name usable again** — secrets, endpoints and integrations. A soft
+      delete left the name reserved: `lm secret list` no longer showed it, `lm secret rm` answered
+      *not found* for it, and creating it again failed with an anonymous `500`. The name is free now.
+    - One makes the **audit trail append-only for the request-path database role**. Nothing in the
+      hub ever wrote to it from there, but the grant allowed it — and an auditor reads grants, not
+      intentions. No action needed unless your own tooling writes to `core.audit_event` as
+      `lumnik_app`; it will now be refused.
+- **An unknown key in a manifest is named instead of ignored in silence.** `poll_timeout: 50` in a
+  spec that has no such key used to apply with no warning, so an integrator read a value the
+  runtime never used. Nothing changes about what is accepted: the manifest is still valid, still
+  applies, and the key is still stored — it just no longer reads as if it did something.
+
+### Security
+- **A disabled account can be refused at once instead of at token expiry.** Set
+  `LUMNIK_AUTH_VERIFY_WITH_IDP=true` and the hub asks the identity provider on every request. It
+  costs one call per request; off by default.
+- **The audit trail cannot be edited or erased by the request-path role** (the migration above).
+- **A refused configuration reaches you as a refusal, not as a `500`.** Whatever the door thought
+  was wrong, it now says so.
+- Every refusal is logged at `WARN` — previously some were, some were not.
+- Credentials written inline in a manifest now draw an advisory that a successful `apply` hands
+  back, instead of applying silently.
+
+### Added
+- **Cancel a running ingestion.** `lm run cancel <id>`, `c` on the TUI's `:runs` view, or
+  `POST /api/platform/runs/{id}/cancel`. The run stops at the next chunk boundary; what was already
+  written stays written.
+- **A run says what it is doing, in the hub's log.** It announces itself at start and at every end,
+  and each of its log lines carries the run id and the tenant — so two concurrent runs can be read
+  apart. A run whose position stops moving is noticed rather than left turning.
+- **The run ledger names the endpoint each row was read from**, so a multi-endpoint connector's
+  history can be read per source.
+- **A REST source's declared total becomes the run's witness** — when the API says how many records
+  exist, the run checks itself against that number.
+- **Integration as code.** Every `-f` door accepts a manifest on stdin, so a manifest can be piped
+  from a generator or a secret store instead of landing on disk first. The discovery commands hand
+  back data rather than a rendering, which makes them scriptable.
+- `lm chat` accepts `:scope TAG`. An entity can declare the name it is called by, and a view
+  inherits it as its title.
+
+### Fixed
+- **JDBC** — the reader pages on the whole primary key, so a composite key no longer skips or
+  repeats rows. The persisted cursor reaches the last row: small tables are incremental too, and
+  there is no tail re-read on every run. The guided `lm source jdbc add` refuses a table it cannot
+  ingest, works in the schema you declared, and leaves nothing behind when it refuses. Secrets typed
+  at a prompt are never echoed, and the terminal is restored if you interrupt with `Ctrl+C`.
+- **A run could be left `Running` forever** — a transactional read was rewriting rows that carry
+  JSON, which orphaned the run that owned them.
+- **REST / GraphQL / SOAP** — a dead source no longer reads as a successful empty sync; the
+  pre-flight test knocks the way a real run knocks, so it stops passing where the run fails; an
+  authentication failure reports the request that was actually composed, headers included; a naive
+  ERP timestamp lands instead of being refused, and when the database does refuse one, the reason
+  reaches you.
+- **`lm run list`** narrows at the hub rather than in the terminal, and says so when a page is full.
+- An entity `apply` refusal carries the message it promises. A workflow can declare a lifecycle over
+  the column name the source actually chose. The `apply` doors tell you about the scopes they are
+  about to overwrite.
+- The JDBC, REST, GraphQL and SOAP documentation pages were rewritten over benches you can run
+  yourself, and the security section now reads like the rest of the site.
+
 ## v1.6.2 — 2026-09-07
 
 The same tree as upstream v1.6.0 for everything that ships here, published under the next free

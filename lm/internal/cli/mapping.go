@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
@@ -69,7 +68,7 @@ func newMappingCmd() *cobra.Command {
 		Short: "Apply per-tenant override from YAML file",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			file, _ := cmd.Flags().GetString("file")
-			data, err := os.ReadFile(file)
+			data, err := readManifest(cmd, file)
 			if err != nil {
 				return err
 			}
@@ -88,7 +87,7 @@ func newMappingCmd() *cobra.Command {
 			return nil
 		},
 	}
-	apply.Flags().StringP("file", "f", "", "Path to override YAML")
+	apply.Flags().StringP("file", "f", "", "Path to override YAML, or - for stdin")
 	_ = apply.MarkFlagRequired("file")
 	m.AddCommand(apply)
 

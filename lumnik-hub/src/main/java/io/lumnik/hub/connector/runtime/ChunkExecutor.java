@@ -11,10 +11,12 @@ import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorCursorEntity;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.domain.ConnectorRun;
+import io.lumnik.hub.connector.domain.EffectiveConfig;
 import io.lumnik.hub.connector.exceptions.TransientFailureException;
 import io.lumnik.hub.connector.repository.ConnectorCursorEntityRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.repository.ConnectorRunRepository;
+import io.lumnik.hub.sql.SqlFailureText;
 
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -75,10 +77,11 @@ public class ChunkExecutor {
    */
   @SuppressWarnings({"rawtypes", "unchecked"})
   public ChunkResult executeChunk(ConnectorRun run, ConnectorType type,
-                                  ConnectorEndpoint endpoint, ConnectorCursor cursorIn) {
+                                  ConnectorEndpoint endpoint, ConnectorCursor cursorIn,
+                                  RunBound bound) {
     Prepared prepared = QuarkusTransaction.joiningExisting().call(() -> {
       Connector conn = connectors.findById(run.getConnectorId());
-      ConnectorContext context = buildContext(run, conn, endpoint);
+      ConnectorContext context = buildContext(run, conn, endpoint, bound);
       return new Prepared(conn, context, type.reader(context), type.writer(context));
     });
     Connector c = prepared.connector();
@@ -128,7 +131,7 @@ public class ChunkExecutor {
             if (outcome instanceof WriteOutcome.AllFailed f) yield allFailed(c, f);
             persistCursor(c.getId(), endpoint.getId(), c.getTenantId(), hm.nextCursor());
             account(r, c, reader, writer, hm.records().size(), outcome);
-            yield new ChunkResult.Success(hm.records().size(), hm.nextCursor());
+            yield new ChunkResult.Success(hm.records().size(), hm.nextCursor(), false);
           }
           case ReadResult.EndOfStream eos -> {
             var outcome = writeOrPassThrough(writer, eos.records(), ctx);
@@ -136,7 +139,7 @@ public class ChunkExecutor {
             // but the counters must not move either.
             if (outcome instanceof WriteOutcome.AllFailed f) yield allFailed(c, f);
             account(r, c, reader, writer, eos.records().size(), outcome);
-            yield new ChunkResult.Success(eos.records().size(), cursorIn);
+            yield new ChunkResult.Success(eos.records().size(), cursorIn, true);
           }
           case ReadResult.EmptyButOpen ep -> {
             // "Nothing usable this pass, the stream is still open" does not mean nothing was READ:
@@ -145,7 +148,29 @@ public class ChunkExecutor {
             int malformed = captureMalformed(reader, c.getId(), r.getId());
             r.setRecordsIn(r.getRecordsIn() + malformed);
             r.setRecordsSkipped(r.getRecordsSkipped() + malformed);
-            yield new ChunkResult.Success(0, ep.sameCursor());
+            // A chunk ran. This branch bypasses account(), which is the only place the counter
+            // moves, so every run ending here under-reported chunks= by one — in the end-of-run log
+            // line, on the run row and in the TUI. Harmless while the shape had no producer.
+            r.setChunkCount(r.getChunkCount() + 1);
+            // The position IS persisted. A reader gets here having moved past the records it just
+            // dead-lettered, and an advance the engine never stores is redone next run: the same
+            // rows dead-lettered again, for ever. This branch persisted nothing while the shape had
+            // no producer, which is the trap ChunkAccountingIT named — and #467 paid for the same
+            // mistake on the EndOfStream path.
+            // An EMPTY position says "no position", and writing a row to say that would be a row
+            // that says nothing — it reads back exactly like the absent row, while touching
+            // captured_at. Only a real advance is stored.
+            if (!ep.position().isEmpty()) {
+              persistCursor(c.getId(), endpoint.getId(), c.getTenantId(), ep.position());
+            }
+            // "Short of the target" needs a target, and THIS is the one place that rule lives. A
+            // reader with no bound cannot be short of anything, so its empty-but-open pass ends the
+            // run the way it always did. Asking each type to make that call instead put an engine
+            // rule in a per-type ternary, and put it in two places.
+            if (bound == null) yield new ChunkResult.Success(0, ep.position(), false);
+            yield new ChunkResult.ShortOfTarget(
+                "the reader stopped before this run's target (" + bound.describe() + ")"
+                    + " — the next run resumes from the position this one reached");
           }
         };
       } catch (Throwable t) {
@@ -203,29 +228,26 @@ public class ChunkExecutor {
     return new ChunkResult.Failure(f.reason(), f.cause(), f.cause() instanceof TransientFailureException);
   }
 
-  private static ChunkResult.Failure failure(Connector c, Throwable t) {
+  /**
+   * The run's own account of why it stopped.
+   *
+   * <p>{@code getMessage()} alone loses whatever the cause said, and the cause is often the only
+   * one that knows: a writer wrapper names the table, PostgreSQL names the column and the two
+   * types that would not meet. {@link SqlFailureText#withCause} joins them under the rule that
+   * decides which database messages may travel at all — the log above keeps every character
+   * either way.
+   */
+  static ChunkResult.Failure failure(Connector c, Throwable t) {
     Logger.getLogger(ChunkExecutor.class)
         .warnf(t, "Chunk failure for connector %s: %s", c.getName(), t.getMessage());
-    return new ChunkResult.Failure(t.getMessage(), t, t instanceof TransientFailureException);
+    return new ChunkResult.Failure(
+        SqlFailureText.withCause(t), t, t instanceof TransientFailureException);
   }
 
-  /**
-   * Builds the per-run context for a single endpoint.
-   *
-   * <p>Config is the connection-level config merged with the endpoint config, the endpoint
-   * winning on key conflicts. The connection base is {@code config.get("connection")} when the
-   * connector carries an explicit connection block (declarative manifests), otherwise the whole
-   * flat connector config (legacy / synthetic endpoints).
-   */
-  @SuppressWarnings("unchecked")
-  private ConnectorContext buildContext(ConnectorRun run, Connector c, ConnectorEndpoint endpoint) {
-    Map<String, Object> base = (c.getConfig().get("connection") instanceof Map<?, ?> conn)
-        ? (Map<String, Object>) conn
-        : c.getConfig();
-
-    Map<String, Object> config = new HashMap<>(base);
-    if (endpoint.getConfig() != null) config.putAll(endpoint.getConfig());
-    if (c.getCredentialId() != null) config.put("_credentialId", c.getCredentialId().toString());
+  /** Builds the per-run context for a single endpoint; the config rule lives in {@link EffectiveConfig}. */
+  private ConnectorContext buildContext(ConnectorRun run, Connector c, ConnectorEndpoint endpoint,
+                                        RunBound bound) {
+    Map<String, Object> config = EffectiveConfig.of(c, endpoint);
 
     return new ConnectorContext(
         run.getId(), c.getId(), endpoint.getId(), c.getTenantId(),
@@ -234,7 +256,32 @@ public class ChunkExecutor {
         c.getSyncMode(),
         Logger.getLogger("connector." + c.getName()),
         credentials, mappings,
-        Clock.systemUTC());
+        Clock.systemUTC(),
+        bound);
+  }
+
+  /**
+   * Asks the type what it learns about the source at run start. Called ONCE by the engine, before
+   * the chunk loop and with no transaction, so the source round-trip inside does not hold a pooled
+   * connection — the same rule step 2 of {@link #executeChunk} follows for the read.
+   *
+   * <p>The run and connector rows are PASSED, not re-read: {@link ConnectorEngine#runChunks} is
+   * holding both when it calls this. The first version looked them both up again inside a
+   * transaction of its own, which cost two selects and a transaction per run for rows already in
+   * hand. Nothing here needs a fresh read — {@link #buildContext} uses the run's id and the
+   * connector's own fields — so there is no transaction left to open.
+   *
+   * <p>The context handed to {@code runStart} carries no bound, which is correct and not a gap: it
+   * is the context in which the bound is about to be measured. A credential the type resolves from
+   * it is safe without a transaction here because {@code CredentialResolver} opens its own.
+   *
+   * <p>A type that cannot reach its source returns nothing rather than throwing — see
+   * {@link ConnectorEngine#runChunks}. Measuring a target is a diagnostic; it must not be the thing
+   * that turns a working ingestion into a failed run.
+   */
+  public RunStart runStart(ConnectorRun run, Connector c, ConnectorType type,
+                           ConnectorEndpoint endpoint, ConnectorCursor cursor) {
+    return type.runStart(buildContext(run, c, endpoint, null), cursor);
   }
 
   private void persistCursor(UUID connectorId, UUID endpointId, Long tenantId, ConnectorCursor newCursor) {
@@ -265,12 +312,10 @@ public class ChunkExecutor {
                                     ObjectMapper mapper) {
     if (o instanceof WriteOutcome.PartialWrite p) {
       for (var s : p.skipped()) {
-        // Mirrors ConnectorDeadLetterRepository.BENIGN_REASONS — the authority for what counts
-        // as a benign, declared skip rather than a loss (also guarded independently in
-        // DeadLetterCapture.capture's metric exemption). That set is string-keyed against the
-        // persisted skip-reason name, so it isn't cheaply shareable with this SkipReason-typed
-        // check; keep both conditions in sync by hand if a third benign reason is ever added.
-        if (!(s.reason() instanceof SkipReason.PolicyExcluded) && !(s.reason() instanceof SkipReason.Duplicate)) {
+        // A declared skip is not a loss, so it is not dead-lettered. The rule lives on the type
+        // (SkipReason.BENIGN_NAMES) — string-keyed in the repository's query, type-keyed here and
+        // in DeadLetterCapture, one source for all three.
+        if (!s.reason().benign()) {
           dlq.capture(connectorId, runId, mapper.valueToTree(s.payload()), s.reason());
         }
       }

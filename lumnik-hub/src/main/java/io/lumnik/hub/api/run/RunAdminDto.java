@@ -8,6 +8,8 @@ public record RunAdminDto(
     UUID id,
     UUID connectorId,
     String connectorName,
+    UUID endpointId,
+    String endpointName,
     String status,
     Instant startedAt,
     Instant endedAt,
@@ -24,10 +26,18 @@ public record RunAdminDto(
    * connectorName may be null (connector since deleted) — the ledger is for human
    * diagnosis, so the name rides along whenever it exists; clients fall back to
    * the id when it doesn't.
+   *
+   * <p>Same rule one level down for the endpoint, which is what tells two rows of the same run
+   * apart: a connector fans out over its endpoints and writes one row per endpoint, so a two-table
+   * jdbc connector logs two rows that differ only in their counters until the endpoint is named.
+   * Both endpoint fields are null together for a run that has no endpoint at all — a row predating
+   * endpoints, or one whose endpoint was hard-deleted ({@code ON DELETE SET NULL}, V13).
    */
-  public static RunAdminDto from(ConnectorRun r, long deadLetterCount, String connectorName) {
+  public static RunAdminDto from(ConnectorRun r, long deadLetterCount,
+                                 String connectorName, String endpointName) {
     return new RunAdminDto(
-        r.getId(), r.getConnectorId(), connectorName, r.getStatus(),
+        r.getId(), r.getConnectorId(), connectorName,
+        r.getEndpointId(), endpointName, r.getStatus(),
         r.getStartedAt(), r.getEndedAt(),
         r.getRecordsIn(), r.getRecordsOut(), r.getRecordsSkipped(), r.getCellErrors(),
         r.getTriggeredBy(), r.getChunkCount(),

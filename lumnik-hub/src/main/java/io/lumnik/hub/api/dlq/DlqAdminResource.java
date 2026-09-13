@@ -9,7 +9,6 @@ import io.lumnik.hub.tenant.RequireUser;
 import io.lumnik.hub.tenant.TenantContextFilter;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
-import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
@@ -21,7 +20,6 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 @Path("/api/platform/dlq")
@@ -44,9 +42,9 @@ public class DlqAdminResource {
     int capped = Math.min(Math.max(limit, 1), 200); // >=1: page(0,0) would throw; limit<=0 is a nonsense request
     List<ConnectorDeadLetter> entries;
     if (runId != null) {
-      entries = repo.findByRun(parseUuidOr400(runId), capped);
+      entries = repo.findByRun(ApiErrors.uuidOrRefuse(runId), capped);
     } else if (connectorId != null) {
-      entries = repo.findPendingByConnector(parseUuidOr400(connectorId), capped);
+      entries = repo.findPendingByConnector(ApiErrors.uuidOrRefuse(connectorId), capped);
     } else {
       // findAllActive (not findAll): exclude soft-deleted/GDPR-erased rows, consistent with the
       // by-run/by-connector branches and GET /{id} — the unfiltered list must not leak erased payloads.
@@ -87,16 +85,4 @@ public class DlqAdminResource {
     return Response.status(204).build();
   }
 
-  private static UUID parseUuidOr400(String s) {
-    try {
-      return UUID.fromString(s);
-    } catch (IllegalArgumentException e) {
-      // JSON error body for consistency with the other platform 400s (not plain text).
-      throw new BadRequestException(
-          Response.status(400)
-              .entity(Map.of("error", "invalid UUID: " + s))
-              .type(MediaType.APPLICATION_JSON)
-              .build());
-    }
-  }
 }

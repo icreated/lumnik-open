@@ -92,8 +92,8 @@ class MultiEndpointCursorIT {
                 ConnectorType type = registry.find("jdbc-generic");
 
                 // Both endpoints of the SAME connector persist their cursor — must not collide.
-                EventItSupport.runInTxAsSystem(utx, () -> { exec.executeChunk(runs.findById(runA), type, endpointA, ConnectorCursor.empty()); return null; });
-                EventItSupport.runInTxAsSystem(utx, () -> { exec.executeChunk(runs.findById(runB), type, endpointB, ConnectorCursor.empty()); return null; });
+                EventItSupport.runInTxAsSystem(utx, () -> { exec.executeChunk(runs.findById(runA), type, endpointA, ConnectorCursor.empty(), null); return null; });
+                EventItSupport.runInTxAsSystem(utx, () -> { exec.executeChunk(runs.findById(runB), type, endpointB, ConnectorCursor.empty(), null); return null; });
 
                 ConnectorCursorEntity ca = EventItSupport.runInTxAsSystem(utx, () -> cursors.findByEndpoint(epA));
                 ConnectorCursorEntity cb = EventItSupport.runInTxAsSystem(utx, () -> cursors.findByEndpoint(epB));

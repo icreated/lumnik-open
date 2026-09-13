@@ -8,7 +8,9 @@ import io.lumnik.extraction.spi.ask.AskPort;
 import io.lumnik.extraction.spi.ask.AskResult;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.extraction.spi.ask.SqlGuard;
+import io.lumnik.hub.workflow.WorkflowManifestStore;
 import io.lumnik.hub.sql.TenantRlsScope;
+import io.lumnik.hub.sql.SqlFailureText;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -43,6 +45,7 @@ public class AskToSqlAgent implements AskPort {
     @Inject UndocumentedColumnGuard undocumentedColumnGuard;
     @Inject LeakGuard leakGuard;
     @Inject AbstentionGuard abstentionGuard;
+    @Inject Instance<WorkflowManifestStore> workflows;
 
     @Inject
     @DataSource("readonly")
@@ -53,6 +56,18 @@ public class AskToSqlAgent implements AskPort {
     AgroalDataSource adminDs;
 
     private final SqlGuard guard = new SqlGuard(MAX_ROWS);
+
+    /**
+     * Does any kind:Workflow declare a lifecycle in this scope? ONE scalar read — not
+     * {@code WorkflowRegistry.all(tenant)}, which is the serving path and re-parses every stored
+     * manifest's YAML by contract. A signpost is a boolean; it must not cost N parses.
+     *
+     * <p>Through {@code Instance}: the store is an app bean, and the SPI tests that exercise this
+     * agent do not boot one.
+     */
+    private boolean scopeDeclaresALifecycle(long tenantId, String scope) {
+        return !workflows.isUnsatisfied() && workflows.get().anyInScope(tenantId, scope);
+    }
 
     @Override
     public AskResult ask(long tenantId, String scope, String question) {
@@ -75,7 +90,8 @@ public class AskToSqlAgent implements AskPort {
             - If the question cannot be answered using ONLY the listed tables and columns, output exactly
               %s (and nothing else) — do not guess.
             - Use only the exact table and column names listed above; never invent names.
-              Qualify each table with its schema exactly as written.
+              Qualify each table with its schema exactly as written. Every name is listed
+              double-quoted — copy each one with its quotes.
             - Do NOT add a WHERE filter unless the question explicitly asks for one, and never
               guess literal values to filter on (e.g. do not invent status/type codes).
             - "how many" -> COUNT(*). A monetary "value/total/amount/revenue" -> SUM of the column
@@ -95,9 +111,14 @@ public class AskToSqlAgent implements AskPort {
 
         String rawSql = chatPorts.get().chat(genPrompt);
 
-        // Honor the model's honest exit: an abstention, not the generic "couldn't translate".
+        // Honor the model's honest exit: an abstention, not the generic "couldn't translate" —
+        // and, when this scope holds something text-to-SQL structurally cannot read, say which door
+        // does (#494 the declared lifecycle, #495 the fusion ledger). The refusal is unchanged; only
+        // the dead end is.
         if (abstentionGuard.isAbstention(rawSql)) {
-            return new AskResult(AbstentionGuard.CANNOT_ANSWER_MESSAGE, "", List.of(), 0);
+            var abstention = abstentionGuard.cannotAnswer(
+                scopeDeclaresALifecycle(tenantId, scope), abstentionGuard.hasAFusedEntity(card));
+            return new AskResult(abstention.answer(), "", List.of(), 0, null, abstention.otherDoors());
         }
 
         String safeSql;
@@ -151,7 +172,7 @@ public class AskToSqlAgent implements AskPort {
             // table as the likely cause, and was wrong on the very failure that prompted the fix —
             // a perfectly qualified query, refused for a multi-row subquery.
             return new AskResult("I couldn't run that query — the database refused it: "
-                + AmbiguousFilterGuard.rootMessage(e) + " The SQL is below; if it looks wrong for this scope, re-run "
+                + SqlFailureText.rootMessage(e) + " The SQL is below; if it looks wrong for this scope, re-run "
                 + "discovery.", safeSql, List.of(), 0);
         }
 

@@ -91,6 +91,11 @@ class SqlLexerTest {
       "plain ASCII,                  segment",
   })
   void anIdentifierIsOneTokenWhereverItsAccentsFall(String axis, String name) {
+    assertOneIdentifier(axis, name);
+  }
+
+  /** {@code <name> = 'x'} must lex as exactly three tokens, the first being the WHOLE name. */
+  private static void assertOneIdentifier(String axis, String name) {
     var t = SqlLexer.tokenize(name + " = 'x'");
 
     assertThat(t).as("%s — %s must not be split", axis, name).hasSize(3);
@@ -103,5 +108,56 @@ class SqlLexerTest {
   @Test
   void numbers_stay_ascii_so_a_foreign_digit_is_never_read_as_a_value() {
     assertThat(SqlLexer.tokenize("١").get(0).kind()).isNotEqualTo(Kind.NUMBER);
+  }
+
+  /**
+   * The same claim over the characters that are not letters. Each row was measured on PostgreSQL 16 —
+   * created quoted, then read UNQUOTED, and it resolved — so the server reads the name as one
+   * identifier; {@link SqlLexer} must agree, or the tail of a split name becomes a column nobody wrote.
+   * The code point is spelled in HEX on purpose: the first version of this bench was typed by hand, and
+   * an invisible character made the server look inconsistent about U+00A0 when it never was.
+   */
+  @ParameterizedTest(name = "{0} (U+{1}) is one identifier to the server, so it must be one token")
+  @CsvSource({
+      "a currency sign,       20AC",
+      "a dollar sign,         0024",
+      "a guillemet,           00AB",
+      "a non-breaking space,  00A0",
+      "an ideographic space,  3000",
+      "a line separator,      2028",
+  })
+  void anIdentifierIsOneTokenForEveryCharacterTheServerAccepts(String axis, String hex) {
+    String name = "a" + (char) Integer.parseInt(hex, 16) + "b";
+
+    var t = SqlLexer.tokenize(name + " = 'x'");
+
+    assertThat(t).as("%s — the server reads %s as one name; a split invents a column", axis, name)
+        .hasSize(3);
+    assertThat(t.get(0).kind()).isEqualTo(Kind.IDENT);
+    assertThat(t.get(0).text()).as("%s — the whole name, not a fragment", axis).isEqualTo(name);
+    assertThat(t.get(2).kind()).isEqualTo(Kind.STRING);
+  }
+
+  /**
+   * The other direction, and it is load-bearing: {@code $} continues a name but cannot START one (the
+   * server refuses {@code SELECT $b}), which is what keeps {@code SqlGuard}'s dollar-quoting refusal
+   * alive now that the identifier class is wider. Allowing a leading {@code $} turns two of that
+   * guard's refusals green — verified by making the change.
+   */
+  @Test
+  void aDollarSignCannotStartAnIdentifier_soDollarQuotingStaysVisibleToTheGuard() {
+    assertThat(SqlLexer.tokenize("$$ x $$").get(0))
+        .as("the opening $ must stay an operator the guard can see")
+        .returns(Kind.OP, Token::kind).returns("$", Token::text);
+    assertThat(SqlLexer.tokenize("$tag$ x $tag$").get(0))
+        .as("a TAGGED body opens with a $ too")
+        .returns(Kind.OP, Token::kind).returns("$", Token::text);
+  }
+
+  /** ASCII whitespace still separates — narrowing the whitespace class must not merge ordinary SQL. */
+  @Test
+  void asciiWhitespaceStillSeparatesTwoNames() {
+    assertThat(SqlLexer.tokenize("a b")).hasSize(2);
+    assertThat(SqlLexer.tokenize("a\tb\nc")).hasSize(3);
   }
 }

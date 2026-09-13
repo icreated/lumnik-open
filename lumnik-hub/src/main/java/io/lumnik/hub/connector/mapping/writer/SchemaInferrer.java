@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.mapping.writer;
 
 import jakarta.enterprise.context.ApplicationScoped;
 
+import java.math.BigInteger;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.sql.Types;
@@ -10,7 +11,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZonedDateTime;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -43,7 +44,7 @@ public class SchemaInferrer {
    * would otherwise freeze to TEXT and break cross-table joins ({@code numeric = text}).
    */
   public Map<String, String> infer(List<Map<String, Object>> rows, Map<String, String> sourceTypeHints) {
-    Map<String, String> schema = new HashMap<>();
+    Map<String, String> schema = new LinkedHashMap<>();
     if (rows.isEmpty()) return schema;
 
     Set<String> allCols = new LinkedHashSet<>();
@@ -56,6 +57,15 @@ public class SchemaInferrer {
   }
 
   /**
+   * The two numeric DDL strings, named because {@code DynamicTableWriter} must agree with them
+   * byte for byte: it widens a registered {@link #BIGINT} column to {@link #NUMERIC} when a later
+   * chunk carries a fraction, and compares the registered string to decide. A second spelling of
+   * either in that class would silently stop widening anything.
+   */
+  static final String BIGINT = "BIGINT";
+  static final String NUMERIC = "NUMERIC(18,4)";
+
+  /**
    * Candidate column types in priority order. A column gets the first type whose predicate holds
    * for <em>all</em> of its non-null sampled values; if none do, it falls back to TEXT.
    */
@@ -63,7 +73,13 @@ public class SchemaInferrer {
     TIMESTAMP("TIMESTAMPTZ",   SchemaInferrer::isTimestamp),
     DATE     ("DATE",          SchemaInferrer::isDate),
     BOOLEAN  ("BOOLEAN",       SchemaInferrer::isBool),
-    NUMERIC  ("NUMERIC(18,4)", SchemaInferrer::isNumber),
+    // Before NUMERIC, and that order is the whole rule: every integral value is also a Number, so
+    // a column reaches NUMERIC only once something in the sample is NOT whole. A whole number then
+    // reads as one everywhere downstream — psql, a kind:View, an ask answer — instead of
+    // 1000.0000 (#497). Narrowing is safe because the writer can still widen: see
+    // DynamicTableWriter.widenings, the one direction a later chunk is allowed to move a column.
+    INTEGRAL (SchemaInferrer.BIGINT,  SchemaInferrer::isIntegral),
+    NUMERIC  (SchemaInferrer.NUMERIC, SchemaInferrer::isNumber),
     // Both nested shapes, one type. A Map used to fall through to TEXT while a List got JSONB —
     // an asymmetry with no reason behind it, and both were unwritable anyway: the List's JSON
     // string was sent as varchar (Postgres refuses it on a jsonb column) and the Map was sent to
@@ -88,15 +104,18 @@ public class SchemaInferrer {
 
   /**
    * Maps a {@link java.sql.Types} code to the PostgreSQL DDL type string this inferrer emits,
-   * so source-declared types and value-inferred types stay consistent. Numerics collapse to
-   * NUMERIC(18,4) (matching value inference of {@link Number}); unknown codes → TEXT.
+   * so source-declared types and value-inferred types stay consistent: a source's INTEGER answers
+   * BIGINT because an {@code Integer} value does, and a source's DECIMAL answers NUMERIC(18,4)
+   * because a {@code BigDecimal} does — a declared scale is the source's own opinion and is kept.
+   * Unknown codes → TEXT. {@code SchemaTypingInventoryTest} enforces the agreement.
    */
   public static String pgTypeForSqlType(int sqlType) {
     return switch (sqlType) {
+      case Types.TINYINT, Types.SMALLINT,
+           Types.INTEGER, Types.BIGINT               -> BIGINT;
       case Types.NUMERIC, Types.DECIMAL,
-           Types.TINYINT, Types.SMALLINT, Types.INTEGER,
-           Types.BIGINT, Types.REAL, Types.FLOAT,
-           Types.DOUBLE                              -> "NUMERIC(18,4)";
+           Types.REAL, Types.FLOAT,
+           Types.DOUBLE                              -> NUMERIC;
       case Types.TIMESTAMP,
            Types.TIMESTAMP_WITH_TIMEZONE             -> "TIMESTAMPTZ";
       case Types.DATE                                -> "DATE";
@@ -128,5 +147,16 @@ public class SchemaInferrer {
 
   private static boolean isNumber(Object v) {
     return v instanceof Number;
+  }
+
+  /**
+   * A number with no fractional part BY TYPE, never by value. A {@code Double} of 42.0 is not one:
+   * the type is what pgJDBC binds, and a producer that sent 42.0 once will send 42.5 next.
+   * {@code BigDecimal} stays out too — JDBC returns it for a column the source DECLARED numeric,
+   * scale included.
+   */
+  static boolean isIntegral(Object v) {
+    return v instanceof Byte || v instanceof Short || v instanceof Integer
+        || v instanceof Long || v instanceof BigInteger;
   }
 }

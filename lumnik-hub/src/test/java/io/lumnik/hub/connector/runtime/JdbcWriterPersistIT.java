@@ -120,7 +120,7 @@ class JdbcWriterPersistIT {
                 ConnectorType type = registry.find("jdbc-generic");
 
                 // One chunk reads all 30 rows (EndOfStream) and the writer persists them.
-                ChunkResult r = inTx(() -> exec.executeChunk(reload(run.getId()), type, endpoint, ConnectorCursor.empty()));
+                ChunkResult r = inTx(() -> exec.executeChunk(reload(run.getId()), type, endpoint, ConnectorCursor.empty(), null));
                 assertThat(r).isInstanceOf(ChunkResult.Success.class);
                 assertThat(((ChunkResult.Success) r).processed()).isEqualTo(ROWS);
 

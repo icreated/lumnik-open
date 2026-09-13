@@ -20,7 +20,7 @@ import java.util.*;
 /**
  * Orchestrates SchemaCard discovery: level-1 registry card, then
  * best-effort level-2 AD enrichment per JDBC connector, then persist. Implements the
- * DiscoveryPort SPI consumed by RagSchemaResource.
+ * DiscoveryPort SPI served by {@link SchemaCardAdminResource}.
  */
 @ApplicationScoped
 public class DiscoveryService implements DiscoveryPort {

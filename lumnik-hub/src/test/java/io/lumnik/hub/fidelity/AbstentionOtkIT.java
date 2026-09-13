@@ -64,7 +64,7 @@ class AbstentionOtkIT {
 
       AskResult r = agent.ask(TENANT, scope, "probe seed " + s);
       boolean abstained = AbstentionGuard.NO_SCHEMA_MESSAGE.equals(r.answer())
-          || AbstentionGuard.CANNOT_ANSWER_MESSAGE.equals(r.answer());
+          || new AbstentionGuard().isCannotAnswer(r.answer());
 
       if (sc.expectAbstain() && !abstained) {
         findings.add(new Finding(Family.ABSTENTION, Severity.HIGH, s,

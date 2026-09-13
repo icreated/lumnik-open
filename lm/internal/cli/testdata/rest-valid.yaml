@@ -12,6 +12,3 @@ spec:
     - id: customers
       path: /v1/customers
       method: GET
-  target:
-    table_prefix: stripe_
-    tags: [crm, customers]

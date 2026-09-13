@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.jdbc;
 
+import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.jdbc.dialect.JdbcDialect;
 import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -43,7 +44,15 @@ public class SchemaIntrospector {
     JdbcDialect dialect = dialectRegistry.resolve(cc.dialectId());
     DataSource ds = poolRegistry.acquire(cc.url(), cc.user(), cc.password(), -1L);
     try (Connection conn = ds.getConnection()) {
+      // JDBC metadata answers an unknown table with empty lists, not an error — ask the catalog.
+      if (!dialect.tableExists(conn, schema, table)) {
+        throw new ConfigValidationException("table " + schema + "." + table
+            + " not found among the base tables of that schema — check the schema and the connection user's "
+            + "SELECT grant; a view is declared in a manifest, not through the guided add");
+      }
       return describeOne(conn, dialect, schema, table);
+    } catch (ConfigValidationException refusal) {
+      throw refusal;
     } catch (Exception e) {
       throw new RuntimeException("Describe failed for " + schema + "." + table, e);
     }

@@ -1,8 +1,8 @@
 package io.lumnik.hub.view;
 
 import io.lumnik.extraction.spi.ask.SchemaCard;
+import io.lumnik.hub.sql.TemporalText;
 import org.junit.jupiter.api.Test;
-import java.time.Instant;
 import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -119,18 +119,6 @@ class ViewFilterTest {
     }
 
     @Test
-    void parseTemporalCoversTheThreeIsoShapes() {
-        assertThat(ViewFilter.parseTemporal("2026-08-01"))
-            .isEqualTo(Instant.parse("2026-08-01T00:00:00Z"));      // date-only = midnight UTC
-        assertThat(ViewFilter.parseTemporal("2026-08-01T12:30:00Z"))
-            .isEqualTo(Instant.parse("2026-08-01T12:30:00Z"));
-        assertThat(ViewFilter.parseTemporal("2026-08-01 10:04:56.019386"))    // PG timestamp text (space)
-            .isEqualTo(Instant.parse("2026-08-01T10:04:56.019386Z"));
-        assertThat(ViewFilter.parseTemporal("not-a-date")).isNull();
-        assertThat(ViewFilter.parseTemporal("2026-02-30")).isNull();          // Feb 30 refused by parse
-    }
-
-    @Test
     void temporalShapeMatchesOnlyWellFormedIsoTimestamps() {
         for (String ok : new String[]{"2026-08-01", "2026-08-01T12:00:00Z",
                 "2026-07-05T10:00:00.123456Z", "2026-08-01 10:04:56.019386", "2026-07-05 10:04:56.019386+00"})
@@ -147,7 +135,7 @@ class ViewFilterTest {
                 "2026-07-05 10:04:56.019386+00", "2026-07-05 10:04:56.019386+05:30",
                 "2026-08-01T10:04:56-05"}) {   // T-separated (no space) + short offset: the pad must fire on the T, not the date
             assertThat(ok.matches(ViewFilter.TEMPORAL_SHAPE)).as("shape: " + ok).isTrue();
-            assertThat(ViewFilter.parseTemporal(ok)).as("parse: " + ok).isNotNull();
+            assertThat(TemporalText.parse(ok)).as("parse: " + ok).isNotNull();
         }
     }
 
@@ -158,5 +146,68 @@ class ViewFilterTest {
         // an ordering operator passes: a threshold is not a membership assertion.
         assertThat(ViewFilter.resolveAll(List.of("segment>100"), rv, table))
                 .containsExactly(new ViewFilter("segment", ">", "100"));
+    }
+
+    // ── Shedding the model's SQL quotes (#483) ───────────────────────────────────
+    // Only a generated filter goes through this: a hand-written manifest means what it writes.
+
+    @Test
+    void shedsMatchingOuterQuotesFromTheValue() {
+        assertThat(ViewFilter.withUnquotedValue("segment='GOLD'")).isEqualTo("segment=GOLD");
+        assertThat(ViewFilter.withUnquotedValue("segment=\"GOLD\"")).isEqualTo("segment=GOLD");
+        assertThat(ViewFilter.withUnquotedValue("city ~ 'Lyon'")).isEqualTo("city ~ Lyon");
+        // An ordered operand too: a quoted number is not a number, and the parse refused it.
+        assertThat(ViewFilter.parse(ViewFilter.withUnquotedValue("amount>'500'")))
+            .isEqualTo(new ViewFilter("amount", ">", "500"));
+    }
+
+    @Test
+    void leavesEverythingElseWhole() {
+        assertThat(ViewFilter.withUnquotedValue("segment=GOLD")).isEqualTo("segment=GOLD");
+        assertThat(ViewFilter.withUnquotedValue("name='Acme")).isEqualTo("name='Acme");   // unmatched
+        assertThat(ViewFilter.withUnquotedValue("name=\"Acme'")).isEqualTo("name=\"Acme'"); // mismatched
+        // SQL escaping ('') is a shape the view grammar does not model — leave it whole for the
+        // gate to refuse, rather than half-decode it into a value nobody wrote.
+        assertThat(ViewFilter.withUnquotedValue("name='O''Brien'")).isEqualTo("name='O''Brien'");
+        // A quote that is the value, and a value that merely contains one.
+        assertThat(ViewFilter.withUnquotedValue("name='")).isEqualTo("name='");
+        assertThat(ViewFilter.withUnquotedValue("name=l'ecole")).isEqualTo("name=l'ecole");
+        // No operator at all: not this method's error to raise.
+        assertThat(ViewFilter.withUnquotedValue("garbage")).isEqualTo("garbage");
+    }
+
+    // ── A value is a bare literal: a human's quotes are REFUSED (#503) ───────────
+    // The other door of #483. A model echoing SQL syntax has its quotes shed above; a human
+    // writing a manifest means what they write, so the honest answer is a refusal — never a
+    // silent rewrite, and never the zero-row table a quoted value used to produce in silence.
+
+    @Test
+    void refusesAQuotedValue() {
+        assertThatThrownBy(() -> ViewFilter.parse("city='Lyon'"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("city=Lyon");
+        assertThatThrownBy(() -> ViewFilter.parse("city=\"Lyon\""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("city=Lyon");
+        // ~ too: a quoted search matches nothing just as silently as a quoted equality.
+        assertThatThrownBy(() -> ViewFilter.parse("name~'ali'"))
+                .isInstanceOf(IllegalArgumentException.class);
+        // An ordered operand: '500' is not a number, and this refusal is the clearer of the two.
+        assertThatThrownBy(() -> ViewFilter.parse("amount>'500'"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("amount>500");
+        // SQL escaping is a shape this grammar does not model: refused whole, never half-decoded.
+        assertThatThrownBy(() -> ViewFilter.parse("name='O''Brien'"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> ViewFilter.parse("name=''"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void leavesAValueThatMerelyCarriesAQuoteAlone() {
+        assertThat(ViewFilter.parse("name=l'ecole")).isEqualTo(new ViewFilter("name", "=", "l'ecole"));
+        assertThat(ViewFilter.parse("name='Acme")).isEqualTo(new ViewFilter("name", "=", "'Acme"));
+        assertThat(ViewFilter.parse("name=\"Acme'")).isEqualTo(new ViewFilter("name", "=", "\"Acme'"));
+        assertThat(ViewFilter.parse("name='")).isEqualTo(new ViewFilter("name", "=", "'"));
     }
 }

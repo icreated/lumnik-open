@@ -10,6 +10,7 @@ import io.lumnik.hub.connector.mapping.writer.MultiTargetWriter;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.rest.RestHttpClient;
+import io.lumnik.hub.connector.rest.Urls;
 import io.lumnik.hub.connector.rest.auth.AuthProviderRegistry;
 import io.lumnik.hub.connector.rest.pagination.PaginationFactory;
 import io.lumnik.hub.connector.rest.reliability.RateLimiterRegistry;
@@ -53,11 +54,24 @@ public class RestConnectorType implements ConnectorType {
     @Override
     public Set<TriggerMode> supportedTriggerModes() { return Set.of(TriggerMode.MANUAL, TriggerMode.POLL); }
 
-    @Override
-    public void validateConfig(Map<String, Object> config) {
+    /**
+     * The one spelling of "this config can address a source at all". Static because apply is not
+     * the only door: the flat connector CRUD persists a config without running this class at all,
+     * so whatever composes a request from a stored row must be able to refuse it by the same name.
+     */
+    public static String requireBaseUrl(Map<String, Object> config) {
         Object baseUrl = config.get("base_url");
         if (!(baseUrl instanceof String s) || s.isBlank())
             throw new ConfigValidationException("rest-generic requires 'base_url'");
+        Urls.whyNotAbsolute(s).ifPresent(why -> {
+            throw new ConfigValidationException("rest-generic 'base_url' " + why);
+        });
+        return s;
+    }
+
+    @Override
+    public void validateConfig(Map<String, Object> config) {
+        requireBaseUrl(config);
         // auth is OPTIONAL — an omitted auth block means `none` at runtime (e.g. 10-offset-none.yaml).
         // When present, auth.kind is validated cross-field by RestConnectorValidator/AuthBlockValidator.
     }

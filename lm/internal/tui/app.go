@@ -101,10 +101,12 @@ func newApp(c *client.Client) *App {
 		}
 	})
 	a.endpointsPage.SetOnEnter(func(endpointID string) {
-		a.runsPage.SetFilter(endpointID)
+		a.runsPage.SetEndpointFilter(endpointID)
 		a.switchTo("runs")
 	})
-	a.runsPage = resources.NewRuns(a.tv, c)
+	a.runsPage = resources.NewRuns(a.tv, c, func(m string) {
+		a.footer.SetToast(a.tv, m, 3*time.Second)
+	})
 	a.pages.AddPage("runs", a.runsPage.View(), true, false)
 	a.dlqPage = resources.NewDLQ(c, a.showError)
 	a.pages.AddPage("dlq", a.dlqPage.View(), true, false)
@@ -146,7 +148,7 @@ func newApp(c *client.Client) *App {
 		if !a.newPage.EditExisting("Process", yaml) {
 			a.showError("Process is not in the :new kind registry — cannot edit")
 		}
-	})
+	}, a.showError)
 	a.pages.AddPage("processes", a.processesPage.View(), true, false)
 	a.viewPage = resources.NewViewPage(a.tv, c,
 		func(f func()) { resources.SuspendEditor(a.tv, a.showError, f) },

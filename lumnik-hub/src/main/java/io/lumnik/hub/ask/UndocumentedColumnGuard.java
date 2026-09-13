@@ -17,10 +17,12 @@ import java.util.Set;
  * reason over — when it is filtered against a STRING literal.
  *
  * <p><b>High-confidence + fail-open.</b> String literals become single tokens, so a column name inside a
- * literal can't trigger a refusal. Only a clean, bare, unqualified identifier on the left of
- * {@code = / <> / !=} (vs a string literal) or {@code IN (<clean literal list>)} is inspected;
- * a qualified ({@code t.col}), quoted ({@code "col"}), or function-wrapped ({@code lower(col)}) LHS, and
- * a small set of non-column keywords, are never inspected — a miss, never an over-block. A bare column is
+ * literal can't trigger a refusal. Only a clean, unqualified identifier on the left of
+ * {@code = / <> / !=} (vs a string literal) or {@code IN (<clean literal list>)} is inspected —
+ * QUOTED OR NOT, since the card renders every column quoted and a model copying what it sees would
+ * otherwise walk straight past this guard; a qualified ({@code t.col}) or function-wrapped
+ * ({@code lower(col)}) LHS, and a small set of non-column keywords, are never inspected — a miss,
+ * never an over-block. A bare column is
  * refused only when it is in NO declared table (the union across the whole card).
  */
 @ApplicationScoped
@@ -42,6 +44,8 @@ public class UndocumentedColumnGuard {
 
     // SQL niladic value keywords that can appear bare on the left of an operator but are NOT columns
     // (incl. bare `user`, a synonym of current_user) — fail-open rather than refuse them as undeclared.
+    // BARE is the operative word: Postgres promotes no quoted token to a keyword, so `"user"` names a
+    // column, and the card hands the model every name quoted. The check below tests both.
     private static final Set<String> NOT_COLUMNS = Set.of(
         "true", "false", "null", "user", "current_user", "session_user", "current_role",
         "current_catalog", "current_schema", "current_date", "current_time", "current_timestamp",
@@ -58,7 +62,10 @@ public class UndocumentedColumnGuard {
 
         for (SqlFilters.Filter f : SqlFilters.columnLiteralFilters(SqlLexer.tokenize(sql))) {
             String col = f.column().toLowerCase(Locale.ROOT);
-            if (NOT_COLUMNS.contains(col) || declared.contains(col)) continue;  // keyword / declared -> skip
+            // A keyword only when the query spelled it BARE: Postgres promotes no quoted token to a
+            // keyword, so `"user" = '…'` filters a column named user — and the card hands the model
+            // every name quoted, so treating that as a niladic keyword would walk past a real filter.
+            if ((!f.quoted() && NOT_COLUMNS.contains(col)) || declared.contains(col)) continue;
             return Optional.of(new Violation(f.column(), List.copyOf(declared)));
         }
         return Optional.empty();

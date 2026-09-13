@@ -39,7 +39,7 @@ func newEntityApplyCmd() *cobra.Command {
 		Use:   "apply",
 		Short: "Apply an entity manifest (YAML)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			body, err := readYamlFile(file)
+			body, err := readManifest(cmd, file)
 			if err != nil {
 				return err
 			}
@@ -63,7 +63,7 @@ func newEntityApplyCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVarP(&file, "file", "f", "", "YAML entity manifest file (required)")
+	cmd.Flags().StringVarP(&file, "file", "f", "", "YAML entity manifest file, or - for stdin (required)")
 	_ = cmd.MarkFlagRequired("file")
 	return cmd
 }

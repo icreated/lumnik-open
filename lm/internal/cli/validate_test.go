@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/config"
 	"github.com/icreated/lumnik-open/lm/internal/output"
@@ -30,7 +32,7 @@ func TestValidate_validManifest_returnsNoError(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	out := &bytes.Buffer{}
-	if err := output.FormatValidation(out, "test.yaml", result); err != nil {
+	if err := output.FormatValidation(out, "test.yaml", rerunCommand("test.yaml"), result); err != nil {
 		t.Fatalf("expected nil, got %v", err)
 	}
 	if !strings.Contains(out.String(), "valid") {
@@ -55,7 +57,7 @@ func TestValidate_invalidManifest_returnsErrorAndPrintsPath(t *testing.T) {
 		t.Fatalf("ValidateManifest error: %v", err)
 	}
 	out := &bytes.Buffer{}
-	err = output.FormatValidation(out, "bad.yaml", result)
+	err = output.FormatValidation(out, "bad.yaml", rerunCommand("bad.yaml"), result)
 	if err == nil {
 		t.Fatal("expected non-nil error from formatter")
 	}
@@ -70,7 +72,7 @@ func TestValidate_fileNotFound_errors(t *testing.T) {
 	if _, err := os.Stat(missing); err == nil {
 		t.Fatal("setup error: file should not exist")
 	}
-	_, err := readYamlFile(missing)
+	_, err := readManifest(&cobra.Command{Use: "x"}, missing)
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}

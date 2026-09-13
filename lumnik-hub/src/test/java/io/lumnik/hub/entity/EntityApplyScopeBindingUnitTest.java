@@ -8,6 +8,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashSet;
+import java.util.List;
+import java.util.Optional;
 import java.util.Map;
 import java.util.Set;
 
@@ -47,8 +49,16 @@ class EntityApplyScopeBindingUnitTest {
     }
 
     private static EntityApplyResource resource() {
+        return resource(Optional.empty());
+    }
+
+    /** @param storedScopes what {@code connector.entity_manifest} already holds under this name. */
+    private static EntityApplyResource resource(Optional<List<String>> storedScopes) {
         EntityApplyResource res = new EntityApplyResource();
         res.parser = new EntityManifestParser();
+        res.registry = new EntityRegistry() {
+            @Override public Optional<List<String>> storedScopes(String name) { return storedScopes; }
+        };
         return res;
     }
 
@@ -118,6 +128,55 @@ class EntityApplyScopeBindingUnitTest {
         CurrentRolesHolder.set(Set.of("lm_admin"));
 
         assertThatThrownBy(() -> resource().apply(CLIENTS_ENTITY))
+            .isInstanceOf(NullPointerException.class);
+    }
+
+    // ---- the STORED scopes: an apply may not re-home what the caller does not hold (#509) ----
+
+    @Test
+    void apply_may_not_rehome_an_entity_that_lives_in_scopes_the_caller_does_not_hold() {
+        // Holding magasin passes the incoming check. `customer` is already fused for clients, and
+        // EntityViewCompiler.apply conflicts on (name) setting scopes = EXCLUDED.scopes: the clients
+        // entity would be re-homed into magasin and its view recompiled under someone else's métier.
+        bindTo("magasin");
+
+        assertThatThrownBy(() -> resource(Optional.of(List.of("clients")))
+            .apply(CLIENTS_ENTITY.replace("scopes: [clients]", "scopes: [magasin]")))
+            .isInstanceOfSatisfying(WebApplicationException.class, e -> {
+                assertThat(e.getResponse().getStatus()).isEqualTo(403);
+                assertThat(errorOf(e)).isEqualTo("scope not granted");
+            });
+    }
+
+    @Test
+    void apply_may_not_narrow_an_entity_out_of_a_scope_the_caller_does_not_hold() {
+        // The subtler half: the incoming list is a SUBSET the caller fully holds, so allowsAll
+        // passes on it. The stored row says [clients, magasin]; re-applying as [clients] drops
+        // magasin, and the entity vanishes from a métier this user was never granted.
+        bindTo("clients");
+
+        assertThatThrownBy(() -> resource(Optional.of(List.of("clients", "magasin")))
+            .apply(CLIENTS_ENTITY))
+            .isInstanceOfSatisfying(WebApplicationException.class,
+                e -> assertThat(e.getResponse().getStatus()).isEqualTo(403));
+    }
+
+    @Test
+    void apply_updates_an_entity_of_scopes_the_caller_does_hold() {
+        bindTo("clients");
+
+        assertThatThrownBy(() -> resource(Optional.of(List.of("clients"))).apply(CLIENTS_ENTITY))
+            .as("its own entity: past both gates, into the unwired compiler")
+            .isInstanceOf(NullPointerException.class);
+    }
+
+    @Test
+    void apply_of_a_free_name_is_not_refused() {
+        bindTo("magasin");
+
+        assertThatThrownBy(() -> resource()
+            .apply(CLIENTS_ENTITY.replace("scopes: [clients]", "scopes: [magasin]")))
+            .as("nothing is stored under this name — creating it is not re-homing")
             .isInstanceOf(NullPointerException.class);
     }
 }

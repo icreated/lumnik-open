@@ -1,14 +1,12 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -47,9 +45,6 @@ class EntityFusionRlsIT {
             email: email
       """;
 
-  static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config().encoderConfig(
-      EncoderConfig.encoderConfig().encodeContentTypeAs("application/yaml", ContentType.TEXT));
-
   @BeforeEach
   void seedAndApply() throws Exception {
     try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
@@ -68,7 +63,7 @@ class EntityFusionRlsIT {
       st.execute("INSERT INTO connector.t_rlsfuse_erp VALUES (1,'C-1','Alice-T1'), (2,'C-1','Zoe-T2')");
       st.execute("INSERT INTO connector.t_rlsfuse_csv VALUES (1,'C-1','alice@t1'), (2,'C-1','zoe@t2')");
     }
-    given().config(YAML_CFG).headers(TestIdentity.tenantAndUser(1))
+    given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
   }

@@ -47,7 +47,7 @@ throughout. Check your crontab's hour before opening an incident.
 
 | Container | Safe? | Command (repo root) | What it costs |
 |---|---|---|---|
-| `hub` | yes | `docker compose -f docker-compose.selfhost.yml restart hub` | In-memory [rate-limit counters](rate-limits.md) reset (harmless). A jdbc/CSV run in flight is interrupted and **resumes on its cursor** at the next trigger ([watermark resume](../connectors/jdbc.md#watermark-resume-composite-cursor)); a REST run restarts its pagination from page one — no duplicates either way (content-hash / unique-key upserts). The compose healthcheck allows up to ~210 s before flagging unhealthy; a restart on an already-migrated DB is typically much faster. |
+| `hub` | yes | `docker compose -f docker-compose.selfhost.yml restart hub` | In-memory [rate-limit counters](rate-limits.md) reset (harmless). A jdbc/CSV run in flight is interrupted and **resumes on its cursor** at the next trigger ([how jdbc cursors resume](../connectors/jdbc.md#cursors-resume-restart-reset)); a REST run restarts its pagination from page one — no duplicates either way (content-hash / unique-key upserts). The compose healthcheck allows up to ~210 s before flagging unhealthy; a restart on an already-migrated DB is typically much faster. |
 | `keycloak` | yes, briefly | `docker compose -f docker-compose.selfhost.yml restart keycloak` | **New logins fail during the window; already-issued tokens keep working.** The store survives on its volume. |
 | `postgres` | be gentle | `docker compose -f docker-compose.selfhost.yml restart postgres` | A full outage while it lasts. The hub's pools recover, but expect a failed request or two right after (no connection validation is configured). Interrupted runs resume on their cursor afterwards. |
 | Ollama (host) | yes | Linux: `systemctl restart ollama` · macOS/Windows: the Ollama app | The model unloads: the **first ask after restart is a cold load** (tens of seconds). `OLLAMA_KEEP_ALIVE=-1` keeps it resident ([the trap list](../quickstart/prerequisites.md)). |
@@ -56,9 +56,16 @@ throughout. Check your crontab's hour before opening an incident.
 !!! note "After a hard kill: the zombie run reaps itself at the next start"
     A run killed mid-flight leaves its row at `Running`, and the scheduler skips any
     connector that has one. The hub's startup reaper fails those rows
-    (`error_message: reaped at startup…`) and logs a WARN with the count — so a crash
-    costs at most one restart, never a silenced schedule. The failed run's connector
-    resumes on its cursor at the next trigger.
+    (`error_message: reaped at startup…`) and warns with the count **and one line per run,
+    naming the run id and the connector whose schedule was blocked** — so a crash costs at
+    most one restart, never a silenced schedule. The failed run's connector resumes on its
+    cursor at the next trigger.
+
+    **Read a reaped run's duration with that in mind.** `ended_at` is when the reaper
+    marked the run dead — at startup — not when the run actually stopped. A run that died
+    at 02:00 and was reaped at 09:00 shows seven hours in `lm run list`: that span is the
+    outage, not the ingestion. The run's own `error_message` says so, and `lm run get`
+    prints it.
 
 ## What waits for morning
 

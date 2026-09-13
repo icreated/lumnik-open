@@ -11,7 +11,7 @@
   its hooks before writing.
 - **jdbc and kafka write a 1:1 dump** — no `spec.mapping`. jdbc has one narrow knob for a source
   column colliding with a hub system column: `source.tables[].rename`, see
-  [JDBC: Target](jdbc.md#target).
+  [JDBC: the hub table](jdbc.md#the-hub-table).
 - **REST/GraphQL/SOAP** transform in the `promote:` block's `transform:` enum — a short fixed
   list, see [REST: the `transform:` enum](#rest-the-transform-enum).
 - **Not the one-shot `lm csv ingest`.** That path writes directly; its `spec.mapping` (if any)
@@ -285,7 +285,8 @@ After: `C1` only. `C2` (blank `name`) never reaches the target table — it is:
 - captured to the DLQ, reason `ValidationFailed`, message
   `required column 'name' is missing or blank`;
 - stored **as it stood in the row tier** — raw, before any cell hook (`mask` included) ran.
-  Replay or discard it via [`lm dlq list`](../cli/lm-reference.md) / `lm dlq get`.
+  Inspect it via [`lm dlq list`](../cli/lm-reference.md) / `lm dlq get`, then `discard` it, or
+  `replayed` to record that you re-sent it yourself — the hub never re-reads a dead letter.
 
 !!! warning "`validate-row` after `split-row` is refused"
     `split-row` fans one source row into N fragments; a `validate-row` placed after it would
@@ -787,8 +788,8 @@ Three placements to notice — each is an ordering decision, not a coincidence:
 
 ```
 $ lm run get 53ec702e
-ID        CONNECTOR            STATUS     IN     OUT    SKIPPED  DEAD-LETTERS  STARTED           ENDED
-53ec702e  s3-c-bpartner-clean  Completed  19019  19014  5        5             2026-09-06 20:09  2026-09-06 20:10
+ID        CONNECTOR            ENDPOINT  STATUS     IN     OUT    SKIPPED  DEAD-LETTERS  STARTED           ENDED
+53ec702e  s3-c-bpartner-clean  default   Completed  19019  19014  5        5             2026-09-06 20:09  2026-09-06 20:10
 ⚠ 5 rows quarantined — see: lm dlq list --run 53ec702e-4c92-4eb6-877d-f66f5ea383f8
 ```
 
@@ -925,10 +926,23 @@ REST/GraphQL/SOAP endpoints do not use `spec.mapping`. Their transformation poin
 | Value | Effect |
 |---|---|
 | `from_epoch` | Unix epoch **seconds** → timestamp (UTC); for milliseconds, divide upstream |
-| `parse_iso8601` | ISO-8601 string → timestamp |
+| `parse_iso8601` | ISO-8601 string → timestamp (UTC when the text carries no offset) |
 | `to_lower` / `to_upper` | case conversion |
 | `trim` | whitespace trim |
 | `to_json_string` | serializes the extracted value to a JSON string |
+
+`parse_iso8601` accepts the shapes an ERP actually exports, not only the strict one:
+
+| Source text | Stored instant |
+|---|---|
+| `2008-04-18T00:00:00` | `2008-04-18T00:00:00Z` — no offset means UTC |
+| `2008-04-18 00:00:00` | `2008-04-18T00:00:00Z` — PostgreSQL's space separator |
+| `2008-04-18` | `2008-04-18T00:00:00Z` — a date alone is midnight |
+| `2026-08-01T14:30:00+02:00` | `2026-08-01T12:30:00Z` — an explicit offset is honoured |
+
+Anything else fails the run naming the column and the transform — a timestamp that cannot be read
+is not silently nulled. These are the same shapes a [view filter](../apps/views.md) accepts on the
+same column, so a filter typed against the value on screen matches the row that was ingested.
 
 See the [REST connector](rest.md) for the `promote:` block itself.
 

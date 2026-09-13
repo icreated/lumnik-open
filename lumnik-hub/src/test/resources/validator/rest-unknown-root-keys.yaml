@@ -1,0 +1,32 @@
+# Root-level typos, the tier rest leaves unswept: `base_urls`, `headerz`, `windo`.
+# All three are accepted today; `lm connector get` shows them back as if they configured something.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: stripe-typo
+  connector_type: rest-generic
+  scopes: [crm]
+spec:
+  base_url: https://api.stripe.com
+  base_urls: https://api.stripe.com
+  headerz:
+    - name: X-Acme-Tenant
+      value: acme
+  windo: "22:00-06:00"
+  auth:
+    kind: bearer
+    token_env: STRIPE_API_KEY
+  endpoints:
+    - id: customers
+      path: /v1/customers
+      method: GET
+      pagination:
+        kind: cursor
+        cursor_param: starting_after
+        cursor_path: $.data[-1:].id
+        has_more_path: $.has_more
+        response_path: $.data
+      target:
+        kind: hybrid
+        table: stripe_customers
+        unique_key: $.id

@@ -28,7 +28,7 @@ func newWorkflowCmd() *cobra.Command {
 		Use:   "apply",
 		Short: "Apply a kind:Workflow manifest (YAML)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			body, err := readYamlFile(file)
+			body, err := readManifest(cmd, file)
 			if err != nil {
 				return err
 			}
@@ -44,7 +44,7 @@ func newWorkflowCmd() *cobra.Command {
 			return nil
 		},
 	}
-	apply.Flags().StringVarP(&file, "file", "f", "", "kind:Workflow YAML manifest (required)")
+	apply.Flags().StringVarP(&file, "file", "f", "", "kind:Workflow YAML manifest, or - for stdin (required)")
 	_ = apply.MarkFlagRequired("file")
 
 	list := &cobra.Command{

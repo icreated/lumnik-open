@@ -26,7 +26,7 @@ class HelloWorldConnectorTypeTest {
         "test", "hello-world", Map.of("count", count),
         new SyncMode.Incremental(),
         Logger.getLogger("test"),
-        null, null, Clock.systemUTC());
+        null, null, Clock.systemUTC(), null);
   }
 
   @Test
@@ -72,8 +72,13 @@ class HelloWorldConnectorTypeTest {
     assertThat(((ReadResult.HasMore<?>) third).records()).hasSize(3);
 
     var fourth = reader.read(3, ((ReadResult.HasMore<?>) third).nextCursor(), ctx(10));
-    assertThat(fourth).isInstanceOf(ReadResult.EndOfStream.class);
-    assertThat(((ReadResult.EndOfStream<?>) fourth).records()).hasSize(1);
+    assertThat(fourth).as("the tail still carries its cursor").isInstanceOf(ReadResult.HasMore.class);
+    var tail = (ReadResult.HasMore<?>) fourth;
+    assertThat(tail.records()).hasSize(1);
+
+    var fifth = reader.read(3, tail.nextCursor(), ctx(10));
+    assertThat(fifth).isInstanceOf(ReadResult.EndOfStream.class);
+    assertThat(((ReadResult.EndOfStream<?>) fifth).records()).isEmpty();
   }
 
   @Test
@@ -88,5 +93,20 @@ class HelloWorldConnectorTypeTest {
     var outcome = writer.write(items, ctx(10));
     assertThat(outcome).isInstanceOf(WriteOutcome.AllWritten.class);
     assertThat(((WriteOutcome.AllWritten) outcome).count()).isEqualTo(2);
+  }
+
+  /** The engine persists a cursor only on HasMore: a loaded EndOfStream forfeits its tail (#437). */
+  @Test
+  void the_readers_own_cursors_reach_the_last_record() {
+    var reader = new HelloWorldConnectorType.HelloReader(10);
+    ConnectorCursor cursor = ConnectorCursor.empty();
+    int seen = 0;
+    ReadResult<HelloWorldConnectorType.HelloRecord> r;
+    while ((r = reader.read(3, cursor, ctx(10))) instanceof ReadResult.HasMore<HelloWorldConnectorType.HelloRecord> hm) {
+      seen += hm.records().size();
+      cursor = hm.nextCursor();
+    }
+    assertThat(seen).as("the HasMore chunks alone carry every record").isEqualTo(10);
+    assertThat(((ReadResult.EndOfStream<?>) r).records()).as("the stream ends on a read that finds nothing").isEmpty();
   }
 }

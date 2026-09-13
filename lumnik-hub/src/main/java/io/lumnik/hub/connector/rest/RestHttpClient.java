@@ -1,6 +1,5 @@
 package io.lumnik.hub.connector.rest;
 
-import io.lumnik.hub.connector.exceptions.ConnectorException;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -20,6 +19,7 @@ public class RestHttpClient {
         // headers, not a 3xx Location the JDK client would otherwise chase on its own). No test or shipped
         // connector manifest relies on redirect-following (grepped for 30x stubs / Location headers /
         // "redirect" across lumnik-hub/src and the rest-generic connector manifest — none found).
+        // The 3xx that now reaches the caller is refused by ResponseStatusGuard, not chased here.
         .followRedirects(HttpClient.Redirect.NEVER)
         .build();
 
@@ -40,23 +40,6 @@ public class RestHttpClient {
         }
         HttpResponse<String> r = client.send(b.build(), HttpResponse.BodyHandlers.ofString());
         return RestResponse.of(r.statusCode(), r.headers().map(), r.body());
-    }
-
-    /**
-     * {@code followRedirects(NEVER)} above means a 3xx now reaches the caller as an ordinary
-     * response instead of being chased. Nothing downstream inspects {@code status()} by default —
-     * the redirect's (typically HTML) body fails JSON parsing and becomes an empty object, so an
-     * unguarded caller would silently ingest zero items instead of failing. Callers that read a
-     * response body as data (the connector reader, discovery) MUST call this before doing so;
-     * callers that exist purely to report status back to a human (e.g. the endpoint test/dry-run)
-     * deliberately do not — showing the 3xx to the operator IS the point there.
-     */
-    public static void refuseRedirect(RestResponse resp) {
-        if (resp.status() >= 300 && resp.status() < 400) {
-            throw new ConnectorException("upstream returned a redirect (" + resp.status() + ") to '"
-                + resp.header("Location").orElse("<no Location header>")
-                + "' — refusing to follow it or ingest its body as data");
-        }
     }
 
     static String buildUrl(String base, Map<String,String> q) {

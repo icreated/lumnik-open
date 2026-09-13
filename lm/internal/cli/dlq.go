@@ -3,16 +3,11 @@ package cli
 import (
 	"fmt"
 
-	"github.com/google/uuid"
 	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/icreated/lumnik-open/lm/internal/types"
 	"github.com/spf13/cobra"
 )
-
-// dlqServerLimitCap mirrors DlqAdminResource's server-side clamp (max 200); the client
-// clamps to it so the truncation hint compares len against the EFFECTIVE limit.
-const dlqServerLimitCap = 200
 
 // resolveDlqFilters reads --connector/--run and turns a name or abbreviated id into the full id the
 // hub's UUID-typed filters require, so `dlq list --run <8 chars>` and `--connector NAME` work like
@@ -24,10 +19,8 @@ func resolveDlqFilters(c *client.Client, cmd *cobra.Command) (connectorID, runID
 	// since-deleted connector whose dead-letters outlive it, and skips a needless connector list.
 	// Validate the SHAPE, not just the length — connector names carry no pattern constraint, so a
 	// 36-character name must still resolve rather than be mistaken for an id and forwarded raw.
-	if connectorID != "" && uuid.Validate(connectorID) != nil {
-		if connectorID, err = resolveConnectorID(c, connectorID); err != nil {
-			return "", "", err
-		}
+	if connectorID, err = resolveConnectorFilter(c, connectorID); err != nil {
+		return "", "", err
 	}
 	if runID != "" {
 		if runID, err = resolveRunID(c, runID); err != nil {
@@ -52,38 +45,22 @@ func newDlqCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			limit, _ := cmd.Flags().GetInt("limit")
-			// Clamp to the hub's own [1, dlqServerLimitCap] range so the client and server behave
-			// identically — a nonsense --limit 0/negative becomes 1 (forwarded), not the server default.
-			effectiveLimit := limit
-			if effectiveLimit < 1 {
-				effectiveLimit = 1
-			}
-			if effectiveLimit > dlqServerLimitCap {
-				effectiveLimit = dlqServerLimitCap
-			}
-			items, err := c.DlqList(conn, run, effectiveLimit)
+			items, err := c.DlqList(conn, run, pageLimit(cmd))
 			if err != nil {
 				return err
 			}
-			format, _ := cmd.Flags().GetString("output")
-			if err := output.Print(cmd.OutOrStdout(), format,
+			return printPage(cmd,
 				[]string{"ID", "CONNECTOR", "RUN", "REASON", "ATTEMPTS", "MESSAGE"}, items,
 				func(d types.DeadLetter) []string {
 					return []string{
 						shortID(d.ID), d.ConnectorLabel(), shortID(d.RunID),
-						d.SkipReason, fmt.Sprintf("%d", d.Attempts), truncate(d.ErrorMessage, 60),
+						d.SkipReason, fmt.Sprintf("%d", d.Attempts),
+						output.Truncate(d.ErrorMessage, output.DlqMessageWidth),
 					}
-				}); err != nil {
-				return err
-			}
-			if effectiveLimit > 0 && len(items) == effectiveLimit {
-				fmt.Fprintf(cmd.ErrOrStderr(), "note: result hit the limit of %d — there may be more\n", effectiveLimit)
-			}
-			return nil
+				})
 		},
 	}
-	listCmd.Flags().Int("limit", 100, "Maximum number of entries to return")
+	addPageLimitFlag(listCmd, 100, client.DlqPageCap, "Maximum number of entries to return")
 	d.AddCommand(listCmd)
 
 	d.AddCommand(&cobra.Command{

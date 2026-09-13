@@ -35,8 +35,8 @@ class SdkApiTest {
         Logger.getLogger("test"),
         null,
         null,
-        Clock.systemUTC()
-    );
+        Clock.systemUTC(),
+        null);
 
     assertThat(ctx.configValue("host", String.class)).isEqualTo("localhost");
     assertThat(ctx.configValue("port", Integer.class)).isEqualTo(5432);
@@ -57,8 +57,8 @@ class SdkApiTest {
         Logger.getLogger("test"),
         null,
         null,
-        Clock.systemUTC()
-    );
+        Clock.systemUTC(),
+        null);
 
     assertThat(ctx.configValue("missing", String.class, "default")).isEqualTo("default");
   }

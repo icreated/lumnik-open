@@ -4,6 +4,7 @@ import io.lumnik.common.security.CurrentRolesHolder;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
+import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,6 +17,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The métier scope boundary on the kind:Workflow surface — the same #131 rule kind:View already
@@ -95,6 +97,7 @@ class WorkflowScopeBindingUnitTest {
     void apply_granted_scope_passes_the_gate() {
         bindTo("magasin");
         WorkflowApplyResource res = new WorkflowApplyResource();
+        res.store = storeWith();   // the name is free — apply also asks the STORED scope (#509)
         res.cards = emptyCards;
 
         Response r = res.apply(MAGASIN_WORKFLOW);
@@ -106,12 +109,117 @@ class WorkflowScopeBindingUnitTest {
     void apply_unscoped_user_is_untouched() {
         CurrentRolesHolder.set(Set.of("lm_integrator"));
         WorkflowApplyResource res = new WorkflowApplyResource();
+        res.store = storeWith();
         res.cards = emptyCards;
 
         assertThat(res.apply(MAGASIN_WORKFLOW).getStatus()).isEqualTo(404);
     }
 
+    // ---- the STORED scope: an apply may not re-home what the caller does not hold (#509) ----
+
+    @Test
+    void apply_may_not_rehome_a_lifecycle_that_lives_in_a_scope_the_caller_does_not_hold() {
+        // Holding magasin passes the incoming check. The name is taken by compta, and the upsert
+        // conflicts on (tenant_id, name) setting scope = EXCLUDED.scope: the compta lifecycle would
+        // be rewritten into magasin, chunk and all, with no word said.
+        bindTo("magasin");
+        WorkflowApplyResource res = new WorkflowApplyResource();
+        res.store = storeWith(row("commande-lifecycle", "compta"));
+        res.cards = emptyCards;
+
+        // The boundary THROWS rather than handing back a refusal a door could drop; JAX-RS serves
+        // the attached response, so the wire is the same 403 (ApplyScopeBoundary's javadoc names
+        // where that last claim is measured).
+        assertThatThrownBy(() -> res.apply(MAGASIN_WORKFLOW))
+            .isInstanceOfSatisfying(WebApplicationException.class, e -> {
+                assertThat(e.getResponse().getStatus()).isEqualTo(403);
+                assertThat(errorOf(e.getResponse())).isEqualTo("scope not granted");
+            });
+    }
+
+    @Test
+    void apply_updates_a_lifecycle_of_a_scope_the_caller_does_hold() {
+        bindTo("magasin");
+        WorkflowApplyResource res = new WorkflowApplyResource();
+        res.store = storeWith(row("commande-lifecycle", "magasin"));
+        res.cards = emptyCards;
+
+        assertThat(res.apply(MAGASIN_WORKFLOW).getStatus())
+            .as("its own manifest: past both gates, then the honest no-schema").isEqualTo(404);
+    }
+
+    @Test
+    void apply_of_a_free_name_is_not_refused() {
+        bindTo("magasin");
+        WorkflowApplyResource res = new WorkflowApplyResource();
+        res.store = storeWith(row("facture", "compta"));   // a different name
+        res.cards = emptyCards;
+
+        assertThat(res.apply(MAGASIN_WORKFLOW).getStatus())
+            .as("nothing is stored under this name — creating it is not re-homing").isEqualTo(404);
+    }
+
     // ---- the read doors ----
+
+    /** A card for `magasin` that advertises the manifest's trigger table, so apply reaches the
+     *  one-lifecycle-per-column check instead of stopping at the honest no-schema 404. */
+    private final SchemaCardStore magasinSeesTheTable = new SchemaCardStore() {
+        @Override public Optional<SchemaCard> load(long tenantId, String scope) {
+            return Optional.of(new SchemaCard(scope, List.of(new SchemaCard.Table(
+                "connector.t_commandes_csv", "Commandes",
+                List.of(new SchemaCard.Column("statut", "text", "Statut"))))));
+        }
+    };
+
+    /**
+     * The one-lifecycle-per-column refusal must not read another métier's card aloud.
+     *
+     * <p>It used to stop it by NAME: "workflow 'facture-compta'", a name from a métier the
+     * {@code scope:} roles were drawing a boundary around (#516). Narrow, and real: reaching it
+     * takes a table advertised in both cards, which the check above lets through.
+     */
+    @Test
+    void the_column_taken_refusal_does_not_name_a_workflow_of_a_scope_the_caller_lacks() {
+        bindTo("magasin");
+        WorkflowApplyResource res = new WorkflowApplyResource();
+        res.store = storeWithColumnOwner(new WorkflowManifestStore.ColumnOwner("facture-compta", "compta"));
+        res.cards = magasinSeesTheTable;
+
+        Response r = res.apply(MAGASIN_WORKFLOW);
+
+        assertThat(r.getStatus()).isEqualTo(400);
+        assertThat(errorOf(r))
+            .as("the column is taken, and that is all a caller outside that métier may learn")
+            .contains("already has a declared lifecycle")
+            .doesNotContain("facture-compta")
+            .doesNotContain("compta");
+    }
+
+    @Test
+    void the_column_taken_refusal_names_the_workflow_when_the_caller_holds_its_scope() {
+        bindTo("magasin");
+        WorkflowApplyResource res = new WorkflowApplyResource();
+        res.store = storeWithColumnOwner(new WorkflowManifestStore.ColumnOwner("commande-v1", "magasin"));
+        res.cards = magasinSeesTheTable;
+
+        Response r = res.apply(MAGASIN_WORKFLOW);
+
+        assertThat(r.getStatus()).isEqualTo(400);
+        assertThat(errorOf(r))
+            .as("inside the métier the name is what makes the refusal actionable")
+            .contains("commande-v1").contains("re-apply under the name");
+    }
+
+    private static WorkflowManifestStore storeWithColumnOwner(WorkflowManifestStore.ColumnOwner owner) {
+        return new WorkflowManifestStore() {
+            @Override public List<StoredWorkflow> listByTenant(long tenantId) { return List.of(); }
+            @Override public Optional<String> findScope(long tenantId, String name) { return Optional.empty(); }
+            @Override public Optional<ColumnOwner> findOtherOnColumn(
+                    long tenantId, String table, String column, String name) {
+                return Optional.of(owner);
+            }
+        };
+    }
 
     private static WorkflowManifestStore storeWith(WorkflowManifestStore.StoredWorkflow... rows) {
         return new WorkflowManifestStore() {

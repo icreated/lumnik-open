@@ -206,7 +206,7 @@ func (n *NewKind) edit(k newkind.KindTemplate, initial string) {
 	}
 	buffer := updated
 
-	issues, err := n.validateOrApply(buffer)
+	issues, note, err := n.validateOrApply(buffer)
 	if err != nil {
 		// Transport/server failure: the buffer must survive it.
 		n.enterIssues("[red]server error[white] — "+tview.Escape(err.Error())+"\n\nYour manifest is intact — e to re-edit.", buffer)
@@ -219,7 +219,11 @@ func (n *NewKind) edit(k newkind.KindTemplate, initial string) {
 	n.buffer = ""
 	n.leaveIssues()
 	if n.toast != nil {
-		n.toast("applied.")
+		if note == "" {
+			n.toast("applied.")
+		} else {
+			n.toast("applied — " + note)
+		}
 	}
 	if n.navigate != nil {
 		n.navigate(k.Observe)
@@ -228,44 +232,67 @@ func (n *NewKind) edit(k newkind.KindTemplate, initial string) {
 
 // validateOrApply: Connector manifests validate first (rich field-by-field errors),
 // then apply; Entity/Process/Workflow apply directly — their apply IS the refusable validation.
-func (n *NewKind) validateOrApply(buf string) (string, error) {
+func (n *NewKind) validateOrApply(buf string) (issues string, note string, err error) {
 	class, kindVal, parseErr := newkind.ClassifyManifest(buf)
 	if parseErr != nil {
 		return newkind.FormatIssues([]newkind.Issue{{Path: "yaml",
-			Message: "invalid YAML: " + parseErr.Error()}}, nil), nil
+			Message: "invalid YAML: " + parseErr.Error()}}, nil), "", nil
 	}
 	switch class {
 	case "connector":
 		res, err := n.client.ValidateManifest([]byte(buf))
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		if len(res.Errors) > 0 {
-			return newkind.FormatIssues(toIssues(res.Errors), toIssues(res.Warnings)), nil
+			return newkind.FormatIssues(toIssues(res.Errors), toIssues(res.Warnings)), "", nil
 		}
 		if _, err := n.client.ApplyManifest([]byte(buf)); err != nil {
-			return "", err
+			return "", "", err
 		}
+		// Accepted is not silent. These advisories were rendered only on the REFUSAL path, so a
+		// scopeless connector applied from here said nothing at all (#531). They cannot go to the
+		// issues view: a non-empty issues string means "not applied, e to re-edit", and this one
+		// is written. The toast is this surface's word for "done, and here is what about it".
+		note = applyNote(res.Warnings)
 	case "entity":
 		if _, err := n.client.EntityApply([]byte(buf)); err != nil {
-			return newkind.FormatIssues([]newkind.Issue{{Path: "apply", Message: err.Error()}}, nil), nil
+			return newkind.FormatIssues([]newkind.Issue{{Path: "apply", Message: err.Error()}}, nil), "", nil
 		}
 	case "process":
 		if _, err := n.client.ProcessApply([]byte(buf)); err != nil {
-			return newkind.FormatIssues([]newkind.Issue{{Path: "apply", Message: err.Error()}}, nil), nil
+			return newkind.FormatIssues([]newkind.Issue{{Path: "apply", Message: err.Error()}}, nil), "", nil
 		}
 	case "workflow":
 		if _, err := n.client.ApplyWorkflow([]byte(buf)); err != nil {
-			return newkind.FormatIssues([]newkind.Issue{{Path: "apply", Message: err.Error()}}, nil), nil
+			return newkind.FormatIssues([]newkind.Issue{{Path: "apply", Message: err.Error()}}, nil), "", nil
 		}
 	default:
 		msg := "missing top-level kind — expected Connector, Entity, Process, or Workflow"
 		if kindVal != "" {
 			msg = "kind '" + kindVal + "' is not routable here — expected Connector, Entity, Process, or Workflow"
 		}
-		return newkind.FormatIssues([]newkind.Issue{{Path: "kind", Message: msg}}, nil), nil
+		return newkind.FormatIssues([]newkind.Issue{{Path: "kind", Message: msg}}, nil), "", nil
 	}
-	return "", nil
+	return "", note, nil
+}
+
+// applyNote is what the toast says beyond "applied." — the paths the hub advised on, not their
+// full text: the panel that shows recommendations is the refusal view, and this manifest was
+// accepted. `lm validate -f` prints the whole report.
+func applyNote(warnings []client.ValidationError) string {
+	if len(warnings) == 0 {
+		return ""
+	}
+	paths := make([]string, 0, len(warnings))
+	for _, w := range warnings {
+		paths = append(paths, w.Path)
+	}
+	unit := "warnings"
+	if len(warnings) == 1 {
+		unit = "warning"
+	}
+	return fmt.Sprintf("%d %s (%s)", len(warnings), unit, strings.Join(paths, ", "))
 }
 
 func toIssues(in []client.ValidationError) []newkind.Issue {

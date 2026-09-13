@@ -42,7 +42,7 @@ func resolveDlqID(c *client.Client, connectorID, runID, arg string) (string, err
 	if len(arg) == uuidLen {
 		return arg, nil
 	}
-	items, err := c.DlqList(connectorID, runID, dlqServerLimitCap)
+	items, err := c.DlqList(connectorID, runID, client.DlqPageCap)
 	if err != nil {
 		return "", err
 	}
@@ -58,7 +58,7 @@ func resolveRunID(c *client.Client, arg string) (string, error) {
 	if len(arg) == uuidLen {
 		return arg, nil
 	}
-	runs, err := c.RunList(runLookupLimit)
+	runs, err := c.RunList("", "", client.RunsPageCap)
 	if err != nil {
 		return "", err
 	}
@@ -71,7 +71,4 @@ func resolveRunID(c *client.Client, arg string) (string, error) {
 
 const (
 	uuidLen = 36
-	// How far back an abbreviated run id is looked up. Beyond this the operator still has the
-	// full id from `lm run list -o yaml`; the abbreviation is a convenience, not the only door.
-	runLookupLimit = 200
 )

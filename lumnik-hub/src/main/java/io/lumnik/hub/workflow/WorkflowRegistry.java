@@ -14,8 +14,9 @@ import java.util.Optional;
  *
  * <p><b>Invariant.</b> Every read re-parses the stored YAML — deliberately, not for want of a
  * cache: the yaml_text column is the single truth, so a served graph can never drift from the
- * manifest as applied, and the parser's identifier grammar is re-applied to whatever the row
- * holds. Do not memoize this, and do not start trusting the denormalized {@code on_table} /
+ * manifest as applied, and the parser's refusals are re-applied to whatever the row holds — the
+ * watch-target confinement above all, since a served graph reaches SQL on a privileged connection. Do
+ * not memoize this, and do not start trusting the denormalized {@code on_table} /
  * {@code on_column} columns (they exist for lookups, not for serving).
  */
 @ApplicationScoped

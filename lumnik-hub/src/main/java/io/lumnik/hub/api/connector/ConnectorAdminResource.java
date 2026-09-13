@@ -22,6 +22,7 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.POST;
+import io.lumnik.hub.connector.runtime.RunWindow;
 import jakarta.ws.rs.PUT;
 import jakarta.ws.rs.DELETE;
 import jakarta.transaction.Transactional;
@@ -47,7 +48,7 @@ public class ConnectorAdminResource {
   public List<ConnectorAdminDto> list() {
     return repo.listAll().stream()
         .map(c -> ConnectorAdminDto.fromWithRun(c,
-            runs.findLatestByConnector(c.getId()).orElse(null)))
+            runs.findLatestActiveByConnector(c.getId()).orElse(null)))
         .toList();
   }
 
@@ -57,7 +58,7 @@ public class ConnectorAdminResource {
   public Response get(@PathParam("id") UUID id) {
     var c = repo.findById(id);
     if (c == null) return ApiErrors.notFound("connector " + id + " not found");
-    var lastRun = runs.findLatestByConnector(id).orElse(null);
+    var lastRun = runs.findLatestActiveByConnector(id).orElse(null);
     return Response.ok(ConnectorAdminDto.fromWithRun(c, lastRun)).build();
   }
 
@@ -65,12 +66,14 @@ public class ConnectorAdminResource {
   @Transactional
   public Response create(ConnectorCreateRequest req) {
     Response bad = refuseBadMapColumns(req.config());
+    if (bad == null) bad = refuseBadWindow(req.window());
     if (bad != null) return bad;
     var c = new Connector();
     c.setTenantId(req.tenantId());
     c.setName(req.name());
     c.setTypeId(req.typeId());
     c.setSchedule(req.schedule());
+    c.setRunWindow(req.window());
     c.setEnabled(req.enabled());
     c.setConfig(req.config());
     repo.persist(c);
@@ -85,10 +88,12 @@ public class ConnectorAdminResource {
     var c = repo.findById(id);
     if (c == null) return ApiErrors.notFound("connector " + id + " not found");
     Response bad = refuseBadMapColumns(req.config());
+    if (bad == null) bad = refuseBadWindow(req.window());
     if (bad != null) return bad;
     c.setName(req.name());
     c.setTypeId(req.typeId());
     c.setSchedule(req.schedule());
+    c.setRunWindow(req.window());
     c.setEnabled(req.enabled());
     c.setConfig(req.config());
     return Response.ok(ConnectorAdminDto.from(c)).build();
@@ -147,6 +152,26 @@ public class ConnectorAdminResource {
         .map(v -> Response.status(400).type(MediaType.APPLICATION_JSON)
             .entity(ApiErrors.error("config '" + v.path() + "' " + v.reason())).build())
         .orElse(null);
+  }
+
+  /**
+   * Refuses a malformed {@code window} before it is stored.
+   *
+   * <p>This door validates almost nothing — a deliberate, documented gap: the manifest door runs
+   * {@code ConnectorValidationService}, the flat one does not. That was survivable while the flat
+   * shape carried no fence. It carries one now (#499), and {@code RunWindow.contains} is
+   * FAIL-OPEN: an unparseable spec answers "yes, run" — so a typo like {@code 22h-6h} would have
+   * been accepted here and silently meant NO fence at all, which is the silent-loss class that
+   * ticket set out to close, arriving through the field it added.
+   *
+   * <p>{@code RunWindow.validate} is the same truth {@code WindowField} serves the manifest door,
+   * so both refuse the same strings. {@code schedule} has the identical hole and is NOT closed
+   * here: it is older than this change and closing it needs the cron validator's own wording —
+   * filed, not smuggled in.
+   */
+  private Response refuseBadWindow(String window) {
+    if (window == null || window.isBlank()) return null;   // no fence is legal
+    return RunWindow.validate(window).map(ApiErrors::badRequest).orElse(null);
   }
 
   @POST

@@ -8,6 +8,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.sql.Date;
 import java.sql.Time;
 import java.sql.Timestamp;
@@ -173,7 +174,17 @@ class SchemaTypingInventoryTest {
     return Stream.of(
         Arguments.of("a string", "Bénédicte", "TEXT"),
         Arguments.of("a BigDecimal, as JDBC returns for numerics", new BigDecimal("1.5"), "NUMERIC(18,4)"),
-        Arguments.of("a boxed integer", 42, "NUMERIC(18,4)"),
+
+        // A whole number is a whole number all the way to the screen. These four used to be
+        // NUMERIC(18,4), so a JSON `partner_id: 1000` printed 1000.0000 in psql, in every view and
+        // in the answers the ask door writes (#497). A BigDecimal is NOT among them, on purpose:
+        // it is what JDBC returns for a source column DECLARED numeric, scale and all, and the
+        // source's own opinion is the one the hint road carries.
+        Arguments.of("a boxed integer", 42, "BIGINT"),
+        Arguments.of("a long", 42L, "BIGINT"),
+        Arguments.of("a short", (short) 42, "BIGINT"),
+        Arguments.of("a BigInteger", BigInteger.valueOf(42), "BIGINT"),
+        Arguments.of("a double that happens to be whole", 42.0d, "NUMERIC(18,4)"),
         Arguments.of("a java.sql.Timestamp", Timestamp.valueOf("2026-05-23 14:30:00"), "TIMESTAMPTZ"),
         Arguments.of("a java.sql.Date", Date.valueOf("2026-05-23"), "DATE"),
         Arguments.of("a boolean", Boolean.TRUE, "BOOLEAN"),
@@ -198,6 +209,26 @@ class SchemaTypingInventoryTest {
   @MethodSource("valueShapes")
   void aValueIsTypedByItsJavaTypeNotItsContent(String axis, Object value, String expected) {
     assertThat(infer(value)).as("%s", axis).isEqualTo(expected);
+  }
+
+  /**
+   * One fractional value anywhere in the sample types the WHOLE column {@code NUMERIC(18,4)} —
+   * the ordinary all-or-nothing rule, stated here because it is what makes {@code BIGINT} safe to
+   * choose at all. A column whose sampled values are whole is narrowed; the moment one is not, it
+   * is not.
+   *
+   * <p>What the sample cannot see is a later chunk. That case is not this class's: it is handled
+   * where the schema can still change, by {@code DynamicTableWriter.widenings}.
+   */
+  @Test
+  void aColumnMixingWholeAndFractionalNumbersIsNumericNotBigint() {
+    Map<String, Object> whole = new LinkedHashMap<>();
+    whole.put("credit_limit", 1000);
+    Map<String, Object> fractional = new LinkedHashMap<>();
+    fractional.put("credit_limit", 748.5d);
+
+    assertThat(inferrer.infer(List.of(whole, fractional)).get("credit_limit")).isEqualTo("NUMERIC(18,4)");
+    assertThat(inferrer.infer(List.of(whole)).get("credit_limit")).isEqualTo("BIGINT");
   }
 
   @Test

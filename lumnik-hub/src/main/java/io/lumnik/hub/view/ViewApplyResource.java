@@ -4,6 +4,7 @@ import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.tenant.RequireTenant;
@@ -77,6 +78,12 @@ public class ViewApplyResource {
     if (!ScopeGrants.allows(manifest.scope())) {
       return ApiErrors.scopeNotGranted();
     }
+
+    // …and the NAME is the other half of the address. SavedViewStore.upsert conflicts on (name) and
+    // sets scope = EXCLUDED.scope, so declaring into a scope you hold under a name that belongs to
+    // one you do not would re-home that view: the métier that owned the screen stops seeing it.
+    // Same words as the check above, so the two refusals are indistinguishable (#509).
+    ApplyScopeBoundary.refuseUnlessCallerHoldsScope(store.findScope(name));
 
     Optional<SchemaCard> card = cards.load(tenant, manifest.scope());
     if (card.isEmpty()) {

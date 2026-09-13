@@ -6,10 +6,21 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.search.Search;
+import org.jboss.logmanager.ExtLogRecord;
+
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -26,6 +37,7 @@ class RunReaperIT {
 
     @Inject @DataSource("admin") AgroalDataSource adminDs;
     @Inject RunReaper reaper;
+    @Inject MeterRegistry registry;
 
     private void exec(String sql) {
         try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
@@ -77,5 +89,87 @@ class RunReaperIT {
         reaper.reap();
 
         assertThat(runRow(done)[0]).isEqualTo("Completed");
+    }
+
+    /**
+     * ONE clock for the two columns of a run's journal. {@code started_at} is written by the JVM
+     * ({@code ConnectorRun}'s field default); the reaper stamped {@code ended_at} with SQL
+     * {@code now()} — the DATABASE's clock. On one host the two agree and nothing shows; the day
+     * Postgres lives on another machine, a reaped run's span is measured across two clocks and can
+     * come out negative. Making the instant a PARAMETER is the fix and its own proof: a caller can
+     * hand in a value, which {@code now()} made impossible by construction.
+     */
+    @Test
+    void the_reaper_stamps_the_instant_it_was_given_not_the_database_clock() {
+        UUID zombie = seedConnectorWithRun("reaper_clock_" + System.nanoTime(), "Running");
+        Instant chosen = Instant.parse("2019-03-14T15:09:26.535Z");
+
+        reaper.reap(chosen);
+
+        assertThat(endedAt(zombie))
+            .as("ended_at must be the instant the caller supplied — the JVM's clock, not the database's")
+            .isEqualTo(chosen);
+    }
+
+    /**
+     * "Reaped 3 run(s)" tells an operator that three schedules were silenced and not WHICH. The
+     * run id is what every other line a run writes now carries; the line that ends those runs
+     * without them ever knowing must carry it too.
+     */
+    @Test
+    void the_reaper_names_what_it_reaped() {
+        UUID zombie = seedConnectorWithRun("reaper_voice_" + System.nanoTime(), "Running");
+
+        List<String> lines = capture(() -> reaper.reapAndReport());
+
+        assertThat(lines).as("the startup warning must name the run it failed")
+            .anySatisfy(l -> assertThat(l).contains(zombie.toString()));
+    }
+
+    /**
+     * A reaped run reached a terminal status like any other, and {@code lumnik_runs_total} is how
+     * an operator counts them. The reaper bypasses finalizeRun by design (bulk SQL), and took the
+     * counter with it: every crash-killed run was missing from the tally.
+     */
+    @Test
+    void a_reaped_run_is_counted_among_the_runs_that_finished() {
+        seedConnectorWithRun("reaper_metric_" + System.nanoTime(), "Running");
+        double before = failedCount();
+
+        reaper.reap(Instant.now());
+
+        assertThat(failedCount())
+            .as("every reaped run counts as a run that finished Failed")
+            .isGreaterThan(before);
+    }
+
+    private Instant endedAt(UUID runId) {
+        try (Connection c = adminDs.getConnection(); Statement st = c.createStatement();
+             ResultSet rs = st.executeQuery(
+                 "SELECT ended_at FROM connector.connector_run WHERE id = '" + runId + "'")) {
+            rs.next();
+            return rs.getObject(1, OffsetDateTime.class).toInstant();
+        } catch (Exception e) { throw new RuntimeException(e); }
+    }
+
+    private double failedCount() {
+        return Search.in(registry).name("lumnik_runs_total").tag("status", "Failed").counters()
+            .stream().mapToDouble(c -> c.count()).sum();
+    }
+
+    /** Runs {@code action} with a probe on the reaper's logger; returns the formatted lines. */
+    private static List<String> capture(Runnable action) {
+        List<String> lines = new CopyOnWriteArrayList<>();
+        Logger log = Logger.getLogger(RunReaper.class.getName());
+        Handler probe = new Handler() {
+            @Override public void publish(LogRecord r) {
+                lines.add(r instanceof ExtLogRecord ext ? ext.getFormattedMessage() : String.valueOf(r.getMessage()));
+            }
+            @Override public void flush() {}
+            @Override public void close() {}
+        };
+        log.addHandler(probe);
+        try { action.run(); } finally { log.removeHandler(probe); }
+        return lines;
     }
 }

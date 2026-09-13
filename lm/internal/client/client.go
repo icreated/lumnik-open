@@ -74,6 +74,29 @@ type Client struct {
 	mu         sync.Mutex // guards the refresh+persist path in authorize
 	onAuthLost func()
 	lostFired  atomic.Bool
+	// staticToken pins ctx.Token as the bearer and takes the refresh path out of
+	// play entirely. Set only by PinStaticToken, i.e. only for an explicit --token.
+	staticToken bool
+}
+
+// PinStaticToken makes this client send ctx.Token and never refresh — what an
+// explicit `--token` on the command line means.
+//
+// The ordinary policy is the opposite, and stays: a static token read from the
+// config FILE loses to a live `lm login` access token, so a stale value someone
+// left behind cannot shadow a working session. A token typed on the command line
+// is not a leftover. It was still losing, so `lm --token "$TOK" …` against an
+// expired context ran the refresh first and died on it before the override was
+// ever reached (#491).
+//
+// Pinned on the client rather than by blanking ctx.Access, because ReloadContext
+// re-reads the auth fields from disk after a re-login and would put the stored
+// access token straight back in front of the override — the same defect, one
+// method further along.
+func (c *Client) PinStaticToken() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.staticToken = true
 }
 
 // SetAuthLost arms the single callback the client fires when the session is dead
@@ -232,8 +255,16 @@ func (c *Client) doOn(hc *http.Client, timeout time.Duration, method, path strin
 	data, _ := io.ReadAll(resp.Body)
 	// Snapshot auth state under the mutex: authorize()/ReloadContext() write ctx.Access
 	// under c.mu on other goroutines — reading it here unguarded is a data race.
+	//
+	// `Access != ""` alone used to be an accurate stand-in for "this request carried an OIDC
+	// session", because a context holding a stored access token ALWAYS took the OIDC path.
+	// That was the accidental confinement #491 removed: with an explicit --token the credential
+	// on the wire is static while ctx.Access is still set, so the flag and the request disagreed
+	// and a 401 raised a modal offering to re-login a session that was never in play. The state
+	// is not what is wrong — clearing ctx.Access here would be undone by the next
+	// ReloadContext — the PREDICATE was, so it now says what it means.
 	c.mu.Lock()
-	oidcSession := c.ctx.Access != ""
+	oidcSession := !c.staticToken && c.ctx.Access != ""
 	c.mu.Unlock()
 	if resp.StatusCode == 401 && oidcSession {
 		// OIDC session rejected by the server — re-login can fix it. A static-token
@@ -262,7 +293,15 @@ func (c *Client) authorize(req *http.Request) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	tok, r, err := bearerToken(c.http, c.ctx.OidcTokenEndpoint, c.ctx, time.Now())
+	// An explicit --token pins the static path: no refresh, so nothing to persist and
+	// no auth-lost signal to raise — there is no session to have lost. Decided HERE,
+	// in the one function that resolves a credential, and then falling through to the
+	// shared tail: a second path would have to re-write the Authorization header and
+	// the tenant/user headers, and would silently miss whatever bearerToken grows next.
+	tok, r, err := c.ctx.Token, (*refreshed)(nil), error(nil)
+	if !c.staticToken {
+		tok, r, err = bearerToken(c.http, c.ctx.OidcTokenEndpoint, c.ctx, time.Now())
+	}
 	if err != nil {
 		// Refresh failed. A neighbor may have rotated a fresh token to disk — try it once.
 		load := func() (config.Context, bool) {

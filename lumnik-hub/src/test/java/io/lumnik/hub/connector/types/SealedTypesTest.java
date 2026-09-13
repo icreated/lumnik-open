@@ -23,18 +23,34 @@ class SealedTypesTest {
     assertThat(summary).isEqualTo("completed:100");
   }
 
+  /**
+   * An EXHAUSTIVE switch, not two instanceof checks: the test was named for the variants and
+   * covered half of them, so a new member could land without a single test noticing. The engine's
+   * own switch is the real guardian — this one just stops the name from lying.
+   */
   @Test
-  void chunk_result_variants() {
-    ChunkResult ok = new ChunkResult.Success(50, ConnectorCursor.empty());
-    ChunkResult.PartialSuccess p = new ChunkResult.PartialSuccess(48, 2, List.of(), ConnectorCursor.empty());
-    assertThat(ok).isInstanceOf(ChunkResult.Success.class);
-    assertThat(p.skipped()).isEqualTo(2);
+  void chunk_result_variants_exhaustive_switch() {
+    ChunkResult r = new ChunkResult.ShortOfTarget("stopped short");
+    String summary = switch (r) {
+      case ChunkResult.Success s        -> "success:" + s.processed();
+      case ChunkResult.PartialSuccess p -> "partial:" + p.skipped();
+      case ChunkResult.ShortOfTarget s  -> "short:" + s.detail();
+      case ChunkResult.Failure f        -> "failed";
+    };
+    assertThat(summary).isEqualTo("short:stopped short");
+    assertThat(new ChunkResult.PartialSuccess(48, 2, List.of(), ConnectorCursor.empty()).skipped())
+        .isEqualTo(2);
   }
 
   @Test
-  void read_result_generic() {
+  void read_result_variants_exhaustive_switch() {
     ReadResult<String> r = new ReadResult.HasMore<>(List.of("a","b"), ConnectorCursor.empty());
-    assertThat(r).isInstanceOf(ReadResult.HasMore.class);
+    String summary = switch (r) {
+      case ReadResult.HasMore<String> hm     -> "more:" + hm.records().size();
+      case ReadResult.EndOfStream<String> e  -> "end";
+      case ReadResult.EmptyButOpen<String> o -> "short";
+    };
+    assertThat(summary).isEqualTo("more:2");
   }
 
   @Test

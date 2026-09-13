@@ -3,14 +3,12 @@ package io.lumnik.hub.view;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.llm.spi.Analytic;
 import io.lumnik.llm.spi.ChatPort;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.InjectMock;
 import io.quarkus.test.junit.QuarkusTest;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -75,8 +73,13 @@ class ViewGenerateResourceIT {
 
         Assertions.assertTrue(yaml.contains("kind: \"View\"")
                 || yaml.contains("kind: View"));
-        Assertions.assertTrue(
-            yaml.lines().findFirst().orElseThrow().contains("--filter 'segment=GOLD'"));
+        // The header states what was asked and what the view narrows on, then the runnable
+        // command — so the command is a line of the header, no longer the first line (#489).
+        Assertions.assertEquals(List.of(
+            "# asked for: les clients gold",
+            "# kept: segment=GOLD — a condition of that description not listed here is NOT enforced",
+            "# lm view -f gold_desk.yaml --filter 'segment=GOLD'"),
+            yaml.lines().takeWhile(l -> l.startsWith("#")).toList());
     }
 
     @Test
@@ -115,9 +118,7 @@ class ViewGenerateResourceIT {
             .then().statusCode(200).extract().asString();
 
         given().header("X-Tenant-Id", "1").contentType("application/yaml")
-            .config(RestAssuredConfig.config().encoderConfig(
-                EncoderConfig.encoderConfig()
-                    .encodeContentTypeAs("application/yaml", ContentType.TEXT)))
+            .config(YamlBody.CONFIG)
             .queryParam("filter", "segment=GOLD")
             .body(yaml)
         .when().post("/api/views/render")

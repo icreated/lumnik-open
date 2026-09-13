@@ -106,7 +106,7 @@ class RestEndpointReaderCursorTest {
 
     private ConnectorContext ctx(Map<String, Object> config) {
         return new ConnectorContext(RUN, CONNECTOR, ENDPOINT, 1L, "erp", "rest-generic",
-            config, new SyncMode.FullRefresh(), null, null, null, null);
+            config, new SyncMode.FullRefresh(), null, null, null, null, null);
     }
 
     private ConnectorCursor cursorOf(String watermark, String emittedByRun) {

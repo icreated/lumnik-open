@@ -11,4 +11,3 @@ spec:
   format: json
   schedule: "every tuesday"
   poll_timeout_ms: 2000
-  target: {}

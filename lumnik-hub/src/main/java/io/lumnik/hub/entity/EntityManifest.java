@@ -14,7 +14,7 @@ import java.util.Map;
  * @param match   canonical column(s) of the single v1 match rule (composite if &gt;1). Cascade deferred.
  * @param sources ordered list of sources; the order is the deterministic merge tiebreak (_ord).
  */
-public record EntityManifest(String kind, String name,
+public record EntityManifest(String kind, String name, String label,
     List<String> match, List<Source> sources, List<String> scopes,
     String description, Map<String, ColumnMeta> columns) {
 
@@ -26,7 +26,7 @@ public record EntityManifest(String kind, String name,
 
   /** Convenience for Java callers/tests that don't set scopes/grounding. */
   public EntityManifest(String kind, String name, List<String> match, List<Source> sources) {
-    this(kind, name, match, sources, List.of(), null, Map.of());
+    this(kind, name, null, match, sources, List.of(), null, Map.of());
   }
 
   /** One source: a connector dynamic table + its sourceColumn -&gt; canonicalColumn map (ordered). */

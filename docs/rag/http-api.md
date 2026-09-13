@@ -83,8 +83,10 @@ corpus-filtered), and the LLM answers **from that context only**, citing chunks 
 }
 ```
 
-`citations` lists the row hashes of **every retrieved chunk** — the context the model saw. The
-`[row:hash]` tags inside `answer` are the ones it says it used. The model is instructed to say so
+`citations` lists the row hashes of **every retrieved chunk that is a row** — the context the
+model saw. Not every chunk is one: a `kind:Workflow` lifecycle is indexed with no row hash, so it
+grounds the answer and cites nothing (an answer drawn only from lifecycles comes back with
+`"citations": []`). The `[row:hash]` tags inside `answer` are the ones the model says it used. The model is instructed to say so
 explicitly when the context cannot answer the question.
 
 ### Analytic response (`mode: "analytic"`)
@@ -98,7 +100,8 @@ guarded, executed, and phrased back:
   "sql": "SELECT count(*), sum(grand_total) FROM connector.c_order WHERE status = 'open'",
   "rowCount": 1,
   "dataAsOf": "2026-08-20T06:05:00Z",
-  "rows": [ { "count": 42, "sum": 18750.00 } ]
+  "rows": [ { "count": 42, "sum": 18750.00 } ],
+  "otherDoors": []
 }
 ```
 
@@ -128,6 +131,31 @@ this page won't re-explain them, but you need to know **how a refusal arrives**:
 answer's ground is. It is absent when the scope has no completed run (fresh install, a
 one-shot demo): absence is stated, never a fabricated timestamp. Refusals carry no
 `dataAsOf`.
+
+`otherDoors` names, as tokens, the doors that *can* answer when this one abstains and the scope
+holds the answer somewhere text-to-SQL structurally cannot read. It is `[]` on every other
+response, and the two tokens today are `"lifecycle"` (the scope declares a
+[kind:Workflow](../apps/workflows.md), retrieved by the semantic door, not by SQL) and
+`"conflicts"` (the scope fuses an entity, so the row-by-row disagreements live in a ledger the
+schema card does not advertise):
+
+```json
+{
+  "answer": "I can't answer that from the data available for this scope — … This scope does declare a lifecycle for its documents, …",
+  "sql": "",
+  "rowCount": 0,
+  "rows": [],
+  "otherDoors": ["lifecycle"]
+}
+```
+
+**The `answer` already states the fact, and names no command on purpose** — the same string is
+served to `lm ask`, to the PWA and to your client, and a CLI command in it would send a user on a
+phone to a terminal they do not have. `otherDoors` is that same fact in a form you can branch on:
+map a token to whatever gesture *your* surface has, and ignore the ones you have none for. `lm ask`
+prints `lm chat` and `lm conflicts list`; the PWA offers its fiches for `conflicts` and stays
+silent on `lifecycle`, having no lifecycle surface. A token you do not recognise — a newer hub —
+must be passed over, never rendered raw.
 
 An app consuming this door should treat a `rowCount: 0` answer as *"read the answer text"*, not
 as *"there are none"* — that asymmetry is the whole point. In the PWA, the **abstentions**
@@ -232,6 +260,13 @@ POST /api/platform/rag/rediscover?scope=<tag>    (lm_admin)
 descriptions, examples and declared value-domains) the analytic mode is allowed to query.
 `404` if no card exists for the scope; run discovery first. `rediscover` rebuilds the card from
 the ingested tables and returns a summary:
+
+!!! note "These two are served by the hub, not by RAG"
+
+    The `rag` in the path is history. The schema card is built, stored and served by the hub
+    itself, so `schema` and `rediscover` — and the `lm source schema` / `lm source rediscover`
+    the app-ladder pages send you to — are in the **open edition**. The paths did not change; only
+    the module behind them did.
 
 ```json
 { "scope": "clients", "tableCount": 3, "columnCount": 41, "enriched": true, "sourceType": "connector" }

@@ -41,3 +41,25 @@ func (c *Client) ProcessList() ([]ProcessInfo, error) {
 	}
 	return out, nil
 }
+
+// ProcessDelete removes one declared process for good.
+func (c *Client) ProcessDelete(name string) error {
+	return c.DELETE("/api/processes/" + url.PathEscape(name))
+}
+
+// ProcessSetEnabled turns one process on or off — the reversible half of ProcessDelete: the
+// manifest stays readable and the hub stops counting it as a subscriber.
+func (c *Client) ProcessSetEnabled(name string, enabled bool) (*ProcessEnabled, error) {
+	var out ProcessEnabled
+	if err := c.PUT("/api/processes/"+url.PathEscape(name)+"/enabled",
+		map[string]any{"enabled": enabled}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ProcessEnabled is the hub's answer to a ProcessSetEnabled call.
+type ProcessEnabled struct {
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+}

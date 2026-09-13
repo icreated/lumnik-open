@@ -388,7 +388,13 @@ public class CsvIngestService {
             "INSERT INTO connector.connector_endpoint" +
             " (id, connector_id, tenant_id, org_id, name, path, config, enabled)" +
             " VALUES (:id, :cid, :tid, 0, :name, :path, CAST(:cfg AS jsonb), false)" +
-            " ON CONFLICT (connector_id, name) DO UPDATE" +
+            // The WHERE is index INFERENCE, not a filter: since V45 the endpoint's name rule is a
+            // partial unique index (a deleted endpoint stops holding its name), and PostgreSQL only
+            // infers a partial index when the statement repeats its predicate. Without it every
+            // one-shot ingest — not merely a conflicting one — dies at plan time with "no unique or
+            // exclusion constraint matching the ON CONFLICT specification". Same form as
+            // InboxResource's ON CONFLICT (tenant_id, dedup_key) WHERE dedup_key IS NOT NULL.
+            " ON CONFLICT (connector_id, name) WHERE deleted_at IS NULL DO UPDATE" +
             " SET path = EXCLUDED.path, config = EXCLUDED.config")
             .setParameter("id", endpointId)
             .setParameter("cid", connectorId)

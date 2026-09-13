@@ -72,3 +72,14 @@ func TestFriendlyAskError_500_SchemaMissing(t *testing.T) {
 		t.Errorf("500 msg = %q, want the scope named in the hint", msg)
 	}
 }
+
+// The atelier renders the doors it HAS, and stays silent about the ones it does not.
+func TestDoorGestures_onlyThePagesThisAtelierHas(t *testing.T) {
+	got := doorGestures([]string{"lifecycle", "conflicts", "a-door-from-a-newer-hub"})
+	if len(got) != 1 || !strings.Contains(got[0], ":conflicts") {
+		t.Fatalf("want exactly the :conflicts gesture, got %q", got)
+	}
+	if len(doorGestures(nil)) != 0 {
+		t.Errorf("no doors, no lines")
+	}
+}

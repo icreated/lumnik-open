@@ -49,7 +49,7 @@ Beyond the standard JVM/HTTP/pool meters, the hub emits:
 
 | Metric | Tags | When it moves |
 |---|---|---|
-| `lumnik_runs_total` | `status` (`Completed`, `Failed`, `Cancelled`) | a connector run reaches a terminal status |
+| `lumnik_runs_total` | `status` (`Completed`, `Partial`, `Failed`, `Cancelled`) | a connector run reaches a terminal status |
 | `lumnik_rate_limited_total` | `bucket` | a request was refused `429` by [rate limiting](rate-limits.md) — the tenant is in the WARN log line, deliberately not in a tag |
 | `lumnik_dead_letters_total` | `reason` | a row is quarantined to the DLQ — real losses only; benign skips (duplicates, policy-excluded) do not count |
 | `csv_filesource_list_total` | `transport`, `connector` | files listed on a remote source |
@@ -144,6 +144,10 @@ switches to JSON console logging, ready for whatever log shipper you already run
 - **No dashboards or alert rules ship with lumnik** — the metrics above are a thin
   floor, bring your own Grafana.
 - **No per-connector tag on `lumnik_runs_total`** — it counts runs by status only.
+- **`Partial` is the status worth alerting on**, more than `Failed`: a failed run is loud and
+  retried, while a partial one wrote everything it read and simply did not read everything there
+  was. It means the reader stopped on its own budget, or the run began past records the source had
+  already deleted under its stored position. The run's `error_message` names which.
   For per-connector history, query the run ledger (`lm runs`, or the
   `connector.connector_run` table).
 - **No row-count / duration metrics per run** — those live on the run record in the

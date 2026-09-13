@@ -6,6 +6,7 @@ import io.restassured.http.ContentType;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
 
+import java.sql.DriverManager;
 import java.util.List;
 import java.util.Map;
 
@@ -36,6 +37,10 @@ class JdbcMultiTenancyIT {
         .withDatabaseName("mt_source").withUsername("u").withPassword("p");
     PG.start();
     jdbcUrl = PG.getJdbcUrl();
+    // a real table with a primary key — the guided add refuses what it cannot page by pk
+    try (var c = DriverManager.getConnection(jdbcUrl, "u", "p"); var st = c.createStatement()) {
+      st.execute("CREATE TABLE customers (id BIGINT PRIMARY KEY, updated TIMESTAMP)");
+    } catch (Exception e) { throw new RuntimeException(e); }
   }
 
   @AfterAll
@@ -54,8 +59,7 @@ class JdbcMultiTenancyIT {
         .body(Map.of(
             "sourceName", sourceName,
             "url", jdbcUrl, "user", "u", "password", "p",
-            "tables", List.of(Map.of("table", "pg_class", "watermark", "reltuples", "mode", "full")),
-            "templateMode", "dump"))
+            "tables", List.of(Map.of("table", "customers", "watermark", "updated", "mode", "full"))))
         .when().post("/api/platform/sources/jdbc/add")
         .then().statusCode(200)
                .body("created.size()", is(1))
@@ -68,8 +72,7 @@ class JdbcMultiTenancyIT {
         .body(Map.of(
             "sourceName", sourceName,
             "url", jdbcUrl, "user", "u", "password", "p",
-            "tables", List.of(Map.of("table", "pg_class", "watermark", "reltuples", "mode", "full")),
-            "templateMode", "dump"))
+            "tables", List.of(Map.of("table", "customers", "watermark", "updated", "mode", "full"))))
         .when().post("/api/platform/sources/jdbc/add")
         .then().statusCode(200)
                .body("created.size()", is(1))

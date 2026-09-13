@@ -20,7 +20,7 @@ Example:
 			if file == "" {
 				return fmt.Errorf("flag -f required")
 			}
-			body, err := readYamlFile(file)
+			body, err := readManifest(cmd, file)
 			if err != nil {
 				return fmt.Errorf("read %s: %w", file, err)
 			}
@@ -32,10 +32,10 @@ Example:
 			if err != nil {
 				return err
 			}
-			return output.FormatValidation(cmd.OutOrStdout(), file, result)
+			return output.FormatValidation(cmd.OutOrStdout(), manifestLabel(file), rerunCommand(file), result)
 		},
 	}
-	cmd.Flags().StringVarP(&file, "file", "f", "", "manifest file (YAML or JSON)")
+	cmd.Flags().StringVarP(&file, "file", "f", "", "manifest file (YAML or JSON), or - for stdin")
 	_ = cmd.MarkFlagRequired("file")
 	return cmd
 }

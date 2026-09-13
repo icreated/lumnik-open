@@ -62,7 +62,7 @@ class ChunkExecutorIT {
       runs.flush();
 
       var type = registry.find("hello-world");
-      var result = exec.executeChunk(run, type, endpoint, ConnectorCursor.empty());
+      var result = exec.executeChunk(run, type, endpoint, ConnectorCursor.empty(), null);
 
       assertThat(result).isInstanceOf(ChunkResult.Success.class);
       var s = (ChunkResult.Success) result;

@@ -6,7 +6,7 @@ import io.lumnik.hub.connector.mapping.hooks.HookId;
 import io.lumnik.hub.connector.mapping.hooks.RowHook;
 import jakarta.enterprise.context.ApplicationScoped;
 
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -16,7 +16,7 @@ public class CoalesceHook implements RowHook {
   @Override
   public List<Map<String, Object>> apply(Map<String, Object> row, JsonNode params, MappingState s) {
     String target = params.path("column").asText();
-    Map<String, Object> out = new HashMap<>(row);
+    Map<String, Object> out = new LinkedHashMap<>(row);
 
     Object existing = out.get(target);
     if (existing != null && !existing.toString().isBlank()) {

@@ -37,10 +37,37 @@ class SqlFiltersTest {
   }
 
   @Test
-  void skips_qualified_quoted_and_cast_columns() {
+  void skips_qualified_and_cast_columns() {
     assertThat(filters("WHERE t.col = 'x'")).isEmpty();
-    assertThat(filters("WHERE \"col\" = 'x'")).isEmpty();
     assertThat(filters("WHERE foo::text = 'x'")).isEmpty();
+  }
+
+  /**
+   * Quoted used to sit in the list above, and the reason was written down: the card advertised bare
+   * names. It advertises quoted ones now — the only form a model can copy for a column called
+   * {@code c_bpartner.id} — so a quoted name is read, and the filter carries the UNQUOTED text the
+   * guards compare against their declared set.
+   */
+  @Test
+  void readsAQuotedColumnAndHandsOverItsUnquotedName() {
+    assertThat(filters("WHERE \"col\" = 'x'")).singleElement()
+        .extracting(SqlFilters.Filter::column).isEqualTo("col");
+    assertThat(filters("WHERE \"Partner Name\" = 'x'")).singleElement()
+        .extracting(SqlFilters.Filter::column).isEqualTo("Partner Name");
+  }
+
+  /**
+   * {@code not} is excluded because the logical operator lexes as an identifier — true of the BARE one
+   * only. Quoted, it is an ordinary column name to Postgres, and the card now hands the model every
+   * name quoted, so the exclusion would silently skip a real filter. The correct shape was two methods
+   * away in this same file: {@code isKeyword} has always tested {@code !t.quoted()}.
+   */
+  @Test
+  void aQuotedKeywordIsAColumnName_whileTheBareOperatorStaysExcluded() {
+    assertThat(filters("WHERE \"not\" = 'x'")).singleElement()
+        .extracting(SqlFilters.Filter::column).isEqualTo("not");
+    assertThat(filters("WHERE segment NOT IN ('A','B')")).singleElement()
+        .extracting(SqlFilters.Filter::column).isEqualTo("segment");
   }
 
   @Test

@@ -42,3 +42,30 @@ func HumanTimeStr(iso string) string {
 	}
 	return HumanTime(&t)
 }
+
+// Truncate shortens s to n CHARACTERS, appending an ellipsis when anything was cut.
+//
+// Runes, not bytes: the strings that reach here are hub messages, and a hub message carries em
+// dashes, accents and whatever a source called its columns (`MONTANT_€` is a real one from the
+// kafka bench). A byte slice landing inside a multi-byte rune printed half of it — a `dlq list`
+// row was the first place it showed (#498).
+//
+// Here beside HumanTime for the same reason that one lives here: lm and its TUI render the same
+// hub strings for the same human, and a second copy of a rule like this drifts. The TUI had a
+// hand-rolled `msg[:60]` on the very same dead-letter message.
+func Truncate(s string, n int) string {
+	if len(s) <= n {
+		return s // byte length <= n implies rune count <= n: nothing to cut, nothing to allocate
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+// DlqMessageWidth is how many characters of a dead-letter message a list row shows. One number,
+// because `lm dlq list` and the TUI's :dlq table show the same column of the same string — and
+// because it is what decides which half of a message survives: hub messages are written
+// mechanism-first for exactly this budget (see KafkaItemReader.tombstoneMessage).
+const DlqMessageWidth = 60

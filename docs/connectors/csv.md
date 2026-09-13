@@ -35,8 +35,8 @@ run scheduled: e9cd433e-3a57-43ff-9ea7-737f2718be0a
 
 ```
 $ lm run get e9cd433e
-ID        CONNECTOR         STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-e9cd433e  csv-local-simple  Completed  2   2    0        0             2026-09-06 22:11  2026-09-06 22:11
+ID        CONNECTOR         ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+e9cd433e  csv-local-simple  default   Completed  2   2    0        0             2026-09-06 22:11  2026-09-06 22:11
 ```
 
 `STARTED` / `ENDED` are printed in **your terminal's time zone** (these screens: Paris, UTC+2);
@@ -55,10 +55,10 @@ Run it again on the unchanged file, then once more after a third line is appende
 
 ```
 $ lm run list --connector csv-local-simple
-ID        CONNECTOR         STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-f550a8ef  csv-local-simple  Completed  3   3    0        0             2026-09-06 22:12  2026-09-06 22:12
-b469deba  csv-local-simple  Completed  2   2    0        0             2026-09-06 22:11  2026-09-06 22:11
-e9cd433e  csv-local-simple  Completed  2   2    0        0             2026-09-06 22:11  2026-09-06 22:11
+ID        CONNECTOR         ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+f550a8ef  csv-local-simple  default   Completed  3   3    0        0             2026-09-06 22:12  2026-09-06 22:12
+b469deba  csv-local-simple  default   Completed  2   2    0        0             2026-09-06 22:11  2026-09-06 22:11
+e9cd433e  csv-local-simple  default   Completed  2   2    0        0             2026-09-06 22:11  2026-09-06 22:11
 ```
 
 - **A small file is re-read every run** — `IN` counts what was read, not what was new.
@@ -104,11 +104,11 @@ transport:
 
 ```
 $ lm run list --connector orders-drop
-ID        CONNECTOR    STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
-c593f035  orders-drop  Completed  210   210   0        0             2026-09-06 22:14  2026-09-06 22:14
-972ef27a  orders-drop  Completed  210   210   0        0             2026-09-06 22:13  2026-09-06 22:13
-a13c89f4  orders-drop  Completed  200   200   0        0             2026-09-06 22:13  2026-09-06 22:13
-c563f800  orders-drop  Completed  1200  1200  0        0             2026-09-06 22:13  2026-09-06 22:13
+ID        CONNECTOR    ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
+c593f035  orders-drop  default   Completed  210   210   0        0             2026-09-06 22:14  2026-09-06 22:14
+972ef27a  orders-drop  default   Completed  210   210   0        0             2026-09-06 22:13  2026-09-06 22:13
+a13c89f4  orders-drop  default   Completed  200   200   0        0             2026-09-06 22:13  2026-09-06 22:13
+c563f800  orders-drop  default   Completed  1200  1200  0        0             2026-09-06 22:13  2026-09-06 22:13
 ```
 
 | run | the folder holds | `IN` | why |
@@ -154,7 +154,9 @@ archive_path: /archive/       # default /archive/; required when after_process: 
 [`lm secret`](../admin-console-guide.md) first, an OS env var of that name as fallback:
 
 ```
-$ lm secret set SFTP_ERP_PASSWORD -      # paste the value on stdin, Ctrl+D
+$ lm secret set SFTP_ERP_PASSWORD
+Value for SFTP_ERP_PASSWORD: 
+Created secret "SFTP_ERP_PASSWORD"
 $ lm secret list
 NAME                           ROTATED_AT                     DESCRIPTION
 ACME_SFTP_KEY                  -                              SFTP key - erp-export test VPS
@@ -180,8 +182,8 @@ teaches — here with a wrong fingerprint declared (host renamed):
 
 ```
 $ lm run get b31b1efe
-ID        CONNECTOR    STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-b31b1efe  sftp-badkey  Failed  0   0    0        0             2026-09-06 22:13  2026-09-06 22:13
+ID        CONNECTOR    ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+b31b1efe  sftp-badkey  default   Failed  0   0    0        0             2026-09-06 22:13  2026-09-06 22:13
 ✖ run failed: SFTP host key refused for sftp.example.com:22 — the server presented SHA256:M0Is0aG8ubOr0cLpQs6QcDwVSxMkvmlfuW4K9Q6CJuc, and it does not match the declared SHA256:0000000000000000000000000000000000000000000. Confirm that fingerprint out of band (ssh-keyscan -p 22 sftp.example.com | ssh-keygen -lf -), then set host_key_fingerprint: "SHA256:M0Is0aG8ubOr0cLpQs6QcDwVSxMkvmlfuW4K9Q6CJuc" in the transport block. Setting strict_host_key: false connects without checking at all — which accepts an impostor as readily as the real server.
 ```
 
@@ -204,8 +206,8 @@ A wrong password, or a user without read rights on the folder, fails the run the
 
 ```
 $ lm run get 22957eeb
-ID        CONNECTOR                    STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-22957eeb  sftp-c-bpartner-credentials  Failed  0   0    0        0             2026-09-04 14:23  2026-09-04 14:23
+ID        CONNECTOR                    ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+22957eeb  sftp-c-bpartner-credentials  default   Failed  0   0    0        0             2026-09-04 14:23  2026-09-04 14:23
 ✖ run failed: SFTP error (SSH_FX_PERMISSION_DENIED): Permission denied
 ```
 
@@ -216,10 +218,10 @@ new reads nothing:
 
 ```
 $ lm run list --connector sftp-c-bpartner-credentials
-ID        CONNECTOR                    STATUS     IN     OUT    SKIPPED  DEAD-LETTERS  STARTED           ENDED
-a9533cb5  sftp-c-bpartner-credentials  Completed  0      0      0        0             2026-09-06 22:09  2026-09-06 22:09
-80032250  sftp-c-bpartner-credentials  Completed  6      5      1        1             2026-09-04 15:27  2026-09-04 15:27
-8358fb91  sftp-c-bpartner-credentials  Completed  19009  19009  0        0             2026-09-04 14:40  2026-09-04 14:41
+ID        CONNECTOR                    ENDPOINT  STATUS     IN     OUT    SKIPPED  DEAD-LETTERS  STARTED           ENDED
+a9533cb5  sftp-c-bpartner-credentials  default   Completed  0      0      0        0             2026-09-06 22:09  2026-09-06 22:09
+80032250  sftp-c-bpartner-credentials  default   Completed  6      5      1        1             2026-09-04 15:27  2026-09-04 15:27
+8358fb91  sftp-c-bpartner-credentials  default   Completed  19009  19009  0        0             2026-09-04 14:40  2026-09-04 14:41
 ```
 
 Zero-byte files are never listed — never ingested, never archived.
@@ -244,7 +246,7 @@ transport:
   and ignores `billing/2026-09-01.csv.tmp`.
 - Same cursor as SFTP: modification time + the last batch (path, size, and the object's
   ETag), oldest first, zero-byte objects skipped.
-- `access_key_env` / `secret_key_env` are secret **names** (`lm secret set AWS_ACCESS_KEY_ID -`),
+- `access_key_env` / `secret_key_env` are secret **names** (`lm secret set AWS_ACCESS_KEY_ID`),
   resolved like the SFTP ones.
 
 **One export, archived after commit.** The manifest of the [S3 how-to](#ingest-a-headerless-export-under-an-s3-prefix-and-archive-it)
@@ -253,10 +255,10 @@ cursor proves its rows landed:
 
 ```
 $ lm run list --connector s3-c-bpartner
-ID        CONNECTOR      STATUS     IN     OUT    SKIPPED  DEAD-LETTERS  STARTED           ENDED
-ee860da1  s3-c-bpartner  Completed  10     5      5        5             2026-09-06 16:30  2026-09-06 16:30
-dda81fcb  s3-c-bpartner  Completed  0      0      0        0             2026-09-06 16:21  2026-09-06 16:21
-7329d11d  s3-c-bpartner  Completed  19009  19009  0        0             2026-09-06 16:03  2026-09-06 16:03
+ID        CONNECTOR      ENDPOINT  STATUS     IN     OUT    SKIPPED  DEAD-LETTERS  STARTED           ENDED
+ee860da1  s3-c-bpartner  default   Completed  10     5      5        5             2026-09-06 16:30  2026-09-06 16:30
+dda81fcb  s3-c-bpartner  default   Completed  0      0      0        0             2026-09-06 16:21  2026-09-06 16:21
+7329d11d  s3-c-bpartner  default   Completed  19009  19009  0        0             2026-09-06 16:03  2026-09-06 16:03
 ```
 
 - **16:03** — the 19 009-row export, read and archived.
@@ -319,8 +321,8 @@ BADROW2
 
 ```
 $ lm run get c6fc75c9
-ID        CONNECTOR                 STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-c6fc75c9  sftp-malformed-after-fix  Completed  6   4    2        2             2026-09-04 15:58  2026-09-04 15:58
+ID        CONNECTOR                 ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+c6fc75c9  sftp-malformed-after-fix  default   Completed  6   4    2        2             2026-09-04 15:58  2026-09-04 15:58
 ⚠ 2 rows quarantined — see: lm dlq list --run c6fc75c9-4fde-4718-ba50-fe12d7d71598
 $ lm dlq list --run c6fc75c9-4fde-4718-ba50-fe12d7d71598
 ID        CONNECTOR                 RUN       REASON           ATTEMPTS  MESSAGE
@@ -358,8 +360,10 @@ Payload:   {"raw":["BADROW","trop de colonnes","erp legacy glitch"],"file":"/erp
   records, so a resume never re-emits a row already dead-lettered.
 - **An unclosed quote swallows the rest of the file** into one record, which is then
   dead-lettered as an `IOException` — the lines after it are never seen as rows.
-- Replay or discard entries with [`lm dlq`](../cli/lm-reference.md). Rows a `validate-row`
-  hook drops land here too, reason `ValidationFailed`.
+- Inspect entries with [`lm dlq`](../cli/lm-reference.md) — `list`, `get`, then `discard`, or
+  `replayed` to record that you re-sent the row yourself (the hub never re-reads a dead letter;
+  fix the export and run again). Rows a `validate-row` hook drops land here too, reason
+  `ValidationFailed`.
 - **This is connector-run behaviour.** The one-shot `lm csv ingest` has no DLQ to route a row
   to — its first malformed row aborts the whole ingest ([below](#what-one-shot-actually-does)).
 
@@ -554,6 +558,10 @@ $ lm validate -f oneshot-keys.yaml
           → Remove it, or check the spelling
 ```
 
+That sweep covers the **root** of `spec` too, not only the blocks: `after_proces` or `windo`
+comes back named instead of being accepted and stored. It stays a warning — the manifest is still
+valid and still applies — but a key nothing reads is worth seeing before a run rather than after.
+
 ### CLI
 
 ```bash
@@ -569,7 +577,9 @@ lm csv ingest s3://bucket/prefix --region eu-west-3 [--endpoint X] [--suffix .cs
 1. Store the secret the manifest names:
 
     ```
-    $ lm secret set CSV_SFTP_PASSWORD -   # paste the value on stdin, Ctrl+D
+    $ lm secret set CSV_SFTP_PASSWORD
+    Value for CSV_SFTP_PASSWORD: 
+    Created secret "CSV_SFTP_PASSWORD"
     ```
 
 2. Apply the manifest — this one targets the docker-compose demo server:
@@ -612,8 +622,8 @@ scope — inspect, then promote it into a manifest or `lm connector delete clien
 | Symptom | Cause | Fix |
 |---|---|---|
 | `SFTP host key refused for host:22 — the server presented SHA256:…` | `strict_host_key` is true (the default) and `host_key_fingerprint` is absent or does not match | confirm the presented fingerprint out of band (`ssh-keyscan -p 22 HOST \| ssh-keygen -lf -`), paste it into `host_key_fingerprint`. `strict_host_key: false` accepts an impostor as readily as the real server |
-| `SFTP error (SSH_FX_PERMISSION_DENIED): Permission denied` | wrong password/key, or the user cannot read `path` | `lm secret list`, then `lm secret set <NAME> -`; check the folder's rights on the server |
-| `SFTP transport requires key_env or password_env` | neither credential declared | `lm secret set <NAME> -`, then `password_env: <NAME>` or `key_env: <NAME>` |
+| `SFTP error (SSH_FX_PERMISSION_DENIED): Permission denied` | wrong password/key, or the user cannot read `path` | `lm secret list`, then `lm secret set <NAME>` (a private key is many lines — pipe it with `<NAME> -`); check the folder's rights on the server |
+| `SFTP transport requires key_env or password_env` | neither credential declared | `lm secret set <NAME>` (or `<NAME> -` for a multi-line private key), then `password_env: <NAME>` or `key_env: <NAME>` |
 | `S3 403 Forbidden` | invalid S3 credentials | check the secrets named by `access_key_env` / `secret_key_env` |
 | `columns is required when has_header: false` | a headerless parser without names | `parser.columns: [a, b, …]` in file order |
 | `after_process: archive is not executed on local connector runs` | a relocation on a local transport | `after_process: none`, or an sftp/s3 transport |

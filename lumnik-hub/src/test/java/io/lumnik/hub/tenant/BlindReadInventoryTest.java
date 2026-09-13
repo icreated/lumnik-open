@@ -54,21 +54,25 @@ class BlindReadInventoryTest {
    * that do carry policies, which is why {@code TenantListResource} moved to the admin datasource
    * instead of gaining an annotation.)
    */
-  private static final Map<String, String> DELIBERATE = Map.of(
-      "TenantResource.listAll", "identity.tenant has no RLS policy",
-      "TenantResource.findById", "identity.tenant has no RLS policy",
-      "ConnectorAdminResource.runNow",
-          "opens its own transaction for the read; the run rows must commit on their own",
-      "JdbcSourceResource.test", "reads the customer's database, not the hub's",
-      "JdbcSourceResource.discover", "reads the customer's database, not the hub's",
-      "IntegrationResource.test",
-          "opens its own transaction for the read; the delivery's HTTP call stays outside one",
-      "HookOverrideResource.upsert", "HookOverrideStore.setScript carries the transaction",
-      "HookOverrideResource.delete", "HookOverrideStore.deleteOverride carries the transaction",
-      "OrgResource.create",
-          "opens its own transaction for the checks; the geocoder's HTTP call stays outside one",
-      "OrgResource.update",
-          "opens its own transaction for the checks; the geocoder's HTTP call stays outside one");
+  private static final Map<String, String> DELIBERATE = Map.ofEntries(
+      Map.entry("TenantResource.listAll", "identity.tenant has no RLS policy"),
+      Map.entry("TenantResource.findById", "identity.tenant has no RLS policy"),
+      Map.entry("ConnectorAdminResource.runNow",
+          "opens its own transaction for the read; the run rows must commit on their own"),
+      Map.entry("JdbcSourceResource.test", "reads the customer's database, not the hub's"),
+      Map.entry("JdbcSourceResource.discover", "reads the customer's database, not the hub's"),
+      Map.entry("IntegrationResource.test",
+          "opens its own transaction for the read; the delivery's HTTP call stays outside one"),
+      Map.entry("HookOverrideResource.upsert", "HookOverrideStore.setScript carries the transaction"),
+      Map.entry("HookOverrideResource.delete", "HookOverrideStore.deleteOverride carries the transaction"),
+      Map.entry("OrgResource.create",
+          "opens its own transaction for the checks; the geocoder's HTTP call stays outside one"),
+      Map.entry("OrgResource.update",
+          "opens its own transaction for the checks; the geocoder's HTTP call stays outside one"),
+      Map.entry("RestDiscoveryResource.probe",
+          "opens its own transaction for the read; the probe's HTTP call stays outside one"),
+      Map.entry("RestDiscoveryResource.fromOpenApi",
+          "reads a remote OpenAPI spec, not the hub's database"));
 
   private static final List<SourceTree> MODULES = List.of(
       SourceTree.of("lumnik-hub", "io/lumnik/hub"),

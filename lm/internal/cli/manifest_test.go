@@ -115,12 +115,12 @@ func TestDecodeManifest(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), tc.file)
-			if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
-				t.Fatalf("seeding %s: %v", path, err)
-			}
+			// No file is written: the decoder takes the bytes, and the path is now only a NAME
+			// — what the refusal prints, and what looksLikeCsv reads an extension from. Seeding
+			// a real file here would suggest a filesystem dependency the decoder no longer has.
+			path := filepath.Join("/tmp/tenant", tc.file)
 
-			payload, err := decodeManifest(path, "connector")
+			payload, err := decodeManifest([]byte(tc.body), path, "connector")
 
 			if !tc.wantErr {
 				if err != nil {
@@ -152,14 +152,24 @@ func TestDecodeManifest(t *testing.T) {
 }
 
 // A missing file keeps its own plain error — the reader is not told about manifests when the
-// problem is that nothing was read.
+// problem is that nothing was read. Asserted through the command now that reading and decoding
+// are separate functions: what matters is that the reader, not the decoder, answers first.
 func TestDecodeManifestMissingFile(t *testing.T) {
-	_, err := decodeManifest(filepath.Join(t.TempDir(), "nope.yaml"), "connector")
+	missing := filepath.Join(t.TempDir(), "nope.yaml")
+	cmd := NewRootCmd()
+	cmd.SetOut(new(strings.Builder))
+	cmd.SetErr(new(strings.Builder))
+	cmd.SetArgs([]string{"connector", "apply", "-f", missing})
+
+	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected an error for a missing file")
 	}
 	if strings.Contains(err.Error(), "not a connector manifest") {
 		t.Errorf("a missing file is not a malformed manifest: %v", err)
+	}
+	if !strings.Contains(err.Error(), "no such file") {
+		t.Errorf("the reader's own error must survive: %v", err)
 	}
 }
 
@@ -253,6 +263,70 @@ func TestQuoteFor(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := quoteFor(tc.goos, tc.in); got != tc.want {
 				t.Errorf("quoteFor(%q, %q) = %q, want %q", tc.goos, tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// The EOF gesture is not the same key on both shells the project documents, and the wrong one
+// reads as a hang: a PowerShell reader pressing Ctrl+D sees nothing happen. Stated as a table
+// with the platform as a parameter, like quoteFor above, rather than inferred from whatever host
+// runs the test.
+func TestEofGestureFor(t *testing.T) {
+	for _, tc := range []struct{ goos, want string }{
+		{"linux", "Ctrl+D"},
+		{"darwin", "Ctrl+D"},
+		{"windows", "Ctrl+Z then Enter"},
+	} {
+		t.Run(tc.goos, func(t *testing.T) {
+			if got := eofGestureFor(tc.goos); got != tc.want {
+				t.Errorf("eofGestureFor(%q) = %q, want %q", tc.goos, got, tc.want)
+			}
+		})
+	}
+}
+
+// Every message that names the EOF key must get it from eofGesture(), so a Windows reader is
+// never told to press a key that does nothing there. Anchored on the sources rather than on a
+// list of call sites: the next notice someone writes is covered without being enrolled.
+//
+// terminal.go is excluded because it DEFINES both gestures — a guard that cannot tell a
+// definition from a hard-coded use fails for a reason that is not a defect. (It did, first try.)
+func TestOnlyTerminalGoNamesTheEofKey(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if f == "terminal.go" || strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "Ctrl+") {
+			t.Errorf("%s hard-codes an EOF gesture — call eofGesture() so Windows reads correctly", f)
+		}
+	}
+}
+
+// The line six docs pages transcribe verbatim must keep its exact shape for an ordinary path —
+// and start surviving the paths those pages never show. Quoting it was the point of routing the
+// hint through shellArg: an unquoted path with a space breaks the moment the line is pasted.
+func TestRerunCommand(t *testing.T) {
+	for _, tc := range []struct{ name, in, want string }{
+		// The four paths that actually appear in docs/connectors/*.md — these must not move.
+		{"a bare file name is left alone", "bad.yaml", "lm apply -f bad.yaml"},
+		{"a relative path is left alone", "docs/connectors/kafka/demo/90-refused.yaml",
+			"lm apply -f docs/connectors/kafka/demo/90-refused.yaml"},
+		{"a space is quoted, so the line survives being pasted", "my exports.yaml",
+			"lm apply -f 'my exports.yaml'"},
+		{"a piped manifest gets no command at all", "-", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := rerunCommand(tc.in); got != tc.want {
+				t.Errorf("rerunCommand(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}

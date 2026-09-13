@@ -12,15 +12,16 @@
 # Kafka consumer group is created or needed — the hub tracks offsets itself,
 # same as any other kafka connector.
 #
-# The 'connection_string_env' field names an env var that holds the Event Hubs
-# connection string (Primary Connection String from the Azure portal). Kafka resolves
-# *_env via the process environment only (OS env, then JVM system property) — the
-# lm secret store is NOT consulted here. Export it where the hub runs:
-#   export EVENTHUBS_CONN_STR="Endpoint=sb://..."
+# The 'connection_string_env' field NAMES the entry that holds the Event Hubs
+# connection string (Primary Connection String from the Azure portal). Every *_env key
+# resolves the same way: the lm secret registry for your tenant first, then the hub
+# process's own environment (OS variable, then JVM system property).
+#   lm secret set EVENTHUBS_CONN_STR          # or: export EVENTHUBS_CONN_STR="Endpoint=sb://..."
 #
-# Auth: Event Hubs over Kafka uses SASL/PLAIN with fixed username "$ConnectionString".
-# Set it once in the environment (it is not a secret):
-#   export EVENT_HUBS_SASL_USERNAME='$ConnectionString'
+# Auth: Event Hubs over Kafka uses SASL/PLAIN with the fixed username "$ConnectionString"
+# (the literal string, dollar sign included — it is not a secret). The preset reads it
+# from the fixed name EVENT_HUBS_SASL_USERNAME:
+#   lm secret set EVENT_HUBS_SASL_USERNAME    # or: export EVENT_HUBS_SASL_USERNAME='$ConnectionString'
 
 apiVersion: connectors.lumnik.io/v1
 kind: Connector

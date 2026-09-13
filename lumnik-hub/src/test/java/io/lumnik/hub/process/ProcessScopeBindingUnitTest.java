@@ -4,6 +4,7 @@ import io.lumnik.common.security.CurrentRolesHolder;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
+import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,6 +17,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The métier scope boundary on the kind:Process surface — kind:View's rule, applied to its sibling.
@@ -84,6 +86,7 @@ class ProcessScopeBindingUnitTest {
     void apply_granted_scope_passes_the_gate() {
         bindTo("clients");
         ProcessApplyResource res = new ProcessApplyResource();
+        res.store = storeWith();   // the name is free — apply also asks the STORED scope (#509)
         res.cards = emptyCards;
 
         assertThat(res.apply(CLIENTS_PROCESS).getStatus())
@@ -94,9 +97,56 @@ class ProcessScopeBindingUnitTest {
     void apply_unscoped_user_is_untouched() {
         CurrentRolesHolder.set(Set.of("lm_admin"));
         ProcessApplyResource res = new ProcessApplyResource();
+        res.store = storeWith();
         res.cards = emptyCards;
 
         assertThat(res.apply(CLIENTS_PROCESS).getStatus()).isEqualTo(404);
+    }
+
+    // ---- the STORED scope: an apply may not re-home what the caller does not hold (#509) ----
+
+    /** The same manifest, same name, declared into the OTHER métier. */
+    private static final String MAGASIN_PROCESS = CLIENTS_PROCESS.replace("scope: clients", "scope: magasin");
+
+    @Test
+    void apply_may_not_rehome_a_process_that_lives_in_a_scope_the_caller_does_not_hold() {
+        // Holding magasin is enough to declare INTO magasin — that is the incoming check, and it
+        // passes. The name is the other half of the address, and it is taken by clients: the upsert
+        // would rewrite that row's scope to magasin and the clients process would be gone.
+        bindTo("magasin");
+        ProcessApplyResource res = new ProcessApplyResource();
+        res.store = storeWith(row("gold-client-arrive", "clients"));
+        res.cards = emptyCards;
+
+        // The boundary THROWS rather than handing back a refusal a door could drop on the floor
+        // (ApplyScopeBoundary's javadoc); JAX-RS serves the attached response, so the wire is 403.
+        assertThatThrownBy(() -> res.apply(MAGASIN_PROCESS))
+            .isInstanceOfSatisfying(WebApplicationException.class, e -> {
+                assertThat(e.getResponse().getStatus()).isEqualTo(403);
+                assertThat(errorOf(e.getResponse())).isEqualTo("scope not granted");
+            });
+    }
+
+    @Test
+    void apply_updates_a_process_of_a_scope_the_caller_does_hold() {
+        bindTo("clients");
+        ProcessApplyResource res = new ProcessApplyResource();
+        res.store = storeWith(row("gold-client-arrive", "clients"));
+        res.cards = emptyCards;
+
+        assertThat(res.apply(CLIENTS_PROCESS).getStatus())
+            .as("its own manifest: past both gates, then the honest no-schema").isEqualTo(404);
+    }
+
+    @Test
+    void apply_of_a_free_name_is_not_refused() {
+        bindTo("magasin");
+        ProcessApplyResource res = new ProcessApplyResource();
+        res.store = storeWith(row("stock-bas", "magasin"));   // a different name
+        res.cards = emptyCards;
+
+        assertThat(res.apply(MAGASIN_PROCESS).getStatus())
+            .as("nothing is stored under this name — creating it is not re-homing").isEqualTo(404);
     }
 
     // ---- the read doors ----
@@ -153,5 +203,41 @@ class ProcessScopeBindingUnitTest {
         res.store = storeWith(row("gold", "clients"));
 
         assertThat(res.manifest("gold").getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    void delete_and_enabled_of_a_foreign_scope_are_refused() {
+        // The two doors #487 added answer the boundary the manifest door already did — and answer
+        // it BEFORE touching the row, so a bound admin cannot learn that 'stock-bas' exists by
+        // trying to remove it.
+        bindTo("clients");
+        ProcessApplyResource res = new ProcessApplyResource();
+        res.store = storeWith(row("stock-bas", "magasin"));
+
+        Response deleted = res.delete("stock-bas");
+        Response toggled = res.setEnabled("stock-bas", new ProcessApplyResource.EnabledRequest(false));
+
+        assertThat(deleted.getStatus()).isEqualTo(403);
+        assertThat(errorOf(deleted)).isEqualTo("scope not granted");
+        assertThat(toggled.getStatus()).isEqualTo(403);
+        assertThat(errorOf(toggled)).isEqualTo("scope not granted");
+    }
+
+    @Test
+    void delete_and_enabled_of_an_unknown_process_are_404_not_403() {
+        bindTo("clients");
+        ProcessApplyResource res = new ProcessApplyResource();
+        res.store = storeWith();
+
+        assertThat(res.delete("nope").getStatus()).isEqualTo(404);
+        assertThat(res.setEnabled("nope", new ProcessApplyResource.EnabledRequest(true)).getStatus())
+            .isEqualTo(404);
+    }
+
+    @Test
+    void enabled_without_a_flag_is_refused_before_the_store_is_touched() {
+        bindTo("clients");
+        // No store wired: a 400 here proves the body check runs first.
+        assertThat(new ProcessApplyResource().setEnabled("gold", null).getStatus()).isEqualTo(400);
     }
 }

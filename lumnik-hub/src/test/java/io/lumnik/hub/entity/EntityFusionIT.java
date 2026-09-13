@@ -1,14 +1,12 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -49,9 +47,6 @@ class EntityFusionIT {
             ville: city
       """;
 
-  static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config().encoderConfig(
-      EncoderConfig.encoderConfig().encodeContentTypeAs("application/yaml", ContentType.TEXT));
-
   @BeforeEach
   void seedAndApply() throws Exception {
     try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
@@ -75,7 +70,7 @@ class EntityFusionIT {
       // C-300: exists ONLY in csv (no erp row) -> pure gap-fill, the entity is still fused -> _conflicts {}
       st.execute("INSERT INTO connector.t_fuse_csv VALUES (1,'C-300','Solo','solo@x.fr','Nice')");
     }
-    given().config(YAML_CFG).headers(TestIdentity.tenantAndUser(1))
+    given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
   }

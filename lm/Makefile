@@ -11,6 +11,10 @@ install: build ## Build and install lm into ~/.local/bin (the PATH copy — a st
 test: ## Run the whole untagged Go suite (internal/ + cmd/) — the per-PR gate; the live TestOTK is behind //go:build otk and cannot be reached from here
 	go test ./...
 
+.PHONY: pty
+pty: build ## Run the manual pty lane (test/pty/no-echo-secrets.sh): the keyboard half of the secret prompts, which `go test` cannot reach — needs a tty allocator, so it is not in CI and not in `test`
+	./test/pty/no-echo-secrets.sh
+
 .PHONY: otk-unit
 otk-unit: ## Run the hub-free OTK unit tests (oracle/generator/checks/runner + tagged helpers); the live TestOTK is always excluded so the run is deterministic regardless of ambient LUMNIK_URL/OTK_GOLD_SEEDS
 	go test -tags otk -skip '^TestOTK$$' ./test/otk/...

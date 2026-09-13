@@ -15,9 +15,15 @@ import java.sql.Statement;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The manifest's per-column {@code label:} must flow into the SchemaCard column label — the
- * enrichment that lets a kind:View render "Code client" instead of the raw canonical name. A
- * column with no label falls back to the canonical name (the prior behavior).
+ * The manifest's {@code label:} must flow into the SchemaCard — per column, and for the table.
+ *
+ * <p>Per column, this is the enrichment that lets a kind:View render "Code client" instead of the
+ * raw canonical name; a column with no label falls back to the canonical name.
+ *
+ * <p>For the TABLE it is newer, and it is what gives the kind:View title ladder a human rung.
+ * That ladder reads {@code spec.title}, then the table's label, then the table's name — and a
+ * fused entity had no way to declare a label, so the middle rung WAS the name and a view with no
+ * title was headed {@code acmecustomer} (#501).
  */
 @QuarkusTest
 class EntitySchemaBuilderIT {
@@ -31,6 +37,7 @@ class EntitySchemaBuilderIT {
     private static final String MANIFEST = """
         kind: Entity
         name: LabelTest
+        label: "Clients ACME"
         match: [customer_code]
         scopes: [labelscope]
         columns:
@@ -41,16 +48,27 @@ class EntitySchemaBuilderIT {
             map: { code: customer_code, nom: name }
         """;
 
+    /** The same entity with no {@code label:} at all — the fallback rung of the ladder. */
+    private static final String UNLABELLED = MANIFEST
+        .replace("name: LabelTest", "name: NoLabelTest")
+        .replace("label: \"Clients ACME\"\n", "");   // a text block strips the common indent
+
     @BeforeEach
     void seed() {
         try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
-            st.execute("DELETE FROM connector.entity_manifest WHERE name = 'labeltest'");
+            st.execute("DELETE FROM connector.entity_manifest WHERE name IN ('labeltest', 'nolabeltest')");
         } catch (Exception e) { throw new RuntimeException(e); }
+        store("labeltest", MANIFEST);
+        store("nolabeltest", UNLABELLED);
+    }
+
+    private void store(String name, String manifest) {
         String sql = "INSERT INTO connector.entity_manifest (name, yaml_text, scopes) "
-                   + "VALUES ('labeltest', ?, ARRAY['labelscope']::text[])";
+                   + "VALUES (?, ?, ARRAY['labelscope']::text[])";
         try (Connection c = adminDs.getConnection();
              PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setString(1, MANIFEST);
+            ps.setString(1, name);
+            ps.setString(2, manifest);
             ps.executeUpdate();
         } catch (Exception e) { throw new RuntimeException(e); }
     }
@@ -68,5 +86,17 @@ class EntitySchemaBuilderIT {
 
         assertThat(code.label()).isEqualTo("Code client");   // from the manifest
         assertThat(name.label()).isEqualTo("name");           // no label declared → canonical name
+        assertThat(table.label()).as("the entity's own display name, for a view that declares no title")
+                .isEqualTo("Clients ACME");
+    }
+
+    @Test
+    void anEntityThatDeclaresNoLabelKeepsItsNameAsTheCardsLabel() {
+        SchemaCard.Table table = builder.resolve("labelscope").stream()
+                .filter(t -> t.name().equals("connector.v_nolabeltest"))
+                .findFirst().orElseThrow();
+
+        assertThat(table.label()).as("the last rung: what a view was headed before `label:` existed")
+                .isEqualTo("nolabeltest");
     }
 }

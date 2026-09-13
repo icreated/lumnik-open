@@ -33,4 +33,30 @@ class SourceBlockValidatorTest {
                 && e.path().equals("spec.source.tables[0].indeces")),
             () -> "expected the unknown-key warning for indeces, got: " + errs);
     }
+
+    @Test void perTable_aNameThatIsNotAPlainIdentifier_isRefusedAtTheDoor_notMidRun() throws Exception {
+        // Before this rule a manifest naming a table `9orders` passed `lm validate`, passed apply,
+        // PERSISTED, and only died once a run had started — why, in full, at perTableDef().
+        List<ValidationError> errs = ConfigDefRunner.run(
+            SourceBlockValidator.perTableDef(),
+            mapper.readTree("{\"name\":\"9orders\",\"mode\":\"full\"}"),
+            "spec.source.tables[0]");
+        assertTrue(errs.stream().anyMatch(e ->
+                e.severity() == ValidationError.Severity.ERROR
+                && e.path().equals("spec.source.tables[0].name")),
+            () -> "expected the identifier refusal for name 9orders, got: " + errs);
+    }
+
+    @Test void perTable_aPlainName_isNotRefused() throws Exception {
+        // The other direction: the rule must accept every name the runtime accepts, or it refuses
+        // working manifests. Digits and underscores are legal anywhere but the first character.
+        // Pinned on THIS key, not on an empty list — a future required key elsewhere in the def is
+        // not this rule's defect, and a guard that can go red for a non-defect is worth nothing.
+        List<ValidationError> errs = ConfigDefRunner.run(
+            SourceBlockValidator.perTableDef(),
+            mapper.readTree("{\"name\":\"_order_items_2\",\"mode\":\"full\"}"),
+            "spec.source.tables[0]");
+        assertTrue(errs.stream().noneMatch(e -> e.path().equals("spec.source.tables[0].name")),
+            () -> "a plain identifier must pass, got: " + errs);
+    }
 }

@@ -1,0 +1,21 @@
+# `schedule: 22` — a number where the cron string belongs. Easy to hit in YAML: an unquoted
+# `schedule: 0 6 * * *` is not a string either. The declaration refuses the shape; CronField must
+# not run the parser on the coerced text, or one mistake comes back as two errors.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: acme-erp-schedule-number
+  connector_type: jdbc-generic
+  scopes: [erp]
+spec:
+  connection:
+    url: jdbc:postgresql://db.acme.io:5432/billing
+    user: ro_user
+    password_env: ACME_DB_PASSWORD
+  source:
+    tables:
+      - name: invoices
+        mode: full
+        pk_columns: [id]
+  schedule: 22
+  target: {}

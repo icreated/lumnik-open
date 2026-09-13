@@ -12,7 +12,7 @@
 # Auth: basic — the platform sends `Authorization: Basic base64(username:password)`.
 # The password is NEVER inline: `password_env` names a credential reference resolved at
 # run time as: DB secret store → OS env var → JVM system property (dev/test).
-# Use `lm secret set REST_DEMO_BASIC_PW <value>` (encrypted at rest, resolved first).
+# Use `lm secret set REST_DEMO_BASIC_PW` (encrypted at rest, resolved first).
 #
 # Pagination: page — numbered pages with a has_more sentinel.
 

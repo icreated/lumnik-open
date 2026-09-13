@@ -89,18 +89,32 @@ class DomainGuardTest {
         .isEmpty();
   }
 
+  /**
+   * This test used to assert the opposite, and the javadoc gave the reason: "quoted-identifier filters
+   * are deliberately not inspected — the SchemaCard advertises bare names". The card now advertises
+   * QUOTED names, because that is the only form a model can copy for a column called
+   * {@code c_bpartner.id} or {@code Partner Name}. So the sentence stopped being true, and with it the
+   * fail-open stopped being a miss and became a hole: the guard that exists to stop "0 rows phrased as
+   * a confident none" would no longer see the filters the model writes. A quoted identifier resolves to
+   * the same column in Postgres, and both guards already fold case, so the honest move is to inspect it.
+   */
   @Test
-  void does_not_inspect_quoted_identifiers_no_over_block() {
-    // A double-quoted identifier is not a bare column token: the closing quote sits between the
-    // column word and the operator, so the full match breaks — not inspected (a miss, never an
-    // over-block), consistent with the javadoc. Also covers a quoted identifier that merely CONTAINS
-    // the domain column name as a word ("segment value").
+  void inspectsAQuotedIdentifier_becauseTheCardNowAdvertisesQuotedNames() {
     assertThat(guard.check(
-        "SELECT * FROM connector.v_customer WHERE \"segment\" = 'PLATINUM'", cardWithSegment())).isEmpty();
+        "SELECT * FROM connector.v_customer WHERE \"segment\" = 'PLATINUM'", cardWithSegment()))
+        .as("the model quotes what the card shows quoted; a guard blind to that is a wish")
+        .isPresent();
     assertThat(guard.check(
-        "SELECT * FROM connector.v_customer WHERE \"segment value\" = 'PLATINUM'", cardWithSegment())).isEmpty();
+        "SELECT * FROM connector.v_customer WHERE \"segment\" IN ('PLATINUM')", cardWithSegment()))
+        .isPresent();
+  }
+
+  /** A quoted name that merely CONTAINS the domain column's name is a different column: no domain. */
+  @Test
+  void aQuotedNameThatOnlyContainsTheColumnNameCarriesNoDomain() {
     assertThat(guard.check(
-        "SELECT * FROM connector.v_customer WHERE \"segment\" IN ('PLATINUM')", cardWithSegment())).isEmpty();
+        "SELECT * FROM connector.v_customer WHERE \"segment value\" = 'PLATINUM'", cardWithSegment()))
+        .isEmpty();
   }
 
   @Test

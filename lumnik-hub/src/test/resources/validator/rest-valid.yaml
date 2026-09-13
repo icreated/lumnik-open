@@ -6,6 +6,11 @@ metadata:
   scopes: [crm, customers]
 spec:
   base_url: https://api.stripe.com
+  schedule: "*/15 * * * *"
+  window: "22:00-06:00"
+  headers:
+    - name: X-Acme-Tenant
+      value: acme
   auth:
     kind: bearer
     token_env: STRIPE_API_KEY

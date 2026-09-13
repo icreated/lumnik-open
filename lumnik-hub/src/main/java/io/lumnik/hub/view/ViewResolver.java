@@ -31,7 +31,13 @@ public class ViewResolver {
         return new ResolvedView(title, table.name(), cols);
     }
 
-    private SchemaCard.Table findTable(ViewManifest m, SchemaCard card) {
+    /**
+     * The card table this manifest is about — the same lookup {@link #resolve} performs, exposed
+     * so a caller that needs the TABLE before it has final columns does not hand-copy it. The
+     * generation agent does: it must know the table to decide whether a filter names a column of
+     * it, and that decision changes the column list it then resolves.
+     */
+    SchemaCard.Table findTable(ViewManifest m, SchemaCard card) {
         if (m.table() != null && !m.table().isBlank()) {
             return card.tables().stream()
                     .filter(t -> t.name().equals(m.table()))

@@ -1,14 +1,9 @@
 package io.lumnik.hub.view;
 
 import io.lumnik.extraction.spi.ask.SchemaCard;
+import io.lumnik.hub.sql.TemporalText;
 
 import java.math.BigDecimal;
-import java.time.Instant;
-import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -17,8 +12,9 @@ import java.util.Set;
  * One runtime filter on a kind:View list or a kind:Process when-condition:
  * {@code col=value} (exact), {@code col~text} (substring, case-insensitive), or an ordering
  * comparison {@code col>value col<value col>=value col<=value} whose value MUST be a number
- * or an ISO-8601 date/timestamp — refused loudly otherwise. Honesty line: a malformed filter,
- * a column the view does not show, or an out-of-domain {@code =} value on an
+ * or an ISO-8601 date/timestamp — refused loudly otherwise. A value is a BARE literal:
+ * {@code city=Lyon}, never {@code city='Lyon'}. Honesty line: a malformed filter, a quoted
+ * value, a column the view does not show, or an out-of-domain {@code =} value on an
  * {@code allowedValues} column is REFUSED — never a lying zero-row table. {@code ~} and the
  * ordering operators are exempt from the domain check: a search / a threshold is not a
  * membership assertion. The comparable shapes below are shared verbatim by the SQL world
@@ -41,17 +37,24 @@ public record ViewFilter(String column, String op, String value) {
 
     public enum OperandType { NUMERIC, TEMPORAL }
 
+    /** The operator at {@code i}, two-char forms first ({@code >=} before {@code >}), or null. */
+    private static String opAt(String raw, int i) {
+        for (String op : OPS) if (raw.startsWith(op, i)) return op;
+        return null;
+    }
+
     public static ViewFilter parse(String raw) {
-        // Scan left-to-right, two-char operators first, and build from the first match
-        // in the same scope — so the operator is never a nullable sentinel.
+        // Scan left-to-right and build from the first match in the same scope — so the operator
+        // is never a nullable sentinel.
         for (int i = 0; i < raw.length(); i++) {
-            for (String op : OPS) {
-                if (!raw.startsWith(op, i)) continue;
+            String op = opAt(raw, i);
+            if (op != null) {
                 String column = raw.substring(0, i).strip();
                 String value = raw.substring(i + op.length()).strip();
                 if (column.isBlank() || value.isBlank())
                     throw new IllegalArgumentException(
                         "filter '" + raw + "' needs a column and a value — col=value, col~text, or col>value");
+                refuseQuotedValue(column, op, value);
                 ViewFilter f = new ViewFilter(column, op, value);
                 if (f.ordering() && f.operandType() == null)
                     throw new IllegalArgumentException(
@@ -62,6 +65,84 @@ public record ViewFilter(String column, String op, String value) {
         throw new IllegalArgumentException(
             "filter '" + raw + "' has no operator — use col=value (exact), col~text (contains), "
             + "or col>value col<value col>=value col<=value (ordered)");
+    }
+
+    /**
+     * The same filter with SQL quotes shed from its value — {@code segment='GOLD'} becomes
+     * {@code segment=GOLD}. A value in this grammar is a bare literal, so a quoted one is refused
+     * by the domain check and, on a column with no domain, silently matches nothing: the lying
+     * zero-row table this class exists to prevent. Only a MODEL-generated filter is passed through
+     * here; a hand-written manifest means what it writes.
+     *
+     * <p>Bounded on purpose: SQL escaping ({@code 'O''Brien'}) is a shape this grammar does not
+     * model, so a value carrying its own quote is left whole for {@link #parse} to refuse, never
+     * half-decoded into a value nobody wrote.
+     */
+    public static String withUnquotedValue(String raw) {
+        for (int i = 0; i < raw.length(); i++) {
+            String op = opAt(raw, i);
+            if (op == null) continue;
+            String tail = raw.substring(i + op.length());
+            String value = tail.strip();
+            String bare = shedQuotes(value);
+            if (bare.equals(value)) return raw;
+            // Splice into the tail's own spacing rather than rebuilding: the generated filter is
+            // shown to a human on the manifest's first line, so `city ~ 'Lyon'` comes back as
+            // `city ~ Lyon`, keeping what the model wrote apart from the quotes.
+            int at = tail.indexOf(value);
+            return raw.substring(0, i + op.length())
+                + tail.substring(0, at) + bare + tail.substring(at + value.length());
+        }
+        return raw;   // no operator: parse() owns that refusal, not this normalisation
+    }
+
+    private static String shedQuotes(String value) {
+        String inner = quotedInner(value);
+        if (inner == null) return value;
+        // 'O''Brien' keeps its quotes here and is refused by parse — see quotedInner.
+        return inner.indexOf(value.charAt(0)) >= 0 ? value : inner;
+    }
+
+    /**
+     * The text between matching outer quotes, or null when the value carries none. One place
+     * recognises a quoted value, because the two readers must never disagree about what one is:
+     * {@link #shedQuotes} strips them off a MODEL's filter, {@link #refuseQuotedValue} refuses
+     * them in a HUMAN's.
+     *
+     * <p><b>Balanced only, on purpose.</b> {@code city='Lyon} and {@code city=Lyon'} are still
+     * accepted, and still match nothing — the same silence, half-closed. They stay accepted because
+     * a lone apostrophe IS data in this domain ({@code l'ecole}, {@code O'Brien}), and a rule that
+     * refused every value carrying one would refuse more real filters than slips. A BALANCED pair is
+     * the shape no value legitimately has, which is why it is the one this refuses.
+     */
+    private static String quotedInner(String value) {
+        if (value.length() < 2) return null;
+        char quote = value.charAt(0);
+        if ((quote != '\'' && quote != '"') || value.charAt(value.length() - 1) != quote) return null;
+        return value.substring(1, value.length() - 1);
+    }
+
+    /**
+     * A value in this grammar is a BARE literal: {@code city=Lyon}, not {@code city='Lyon'}.
+     * Quotes are ordinary characters here, so a quoted value used to be compared quotes and all —
+     * accepted at apply, matching nothing for ever, saying nothing. That silence is the one thing
+     * this class exists to prevent, so the quotes are refused at the door instead (#503).
+     *
+     * <p>Refused, not rewritten: a hand-written manifest means what it writes, and silently
+     * changing a human's text is how a filter comes to mean something nobody declared. The
+     * model's own filter never reaches here quoted — {@link #withUnquotedValue} sheds them first,
+     * because echoing SQL syntax is the model's mistake to absorb, not the operator's to read.
+     *
+     * <p>The bare form is only suggested when it is unambiguous: {@code 'O''Brien'} would become
+     * {@code O''Brien}, a value nobody wrote, so that one gets the rule and no rewrite.
+     */
+    private static void refuseQuotedValue(String column, String op, String value) {
+        String inner = quotedInner(value);
+        if (inner == null) return;
+        String bare = inner.isEmpty() || inner.indexOf(value.charAt(0)) >= 0
+            ? "" : " — write " + column + op + inner;
+        throw new IllegalArgumentException("filter value " + value + " is quoted; a value here is a"
+            + " bare literal, so the quotes would be compared to " + column + " too" + bare);
     }
 
     /** True for the four comparison operators. */
@@ -78,26 +159,10 @@ public record ViewFilter(String column, String op, String value) {
                 return OperandType.NUMERIC;
             } catch (NumberFormatException ignored) { /* fall through */ }
         }
-        if (value.matches(TEMPORAL_SHAPE) && parseTemporal(value) != null) return OperandType.TEMPORAL;
+        if (value.matches(TEMPORAL_SHAPE) && TemporalText.parse(value) != null) return OperandType.TEMPORAL;
         return null;
     }
 
-    /** ISO date / datetime (T or space) / offset datetime → Instant; date-only = midnight UTC. */
-    public static Instant parseTemporal(String s) {
-        // Normalize the two PG-ism gaps vs strict ISO: a space date/time separator, and a whole-hour
-        // zone offset rendered as "+00" (ISO wants "+00:00"). Keeps parseTemporal accepting every form
-        // TEMPORAL_SHAPE accepts, so the SQL guard and the in-memory evaluator never disagree on a row.
-        // The offset pad only fires once a time component is present (a 'T' separator) — otherwise a
-        // plain date's "-01" day-of-month would be mistaken for a short "-01" zone offset.
-        String t = s.strip().replace(' ', 'T');
-        if (t.indexOf('T') >= 0) t = t.replaceAll("([+-][0-9]{2})$", "$1:00");
-        try { return OffsetDateTime.parse(t).toInstant(); } catch (DateTimeParseException ignored) { }
-        try { return LocalDateTime.parse(t).atOffset(ZoneOffset.UTC).toInstant(); }
-        catch (DateTimeParseException ignored) { }
-        try { return LocalDate.parse(t).atStartOfDay(ZoneOffset.UTC).toInstant(); }
-        catch (DateTimeParseException ignored) { }
-        return null;
-    }
 
     /** Parse + validate all filters against the resolved view and its card table. */
     public static List<ViewFilter> resolveAll(List<String> raw, ResolvedView rv, SchemaCard.Table table) {

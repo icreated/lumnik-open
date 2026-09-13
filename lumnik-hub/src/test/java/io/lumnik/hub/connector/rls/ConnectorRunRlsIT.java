@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rls;
 
+import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.quarkus.test.junit.QuarkusTest;
@@ -10,9 +11,6 @@ import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import org.postgresql.util.PSQLException;
 
 import java.nio.charset.StandardCharsets;
@@ -89,11 +87,8 @@ class ConnectorRunRlsIT {
 
     // Apply as tenant 1 — the same path `lm apply` uses; creates connector + endpoint.
     // ApplyResult record: { name, connectorId (UUID), endpointsApplied }
-    // RestAssured doesn't know application/yaml natively; tell it to treat it as TEXT.
-    RestAssuredConfig yamlCfg = RestAssuredConfig.config().encoderConfig(
-        EncoderConfig.encoderConfig().encodeContentTypeAs("application/yaml", ContentType.TEXT));
     connectorId = given()
-        .config(yamlCfg)
+        .config(YamlBody.CONFIG)
         .headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml")
         .body(manifest)

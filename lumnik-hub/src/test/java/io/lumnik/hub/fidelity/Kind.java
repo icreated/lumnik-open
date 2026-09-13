@@ -12,7 +12,18 @@ public enum Kind {
   OUT_OF_DOMAIN_IN(true),
   IN_DOMAIN(false),
   FUNCTION_WRAPPED(false),
-  QUOTED_IDENT(false),
+  // A DECLARED column, quoted, filtered on an OUT-OF-DOMAIN value — the same deception as
+  // OUT_OF_DOMAIN_EQ, spelled with quotes. This said `false` while the guards skipped quoted
+  // identifiers, justified by "the SchemaCard advertises bare names"; the card now renders every name
+  // quoted (the only form a model can copy for `c_bpartner.id`), so that shape became the shape the
+  // model actually writes. Leaving it here would have graded the guard's own purpose as an over-block.
+  QUOTED_IDENT(true),
+  // The column guard under the same quoting: an UNDECLARED name, quoted, against a literal.
+  QUOTED_UNDECLARED(true),
+  // A column NAMED like a SQL keyword, quoted — `"user"`, which a legacy export really does ship.
+  // Bare, `user` is a niladic keyword the guard must walk past; quoted, Postgres promotes nothing,
+  // so it is a column name and an undeclared one must be refused like any other.
+  QUOTED_KEYWORD(true),
   NON_CLEAN_IN(false),
   CROSS_TABLE_DIVERGENT(false),
   UNDECLARED_COLUMN_EQ(true),

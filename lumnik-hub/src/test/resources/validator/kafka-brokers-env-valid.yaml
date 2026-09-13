@@ -14,4 +14,3 @@ spec:
     kind: sasl-plain
     username_env: KAFKA_USER
     password_env: KAFKA_PASSWORD
-  target: {}

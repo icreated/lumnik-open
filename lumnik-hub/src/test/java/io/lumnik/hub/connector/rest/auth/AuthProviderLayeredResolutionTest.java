@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.rest.auth;
 
 import io.lumnik.common.tenant.TenantContext;
+import io.lumnik.hub.connector.secret.SecretRefs;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.secret.SecretResolver;
 import io.quarkus.test.junit.QuarkusTest;
@@ -39,10 +40,9 @@ class AuthProviderLayeredResolutionTest {
         });
 
         // Build factory with env lookup that would return "from-env" if used
-        var factory = new BearerAuthProviderFactory(
-            name -> "LAYERED_TEST_BEARER".equals(name) ? "from-env" : null,
-            resolver
-        );
+        var factory = new BearerAuthProviderFactory(new SecretRefs(
+            resolver,
+            name -> "LAYERED_TEST_BEARER".equals(name) ? "from-env" : null));
 
         TenantContext.callAs(1L, () -> {
             var spec = new AuthSpec("bearer", Map.of("token_env", "LAYERED_TEST_BEARER"), null);
@@ -56,10 +56,9 @@ class AuthProviderLayeredResolutionTest {
 
     @Test
     void env_var_fallback_when_db_miss() {
-        var factory = new BearerAuthProviderFactory(
-            name -> "NOT_IN_DB_BEARER".equals(name) ? "from-env-only" : null,
-            resolver
-        );
+        var factory = new BearerAuthProviderFactory(new SecretRefs(
+            resolver,
+            name -> "NOT_IN_DB_BEARER".equals(name) ? "from-env-only" : null));
 
         TenantContext.callAs(1L, () -> {
             var spec = new AuthSpec("bearer", Map.of("token_env", "NOT_IN_DB_BEARER"), null);

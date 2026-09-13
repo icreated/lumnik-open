@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.lumnik.hub.connector.api.types.*;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
+import io.lumnik.hub.connector.exceptions.SourceUnreachableException;
 import io.lumnik.hub.connector.jdbc.dialect.JdbcDialect;
 import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
 import io.lumnik.hub.connector.mapping.MappingEngine;
@@ -22,6 +23,12 @@ import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.sql.SqlIdentifiers;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import javax.sql.DataSource;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 
 import java.util.*;
 
@@ -56,9 +63,8 @@ public class JdbcConnectorType implements ConnectorType {
     resolveDialectId(config);
     Configs.requireString(config, "schema");
     String name = Configs.requireString(config, "name");
-    // validator == runtime: dumpSpec refuses a 'name' that is not a plain identifier before
-    // building the t_<name> destination table — refuse it here too, so `lm apply` never accepts
-    // a manifest that would only fail mid-run.
+    // Mirrors dumpSpec's refusal below. What keeps `lm apply` from accepting such a manifest is
+    // SourceBlockValidator.perTableDef(), not this line: nothing on the jdbc path calls validateConfig.
     if (!SqlIdentifiers.isPlainIdentifier(name)) {
       throw new ConfigValidationException(
           "config key 'name' must be a plain identifier (letters, digits, underscore; not starting with a digit): " + name);
@@ -78,29 +84,94 @@ public class JdbcConnectorType implements ConnectorType {
     validateRename(readRename(config));
   }
 
-  @Override
-  public ItemReader<?> reader(ConnectorContext ctx) {
-    String url      = ctx.configValue("url",      String.class);
-    String user     = ctx.configValue("user",     String.class);
+  /**
+   * Everything both the reader and the run-start probe need from one endpoint's config, read once.
+   * Two copies of this extraction is how they drift: the probe would measure a ceiling over a key
+   * layout the reader does not page on, and the reader would (rightly) ignore it.
+   */
+  private record Wiring(String url, String user, String password, String dialectId, String schema,
+                        String table, String watermark, List<String> pk, JdbcChunkReader.Mode mode,
+                        JdbcDialect dialect) {
+
+    List<String> keyColumns() {
+      return JdbcQueryBuilder.keyColumns(watermark, pk, mode.forQuery());
+    }
+  }
+
+  private Wiring wiringOf(ConnectorContext ctx) {
     String dialectId = resolveDialectId(ctx.config());
-    String schema   = ctx.configValue("schema",   String.class);
-    String table    = ctx.configValue("name",     String.class);
-    String modeStr  = ctx.configValue("mode",     String.class);
-    String watermark = ctx.configValue("watermark_column", String.class, null);
+    String modeStr   = ctx.configValue("mode", String.class);
     @SuppressWarnings("unchecked")
     List<String> pk = (List<String>) ctx.config().get("pk_columns");
-
     // Password comes from a Basic credential.
-    // ChunkExecutor.buildContext injects "_credentialId" into the config map
-    // from Connector.credentialId when a credential is attached.
-    String password = resolvePassword(ctx);
+    // EffectiveConfig stamps "_credentialId" into the config map from Connector.credentialId
+    // when a credential is attached — last, so no endpoint overlay can steer it.
+    return new Wiring(
+        ctx.configValue("url",    String.class),
+        ctx.configValue("user",   String.class),
+        resolvePassword(ctx),
+        dialectId,
+        ctx.configValue("schema", String.class),
+        ctx.configValue("name",   String.class),
+        ctx.configValue("watermark_column", String.class, null),
+        pk,
+        "full".equals(modeStr) ? JdbcChunkReader.Mode.FULL : JdbcChunkReader.Mode.WATERMARK,
+        dialectRegistry.resolve(dialectId));
+  }
 
-    JdbcDialect dialect = dialectRegistry.resolve(dialectId);
-    JdbcChunkReader.Mode mode = "full".equals(modeStr)
-        ? JdbcChunkReader.Mode.FULL : JdbcChunkReader.Mode.WATERMARK;
+  @Override
+  public ItemReader<?> reader(ConnectorContext ctx) {
+    Wiring w = wiringOf(ctx);
+    return new JdbcChunkReader(w.url(), w.user(), w.password(), w.dialectId(), w.schema(), w.table(),
+        w.watermark(), w.pk(), w.mode(), w.dialect(), poolRegistry);
+  }
 
-    return new JdbcChunkReader(url, user, password, dialectId, schema, table,
-        watermark, pk, mode, dialect, poolRegistry);
+  /**
+   * The greatest key row the table holds right now: the target this run drains to.
+   *
+   * <p>One query, before the first chunk. Without it a run against a table receiving inserts pages
+   * on {@code (keys) > (last)} for as long as the writers keep writing — it ends when THEY pause,
+   * which on a busy table is never, so the run row stays Running and every scheduled slot behind it
+   * is skipped by the per-endpoint advisory lock. The same shape kafka had, found by asking who else
+   * paged without a ceiling.
+   *
+   * <p>Nothing is reported as lost at start: jdbc's twin of a deleted-underneath cursor is a cursor
+   * this reader declares foreign, and that restarts the table and re-reads everything — {@code
+   * _row_hash} dedup absorbs it, so nothing is missed and the run is not partial. jdbc takes the
+   * ceiling, not the status.
+   */
+  @Override
+  public RunStart runStart(ConnectorContext ctx, ConnectorCursor cursorIn) {
+    Wiring w = wiringOf(ctx);
+    if (w.mode() == JdbcChunkReader.Mode.WATERMARK && w.watermark() == null) {
+      return RunStart.none();   // refused on the first chunk, with the reader's own sentence
+    }
+    String probe = new JdbcQueryBuilder(w.dialect())
+        .buildCeilingProbe(w.schema(), w.table(), w.watermark(), w.pk(), w.mode().forQuery());
+    DataSource ds = poolRegistry.acquire(w.url(), w.user(), w.password(), ctx.tenantId());
+    try (Connection conn = ds.getConnection();
+         PreparedStatement ps = conn.prepareStatement(probe);
+         ResultSet rs = ps.executeQuery()) {
+      // An empty table has no ceiling, and needs none: the first chunk reads nothing and the run
+      // completes. Returning a ceiling of NULLs would instead make every row unreadable.
+      if (!rs.next()) return RunStart.none();
+      List<String> keys = w.keyColumns();
+      List<Object> values = new ArrayList<>(keys.size());
+      for (int i = 1; i <= keys.size(); i++) values.add(rs.getObject(i));
+      return new RunStart(new JdbcRunBound(keys, values), List.of());
+    } catch (SQLException e) {
+      // A connection-class failure (SQLSTATE 08…) is the one the READER cannot survive either: no
+      // pool hands out a connection to a database that is down, so degrading to an unbounded run
+      // only buys a second connect timeout for the same sentence — #486's shape, on the other type
+      // that measures a target. Everything else keeps the forgiving path: a probe that fails on
+      // permissions or on a missing column says nothing certain about the reader's own query.
+      if (e.getSQLState() != null && e.getSQLState().startsWith("08")) {
+        throw new SourceUnreachableException("could not reach " + w.schema() + "." + w.table()
+            + " to measure the run's target: " + e.getMessage(), e);
+      }
+      throw new RuntimeException("could not measure the run's target on "
+          + w.schema() + "." + w.table() + ": " + e.getMessage(), e);
+    }
   }
 
   /**
@@ -251,8 +322,8 @@ public class JdbcConnectorType implements ConnectorType {
    *
    * <p>Two sources are supported (in priority order):
    * <ol>
-   *   <li>{@code "_credentialId"} in config — a UUID written by {@code ChunkExecutor.buildContext}
-   *       from {@code Connector.credentialId}. Resolved via {@link io.lumnik.hub.connector.api.helpers.CredentialResolver}
+   *   <li>{@code "_credentialId"} in config — a UUID written by {@link
+   *       io.lumnik.hub.connector.domain.EffectiveConfig} from {@code Connector.credentialId}. Resolved via {@link io.lumnik.hub.connector.api.helpers.CredentialResolver}
    *       and cast to {@link ResolvedCredential.Basic} to extract the password.</li>
    *   <li>{@code "password"} in config — plain-text fallback for dev/test environments.</li>
    * </ol>
@@ -260,6 +331,9 @@ public class JdbcConnectorType implements ConnectorType {
   private static String resolvePassword(ConnectorContext ctx) {
     Object credId = ctx.config().get("_credentialId");
     if (credId != null && ctx.credentials() != null) {
+      // Safe with no ambient transaction of our own: CredentialResolver opens its own. That
+      // matters because runStart reaches this helper deliberately holding none, so its source probe
+      // does not keep a pooled connection.
       ResolvedCredential cred = ctx.credentials().resolve(UUID.fromString(credId.toString()));
       if (cred instanceof ResolvedCredential.Basic b) return b.password();
       throw new ConfigValidationException(

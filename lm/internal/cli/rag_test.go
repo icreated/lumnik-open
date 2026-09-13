@@ -21,11 +21,11 @@ func setupCfg(t *testing.T, server string) {
 		0o600)
 }
 
-func TestRagSearch(t *testing.T) {
+// runRagSearch serves one hit from a stub hub and returns what `lm rag search` printed.
+func runRagSearch(t *testing.T, hit map[string]any) string {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"results": []map[string]any{{"score": 0.9, "snippet": "hello world"}},
-		})
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{hit}})
 	}))
 	defer srv.Close()
 	setupCfg(t, srv.URL)
@@ -34,11 +34,65 @@ func TestRagSearch(t *testing.T) {
 	buf := new(bytes.Buffer)
 	cmd.SetOut(buf)
 	cmd.SetErr(buf)
-	cmd.SetArgs([]string{"rag", "search", "test", "-o", "json"})
+	cmd.SetArgs([]string{"rag", "search", "test"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "hello world") {
-		t.Errorf("unexpected output: %s", buf.String())
+	return buf.String()
+}
+
+func TestRagSearch(t *testing.T) {
+	// The hub's own payload — RagSearchResource.SearchHit: rowHash, ref, content, similarity,
+	// metadata. The previous stub answered with `score`/`snippet`, fields the hub has never
+	// sent, so the CLI decoded zeros into every column and this test stayed green (#484).
+	out := runRagSearch(t, map[string]any{
+		"rowHash":    "9f2c1b",
+		"ref":        "9f2c1b",
+		"content":    "hello world",
+		"similarity": 0.873,
+		"metadata":   map[string]any{"scope": "desk"},
+	})
+	for _, want := range []string{"0.873", "9f2c1b", "hello world"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in output:\n%s", want, out)
+		}
+	}
+}
+
+// A chunk that is not an ingested row — a kind:Workflow lifecycle — has no row hash. Its ref
+// still names it, so the SOURCE column says where the answer came from instead of nothing.
+func TestRagSearchNamesARowlessChunkByItsRef(t *testing.T) {
+	out := runRagSearch(t, map[string]any{
+		"rowHash":    nil,
+		"ref":        "workflow/acme-order-lifecycle",
+		"content":    "Workflow acme-order-lifecycle — cycle de vie",
+		"similarity": 0.61,
+	})
+	if !strings.Contains(out, "workflow/acme-order-lifecycle") {
+		t.Errorf("unexpected output: %s", out)
+	}
+}
+
+// truncate cuts a column to a width in CHARACTERS — see output.Truncate for why bytes were wrong.
+// The cases here are the shapes that reached it: a cut inside an em dash, and a string shorter in
+// runes than in bytes.
+func TestTruncate_cutsRunesNotBytes(t *testing.T) {
+	cases := []struct {
+		axis string
+		in   string
+		n    int
+		want string
+	}{
+		{"nothing to cut", "abc", 5, "abc"},
+		{"exactly the width", "abcde", 5, "abcde"},
+		{"plain ascii", "abcdef", 5, "abcde…"},
+		{"the cut lands inside an em dash", "ab — cd", 4, "ab —…"},
+		{"a width counted in runes, not bytes", "é€ü-abc", 3, "é€ü…"},
+		{"an accented string shorter in runes than in bytes", "éàü", 4, "éàü"},
+	}
+	for _, c := range cases {
+		if got := truncate(c.in, c.n); got != c.want {
+			t.Errorf("%s: truncate(%q, %d) = %q, want %q", c.axis, c.in, c.n, got, c.want)
+		}
 	}
 }

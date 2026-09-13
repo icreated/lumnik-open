@@ -124,6 +124,19 @@ public class PostgresDialect implements JdbcDialect {
   }
 
   @Override
+  public boolean tableExists(Connection conn, String schema, String table) throws SQLException {
+    String sql = "SELECT 1 FROM information_schema.tables " +
+                 "WHERE table_schema = ? AND table_name = ? AND table_type = 'BASE TABLE'";
+    try (PreparedStatement ps = conn.prepareStatement(sql)) {
+      ps.setString(1, schema);
+      ps.setString(2, table);
+      try (ResultSet rs = ps.executeQuery()) {
+        return rs.next();
+      }
+    }
+  }
+
+  @Override
   public long estimateRowCount(Connection conn, String schema, String table) throws SQLException {
     String sql = "SELECT COALESCE(reltuples::bigint, 0) " +
                  "FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace " +

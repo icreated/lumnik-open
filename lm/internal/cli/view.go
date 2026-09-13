@@ -26,7 +26,7 @@ Subcommands manage the saved-view store: list, get, apply, generate.`,
 			if len(args) == 1 && len(filters) > 0 {
 				return fmt.Errorf("--filter applies to the list; it is not used with a detail KEY — pass one or the other")
 			}
-			body, err := readYamlFile(file)
+			body, err := readManifest(cmd, file)
 			if err != nil {
 				return err
 			}
@@ -40,7 +40,7 @@ Subcommands manage the saved-view store: list, get, apply, generate.`,
 			return renderList(cmd, c, body, filters)
 		},
 	}
-	cmd.Flags().StringVarP(&file, "file", "f", "", "kind:View YAML manifest (required)")
+	cmd.Flags().StringVarP(&file, "file", "f", "", "kind:View YAML manifest, or - for stdin (required)")
 	cmd.Flags().StringArrayVar(&filters, "filter", nil,
 		"filter rows: col=value (exact), col~text (contains), col>v col<v col>=v col<=v (number/ISO date); repeatable (AND)")
 	_ = cmd.MarkFlagRequired("file")
@@ -122,7 +122,7 @@ func newViewApplyCmd() *cobra.Command {
 		Use:   "apply",
 		Short: "Validate and upsert a kind:View manifest into the saved-view store",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			body, err := readYamlFile(file)
+			body, err := readManifest(cmd, file)
 			if err != nil {
 				return err
 			}
@@ -138,7 +138,7 @@ func newViewApplyCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVarP(&file, "file", "f", "", "kind:View YAML manifest (required)")
+	cmd.Flags().StringVarP(&file, "file", "f", "", "kind:View YAML manifest, or - for stdin (required)")
 	_ = cmd.MarkFlagRequired("file")
 	return cmd
 }

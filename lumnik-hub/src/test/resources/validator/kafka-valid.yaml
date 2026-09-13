@@ -10,4 +10,3 @@ spec:
   topic: erp.orders.v1
   format: json
   poll_timeout_ms: 2000
-  target: {}

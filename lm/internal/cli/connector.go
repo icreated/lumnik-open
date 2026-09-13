@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/icreated/lumnik-open/lm/internal/types"
@@ -13,17 +14,37 @@ import (
 
 // resolveConnectorID looks up a connector ID either by direct UUID match or by name.
 // Returns the resolved ID (UUID string) or an error if not found.
+// resolveConnectorFilter turns a --connector value into the id the hub's UUID-typed filters
+// require. A well-formed UUID passes through unchanged: it saves listing every connector to map
+// an id onto itself, and it keeps a full id filtering even when it names a since-deleted
+// connector. Validate the SHAPE, not the length — connector names carry no pattern constraint,
+// so a 36-character NAME must still resolve rather than be forwarded raw.
+func resolveConnectorFilter(c *client.Client, value string) (string, error) {
+	if value == "" || uuid.Validate(value) == nil {
+		return value, nil
+	}
+	return resolveConnectorID(c, value)
+}
+
 func resolveConnectorID(c *client.Client, idOrName string) (string, error) {
+	conn, err := resolveConnector(c, idOrName)
+	return conn.ID, err
+}
+
+// resolveConnector is the same lookup for callers that need more of the row than its id — the REST
+// pre-flight reads TypeID so it can name a connector of another family instead of failing deep
+// inside a request builder that has no idea why the config makes no sense.
+func resolveConnector(c *client.Client, idOrName string) (types.Connector, error) {
 	list, err := c.ConnectorList()
 	if err != nil {
-		return "", err
+		return types.Connector{}, err
 	}
 	for _, item := range list {
 		if item.ID == idOrName || item.Name == idOrName {
-			return item.ID, nil
+			return item, nil
 		}
 	}
-	return "", fmt.Errorf("connector %q not found", idOrName)
+	return types.Connector{}, fmt.Errorf("connector %q not found", idOrName)
 }
 
 func newConnectorCmd() *cobra.Command {
@@ -43,10 +64,10 @@ func newConnectorCmd() *cobra.Command {
 			}
 			format, _ := cmd.Flags().GetString("output")
 			return output.Print(cmd.OutOrStdout(), format,
-				[]string{"NAME", "TYPE", "TENANT", "SCHED", "STATUS", "LAST RUN"}, cs,
+				[]string{"NAME", "TYPE", "TENANT", "SCHED", "WINDOW", "STATUS", "LAST RUN"}, cs,
 				func(c types.Connector) []string {
 					return []string{c.Name, c.TypeID, fmt.Sprintf("%d", c.TenantID), c.Schedule,
-						c.Status, output.HumanTime(c.LastRunAt)}
+						c.Window, c.Status, output.HumanTime(c.LastRunAt)}
 				})
 		},
 	})
@@ -77,13 +98,17 @@ func newConnectorCmd() *cobra.Command {
 		Use:   "apply",
 		Short: "Create or update a connector from its `get` YAML (flat fields, not a manifest)",
 		Long: "Create or update a connector from the FLAT stored fields — tenantId, name, typeId,\n" +
-			"schedule, enabled, config — which is what `lm connector get` writes. The designed loop is\n" +
+			"schedule, window, enabled, config — which is what `lm connector get` writes. The designed loop is\n" +
 			"`get` → edit → `apply`, the same one the TUI runs against $EDITOR.\n\n" +
 			"A `kind: Connector` manifest goes to `lm apply -f` instead: different format,\n" +
 			"different endpoint. Hand one here and this command says so rather than posting it.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			file, _ := cmd.Flags().GetString("file")
-			payload, err := decodeManifest(file, "connector")
+			body, err := readManifest(cmd, file)
+			if err != nil {
+				return err
+			}
+			payload, err := decodeManifest(body, file, "connector")
 			if err != nil {
 				return err
 			}
@@ -104,7 +129,7 @@ func newConnectorCmd() *cobra.Command {
 			return nil
 		},
 	}
-	apply.Flags().StringP("file", "f", "", "Path to connector YAML")
+	apply.Flags().StringP("file", "f", "", "Path to connector YAML, or - for stdin")
 	_ = apply.MarkFlagRequired("file")
 	cn.AddCommand(apply)
 

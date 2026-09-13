@@ -24,7 +24,6 @@ public class CsvFileConnectorApplyHandler implements ConnectorApplyHandler {
     private static final String TRANSPORT = "transport";
     private static final String MAPPING = "mapping";
     private static final String INDEXES = "indexes";
-    private static final String SCHEDULE = "schedule";
     private static final String AFTER_PROCESS = "after_process";
     private static final String ARCHIVE_PATH = "archive_path";
 
@@ -61,9 +60,6 @@ public class CsvFileConnectorApplyHandler implements ConnectorApplyHandler {
         JsonNode target = spec.path("target");
         if (target.has(INDEXES)) {
             connCfg.put(INDEXES, JSON.convertValue(target.get(INDEXES), List.class));
-        }
-        if (!spec.path(SCHEDULE).isMissingNode()) {
-            connCfg.put(SCHEDULE, spec.path(SCHEDULE).asText());
         }
         if (!spec.path(AFTER_PROCESS).isMissingNode()) {
             connCfg.put(AFTER_PROCESS, spec.path(AFTER_PROCESS).asText());

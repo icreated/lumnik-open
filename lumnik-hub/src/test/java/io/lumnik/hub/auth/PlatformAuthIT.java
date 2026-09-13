@@ -24,7 +24,9 @@ import static io.restassured.RestAssured.given;
  * on this OIDC-based app (there is no {@code quarkus-smallrye-jwt}) — the token comes up empty, so the
  * filter correctly aborts 401 on the missing claim. That full chain (a real Bearer → tenant resolution →
  * endpoint) is covered end-to-end with a real Keycloak token by the JIT-provisioning and SCIM e2e tests,
- * and is proven live in the self-host deploy. {@code TenantContextFilter}'s own claim handling is unit-
+ * is proven live in the self-host deploy, and — on this very platform endpoint, inside this tree — by
+ * {@code ScopeRefusalOnTheWireIT}, which reaches a 200 through {@link NoBypassOidcProfile}'s signed
+ * token. {@code TenantContextFilter}'s own claim handling is unit-
  * tested in {@code TenantContextFilterJwtTest}.
  */
 @QuarkusTest
@@ -44,9 +46,12 @@ class PlatformAuthIT {
     @Test
     void anonymous_is_401_with_bearer_challenge() {
         // No authenticated principal → 401 with a WWW-Authenticate: Bearer challenge (RFC 7235).
+        // Its sentence is plain text for the same reason its 403 sibling's is — see the filter.
         given().when().get("/api/platform/connectors")
             .then().statusCode(401)
-            .header("WWW-Authenticate", Matchers.containsString("Bearer"));
+            .header("WWW-Authenticate", Matchers.containsString("Bearer"))
+            .contentType(Matchers.startsWith("text/plain"))
+            .body(Matchers.equalTo("authentication required"));
     }
 
     @Test
@@ -54,5 +59,30 @@ class PlatformAuthIT {
     void authenticated_without_integrator_role_is_403() {
         // Principal present but no lm_integrator role → 403 (the filter aborts before tenant resolution).
         given().when().get("/api/platform/connectors").then().statusCode(403);
+    }
+
+    /**
+     * The third of three confusable 403s, and the only one nothing held in place (#517).
+     *
+     * <p>The documentation teaches a reader to tell them apart BY THEIR BODY: a
+     * {@code @RequiresPermission} refusal is body-less ({@code TenantAdminAuthIT}), a métier-scope
+     * refusal carries {@code {"error":"scope not granted"}} off the socket
+     * ({@code ScopeRefusalOnTheWireIT}), and this one is the plain sentence
+     * {@code missing role lm_integrator}. It is the one LEAST like its siblings — text where they
+     * are JSON, built inline where they go through {@code ApiErrors} — which is exactly why it is
+     * the one a tidy-up would quietly reshape. The status alone was asserted; the byte sequence
+     * those pages send readers to look at was defended by nothing.
+     *
+     * <p>Measuring it found it wrong. The body was right; the dress was not — see
+     * {@code PlatformApiAuthFilter} for why an aborting filter negotiated its way into
+     * {@code application/json}, and what the explicit {@code text/plain} is now holding.
+     */
+    @Test
+    @TestSecurity(user = "u1")
+    void thePlatformRefusalIsPlainTextNamingTheRoleItWants() {
+        given().when().get("/api/platform/connectors")
+            .then().statusCode(403)
+            .contentType(Matchers.startsWith("text/plain"))
+            .body(Matchers.equalTo("missing role lm_integrator"));
     }
 }

@@ -12,6 +12,7 @@ import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.rest.RestHttpClient;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
+import io.lumnik.hub.connector.rest.ResponseStatusGuard;
 import io.lumnik.hub.connector.rest.auth.AuthProvider;
 import io.lumnik.hub.connector.rest.auth.AuthProviderRegistry;
 import io.lumnik.hub.connector.rest.auth.AuthSpec;
@@ -19,6 +20,7 @@ import io.lumnik.hub.connector.rest.pagination.EndpointConfig;
 import io.lumnik.hub.connector.rest.pagination.JsonPathExtractor;
 import io.lumnik.hub.connector.rest.pagination.PaginationFactory;
 import io.lumnik.hub.connector.rest.pagination.PaginationStrategy;
+import io.lumnik.hub.connector.rest.pagination.PaginationSupport;
 import io.lumnik.hub.connector.rest.RequestHeaders;
 import io.lumnik.hub.connector.rest.reliability.GraphQlResponseValidator;
 import io.lumnik.hub.connector.rest.reliability.NoopResponseValidator;
@@ -35,6 +37,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 
 /**
  * ConnectorEngine bridge reader for {@code rest-generic} connectors.
@@ -115,6 +118,9 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
     private static final String EMITTED_BY_RUN = "emittedByRun";
     private static final String RESUME = "resume";
     private static final String PAGES = "pages";
+    private static final String EMITTED = "emitted";
+    private static final String DECLARED_TOTAL = "declaredTotal";
+    private static final String TOTAL_DISPUTED = "declaredTotalDisputed";
     private static final String METHOD = "method";
     private static final String URL = "url";
     private static final String QUERY = "query";
@@ -177,7 +183,10 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         Incremental inc = incremental(cfg);
         Map<String, Object> pagCfg = mapConfig(cfg, "pagination");
         PaginationStrategy pag = paginationFactory.build(pagCfg);
-        AuthProvider auth = authReg.build(toAuthSpec(mapConfig(cfg, "auth")));
+        // Lifted out of the strategies for the same reason cursorHeaderName is: reading a JsonPath
+        // out of a response body does not vary by pagination shape, so nothing here is per-strategy.
+        String totalPath = str(pagCfg.get("total_path"));
+        AuthProvider auth = authReg.build(authSpecFor(cfg));
         auth.probe();
 
         RateLimiter rl = rateRegistry.forConnector(ctx.connectorId(),
@@ -209,7 +218,20 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         RestRequest start = resuming ? resumeRequest(parsed.resume, cfg, ctx)
                                      : firstRequest(pag, cfg, ep, inc, parsed);
         PageWindow window = fetchPageWindow(auth, rl, retry, pag, start, bodyParser,
-            chunkSize, resuming ? parsed.pages : 0);
+            chunkSize, resuming ? parsed.pages : 0,
+            resuming ? parsed.declaredTotal : DeclaredTotal.NONE, totalPath);
+
+        // `resuming` gates the running tally for the same reason it gates `pages` above: a cursor
+        // left behind by a DEAD run makes this run start from page 1, so its counts are not ours.
+        long emitted = (resuming ? parsed.emitted : 0) + window.items().size();
+
+        // Reconcile once, when pagination is exhausted — and only over a read that asked for
+        // everything. The exemption is a NAMED condition rather than a consequence of where this
+        // line sits, so the next mode that starts filtering has to answer it instead of inheriting
+        // the guard by falling past a branch.
+        if (!inc.filtersRows() && window.next() == null) {
+            reconcileWithDeclaredTotal(ctx, emitted, window.total());
+        }
 
         if (inc.enabled()) {
             // Staged promotion — see the class javadoc. `watermark` is carried through unchanged
@@ -225,11 +247,19 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         }
 
         return new ReadResult.HasMore<>(window.items(),
-            fullCursor(runId, window.next(), window.pages(), cursorHeaderName(pagCfg)));
+            fullCursor(runId, window, emitted, cursorHeaderName(pagCfg)));
     }
 
     /** The incremental block, reduced to what the runtime honours; {@code api_cursor} is deferred → full. */
-    private record Incremental(boolean enabled, String param, String path) {}
+    private record Incremental(boolean enabled, String param, String path) {
+        /**
+         * Whether this read NARROWS what the source returns — the one case where the source's own
+         * total is not a number this run can be measured against. {@code api_cursor} is deferred to
+         * full and sends no filter, so it is deliberately not one; the mode that starts filtering
+         * must say so here rather than inherit the answer.
+         */
+        boolean filtersRows() { return enabled; }
+    }
 
     private static Incremental incremental(Map<String, Object> cfg) {
         Map<String, Object> inc = mapConfig(cfg, "incremental");
@@ -244,10 +274,20 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      */
     private static RestRequest firstRequest(PaginationStrategy pag, Map<String, Object> cfg,
                                             ConnectorEndpoint ep, Incremental inc, Parsed parsed) {
-        EndpointConfig ec = new EndpointConfig((String) cfg.get("base_url"), ep.getMethod(), ep.getPath(), cfg);
-        RestRequest req = RequestHeaders.apply(pag.first(ec, null), cfg.get(HEADERS), RequestHeaders.ENV);
+        RestRequest req = firstRequest(pag, cfg, ep);
         boolean canSend = inc.enabled() && parsed.watermark != null && inc.param() != null;
         return canSend ? req.withQuery(inc.param(), parsed.watermark) : req;
+    }
+
+    /**
+     * The very first request of a read, before anything a RUN alone knows (a stored watermark) is
+     * added — method, path, query, body and declarative headers, exactly as the strategy composes
+     * them. Shared with {@link RestPreflight}: a pre-flight that composed its own request would be
+     * reporting on a door the run never knocks at.
+     */
+    static RestRequest firstRequest(PaginationStrategy pag, Map<String, Object> cfg, ConnectorEndpoint ep) {
+        EndpointConfig ec = new EndpointConfig((String) cfg.get("base_url"), ep.getMethod(), ep.getPath(), cfg);
+        return RequestHeaders.apply(pag.first(ec, null), cfg.get(HEADERS), RequestHeaders.ENV);
     }
 
     /**
@@ -255,7 +295,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * GraphQL (kind or query) — a malformed kind:graphql config that lost its query then still fails
      * loud instead of silently ingesting an empty batch.
      */
-    private static ResponseValidator validatorFor(Map<String, Object> cfg) {
+    static ResponseValidator validatorFor(Map<String, Object> cfg) {
         if (isSoapEndpoint(cfg)) return new SoapFaultValidator();
         if (isGraphQlEndpoint(cfg)) return new GraphQlResponseValidator();
         return new NoopResponseValidator();
@@ -265,7 +305,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * SOAP responses are XML; convert to a JSON tree so pagination and items read it like any other.
      * The {@code response_path} hint drives the force-list (single element → singleton list).
      */
-    private static BodyParser bodyParserFor(Map<String, Object> cfg) {
+    static BodyParser bodyParserFor(Map<String, Object> cfg) {
         if (!isSoapEndpoint(cfg)) return JsonBodyParser.INSTANCE;
         return new XmlBodyParser(str(mapConfig(cfg, "pagination").get("response_path")));
     }
@@ -278,7 +318,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * apply. This used to be a bare cast, i.e. a ClassCastException; the message is the only change.
      */
     @SuppressWarnings("unchecked")
-    private static Map<String, Object> mapConfig(Map<String, Object> cfg, String key) {
+    static Map<String, Object> mapConfig(Map<String, Object> cfg, String key) {
         Object v = cfg.get(key);
         if (v == null) return Map.of();
         if (v instanceof Map<?, ?> m) return (Map<String, Object>) m;
@@ -314,7 +354,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
                 rl.acquire();
                 final RestRequest finalReq = signed;
                 RestResponse resp = retry.execute(() -> http.execute(finalReq));
-                RestHttpClient.refuseRedirect(resp);   // NEVER-followed 3xx must not read as an empty page
+                ResponseStatusGuard.refuseNonSuccess(resp);   // a non-2xx must never read as an empty page
                 resp = bodyParser.reparse(resp);   // SOAP: XML→JSON; JSON/GraphQL: identity
                 all.addAll(pag.items(resp));
                 req = pag.next(resp, signed);
@@ -329,8 +369,34 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         return all;
     }
 
-    /** One chunk's worth of pages, plus what the next chunk needs: the next request (null = exhausted) and the run-wide page count. */
-    private record PageWindow(List<Map<String, Object>> items, RestRequest next, int pages) {}
+    /**
+     * One chunk's worth of pages, plus what the next chunk needs: the next request (null =
+     * exhausted), the run-wide page count, and what the source has claimed about its own size.
+     */
+    private record PageWindow(List<Map<String, Object>> items, RestRequest next, int pages,
+                              DeclaredTotal total) {}
+
+    /**
+     * What the source has said about its own row count so far in this run, and whether it has
+     * contradicted itself.
+     *
+     * <p>A total that MOVES between pages is not a defect — it is a live source: rows were inserted
+     * or deleted while we paged. There is then no number the run can be measured against, so the
+     * reconciliation abstains rather than fail a run that lost nothing. Refusing to judge what we
+     * cannot model is the same rule the SQL guards follow; the alternative here is a false red on
+     * every busy ERP.
+     */
+    private record DeclaredTotal(Long value, boolean disputed) {
+        static final DeclaredTotal NONE = new DeclaredTotal(null, false);
+
+        DeclaredTotal observe(OptionalLong seen) {
+            if (seen.isEmpty()) return this;
+            if (value == null) return new DeclaredTotal(seen.getAsLong(), disputed);
+            return value == seen.getAsLong() ? this : new DeclaredTotal(value, true);
+        }
+
+        boolean usable() { return value != null && !disputed; }
+    }
 
     /**
      * The shared full/watermark chunk loop: follow the pagination chain (signing + rate-limiting +
@@ -343,19 +409,22 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      */
     private PageWindow fetchPageWindow(AuthProvider auth, RateLimiter rl, RetryExecutor retry,
                                        PaginationStrategy pag, RestRequest first, BodyParser bodyParser,
-                                       int chunkSize, int pagesAlreadyFetched) {
+                                       int chunkSize, int pagesAlreadyFetched,
+                                       DeclaredTotal carriedTotal, String totalPath) {
         List<Map<String, Object>> items = new ArrayList<>();
         RestRequest req = first;
         int pages = pagesAlreadyFetched;
+        DeclaredTotal total = carriedTotal;
         try {
             while (req != null && pages < MAX_PAGES && items.size() < chunkSize) {
                 RestRequest signed = auth.apply(req);
                 rl.acquire();
                 final RestRequest finalReq = signed;
                 RestResponse resp = retry.execute(() -> http.execute(finalReq));
-                RestHttpClient.refuseRedirect(resp);   // NEVER-followed 3xx must not read as an empty page
+                ResponseStatusGuard.refuseNonSuccess(resp);   // a non-2xx must never read as an empty page
                 resp = bodyParser.reparse(resp);   // SOAP: XML→JSON; JSON/GraphQL: identity
                 items.addAll(pag.items(resp));
+                total = total.observe(PaginationSupport.declaredItems(resp.json(), totalPath));
                 req = pag.next(resp, req);
                 pages++;
             }
@@ -365,7 +434,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         } catch (Exception e) {
             throw (e instanceof RuntimeException re) ? re : new RuntimeException(e);
         }
-        return new PageWindow(items, pages >= MAX_PAGES ? null : req, pages);
+        return new PageWindow(items, pages >= MAX_PAGES ? null : req, pages, total);
     }
 
     /** The header carrying the pagination token when the strategy binds its cursor to a header, else null. */
@@ -410,13 +479,40 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * per page — persisting them would write secrets into {@code connector.connector_cursor});
      * the one exception is the header-bound pagination token, which is resume state, not a secret.
      */
-    private ConnectorCursor fullCursor(String runId, RestRequest next, int pages, String cursorHeader) {
-        if (next == null) return cursor(null, runId);
+    private ConnectorCursor fullCursor(String runId, PageWindow window, long emitted, String cursorHeader) {
+        if (window.next() == null) return cursor(null, runId);
         ObjectNode node = mapper.createObjectNode();
         node.putNull(WATERMARK);
         node.put(EMITTED_BY_RUN, runId);
-        writeResume(node, next, pages, cursorHeader);
+        writeResume(node, window.next(), window.pages(), cursorHeader);
+        // The reconciliation's run-wide state. It rides here for the same reason `pages` does: a
+        // fresh reader is built per chunk, so only what the cursor carries survives into the next.
+        // `emitted` counts rows RETURNED, and equals the run's records_in only while REST isolates
+        // no malformed rows at read time — the day it does, these stop being the same number.
+        node.put(EMITTED, emitted);
+        node.put(DECLARED_TOTAL, window.total().value());   // a null Long lands as JSON null
+        node.put(TOTAL_DISPUTED, window.total().disputed());
         return new ConnectorCursor(node, Instant.now());
+    }
+
+    /**
+     * The source's own total, used as a WITNESS at the end of the read.
+     *
+     * <p>A pagination stop condition only ever says "no more pages" — never "you got everything you
+     * were promised". So a read that lost rows ends the same way a complete one does, and the
+     * conservation invariant downstream ({@code records_in = records_out + records_skipped}) is
+     * self-consistent about a number that is already wrong. The source is the only witness outside
+     * the run, and the strategies that page by offset already ask it for a total.
+     *
+     * <p>Refusing (rather than warning) is the same choice {@code ResponseStatusGuard} makes one
+     * layer down: a run that reports success over a partial extract is the failure mode being
+     * fought, and a green-but-short run is indistinguishable from "nothing changed upstream".
+     */
+    private static void reconcileWithDeclaredTotal(ConnectorContext ctx, long emitted, DeclaredTotal total) {
+        if (!total.usable() || emitted == total.value()) return;
+        throw new ConnectorException("Endpoint " + ctx.endpointId() + ": the source declared "
+            + total.value() + " rows but this run returned " + emitted
+            + " — refusing to report a partial extract as a complete one");
     }
 
     /**
@@ -474,17 +570,25 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
     }
 
     private record Parsed(String watermark, String watermarkCandidate, String emittedByRun,
-                          JsonNode resume, int pages) {}
+                          JsonNode resume, int pages, long emitted, DeclaredTotal declaredTotal) {}
 
     private Parsed parse(ConnectorCursor cursor) {
-        if (cursor == null || cursor.isEmpty()) return new Parsed(null, null, null, null, 0);
+        if (cursor == null || cursor.isEmpty()) {
+            return new Parsed(null, null, null, null, 0, 0, DeclaredTotal.NONE);
+        }
         JsonNode v = cursor.value();
         String wm = v.hasNonNull(WATERMARK) ? v.get(WATERMARK).asText() : null;
         String wmCandidate = v.hasNonNull(WATERMARK_CANDIDATE) ? v.get(WATERMARK_CANDIDATE).asText() : null;
         String run = v.hasNonNull(EMITTED_BY_RUN) ? v.get(EMITTED_BY_RUN).asText() : null;
         JsonNode resume = v.hasNonNull(RESUME) ? v.get(RESUME) : null;
         int pages = v.hasNonNull(PAGES) ? v.get(PAGES).asInt() : 0;
-        return new Parsed(wm, wmCandidate, run, resume, pages);
+        // Absent on a cursor written by an older hub: read as "nothing counted, nothing declared",
+        // which is exactly the state that makes the reconciliation abstain instead of misfire.
+        long emitted = v.hasNonNull(EMITTED) ? v.get(EMITTED).asLong() : 0;
+        DeclaredTotal declaredTotal = new DeclaredTotal(
+            v.hasNonNull(DECLARED_TOTAL) ? v.get(DECLARED_TOTAL).asLong() : null,
+            v.hasNonNull(TOTAL_DISPUTED) && v.get(TOTAL_DISPUTED).asBoolean());
+        return new Parsed(wm, wmCandidate, run, resume, pages, emitted, declaredTotal);
     }
 
     private ConnectorCursor cursor(String watermark, String emittedByRun) {
@@ -496,8 +600,22 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
 
     private static String str(Object o) { return o == null ? null : String.valueOf(o); }
 
+    /**
+     * The credential a source is approached with, read off an effective config. Public because it
+     * is not the run's private business: the endpoint pre-flight and the REST probe must present
+     * the same one, or they diagnose a source nobody talks to. The default when the block is
+     * absent is {@code none} — never an empty bearer.
+     *
+     * <p>One entry point rather than two exported halves: {@code toAuthSpec(mapConfig(cfg,"auth"))}
+     * was being spelled out at three call sites, so the {@code "auth"} key and the {@code none}
+     * default travelled with each copy.
+     */
+    public static AuthSpec authSpecFor(Map<String, Object> cfg) {
+        return toAuthSpec(mapConfig(cfg, "auth"));
+    }
+
     /** Builds the {@link AuthSpec} from the connector's auth config block. */
-    private AuthSpec toAuthSpec(Map<String, Object> raw) {
+    static AuthSpec toAuthSpec(Map<String, Object> raw) {
         String kind = raw.containsKey("kind") ? String.valueOf(raw.get("kind")) : "none";
         Map<String, String> cfg = new HashMap<>();
         raw.forEach((k, v) -> {

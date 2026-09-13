@@ -21,7 +21,6 @@ public class JdbcGenericConnectorApplyHandler implements ConnectorApplyHandler {
 
     private static final String KIND_JDBC_GENERIC = "jdbc-generic";
     private static final String DEFAULTS = "defaults";
-    private static final String SCHEDULE = "schedule";
 
     @Inject ConnectorRepository connRepo;
     @Inject ConnectorEndpointRepository epRepo;
@@ -63,9 +62,6 @@ public class JdbcGenericConnectorApplyHandler implements ConnectorApplyHandler {
         connCfg.put("connection", JSON.convertValue(spec.path("connection"), Map.class));
         if (!spec.path(DEFAULTS).isMissingNode()) {
             connCfg.put(DEFAULTS, JSON.convertValue(spec.path(DEFAULTS), Map.class));
-        }
-        if (!spec.path(SCHEDULE).isMissingNode()) {
-            connCfg.put(SCHEDULE, spec.path(SCHEDULE).asText());
         }
         return connCfg;
     }

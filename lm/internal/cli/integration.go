@@ -14,8 +14,9 @@ import (
 
 var integrationHeaders = []string{"ID", "NAME", "URL", "EVENTS", "ENABLED"}
 
-// readLineFrom reads one line from the command's input — cmd.InOrStdin(), so tests can
-// drive it with SetIn (readPasswordStdin binds os.Stdin directly and cannot be tested).
+// readLineFrom reads one line from the command's input — cmd.InOrStdin(), so tests can drive it
+// with SetIn. Its other caller is readPassword in source_jdbc.go, which uses it for the piped
+// half of the guided flow's password.
 func readLineFrom(r io.Reader) (string, error) {
 	line, err := bufio.NewReader(r).ReadString('\n')
 	if err != nil && line == "" {

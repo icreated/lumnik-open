@@ -54,3 +54,30 @@ func TestProcessList_parses(t *testing.T) {
 	assert.Equal(t, ProcessInfo{Name: "gold-arrive", Table: "connector.t_cust_csv",
 		Emit: "decision.gold-arrive", Enabled: true}, ps[0])
 }
+
+func TestProcessDelete_escapesNameAndSendsDelete(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodDelete, r.Method)
+		assert.Equal(t, "/api/processes/gold%20arrive%2Fv2", r.URL.EscapedPath())
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := New(config.Context{Server: srv.URL})
+	require.NoError(t, c.ProcessDelete("gold arrive/v2"))
+}
+
+func TestProcessSetEnabled_putsTheFlagAndReadsItBack(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method)
+		assert.Equal(t, "/api/processes/gold-arrive/enabled", r.URL.EscapedPath())
+		body, _ := io.ReadAll(r.Body)
+		assert.JSONEq(t, `{"enabled":false}`, string(body))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"gold-arrive","enabled":false}`))
+	}))
+	defer srv.Close()
+	c := New(config.Context{Server: srv.URL})
+	out, err := c.ProcessSetEnabled("gold-arrive", false)
+	require.NoError(t, err)
+	assert.Equal(t, ProcessEnabled{Name: "gold-arrive", Enabled: false}, *out)
+}

@@ -1,5 +1,6 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.AskResult;
@@ -9,9 +10,6 @@ import io.lumnik.llm.spi.ChatPort;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.InjectMock;
 import io.quarkus.test.junit.QuarkusTest;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -37,9 +35,6 @@ class EntityRagDomainGuardIT {
 
   @Inject AskToSqlAgent agent;
   @InjectMock @Analytic ChatPort chatPort;
-
-  static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config().encoderConfig(
-      EncoderConfig.encoderConfig().encodeContentTypeAs("application/yaml", ContentType.TEXT));
 
   static final String MANIFEST = """
       kind: Entity
@@ -70,7 +65,7 @@ class EntityRagDomainGuardIT {
       st.execute("INSERT INTO connector.t_dg_src VALUES (7,'C-1','GOLD')");
       st.execute("DELETE FROM connector.entity_manifest WHERE name = 'dgcustomer'");
     }
-    given().config(YAML_CFG).headers(TestIdentity.tenantAndUser(7))
+    given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(7))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
   }

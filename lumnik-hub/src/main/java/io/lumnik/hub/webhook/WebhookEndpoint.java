@@ -16,6 +16,11 @@ import static lombok.AccessLevel.PROTECTED;
 @Getter @Setter
 @NoArgsConstructor(access = PROTECTED)
 @Entity
+// The real rule is NARROWER than JPA can say: since V46 uq_webhook_endpoint_name is a unique index
+// partial on deleted_at IS NULL, so a soft-deleted row stops holding its name. The annotation is
+// inert here (quarkus.hibernate-orm.database.generation=none — nothing creates or validates from
+// it) and kept only for the same reason identity's entities keep theirs: it names the rule. Read
+// V46 for what it actually is.
 @Table(schema = "core", name = "webhook_endpoint",
        uniqueConstraints = @UniqueConstraint(name = "uq_webhook_endpoint_name",
                                              columnNames = {"tenant_id", "name"}))

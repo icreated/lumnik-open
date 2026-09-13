@@ -27,16 +27,14 @@ func newObservationsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			limit, _ := cmd.Flags().GetInt("limit")
-			items, err := c.ObservationList(limit)
+			items, err := c.ObservationList(pageLimit(cmd))
 			if err != nil {
 				return err
 			}
-			format, _ := cmd.Flags().GetString("output")
-			return output.Print(cmd.OutOrStdout(), format, observationHeaders, items, observationRow)
+			return printPage(cmd, observationHeaders, items, observationRow)
 		},
 	}
-	list.Flags().Int("limit", 200, "max observations to list")
+	addPageLimitFlag(list, 200, client.ObservationsPageCap, "max observations to list")
 	root.AddCommand(list)
 	stats := &cobra.Command{
 		Use:   "stats",

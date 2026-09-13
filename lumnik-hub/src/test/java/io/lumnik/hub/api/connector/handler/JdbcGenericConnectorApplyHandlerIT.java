@@ -1,10 +1,8 @@
 package io.lumnik.hub.api.connector.handler;
 
+import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.test.junit.QuarkusTest;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import org.junit.jupiter.api.Test;
 
 import static io.restassured.RestAssured.given;
@@ -12,10 +10,6 @@ import static org.hamcrest.Matchers.*;
 
 @QuarkusTest
 class JdbcGenericConnectorApplyHandlerIT {
-
-    private static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config()
-        .encoderConfig(EncoderConfig.encoderConfig()
-            .encodeContentTypeAs("application/yaml", ContentType.TEXT));
 
     @Test void apply_jdbcMultiTable_creates_connector_and_N_endpoints() {
         String yaml = """
@@ -47,10 +41,11 @@ class JdbcGenericConnectorApplyHandlerIT {
                     watermark_column: ts
                     pk_columns: [invoice_id, line_no]
               schedule: "*/15 * * * *"
+              window: "22:00-06:00"
               target: {}
             """.formatted(System.nanoTime());
 
-        String connectorId = given().config(YAML_CFG)
+        String connectorId = given().config(YamlBody.CONFIG)
             .headers(TestIdentity.tenantAndUser(1))
             .contentType("application/yaml")
             .body(yaml)
@@ -64,11 +59,20 @@ class JdbcGenericConnectorApplyHandlerIT {
 
         // A10: the manifest cron must land on the Connector.schedule COLUMN (the
         // scheduler's WHERE clause) — not only in the config JSON.
+        //
+        // And the read door must GIVE BACK both preamble fields, each exactly once (#499).
+        // `window` was stored on its own column and shown by nothing, so `lm connector list`
+        // had a SCHED column and no fence and the flat `get -> edit -> apply` loop dropped a
+        // declared window without a word. `schedule` had the opposite defect: the two handlers
+        // that copy it into the config JSON made `lm connector get` print it twice, and the copy
+        // is read by nobody — the scheduler selects on the column.
         given()
             .headers(TestIdentity.tenantAndUser(1))
         .when().get("/api/platform/connectors/" + connectorId)
         .then()
             .statusCode(200)
-            .body("schedule", equalTo("*/15 * * * *"));
+            .body("schedule", equalTo("*/15 * * * *"))
+            .body("window", equalTo("22:00-06:00"))
+            .body("config.schedule", nullValue());
     }
 }

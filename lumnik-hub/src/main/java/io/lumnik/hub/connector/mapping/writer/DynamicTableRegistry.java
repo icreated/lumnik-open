@@ -42,6 +42,10 @@ public class DynamicTableRegistry {
   /** The hybrid writer's schema — entirely hub-owned (created only by HybridJsonbWriter),
    *  so every registered ext.* row is droppable with its connector (C4/P18 PR1). */
   static final String HYBRID_SCHEMA = "ext";
+  /** {@code mapping_id} marker {@link HybridJsonbWriter} registers its targets under — the one
+   *  field that tells the two row writers apart in this table (the schema does not: a hybrid spec
+   *  with no schema registers under {@code public}, and a mapping may target any schema). */
+  static final String HYBRID_MAPPING_PREFIX = "hybrid:";
 
   static boolean isHubDynamicTable(String schema, String name) {
     if (name == null) return false;
@@ -56,6 +60,39 @@ public class DynamicTableRegistry {
   @Inject Instance<ExtractionSink> sinks;
 
   @Inject HybridJsonbWriter hybridWriter;
+
+  /**
+   * Does a row written into this table emit {@code data.row.changed}? The positive form of the
+   * question on purpose: the event is staged by {@link DynamicTableWriter} alone, so the answer is
+   * "there is a registry row for it, and it is not one the hybrid writer put there". Everything
+   * else — a fused {@code connector.v_} entity view, an {@code ext.*} hybrid target, a table the
+   * card grew from some future source — answers false, so drift refuses instead of going silent.
+   *
+   * <p>That silence is what this exists to end: a subscription declared on a table nothing writes
+   * rows into is accepted, listed, and never heard from again.
+   *
+   * @param fqn schema-qualified, exactly as the writer stamps it on the event's {@code entity}
+   */
+  public boolean emitsRowEvents(Long tenantId, String fqn) {
+    if (tenantId == null || fqn == null) return false;
+    int dot = fqn.indexOf('.');
+    if (dot <= 0 || dot == fqn.length() - 1) return false;
+    String sql = "SELECT 1 FROM connector.dynamic_table "
+        + "WHERE tenant_id = ? AND table_schema = ? AND table_name = ? "
+        + "AND mapping_id NOT LIKE ? LIMIT 1";
+    try (Connection c = adminDs.getConnection();
+         PreparedStatement ps = c.prepareStatement(sql)) {
+      ps.setLong(1, tenantId);
+      ps.setString(2, fqn.substring(0, dot));
+      ps.setString(3, fqn.substring(dot + 1));
+      ps.setString(4, HYBRID_MAPPING_PREFIX + "%");
+      try (ResultSet rs = ps.executeQuery()) {
+        return rs.next();
+      }
+    } catch (Exception e) {
+      throw new RuntimeException("DynamicTableRegistry.emitsRowEvents: " + e.getMessage(), e);
+    }
+  }
 
   /** Returns the inferred schema {column: pg_type} or null if not registered. */
   public Map<String, String> findSchema(Long tenantId, String mappingId) {

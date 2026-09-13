@@ -36,16 +36,14 @@ func newOutputsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			limit, _ := cmd.Flags().GetInt("limit")
-			items, err := c.OutputList(limit)
+			items, err := c.OutputList(pageLimit(cmd))
 			if err != nil {
 				return err
 			}
-			format, _ := cmd.Flags().GetString("output")
-			return output.Print(cmd.OutOrStdout(), format, outputHeaders, items, outputRow)
+			return printPage(cmd, outputHeaders, items, outputRow)
 		},
 	}
-	list.Flags().Int("limit", 200, "max deliveries to list")
+	addPageLimitFlag(list, 200, client.OutputsPageCap, "max deliveries to list")
 	root.AddCommand(list)
 	return root
 }

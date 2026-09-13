@@ -44,7 +44,7 @@ public class AggregatorHook implements RowHook {
   }
 
   private Map<String, Object> buildEmission(List<Map<String, Object>> buf, JsonNode params) {
-    Map<String, Object> result = new HashMap<>();
+    Map<String, Object> result = new LinkedHashMap<>();
     applyKeepFirst(result, buf, params);
     applyMerge(result, buf, params);
     return result;

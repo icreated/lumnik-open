@@ -285,4 +285,50 @@ class WorkflowDormancySweepIT {
         assertThat(events).anySatisfy(e -> assertThat(e.get("payload")).contains(longKey));
         assertThat(observations.loadAll(TENANT, WF).get(longKey).alertedAt()).isNotNull();
     }
+
+    /**
+     * Every identifier in {@code latestStatePerKey} is interpolated — JDBC cannot bind one — so this
+     * is where quoting has to hold: a capitalised table, a space in the watched column, a {@code °}
+     * in the business key. Bare, {@code SELECT DISTINCT ON (N° Commande)} is not a miss but a SYNTAX
+     * ERROR, and the per-workflow net swallows it as a logged skip — a declared dormancy that never
+     * fires, in silence, forever.
+     *
+     * <p>Which is exactly why the ledger is the whole assertion: a swallowed statement observes
+     * nothing, so {@code containsOnlyKeys} is what goes red (and did, before the fix). Aging and
+     * alerting past that point would re-prove {@code cold_start_then_dormancy…} with no identifier
+     * in play. One tenant of its own, because this workflow emits like any other and the assertions
+     * above count events per tenant.
+     */
+    @Test
+    void a_lifecycle_over_the_names_the_source_chose_still_sweeps() throws Exception {
+        long tenant = 7502L;
+        String table = "connector.\"t_WfSweepVerbatim_it\"";
+        String yaml = """
+            apiVersion: apps.lumnik.io/v1
+            kind: Workflow
+            metadata: { name: wf-sweep-verbatim-it }
+            spec:
+              scope: demo
+              provenance: declared
+              on: { table: "connector.t_WfSweepVerbatim_it", column: "Statut Commande", key: "N° Commande" }
+              dormancy: { after: 1m }
+              states:
+                - { code: EN_COURS, initial: true, aliases: [en cours] }
+                - { code: TERMINE, aliases: [fini], terminal: true }
+            """;
+        try (Connection c = adminDs.getConnection(); Statement s = c.createStatement()) {
+            s.execute("CREATE TABLE IF NOT EXISTS " + table + " (id BIGSERIAL PRIMARY KEY, "
+                + "tenant_id BIGINT NOT NULL, \"N° Commande\" TEXT, \"Statut Commande\" TEXT, "
+                + "_ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+            s.execute("DELETE FROM " + table);
+            s.execute("DELETE FROM core.workflow_observation WHERE tenant_id = " + tenant);
+            s.execute("INSERT INTO " + table + " (tenant_id, \"N° Commande\", \"Statut Commande\") "
+                + "VALUES (" + tenant + ", 'CMD-1', 'en cours'), (" + tenant + ", 'CMD-2', 'fini')");
+        }
+        manifests.upsert(tenant, new WorkflowManifestParser().parse(yaml), yaml);
+
+        sweep.sweepNow();
+        assertThat(observations.loadAll(tenant, "wf-sweep-verbatim-it"))
+            .containsOnlyKeys("CMD-1", "CMD-2");
+    }
 }

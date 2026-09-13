@@ -5,9 +5,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 
 	"github.com/spf13/cobra"
+
+	"github.com/icreated/lumnik-open/lm/internal/output"
+	"github.com/icreated/lumnik-open/lm/internal/types"
 )
+
+// restConnectorType is the only connector_type the REST engine drives; `graphql` and `soap` are
+// per-endpoint request shapes on it, not families of their own.
+const restConnectorType = "rest-generic"
 
 func newSourceRestCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -18,29 +26,110 @@ func newSourceRestCmd() *cobra.Command {
 	return cmd
 }
 
+// newSourceRestTestCmd pre-flights every enabled endpoint of a connector: one request each, the
+// one an ingestion run would send first, writing nothing.
+//
+// The hub has no test-all route — the endpoint verbs each address one endpoint — so the walk is
+// here, exactly as `lm endpoint enable|purge` resolve one. (This command used to POST the literal
+// "*" as an endpoint id and hoped the server would read it as "all"; the route binds a UUID, so it
+// answered 404 to every invocation ever made.)
 func newSourceRestTestCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "test <connector>",
-		Short: "Pre-flight: auth probe + 1 page, no write",
+		Short: "Pre-flight every enabled endpoint: the request a run would send, no write",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
 				return err
 			}
-			cid, err := resolveConnectorID(c, args[0])
+			conn, err := resolveConnector(c, args[0])
 			if err != nil {
 				return err
 			}
-			// "*" signals test-all-endpoints to the server
-			body, err := c.EndpointTest(cid, "*")
+			if err := requireRestConnector(conn, args[0], "`lm source rest test` pre-flights REST sources"); err != nil {
+				return err
+			}
+			eps, err := c.Endpoints(conn.ID)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), string(body))
+
+			var verdicts []types.PreflightVerdict
+			skipped := 0
+			for _, ep := range eps {
+				// A disabled endpoint will not run, so a red one here would be a pre-flight
+				// failing for something that was never going to be attempted.
+				if !ep.Enabled {
+					skipped++
+					continue
+				}
+				v, err := c.EndpointTest(conn.ID, ep.ID)
+				if err != nil {
+					return err
+				}
+				verdicts = append(verdicts, v)
+			}
+			if skipped > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: skipped %d disabled endpoint(s)\n", skipped)
+			}
+			if len(verdicts) == 0 {
+				return fmt.Errorf("no enabled endpoint on %q — nothing was pre-flighted", args[0])
+			}
+
+			format, _ := cmd.Flags().GetString("output")
+			err = output.Print(cmd.OutOrStdout(), format,
+				[]string{"ENDPOINT", "METHOD", "STATUS", "ITEMS", "VERDICT"},
+				verdicts, preflightRow)
+			if err != nil {
+				return err
+			}
+
+			failed := 0
+			for _, v := range verdicts {
+				if !v.OK {
+					failed++
+				}
+			}
+			if failed > 0 {
+				// A pre-flight exists to be believed before a run is launched: it may not report
+				// a refusal on stdout and still exit 0.
+				return fmt.Errorf("%d of %d enabled endpoint(s) did not answer with readable data",
+					failed, len(verdicts))
+			}
 			return nil
 		},
 	}
+}
+
+// requireRestConnector refuses a connector of another family BY NAME rather than by symptom: every
+// other family lacks the connection blocks the REST engine composes a request from, so walking on
+// would report "Unknown pagination kind: null" once per table and never mention the word jdbc.
+// Shared by the two commands that reach a REST source directly — test and probe.
+func requireRestConnector(conn types.Connector, named, gesture string) error {
+	if conn.TypeID == restConnectorType {
+		return nil
+	}
+	return fmt.Errorf("%q is not a %s connector (type: %q) — %s",
+		named, restConnectorType, conn.TypeID, gesture)
+}
+
+// preflightRow renders one verdict. A status of 0 means the request never got an answer at all
+// (unreachable host, a credential that would not resolve) — printed as "-" rather than as a
+// status code no server ever sent.
+func preflightRow(v types.PreflightVerdict) []string {
+	status := "-"
+	if v.Status > 0 {
+		status = strconv.Itoa(v.Status)
+	}
+	verdict := "ok"
+	if !v.OK {
+		verdict = v.Detail
+		if verdict == "" {
+			verdict = "failed"
+		}
+	}
+	return []string{v.Endpoint, v.Method, status, strconv.Itoa(v.Items), verdict}
 }
 
 func newSourceRestRunCmd() *cobra.Command {
@@ -101,7 +190,7 @@ func newSourceRestFromOpenApiCmd() *cobra.Command {
 				return fmt.Errorf("apply failed: %w", err)
 			}
 			printApplySummary(cmd.OutOrStdout(), resp, name)
-			return nil
+			return renderApplyWarnings(cmd, name, resp)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "connector name (required)")
@@ -131,18 +220,21 @@ func newSourceRestProbeCmd() *cobra.Command {
 	var endpoint string
 	cmd := &cobra.Command{
 		Use:   "probe <connector>",
-		Short: "Sample fetch + LLM-augmented manifest draft",
+		Short: "Sample one path of a connector and draft its endpoint fragment",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cli, err := ClientFromCmd(cmd)
 			if err != nil {
 				return err
 			}
-			cid, err := resolveConnectorID(cli, args[0])
+			conn, err := resolveConnector(cli, args[0])
 			if err != nil {
 				return err
 			}
-			body, err := cli.RestProbe(cid, endpoint)
+			if err := requireRestConnector(conn, args[0], "`lm source rest probe` samples a REST source"); err != nil {
+				return err
+			}
+			body, err := cli.RestProbe(conn.ID, endpoint)
 			if err != nil {
 				return err
 			}

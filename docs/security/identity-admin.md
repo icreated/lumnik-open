@@ -1,100 +1,109 @@
-# Tenants, users & scopes — the admin gestures
+# Tenants, users & scopes
 
-Identity lives in **Keycloak**, not in lumnik: creating a human, giving them roles,
-granting a métier scope are Keycloak-console gestures, and the hub follows the JWT.
-This page walks each gesture in the bundled console — no Keycloak manual required
-(the [official docs](https://www.keycloak.org/documentation) are for the hyper-curious).
+> Identity lives in Keycloak, not in lumnik. Creating a human, granting a role, fencing a métier
+> are console gestures; the hub follows the token.
 
-**The model in four lines.** The hub trusts three JWT claims: `tenant_id` (which tenant),
-`user_id` (which row), and the realm roles (`lm_*` for permissions, `scope:*` for métier
-fences). The bundled realm `lumnik` already carries the protocol mappers that turn the
-user attributes `tenant_id` / `user_id` into those claims — you only set attributes and
-roles on users. A user *with* a `user_id` is bound to that row directly and never
-provisioned — the bundled `integrator` (`user_id=1`) has its row seeded at install, and a
-`user_id` that names no row still authenticates but the doors that need the row (default
-scope) answer 404. Outside the open edition, a user *without* one is **JIT-provisioned** at
-first login; SCIM deprovisions it ([SCIM](scim.md)).
+**The model**
 
-Console: `http://localhost:8180` → realm **lumnik** (admin credentials from your `.env`).
-The realm ships with **brute-force detection on** (temporary lockout at Keycloak's
-defaults — tune it under *Realm settings → Security defenses*).
-The console is **local-only by design** — the compose pins Keycloak to `127.0.0.1` and the
-[TLS façade](../deploy.md#one-https-origin-the-tls-facade) proxies only `/realms/*` (the
-OIDC endpoints), never the admin console. On a remote host, reach it through an SSH
-tunnel ([reach the hub from another machine](../deploy.md#reach-the-hub-from-another-machine)).
+- The hub trusts four claims: `aud` (must be `lumnik-backend`), `tenant_id` (which tenant),
+  `groups` (the realm roles: `lm_*` for surfaces, `scope:*` for métier fences) and, optionally,
+  `user_id` (which hub row).
+- The bundled realm `lumnik` already maps the user attributes `tenant_id` and `user_id` onto
+  those claims. You set attributes and roles; nothing else.
+- A user **with** a `user_id` is bound to that hub row and never provisioned. The bundled
+  `integrator` (`user_id=1`) has its row seeded at install.
+- A user **without** one is created at first login (JIT) on lumnik Pro; SCIM deprovisions it.
+  lumnik Open has neither. [BYO IdP](byo-idp.md) · [SCIM](scim.md)
+
+**The console**
+
+- `http://localhost:8180`, realm **lumnik**, admin credentials from your `.env`.
+- Brute-force detection is **on**: temporary lockout at Keycloak's defaults. Tune it under
+  *Realm settings → Security defenses*.
+- **Local-only by design.** The compose pins Keycloak to `127.0.0.1`, and the
+  [TLS façade](../deploy.md#one-https-origin-the-tls-facade) proxies only the OIDC endpoints,
+  never the admin console. On a remote host, use an SSH tunnel:
+  [reach the hub from another machine](../deploy.md#reach-the-hub-from-another-machine).
 
 ## How to…
 
 ### Add a user
 
-1. **Users → Add user** — username, email; **Create**.
-2. **Credentials** tab → set a password (or let the IdP federation handle it).
-3. **Attributes** tab → add `tenant_id` = the tenant's numeric id.
-4. **Role mapping** tab → **Assign role** → `lm_user` (plus any `scope:*` roles — see below).
+1. **Users → Add user**: username, email, **Create**.
+2. **Credentials** tab: set a password, or let your IdP federation handle it.
+3. **Attributes** tab: `tenant_id` = the tenant's numeric id.
+4. **Role mapping** tab → **Assign role** → `lm_user`, plus any `scope:*` role.
 
-**Result (outside the open edition):** the first login JIT-creates the hub row in that tenant —
-nothing to do on the lumnik side. **Open edition:** there is no JIT — also add a
-`user_id` attribute pointing at an existing hub user row
-(`POST /api/tenants/{tid}/users`, `lm_admin`); a JWT without it is refused 401.
+- **lumnik Pro**: the first login creates the hub row. Nothing to do on the lumnik side.
+- **lumnik Open**: there is no JIT. Also add a `user_id` attribute pointing at an existing hub
+  row (`POST /api/tenants/{tid}/users`, as `lm_admin`). A token without it is refused with 401.
 
 ### Grant (or revoke) a métier scope
 
-Scope roles are **created on demand** — the shipped realm has none, because zero
-`scope:*` roles means *unscoped, tenant-wide*.
+Scope roles are created on demand. The shipped realm has none: zero `scope:*` roles means
+unscoped, tenant-wide.
 
-1. **Realm roles → Create role** — name it `scope:ventes` (the tag your manifests use
-   in `spec.scope`).
+1. **Realm roles → Create role**: name it `scope:ventes`, the tag your manifests use in `spec.scope`.
 2. **Users →** the user → **Role mapping → Assign role** → `scope:ventes`.
 
-**Result:** from their next token, the user is **bound**: chat, search, views, entity
-reads answer only inside granted scopes — anything else refuses with
-`403 {"error":"scope not granted"}` ([Scopes](../rag/scopes.md)). Revoking works the
-same gesture in reverse; removing their *last* scope role makes them tenant-wide again.
+From their next token the user is **bound**: chat, search, views and entity reads answer only
+inside granted scopes. Anything else refuses with `403 {"error":"scope not granted"}`.
+Revoking is the same gesture in reverse; removing the last scope role makes them tenant-wide again.
+
+```mermaid
+flowchart LR
+  u0["no scope:* role"] -->|"tenant-wide"| all
+  ua["scope:ventes"] --> V
+  ua -.->|"403 scope not granted"| S
+  subgraph all["one tenant's data"]
+    V[("scope: ventes")]
+    S[("scope: stock")]
+  end
+```
 
 ### Make someone admin, integrator, superadmin
 
-Same **Role mapping** gesture; what each unlocks:
+Same **Role mapping** gesture. Roles are separate, not ranked: an integrator is not
+automatically an admin. [Roles & permissions](role-management.md)
 
 | Role | Unlocks |
 |---|---|
-| `lm_user` | the app surface — chat, views, inbox, PWA |
-| `lm_admin` | tenant administration — integrations, notification rules, business lists |
-| `lm_integrator` | the `/api/platform/*` surface `lm` drives — connectors, manifests, runs |
-| `lm_superadmin` | cross-tenant: tenant CRUD and impersonation |
-
-Roles are separate, not ranked — an integrator is not automatically an admin
-([role management](role-management.md)).
+| `lm_user` | the app surface: entities, views, chat, inbox, the PWA |
+| `lm_integrator` | the platform surface `lm` drives: connectors, runs, manifests, `views/apply`, `workflows/apply` |
+| `lm_admin` | tenant administration: users, integrations, notification rules, business lists, SCIM tokens |
+| `lm_superadmin` | cross-tenant: tenant list, tenant CRUD, impersonation |
 
 ### Onboard a new tenant
 
-1. Create the tenant row (superadmin):
+1. Create the tenant row, as superadmin:
    ```bash
    TOKEN=$(awk '/^ *access:/ {print $2; exit}' ~/.lm/config.yaml)
    curl -s -X POST https://your-hub.example.com/api/tenants \
      -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
      -d '{"code": "ACME", "name": "Acme Corp"}'    # both required; note the returned id
    ```
-2. In Keycloak, create its first admin (gesture above) with `tenant_id` = the returned
-   id and roles `lm_user` + `lm_admin`.
+2. In Keycloak, create its first admin (gesture above) with `tenant_id` = the returned id and
+   roles `lm_user` + `lm_admin`.
 
-**Result:** that admin's first login lands in the new tenant; RLS fences every read and
-write to it from the first request.
+That admin's first login lands in the new tenant. RLS fences every read and write to it from
+the first request.
 
 ### Offboard someone
 
-`active: false` from your IdP via [SCIM](scim.md) (not on the open edition) archives the user —
-tokens are refused from the next request. Departure of the *integrator* has its own
-checklist: [offboarding](offboarding.md).
+- A métier user: `active: false` from your IdP via [SCIM](scim.md) (lumnik Pro), or
+  `DELETE /api/tenants/{tid}/users/{id}` as `lm_admin` (both editions). Either archives the hub
+  row, and the very next request is refused, valid token or not.
+- Disabling the account in Keycloak alone stops new logins and refreshes; a live access token
+  stays valid until it expires (1 hour on the bundled realm). Do both.
+- The integrator: a checklist of its own, [Offboarding the integrator](offboarding.md).
 
-## One surface to not misread
+## One surface not to misread
 
-`POST /api/tenants/{tid}/users` creates a **hub row, not a login** — it carries no IdP
-identity, so no one can authenticate as it (outside the open edition JIT creates rows by
-itself; on the open edition the row is what a `user_id` attribute points at). Treat the
-users API as the mirror it is, not as an onboarding path.
+`POST /api/tenants/{tid}/users` creates a **hub row, not a login**. It carries no IdP identity,
+so nobody can authenticate as it. On lumnik Pro JIT creates rows by itself; on lumnik Open the
+row is what a `user_id` attribute points at. The users API is a mirror, not an onboarding path.
 
 ## See also
 
-- [Role management](role-management.md) — the permission model behind `lm_*`
-- [Bring your own IdP](byo-idp.md) — the same claims from your enterprise SSO
+- [Roles & permissions](role-management.md) · [Bring your own IdP](byo-idp.md)
 - [SCIM](scim.md) · [Offboarding](offboarding.md) · [Scopes](../rag/scopes.md)

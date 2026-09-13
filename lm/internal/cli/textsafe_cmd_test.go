@@ -92,9 +92,16 @@ func TestSourceRestProbeCommand_sanitizesServerEchoedBidi(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/platform/connectors":
-			_, _ = w.Write([]byte(`[{"id":"c1","name":"conn"}]`))
+			// In contract with the real route on both counts: a UUID id, because the hub binds
+			// connectorId through ApiErrors.uuidOrRefuse and answers 400 to anything else, and a
+			// typeId, because the probe refuses another family by name. A fake looser than the
+			// door it stands for is how this very command stayed green while being broken.
+			_, _ = w.Write([]byte(`[{"id":"` + fakeCID + `","name":"conn","typeId":"rest-generic"}]`))
 		case r.URL.Path == "/api/platform/sources/rest/probe":
-			_, _ = w.Write([]byte(`{"draft":"` + bidiName + `"}`))
+			// text/plain YAML, which is what the route produces — the whole reason the client
+			// sends no Accept header.
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = w.Write([]byte("- id: " + bidiName + "\n  method: GET\n"))
 		default:
 			http.NotFound(w, r)
 		}
@@ -113,9 +120,13 @@ func TestSourceRestTestCommand_sanitizesServerEchoedBidi(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/platform/connectors":
-			_, _ = w.Write([]byte(`[{"id":"c1","name":"conn"}]`))
+			_, _ = w.Write([]byte(`[{"id":"c1","name":"conn","typeId":"rest-generic"}]`))
+		case r.URL.Path == "/api/platform/connectors/c1/endpoints":
+			_, _ = w.Write([]byte(`[{"id":"e1","name":"` + bidiName + `","method":"GET","enabled":true}]`))
 		case strings.Contains(r.URL.Path, "/endpoints/") && strings.HasSuffix(r.URL.Path, "/test"):
-			_, _ = w.Write([]byte(`{"report":"` + bidiName + `"}`))
+			// The endpoint NAME is what the pre-flight table echoes back, so that is where the
+			// server-supplied bidi has to ride for this to still be testing anything.
+			_, _ = w.Write([]byte(`{"endpoint":"` + bidiName + `","method":"GET","status":200,"ok":true,"items":1}`))
 		default:
 			http.NotFound(w, r)
 		}

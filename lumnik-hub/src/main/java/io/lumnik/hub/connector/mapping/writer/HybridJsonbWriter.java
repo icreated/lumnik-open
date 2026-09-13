@@ -9,6 +9,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.PromotedColumn;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.SqlType;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.Transform;
+import io.lumnik.hub.sql.TemporalText;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -137,7 +138,8 @@ public class HybridJsonbWriter {
         for (PromotedColumn col : spec.promote()) cols.put(col.name(), col.type().ddl);
         cols.put("data", "JSONB");
         try {
-            registry.register(tenantId, "hybrid:" + spec.table(), schema, table, cols, connectorId);
+            registry.register(tenantId, DynamicTableRegistry.HYBRID_MAPPING_PREFIX + spec.table(),
+          schema, table, cols, connectorId);
         } catch (RuntimeException e) {
             // Registration must never fail a data write. The known case: the one-shot CSV path
             // writes rows INSIDE the transaction that creates its connector row, so the registry
@@ -329,7 +331,7 @@ public class HybridJsonbWriter {
         for (int ci = 0; ci < promote.size(); ci++) {
             PromotedColumn col = promote.get(ci);
             Object raw = ctx.read(colPaths.get(ci), Object.class);
-            Object val = applyTransform(raw, col.transform());
+            Object val = applyTransform(raw, col.transform(), col.name());
             bindTyped(ps, i++, val, col.type());
         }
 
@@ -342,12 +344,23 @@ public class HybridJsonbWriter {
 
     // package-private static: a pure function of (raw, transform), so a unit test can drive it
     // under a forced locale without standing up the writer.
-    static Object applyTransform(Object raw, Optional<Transform> t) {
+    static Object applyTransform(Object raw, Optional<Transform> t, String column) {
         if (raw == null || t.isEmpty()) return raw;
         return switch (t.get()) {
             case FROM_EPOCH    -> OffsetDateTime.ofInstant(
                                     Instant.ofEpochSecond(((Number) raw).longValue()), ZoneOffset.UTC);
-            case PARSE_ISO8601 -> OffsetDateTime.parse(String.valueOf(raw));
+            case PARSE_ISO8601 -> {
+                // Not OffsetDateTime.parse: that demands an offset, and the single most common ERP
+                // export — "2008-04-18T00:00:00" — has none, so a valid ISO-8601 local date-time
+                // failed the whole run. TemporalText is the rule the view filter reads the same
+                // column with; sharing it is what keeps a filter typed against a value on screen
+                // matching the row ingestion wrote.
+                Instant at = TemporalText.parse(String.valueOf(raw));
+                if (at == null) throw new IllegalArgumentException(
+                    "column '" + column + "': parse_iso8601 cannot read '" + raw
+                    + "' as a timestamp — expected an ISO-8601 date, date-time, or offset date-time");
+                yield at.atOffset(ZoneOffset.UTC);
+            }
             case TO_LOWER      -> String.valueOf(raw).toLowerCase(Locale.ROOT);
             case TO_UPPER      -> String.valueOf(raw).toUpperCase(Locale.ROOT);
             case TRIM          -> String.valueOf(raw).trim();

@@ -134,13 +134,16 @@ class JdbcFullScanCursorIT {
                 ConnectorType type = registry.find("jdbc-generic");
 
                 // Chunk 1 — from an empty cursor.
-                ChunkResult r1 = inTx(() -> exec.executeChunk(reload(run.getId()), type, endpoint, ConnectorCursor.empty()));
+                ChunkResult r1 = inTx(() -> exec.executeChunk(reload(run.getId()), type, endpoint, ConnectorCursor.empty(), null));
                 assertThat(r1).isInstanceOf(ChunkResult.Success.class);
                 ChunkResult.Success s1 = (ChunkResult.Success) r1;
                 assertThat(s1.processed()).as("chunk 1 should read a full page").isEqualTo(CHUNK);
 
-                // Chunk 2 — fed chunk 1's returned cursor (the exact round-trip the engine does).
-                ChunkResult r2 = inTx(() -> exec.executeChunk(reload(run.getId()), type, endpoint, s1.nextCursor()));
+                // Chunk 2 — fed chunk 1's returned cursor, IN MEMORY. Note this is NOT what the
+                // engine does: it re-reads the cursor from connector_cursor on every iteration
+                // (ConnectorEngine.currentCursor), so this test does not cross the jsonb store.
+                // JdbcCompositeKeyCursorIT is the one that does.
+                ChunkResult r2 = inTx(() -> exec.executeChunk(reload(run.getId()), type, endpoint, s1.nextCursor(), null));
                 assertThat(r2).isInstanceOf(ChunkResult.Success.class);
                 ChunkResult.Success s2 = (ChunkResult.Success) r2;
                 assertThat(s2.processed()).as("chunk 2 should read rows").isGreaterThan(0);

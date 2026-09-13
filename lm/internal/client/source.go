@@ -61,8 +61,8 @@ type JdbcDiscoverResponse struct {
 // and ingestion mode chosen for it.
 type JdbcAddTable struct {
 	Table     string `json:"table"`
-	Watermark string `json:"watermark"`
-	Mode      string `json:"mode"`
+	Watermark string `json:"watermark,omitempty"`
+	Mode      string `json:"mode,omitempty"`
 }
 
 // JdbcAddRequest onboards one or more discovered JDBC tables as connectors:
@@ -73,17 +73,15 @@ type JdbcAddRequest struct {
 	URL          string         `json:"url"`
 	User         string         `json:"user"`
 	Password     string         `json:"password"`
+	Schema       string         `json:"schema,omitempty"`
 	Tables       []JdbcAddTable `json:"tables"`
-	TemplateMode string         `json:"templateMode"`
 	ScheduleCron string         `json:"scheduleCron,omitempty"`
 }
 
-// JdbcAddEntry is one connector/mapping pair created (or skipped) by JdbcAdd.
+// JdbcAddEntry is one connector created (or skipped) by JdbcAdd.
 type JdbcAddEntry struct {
 	ConnectorID   string `json:"connectorId"`
-	MappingID     string `json:"mappingId"`
 	ConnectorName string `json:"connectorName"`
-	MappingName   string `json:"mappingName"`
 	Status        string `json:"status"`
 }
 

@@ -437,7 +437,7 @@ Events are defined in `META-INF/events.yaml` files, one per module. These files 
 |---|---|
 | `data.row.changed` | A genuinely new or changed row landed in a watched ingest table (emitted in the ingestion transaction) |
 | `annotation.decision.acked` | A human treated a decision in the inbox |
-| `connector.run.started` / `completed` / `cancelled` / `failed` | Run lifecycle; `completed` carries the conservation counters |
+| `connector.run.started` / `completed` / `partial` / `cancelled` / `failed` | Run lifecycle; `completed` carries the conservation counters. **`partial` is a terminal ending like the other three** — the run stopped below the target it gave itself, having written everything it read. A subscription that only listens for `completed` will not hear those runs, which is why the family is worth subscribing to with the `connector.run.*` glob |
 | `platform.secret.created` / `updated` / `deleted` / `read` | Secret lifecycle (`read` on cache misses only) |
 | `org.created` / `updated` / `moved` / `archived` | Organisation lifecycle |
 

@@ -1,6 +1,7 @@
 package io.lumnik.hub.process;
 
 import io.lumnik.hub.view.ViewFilter;
+import io.lumnik.hub.sql.TemporalText;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -82,9 +83,9 @@ public final class ProcessRuleEvaluator {
         } else if (v instanceof Instant i) {
             left = i;
         } else {
-            left = ViewFilter.parseTemporal(String.valueOf(v));
+            left = TemporalText.parse(String.valueOf(v));
             if (left == null) return null;
         }
-        return left.compareTo(ViewFilter.parseTemporal(operand));
+        return left.compareTo(TemporalText.parse(operand));
     }
 }

@@ -6,6 +6,8 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.sql.Connection;
 import java.sql.Statement;
@@ -94,27 +96,36 @@ class WorkflowDataTruthIT {
         assertThat(r.undeclared()).isEmpty();
     }
 
-    /** Anything the probe cannot do — a statement timeout on a 50M-row table, a dropped column,
-     *  a revoked grant — is a degraded REPORT, never a refusal: "nothing ever blocks". */
-    @Test
+    /**
+     * Anything the probe cannot do — a statement timeout on a 50M-row table, a dropped column, a
+     * revoked grant — is a degraded REPORT, never a refusal: "nothing ever blocks".
+     *
+     * <p>The second row is what replaced the character grammar. The name is no longer filtered, so
+     * quoting is the whole defence, and the SQLSTATE is the claim: **42703 undefined_column, not
+     * 42601 syntax error** — the server read the whole hostile string as ONE identifier. Asserting
+     * `checkUnavailable` alone would be inert, since bare interpolation reaches that flag too.
+     */
+    @ParameterizedTest(name = "an unrunnable probe degrades the report: column {0}")
+    @ValueSource(strings = {"no_such_col", "statut\"; DROP TABLE connector.t_wf_truth_it; --"})
     @Transactional
-    void an_unrunnable_probe_degrades_the_report_instead_of_throwing() throws Exception {
+    void an_unrunnable_probe_degrades_the_report_instead_of_throwing(String column) throws Exception {
         try (Connection c = adminDs.getConnection(); Statement s = c.createStatement()) {
             s.execute("CREATE TABLE IF NOT EXISTS connector.t_wf_truth_it "
                 + "(id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, statut TEXT)");
         }
 
-        // the table exists, the column does not (42703) — not the one modelled case
-        WorkflowDataTruth.Report r = truth.check(TENANT, graph("connector.t_wf_truth_it", "no_such_col"));
+        // the table exists, the column does not — not the one modelled case
+        WorkflowDataTruth.Report r = truth.check(TENANT, graph("connector.t_wf_truth_it", column));
 
         assertThat(r.checkUnavailable()).isTrue();
-        assertThat(r.unavailableReason()).isNotBlank();
+        assertThat(r.unavailableReason()).contains("42703");
         assertThat(r.tableMissing()).isFalse();
         assertThat(r.undeclared()).isEmpty();
     }
 
     /**
-     * A typo'd {@code spec.on.key} (`nu` for `num`) passes the identifier grammar and applies with
+     * A typo'd {@code spec.on.key} (`nu` for `num`) is indistinguishable from a column not yet
+     * ingested, so it applies with
      * a clean 200 — and then the dormancy sweep's SELECT fails 42703 on every single tick, silently,
      * forever. The report already models "declared but not yet real" ({@code tableMissing}); the
      * missing key column belongs in the same family, surfaced and never refused.
@@ -138,5 +149,37 @@ class WorkflowDataTruthIT {
             .keyColumnMissing()).isFalse();
         assertThat(truth.check(TENANT, graph("connector.t_wf_truth_key_it", "statut"))
             .keyColumnMissing()).isFalse();
+    }
+
+    /**
+     * A table created exactly the way {@code DynamicTableWriter} creates one — quoted, so the names
+     * are the source's own (see {@code docs/apps/workflows.md#names-the-source-chose}).
+     *
+     * <p>What this test adds over the parser's: the CONFRONTATION runs on them. The sharp half is
+     * {@code keyColumnMissing}, which the catalog probe answers — and that flag is, by this class's
+     * own javadoc, the only signal a typo'd key ever produces, so a false one is worse than none.
+     */
+    @Test
+    @Transactional
+    void a_name_the_source_chose_is_confronted_not_refused() throws Exception {
+        try (Connection c = adminDs.getConnection(); Statement s = c.createStatement()) {
+            s.execute("CREATE TABLE IF NOT EXISTS connector.\"t_WfTruthVerbatim_it\" "
+                + "(id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, "
+                + "\"N° Commande\" TEXT, \"Statut Commande\" TEXT)");
+            s.execute("DELETE FROM connector.\"t_WfTruthVerbatim_it\"");
+            s.execute("INSERT INTO connector.\"t_WfTruthVerbatim_it\" "
+                + "(tenant_id, \"N° Commande\", \"Statut Commande\") VALUES "
+                + "(" + TENANT + ", 'C-1', 'En cours'), (" + TENANT + ", 'C-2', 'EN LITIGE')");
+        }
+
+        WorkflowDataTruth.Report r = truth.check(TENANT,
+            graph("connector.t_WfTruthVerbatim_it", "Statut Commande", "N° Commande"));
+
+        assertThat(r.tableMissing()).isFalse();
+        assertThat(r.checkUnavailable()).isFalse();
+        assertThat(r.keyColumnMissing()).isFalse();
+        assertThat(r.undeclared()).extracting(WorkflowDataTruth.ValueCount::value)
+            .containsExactly("EN LITIGE");
+        assertThat(r.unobserved()).containsExactlyInAnyOrder("TERMINE", "ANNULE");
     }
 }

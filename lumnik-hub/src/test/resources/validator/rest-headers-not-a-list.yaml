@@ -1,0 +1,25 @@
+# `headers` as a string where a list belongs. The declaration gives the runner the shape check;
+# `validateHeaders` must NOT repeat it, or this one mistake comes back as two refusals.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: stripe-headers-string
+  connector_type: rest-generic
+  scopes: [crm]
+spec:
+  base_url: https://api.stripe.com
+  headers: "X-Api-Version: 2026-01"
+  endpoints:
+    - id: customers
+      path: /v1/customers
+      method: GET
+      pagination:
+        kind: cursor
+        cursor_param: starting_after
+        cursor_path: $.data[-1:].id
+        has_more_path: $.has_more
+        response_path: $.data
+      target:
+        kind: hybrid
+        table: stripe_customers
+        unique_key: $.id

@@ -27,10 +27,15 @@ class TenantAdminAuthIT {
     }
 
     /**
-     * Pins the shape of a role refusal on the wire, because five documentation pages tell readers
-     * to tell three different 403s apart by their body: this one is EMPTY, a métier-scope refusal
+     * Pins the shape of a role refusal on the wire, because the documentation teaches readers to
+     * tell three different 403s apart by their body: this one is EMPTY, a métier-scope refusal
      * carries {@code {"error":"scope not granted"}}, and {@code /api/platform/*} answers the plain
-     * text {@code missing role lm_integrator} from {@code PlatformApiAuthFilter}.
+     * text {@code missing role lm_integrator} from {@code PlatformApiAuthFilter}. All three are
+     * now measured in this package — the second by {@code ScopeRefusalOnTheWireIT}, the third by
+     * {@code PlatformAuthIT}, which found the plain sentence going out labelled as JSON.
+     *
+     * <p>(This sentence used to count the pages. Two neighbours then carried two different counts
+     * and the tree carried a third — a number in prose rots, and the mechanism does not.)
      *
      * <p>{@code PermissionInterceptor} throws {@code ForbiddenException("Insufficient
      * permissions")}, which reads as though the message reaches the client — it does not: no

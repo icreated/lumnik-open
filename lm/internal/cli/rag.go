@@ -21,7 +21,7 @@ func newRagCmd() *cobra.Command {
 				return err
 			}
 			topK, _ := cmd.Flags().GetInt("top-k")
-			res, err := c.RagSearch(args[0], topK)
+			res, err := c.RagSearch(args[0], topK, "")
 			if err != nil {
 				return err
 			}
@@ -30,7 +30,7 @@ func newRagCmd() *cobra.Command {
 				[]string{"SCORE", "SOURCE", "SNIPPET"}, res.Results,
 				func(h client.RagSearchHit) []string {
 					return []string{
-						strFloat(h.Score), h.Source, truncate(h.Snippet, 80),
+						strFloat(h.Similarity), h.Ref, truncate(h.Content, 80),
 					}
 				})
 		},
@@ -77,9 +77,6 @@ func strFloat(f float64) string {
 	return fmt.Sprintf("%.3f", f)
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
-}
+// truncate is output.Truncate under this package's old name — the call sites are many and the
+// rule belongs beside HumanTime, where lm and its TUI already share one human-rendering decision.
+func truncate(s string, n int) string { return output.Truncate(s, n) }

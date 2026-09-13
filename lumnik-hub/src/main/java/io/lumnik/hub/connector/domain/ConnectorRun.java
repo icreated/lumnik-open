@@ -5,6 +5,8 @@ import io.lumnik.common.domain.TenantedEntity;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.Mutability;
+import io.lumnik.hub.connector.persistence.converters.ImmutableJsonNodePlan;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -55,10 +57,12 @@ public class ConnectorRun extends TenantedEntity {
   private int chunkCount = 0;
 
   @JdbcTypeCode(SqlTypes.JSON)
+  @Mutability(ImmutableJsonNodePlan.class)
   @Column(name = "cursor_before", columnDefinition = "jsonb")
   private JsonNode cursorBefore;
 
   @JdbcTypeCode(SqlTypes.JSON)
+  @Mutability(ImmutableJsonNodePlan.class)
   @Column(name = "cursor_after", columnDefinition = "jsonb")
   private JsonNode cursorAfter;
 
@@ -72,6 +76,7 @@ public class ConnectorRun extends TenantedEntity {
   private String triggeredBy;
 
   @JdbcTypeCode(SqlTypes.JSON)
+  @Mutability(ImmutableJsonNodePlan.class)
   @Column(name = "triggered_meta", columnDefinition = "jsonb")
   private JsonNode triggeredMeta;
 }

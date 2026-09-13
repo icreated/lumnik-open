@@ -127,6 +127,12 @@ public class CsvFileConnectorType implements ConnectorType {
     String kind = String.valueOf(transport.getOrDefault("kind", LOCAL));
     if (LOCAL.equals(kind)) {
       boolean isGlob = p.contains("*") || p.contains("?");
+      // This message echoes a SERVER-SIDE path, and ConfigValidationException is now dressed as a
+      // 400 by ConfigValidationExceptionMapper. It is safe only because nothing in production calls
+      // csv's validateConfig — it never reaches a caller. If a future change makes
+      // CsvFileConnectorApplyHandler re-run it (the "validator == runtime" tightening kafka already
+      // has), this path becomes integrator-visible and NO guard would fail. Say what is missing
+      // without the resolved path first.
       if (!isGlob && !Files.exists(Path.of(p)))
         throw new ConfigValidationException("CSV file not found: " + p);
     }

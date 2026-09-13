@@ -44,21 +44,27 @@ git clone https://github.com/icreated/lumnik-open.git && cd lumnik-open
 <div class="lm-grid" markdown>
 <article class="lm-card" markdown>
 <div class="lm-kicker">Half-day 1</div>
-<h3>Defrost reading</h3>
+<div class="lm-title">Defrost reading</div>
 
 Deploy the hub, meet `lm`, run the WOW, and prove that ingestion stayed read-only and lost nothing.
+
+<p class="lm-note">Six steps, ≈ 3 h</p>
 </article>
 <article class="lm-card" markdown>
 <div class="lm-kicker">Half-day 2</div>
-<h3>Defrost reasoning</h3>
+<div class="lm-title">Defrost reasoning</div>
 
 Understand entities, honesty guards, scopes, models, and the TUI an integrator operates from.
+
+<p class="lm-note">Six steps, 3 h</p>
 </article>
 <article class="lm-card" markdown>
 <div class="lm-kicker">Half-day 3</div>
-<h3>Defrost time</h3>
+<div class="lm-title">Defrost time</div>
 
 Move from a mirror of the source to views, processes, workflows, inbox decisions, and the métier PWA.
+
+<p class="lm-note">Six steps, ≈ 3 h 15</p>
 </article>
 </div>
 
@@ -70,7 +76,8 @@ Goal of the day: legacy data flows into the hub, read-only, and you can prove no
 <article class="lm-step" markdown>
 <div class="lm-step__num">1</div>
 <div markdown>
-<h3>The pitch — 10 min</h3>
+<div class="lm-kicker">10 min</div>
+<div class="lm-title">The pitch</div>
 
 Read the [Home page](index.md). It tells you what lumnik is (a read-only defrost of legacy systems) and, just as important, what it is not (not a migration, not a BI project).
 
@@ -80,7 +87,8 @@ Read the [Home page](index.md). It tells you what lumnik is (a read-only defrost
 <article class="lm-step" markdown>
 <div class="lm-step__num">2</div>
 <div markdown>
-<h3>Deploy the hub — 30 min</h3>
+<div class="lm-kicker">30 min</div>
+<div class="lm-title">Deploy the hub</div>
 
 Follow [Deploy lumnik](deploy.md), self-host path: one command, `deploy/selfhost/up.sh`. It generates all secrets into a local `.env` — your credentials live there, including `HUBADMIN_PASSWORD`.
 
@@ -90,7 +98,8 @@ Follow [Deploy lumnik](deploy.md), self-host path: one command, `deploy/selfhost
 <article class="lm-step" markdown>
 <div class="lm-step__num">3</div>
 <div markdown>
-<h3>Meet <code>lm</code> — 20 min</h3>
+<div class="lm-kicker">20 min</div>
+<div class="lm-title">Meet <code>lm</code></div>
 
 The [60-second Quickstart](quickstart/installer.md) builds the `lm` binary, points it at your hub, and logs you in — then puts a first file into the hub with one command.
 
@@ -98,15 +107,16 @@ The [60-second Quickstart](quickstart/installer.md) builds the `lm` binary, poin
 
 ```
 $ lm connector list
-NAME       TYPE      TENANT  SCHED  STATUS     LAST RUN
-customers  csv-file  1              Completed  2026-09-05 05:38
+NAME       TYPE      TENANT  SCHED  WINDOW  STATUS     LAST RUN
+customers  csv-file  1                      Completed  2026-09-05 05:38
 ```
 </div>
 </article>
 <article class="lm-step" markdown>
 <div class="lm-step__num">4</div>
 <div markdown>
-<h3>The WOW — 60–90 min</h3>
+<div class="lm-kicker">60–90 min</div>
+<div class="lm-title">The WOW</div>
 
 The heart of the first half-day. Read [The WOW, step by step](wow.md), then replay it yourself with [The WOW, hands-on](demo/wow-customer/README.md): a SOAP Siebel and a CSV fused into one canonical Customer, asked in natural language.
 
@@ -116,7 +126,8 @@ The heart of the first half-day. Read [The WOW, step by step](wow.md), then repl
 <article class="lm-step" markdown>
 <div class="lm-step__num">5</div>
 <div markdown>
-<h3>How a connector is built — 30 min</h3>
+<div class="lm-kicker">30 min</div>
+<div class="lm-title">How a connector is built</div>
 
 Now that you have seen one run, read [Connectors overview](connectors/index.md) and the manifest you just used, [CSV & files](connectors/csv.md). Every other source type follows the same grammar — the full list is on the shelf below.
 
@@ -126,7 +137,8 @@ Now that you have seen one run, read [Connectors overview](connectors/index.md) 
 <article class="lm-step" markdown>
 <div class="lm-step__num">6</div>
 <div markdown>
-<h3>What was ingested, skipped, quarantined — 20 min</h3>
+<div class="lm-kicker">20 min</div>
+<div class="lm-title">What was ingested, skipped, quarantined</div>
 
 Read [Seeing what was ingested, skipped, and quarantined](transparency/ingestion-honesty.md).
 
@@ -134,8 +146,8 @@ Read [Seeing what was ingested, skipped, and quarantined](transparency/ingestion
 
 ```
 $ lm run get f0466804
-ID        CONNECTOR  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-f0466804  orders     Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
+ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+f0466804  orders     default   Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
 ⚠ 2 rows quarantined — see: lm dlq list --run f0466804-0824-4eb4-8aa2-54e263dccafe
 ```
 </div>
@@ -150,7 +162,8 @@ Goal of the day: the ingested data answers questions — sources shown, and only
 <article class="lm-step" markdown>
 <div class="lm-step__num">1</div>
 <div markdown>
-<h3>Fuse sources into one truth — 40 min</h3>
+<div class="lm-kicker">40 min</div>
+<div class="lm-title">Fuse sources into one truth</div>
 
 Read [Entities — fuse](entities.md) and inspect the Customer entity you applied during the WOW.
 
@@ -160,7 +173,8 @@ Read [Entities — fuse](entities.md) and inspect the Customer entity you applie
 <article class="lm-step" markdown>
 <div class="lm-step__num">2</div>
 <div markdown>
-<h3>The five guards — 30 min</h3>
+<div class="lm-kicker">30 min</div>
+<div class="lm-title">The five guards</div>
 
 Read [Ask honesty — the five guards](transparency/ask-honesty.md). This page is lumnik's spine: an abstention is a feature, a confident wrong answer is the cardinal sin.
 
@@ -170,7 +184,8 @@ Read [Ask honesty — the five guards](transparency/ask-honesty.md). This page i
 <article class="lm-step" markdown>
 <div class="lm-step__num">3</div>
 <div markdown>
-<h3>Scopes — 30 min</h3>
+<div class="lm-kicker">30 min</div>
+<div class="lm-title">Scopes</div>
 
 Read [Scopes](rag/scopes.md): a scope is declared on the connector (`metadata.scopes`) and granted as a Keycloak role. Zero scope roles = tenant-wide; one or more = bound.
 
@@ -180,7 +195,8 @@ Read [Scopes](rag/scopes.md): a scope is declared on the connector (`metadata.sc
 <article class="lm-step" markdown>
 <div class="lm-step__num">4</div>
 <div markdown>
-<h3>Models & providers — 20 min</h3>
+<div class="lm-kicker">20 min</div>
+<div class="lm-title">Models & providers</div>
 
 Read [Models & providers](rag/models.md) to know which LLM answers you, and how to swap it (Ollama local or a remote provider).
 
@@ -190,7 +206,8 @@ Read [Models & providers](rag/models.md) to know which LLM answers you, and how 
 <article class="lm-step" markdown>
 <div class="lm-step__num">5</div>
 <div markdown>
-<h3>The integrator's cockpit — 40 min</h3>
+<div class="lm-kicker">40 min</div>
+<div class="lm-title">The integrator's cockpit</div>
 
 Skim the [CLI & TUI reference](cli/lm-reference.md), then open the TUI with `lm ui` and redo yesterday's WOW checks without leaving it.
 
@@ -200,7 +217,8 @@ Skim the [CLI & TUI reference](cli/lm-reference.md), then open the TUI with `lm 
 <article class="lm-step" markdown>
 <div class="lm-step__num">6</div>
 <div markdown>
-<h3>Who may do what — 20 min</h3>
+<div class="lm-kicker">20 min</div>
+<div class="lm-title">Who may do what</div>
 
 Read [Roles & permissions](security/role-management.md) and skim [RLS & database roles](security/rls.md): tenant isolation is enforced by the database itself, not by application code being careful.
 
@@ -217,7 +235,8 @@ Goal of the day: the hub stops being a mirror and starts finding things — and 
 <article class="lm-step" markdown>
 <div class="lm-step__num">1</div>
 <div markdown>
-<h3>Views — see — 30 min</h3>
+<div class="lm-kicker">30 min</div>
+<div class="lm-title">Views — see</div>
 
 Read [Views](apps/views.md) and apply the WOW's saved view.
 
@@ -227,7 +246,8 @@ Read [Views](apps/views.md) and apply the WOW's saved view.
 <article class="lm-step" markdown>
 <div class="lm-step__num">2</div>
 <div markdown>
-<h3>Processes — react — 30 min</h3>
+<div class="lm-kicker">30 min</div>
+<div class="lm-title">Processes — react</div>
 
 Read [Processes](apps/processes.md): declarative reactions to `data.row.changed`, always refusable, never writing to the source.
 
@@ -237,7 +257,8 @@ Read [Processes](apps/processes.md): declarative reactions to `data.row.changed`
 <article class="lm-step" markdown>
 <div class="lm-step__num">3</div>
 <div markdown>
-<h3>Workflows — declare the lifecycle — 45 min</h3>
+<div class="lm-kicker">45 min</div>
+<div class="lm-title">Workflows — declare the lifecycle</div>
 
 Read [Workflows](apps/workflows.md). This is the third defrost axis: the source shows current state; lumnik, ingesting repeatedly, reconstructs *time* — and a declared lifecycle plus a dormancy threshold turns silence into an alert.
 
@@ -247,7 +268,8 @@ Read [Workflows](apps/workflows.md). This is the third defrost axis: the source 
 <article class="lm-step" markdown>
 <div class="lm-step__num">4</div>
 <div markdown>
-<h3>Inbox — decide — 20 min</h3>
+<div class="lm-kicker">20 min</div>
+<div class="lm-title">Inbox — decide</div>
 
 Read [Inbox](apps/inbox.md): where `decision.*` events (including `decision.dormant.<workflow>`) wait for a human, and the ack gesture that closes the loop.
 
@@ -257,7 +279,8 @@ Read [Inbox](apps/inbox.md): where `decision.*` events (including `decision.dorm
 <article class="lm-step" markdown>
 <div class="lm-step__num">5</div>
 <div markdown>
-<h3>The métier PWA — 30 min</h3>
+<div class="lm-kicker">30 min</div>
+<div class="lm-title">The métier PWA</div>
 
 Read [The métier PWA](apps/pwa.md) and open `https://<your-host>/app/` on a phone: cards on a phone, a table on a tablet, the same scope rules as everywhere else. A phone cannot reach your laptop's `localhost` — the TLS façade on the [deploy page](deploy.md) is what gives both devices one host and one token issuer.
 
@@ -267,7 +290,8 @@ Read [The métier PWA](apps/pwa.md) and open `https://<your-host>/app/` on a pho
 <article class="lm-step" markdown>
 <div class="lm-step__num">6</div>
 <div markdown>
-<h3>Run it for real — 40 min</h3>
+<div class="lm-kicker">40 min</div>
+<div class="lm-title">Run it for real</div>
 
 Read [Backup & restore](operations/backup-restore.md) and [Upgrade](operations/upgrade.md) — the two pages you must have practiced *before* the day you need them.
 

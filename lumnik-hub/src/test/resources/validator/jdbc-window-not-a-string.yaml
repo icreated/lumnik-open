@@ -1,0 +1,21 @@
+# `window: 22` — a number where the fence's HH:MM-HH:MM string belongs. Easy to hit in YAML:
+# unquoted `window: 22:00` is sexagesimal and arrives as 1320. The declaration refuses the shape;
+# WindowField must NOT refuse it again, or one mistake comes back as two errors.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: acme-erp-window-number
+  connector_type: jdbc-generic
+  scopes: [erp]
+spec:
+  connection:
+    url: jdbc:postgresql://db.acme.io:5432/billing
+    user: ro_user
+    password_env: ACME_DB_PASSWORD
+  source:
+    tables:
+      - name: invoices
+        mode: full
+        pk_columns: [id]
+  window: 22
+  target: {}

@@ -51,7 +51,7 @@ class HelloWorldConnectorIT {
     TenantContext.callAsSystem(() -> {
       try {
         utx.begin();
-        var history = runs.findRecentByConnector(id, 5);
+        var history = runs.findRecentActiveByConnector(id, 5);
         assertThat(history).hasSize(1);
         assertThat(history.get(0).getRecordsIn()).isEqualTo(600);
         assertThat(history.get(0).getRecordsOut()).isEqualTo(600);

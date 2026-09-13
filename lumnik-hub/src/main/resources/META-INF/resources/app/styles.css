@@ -42,6 +42,14 @@ button.primary {
   padding: 12px 14px; color: var(--lumen); font-size: 14px;
   overflow-wrap: anywhere; margin: 14px 0;
 }
+/* The door an abstention offers: same amber family as the refusal it sits under, because it is
+   part of the same honest "not here — there" (#515). */
+.door {
+  display: block; margin: -6px 0 14px; padding: 9px 14px;
+  background: transparent; border: 1px solid #4a3c1c; border-radius: 10px;
+  color: var(--lumen); font-size: 14px; cursor: pointer;
+}
+.door:active { transform: scale(.98); }
 /* ---- cards (voir) ---- */
 .card {
   background: var(--card); border: 1px solid var(--edge); border-radius: 14px;

@@ -25,11 +25,12 @@ type Processes struct {
 	table    *tview.Table
 	items    []client.ProcessInfo
 	onEdit   func(name string) // app-level: fetch manifest → :new EditExisting
+	onError  func(string)
 	onSelect func()
 }
 
-func NewProcesses(c *client.Client, onEdit func(string)) *Processes {
-	p := &Processes{client: c, onEdit: onEdit,
+func NewProcesses(c *client.Client, onEdit func(string), onError func(string)) *Processes {
+	p := &Processes{client: c, onEdit: onEdit, onError: onError,
 		table: tview.NewTable().SetBorders(false).SetSelectable(true, false)}
 	style.ApplyChrome(p.table.Box)
 	style.ApplyTableSelection(p.table)
@@ -44,7 +45,7 @@ func NewProcesses(c *client.Client, onEdit func(string)) *Processes {
 
 func (p *Processes) View() tview.Primitive { return p.table }
 func (p *Processes) Hints() string {
-	return "e: edit the manifest (validate → apply loop) · d: describe · y: yank · r: refresh"
+	return "e: edit the manifest (validate → apply loop) · ^P: enable/disable · Del: delete · d: describe · y: yank · r: refresh"
 }
 
 func (p *Processes) Refresh() {
@@ -80,6 +81,16 @@ func (p *Processes) selected() (client.ProcessInfo, bool) {
 }
 
 func (p *Processes) handleKey(ev *tcell.EventKey) *tcell.EventKey {
+	// Same two chords, same words, same no-confirmation rule as the Sources page — a declared
+	// process was the one listed thing with an ENABLED column and no hand to reach it (#487).
+	switch ev.Key() {
+	case tcell.KeyCtrlP:
+		p.toggleEnabled()
+		return nil
+	case tcell.KeyDelete:
+		p.delete()
+		return nil
+	}
 	if ev.Rune() == 'e' {
 		if it, ok := p.selected(); ok && p.onEdit != nil {
 			p.onEdit(it.Name)
@@ -87,6 +98,32 @@ func (p *Processes) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 		return nil
 	}
 	return ev
+}
+
+func (p *Processes) toggleEnabled() {
+	if it, ok := p.selected(); ok {
+		if _, err := p.client.ProcessSetEnabled(it.Name, !it.Enabled); err != nil {
+			p.signalError(fmt.Sprintf("enable/disable: %v", err))
+			return
+		}
+		p.Refresh()
+	}
+}
+
+func (p *Processes) delete() {
+	if it, ok := p.selected(); ok {
+		if err := p.client.ProcessDelete(it.Name); err != nil {
+			p.signalError(fmt.Sprintf("delete: %v", err))
+			return
+		}
+		p.Refresh()
+	}
+}
+
+func (p *Processes) signalError(msg string) {
+	if p.onError != nil {
+		p.onError(msg)
+	}
 }
 
 // Describable

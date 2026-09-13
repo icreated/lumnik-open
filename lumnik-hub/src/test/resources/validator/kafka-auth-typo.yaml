@@ -1,0 +1,19 @@
+# The same silence one level down: `security_protocoll` leaves the default SASL_SSL in place, so
+# this manifest — written for a SASL broker without TLS — applied clean and then died on its
+# first run in a TLS handshake, with the typo as the unnamed cause.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: acme-events-auth-typo
+  connector_type: kafka
+  scopes: [erp]
+spec:
+  name: orders
+  brokers: "broker1:9092"
+  topic: erp.orders.v1
+  format: json
+  auth:
+    kind: sasl-plain
+    username_env: KAFKA_USER
+    password_env: KAFKA_PASSWORD
+    security_protocoll: SASL_PLAINTEXT

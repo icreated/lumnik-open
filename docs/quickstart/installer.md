@@ -83,7 +83,7 @@ The round trip is proven when a listing answers:
 
 ```
 $ lm connector list
-NAME  TYPE  TENANT  SCHED  STATUS  LAST RUN
+NAME  TYPE  TENANT  SCHED  WINDOW  STATUS  LAST RUN
 ```
 
 An empty table is the right answer on a fresh hub — nothing is registered yet.
@@ -137,7 +137,8 @@ Best for object-store exports or S3-compatible storage like MinIO or R2.
 
 ```bash
 # 1. Register the API key (AES-256-encrypted in DB via pgcrypto)
-lm secret set STRIPE_API_KEY sk_test_xxx
+#    No value on the command line: it prompts, and what you type is not shown
+lm secret set STRIPE_API_KEY
 
 # 2. Generate the manifest from Stripe's OpenAPI — -o keeps the file so you can trim it
 #    (add --apply to skip the file and post it straight to the hub)
@@ -224,7 +225,7 @@ right away, on an edition that carries the chat. Promotion to recurring ingestio
 Needs the `stripe.yaml` Scenario A generated — see [Scenario A](#scenario-a-stripe-via-openapi).
 
 ```bash
-lm secret set STRIPE_API_KEY sk_test_xxx
+lm secret set STRIPE_API_KEY    # prompts; the value never reaches your shell history
 lm apply -f stripe.yaml        # the REST manifest from Scenario A
 lm csv ingest contacts.csv --scope billing
 lm connector run stripe        # apply enabled the endpoints; this is what starts a run
@@ -239,14 +240,15 @@ Both halves land in the same scope on purpose — `--scope billing` on the conne
 The most common shape: a customer ERP exports to an SFTP server every night.
 
 ```bash
-lm secret set ACME_SFTP_KEY -      # paste the private SSH key on stdin, Ctrl+D
+lm secret set ACME_SFTP_KEY -      # paste the private SSH key on stdin, then Ctrl+D (PowerShell: Ctrl+Z, Enter)
 lm csv ingest sftp://lumnik@sftp.acme.io/export/billing-latest.csv \
     --key-secret ACME_SFTP_KEY --scope billing --name acme-billing
 # askable at once; recurrence is what the promotion below adds
 ```
 
 ```
-$ lm secret set SFTP_EXPORT_PASSWORD - --description "nightly export server"
+$ lm secret set SFTP_EXPORT_PASSWORD --description "nightly export server"
+Value for SFTP_EXPORT_PASSWORD: 
 Created secret "SFTP_EXPORT_PASSWORD"
 $ lm secret list
 NAME                           ROTATED_AT                     DESCRIPTION
@@ -283,8 +285,8 @@ lm connector resume acme_billing   # apply upserts by name and never flips enabl
 ## Scenario E — S3 prefix
 
 ```bash
-lm secret set AWS_ACCESS_KEY_ID AKIA...
-lm secret set AWS_SECRET_ACCESS_KEY ...
+lm secret set AWS_ACCESS_KEY_ID          # both prompt; neither value is echoed
+lm secret set AWS_SECRET_ACCESS_KEY
 lm csv ingest s3://acme-exports/billing/ \
     --region eu-west-3 --suffix .csv --scope billing
 # askable at once in that scope
@@ -329,11 +331,14 @@ connector's own `metadata.name`, `lm apply -f` it, then `lm connector resume` it
 ### Enter a secret without a shell trace
 
 ```bash
-lm secret set STRIPE_API_KEY -
-# (then paste the value on stdin, end with Ctrl+D)
+lm secret set STRIPE_API_KEY
+# (prompts: type or paste the value, it is not shown)
 ```
 
-Keeps the value out of shell history and `ps -ef`.
+Keeps the value out of shell history and `ps -ef` — passing it as an argument still works, and
+says so on stderr. For a value that spans lines (a private SSH key) use `lm secret set NAME -`
+and end with Ctrl+D — **Ctrl+Z then Enter in PowerShell**; that form reads until EOF, and warns
+that a terminal shows what you paste. The CLI names the right gesture for the shell you are in.
 
 ### Production security
 
@@ -356,17 +361,17 @@ lm run get <ID>
 
 ```
 $ lm connector list
-NAME          TYPE      TENANT  SCHED  STATUS     LAST RUN
-customers     csv-file  1              Completed  2026-09-05 05:38
-orders        csv-file  1              Completed  2026-09-05 05:38
-products      csv-file  1              Failed     2026-09-05 05:38
-crm-contacts  csv-file  1              Completed  2026-09-05 05:39
+NAME          TYPE      TENANT  SCHED  WINDOW  STATUS     LAST RUN
+customers     csv-file  1                      Completed  2026-09-05 05:38
+orders        csv-file  1                      Completed  2026-09-05 05:38
+products      csv-file  1                      Failed     2026-09-05 05:38
+crm-contacts  csv-file  1                      Completed  2026-09-05 05:39
 $ lm run list --connector orders
-ID        CONNECTOR  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-f0466804  orders     Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
+ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+f0466804  orders     default   Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
 $ lm run get f0466804
-ID        CONNECTOR  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-f0466804  orders     Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
+ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+f0466804  orders     default   Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
 ⚠ 2 rows quarantined — see: lm dlq list --run f0466804-0824-4eb4-8aa2-54e263dccafe
 ```
 **Result:** one row per connector run — `IN`, `OUT`, `SKIPPED`, `DEAD-LETTERS` — and the
@@ -428,12 +433,12 @@ on its own, and `lm source schema --scope <tag>` shows what it holds.
 
 | Error | Cause | Fix |
 |---|---|---|
-| `Bearer token unavailable (env=STRIPE_API_KEY)` | secret set neither in DB nor as an env var | `lm secret list` then `lm secret set STRIPE_API_KEY ...` |
+| `Bearer token unavailable (env=STRIPE_API_KEY)` | secret set neither in DB nor as an env var | `lm secret list` then `lm secret set STRIPE_API_KEY` |
 | `apply failed: …` (400) right after `from-openapi --apply` | the hub refused the manifest — a hand-edit broke it, or `metadata.tenant` was added and does not match your own | generate with `-o` instead, then `lm validate -f` to see which field the hub names |
 | a second connector appears after `lm apply -f` | `metadata.name` did not match the registered (slugified) name, so apply created rather than updated | `lm connector list` for the real name, `lm connector delete` the duplicate, re-apply |
 | `429 Too Many Requests` from the vendor | too many calls for the quota | edit `default_rate_limit: 50/s` in the YAML, then `lm apply -f` |
 | `lumnik.secret.master-key is too short` at JVM startup | env var missing or < 16 chars | regenerate with `openssl rand -base64 32` + export; restart the JVM |
-| `secret with this name already exists` on `secret set` | transparent update not handled | `lm secret rm NAME --force` then `set`; or the CLI already falls back to update on 409 |
+| `secret with this name already exists` on `secret set` | the create door refuses a name a live secret holds; `lm` falls back to an update, a direct `POST` does not | nothing to do through `lm`. To replace rather than rotate: `lm secret rm NAME --force`, then `set` — a removed name is free again |
 | `403 {"error":"scope not granted"}` on `lm apply` | your user holds `scope:` roles and the manifest declares a scope you do not hold (or none) | declare only scopes you hold, or apply as a user with no `scope:` role |
 | `WARN metadata.scopes — no scopes declared` on validate | the manifest names no métier, so its tables will not be askable | add `scopes: [<scope>]` under `metadata` |
 

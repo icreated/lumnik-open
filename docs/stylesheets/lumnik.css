@@ -331,12 +331,13 @@
 
 .md-typeset .lm-band {
   margin: 2rem 0;
-  grid-template-columns: 1.2fr 1fr;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
   align-items: stretch;
 }
 
 .md-typeset .lm-rail {
   margin: 1.5rem 0 2rem;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .md-typeset .lm-card,
@@ -347,6 +348,18 @@
   border-radius: 16px;
   background: rgba(18, 34, 51, 0.04);
   padding: 1rem 1.1rem;
+}
+
+/* A grid item's automatic minimum size is its content: one wide <pre> inside a
+   card then sizes its own track, and the card grows past the page instead of
+   scrolling its code. Every fr track above is written minmax(0, 1fr) and every
+   item is floored at zero — the two halves of the same rule. */
+.md-typeset .lm-card,
+.md-typeset .lm-step,
+.md-typeset .lm-step > *,
+.md-typeset .lm-pane,
+.md-typeset .lm-meta-item {
+  min-width: 0;
 }
 
 [data-md-color-scheme="slate"] .md-typeset .lm-card,
@@ -368,10 +381,22 @@
 .md-typeset .lm-step h2,
 .md-typeset .lm-step h3,
 .md-typeset .lm-pane h2,
-.md-typeset .lm-pane h3 {
+.md-typeset .lm-pane h3,
+.md-typeset .lm-title {
   margin-top: 0;
   margin-bottom: 0.6rem;
   max-width: none;
+}
+
+/* Same type as the h3 it stands in for, but not a heading: a card that names
+   no section of the page earns no line in the table of contents. */
+.md-typeset .lm-title {
+  font-family: var(--lm-serif);
+  font-size: 1.25em;
+  font-weight: 550;
+  letter-spacing: -0.01em;
+  line-height: 1.5;
+  color: var(--md-default-fg-color);
 }
 
 .md-typeset .lm-card p:last-child,
@@ -468,7 +493,7 @@
 
 .md-typeset .lm-step {
   display: grid;
-  grid-template-columns: 4.5rem 1fr;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
   gap: 1rem;
   align-items: start;
 }
@@ -516,7 +541,7 @@
 
 .md-typeset .lm-split-code {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 1rem;
   align-items: start;
   margin: 1.25rem 0;
@@ -542,11 +567,11 @@
   .md-typeset .lm-band,
   .md-typeset .lm-mini-grid,
   .md-typeset .lm-split-code {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .md-typeset .lm-step {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

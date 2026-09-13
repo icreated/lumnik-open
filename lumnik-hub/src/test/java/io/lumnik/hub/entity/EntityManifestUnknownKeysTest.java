@@ -92,6 +92,7 @@ class EntityManifestUnknownKeysTest {
   @Test
   void the_honored_surface_names_what_is_accepted_not_only_what_is_not() {
     assertThat(EntityManifestParser.honoredSurface())
-        .contains("scopes").contains("columns").contains("sources").contains("table");
+        .contains("scopes").contains("columns").contains("sources").contains("table")
+        .contains("label");
   }
 }

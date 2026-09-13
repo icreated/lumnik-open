@@ -9,12 +9,17 @@ import (
 
 // FormatValidation writes per-field errors/warnings. Returns nil if there are no errors
 // (warnings allowed); returns an error if there is at least one error.
-func FormatValidation(out io.Writer, file string, r *client.ValidationResult) error {
+//
+// name is what the manifest is called in the report, and rerun the command to suggest once the
+// errors are fixed — empty when there is none to suggest. Both are decided by the caller on
+// purpose: whether a manifest came from a file or from a pipe is the CLI's contract, and a copy
+// of that rule here is how the label a refusal prints drifts away from the one a validation does.
+func FormatValidation(out io.Writer, name, rerun string, r *client.ValidationResult) error {
 	nErr := len(r.Errors)
 	nWarn := len(r.Warnings)
 
 	if nErr == 0 && nWarn == 0 {
-		fmt.Fprintf(out, "✓ %s — valid\n", file)
+		fmt.Fprintf(out, "✓ %s — valid\n", name)
 		return nil
 	}
 
@@ -24,7 +29,7 @@ func FormatValidation(out io.Writer, file string, r *client.ValidationResult) er
 	} else if nWarn > 0 {
 		mark = "!"
 	}
-	fmt.Fprintf(out, "%s %s — %d error(s), %d warning(s)\n\n", mark, file, nErr, nWarn)
+	fmt.Fprintf(out, "%s %s — %d error(s), %d warning(s)\n\n", mark, name, nErr, nWarn)
 
 	for _, e := range r.Errors {
 		printOne(out, "ERROR  ", e)
@@ -34,7 +39,11 @@ func FormatValidation(out io.Writer, file string, r *client.ValidationResult) er
 	}
 
 	if nErr > 0 {
-		fmt.Fprintf(out, "Fix errors above before running 'lm apply -f %s'.\n", file)
+		if rerun == "" {
+			fmt.Fprintln(out, "Fix the errors above in what produced this manifest.")
+		} else {
+			fmt.Fprintf(out, "Fix errors above before running '%s'.\n", rerun)
+		}
 		return fmt.Errorf("validation failed: %d error(s)", nErr)
 	}
 	return nil

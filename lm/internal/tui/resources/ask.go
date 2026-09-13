@@ -158,10 +158,30 @@ func (a *Ask) render(res *client.AskResult) {
 	if res.DataAsOf != "" {
 		answerText += "\n\ndata as of: " + res.DataAsOf + " (last completed run)"
 	}
+	for _, g := range doorGestures(res.OtherDoors) {
+		answerText += "\n\n" + g
+	}
 	a.answer.SetText(tview.Escape(answerText))
 
 	// hand focus to the results so y / e / n work without typing into the input
 	a.app.SetFocus(a.table)
+}
+
+// doorGestures turns the hub's door tokens into THIS surface's gestures.
+//
+// Deliberately not shared with `lm ask`: the hub sends tokens precisely because the gesture
+// differs per surface, and here it is a TUI page, not a command. `conflicts` has one — the
+// :conflicts page. `lifecycle` has none: the declared graph is answered by the semantic chat,
+// and this atelier has no chat page, so pointing at :observations (the watched-lifecycle ledger,
+// a different thing) would be a signpost to a near miss. An unknown token is silence (#515).
+func doorGestures(doors []string) []string {
+	var out []string
+	for _, d := range doors {
+		if d == "conflicts" {
+			out = append(out, "where this scope's sources disagree: :conflicts")
+		}
+	}
+	return out
 }
 
 func (a *Ask) tableKeys(ev *tcell.EventKey) *tcell.EventKey {

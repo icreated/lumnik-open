@@ -1,14 +1,12 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -47,9 +45,6 @@ class EntityReadIT {
             CREDIT_LIMIT: credit_limit
       """;
 
-  static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config().encoderConfig(
-      EncoderConfig.encoderConfig().encodeContentTypeAs("application/yaml", ContentType.TEXT));
-
   @BeforeEach
   void seedAndApply() throws Exception {
     try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
@@ -65,7 +60,7 @@ class EntityReadIT {
       st.execute("INSERT INTO connector.t_cust_src VALUES "
           + "(1,'r1','Alice','GOLD',5000),(1,'r2','Bob','SILVER',1000),(2,'r9','Zoe','GOLD',9000)");
     }
-    given().config(YAML_CFG)
+    given().config(YamlBody.CONFIG)
         .headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);

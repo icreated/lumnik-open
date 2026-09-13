@@ -74,7 +74,10 @@ class AdminDatasourceTenantGuardTest {
       e("AuditRetentionPurger:delete:core.audit_event", "operator-wide retention purge, all tenants"),
       e("ConnectorScheduler:select:connector.connector,connector.connector_run",
           "cross-tenant due-run scan; the run it starts binds its own tenant"),
-      e("RunReaper:update:connector.connector_run", "startup recovery of stale Running rows, all tenants"),
+      e("RunReaper:update:connector.connector,connector.connector_run",
+          "startup recovery of stale Running rows, all tenants; the RETURNING correlates each "
+          + "reaped run's connector NAME for the operator's warning, keyed by that run's own "
+          + "connector_id — it reads one more table, not one more tenant"),
       // Cross-tenant admin surfaces / correlated reads the tenant_id-PREDICATE check surfaced.
       // (EventStreamResource dropped: its SSE query now scopes tenant_id = ?, so it is no longer a
       // deliberate cross-tenant reader — it passes the predicate check like any other statement.)

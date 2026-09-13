@@ -1,0 +1,15 @@
+# Three declared keys, three wrong types. Each is refused by the DECLARATION; the cross-field
+# rules must skip them rather than re-check the type, or one mistake comes back as two errors.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: acme-events-wrong-types
+  connector_type: kafka
+  scopes: [erp]
+spec:
+  name: orders
+  brokers: "broker1:9092"
+  topic: erp.orders.v1
+  format: 22
+  poll_timeout_ms: "fast"
+  max_poll_records: "many"

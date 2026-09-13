@@ -1,0 +1,27 @@
+# `auth: bearer` — a string where a block belongs. Measured before the fix: `validateAuth` returned
+# early on a non-object, the manifest validated CLEAN, and the apply door then answered HTTP 500
+# with a Jackson `IllegalArgumentException` from RestConnectorApplyHandler:56. Declaring the block
+# turns that into a named 400.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: stripe-auth-string
+  connector_type: rest-generic
+  scopes: [crm]
+spec:
+  base_url: https://api.stripe.com
+  auth: bearer
+  endpoints:
+    - id: customers
+      path: /v1/customers
+      method: GET
+      pagination:
+        kind: cursor
+        cursor_param: starting_after
+        cursor_path: $.data[-1:].id
+        has_more_path: $.has_more
+        response_path: $.data
+      target:
+        kind: hybrid
+        table: stripe_customers
+        unique_key: $.id

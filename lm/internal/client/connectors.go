@@ -25,7 +25,7 @@ func (c *Client) ConnectorGet(id string) (*types.Connector, error) {
 }
 
 // ConnectorCreate creates a connector from the FLAT admin payload — ConnectorCreateRequest is
-// (tenantId, name, typeId, schedule, enabled, config) — via POST /api/platform/connectors, not
+// (tenantId, name, typeId, schedule, window, enabled, config) — via POST /api/platform/connectors, not
 // from a manifest, whatever the name suggests.
 // A kind: Connector manifest goes to ApplyManifest instead.
 func (c *Client) ConnectorCreate(payload map[string]any) (*types.Connector, error) {

@@ -88,12 +88,14 @@ The hub speaks two formats. **The packaged stack — what Docker and Kubernetes 
 emits one JSON object per line**, built for log collectors and for `jq`:
 
 ```json
-{"timestamp":"2026-08-18T09:41:24+02:00","level":"ERROR","loggerName":"io.lumnik.hub.connector.runtime.ChunkExecutor","threadName":"executor-thread-1","mdc":{"tenantId":"12"},"message":"chunk 4 failed: …"}
+{"timestamp":"2026-08-18T09:41:24+02:00","level":"ERROR","loggerName":"io.lumnik.hub.connector.runtime.ChunkExecutor","threadName":"executor-thread-1","mdc":{"tenantId":"12","runId":"66541f10-0dc7-4534-85b0-942668020fb1"},"message":"chunk 4 failed: …"}
 ```
 
-`mdc.tenantId` is the **tenant id** carried on every request-path line — `0` is the
-cross-tenant system sentinel, absent means the work happened outside any request. Slice
-the stream along the axes you actually search by (`--no-log-prefix` strips compose's
+`mdc.tenantId` is the **tenant id** — `0` is the cross-tenant system sentinel, and it is
+carried both on the request path and on every line an ingestion run writes. `mdc.runId` is
+the **run id**, present only on lines a run wrote: it is what separates two connectors
+ingesting at the same time, and it is on the reader and writer warnings too, not just on
+the run's own start and end lines. Slice the stream along the axes you actually search by (`--no-log-prefix` strips compose's
 `hub-1 |` prefix so `jq` can parse; `fromjson? // empty` skips any non-JSON line):
 
 ```bash
@@ -105,6 +107,9 @@ $LOGS hub | jq -rR 'fromjson? // empty | select(.level=="ERROR") | "\(.timestamp
 # One tenant's story
 $LOGS hub | jq -rR 'fromjson? // empty | select(.mdc.tenantId=="12") | .message'
 
+# One run's story, warnings included — the id comes from `lm run list`
+$LOGS hub | jq -rR 'fromjson? // empty | select(.mdc.runId=="66541f10-0dc7-4534-85b0-942668020fb1") | "\(.level) \(.message)"'
+
 # One subsystem — everything the connector runtime said
 $LOGS hub | jq -rR 'fromjson? // empty | select(.loggerName | startswith("io.lumnik.hub.connector")) | .message'
 ```
@@ -114,13 +119,14 @@ $LOGS hub | jq -rR 'fromjson? // empty | select(.loggerName | startswith("io.lum
 **Dev mode** (`mvn quarkus:dev`) keeps the human one-line format:
 
 ```
-14:03:27 ERROR [io.lu.hu.co.ru.ChunkExecutor] (executor-thread-1) 12 chunk 4 failed: ...
-   │      │            │                            │             │
-   time  level   logger (abbreviated)             thread      tenant id
+14:03:27 ERROR [io.lu.hu.co.ru.ChunkExecutor] (executor-thread-1) 12 66541f10-… chunk 4 failed: ...
+   │      │            │                            │             │      │
+   time  level   logger (abbreviated)             thread     tenant id  run id
 ```
 
 Same information, shaped for eyes: the logger category is abbreviated (two letters per
-package segment) and the number after the thread is the same tenant id.
+package segment), and the two fields after the thread are the tenant id and the run id.
+Off a run — a plain HTTP request, a scheduler tick — the run id slot is simply blank.
 
 ## Turning up the volume
 

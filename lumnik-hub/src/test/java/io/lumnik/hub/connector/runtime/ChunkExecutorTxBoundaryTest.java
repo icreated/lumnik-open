@@ -189,7 +189,7 @@ class ChunkExecutorTxBoundaryTest {
         RecordingType type = new RecordingType(false);
 
         ChunkResult result = TenantContext.callAsSystem(
-            () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty()));
+            () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty(), null));
 
         assertThat(result).isInstanceOf(ChunkResult.Success.class);
         assertThat(type.txDuringRead.get())
@@ -202,7 +202,7 @@ class ChunkExecutorTxBoundaryTest {
     void write_cursor_and_counters_commit_together() {
         RecordingType type = new RecordingType(false);
 
-        TenantContext.callAsSystem(() -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty()));
+        TenantContext.callAsSystem(() -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty(), null));
 
         assertThat(type.txDuringWrite.get())
             .as("writer.write() must stay INSIDE the transaction that persists the cursor")
@@ -224,7 +224,7 @@ class ChunkExecutorTxBoundaryTest {
         RecordingType type = new RecordingType(true);
 
         ChunkResult result = TenantContext.callAsSystem(
-            () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty()));
+            () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty(), null));
 
         assertThat(type.writeCalled.get()).as("the writer must actually have been invoked").isTrue();
         assertThat(result).isInstanceOf(ChunkResult.Failure.class);
@@ -251,7 +251,7 @@ class ChunkExecutorTxBoundaryTest {
         RecordingType type = new RecordingType(false);
 
         ChunkResult result = TenantContext.callAsSystem(
-            () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty()));
+            () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty(), null));
 
         assertThat(result).isInstanceOf(ChunkResult.Success.class);
         assertThat(type.prepareCalled.get()).as("prepare() must have been invoked").isTrue();
@@ -273,7 +273,7 @@ class ChunkExecutorTxBoundaryTest {
         RecordingType type = new RecordingType(false, true);
 
         ChunkResult result = TenantContext.callAsSystem(
-            () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty()));
+            () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty(), null));
 
         assertThat(type.prepareCalled.get()).as("the prepare hook must actually have been invoked").isTrue();
         assertThat(type.writeCalled.get()).as("write() must never run once prepare() has failed").isFalse();

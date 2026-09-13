@@ -20,7 +20,13 @@ public record ConnectorContext(
     Logger logger,
     CredentialResolver credentials,
     MappingResolver mappings,
-    Clock clock
+    Clock clock,
+    /**
+     * The target this run drains to, measured once by {@link ConnectorType#runStart} — or null when
+     * the type declares none, which is how csv, rest and hello-world read. A type's own reader is
+     * the only thing that compares a position against it; see {@link RunBound}.
+     */
+    RunBound bound
 ) {
   @SuppressWarnings("unchecked")
   public <T> T configValue(String key, Class<T> type) {

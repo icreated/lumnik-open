@@ -11,7 +11,6 @@ class AllRepositoriesIT {
   @Inject ConnectorRepository connectors;
   @Inject ConnectorRunRepository runs;
   @Inject ConnectorCursorEntityRepository cursors;
-  @Inject ConnectorMappingRepository mappings;
   @Inject ConnectorCredentialRepository credentials;
   @Inject ConnectorDeadLetterRepository dlqs;
 
@@ -20,7 +19,6 @@ class AllRepositoriesIT {
     assertThat(connectors).isNotNull();
     assertThat(runs).isNotNull();
     assertThat(cursors).isNotNull();
-    assertThat(mappings).isNotNull();
     assertThat(credentials).isNotNull();
     assertThat(dlqs).isNotNull();
   }

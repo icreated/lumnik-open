@@ -4,13 +4,64 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 
+	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
+
+// readManifest returns the bytes of the manifest named by -f, and is the CLI's only mouth for
+// reading one: three of them existed before, and only one had learned the sentinel.
+//
+// The sentinel "-" reads stdin to EOF. That is what lets a generated manifest be applied without
+// ever touching a disk — the shape an integrator needs when the SI has two hundred tables and the
+// manifests are produced by a script rather than typed:
+//
+//	./generate-entities.sh acme | lm entity apply -f -
+//
+// TestEveryFileDoorReadsTheManifestFromStdin enumerates the -f doors from the command tree and
+// pipes a manifest through each, so a new door that reads files on its own is caught as a gap
+// rather than discovered by whoever tries to pipe into it.
+func readManifest(cmd *cobra.Command, path string) ([]byte, error) {
+	if !isStdinSentinel(path) {
+		return os.ReadFile(path)
+	}
+	// At a keyboard, a bare `-f -` looks exactly like a hang. Say what is being waited for —
+	// on stderr, which -o json consumers do not read. The terminal case is the pty lane's
+	// (`make pty`); the silence of the piped case is asserted in the unit tests.
+	if _, ok := terminalIn(cmd); ok {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"reading the manifest from the keyboard until EOF (%s) — `-f <file>` reads a file instead\n",
+			eofGesture())
+	}
+	return io.ReadAll(cmd.InOrStdin())
+}
+
+// manifestLabel names the manifest's source in a message. A piped manifest has no file name, and
+// printing the bare sentinel ("✗ - — 2 error(s)") tells the reader nothing.
+func manifestLabel(path string) string {
+	if isStdinSentinel(path) {
+		return "stdin"
+	}
+	return filepath.Base(path)
+}
+
+// rerunCommand is the command to suggest once a refused manifest is fixed — and nothing at all
+// for a piped one: `lm apply -f -` offered as the next step would sit waiting on a terminal, and
+// there is no file to go back and edit.
+//
+// The path is shell-quoted like every other suggested command in this file. That line is meant to
+// be pasted, and an unquoted path with a space in it breaks the moment it is.
+func rerunCommand(path string) string {
+	if isStdinSentinel(path) {
+		return ""
+	}
+	return "lm apply -f " + shellArg(path)
+}
 
 // decodeManifest reads a YAML manifest of the given kind ("connector", "hook") and refuses, in
 // the reader's own terms, anything that is not one.
@@ -34,12 +85,10 @@ import (
 // The kind is a parameter because it must be: one shared decoder saying "connector" at
 // `lm hook apply` would be a message that lies at one site, which is worse than the two honest
 // duplicates it replaced.
-func decodeManifest(path, kind string) (map[string]any, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err // a missing or unreadable file is not a malformed manifest
-	}
-
+//
+// The bytes are read by the caller (readManifest) rather than here: a decoder that also opens the
+// file cannot be handed a manifest that arrived on stdin.
+func decodeManifest(data []byte, path, kind string) (map[string]any, error) {
 	var payload map[string]any
 	if err := yaml.Unmarshal(data, &payload); err != nil {
 		var shape *yaml.TypeError
@@ -76,7 +125,7 @@ func refuseManifestEnvelope(path string, payload map[string]any, kind string) er
 	if envelope == "" && payload["apiVersion"] == nil {
 		return nil
 	}
-	msg := fmt.Sprintf("%s is a manifest", filepath.Base(path))
+	msg := fmt.Sprintf("%s is a manifest", manifestLabel(path))
 	if envelope != "" {
 		msg += fmt.Sprintf(" (kind: %s)", envelope)
 	}
@@ -91,7 +140,7 @@ func refuseManifestEnvelope(path string, payload map[string]any, kind string) er
 // The guess never gates anything: when it is wrong or absent the refusal still stands, the reader
 // simply gets no tip.
 func notAManifest(path string, data []byte, kind, why string) error {
-	msg := fmt.Sprintf("%s is not a %s manifest: %s", filepath.Base(path), kind, why)
+	msg := fmt.Sprintf("%s is not a %s manifest: %s", manifestLabel(path), kind, why)
 	if looksLikeCsv(path, data) {
 		msg += fmt.Sprintf("\nIt looks like a CSV — to ingest it: lm csv ingest %s --scope <scope>",
 			shellArg(path))

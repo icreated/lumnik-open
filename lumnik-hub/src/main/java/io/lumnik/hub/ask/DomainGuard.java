@@ -26,8 +26,11 @@ import java.util.Set;
  * the domain). A column wrapped in a function/cast (e.g. {@code lower(col) = '...'}) is NOT flagged —
  * better to miss one than to block a legitimate query on a parsing glitch. String literals become
  * single tokens (with {@code ''} escapes handled), so a column name appearing inside another column's
- * literal can never trigger a spurious refusal. Quoted-identifier filters ({@code "col" = '...'})
- * are deliberately not inspected (a miss, not an over-block) — the SchemaCard advertises bare names.
+ * literal can never trigger a spurious refusal. Quoted-identifier filters ({@code "col" = '...'}) ARE
+ * inspected: this sentence used to say the opposite, justified by "the SchemaCard advertises bare
+ * names", and that stopped being true the day the card began rendering every column quoted — the only
+ * form a model can copy for a name carrying a dot or a space. The assumed miss would have become a
+ * hole: the model quotes, and this guard would have stopped seeing the filters it exists to check.
  *
  * <p>A bare {@code col} cannot be resolved to a specific table without parsing FROM/JOIN/aliases, so a
  * column NAME is only enforced when it has ONE consistent domain across the whole card. A name with

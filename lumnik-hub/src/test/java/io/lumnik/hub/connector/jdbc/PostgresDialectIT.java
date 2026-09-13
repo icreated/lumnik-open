@@ -47,6 +47,13 @@ class PostgresDialectIT {
   }
 
   @Test
+  void table_exists_answers_by_name_without_listing_the_schema() throws Exception {
+    assertTrue(d.tableExists(conn, "public", "c_bpartner"));
+    assertFalse(d.tableExists(conn, "public", "no_such_table"));
+    assertFalse(d.tableExists(conn, "no_such_schema", "c_bpartner"));
+  }
+
+  @Test
   void list_columns_returns_descriptors_for_c_bpartner() throws Exception {
     List<ColumnDescriptor> cols = d.listColumns(conn, "public", "c_bpartner");
     assertEquals("c_bpartner_id", cols.get(0).name());

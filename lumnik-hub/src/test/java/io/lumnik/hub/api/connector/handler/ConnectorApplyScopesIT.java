@@ -1,10 +1,8 @@
 package io.lumnik.hub.api.connector.handler;
 
+import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.test.junit.QuarkusTest;
-import io.restassured.config.EncoderConfig;
-import io.restassured.http.ContentType;
-import io.restassured.config.RestAssuredConfig;
 import org.junit.jupiter.api.Test;
 
 import static io.restassured.RestAssured.given;
@@ -24,12 +22,8 @@ import static org.hamcrest.Matchers.contains;
 @QuarkusTest
 class ConnectorApplyScopesIT {
 
-    private static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config()
-        .encoderConfig(EncoderConfig.encoderConfig()
-            .encodeContentTypeAs("application/yaml", ContentType.TEXT));
-
     private static String apply(String yaml) {
-        return given().config(YAML_CFG)
+        return given().config(YamlBody.CONFIG)
             .headers(TestIdentity.tenantAndUser(1))
             .contentType("application/yaml").body(yaml)
         .when().post("/api/platform/connectors/apply")

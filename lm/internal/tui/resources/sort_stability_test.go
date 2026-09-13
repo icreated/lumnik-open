@@ -61,12 +61,14 @@ func TestSourcesEnabledDescendingSortKeepsTiesStable(t *testing.T) {
 
 func TestRunsDescendingSortKeepsTiesStable(t *testing.T) {
 	r := &Runs{table: tview.NewTable(),
-		sort: style.NewColumnSort([]string{"CONNECTOR", "STATUS", "STARTED", "DURATION"})}
+		sort: style.NewColumnSort(runSortColumns)}
 	r.items = []types.Run{
 		{ID: "r1", Status: "Completed"}, {ID: "r2", Status: "Completed"}, {ID: "r3", Status: "Failed"},
 	}
 	r.sort.Next() // CONNECTOR asc
 	r.sort.Next() // CONNECTOR desc
+	r.sort.Next() // ENDPOINT asc
+	r.sort.Next() // ENDPOINT desc
 	r.sort.Next() // STATUS asc
 	r.sort.Next() // STATUS desc
 	r.applySort()

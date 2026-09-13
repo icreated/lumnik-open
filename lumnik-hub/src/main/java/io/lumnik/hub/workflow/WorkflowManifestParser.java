@@ -3,6 +3,7 @@ package io.lumnik.hub.workflow;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
 import io.lumnik.hub.manifest.ManifestKeys;
+import io.lumnik.hub.sql.SqlIdentifiers;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -46,10 +47,17 @@ public class WorkflowManifestParser {
         ALLOWED_BY_PATH.put("spec.transitions[]", TRANSITION_KEYS);
     }
 
-    // Identifier guards: the table/column ride into a SQL statement at apply time —
-    // the grammar is closed here so injection dies at declaration.
-    private static final String TABLE_RX = "connector\\.[a-z_][a-z0-9_]*";
-    private static final String COLUMN_RX = "[a-z_][a-z0-9_]*";
+    /** What a workflow may watch — see {@link #requireWatchedTable}. {@code t_} is
+     *  DynamicTableRegistry's ingest convention, {@code v_} an EntityViewCompiler fused view. */
+    private static final String SCHEMA = "connector";
+    private static final String SCHEMA_PREFIX = SCHEMA + ".";
+    private static final String INGEST_PREFIX = SCHEMA_PREFIX + "t_";
+    private static final String FUSED_VIEW_PREFIX = SCHEMA_PREFIX + "v_";
+    private static final List<String> WATCHABLE = List.of(INGEST_PREFIX, FUSED_VIEW_PREFIX);
+    /** {@code EntityManifestParser} admits {@code [A-Za-z0-9_]+} and {@code EntityViewCompiler}
+     *  folds it — so the composed suffix is exactly that alphabet, lower-cased. A leading DIGIT is
+     *  legal here and illegal under {@code t_}: the two prefixes do not share an alphabet. */
+    private static final String FUSED_VIEW_NAME_RX = "[a-z0-9_]+";
     private static final String AFTER_RX = "[0-9]+[mhd]";
 
     /** Alias/code matching normalization — trim + lowercase. Excel reality is dirty input, not error. */
@@ -74,7 +82,7 @@ public class WorkflowManifestParser {
         String provenance = requireDeclaredProvenance(spec);
 
         Watched watched = requireWatchedColumn(spec);
-        WorkflowManifest.DormancyDef dormancy = optionalDormancy(spec, watched.key());
+        WorkflowManifest.DormancyDef dormancy = optionalDormancy(spec, watched);
 
         Declared declared = requireStates(spec);
         List<WorkflowManifest.TransitionDef> transitions = requireTransitions(spec, declared);
@@ -128,30 +136,129 @@ public class WorkflowManifestParser {
     }
 
     /**
-     * The identifiers that ride into SQL. The grammars are closed here, at declaration, because JDBC
-     * cannot bind an identifier — see WorkflowDormancySweep, which interpolates these on the admin
-     * (BYPASSRLS) datasource.
+     * The identifiers that ride into SQL. They ride QUOTED — {@code SqlIdentifiers.quoteIdent} at
+     * every builder (WorkflowDataTruth, WorkflowDormancySweep) — so escaping, not a character
+     * grammar, is what stops an injection: a hostile name resolves to a column that does not exist.
+     * This is the same defence kind:View has used since it shipped, and the reason the name itself
+     * is free: ingestion lands a source's keys VERBATIM (DynamicTableWriter quotes each one), so
+     * {@code Statut Commande}, {@code MONTANT_€} and {@code c_bpartner.id} are columns a customer
+     * really has, and a grammar here would make their lifecycle undeclarable for a reason the
+     * integrator cannot act on — the hub chose the name.
+     *
+     * <p>One refusal is NOT grammatical and stays: the watched table must be one ingestion owns
+     * (see {@link #requireWatchedTable}). The dormancy sweep reads on the admin (BYPASSRLS)
+     * datasource, so a workflow declared over {@code identity.app_user} would read every tenant's
+     * rows and copy the watched values into {@code core.event_outbox} payloads. Quoting confines
+     * nothing; that check does.
      */
     private static Watched requireWatchedColumn(JsonNode spec) {
         JsonNode on = spec.path("on");
-        String table = ManifestKeys.text(on, "table");
-        if (table == null || !table.matches(TABLE_RX))
-            throw new IllegalArgumentException(
-                "spec.on.table is required and must match " + TABLE_RX + ": " + table);
-        String column = ManifestKeys.text(on, "column");
-        if (column == null || !column.matches(COLUMN_RX))
-            throw new IllegalArgumentException(
-                "spec.on.column is required and must match " + COLUMN_RX + ": " + column);
+        String table = requireWatchedTable(ManifestKeys.text(on, "table"));
+        String column = requireNamed(ManifestKeys.text(on, "column"), "spec.on.column");
         String key = ManifestKeys.text(on, "key");
-        if (key != null && !key.matches(COLUMN_RX))
-            throw new IllegalArgumentException(
-                "spec.on.key must match " + COLUMN_RX + ": " + key);
+        if (key != null) requireNamed(key, "spec.on.key");
         return new Watched(table, column, key);
     }
 
-    private static WorkflowManifest.DormancyDef optionalDormancy(JsonNode spec, String key) {
+    /**
+     * WHERE a workflow may watch — the one refusal quoting cannot make, per the javadoc above.
+     *
+     * <p>The schema alone is not enough, and that is not a detail: {@code connector} holds twelve
+     * HUB-INTERNAL tables beside the ingested ones ({@code connector_credential}, {@code schema_card},
+     * {@code saved_view}, …) and {@code lumnik_readonly} is granted SELECT on all of them, so
+     * watching one made the data-truth report hand its column's values back in the apply response.
+     * The prefixes are the hub's own conventions for "a table ingestion created" — the same
+     * blast-radius bound {@code DynamicTableRegistry.isHubDynamicTable} draws for purge, and the
+     * reason this is an allowlist rather than a list of internal tables to keep up to date.
+     *
+     * <p>The SHAPE is checked with {@link SqlIdentifiers#isPlainIdentifier} — not a grammar invented
+     * here, but the very predicate the hub COMPOSES these names under ({@code "t_" + name} in every
+     * connector type, {@code "v_" + name} over the entity parser's {@code [A-Za-z0-9_]+}). It is the
+     * one place a character rule is honest, because this name is ours and not the source's: it
+     * accepts the capital in {@code t_Orders}, and refuses the trailing space in
+     * {@code t_orders␠}, which cannot be a real table and would otherwise be reported as
+     * {@code tableMissing} — the flag the page phrases as the legitimate "declared before ingesting"
+     * case, so the typo would be answered with the wrong errand. A COLUMN is the opposite and keeps
+     * its whitespace: the source chose that name, not us.
+     *
+     * <p>The length test is not redundant with the shape one: {@code isPlainIdentifier("t_")} is
+     * TRUE, so the prefix alone would satisfy a shape check and apply as a table the hub can never
+     * have created. Both halves are needed — the prefix must be a prefix OF something. See
+     * {@link #composedAs} for the per-prefix clauses.
+     */
+    private static String requireWatchedTable(String table) {
+        if (table == null || WATCHABLE.stream().noneMatch(p -> composedAs(table, p)))
+            throw new IllegalArgumentException("spec.on.table is required and must name a table in "
+                + "the '" + SCHEMA + "' schema that ingestion owns (" + SCHEMA + ".t_<table>) or a "
+                + "fused entity view (" + SCHEMA + ".v_<entity>, always lower-case), spelled the way "
+                + "the hub created it (letters, digits and underscores — a space is a typo): " + table);
+        return table;
+    }
+
+    /**
+     * Does this name look like what the hub COMPOSES under that prefix? Each clause mirrors one step
+     * of a real composition, which is why none of them is a grammar of our invention:
+     * {@code isPlainIdentifier} is the predicate ingestion gates its target table with BEFORE
+     * composing {@code "t_" + name} (SourceBlockValidator, KafkaConnectorValidator; the CSV door
+     * slugs), and {@link #FUSED_VIEW_NAME_RX} is the entity parser's alphabet after
+     * {@code EntityViewCompiler}'s fold.
+     *
+     * <p>It tests the COMPONENT, never the composed token: {@code isPlainIdentifier("t_1foo")} is
+     * true while {@code isPlainIdentifier("1foo")} is false, so validating the whole thing would
+     * admit a table no ingest can create. And the two prefixes do NOT share an alphabet — an entity
+     * may be named {@code 1customer}, so {@code connector.v_1customer} is real where
+     * {@code connector.t_1foo} is not. Likewise {@code t_Orders} exists (a connector's target table
+     * is never folded) while {@code v_Customer} cannot. Each accepted typo would come back as
+     * {@code tableMissing}, the flag the page phrases as the legitimate "declared before ingesting"
+     * case — the wrong errand.
+     */
+    private static boolean composedAs(String table, String prefix) {
+        if (!table.startsWith(prefix) || table.length() == prefix.length()) return false;
+        String name = table.substring(prefix.length());          // the COMPONENT, not the composed token
+        return FUSED_VIEW_PREFIX.equals(prefix)
+            ? name.matches(FUSED_VIEW_NAME_RX)
+            : SqlIdentifiers.isPlainIdentifier(name);
+    }
+
+    /** A name that names nothing is the one column-shaped refusal left — everything else is a name.
+     *  Worded for both callers: {@code column} is required, {@code key} is optional but, once
+     *  written, must say something. */
+    private static String requireNamed(String name, String path) {
+        if (name == null || name.isBlank())
+            throw new IllegalArgumentException(path + " must name a column (got: " + name + ")");
+        if (name.indexOf('\0') >= 0)
+            throw new IllegalArgumentException(path + " contains a NUL, which no PostgreSQL "
+                + "identifier can hold — the column it names cannot exist, now or ever. It is "
+                + "invisible in the manifest: look for a \\0 escape in a double-quoted scalar");
+        return name;
+    }
+
+    /**
+     * Dormancy is the WATCHED half of a workflow, and not every watchable target can carry it.
+     *
+     * <p>A fused entity view cannot: the sweep is per-document, picking a key's latest version with
+     * {@code ORDER BY key, _ingested_at DESC, id DESC} under {@code tenant_id = ?}, and an
+     * {@code EntityViewCompiler} view projects the canonical columns plus {@code _conflicts} — none
+     * of those three. Declared anyway, it applies with a clean 200 and then fails 42703 on every
+     * tick inside the sweep's per-workflow net: an alert that can never arrive, and nothing for the
+     * integrator to look at. Unlike {@code tableMissing} or {@code keyColumnMissing}, the condition
+     * can never resolve — it is what a view IS — so this is a refusal, not a report.
+     *
+     * <p>It is checked BEFORE the key: sending someone to add {@code spec.on.key} when no key can
+     * help is the wrong errand. (An entity manifest could in principle map a canonical column
+     * literally named {@code _ingested_at} — {@code RESERVED} only holds {@code _conflicts},
+     * {@code _src}, {@code _ord} — but all three would have to be mapped, as text, for the ordering
+     * to mean anything. Not a use case; the refusal says what it wants instead.)
+     */
+    private static WorkflowManifest.DormancyDef optionalDormancy(JsonNode spec, Watched watched) {
         JsonNode dorm = spec.path("dormancy");
         if (dorm.isMissingNode() || dorm.isNull()) return null;
+        if (watched.table().startsWith(FUSED_VIEW_PREFIX))
+            throw new IllegalArgumentException("spec.dormancy cannot be declared on a fused entity "
+                + "view (" + watched.table() + "): the sweep orders a document's versions by their "
+                + "ingest, and a view carries none. Declare it on the ingest table the entity fuses, "
+                + "or drop spec.dormancy and keep the taxonomy");
+        String key = watched.key();
         if (key == null)
             throw new IllegalArgumentException(
                 "spec.dormancy requires spec.on.key (dormancy is per-document; "

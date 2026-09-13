@@ -24,8 +24,10 @@ maps all five in one place.
 resource). A run fans out over the connector's enabled endpoints, and the scheduler,
 cursor and purge all work per endpoint. [CLI](cli/lm-reference.md).
 
-**Run** — one execution of a connector. Each run keeps its arithmetic in a ledger:
-records in, records out, records skipped. [`lm run list`](cli/lm-reference.md).
+**Run** — one execution of **one endpoint** of a connector: `lm connector run` over a
+two-table source writes two run rows, and each names the endpoint it read. Each run keeps
+its arithmetic in a ledger: records in, records out, records skipped.
+[`lm run list`](cli/lm-reference.md).
 
 **Conservation invariant** — `records in = records out + records skipped`, on every
 run, always. A row is never silently lost; it arrives, is skipped with a counted
@@ -33,7 +35,8 @@ reason, or lands in the DLQ (a declared filter is a counted skip, not a DLQ entr
 [Ingestion honesty](transparency/ingestion-honesty.md).
 
 **DLQ (dead-letter queue)** — where a quarantined row waits, carrying its reason and the
-offending payload, until you replay or discard it. [`lm dlq`](cli/lm-reference.md).
+offending payload, until you close it: `discard`, or `replayed` to record that you re-sent it
+yourself. The hub never re-reads a dead letter. [`lm dlq`](cli/lm-reference.md).
 
 **Raw table (`t_*`)** — the dynamic table a `csv-file`, `jdbc-generic` or `kafka`
 connector creates in schema `connector`, one per endpoint, stamped with the tenant. The

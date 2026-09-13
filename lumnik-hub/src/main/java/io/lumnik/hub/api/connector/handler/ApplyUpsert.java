@@ -9,6 +9,7 @@ import io.lumnik.hub.validator.JsonNodes;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.StreamSupport;
 
@@ -20,6 +21,21 @@ import java.util.stream.StreamSupport;
 public final class ApplyUpsert {
     private ApplyUpsert() {}
 
+    private static final String SCHEDULE = "schedule";
+    private static final String WINDOW = "window";
+
+    /**
+     * The spec keys THIS class reads, for every connector type — declared here because the reader
+     * is the only honest source for "what the door consumes". Every connector's {@code ConfigDef}
+     * must declare them, or its closed key set warns "ignored by the runtime" about a key that
+     * lands in the columns the scheduler selects and fences on: removing it on that advice would
+     * unschedule a connector or lift a declared fence. Twice now the audit for a closed root was
+     * taken from a connector's own package and missed {@code window} (kafka #472, then jdbc/csv/rest);
+     * {@code PreambleKeysAreDeclaredTest} is what makes a third time fail here instead of in a
+     * manifest.
+     */
+    public static final Set<String> PREAMBLE_KEYS = Set.of(SCHEDULE, WINDOW);
+
     /**
      * Find the tenant's connector by name or create it, write the shared fields and persist when new.
      * The {@code config} function receives the connector so a handler can merge onto the existing config.
@@ -27,7 +43,7 @@ public final class ApplyUpsert {
     public static Connector connector(ConnectorRepository repo, long tenant, String name, String typeId,
                                       JsonNode meta, JsonNode spec,
                                       Function<Connector, Map<String, Object>> config) {
-        var existing = repo.find("tenantId = ?1 and name = ?2", tenant, name).firstResultOptional();
+        var existing = repo.byAddress(tenant, name);
         final Connector conn = existing.orElseGet(() -> {
             var c = new Connector();
             c.setTenantId(tenant);
@@ -40,9 +56,9 @@ public final class ApplyUpsert {
         conn.setTags(scopes(meta));
         // A10: the scheduler selects on the COLUMN (WHERE c.schedule IS NOT NULL) — the
         // config copy alone never scheduled anything. Absent cron on re-apply = unschedule.
-        conn.setSchedule(JsonNodes.textOrNull(spec.path("schedule")));
+        conn.setSchedule(JsonNodes.textOrNull(spec.path(SCHEDULE)));
         // P10: same column-is-truth contract as schedule — absent window on re-apply = fence lifted.
-        conn.setRunWindow(JsonNodes.textOrNull(spec.path("window")));
+        conn.setRunWindow(JsonNodes.textOrNull(spec.path(WINDOW)));
 
         if (existing.isEmpty()) {
             repo.persist(conn);

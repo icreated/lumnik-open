@@ -5,10 +5,12 @@ import java.util.List;
 /**
  * The served shape of a document lifecycle — built from a kind:Workflow manifest.
  *
- * <p><b>Invariant.</b> {@code table} and {@code column} ride unquoted into the SQL of
- * {@link WorkflowDataTruth#check}, and the canonical constructor accepts any string — so a graph
- * that reaches SQL MUST have come from {@link #from(WorkflowManifest)}, i.e. from a manifest the
- * parser grammar-checked (TABLE_RX/COLUMN_RX). Minting a graph by hand is a test-only liberty.
+ * <p><b>Invariant.</b> {@code table} and {@code column} ride into the SQL of
+ * {@link WorkflowDataTruth#check} and of the dormancy sweep. They ride quoted, so the NAME is free;
+ * what quoting cannot do is confine WHICH table is watched, and only the parser does that
+ * (see {@code WorkflowManifestParser.requireWatchedColumn}). The canonical constructor accepts any
+ * string, so a graph that reaches SQL MUST have come from {@link #from(WorkflowManifest)}, i.e. from
+ * a parsed manifest. Minting one by hand is a test-only liberty.
  */
 public record WorkflowGraph(
     String name, String scope, String table, String column, String provenance,

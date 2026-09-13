@@ -16,8 +16,9 @@ public final class TargetBlockValidator {
     public static ConfigDef configDef() {
         return new ConfigDef()
             // The scope is not a target concern: it lives at metadata.scopes (ScopesValidator).
-            .optional("indexes", Type.LIST, Importance.LOW,
-                "Postgres indexes on the hub table", List.of())
+            .optionalHinted("indexes", Type.LIST, Importance.LOW,
+                "Postgres indexes on the hub table", List.of(),
+                "indexes is a list of { columns: [...], unique?: bool } objects — e.g. indexes: [{ columns: [email] }]")
             // C3: indexes is the whole runtime-read target surface — typos warn.
             .closed();
     }
@@ -36,12 +37,10 @@ public final class TargetBlockValidator {
     public static List<ValidationError> validateIndexes(JsonNode indexes, String basePath) {
         List<ValidationError> errs = new ArrayList<>();
         if (indexes == null || indexes.isMissingNode() || indexes.isNull()) return errs;
-        if (!indexes.isArray()) {
-            errs.add(new ValidationError(basePath, Severity.ERROR,
-                "indexes must be a list of { columns: [...], unique?: bool } objects",
-                List.of("Example: indexes: [{ columns: [email] }]")));
-            return errs;
-        }
+        // The SHAPE belongs to the declaration, which carries the same sentence as its hint
+        // (`optionalHinted`, both here and in SourceBlockValidator). Repeating it would report one
+        // mistake twice — the duplication this rule's twins in rest/auth and rest/headers shed.
+        if (!indexes.isArray()) return errs;
         for (int i = 0; i < indexes.size(); i++) {
             validateIndexEntry(indexes.get(i), basePath + "[" + i + "]", errs);
         }

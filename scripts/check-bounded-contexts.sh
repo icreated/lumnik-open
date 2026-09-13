@@ -91,7 +91,7 @@ fi
 # Since Chantier A2, platform main no longer compile-depends on lumnik-rag
 # (the ask ports/types moved to lumnik-extraction-spi). The dep is now
 # runtime-scoped: rag is bundled so its chat/ask REST resources
-# (RagChatResource, RagSchemaResource) are deployed and served alongside hub's
+# (RagChatResource, RagSearchResource) are deployed and served alongside hub's
 # AskPort impl. With codegen removed, hub main injects no SearchPort at all,
 # so a HUB-only (rag-absent) deployment would no longer fail Arc validation.
 if grep -B1 -A3 '<artifactId>lumnik-rag' lumnik-hub/pom.xml | grep -qE '<scope>(test|runtime)</scope>'; then
@@ -223,7 +223,8 @@ fi
 # @QuarkusTest on a static inner class is compiled, reported nowhere, and never runs — the suite
 # stays green because the test is absent, not because it passes. Two security tests lived that way
 # until 2026-08-28: RagResourceIT$WithoutRoleTest (which had also kept a wrong 403 expectation, since
-# a dead test cannot fail to correct it) and RagSchemaResourceClosedIT$WithoutAuthTest. An indented
+# a dead test cannot fail to correct it) and RagSchemaResourceClosedIT$WithoutAuthTest — that file
+# is SchemaCardAdminResourceIT since the schema door moved into the hub (#488). An indented
 # @QuarkusTest is the signature; a top-level one starts at column 0.
 # The open edition prunes lumnik-rag, so the directory list is built from what EXISTS. scan()
 # treats a grep exit >= 2 as a failed search and aborts — correctly: a search that could not run

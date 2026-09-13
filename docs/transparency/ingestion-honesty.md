@@ -42,8 +42,8 @@ On a ten-row orders export where two lines did not match the header:
 
 ```
 $ lm run get f0466804
-ID        CONNECTOR  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-f0466804  orders     Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
+ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+f0466804  orders     default   Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
 ⚠ 2 rows quarantined — see: lm dlq list --run f0466804-0824-4eb4-8aa2-54e263dccafe
 ```
 
@@ -61,6 +61,22 @@ a value the source never sent, which only happens where the manifest asks for it
 cell was **overwritten** by a value the source did send, from another column a rename landed on.
 In all four **the row itself still landed** and still counts in `OUT`. It is a lead to follow in the
 source data or the transformer, never a quarantine, and it never appears in the DLQ.
+
+## A run that refuses to finish
+
+There is a third ending, rarer than the two above and never silent. A chunk read
+records and the endpoint's stored position did not move — the next chunk would read
+the very same rows, and the one after that, for as long as the process lives. The run
+stops itself and ends **Failed**, naming the endpoint:
+
+    ✖ run failed: endpoint 'order_lines' read 500 records but its stored position did not move — the same window would be re-read for ever
+
+Nothing was lost: the rows the stuck window did read were written, and re-reading them
+on a later run costs nothing (identical rows are recognised and not duplicated). What
+the refusal buys you is the *reason*, on the run itself, instead of a green run whose
+`IN` quietly counts the same rows twice. Re-running the endpoint reproduces it — the
+position is stored, so the next run starts from the same place — which is why the run
+says so rather than trying again in silence.
 
 ## Seeing why
 
@@ -90,7 +106,9 @@ so what the source sent is there to read — and to fix in the export, not in th
 
 The Prometheus endpoint (`/q/metrics`) exposes:
 
-- `lumnik_runs_total{status}` — runs by terminal status.
+- `lumnik_runs_total{status}` — runs by terminal status (`Completed`, `Partial`, `Failed`,
+  `Cancelled`). `Partial` is the honest ending for a run that stopped below the target it gave
+  itself: it wrote everything it read, and did not read everything there was.
 - `lumnik_dead_letters_total{reason}` — quarantined rows by reason.
 
 No dashboards ship with lumnik; wire these into your own monitoring if desired.

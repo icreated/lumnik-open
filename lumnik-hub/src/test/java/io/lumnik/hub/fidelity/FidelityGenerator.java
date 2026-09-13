@@ -49,7 +49,11 @@ public final class FidelityGenerator {
       case FUNCTION_WRAPPED -> new Scenario(seed, kind, oneTable,
           "SELECT * FROM " + VIEW + " WHERE lower(" + col + ") = '" + outVal.toLowerCase(Locale.ROOT) + "'", false);
       case QUOTED_IDENT -> new Scenario(seed, kind, oneTable,
-          "SELECT * FROM " + VIEW + " WHERE \"" + col + "\" = '" + outVal + "'", false);
+          "SELECT * FROM " + VIEW + " WHERE \"" + col + "\" = '" + outVal + "'", true);
+      case QUOTED_UNDECLARED -> new Scenario(seed, kind, oneTable,
+          "SELECT * FROM " + VIEW + " WHERE \"" + undeclared + "\" = '" + inVal + "'", true);
+      case QUOTED_KEYWORD -> new Scenario(seed, kind, oneTable,
+          "SELECT * FROM " + VIEW + " WHERE \"user\" = '" + inVal + "'", true);
       case NON_CLEAN_IN -> new Scenario(seed, kind, oneTable,
           "SELECT * FROM " + VIEW + " WHERE " + col + " IN ('" + inVal + "', upper('" + outVal + "'))", false);
       case CROSS_TABLE_DIVERGENT -> {

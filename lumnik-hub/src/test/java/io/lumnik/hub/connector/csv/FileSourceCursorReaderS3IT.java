@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.csv;
 
+import io.lumnik.hub.connector.secret.SecretRefs;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
@@ -58,7 +59,7 @@ class FileSourceCursorReaderS3IT {
 
     @BeforeAll
     static void start() {
-        minio = new GenericContainer<>("minio/minio:RELEASE.2025-09-07T16-13-09Z")
+        minio = new GenericContainer<>("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
             .withEnv("MINIO_ROOT_USER", ACCESS)
             .withEnv("MINIO_ROOT_PASSWORD", SECRET)
             .withCommand("server", "/data")
@@ -105,7 +106,7 @@ class FileSourceCursorReaderS3IT {
             case "AWS_S3_SECRET_KEY" -> SECRET;
             default -> null;
         };
-        var factory = new S3FileSourceFactory(env);
+        var factory = new S3FileSourceFactory(SecretRefs.environmentOnly(env));
         Map<String, Object> s3cfg = Map.of(
             "kind", "s3",
             "region", "us-east-1",

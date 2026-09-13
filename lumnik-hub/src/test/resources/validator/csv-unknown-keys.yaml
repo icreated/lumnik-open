@@ -12,5 +12,7 @@ spec:
     has_header: true
     empy_check: true
   after_process: none
+  after_proces: delete
+  windo: "22:00-06:00"
   target:
     tabel_prefix: t_

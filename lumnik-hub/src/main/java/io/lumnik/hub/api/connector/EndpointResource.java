@@ -8,11 +8,7 @@ import io.lumnik.hub.connector.mapping.MapColumnsRules;
 import io.lumnik.hub.connector.repository.ConnectorCursorEntityRepository;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
-import io.lumnik.hub.connector.rest.RestHttpClient;
-import io.lumnik.hub.connector.rest.RestRequest;
-import io.lumnik.hub.connector.rest.RestResponse;
-import io.lumnik.hub.connector.rest.auth.AuthProviderRegistry;
-import io.lumnik.hub.connector.rest.auth.AuthSpec;
+import io.lumnik.hub.connector.rest.runtime.RestPreflight;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
 import jakarta.transaction.Transactional;
@@ -36,8 +32,7 @@ public class EndpointResource {
     @Inject ConnectorEndpointRepository epRepo;
     @Inject ConnectorCursorEntityRepository cursorRepo;
     @Inject EntityManager em;
-    @Inject RestHttpClient http;
-    @Inject AuthProviderRegistry authReg;
+    @Inject RestPreflight preflight;
     @Inject ObjectMapper json;
 
     /** Schemas dynamic ingestion writes to — the only ones an endpoint purge may target. */
@@ -100,36 +95,17 @@ public class EndpointResource {
         return Response.status(204).build();
     }
 
-    /** Dry-run probe: execute one GET to the endpoint and return status + sample. */
+    /** Pre-flight: send the one request a run would send, write nothing, report what came back. */
     @POST
     @Path("{eid}/test")
     @Consumes(MediaType.WILDCARD)
     @Transactional
-    public Response test(@PathParam("cid") UUID cid, @PathParam("eid") UUID eid) throws Exception {
-        ConnectorEndpoint ep = resolveEndpoint(cid, eid);
+    public Response test(@PathParam("cid") UUID cid, @PathParam("eid") UUID eid) {
+        Connector conn = connRepo.findById(cid);
+        ConnectorEndpoint ep = endpointOf(conn, eid);
         if (ep == null) return ApiErrors.notFound("endpoint " + eid + " not found under connector " + cid);
 
-        Connector conn = connRepo.findById(cid);
-        String baseUrl = (String) conn.getConfig().getOrDefault("base_url", "");
-
-        // Build auth from connector config
-        @SuppressWarnings("unchecked")
-        Map<String, String> authCfg = (Map<String, String>) conn.getConfig().get("auth");
-        AuthSpec authSpec = authCfg != null && authCfg.containsKey("kind")
-            ? new AuthSpec(authCfg.get("kind"), authCfg, List.of())
-            : new AuthSpec("bearer", Map.of("token_value", ""), List.of());
-
-        var authProvider = authReg.build(authSpec);
-        RestRequest req = authProvider.apply(RestRequest.get(baseUrl + ep.getPath()));
-        RestResponse resp = http.execute(req);
-
-        return Response.ok(Map.of(
-            "status", resp.status(),
-            "ok", resp.status() >= 200 && resp.status() < 300,
-            "sample", resp.body() != null
-                      ? resp.body().substring(0, Math.min(500, resp.body().length()))
-                      : ""
-        )).build();
+        return Response.ok(preflight.check(conn, ep)).build();
     }
 
     /** Clear the stored cursor for this endpoint so the next run is a full re-sync. */
@@ -217,9 +193,18 @@ public class EndpointResource {
     }
 
     private ConnectorEndpoint resolveEndpoint(UUID cid, UUID eid) {
-        if (connRepo.findById(cid) == null) return null;
+        return endpointOf(connRepo.findById(cid), eid);
+    }
+
+    /**
+     * The same resolution for the one caller that needs the connector itself — the pre-flight sends
+     * a request built from its config. Split rather than re-read: {@code resolveEndpoint} was
+     * fetching the connector, discarding it, and leaving {@code test} to fetch it again.
+     */
+    private ConnectorEndpoint endpointOf(Connector conn, UUID eid) {
+        if (conn == null) return null;
         ConnectorEndpoint ep = epRepo.findById(eid);
-        if (ep == null || ep.isDeleted() || !cid.equals(ep.getConnectorId())) return null;
+        if (ep == null || ep.isDeleted() || !conn.getId().equals(ep.getConnectorId())) return null;
         return ep;
     }
 }

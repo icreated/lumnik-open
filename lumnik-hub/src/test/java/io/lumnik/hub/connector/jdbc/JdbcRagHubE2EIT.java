@@ -59,8 +59,7 @@ class JdbcRagHubE2EIT {
             "tables", List.of(
                 Map.of("table", "c_bpartner", "watermark", "updated", "mode", "watermark"),
                 Map.of("table", "m_product",  "watermark", "updated", "mode", "watermark"),
-                Map.of("table", "c_order",    "watermark", "updated", "mode", "watermark")),
-            "templateMode", "llm-first"))
+                Map.of("table", "c_order",    "watermark", "updated", "mode", "watermark"))))
         .when().post("/api/platform/sources/jdbc/add")
         .then().statusCode(200)
                .body("created.size()", is(3));

@@ -4,13 +4,13 @@ import io.lumnik.hub.connector.domain.ConnectorDeadLetter;
 import io.quarkus.hibernate.orm.panache.PanacheRepositoryBase;
 import jakarta.enterprise.context.ApplicationScoped;
 
+import io.lumnik.hub.connector.api.types.SkipReason;
+
 import java.util.List;
 import java.util.UUID;
 
 @ApplicationScoped
 public class ConnectorDeadLetterRepository implements PanacheRepositoryBase<ConnectorDeadLetter, UUID> {
-
-  private static final List<String> BENIGN_REASONS = List.of("Duplicate", "PolicyExcluded");
 
   public List<ConnectorDeadLetter> findPendingByConnector(UUID connectorId, int limit) {
     return find("connectorId = ?1 and resolution is null and deletedAt is null order by capturedAt desc", connectorId)
@@ -20,15 +20,15 @@ public class ConnectorDeadLetterRepository implements PanacheRepositoryBase<Conn
   /**
    * Real-loss dead-letters for a run (excludes benign skips + soft-deleted).
    *
-   * <p>OTK COUPLING — this benign exclusion is the conservation denominator consumed by
-   * Law 1 in {@code lm/test/otk/checks/reconcile.go ReconcileCounts}. Law 1
-   * ({@code recordsIn == recordsOut + dlqCount}) is correct only while benign reasons
-   * (Duplicate/PolicyExcluded) never enter the recordsIn-not-recordsOut skip path
-   * (i.e. are never dead-lettered). If that ever changes, Law 1 will false-positive on
-   * benign skips — ReconcileCounts is the place that must be updated alongside this query.
+   * <p>The excluded set is {@link SkipReason#BENIGN_NAMES}, not a local copy: this query is
+   * string-keyed against the persisted name while the runtime checks are type-keyed, and those
+   * two spellings of one rule used to be kept in step by a comment. See that constant for the
+   * OTK coupling — Law 1's conservation denominator is this exclusion, and its fourth reader
+   * is in Go.
    */
   public long countByRun(UUID runId) {
-    return count("runId = ?1 and deletedAt is null and skipReason not in ?2", runId, BENIGN_REASONS);
+    return count("runId = ?1 and deletedAt is null and skipReason not in ?2",
+        runId, SkipReason.BENIGN_NAMES);
   }
 
   /** All dead-letters a run produced, newest first (full transparency).

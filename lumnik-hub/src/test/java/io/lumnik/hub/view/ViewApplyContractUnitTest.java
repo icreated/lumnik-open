@@ -7,6 +7,7 @@ import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.audit.AuditRecorder;
 import jakarta.ws.rs.Path;
+import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,6 +19,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Curated writes: apply = validate-then-upsert. A view that cannot render is not
@@ -39,9 +41,12 @@ class ViewApplyContractUnitTest {
 
   static final class RecordingStore extends SavedViewStore {
     String name, scope, title, yaml;
+    /** Who already owns the name apply is about to write — empty means it is free. */
+    String storedScope;
     @Override public void upsert(String name, String scope, String title, String yaml) {
       this.name = name; this.scope = scope; this.title = title; this.yaml = yaml;
     }
+    @Override public Optional<String> findScope(String name) { return Optional.ofNullable(storedScope); }
   }
 
   private final SchemaCardStore emptyCards = new SchemaCardStore() {
@@ -219,5 +224,55 @@ class ViewApplyContractUnitTest {
     assertThat(store.title).isEqualTo("Clients");
     assertThat(store.yaml).isEqualTo(GOOD);
     assertThat(((Map<String,Object>) r.getEntity())).containsEntry("name", "clients-desk");
+  }
+
+  // ---- the STORED scope: an apply may not re-home what the caller does not hold (#509) ----
+
+  @Test
+  void apply_may_not_rehome_a_view_that_lives_in_a_scope_the_caller_does_not_hold() {
+    // Holding magasin passes the incoming check. `clients-desk` is taken by clients, and
+    // SavedViewStore.upsert conflicts on (name) setting scope = EXCLUDED.scope: the clients desk
+    // would become a magasin view, and the métier that owned it would stop seeing its own screen.
+    CurrentRolesHolder.set(Set.of("lm_integrator", "scope:magasin"));
+    RecordingStore store = new RecordingStore();
+    store.storedScope = "clients";
+    ViewApplyResource res = new ViewApplyResource();
+    res.store = store;
+    res.cards = emptyCards;
+
+    // The boundary THROWS rather than handing back a refusal a door could drop; JAX-RS serves the
+    // attached response, so the wire is the same 403 (ApplyScopeBoundary's javadoc names where that
+    // last claim is measured).
+    assertThatThrownBy(() -> res.apply(GOOD.replace("scope: clients", "scope: magasin")))
+        .isInstanceOfSatisfying(WebApplicationException.class, e -> {
+          assertThat(e.getResponse().getStatus()).isEqualTo(403);
+          assertThat(((Map<?, ?>) e.getResponse().getEntity()).get("error")).isEqualTo("scope not granted");
+        });
+    assertThat(store.name).as("nothing was written").isNull();
+  }
+
+  @Test
+  void apply_updates_a_view_of_a_scope_the_caller_does_hold() {
+    CurrentRolesHolder.set(Set.of("lm_integrator", "scope:clients"));
+    RecordingStore store = new RecordingStore();
+    store.storedScope = "clients";
+    ViewApplyResource res = new ViewApplyResource();
+    res.store = store;
+    res.cards = emptyCards;
+
+    assertThat(res.apply(GOOD).getStatus())
+        .as("its own view: past both gates, then the honest no-schema").isEqualTo(404);
+  }
+
+  @Test
+  void apply_of_a_free_name_is_not_refused() {
+    CurrentRolesHolder.set(Set.of("lm_integrator", "scope:magasin"));
+    RecordingStore store = new RecordingStore();   // storedScope stays null: the name is free
+    ViewApplyResource res = new ViewApplyResource();
+    res.store = store;
+    res.cards = emptyCards;
+
+    assertThat(res.apply(GOOD.replace("scope: clients", "scope: magasin")).getStatus())
+        .as("nothing is stored under this name — creating it is not re-homing").isEqualTo(404);
   }
 }

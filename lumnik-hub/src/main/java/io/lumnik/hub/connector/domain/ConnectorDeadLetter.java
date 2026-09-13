@@ -5,6 +5,8 @@ import io.lumnik.common.domain.TenantedEntity;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.Mutability;
+import io.lumnik.hub.connector.persistence.converters.ImmutableJsonNodePlan;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -31,6 +33,7 @@ public class ConnectorDeadLetter extends TenantedEntity {
   private UUID runId;
 
   @JdbcTypeCode(SqlTypes.JSON)
+  @Mutability(ImmutableJsonNodePlan.class)
   @Column(nullable = false, columnDefinition = "jsonb")
   private JsonNode payload;
 
@@ -38,6 +41,7 @@ public class ConnectorDeadLetter extends TenantedEntity {
   private String skipReason;
 
   @JdbcTypeCode(SqlTypes.JSON)
+  @Mutability(ImmutableJsonNodePlan.class)
   @Column(name = "skip_detail", columnDefinition = "jsonb")
   private JsonNode skipDetail;
 

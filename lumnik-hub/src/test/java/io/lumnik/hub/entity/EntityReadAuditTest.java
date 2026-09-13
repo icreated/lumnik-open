@@ -6,12 +6,10 @@ import io.agroal.api.AgroalDataSourceMetrics;
 import io.agroal.api.AgroalPoolInterceptor;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.lumnik.hub.tenant.TenantContextFilter;
+import io.lumnik.hub.testsupport.YamlBody;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
 import jakarta.transaction.UserTransaction;
@@ -73,9 +71,6 @@ class EntityReadAuditTest {
             label: label
       """;
 
-  static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config().encoderConfig(
-      EncoderConfig.encoderConfig().encodeContentTypeAs("application/yaml", ContentType.TEXT));
-
   private Long tenantId;
 
   @BeforeEach
@@ -92,7 +87,7 @@ class EntityReadAuditTest {
       st.execute("GRANT SELECT ON connector.t_audit_probe TO lumnik_app");
       st.execute("INSERT INTO connector.t_audit_probe VALUES (" + tenantId + ",'P-1','Probe One')");
     }
-    given().config(YAML_CFG).header("X-Tenant-ID", String.valueOf(tenantId)).header("X-User-ID", "1")
+    given().config(YamlBody.CONFIG).header("X-Tenant-ID", String.valueOf(tenantId)).header("X-User-ID", "1")
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
   }

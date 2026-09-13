@@ -1,0 +1,20 @@
+# A preset manifest whose scheduler pair is malformed. `EventHubsPreset.expand` carries only
+# kind/brokers/auth/topic/name/format, so `schedule` and `window` do NOT survive expansion — while
+# `ApplyUpsert` stores both from the RAW spec. Validate the expanded spec and neither is ever seen:
+# the manifest applies, the columns hold garbage, and the scheduler treats an invalid cron as
+# never-due. A connector that silently never fires.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: acme-eventhubs-bad-sched
+  connector_type: kafka
+  scopes: [erp]
+spec:
+  preset: event-hubs
+  namespace: acme
+  connection_string_env: EVENTHUBS_CONN_STR
+  name: telemetry_events
+  topic: telemetry
+  format: json
+  schedule: "every tuesday"
+  window: "22h-6h"

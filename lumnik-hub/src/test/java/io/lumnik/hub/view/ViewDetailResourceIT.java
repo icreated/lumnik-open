@@ -3,11 +3,9 @@ package io.lumnik.hub.view;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.testsupport.YamlBody;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,10 +19,6 @@ import static org.hamcrest.Matchers.*;
 
 @QuarkusTest
 class ViewDetailResourceIT {
-
-    private static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config()
-        .encoderConfig(EncoderConfig.encoderConfig()
-            .encodeContentTypeAs("application/yaml", ContentType.TEXT));
 
     @Inject SchemaCardStore store;
 
@@ -68,7 +62,7 @@ class ViewDetailResourceIT {
 
     @Test
     void rendersOneRecordWithItsConflictLedger() {
-        given().config(YAML_CFG).header("X-Tenant-Id", "1").contentType("application/yaml")
+        given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml")
             .queryParam("key", "C-200").body(MANIFEST)
         .when().post("/api/views/detail")
         .then().statusCode(200)
@@ -83,7 +77,7 @@ class ViewDetailResourceIT {
 
     @Test
     void agreementCaseHasEmptyConflicts() {
-        given().config(YAML_CFG).header("X-Tenant-Id", "1").contentType("application/yaml")
+        given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml")
             .queryParam("key", "C-100").body(MANIFEST)
         .when().post("/api/views/detail")
         .then().statusCode(200)
@@ -93,7 +87,7 @@ class ViewDetailResourceIT {
 
     @Test
     void unknownKey_404() {
-        given().config(YAML_CFG).header("X-Tenant-Id", "1").contentType("application/yaml")
+        given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml")
             .queryParam("key", "GHOST").body(MANIFEST)
         .when().post("/api/views/detail")
         .then().statusCode(404)
@@ -102,7 +96,7 @@ class ViewDetailResourceIT {
 
     @Test
     void ambiguousKey_400() {
-        given().config(YAML_CFG).header("X-Tenant-Id", "1").contentType("application/yaml")
+        given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml")
             .queryParam("key", "DUP").body(MANIFEST)
         .when().post("/api/views/detail")
         .then().statusCode(400)
@@ -111,7 +105,7 @@ class ViewDetailResourceIT {
 
     @Test
     void missingKey_400() {
-        given().config(YAML_CFG).header("X-Tenant-Id", "1").contentType("application/yaml")
+        given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml")
             .body(MANIFEST)
         .when().post("/api/views/detail")
         .then().statusCode(400)
@@ -120,7 +114,7 @@ class ViewDetailResourceIT {
 
     @Test
     void withoutTenant_401() {
-        given().config(YAML_CFG).contentType("application/yaml")
+        given().config(YamlBody.CONFIG).contentType("application/yaml")
             .queryParam("key", "C-200").body(MANIFEST)
         .when().post("/api/views/detail")
         .then().statusCode(401);

@@ -51,7 +51,7 @@ class ConnectorEngineIT {
 
         var history = TenantContext.callAsSystem(() -> {
             utx.begin();
-            var h = runs.findRecentByConnector(connectorId, 5);
+            var h = runs.findRecentActiveByConnector(connectorId, 5);
             utx.commit();
             return h;
         });
@@ -88,7 +88,7 @@ class ConnectorEngineIT {
 
         var history = TenantContext.callAsSystem(() -> {
             utx.begin();
-            var h = runs.findRecentByConnector(connectorId, 5);
+            var h = runs.findRecentActiveByConnector(connectorId, 5);
             utx.commit();
             return h;
         });

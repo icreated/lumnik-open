@@ -1,7 +1,6 @@
 package client
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/icreated/lumnik-open/lm/internal/types"
@@ -55,17 +54,22 @@ func (c *Client) EndpointResetCursor(connectorID, endpointID string) error {
 	)
 }
 
-// EndpointTest fires a single one-off request against an endpoint via
+// EndpointTest fires the one request a run would send at an endpoint via
 // POST /api/platform/connectors/{connectorID}/endpoints/{endpointID}/test,
-// returning the raw JSON result without landing any data.
-func (c *Client) EndpointTest(connectorID, endpointID string) (json.RawMessage, error) {
-	var out json.RawMessage
+// and reports what came back without landing any data.
+//
+// There is no server-side "test them all": endpointID is one endpoint's UUID. The CLI resolves the
+// list and calls this per endpoint, the way every other endpoint verb addresses one. (It used to
+// send the literal "*" here as a test-all sentinel; the route binds a UUID, so every call 404'd —
+// since the first commit.)
+func (c *Client) EndpointTest(connectorID, endpointID string) (types.PreflightVerdict, error) {
+	var out types.PreflightVerdict
 	if err := c.POST(
 		fmt.Sprintf("/api/platform/connectors/%s/endpoints/%s/test", connectorID, endpointID),
 		map[string]any{},
 		&out,
 	); err != nil {
-		return nil, err
+		return types.PreflightVerdict{}, err
 	}
 	return out, nil
 }

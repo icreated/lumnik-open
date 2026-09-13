@@ -29,6 +29,10 @@ export function App() {
   // Whether THIS build carries the chat doors. Starts true so an unread answer never claims
   // absence (capabilities.mjs); only a readable /me that lacks the rag module turns it off.
   const [chatAvailable, setChatAvailable] = useState(true);
+  // Moving to a tab is one gesture: clear the header count slot the previous tab filled, then
+  // switch. Both callers — the tab bar, and the door an abstention offers (#515) — go through it.
+  const goTab = t => { setCount(''); setTab(t); };
+
   const authRef = useRef(null);
   const renewTimerRef = useRef(null);
 
@@ -137,8 +141,8 @@ export function App() {
       ${screen === 'login' ? html`<${Login} note=${note} onLogin=${onLogin} />` : null}
       ${screen === 'tabs' && tab === 'fiches' ? html`<${Fiches} views=${viewsRef.current} onCount=${setCount} />` : null}
       ${screen === 'tabs' && tab === 'inbox' ? html`<${Inbox} api=${apiRef.current} onBadge=${setBadge} />` : null}
-      ${screen === 'tabs' && tab === 'chat' ? html`<${Chat} api=${apiRef.current} scope=${METIER.scope} log=${chatLog} setLog=${setChatLog} available=${chatAvailable} />` : null}
+      ${screen === 'tabs' && tab === 'chat' ? html`<${Chat} api=${apiRef.current} scope=${METIER.scope} log=${chatLog} setLog=${setChatLog} available=${chatAvailable} onOpenFiches=${() => goTab('fiches')} />` : null}
     </main>
-    ${screen === 'tabs' ? html`<${TabBar} tab=${tab} onTab=${t => { setCount(''); setTab(t); }} badge=${badge} />` : null}
+    ${screen === 'tabs' ? html`<${TabBar} tab=${tab} onTab=${goTab} badge=${badge} />` : null}
   `;
 }

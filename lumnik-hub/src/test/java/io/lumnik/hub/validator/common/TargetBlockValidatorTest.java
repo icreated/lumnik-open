@@ -49,10 +49,26 @@ class TargetBlockValidatorTest {
         assertTrue(TargetBlockValidator.validateIndexes(mapper.readTree("null"), "p").isEmpty());
     }
 
-    @Test void validateIndexes_notAnArray_fails() throws Exception {
+    /**
+     * The shape refusal MOVED, so the test follows it. It used to live here, in the per-entry
+     * walker, and the declaration refused the same node one tier up — one mistake, two errors, on
+     * one path. The walker now bails on a non-array and the declaration owns the shape, hint
+     * included; the two tests below assert both halves of that division, so neither can quietly
+     * take the other's job back.
+     */
+    @Test void validateIndexes_notAnArray_isNoLongerThisWalkersRefusal() throws Exception {
         var errs = TargetBlockValidator.validateIndexes(mapper.readTree("\"nope\""), "spec.target.indexes");
-        assertEquals(1, errs.size());
+        assertTrue(errs.isEmpty(), () -> "the declaration refuses the shape, not this walker: " + errs);
+    }
+
+    @Test void indexesThatIsNotAList_isRefusedByTheDeclaration_withItsHint() throws Exception {
+        List<ValidationError> errs = ConfigDefRunner.run(
+            TargetBlockValidator.configDef(), mapper.readTree("{\"indexes\":\"nope\"}"), "spec.target");
+        assertEquals(1, errs.size(), () -> "exactly one refusal: " + errs);
+        assertEquals("spec.target.indexes", errs.get(0).path());
         assertSame(ValidationError.Severity.ERROR, errs.get(0).severity());
+        assertTrue(errs.get(0).recommendations().stream().anyMatch(h -> h.contains("columns")),
+            () -> "the refusal must still teach the shape: " + errs.get(0));
     }
 
     @Test void validateIndexes_malformedEntries_eachFailsWithError() throws Exception {

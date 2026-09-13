@@ -1,15 +1,30 @@
 package client
 
 import (
-	"fmt"
+	"net/url"
+	"strconv"
 
 	"github.com/icreated/lumnik-open/lm/internal/types"
 )
 
-// RunList fetches the global recent runs.
-func (c *Client) RunList(limit int) ([]types.Run, error) {
+// RunList fetches recent runs via GET /api/platform/runs, newest first, narrowed by whichever
+// filter is given — the same shape as DlqList's. Empty means "every": no filter at all is the
+// global ledger. Both ride the QUERY because the ledger is global, and narrowing a page after it
+// arrives answers about the hub's newest N runs rather than about what was asked for.
+//
+// endpointID is the finer half of the same address: a connector writes one run row per endpoint,
+// so only it can answer "this table's runs". The server clamps limit to RunsPageCap.
+func (c *Client) RunList(connectorID, endpointID string, limit int) ([]types.Run, error) {
+	q := url.Values{}
+	if connectorID != "" {
+		q.Set("connector", connectorID)
+	}
+	if endpointID != "" {
+		q.Set("endpoint", endpointID)
+	}
+	q.Set("limit", strconv.Itoa(limit))
 	var out []types.Run
-	if err := c.GET(fmt.Sprintf("/api/platform/runs?limit=%d", limit), &out); err != nil {
+	if err := c.GET("/api/platform/runs?"+q.Encode(), &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -22,4 +37,14 @@ func (c *Client) RunGet(id string) (types.Run, error) {
 		return types.Run{}, err
 	}
 	return out, nil
+}
+
+// RunCancel requests cancellation of an in-flight run via
+// POST /api/platform/runs/{id}/cancel. A 202 only means the request was
+// recorded — the chunk loop reads the flag at the next chunk boundary, so
+// this never guarantees the run has stopped. A non-2xx (already ended, or no
+// chunk loop is watching it) surfaces the hub's own {"error": …} message via
+// APIError, unchanged.
+func (c *Client) RunCancel(id string) error {
+	return c.POST("/api/platform/runs/"+id+"/cancel", map[string]any{}, nil)
 }

@@ -42,7 +42,7 @@ services:
       - ollama_data:/root/.ollama
 
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:latest
     container_name: lumnik-minio
     command: server /data --console-address ":9001"
     environment:
@@ -60,7 +60,7 @@ services:
       retries: 5
 
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: lumnik-minio-init
     depends_on:
       minio:

@@ -83,4 +83,17 @@ class ScopeGrantsTest {
     assertThat(ScopeGrants.granted()).isEmpty();
     assertThat(ScopeGrants.allows("anything")).isTrue();
   }
+  /**
+   * The refusal WARN renders the grants; a Set renders in hash order, so two identical refusals
+   * could log two different lines and an exact-match SIEM rule would be brittle. One rendering,
+   * sorted, for every door that logs it.
+   */
+  @Test
+  void the_log_rendering_is_sorted_and_names_the_unscoped_case() {
+    CurrentRolesHolder.set(Set.of("lm_user", "scope:stock", "scope:achats", "scope:magasin"));
+    assertThat(ScopeGrants.grantedForLog()).isEqualTo("[achats, magasin, stock]");
+
+    CurrentRolesHolder.set(Set.of("lm_user"));
+    assertThat(ScopeGrants.grantedForLog()).isEqualTo("(unscoped)");
+  }
 }

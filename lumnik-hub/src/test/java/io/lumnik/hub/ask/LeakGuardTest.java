@@ -74,6 +74,16 @@ class LeakGuardTest {
         "SELECT t.code FROM connector.v_customer t", card())).isEmpty();
   }
 
+  /**
+   * The positive direction, and it became load-bearing when the card started rendering table names
+   * quoted: the model now copies {@code "connector"."v_customer"}, so a guard that read only the bare
+   * form would refuse EVERY ask. It does not — both sides are folded to lower case before comparing.
+   */
+  @Test
+  void a_declared_table_is_not_refused_when_the_model_quotes_it() {
+    assertThat(guard.check("SELECT * FROM \"connector\".\"v_customer\"", card())).isEmpty();
+  }
+
   @Test
   void refuses_a_quoted_or_spaced_qualified_table() {
     // The boundary can't be bypassed by quoting the identifiers or spacing the dot.

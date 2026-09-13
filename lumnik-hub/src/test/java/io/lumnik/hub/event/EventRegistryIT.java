@@ -26,7 +26,7 @@ class EventRegistryIT {
         String[] emitted = {
             "org.created", "org.updated", "org.moved", "org.archived",
             "connector.run.started", "connector.run.completed",
-            "connector.run.cancelled", "connector.run.failed",
+            "connector.run.partial", "connector.run.cancelled", "connector.run.failed",
             "platform.secret.created", "platform.secret.updated",
             "platform.secret.deleted", "platform.secret.read",
             "data.row.changed", "annotation.decision.acked",

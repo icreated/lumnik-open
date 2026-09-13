@@ -3,6 +3,7 @@ package io.lumnik.hub.webhook;
 import io.lumnik.identity.Require;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.event.EventRegistry;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.hub.tenant.TenantContextFilter;
@@ -52,6 +53,7 @@ public class IntegrationResource {
     @Transactional
     public Response create(@PathParam("tid") Long tid, IntegrationCreate in) {
         requireTenant(tid);
+        requireNameFree(tid, in.name(), null);
         WebhookEndpoint e = new WebhookEndpoint();
         e.setTenantId(tid);
         e.setName(in.name());
@@ -72,6 +74,7 @@ public class IntegrationResource {
                                  IntegrationUpdate in) {
         requireTenant(tid);
         WebhookEndpoint e = Require.owned(repo, id, tid, "Integration");
+        requireNameFree(tid, in.name(), e.getId());
         if (in.name()       != null) e.setName(in.name());
         if (in.targetUrl()  != null) e.setTargetUrl(in.targetUrl());
         if (in.platform()   != null) e.setPlatform(in.platform());
@@ -90,6 +93,33 @@ public class IntegrationResource {
         WebhookEndpoint e = Require.owned(repo, id, tid, "Integration");
         e.softDelete();
         return Response.noContent().build();
+    }
+
+    /**
+     * One live integration per name, said by the door instead of by the database.
+     *
+     * <p>Both write doors reached uq_webhook_endpoint_name with no check at all: creating a second
+     * integration under a name already taken, or renaming one onto another's name, came back as an
+     * anonymous 500. The constraint is the guard of last resort — under READ COMMITTED it is what
+     * keeps two concurrent creates from coexisting — but it cannot name the integration that
+     * already holds the name, and 500 tells the caller nothing about what to do next.
+     *
+     * <p>Throws rather than returns: {@code update} answers with a domain type, so a returned
+     * Response has nowhere to go there. Same channel {@link io.lumnik.hub.api.NotFoundExceptionMapper}
+     * describes for 404. A null name changes nothing (PATCH semantics), and {@code selfId} lets a
+     * row keep its own name on update.
+     *
+     * <p>The body carries the HOLDER's id, not only the name: the name is what the caller just
+     * submitted, so echoing it alone says no more than "taken". The id is the handle every other
+     * door here takes — {@code DELETE /{id}}, {@code PUT /{id}} — so the refusal ends the caller's
+     * question instead of sending them to {@code list} to ask it again.
+     */
+    private void requireNameFree(Long tid, String name, Long selfId) {
+        if (name == null) return;
+        WebhookEndpoint holder = repo.findLiveByName(tid, name);
+        if (holder == null || holder.getId().equals(selfId)) return;
+        throw new ClientErrorException(ApiErrors.conflict(
+            "an integration named " + name + " already exists (id " + holder.getId() + ")"));
     }
 
     // ── Test / Deliveries / Replay ──────────────────────────────────────────

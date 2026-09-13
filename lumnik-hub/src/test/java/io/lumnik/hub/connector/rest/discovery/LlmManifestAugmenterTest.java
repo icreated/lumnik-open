@@ -21,9 +21,7 @@ class LlmManifestAugmenterTest {
 
     private JsonNode probed(String path) {
         String block = new LlmManifestAugmenter().augment(
-            "demo", null, "https://api.demo.io", path,
-            JsonStructureInference.PaginationKind.PAGE,
-            "$.content", "$.id", List.of(), null);
+            "demo", path, JsonStructureInference.PaginationKind.PAGE, "$.id", List.of());
         try {
             return new YAMLMapper().readTree(block);
         } catch (Exception e) {

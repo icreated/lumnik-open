@@ -26,7 +26,7 @@ public class EntityManifestParser {
   // parse() ignores it: the shipped manifests carry the apps.lumnik.io/v1 envelope, and refusing it
   // would cry wolf on our own demo — the failure mode the C3 verdict named.
   private static final Set<String> ROOT_KEYS = Set.of(
-      "apiVersion", "kind", "name", "match", "sources", "scopes", "description", "columns");
+      "apiVersion", "kind", "name", "label", "match", "sources", "scopes", "description", "columns");
   private static final Set<String> SOURCE_KEYS = Set.of("table", "map");
 
   private static final Map<String, Set<String>> ALLOWED_BY_PATH = new LinkedHashMap<>();

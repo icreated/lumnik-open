@@ -5,6 +5,7 @@ import io.lumnik.hub.connector.rest.RestResponse;
 
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
 
 public class OffsetPaginationStrategy implements PaginationStrategy {
 
@@ -30,10 +31,8 @@ public class OffsetPaginationStrategy implements PaginationStrategy {
         int off = Integer.parseInt(current.queryParams().getOrDefault(offsetParam, "0"));
         int n = items(resp).size();
         if (n < limit) return null;
-        if (totalPath != null) {
-            Number tot = JsonPathExtractor.read(resp.json(), totalPath);
-            if (tot != null && off + n >= tot.intValue()) return null;
-        }
+        OptionalLong declared = PaginationSupport.declaredItems(resp.json(), totalPath);
+        if (declared.isPresent() && off + n >= declared.getAsLong()) return null;
         return current.withQuery(offsetParam, String.valueOf(off + limit));
     }
 

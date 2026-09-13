@@ -9,12 +9,10 @@ import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.runtime.ConnectorEngine;
+import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
-import io.restassured.config.EncoderConfig;
-import io.restassured.config.RestAssuredConfig;
-import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
 import org.junit.jupiter.api.AfterEach;
@@ -57,9 +55,6 @@ class EntityBlocksConnectorDeleteIT {
   @Inject
   @DataSource("admin")
   AgroalDataSource adminDs;
-
-  static final RestAssuredConfig YAML_CFG = RestAssuredConfig.config().encoderConfig(
-      EncoderConfig.encoderConfig().encodeContentTypeAs("application/yaml", ContentType.TEXT));
 
   String suffix;
   String csvName;     // endpoint target name -> physical table connector.t_<csvName>
@@ -222,7 +217,7 @@ class EntityBlocksConnectorDeleteIT {
               code: customer_code
               cname: name
         """.formatted(entityName, csvTable);
-    given().config(YAML_CFG).headers(TestIdentity.tenantAndUser(1))
+    given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(manifest)
         .post("/api/entities/apply").then().statusCode(200);
   }

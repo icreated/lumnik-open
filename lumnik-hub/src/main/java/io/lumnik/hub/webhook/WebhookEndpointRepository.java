@@ -29,6 +29,21 @@ public class WebhookEndpointRepository implements PanacheRepository<WebhookEndpo
         return count("id = ?1 AND tenantId = ?2", id, tenantId);
     }
 
+    /**
+     * The live endpoint holding this name for a tenant, or null — the create and rename door's
+     * pre-check.
+     *
+     * <p>The predicate is {@code deletedAt IS NULL} and NOT the {@code archivedAt IS NULL} the
+     * readers above add, because this one does not answer "can it be used"; it answers "is the name
+     * taken", and that question belongs to uq_webhook_endpoint_name (V46), whose predicate is
+     * exactly this. The two must agree or the door refuses a set the index does not, and vice
+     * versa. (No door archives a WebhookEndpoint today; V46 records why the predicate must not grow
+     * to archived_at if one ever does.)
+     */
+    public WebhookEndpoint findLiveByName(Long tenantId, String name) {
+        return find("tenantId = ?1 AND name = ?2 AND deletedAt IS NULL", tenantId, name).firstResult();
+    }
+
     /** Every live endpoint of one tenant, newest rule first — the list door's whole query. */
     public List<WebhookEndpoint> listLiveForTenant(Long tenantId) {
         return list("tenantId = ?1 AND archivedAt IS NULL AND deletedAt IS NULL ORDER BY name",

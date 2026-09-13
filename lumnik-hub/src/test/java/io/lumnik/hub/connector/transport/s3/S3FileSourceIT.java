@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.transport.s3;
 
+import io.lumnik.hub.connector.secret.SecretRefs;
 import io.lumnik.hub.connector.transport.AfterProcessAction;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.GenericContainer;
@@ -30,7 +31,7 @@ class S3FileSourceIT {
 
     @BeforeAll
     static void start() {
-        minio = new GenericContainer<>("minio/minio:RELEASE.2025-09-07T16-13-09Z")
+        minio = new GenericContainer<>("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
             .withEnv("MINIO_ROOT_USER", ACCESS)
             .withEnv("MINIO_ROOT_PASSWORD", SECRET)
             .withCommand("server", "/data")
@@ -73,7 +74,7 @@ class S3FileSourceIT {
             case "AWS_S3_SECRET_KEY" -> SECRET;
             default -> null;
         };
-        var factory = new S3FileSourceFactory(env);
+        var factory = new S3FileSourceFactory(SecretRefs.environmentOnly(env));
         var source = factory.build(Map.of(
             "region", "us-east-1",
             "endpoint", endpoint,
@@ -106,7 +107,7 @@ class S3FileSourceIT {
             case "AWS_S3_SECRET_KEY" -> SECRET;
             default -> null;
         };
-        var factory = new S3FileSourceFactory(env);
+        var factory = new S3FileSourceFactory(SecretRefs.environmentOnly(env));
         var source = (S3FileSource) factory.build(Map.of(
             "region", "us-east-1",
             "endpoint", endpoint,

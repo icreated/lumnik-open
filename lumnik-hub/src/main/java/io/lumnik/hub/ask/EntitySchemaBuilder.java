@@ -47,17 +47,31 @@ public class EntitySchemaBuilder {
                         if (meta == null) {
                             cols.add(new SchemaCard.Column(c, "text", c));
                         } else {
-                            String label = (meta.label() != null && !meta.label().isBlank()) ? meta.label() : c;
-                            cols.add(new SchemaCard.Column(c, "text", label,
+                            cols.add(new SchemaCard.Column(c, "text", or(meta.label(), c),
                                 meta.description(), meta.example(), meta.values()));
                         }
                     }
-                    out.add(new SchemaCard.Table("connector.v_" + name, name, cols, m.description()));
+                    // The table's LABEL is the entity's `label:` when it declares one, and its
+                    // name otherwise — the same ladder the per-column label above walks. A
+                    // kind:View with no `title:` falls back to exactly this, so before the
+                    // manifest could carry one the ladder's every rung was the technical name
+                    // and a generated view was headed `acmecustomer` (#501).
+                    out.add(new SchemaCard.Table(
+                        "connector.v_" + name, or(m.label(), name), cols, m.description()));
                 }
             }
         } catch (Exception e) {
             throw new RuntimeException("EntitySchemaBuilder.resolve(scope=" + scope + "): " + e, e);
         }
         return out;
+    }
+
+    /**
+     * The declared display name, or the technical one — the ladder both a column's {@code label:}
+     * and an entity's own walk. A blank is an absent label, not an empty one: YAML's {@code label:}
+     * with nothing after it must not make a card whose heading is a space.
+     */
+    private static String or(String label, String fallback) {
+        return (label != null && !label.isBlank()) ? label : fallback;
     }
 }

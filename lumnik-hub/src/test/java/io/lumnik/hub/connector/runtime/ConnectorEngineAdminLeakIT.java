@@ -67,7 +67,7 @@ class ConnectorEngineAdminLeakIT {
 
         UUID endpointId = TenantContext.callAsSystem(() -> {
             utx.begin();
-            var h = runs.findRecentByConnector(connectorId, 1);
+            var h = runs.findRecentActiveByConnector(connectorId, 1);
             utx.commit();
             return h.get(0).getEndpointId();
         });
@@ -99,7 +99,7 @@ class ConnectorEngineAdminLeakIT {
 
             var history = TenantContext.callAsSystem(() -> {
                 utx.begin();
-                var h = runs.findRecentByConnector(connectorId, 1);
+                var h = runs.findRecentActiveByConnector(connectorId, 1);
                 utx.commit();
                 return h;
             });

@@ -58,7 +58,25 @@ public class RestConnectorValidator implements ConnectorValidator {
             .optional("default_rate_limit", Type.STRING, Importance.MEDIUM,
                 "Max request rate across all endpoints, e.g. \"100/s\" (count/window; unit s|m|h)", "100/s")
             .optional("schedule", Type.STRING, Importance.MEDIUM,
-                "Cron expression for recurring runs — the hub scheduler fires it, evaluated in UTC", null);
+                "Cron expression for recurring runs — the hub scheduler fires it, evaluated in UTC", null)
+            // The four keys the door reads and this def did not list, declared so the closed sweep
+            // does not accuse them. `auth` carries its sub-def: AuthBlockValidator's key set was
+            // already swept from validateAuth by hand, which is the workaround ConfigDef.optionalNested
+            // replaced (#472) — the declaration also gives the block its missing TYPE check, and a
+            // non-object auth used to validate clean and then break the apply door with a 500.
+            .optionalNested("auth", Importance.MEDIUM,
+                "Authentication for every endpoint (omit => none)", AuthBlockValidator.configDef())
+            .optionalHinted("headers", Type.LIST, Importance.MEDIUM,
+                "Static headers sent on every request, [{name, value | value_env}]", null,
+                "headers is a list of { name, value|value_env } objects")
+            .optional("defaults", Type.NESTED, Importance.LOW,
+                "Per-endpoint defaults merged into each endpoint", null)
+            .optional("graphql_path", Type.STRING, Importance.LOW,
+                "Path appended to base_url for GraphQL endpoints (default /graphql)", null)
+            // schedule's twin, read by the SHARED apply preamble (ApplyUpsert); declared and
+            // checked through WindowField, which owns both wordings for all four connector types.
+            .optional("window", Type.STRING, Importance.MEDIUM, WindowField.DOC, null)
+            .closed();
     }
 
     @Override
@@ -67,15 +85,12 @@ public class RestConnectorValidator implements ConnectorValidator {
         validateAuth(spec.path("auth"), errs);
         validateEndpoints(spec.path("endpoints"), errs);
         validateHeaders(spec.path("headers"), errs);
-        JsonNode sched = spec.path("schedule");
-        if (!sched.isMissingNode() && !sched.isNull()) {
-            CronField.validCron().apply(sched)
-                .ifPresent(msg -> errs.add(new ValidationError("spec.schedule",
-                    ValidationError.Severity.ERROR, msg,
-                    List.of("Example: schedule: \"0 6 * * *\" (daily at 06:00 UTC)"))));
-        }
+        CronField.check(spec.path("schedule"), errs,
+            "Example: schedule: \"0 6 * * *\" (daily at 06:00 UTC)");
         JsonNode rate = spec.path("default_rate_limit");
-        if (!rate.isMissingNode() && !rate.isNull()) {
+        // isTextual, not just present: the declaration refuses a non-string, and reading
+        // asText() off a number here would report one mistake twice.
+        if (rate.isTextual()) {
             // validator == runtime: the same reading the HTTP client does on the first request,
             // so `lm apply` never accepts a rate the run would only choke on later.
             RateLimiterRegistry.describeProblem(rate.asText())
@@ -83,22 +98,37 @@ public class RestConnectorValidator implements ConnectorValidator {
                     ValidationError.Severity.ERROR, msg,
                     List.of("Example: default_rate_limit: \"100/s\" (count/window; unit s|m|h)"))));
         }
-        JsonNode window = spec.path("window");
-        if (!window.isMissingNode() && !window.isNull()) {
-            WindowField.validWindow().apply(window)
-                .ifPresent(msg -> errs.add(new ValidationError("spec.window",
-                    ValidationError.Severity.ERROR, msg,
-                    List.of("Example: window: \"22:00-06:00\" (UTC; scheduled runs are skipped outside it)"))));
-        }
+        WindowField.check(spec.path("window"), errs);
         return errs;
     }
 
     /** auth is optional; validate the block only when present (omitting it => `none` at runtime). */
     private void validateAuth(JsonNode auth, List<ValidationError> errs) {
+        // The block's key set and shape are the declaration's job now (configDef), so only the
+        // cross-field rule is left here. A non-object cannot reach the rule below anyway — a
+        // MissingNode `kind` never equals "bearer" — so this guard is armour, not logic.
         if (!auth.isObject()) return;
-        errs.addAll(ConfigDefRunner.run(AuthBlockValidator.configDef(), auth, "spec.auth"));
         // bearer accepts either an env-var name (token_env) or an inline value (token_value).
         // Missing, explicit null, or blank all count as absent (NullNode.asText() is "null").
+        // The secret itself, in a file the integrator is told to commit and review. Not the same
+        // hazard as jdbc's `password` — BearerAuthProviderFactory reads token_env FIRST and only
+        // falls back to the literal when no reference is named, so nothing is silently overridden
+        // — but it is the same secret in the same repository, and the docs' CI grep is the only
+        // thing that stood between it and a git history (#530).
+        //
+        // Under `kind: bearer` only: the field is declared optional for every kind, and nothing
+        // else reads it, so elsewhere this sentence would name a bearer token that is not one.
+        // A secret in a key the runtime ignores is a different finding — dead knobs have their own
+        // sweep — and the CI grep the docs give bans the line whatever the kind.
+        if ("bearer".equals(auth.path("kind").asText())
+                && !blankOrNull(auth.path("token_value"))) {
+            errs.add(new ValidationError("spec.auth.token_value", Severity.WARNING,
+                "literal bearer token in the manifest — this is the secret itself, not a name, "
+                    + "and a manifest is meant to be committed",
+                List.of("Remove it and name the secret: token_env: <NAME> "
+                            + "(`lm secret set <NAME> …`, else an env var set on the hub)",
+                    "Keep it only in a manifest that is never committed — dev/test")));
+        }
         if ("bearer".equals(auth.path("kind").asText())
                 && blankOrNull(auth.path("token_env"))
                 && blankOrNull(auth.path("token_value"))) {
@@ -400,11 +430,12 @@ public class RestConnectorValidator implements ConnectorValidator {
     /** Connector-level request headers: each entry needs a name + exactly one of value / value_env. */
     private void validateHeaders(JsonNode headers, List<ValidationError> errs) {
         if (headers.isMissingNode() || headers.isNull()) return;
-        if (!headers.isArray()) {
-            errs.add(new ValidationError("spec.headers", Severity.ERROR,
-                "headers must be a list of { name, value|value_env } objects", List.of()));
-            return;
-        }
+        // The SHAPE belongs to the declaration now: `optional("headers", Type.LIST, …)` makes the
+        // runner refuse a non-list, and repeating the check here would report one mistake twice —
+        // the very duplication removed from validateAuth above. What stays is the per-entry rule
+        // no single-key declaration can express. The expected shape lives in the doc string, which
+        // `lm describe` serves.
+        if (!headers.isArray()) return;
         for (int i = 0; i < headers.size(); i++) {
             JsonNode h = headers.get(i);
             String p = "spec.headers[" + i + "]";

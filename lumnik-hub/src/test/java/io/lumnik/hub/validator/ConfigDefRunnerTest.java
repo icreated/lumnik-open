@@ -86,6 +86,38 @@ class ConfigDefRunnerTest {
         assertEquals("spec.auth.token_env", errs.get(0).path());
     }
 
+    /**
+     * The primitive lives in the open tree and its first caller is closed-edition kafka, which the
+     * open-edition extraction prunes — so the guard belongs here, at the runner's own level.
+     * Three properties, each the reason the method exists: the block may be omitted, its rules
+     * apply when it is present, and — the whole point — a CLOSED sub-def gets swept. Declaring
+     * the same block as {@code optional(…, Type.NESTED, …)} leaves {@code nested} null, and the
+     * recursion below is then unreachable for every optional block in the codebase.
+     */
+    @Test void optionalNested_omitted_noError() throws Exception {
+        var sub = new ConfigDef().require("token_env", Type.STRING, Importance.HIGH, "Token");
+        var def = new ConfigDef().optionalNested("auth", Importance.MEDIUM, "Auth", sub);
+        assertTrue(run(def, "{}").isEmpty(), "an optional block may be absent");
+    }
+
+    @Test void optionalNested_present_recursesIntoChild() throws Exception {
+        var sub = new ConfigDef().require("token_env", Type.STRING, Importance.HIGH, "Token");
+        var def = new ConfigDef().optionalNested("auth", Importance.MEDIUM, "Auth", sub);
+        var errs = run(def, "{\"auth\":{}}");
+        assertEquals(1, errs.size());
+        assertEquals("spec.auth.token_env", errs.get(0).path());
+    }
+
+    @Test void optionalNested_closedChild_sweepsUnknownKey() throws Exception {
+        var sub = new ConfigDef().optional("token_env", Type.STRING, Importance.HIGH, "Token", null)
+            .closed();
+        var def = new ConfigDef().optionalNested("auth", Importance.MEDIUM, "Auth", sub);
+        var errs = run(def, "{\"auth\":{\"token_envv\":\"X\"}}");
+        assertEquals(1, errs.size(), () -> "the typo inside the optional block must be named: " + errs);
+        assertEquals("spec.auth.token_envv", errs.get(0).path());
+        assertEquals(Severity.WARNING, errs.get(0).severity());
+    }
+
     @Test void enumValidation_inSet_passes() throws Exception {
         var def = new ConfigDef().requireEnum("kind", Importance.HIGH, "Kind", "bearer", "basic");
         assertTrue(run(def, "{\"kind\":\"bearer\"}").isEmpty());

@@ -7,18 +7,16 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.dataformat.xml.XmlFactory;
 import com.fasterxml.jackson.dataformat.xml.XmlMapper;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
-import io.lumnik.hub.connector.exceptions.TransientFailureException;
 import io.lumnik.hub.connector.rest.DottedPath;
 import io.lumnik.hub.connector.rest.RestResponse;
+import io.lumnik.hub.connector.rest.ResponseStatusGuard;
 import io.lumnik.hub.connector.rest.Snippets;
-import io.lumnik.hub.connector.rest.reliability.RetryPolicy;
 import io.lumnik.hub.connector.rest.runtime.BodyParser;
 
 import javax.xml.stream.XMLInputFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Converts a SOAP XML response into a {@link JsonNode} so the existing JsonPath pagination/items
@@ -53,21 +51,13 @@ public final class XmlBodyParser implements BodyParser {
         this.responsePath = responsePath;
     }
 
-    // Derived from RetryPolicy.defaults() so the two stay in sync when the retry config changes.
-    private static final Set<Integer> RETRYABLE = RetryPolicy.defaults().retryOn();
-
     @Override
     public RestResponse reparse(RestResponse raw) {
-        if (raw.status() >= 400) {
-            // SoapFaultValidator (inside the retry boundary) has already handled real SOAP Faults.
-            // Any non-2xx that survives here is an infrastructure error — classify by retryability:
-            // 5xx/429/408 are transient (chunk retried later); 4xx misconfigurations are permanent.
-            if (RETRYABLE.contains(raw.status())) {
-                throw new TransientFailureException(
-                    "SOAP endpoint returned HTTP " + raw.status() + " — treating as transient", null);
-            }
-            throw new ConnectorException("SOAP endpoint returned HTTP " + raw.status() + " — permanent failure");
-        }
+        // SoapFaultValidator (inside the retry boundary) has already handled real SOAP Faults. Any
+        // non-2xx that survives here is an infrastructure error, and the transient/permanent split
+        // it needs is the one every request shape needs — so it is read from the shared guard rather
+        // than kept as a second copy that could drift from it.
+        ResponseStatusGuard.refuseNonSuccess(raw);
         JsonNode tree = strippedTree(raw.body());
         if (tree instanceof ObjectNode obj) forceList(obj, responsePath);
         return new RestResponse(raw.status(), raw.headers(), raw.body(), tree);

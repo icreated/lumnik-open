@@ -4,8 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.api.ConnectorType;
 import io.lumnik.hub.connector.api.types.*;
-import io.lumnik.hub.tenant.TenantContextFilter;
 import io.lumnik.hub.connector.domain.Connector;
+import io.lumnik.hub.connector.exceptions.SourceUnreachableException;
 import io.lumnik.hub.connector.domain.ConnectorCursorEntity;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.domain.ConnectorRun;
@@ -13,6 +13,7 @@ import io.lumnik.hub.connector.event.ConnectorEvents;
 import io.lumnik.hub.connector.event.ConnectorRunCompleted;
 import io.lumnik.hub.connector.event.RunTableStats;
 import io.lumnik.hub.connector.registry.ConnectorTypeRegistry;
+import io.lumnik.hub.scheduler.TenantScope;
 import io.lumnik.hub.connector.repository.ConnectorCursorEntityRepository;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
@@ -28,6 +29,7 @@ import jakarta.enterprise.event.Event;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
+import org.jboss.logging.MDC;
 import org.jboss.logging.Logger;
 
 import java.io.PrintWriter;
@@ -39,6 +41,7 @@ import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -46,12 +49,19 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @ApplicationScoped
 public class ConnectorEngine {
 
     private static final String STATUS_FAILED = "Failed";
+    private static final String STATUS_PARTIAL = "Partial";
+    private static final String STATUS_COMPLETED = "Completed";
     private static final String RUN_ID = "run_id";
+    /** MDC key, camelCase like its neighbours {@code tenantId}/{@code userId} — the event
+     *  payload's {@link #RUN_ID} is snake_case because that contract is JSON, not a log. */
+    private static final String MDC_RUN_ID = "runId";
 
     private static final Logger LOG = Logger.getLogger(ConnectorEngine.class);
 
@@ -70,7 +80,15 @@ public class ConnectorEngine {
     @Inject IngestionMetrics ingestionMetrics;
 
     private ExecutorService vt;
-    private final Map<UUID, Boolean> cancelFlags = new ConcurrentHashMap<>();
+
+    /**
+     * The single registry answering BOTH "is this run's chunk loop in flight in THIS JVM?" (key
+     * present) and "was cancellation requested?" (value). One map instead of two: a two-structure
+     * split would leak an entry on the race between a cancel and a run that just ended — the run
+     * that just finished removes itself from an "in flight" set while a concurrent cancel is still
+     * writing to a separate "cancelled" set, and nothing ever cleans that second write up.
+     */
+    private final Map<UUID, Boolean> liveRuns = new ConcurrentHashMap<>();
 
     void onStart(@Observes StartupEvent ev) {
         vt = Executors.newVirtualThreadPerTaskExecutor();
@@ -160,14 +178,26 @@ public class ConnectorEngine {
     }
 
     /**
-     * Cancel the runs from index {@code from} onward when the aggregating wait is interrupted:
-     * raise each run's cooperative cancel flag (the chunk loop checks it and finalizes as Cancelled)
-     * and interrupt its worker to unblock any in-flight wait.
+     * Cancel the runs from index {@code from} onward when the aggregating wait is interrupted: raise
+     * each run's cooperative cancel flag AND interrupt its worker to unblock any in-flight wait. The
+     * two race, and the interrupt essentially always wins in practice: the flag is only honoured at
+     * the loop's next top-of-chunk check ({@code runChunks}, {@code Cancelled}), while the interrupt
+     * lands immediately, on a worker that in the overwhelmingly common case is mid-chunk — aborting
+     * whatever blocking call was in flight and, from there, ending the run {@code Failed} through
+     * {@code executeEndpointRun}'s catch (with a raw driver-level message as {@code error_message}).
+     * The flag-honoured, cleanly-{@code Cancelled} outcome is real but narrow: only a worker caught
+     * exactly between chunks when the interrupt lands.
+     *
+     * <p>{@code cancel(h.runId())}'s result is ignored on purpose: a handle whose chunk loop has not
+     * registered in {@code liveRuns} yet (endpoint/connector still resolving, advisory lock not yet
+     * acquired) has nothing to flag — {@code computeIfPresent} correctly declines rather than
+     * resurrecting an entry for a run that, from this map's point of view, does not exist. That is
+     * NOT a gap: {@code h.future().cancel(true)} right below still interrupts that worker.
      */
     private void cancelOutstanding(List<RunHandle> handles, int from) {
         for (int j = from; j < handles.size(); j++) {
             RunHandle h = handles.get(j);
-            cancelFlags.put(h.runId(), Boolean.TRUE);
+            cancel(h.runId());
             h.future().cancel(true);
         }
     }
@@ -183,11 +213,39 @@ public class ConnectorEngine {
         try {
             return runSyncEndpoint(endpointId, runId, trigger);
         } catch (Exception e) {
+            // Two sources can reach this worker as a real Thread.interrupt(): cancelOutstanding()
+            // via h.future().cancel(true), and onStop()'s vt.shutdownNow() at hub shutdown. Either
+            // aborts whatever blocking JDBC call was in flight (surfacing HERE as this very
+            // exception) but leaves the THREAD's interrupt status set. Uncleared, the FIRST casualty
+            // on the way out is not this catch block but doRunEndpoint's own
+            // finally { releaseAdvisoryLock(...) }, which unwinds BEFORE control reaches here: its
+            // "SELECT pg_advisory_unlock(?)" would be poisoned the same way, fail, and get swallowed
+            // to a WARN (releaseAdvisoryLock's own catch). That failure is harmless only on THIS
+            // path: the interrupt physically kills the JDBC socket, so Agroal destroys the pooled
+            // handle instead of recycling it — closeQuietly() right after does not itself end the
+            // backend session or drop a session-level advisory lock, the destroyed connection does.
+            // A releaseAdvisoryLock failure reached by any OTHER route (no interrupt, a live socket)
+            // would leave the lock held and must not lean on this reasoning. What clearing the flag
+            // HERE actually buys is a clean thread for what comes next in THIS block: the
+            // finalizeRun() write below, on a freshly acquired connection, would otherwise be
+            // poisoned the same way and throw again, leaving the row stuck at Running forever (no
+            // in-JVM process ever revisits it; only RunReaper.reap() clears it, and only at the NEXT
+            // boot). Clearing the interrupt also changes onStop()'s shutdown behaviour: finalizeRun()
+            // is now attempted (marking the row Failed) instead of failing fast and leaving it
+            // Running until the next boot — probably an improvement, but a real behaviour change
+            // worth naming. The flag is restored right after finalizeRun() below, once the critical
+            // write is safely past it: the suppression is scoped to that one write instead of being
+            // swallowed for the rest of the thread's life, so correctness does not depend on vt being
+            // newVirtualThreadPerTaskExecutor() — it holds for a pooled executor too.
+            boolean interrupted = Thread.interrupted();
             LOG.errorf(e, "Connector run %s (endpoint %s) failed unexpectedly", runId, endpointId);
             TenantContext.callAsSystem(() -> {
                 finalizeRun(runId, STATUS_FAILED, e.getMessage(), e);
                 return null;
             });
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
             return new RunStatus.Failed(Instant.now(), e.getMessage(), false);
         } finally {
             // Catch-all drain: completeRun/failRun/cancelRun already drain on normal endings
@@ -296,18 +354,38 @@ public class ConnectorEngine {
             return new RunStatus.Failed(Instant.now(),
                     "Connector not found: " + connectorId, false);
         }
-        TenantContextFilter.CURRENT_TENANT.set(c.getTenantId());
+        // Everything this run does happens under its tenant AND under its identity in the log.
+        // TenantScope sets both ThreadLocals — the Hibernate filter's and the RLS GUC's — plus the
+        // tenantId MDC, and RESTORES what was there; the hand-rolled pair this replaces removed
+        // instead, which lost a synchronous caller's tenant on the way out. runId rides alongside so
+        // every line raised mid-run says which run raised it: the sixteen reader/writer WARNs named
+        // neither the run nor the tenant, and %X{tenantId} — already in the console format — printed
+        // empty for everything a run wrote, because no one on this thread ever filled it.
+        MDC.put(MDC_RUN_ID, runId.toString());
         try {
-            return TenantContext.callAs(c.getTenantId(), () -> doRunEndpoint(c, endpoint, runId, trigger));
+            return TenantScope.get(c.getTenantId(), () -> doRunEndpoint(c, endpoint, runId, trigger));
         } finally {
-            TenantContextFilter.CURRENT_TENANT.remove();
+            MDC.remove(MDC_RUN_ID);
         }
     }
 
+    /**
+     * Requests cancellation of {@code runId}. Cooperative: the flag is read once, at the top of the
+     * chunk loop, so an in-flight chunk always finishes before the run ends — nothing here claims
+     * the run IS cancelled, only that cancellation was requested and takes effect at the next chunk
+     * boundary.
+     *
+     * <p>Atomic against the run ending concurrently: {@code computeIfPresent} only flags an entry
+     * that is still present, so a run whose chunk loop already exited (and removed itself from
+     * {@link #liveRuns}) cannot be resurrected into "cancelling" — it simply is not there.
+     *
+     * @return {@code false} for a {@code null} id or when no chunk loop in THIS JVM is watching
+     *         {@code runId} (never started here, or already ended);
+     *         {@code true} once cancellation has been recorded for a run this JVM is driving.
+     */
     public boolean cancel(UUID runId) {
         if (runId == null) return false;
-        cancelFlags.put(runId, true);
-        return true;
+        return liveRuns.computeIfPresent(runId, (k, v) -> Boolean.TRUE) != null;
     }
 
     /**
@@ -322,10 +400,45 @@ public class ConnectorEngine {
      * and sets the tenant GUC — without one the RLS-enforced datasource returns null.
      */
     protected ChunkResult executeChunkManaged(UUID runId, ConnectorType type,
-                                              ConnectorEndpoint endpoint, ConnectorCursor cursor) {
+                                              ConnectorEndpoint endpoint, ConnectorCursor cursor,
+                                              RunBound bound) {
         ConnectorRun run = QuarkusTransaction.requiringNew().call(() -> runs.findById(runId));
         if (run == null) return new ChunkResult.Failure("Run not found: " + runId, null, false);
-        return chunkExecutor.executeChunk(run, type, endpoint, cursor);
+        return chunkExecutor.executeChunk(run, type, endpoint, cursor, bound);
+    }
+
+    /**
+     * The run's target, measured once before the first chunk.
+     *
+     * <p>A type that cannot reach its source here degrades to an UNBOUNDED run with a WARN, which is
+     * exactly how every run behaved before targets existed. Measuring a target is a diagnostic, and
+     * a diagnostic must not be the thing that turns a working ingestion into a failed run — the
+     * first chunk will fail on its own, with the source's own message, if the source is really
+     * unreachable. THE POLICY LIVES HERE, once, rather than in each type.
+     *
+     * <p>The catch is deliberately wide, so it also absorbs a broken config — and that is why the
+     * line names the exception's TYPE. {@code getMessage()} alone is {@code null} for an NPE, which
+     * printed "reading unbounded — null" and told the operator nothing about which of the two had
+     * happened. The consequence stays bounded either way: a config this cannot survive is a config
+     * the first chunk cannot survive either, so the run then fails with the reader's own sentence.
+     *
+     * <p>ONE exception is not absorbed. {@link SourceUnreachableException} is a type saying it
+     * already holds the reader's answer — the source cannot be reached — and degrading there buys
+     * nothing but a second full timeout for the same sentence: measured against a dead broker,
+     * 60 s to say "reading unbounded" and 60 s more to fail, with 198 client WARN lines between
+     * them (#486). It travels up to {@code runChunks}, which fails the run at once.
+     */
+    private RunStart runStartOf(ConnectorRun run, Connector c, ConnectorType type,
+                                ConnectorEndpoint endpoint, ConnectorCursor cursor) {
+        try {
+            return chunkExecutor.runStart(run, c, type, endpoint, cursor);
+        } catch (SourceUnreachableException unreachable) {
+            throw unreachable;
+        } catch (Exception e) {
+            LOG.warnf(e, "run %s: could not measure the run's target, reading unbounded — %s: %s",
+                    run.getId(), e.getClass().getSimpleName(), e.getMessage());
+            return RunStart.none();
+        }
     }
 
     @Transactional
@@ -365,13 +478,21 @@ public class ConnectorEngine {
         ConnectorCursorEntity cursorEnt = r.getEndpointId() != null
                 ? cursors.findByEndpoint(r.getEndpointId()) : null;
         if (cursorEnt != null) r.setCursorAfter(cursorEnt.getCursorValue());
-        if (r.getEndpointId() != null) {
-            ConnectorEndpoint endpoint = endpoints.findById(r.getEndpointId());
-            if (endpoint != null) {
-                endpoint.setLastRunStatus(status);
-                endpoint.setLastRunAt(endedAt);
-            }
+        ConnectorEndpoint endpoint = r.getEndpointId() != null ? endpoints.findById(r.getEndpointId()) : null;
+        if (endpoint != null) {
+            endpoint.setLastRunStatus(status);
+            endpoint.setLastRunAt(endedAt);
         }
+        String reason = errorMessage != null && !errorMessage.isBlank() ? " — " + errorMessage : "";
+        Object endpointLabel = endpoint != null ? endpoint.getName() : r.getEndpointId();   // the id when the row is gone
+        // Partial is a WARN with Failed: both are endings the operator has to notice. An INFO line
+        // is what made the two silences this arc closes invisible in the first place.
+        LOG.logf(STATUS_FAILED.equals(status) || STATUS_PARTIAL.equals(status)
+                        ? Logger.Level.WARN : Logger.Level.INFO,
+                "run %s %s: endpoint %s, in=%d out=%d skipped=%d cell_errors=%d chunks=%d, %d ms%s",
+                runId, status, endpointLabel, r.getRecordsIn(), r.getRecordsOut(),
+                r.getRecordsSkipped(), r.getCellErrors(), r.getChunkCount(),
+                Duration.between(r.getStartedAt(), endedAt).toMillis(), reason);
     }
 
     private RunStatus doRunEndpoint(Connector c, ConnectorEndpoint endpoint, UUID runId, RunTrigger trigger) {
@@ -400,7 +521,6 @@ public class ConnectorEngine {
         }
         try {
             if (!tryAdvisoryLock(lockConn, lockKey)) {
-                LOG.infof("Endpoint %s already has an active run — skipping this submission", endpoint.getId());
                 // Known transient: this stamps the endpoint's last_run_status Cancelled while the OTHER
                 // (live) run is still mid-flight; that run's own finalizeRun later overwrites it with its
                 // real terminal status, so the endpoint self-heals — no action needed.
@@ -421,16 +541,35 @@ public class ConnectorEngine {
         }
 
         try {
-            return runChunks(c, endpoint, runId, trigger, type);
+            return runChunks(c, endpoint, runId, type);
         } finally {
             releaseAdvisoryLock(lockConn, lockKey);
         }
     }
 
-    private RunStatus runChunks(Connector c, ConnectorEndpoint endpoint, UUID runId, RunTrigger trigger, ConnectorType type) {
+    /**
+     * The chunk loop. Package-private, not private: {@code ChunkLoopNoProgressNetIT} drives it with
+     * a reader that never advances, which is the one shape no real connector can be asked to
+     * produce on demand. A test that copied this loop would be testing the copy.
+     *
+     * <p>The {@code trigger} the caller holds is not a parameter: the log line and the started
+     * event both read it back off the run row ({@code run.getTriggeredBy()}), which is the single
+     * spelling every other reader sees.
+     *
+     * <p>Must be called with NO transaction active — the production shape. The no-progress net below
+     * reads the cursor back out of Postgres between chunks, and {@code ChunkExecutor} joins an
+     * ambient transaction when it finds one: driven from inside one, the chunk's cursor write would
+     * not be committed yet, every read would return the pre-chunk value and EVERY run would fail
+     * after one chunk. Neighbouring ITs do drive {@code executeChunk} inside a transaction on
+     * purpose; this entry point is not that one.
+     */
+    RunStatus runChunks(Connector c, ConnectorEndpoint endpoint, UUID runId, ConnectorType type) {
         ConnectorRun run = TenantContext.callAsSystem(() ->
                 QuarkusTransaction.requiringNew()
                         .call(() -> runs.findById(runId)));
+        // paired with the end line in finalizeRun, whatever the ending
+        LOG.infof("run %s started: connector %s (%s), endpoint %s, trigger %s",
+                runId, c.getName(), c.getTypeId(), endpoint.getName(), run.getTriggeredBy());
         events.emit("connector.run.started", Map.of(
                 RUN_ID,       runId.toString(),
                 "connector_id", c.getId().toString(),
@@ -438,35 +577,126 @@ public class ConnectorEngine {
                 "sync_mode",    run.getSyncMode(),
                 "trigger",      run.getTriggeredBy()));
 
-        long startedNs = System.nanoTime();
+        liveRuns.put(runId, Boolean.FALSE);
         try {
+            ConnectorCursor cursor = currentCursor(endpoint.getId());
+            // THE RUN'S TARGET, measured once, before the first chunk: what the source held when
+            // this run started. Without one a run against a live source never ends — it stops when
+            // the PRODUCER stops, not when the reader has caught up — so the run row stays Running
+            // for days, every scheduled slot behind it is skipped by the advisory lock above, and a
+            // declared `window` fence is walked straight through by a run that began inside it.
+            // Types that declare no target (csv, rest, hello-world) read exactly as they always did.
+            final ConnectorCursor startedFrom = cursor;
+            RunStart start;
+            try {
+                start = TenantContext.callAsSystem(() ->
+                        runStartOf(run, c, type, endpoint, startedFrom));
+            } catch (SourceUnreachableException unreachable) {
+                // Retryable comes off the type, not off a literal: a source that is down is a
+                // TransientFailureException, and ChunkExecutor reads the same property the same way.
+                return failRun(runId, new ChunkResult.Failure(
+                        unreachable.getMessage(), unreachable.getCause(), unreachable.isRetryable()));
+            }
+            final RunBound bound = start.bound();
+            if (bound != null) {
+                LOG.infof("run %s target: %s", runId, bound.describe());
+            }
             while (true) {
-                if (Boolean.TRUE.equals(cancelFlags.get(runId))) {
+                if (Boolean.TRUE.equals(liveRuns.get(runId))) {
                     return cancelRun(runId);
                 }
 
-                ConnectorCursor cursor = currentCursor(endpoint.getId());
+                ConnectorCursor before = cursor;
                 ChunkResult result = TenantContext.callAsSystem(() ->
-                        executeChunkManaged(runId, type, endpoint, cursor));
+                        executeChunkManaged(runId, type, endpoint, before, bound));
 
+                int processed;
                 switch (result) {
                     case ChunkResult.Success s -> {
-                        // EndOfStream: no new records processed, or cursor unchanged. Otherwise HasMore → loop.
-                        if (s.processed() == 0 || cursor.value().equals(s.nextCursor().value())) {
-                            return completeRun(c, endpoint, runId, run, startedNs);
+                        // Terminal, or nothing read: either way this run is done. A terminal chunk
+                        // may still be holding records and have persisted no position — that is a
+                        // reader's right, not a stall, and only the chunk itself can tell them apart.
+                        if (s.endOfStream() || s.processed() == 0) {
+                            // A run that BEGAN by skipping what the source deleted underneath its
+                            // cursor did not read everything it was entitled to, however cleanly
+                            // the rest of it went. Reporting it Completed is the silence #467
+                            // measured and left green. The sentences are not re-logged here: the
+                            // reader's own planStart words them on the chunk that applies the
+                            // repair, and the run row carries them as its message.
+                            return start.lostAtStart().isEmpty()
+                                    ? completeRun(c, endpoint, runId, run)
+                                    : partialRun(c, endpoint, runId, run,
+                                            String.join("; ", start.lostAtStart()));
                         }
+                        processed = s.processed();
                     }
-                    case ChunkResult.PartialSuccess ps -> {
-                        // continue loop — partial success means more data may follow
+                    case ChunkResult.PartialSuccess ps -> processed = ps.processed();
+                    case ChunkResult.ShortOfTarget st -> {
+                        // Neither dry nor broken: the reader stopped for a reason of its own while
+                        // the target says there is more. Everything it read was written and its
+                        // position is persisted, so this is a terminal ending like the others — it
+                        // simply is not a complete one, and saying Completed here would be the
+                        // green run this whole arc exists to remove.
+                        // BOTH sentences, when both are true. A run can begin past retention-deleted
+                        // offsets AND stop on its chunk budget, and the pages tell the operator to
+                        // read `error:` to learn WHICH cause fired — so keeping only the last one
+                        // answers a question with half an answer.
+                        return partialRun(c, endpoint, runId, run,
+                                Stream.concat(start.lostAtStart().stream(), Stream.of(st.detail()))
+                                        .collect(Collectors.joining("; ")));
                     }
                     case ChunkResult.Failure f -> {
                         return failRun(runId, f);
                     }
                 }
+
+                // THE NO-PROGRESS NET: records were read, so the position must have moved. Both
+                // sides of this comparison are read back OUT of Postgres, one chunk apart. The
+                // reader's own nextCursor is deliberately not used: it is a node built in the JVM,
+                // and comparing it against one that came out of jsonb is comparing across a
+                // serialization boundary — a POJONode (every jdbc cursor) is never equal to
+                // anything parsed, and a LongNode comes back an IntNode. Both made this net answer
+                // "it moved" for ever. A jdbc endpoint that started declaring its own cursor
+                // foreign then re-read the same window until the pod died: 2 279 500 rows off a
+                // 700-row table, in a minute.
+                //
+                // Failed, not Completed: every chunk that gets here PROMISED more, and no shipped
+                // reader promises more from a position it did not move. (A reader that ends loaded
+                // without persisting a position is the healthy case, and it was handled above — it
+                // says endOfStream instead of leaving the engine to guess from the cursor.) So a
+                // stopped position is never a normal ending here, and reporting Completed would
+                // hide a re-reading endpoint behind a green run.
+                cursor = currentCursor(endpoint.getId());
+                if (cursor.value().equals(before.value())) {
+                    return failRun(runId, new ChunkResult.Failure(
+                            "endpoint '" + endpoint.getName() + "' read " + processed
+                                    + " records but its stored position did not move — the same"
+                                    + " window would be re-read for ever", null, false));
+                }
             }
         } finally {
-            cancelFlags.remove(runId);
+            liveRuns.remove(runId);
         }
+    }
+
+    /**
+     * A run that ended without reaching the target it gave itself. Terminal, like every other
+     * ending, and deliberately NOT Failed: nothing went wrong, everything read was written and the
+     * position is persisted — the next run resumes from it and catches up.
+     *
+     * <p>{@code RunStatus.Partial} has existed since the connector runtime was written and nothing
+     * ever produced it. {@code connector_run.status} carries no constraint (only two partial indexes
+     * on {@code 'Running'}), so this needs no migration.
+     *
+     * <p>Partial means ONE thing: the run stopped below its target — a shortfall in POSITION. A
+     * shortfall in DELIVERY (rows read and dropped) is not this; {@code records_skipped}, the
+     * dead-letter list and OTK Law 1 already say it in full, and a status that answered both
+     * questions would end up lying to one of them.
+     */
+    private RunStatus partialRun(Connector c, ConnectorEndpoint endpoint, UUID runId,
+                                 ConnectorRun run, String detail) {
+        Ended e = finishRun(c, endpoint, runId, run, STATUS_PARTIAL, detail, "connector.run.partial");
+        return new RunStatus.Partial(e.endedAt(), e.recordsOut(), e.skipped());
     }
 
     private RunStatus cancelRun(UUID runId) {
@@ -479,32 +709,77 @@ public class ConnectorEngine {
         return new RunStatus.Cancelled(Instant.now(), "cancelled");
     }
 
-    private RunStatus completeRun(Connector c, ConnectorEndpoint endpoint, UUID runId, ConnectorRun run, long startedNs) {
+    /**
+     * ONE source of duration. The run's JOURNAL span — {@code ended_at − started_at} on the
+     * {@code connector_run} row — is what every other reader already derives: {@code lm run list},
+     * the TUI's DURATION column and {@code GET /api/platform/runs} all read the stored columns, and
+     * the end-of-run log line in {@link #finalizeRun} uses those same two instants a moment before
+     * Postgres rounds {@code ended_at} on the way in. Same span, one rounding apart. The event says
+     * the same thing instead of measuring the chunk loop a second time, which reported a shorter,
+     * different segment — it began after the row was created, the endpoint resolved and the
+     * advisory lock taken, so the two numbers disagreed for every run that ever completed.
+     */
+    private RunStatus completeRun(Connector c, ConnectorEndpoint endpoint, UUID runId, ConnectorRun run) {
+        Ended e = finishRun(c, endpoint, runId, run, STATUS_COMPLETED, null, "connector.run.completed");
+        return new RunStatus.Completed(e.endedAt(), e.recordsOut(), e.elapsed());
+    }
+
+    /** What a terminal ending measured, so each status can shape its own {@link RunStatus}. */
+    private record Ended(long recordsOut, long skipped, Instant endedAt, Duration elapsed) {}
+
+    /**
+     * ONE terminal ending for the two statuses that mean "this run wrote everything it read":
+     * Completed and Partial. They are together because they must do the SAME six things, and the
+     * first draft of Partial did four of them — it skipped the per-table counters and, worse, the
+     * {@code runCompleted} event that starts the schema-card refresh window. A Partial run writes
+     * rows (#467's shape wrote 3 000 of 5 000), so its tables need indexing exactly as much; the
+     * Ask-to-SQL card would have gone stale for every partial run, silently.
+     *
+     * <p>{@code topic} is passed, not derived from {@code status}: a reader grepping for
+     * {@code connector.run.partial} has to find the string, and a computed event name is one more
+     * signal standing in for a question nobody asked it.
+     */
+    private Ended finishRun(Connector c, ConnectorEndpoint endpoint, UUID runId, ConnectorRun run,
+                            String status, String detail, String topic) {
         TenantContext.callAsSystem(() -> {
-            finalizeRun(runId, "Completed", null, null);
+            finalizeRun(runId, status, detail, null);
             return null;
         });
         ConnectorRun refreshed = TenantContext.callAsSystem(() ->
                 QuarkusTransaction.requiringNew()
-                        .call(() -> runs.findById(runId)));
+                        .call(() -> {
+                            // finalizeRun wrote this row through the SAME persistence context, so a plain
+                            // find hands back its in-memory copy — nanosecond Instants the database rounded
+                            // on the way in. Clearing makes this a real re-read, so the span below is the one
+                            // a reader of the stored columns computes, to the millisecond.
+                            runs.getEntityManager().clear();
+                            return runs.findById(runId);
+                        }));
         long recordsOut = refreshed != null ? refreshed.getRecordsOut() : run.getRecordsOut();
-        events.emit("connector.run.completed", Map.of(
-                RUN_ID,      runId.toString(),
-                "endpoint_id", endpoint.getId().toString(),
-                "records_in",  refreshed != null ? refreshed.getRecordsIn()  : run.getRecordsIn(),
-                "records_out", recordsOut,
-                "duration_ms", Duration.ofNanos(System.nanoTime() - startedNs).toMillis(),
-                "tables",      stats.drain(runId)));
-        // Stamp the event with the run's ACTUAL start (loaded at the top of runChunks, NOT NULL, set in
-        // startRunRow before any chunk ran). This is the start of the refresher's schema-change look-back
-        // window — an Instant.now() fallback here would start the window at finalization time and could
-        // miss a table created earlier in the run, skipping the SchemaCard refresh.
+        long recordsSkipped = refreshed != null ? refreshed.getRecordsSkipped() : run.getRecordsSkipped();
+        Instant startedAt = refreshed != null ? refreshed.getStartedAt() : run.getStartedAt();
+        Instant endedAt = refreshed != null && refreshed.getEndedAt() != null
+                ? refreshed.getEndedAt()
+                : Instant.now();
+        Duration elapsed = Duration.between(startedAt, endedAt);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put(RUN_ID, runId.toString());
+        payload.put("endpoint_id", endpoint.getId().toString());
+        payload.put("records_in", refreshed != null ? refreshed.getRecordsIn() : run.getRecordsIn());
+        payload.put("records_out", recordsOut);
+        payload.put("duration_ms", elapsed.toMillis());
+        payload.put("tables", stats.drain(runId));
+        // Only the endings that have something to explain carry it, so a `completed` payload keeps
+        // exactly the keys its subscribers already read.
+        if (detail != null) payload.put("error_message", detail);
+        events.emit(topic, payload);
+        // Stamp the event with the run's ACTUAL start (NOT NULL, set in startRunRow before any chunk
+        // ran). This is the start of the refresher's schema-change look-back window — an Instant.now()
+        // fallback here would start the window at finalization time and could miss a table created
+        // earlier in the run, skipping the SchemaCard refresh.
         runCompleted.fireAsync(new ConnectorRunCompleted(
-                c.getId(), c.getTenantId(), runId, run.getStartedAt()));
-        return new RunStatus.Completed(
-                Instant.now(),
-                recordsOut,
-                Duration.ofNanos(System.nanoTime() - startedNs));
+                c.getId(), c.getTenantId(), runId, startedAt));
+        return new Ended(recordsOut, recordsSkipped, endedAt, elapsed);
     }
 
     private RunStatus failRun(UUID runId, ChunkResult.Failure f) {
@@ -520,7 +795,12 @@ public class ConnectorEngine {
         return new RunStatus.Failed(Instant.now(), f.message(), f.retryable());
     }
 
-    private ConnectorCursor currentCursor(UUID endpointId) {
+    /**
+     * Package-private, not private: {@code JdbcCompositeKeyCursorIT} drives it directly. A test that
+     * copies this method tests the copy — and the copy would keep passing while a change here (a
+     * cache that is no longer cleared, a different read path) broke the caller.
+     */
+    ConnectorCursor currentCursor(UUID endpointId) {
         return TenantContext.callAsSystem(() ->
                 // Wrap in REQUIRES_NEW so the Agroal interceptor fires and sets the tenant GUC
                 // before the cursor read. The L1 cache is cleared inside the transaction so each

@@ -38,8 +38,26 @@ public final class SourceTree {
      * @param packagePath the package as a path, e.g. {@code io/lumnik/hub}
      */
     public static SourceTree of(String module, String packagePath) {
+        return find(module, packagePath).orElseThrow(() -> new IllegalStateException(
+            "cannot locate " + module + "'s sources from " + Path.of("").toAbsolutePath()
+                + " — an inventory cannot police what it cannot find"));
+    }
+
+    /**
+     * The same search, for a module that may legitimately be absent — a closed module the open
+     * edition prunes ({@code scripts/extract-open-edition.sh}).
+     *
+     * <p>The search and its refusal are separated because only the caller knows which absence is
+     * legitimate: a sweep that spans a closed module must tell "pruned on purpose" from "the guard
+     * lost its subject", and it cannot say that by catching {@link #of}'s exception — least of all
+     * from a static initializer, where the refusal reaches the report as an unreadable
+     * {@code ExceptionInInitializerError} instead of the assertion the author wrote.
+     *
+     * @return the tree, or empty when this module has no sources here
+     */
+    public static Optional<SourceTree> find(String module, String packagePath) {
         Path fromModule = Path.of("src/main/java", packagePath);
-        if (Files.isDirectory(fromModule)) return new SourceTree(fromModule);
+        if (Files.isDirectory(fromModule)) return Optional.of(new SourceTree(fromModule));
         // Then <module>/src/main/java from here, and from every ancestor. The ancestor walk is
         // what lets a guard in one module police ANOTHER module's sources: surefire's cwd is the
         // module under test, so a sweep living in lumnik-hub cannot see lumnik-identity from
@@ -47,11 +65,9 @@ public final class SourceTree {
         // one reports the shape of its own blind spot rather than the codebase's.
         for (Path dir = Path.of("").toAbsolutePath(); dir != null; dir = dir.getParent()) {
             Path candidate = dir.resolve(module).resolve("src/main/java").resolve(packagePath);
-            if (Files.isDirectory(candidate)) return new SourceTree(candidate);
+            if (Files.isDirectory(candidate)) return Optional.of(new SourceTree(candidate));
         }
-        throw new IllegalStateException(
-            "cannot locate " + module + "'s sources from " + Path.of("").toAbsolutePath()
-                + " — an inventory cannot police what it cannot find");
+        return Optional.empty();
     }
 
     public Path root() { return root; }
