@@ -44,8 +44,6 @@ spec:
 
   after_process: none
 
-  target: {}
-
   mapping:
     cell:
       - kotlin:

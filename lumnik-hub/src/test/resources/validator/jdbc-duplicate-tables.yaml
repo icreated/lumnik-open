@@ -17,4 +17,3 @@ spec:
       - name: invoices
         mode: full
         pk_columns: [id]
-  target: {}

@@ -28,5 +28,3 @@ spec:
         schema: demo
         mode: full
         pk_columns: [invoice_id]
-
-  target: {}

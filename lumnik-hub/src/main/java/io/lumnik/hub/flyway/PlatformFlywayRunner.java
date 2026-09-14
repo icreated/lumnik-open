@@ -5,6 +5,7 @@ import io.lumnik.hub.manifest.ModuleManifest;
 import io.lumnik.hub.manifest.ModuleManifestRegistry;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.runtime.StartupEvent;
+import io.quarkus.scheduler.Scheduler;
 import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
@@ -29,6 +30,7 @@ public class PlatformFlywayRunner {
     @DataSource("admin")
     AgroalDataSource dataSource;
     @Inject ModuleManifestRegistry registry;
+    @Inject Scheduler scheduler;
 
     // Priority(2) — runs after registry (Priority 1)
     void onStart(@Observes @Priority(2) StartupEvent ev) {
@@ -51,6 +53,16 @@ public class PlatformFlywayRunner {
             var result = flyway.migrate();
             LOG.infof("Module '%s': %d migration(s) applied", manifest.id(), result.migrationsExecuted);
             grantSchemaUsage(manifest.schema());
+        }
+        // quarkus.scheduler.start-mode=halted keeps every @Scheduled bean off until this line:
+        // a scheduled job's first tick otherwise races this very loop on a fresh database
+        // (its own executor thread starts independently of the StartupEvent ordering above).
+        // quarkus.scheduler.enabled=false (SchedulerPausedProfile and friends, IT-only) swaps in
+        // a no-op Scheduler that throws on resume() — nothing to un-halt, not a boot failure.
+        try {
+            scheduler.resume();
+        } catch (UnsupportedOperationException e) {
+            LOG.debugf("No scheduler to resume: %s", e.getMessage());
         }
     }
 

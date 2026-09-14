@@ -15,4 +15,3 @@ spec:
         mode: full
         pk_columns: [id]
         rename: "not-an-object"
-  target: {}

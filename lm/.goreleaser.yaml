@@ -29,8 +29,8 @@ builds:
       # the release workflow) — goreleaser OSS has no tag_prefix, and the raw tag would
       # otherwise leak into versions and archive names as "lm-v1.0.0". Local snapshot
       # builds fall back to goreleaser's own version.
-      - -X github.com/icreated/lumnik-open/lm/internal/cli.Version={{ envOrDefault "LM_VERSION" .Version }}
-      - -X github.com/icreated/lumnik-open/lm/internal/cli.GitCommit={{.ShortCommit}}
+      - -X github.com/icreated/lumnik-open/lm/internal/brand.Version={{ envOrDefault "LM_VERSION" .Version }}
+      - -X github.com/icreated/lumnik-open/lm/internal/brand.GitCommit={{.ShortCommit}}
 
 archives:
   - id: lm-archive

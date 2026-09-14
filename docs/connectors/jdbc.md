@@ -405,7 +405,9 @@ ever sees an absence. To resync from nothing, `lm connector delete` drops the co
 ### Indexes on the hub table
 
 `indexes:` is **per table** for jdbc — that is where the runtime reads it. (`spec.target.indexes`
-at connector level is what [CSV & files](csv.md#target-table) reads; jdbc ignores it.)
+at connector level is what [CSV & files](csv.md#target-table) reads. A jdbc manifest carrying a
+`spec.target` block at all is answered with an `unknown key` warning: nothing on this kind reads
+one, so an index declared there would be accepted and then silently dropped.)
 
 ```yaml
 indexes:

@@ -16,4 +16,3 @@ spec:
         pk_columns: [id]
         rename:
           id: source_id
-  target: {}

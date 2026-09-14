@@ -18,4 +18,3 @@ spec:
         mode: full
         pk_columns: [id]
   window: 22
-  target: {}

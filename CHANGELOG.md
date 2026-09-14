@@ -7,7 +7,46 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
-## v1.7.0 — 2026-09-14
+## v1.7.1 — 2026-09-14
+
+A patch release about what a key written with nothing after it means. Three blocks and one path
+answered that question four different ways, and one of the answers moved your processed files into a
+directory literally named `null`. Also: a first boot against an empty database stops logging errors
+it was already recovering from on its own.
+
+### Changed — read before upgrading
+- **`spec.target` is no longer required, and your manifests can lose the line.** Its only key —
+  `indexes` — was already optional, so every csv and jdbc manifest carried a `target: {}` the runtime
+  read nothing from. On `csv-file` the block is now optional: write it and it is still checked key by
+  key. On `jdbc-generic` it is gone entirely — nothing on that kind ever read it, since a jdbc
+  connector's indexes are declared per table on `source.tables[].indexes`, so `target.indexes` was
+  accepted and then dropped without a word. **A manifest still carrying the line keeps applying**, and
+  a jdbc one now comes back with a warning inviting you to delete it. The same is true of csv's
+  `spec.parser`, whose keys all carry a default. The manifests on this site and the `lm new` templates
+  are already a line shorter.
+- **`after_process: move` without an `archive_path` is now refused.** Written empty — `archive_path:`
+  with nothing after it — it used to validate green and then move every processed file into a directory
+  called `null`. Both layers close: `lm validate` refuses the combination, and an apply never stores
+  that string whatever `after_process` says. A manifest of yours with that shape will now be refused;
+  it was already not doing what it said.
+- **Deleting the `parser` block now gets you the auto-detection the page promises.** An apply starts
+  from the connector's existing configuration, so removing the block used to leave the previous run's
+  delimiter in place, in silence. The same was true of `indexes`. Note what this does not do: removing
+  an `indexes` declaration does not drop an index that was already created.
+
+### Fixed
+- **A first boot against an empty database no longer logs `relation does not exist`.** Scheduled work
+  starts on its own threads, independently of the migrations, so its first tick could reach a table
+  Flyway had not created yet — on `up.sh` against fresh volumes, and on a first cloud start. The error
+  was caught and the next tick recovered, so nothing was ever lost; the log simply said otherwise.
+  Scheduled work now waits until every migration has run.
+
+### Added
+- **`lm login` shows which binary you are running.** The page where you first meet a binary you may not
+  have built now carries its version, next to the product signature. A binary you built yourself says
+  `dev` — which is the truth, and a signal of its own.
+
+## v1.7.0 — 2026-09-13
 
 Six days of running the product against real sources — a live JDBC database, and a REST / GraphQL /
 SOAP service the reader can start — rather than asserting about it. Five migrations run at startup,

@@ -45,8 +45,10 @@ public class JdbcConnectorValidator implements ConnectorValidator {
             // schedule's twin, read by the SHARED apply preamble (ApplyUpsert); declared and
             // checked through WindowField, which owns both wordings for all four connector types.
             .optional("window", Type.STRING, Importance.MEDIUM, WindowField.DOC, null)
-            .requireNested("target", Importance.HIGH, "Target persistence",
-                TargetBlockValidator.configDef())
+            // No `target` block: nothing on this kind reads spec.target — JdbcGenericConnectorApplyHandler
+            // never touches it, and a jdbc connector's indexes live on source.tables[].indexes. Declaring it
+            // accepted `target.indexes` and dropped it in silence; undeclared, the closed sweep names it
+            // with the sentence it already owns, and no code here has to say it twice (#543).
             .closed();
     }
 

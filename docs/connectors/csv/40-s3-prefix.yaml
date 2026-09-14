@@ -27,5 +27,3 @@ spec:
     has_header: true
 
   after_process: none
-
-  target: {}

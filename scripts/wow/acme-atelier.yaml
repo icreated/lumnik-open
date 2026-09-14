@@ -28,5 +28,3 @@ spec:
       - name: c_payment
         mode: full
         pk_columns: [c_payment_id]
-  target:
-    table_prefix: t_

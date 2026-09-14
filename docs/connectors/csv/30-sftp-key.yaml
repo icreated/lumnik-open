@@ -35,5 +35,3 @@ spec:
     has_header: true
 
   after_process: none              # validator vocab: archive|delete|move|none ('none' = leave file in place)
-
-  target: {}

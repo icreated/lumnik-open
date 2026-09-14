@@ -273,7 +273,8 @@ $EDITOR acme-nightly.yaml   # a csv-file manifest: metadata.name: acme_billing (
                             # tables stay un-askable — validate warns), spec.transport
                             # (kind: sftp, host:, user:, path: /export/*.csv,
                             # key_env: ACME_SFTP_KEY, host_key_fingerprint: "SHA256:…" —
-                            # refused without it), spec.parser, spec.target: {},
+                            # refused without it), spec.parser (optional — the
+                            # delimiter is sniffed and a header row assumed),
                             # spec.schedule: "0 6 * * *", after_process: move,
                             # archive_path: /archive/
 lm validate -f acme-nightly.yaml   # names any block you left out, field by field

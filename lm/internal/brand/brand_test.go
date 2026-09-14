@@ -1,6 +1,9 @@
 package brand
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -108,5 +111,65 @@ func TestBannerHandlesAnUnknownWidth(t *testing.T) {
 	// degrading the one case where the output is most likely to be read by a human.
 	if !strings.Contains(Banner(0), "██") {
 		t.Errorf("width 0 (not a terminal) should still get the wordmark")
+	}
+}
+
+func TestBannerSaysWhichBinaryIsRunning(t *testing.T) {
+	// The login page is where someone first meets a binary they may not have built. Saying
+	// nothing about which one it is leaves them to guess, and a guess about a version is how
+	// two machines end up debugging different products.
+	old := Version
+	t.Cleanup(func() { Version = old })
+	Version = "v9.9.9"
+
+	if b := Banner(100); !strings.Contains(b, "v9.9.9") {
+		t.Errorf("the wide banner must carry the version, got:\n%s", b)
+	}
+	// The narrow fallback drops the wordmark, never the identity.
+	t.Setenv("NO_COLOR", "1")
+	if b := Banner(40); !strings.Contains(b, "v9.9.9") {
+		t.Errorf("the narrow fallback must carry it too, got:\n%s", b)
+	}
+}
+
+func TestReleaseStampsThisPackagesVersionSymbol(t *testing.T) {
+	// goreleaser's -X takes a STRING path. Point it at a symbol that does not exist and the
+	// linker says nothing: the flag is dropped, Version keeps "dev", and every release prints
+	// "dev" forever with no error anywhere. That is the failure this pins — the expectation is
+	// DERIVED from where this file actually sits, so moving the package fails the test instead
+	// of silently un-stamping the product.
+	_, self, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot locate this test file")
+	}
+	dir := filepath.Dir(self)
+	root := dir
+	for {
+		if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
+			break
+		}
+		parent := filepath.Dir(root)
+		if parent == root {
+			t.Fatal("no go.mod above " + dir)
+		}
+		root = parent
+	}
+	mod, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := strings.Fields(strings.SplitN(string(mod), "\n", 2)[0])[1]
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "-X " + module + "/" + filepath.ToSlash(rel) + ".Version="
+
+	spec, err := os.ReadFile(filepath.Join(root, ".goreleaser.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(spec), want) {
+		t.Errorf(".goreleaser.yaml must stamp %s\nIt does not — a release would ship Version=%q.", want, Version)
 	}
 }

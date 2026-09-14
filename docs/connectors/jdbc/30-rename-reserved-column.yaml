@@ -25,5 +25,3 @@ spec:
         pk_columns: [id]
         rename:
           id: price_list_id
-
-  target: {}

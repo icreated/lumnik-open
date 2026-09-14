@@ -14,4 +14,3 @@ spec:
       - name: invoices
         mode: watermark
         pk_columns: [id]
-  target: {}

@@ -42,7 +42,6 @@ class JdbcGenericConnectorApplyHandlerIT {
                     pk_columns: [invoice_id, line_no]
               schedule: "*/15 * * * *"
               window: "22:00-06:00"
-              target: {}
             """.formatted(System.nanoTime());
 
         String connectorId = given().config(YamlBody.CONFIG)

@@ -5,8 +5,8 @@
 #   connector.t_<slug(metadata.name)>
 # i.e. a hardcoded `t_` prefix + the slugified connector name. So:
 #   metadata.name: commandes-csv   ->   connector.t_commandes_csv
-# (that's the table commande-workflow.yaml's spec.on.table names). `target` only carries
-# optional `indexes`/`tags` — there is no table_prefix knob for csv-file.
+# (that's the table commande-workflow.yaml's spec.on.table names). `target` is optional and
+# carries only `indexes` — there is no table_prefix knob for csv-file.
 apiVersion: connectors.lumnik.io/v1
 kind: Connector
 metadata:
@@ -14,7 +14,6 @@ metadata:
   connector_type: csv-file
   scopes: [demo]
 spec:
-  target: {}  # the target block itself is required (ConfigDef error if absent)
   transport:
     kind: local
     # Path AS SEEN BY THE HUB. On the self-host stack the demo folder is mounted at /demo

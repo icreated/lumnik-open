@@ -3,12 +3,9 @@ package cli
 import (
 	"runtime/debug"
 
-	"github.com/spf13/cobra"
-)
+	"github.com/icreated/lumnik-open/lm/internal/brand"
 
-var (
-	Version   = "dev"
-	GitCommit = "unknown"
+	"github.com/spf13/cobra"
 )
 
 // buildStamp falls back to the VCS info Go embeds in every `go build` — two
@@ -16,7 +13,7 @@ var (
 func buildStamp() (string, string) {
 	// Collect first, compose after: Settings order is not guaranteed, and a
 	// dirty-before-revision ordering must not leave the commit as "unknown+dirty".
-	commit, when := GitCommit, ""
+	commit, when := brand.GitCommit, ""
 	revision, dirty := "", false
 	if info, ok := debug.ReadBuildInfo(); ok {
 		for _, kv := range info.Settings {
@@ -46,9 +43,9 @@ func newVersionCmd() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			commit, when := buildStamp()
 			if when != "" {
-				cmd.Printf("lm version %s (commit %s, built from %s)\n", Version, commit, when)
+				cmd.Printf("lm version %s (commit %s, built from %s)\n", brand.Version, commit, when)
 			} else {
-				cmd.Printf("lm version %s (commit %s)\n", Version, commit)
+				cmd.Printf("lm version %s (commit %s)\n", brand.Version, commit)
 			}
 		},
 	}

@@ -36,5 +36,3 @@ spec:
   # per table when nothing has changed. Cron times are UTC.
   # schedule: "*/10 * * * *"
   # window: "22:00-06:00"
-
-  target: {}

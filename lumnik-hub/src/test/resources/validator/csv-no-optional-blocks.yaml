@@ -1,0 +1,13 @@
+# A csv manifest that accepts every default: neither `parser:` nor `target:` — see
+# CsvFileConnectorValidator#configDef for why each may be omitted (#543).
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: nightly-export
+  connector_type: csv-file
+  scopes: [billing]
+spec:
+  transport:
+    kind: local
+    path: /imports/*.csv
+  after_process: none

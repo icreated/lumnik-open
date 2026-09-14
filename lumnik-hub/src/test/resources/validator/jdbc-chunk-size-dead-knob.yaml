@@ -18,4 +18,3 @@ spec:
         mode: watermark
         watermark_column: updated_at
         pk_columns: [id]
-  target: {}

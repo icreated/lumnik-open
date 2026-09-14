@@ -8,6 +8,17 @@ import (
 	"strings"
 )
 
+// Version and GitCommit are the binary's build stamp, set at release time by goreleaser's -X
+// ldflags (see .goreleaser.yaml; a test in this package pins that path to these symbols, because a
+// stale path is dropped by the linker in silence and would ship every release as "dev"). They live
+// here rather than in the CLI because this package is where the product says who it is, and the
+// version is part of that: `lm version` and the login banner read the same two vars, so they cannot
+// drift. A build from source keeps "dev" — that is the truth, and a useful signal of its own.
+var (
+	Version   = "dev"
+	GitCommit = "unknown"
+)
+
 // GoldHex is lumière, the accent lm wears everywhere. tui.ChromePrimary is the same colour spelt as
 // a tcell value for the TUI borders; a test in package tui pins the two spellings together.
 const GoldHex = "#ffb000"
@@ -75,8 +86,12 @@ func Banner(width int) string {
 		gold, reset = "", ""
 	}
 	if width > 0 && width < Width {
-		return gold + Name + reset + "\n"
+		return gold + Name + " · " + Version + reset + "\n"
 	}
+	// The signature carries the build stamp: whoever reads this page may not have built the
+	// binary, and a guess about which version is running is how two machines end up debugging
+	// different products. Centring measures THIS string, not Tagline, or the line sits off-axis.
+	sig := Tagline + " · " + Version
 	pad := strings.Repeat(" ", indent(width))
 	var b strings.Builder
 	for _, line := range strings.Split(Wordmark, "\n") {
@@ -87,8 +102,8 @@ func Banner(width int) string {
 		b.WriteByte('\n')
 	}
 	b.WriteString(pad)
-	b.WriteString(strings.Repeat(" ", max((Width-len([]rune(Tagline)))/2, 0)))
-	b.WriteString(Tagline)
+	b.WriteString(strings.Repeat(" ", max((Width-len([]rune(sig)))/2, 0)))
+	b.WriteString(sig)
 	b.WriteByte('\n')
 	return b.String()
 }

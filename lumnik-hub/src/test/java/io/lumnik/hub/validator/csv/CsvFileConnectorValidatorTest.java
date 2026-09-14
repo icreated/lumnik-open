@@ -8,10 +8,14 @@ import io.lumnik.hub.validator.ValidationResult;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.InputStream;
 import java.util.List;
+import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.*;
 
 @QuarkusTest
@@ -29,6 +33,16 @@ class CsvFileConnectorValidatorTest {
 
     @Test void localManifest_valid_passes() throws Exception {
         ValidationResult r = service.validate(load("csv-local-valid.yaml"));
+        assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
+    }
+
+    /**
+     * Both blocks a csv manifest could only ever write to say nothing. One assertion covers both
+     * because the refusal names its own path: a regression on either comes back as
+     * {@code spec.parser} or {@code spec.target}, not as an anonymous red (#543).
+     */
+    @Test void localManifest_withoutParserOrTarget_passes() throws Exception {
+        ValidationResult r = service.validate(load("csv-no-optional-blocks.yaml"));
         assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
     }
 
@@ -74,6 +88,47 @@ class CsvFileConnectorValidatorTest {
         ValidationResult r = service.validate(load("csv-move-no-archive.yaml"));
         assertFalse(r.isValid());
         assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.archive_path")));
+    }
+
+    private record NoArchive(String name, String archiveLine) {
+        @Override public String toString() { return name; }
+    }
+
+    /** The three ways a manifest can fail to give a path. YAML spells "nothing" more than once. */
+    static Stream<Arguments> spellingsOfNoArchivePath() {
+        return Stream.of(
+            new NoArchive("the key is absent", ""),
+            new NoArchive("the key is there with nothing after it", ",\"archive_path\":null"),
+            new NoArchive("the key is there and blank", ",\"archive_path\":\"   \"")
+        ).map(Arguments::of);
+    }
+
+    /**
+     * {@code after_process: move} with no path to move to. Only the first row was refused: the rule
+     * asked {@code isMissingNode()}, and a key written with nothing after it is a NullNode — present
+     * by that question, absent by every other. The manifest validated green and the apply then
+     * stored {@code archive_path} as the literal string {@code "null"} ({@code NullNode.asText()}),
+     * so processed files were moved into a directory named "null". The tree already carried the
+     * remedy and named this exact trap: {@code JsonNodes.blankOrNull}.
+     *
+     * <p>s3 rather than the local transport of {@code csv-move-no-archive.yaml}: local refuses
+     * {@code move} on its own ({@code localCannotRelocate}), so that fixture raises two errors at
+     * once and could not tell which rule this row is testing.
+     */
+    @ParameterizedTest(name = "after_process: move — {0}")
+    @MethodSource("spellingsOfNoArchivePath")
+    void moveWithoutAnArchivePath_isRefused(NoArchive c) throws Exception {
+        JsonNode manifest = mapper.readTree("""
+            {"apiVersion":"connectors.lumnik.io/v1","kind":"Connector",
+             "metadata":{"name":"bad-move","connector_type":"csv-file","scopes":["test"]},
+             "spec":{"transport":{"kind":"s3","bucket":"acme-exports"},
+                     "after_process":"move"%s}}""".formatted(c.archiveLine()));
+
+        ValidationResult r = service.validate(manifest);
+
+        assertFalse(r.isValid(), () -> "a move with nowhere to move to must be refused");
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.archive_path")),
+            () -> "the refusal must name spec.archive_path, got: " + r.errors());
     }
 
     @Test void invalidCron_isError() throws Exception {

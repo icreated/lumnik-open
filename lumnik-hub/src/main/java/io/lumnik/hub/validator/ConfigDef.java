@@ -69,6 +69,15 @@ public final class ConfigDef {
         return this;
     }
 
+    /**
+     * A block that must be present, with its key set attached. Before reaching for it, check that
+     * {@code sub} has a required field — or that a cross-field rule owns its requiredness, the way
+     * {@code KafkaConnectorValidator.validateAuth} does for an all-optional auth def. A sub-def with
+     * neither makes a block that can only be written to say nothing, and every manifest of the kind
+     * then carries a line the runtime reads nothing from: that was {@code spec.target} on jdbc and
+     * csv, and {@code spec.parser} on csv, until #543. {@link #optionalNested} is the declaration
+     * those wanted.
+     */
     public ConfigDef requireNested(String name, Importance imp, String doc, ConfigDef sub) {
         fields.put(name, new FieldSpec(name, Type.NESTED, imp, doc, null, true, null, null, List.of(), sub));
         return this;

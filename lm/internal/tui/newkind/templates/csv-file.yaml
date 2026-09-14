@@ -26,5 +26,3 @@ spec:
     has_header: true              # first row holds column names; they drive target column mapping
 
   after_process: none             # leave the source file untouched after ingestion
-
-  target: {}

@@ -34,8 +34,25 @@ class JdbcConnectorValidatorTest {
         // The anti-lie guard of a closed key set: this fixture carries both scheduler keys, and
         // `window` is read by the SHARED apply preamble (ApplyUpsert) into the column the scheduler
         // fences on. A sweep that called it unknown would advise removing a declared fence.
+        // It also carries NO `target` block, deliberately: re-declaring one on this kind fails here
+        // twice over — as a required-field error, and as the unknown key it would become (#543).
         assertEquals(List.of(), ValidationWarnings.unknownKeyPaths(r),
             "every key this fixture carries is honored — none may be called unknown");
+    }
+
+    /**
+     * The other half of the same removal, and the half that was a defect rather than noise. A jdbc
+     * manifest declaring {@code target.indexes} was accepted and then dropped in silence: jdbc reads
+     * its indexes PER TABLE ({@code source.tables[].indexes}, via
+     * {@code JdbcConnectorType.parseIndexes} off the endpoint config), never off {@code spec.target}.
+     * Dropping the declaration hands the refusal to the closed sweep, which already owns the right
+     * sentence — so the integrator is told instead of reassured, and no new code says it.
+     */
+    @Test void deadTargetBlock_isNamed() throws Exception {
+        ValidationResult r = service.validate(load("jdbc-dead-target.yaml"));
+        assertTrue(r.isValid(), () -> "an unknown key is a warning, not a refusal: " + r.errors());
+        assertEquals(List.of("spec.target"), ValidationWarnings.unknownKeyPaths(r),
+            () -> "the block jdbc never reads must be named, got warnings: " + r.warnings());
     }
 
     /**
@@ -75,7 +92,7 @@ class JdbcConnectorValidatorTest {
 
     /**
      * The root level was the unswept one: jdbc confines most keys to closed blocks
-     * ({@code connection}, {@code source}, {@code target}), so a typo inside one is named while
+     * ({@code connection}, {@code source}), so a typo inside one is named while
      * `schedul` or `windo` at the root passed in complete silence — accepted, persisted, and shown
      * back by {@code lm connector get}. The manifest stays VALID: an unknown key is a warning.
      */

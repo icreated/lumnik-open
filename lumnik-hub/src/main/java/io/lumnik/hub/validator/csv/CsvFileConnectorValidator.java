@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.MissingNode;
 import io.lumnik.hub.connector.mapping.MapColumnsRules;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.validator.ConfigDef;
+import io.lumnik.hub.validator.JsonNodes;
 import io.lumnik.hub.validator.ConfigDef.Importance;
 import io.lumnik.hub.validator.ConfigDef.Type;
 import io.lumnik.hub.validator.ConnectorValidator;
@@ -31,7 +32,12 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
         return new ConfigDef()
             .requireNested("transport", Importance.HIGH, "Transport block",
                 TransportBlockValidator.configDef())
-            .requireNested("parser", Importance.HIGH, "CSV parser config",
+            // Optional, for target's reason. Every parser key either carries a default or is needed
+            // only in a case the defaults rule out: delimiter and encoding are sniffed per file when
+            // absent, has_header and bom_strip default true, null_values is seeded — and `columns`,
+            // the one key with no default, is required solely when has_header is false, which its own
+            // default of true excludes. So the block could only ever be written to say nothing (#543).
+            .optionalNested("parser", Importance.HIGH, "CSV parser config",
                 ParserBlockValidator.configDef())
             .optional("schedule", Type.STRING, Importance.MEDIUM,
                 "Cron expression for recurring ingestion", null)
@@ -48,7 +54,9 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
             .optional("mapping", Type.NESTED, Importance.MEDIUM,
                 "Dataset/row/cell transformer hooks — see the transformers page", null)
             .optional("window", Type.STRING, Importance.MEDIUM, WindowField.DOC, null)
-            .requireNested(TARGET, Importance.HIGH, "Target persistence",
+            // Optional: its only key (`indexes`) is optional too, so requiring the block made every
+            // csv manifest carry an empty `target: {}` that the runtime reads nothing from (#543).
+            .optionalNested(TARGET, Importance.HIGH, "Target persistence",
                 TargetBlockValidator.configDef())
             .closed();
     }
@@ -102,7 +110,11 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
     }
 
     private static List<ValidationError> moveNeedsAnArchivePath(JsonNode spec, String afterProc) {
-        if (!"move".equals(afterProc) || !spec.path("archive_path").isMissingNode()) return List.of();
+        // blankOrNull, not isMissingNode: a key written with nothing after it is a NullNode —
+        // present by that one question, absent by every other, including ConfigDefRunner's. It
+        // validated green and the apply then stored the literal string "null" as the path, so the
+        // files were moved into a directory named that. The helper exists precisely for this trap.
+        if (!"move".equals(afterProc) || !JsonNodes.blankOrNull(spec.path("archive_path"))) return List.of();
         return List.of(new ValidationError("spec.archive_path", Severity.ERROR,
             "archive_path is required when after_process=move",
             List.of("Set archive_path: /path/to/archive/")));

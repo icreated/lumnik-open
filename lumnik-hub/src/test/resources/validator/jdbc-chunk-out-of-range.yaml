@@ -15,4 +15,3 @@ spec:
         mode: full
         pk_columns: [id]
         chunk_size: 50000
-  target: {}

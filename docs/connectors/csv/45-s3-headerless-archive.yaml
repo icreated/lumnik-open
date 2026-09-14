@@ -36,5 +36,3 @@ spec:
     columns: [c_bpartner_id, name, created, isactive]
 
   after_process: archive
-
-  target: {}

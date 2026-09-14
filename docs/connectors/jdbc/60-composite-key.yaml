@@ -25,5 +25,3 @@ spec:
         schema: demo
         mode: full
         pk_columns: [order_id, line_no]
-
-  target: {}

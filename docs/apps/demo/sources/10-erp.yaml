@@ -17,4 +17,3 @@ spec:
   parser:
     has_header: true
   after_process: none
-  target: {}
