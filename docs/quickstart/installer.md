@@ -30,9 +30,29 @@ CSV or REST first. Recurrence and polish come after proof.
 
 ## Once per workstation
 
-### Build `lm`
+### Install `lm`
 
-`lm` builds from source (Go 1.25+ — the floor is `lm/go.mod`) — today's official install path:
+Take the archive for your platform from the
+[Releases page](https://github.com/icreated/lumnik-open/releases/latest). Five are published:
+macOS (Intel and Apple Silicon), Linux (x86-64 and arm64), Windows x86-64.
+
+```bash
+tar -xzf lm_<version>_darwin_arm64.tar.gz          # your platform's archive
+install -d ~/.local/bin && install -m 0755 lm ~/.local/bin/lm
+```
+
+On Windows the archive is a `.zip` holding `lm.exe` — unpack it into a directory on your `PATH`.
+
+Each release also carries `lm_<version>_checksums.txt`:
+
+```bash
+shasum -a 256 -c lm_<version>_checksums.txt --ignore-missing
+```
+
+> The archives are named after `lm`'s own version, which advances on its own tags rather than the
+> hub's — that is why `lm_1.3.0_…` hangs on a `v1.7.x` release.
+
+Building from source works too, and needs Go 1.26+ (the floor is `lm/go.mod`):
 
 ```bash
 cd lm && make install   # builds, then copies to ~/.local/bin (no sudo)
@@ -41,8 +61,8 @@ cd lm && make install   # builds, then copies to ~/.local/bin (no sudo)
 If the shell cannot find `lm` afterwards, `~/.local/bin` is not on your `PATH` — add it, or run
 the binary in place as `./lm`.
 
-> Pre-built binaries (GitHub Releases) and a Homebrew tap will arrive with the public opening —
-> they are part of the publication ritual, not shipped yet.
+> `lm version` prints the release number for a downloaded binary and `dev` for one built from
+> source, which sets no version stamp. It is the line to put in a bug report.
 
 ### Run lumnik
 

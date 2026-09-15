@@ -2,7 +2,13 @@
 
 The integrator's single Go binary: a kubectl-style CLI plus a k9s-style TUI.
 
-## Build
+## Install
+
+Pre-built archives for macOS, Linux and Windows are attached to every
+[lumnik release](https://github.com/icreated/lumnik-open/releases/latest), with a checksums
+file beside them. Unpack the one for your platform and put `lm` on your `PATH`.
+
+From source instead (Go 1.26+, the floor is `go.mod`):
 
 ```bash
 cd lm && make install   # builds, then copies to ~/.local/bin (no sudo)
@@ -10,6 +16,9 @@ cd lm && make install   # builds, then copies to ~/.local/bin (no sudo)
 
 If the shell cannot find `lm` afterwards, `~/.local/bin` is not on your `PATH` — add it, or
 run the binary in place as `./lm`.
+
+`lm version` prints the release number for a downloaded binary and `dev` for one built from
+source, which sets no version stamp.
 
 ## Connect & sign in
 

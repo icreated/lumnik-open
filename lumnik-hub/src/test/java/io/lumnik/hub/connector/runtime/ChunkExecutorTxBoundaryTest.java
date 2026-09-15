@@ -23,6 +23,8 @@ import io.lumnik.hub.connector.repository.ConnectorRunRepository;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
+import jakarta.transaction.Status;
+import jakarta.transaction.TransactionManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -66,6 +68,7 @@ class ChunkExecutorTxBoundaryTest {
     @Inject ConnectorEndpointRepository endpoints;
     @Inject ConnectorRunRepository runs;
     @Inject ConnectorCursorEntityRepository cursors;
+    @Inject TransactionManager tm;
 
     private UUID endpointId;
     private UUID runId;
@@ -126,6 +129,24 @@ class ChunkExecutorTxBoundaryTest {
                     return new WriteOutcome.AllWritten(items.size());
                 }
             };
+        }
+    }
+
+    /**
+     * A type that refuses to BUILD its reader. This is the shape of a configuration refusal, not of
+     * a crash: {@code jdbc-generic} resolves its credential from inside {@code reader(ctx)}, so
+     * "no secret named acme-token" arrives exactly here, before anything has been read.
+     */
+    static final class UnbuildableType implements ConnectorType {
+        static final String REFUSAL = "no secret named acme-token";
+
+        @Override public String id() { return "unbuildable-probe"; }
+        @Override public WritePerformanceProfile defaultWriteProfile() { return new WritePerformanceProfile.Safe(); }
+        @Override public Set<TriggerMode> supportedTriggerModes() { return Set.of(TriggerMode.MANUAL); }
+        @Override public void validateConfig(Map<String, Object> config) { /* nothing to validate */ }
+
+        @Override public ItemReader<Map<String, Object>> reader(ConnectorContext ctx) {
+            throw new IllegalStateException(REFUSAL);
         }
     }
 
@@ -290,4 +311,65 @@ class ChunkExecutorTxBoundaryTest {
         assertThat(after.getRecordsOut()).isZero();
         assertThat(after.getChunkCount()).isZero();
     }
+
+    /**
+     * THE FUNNEL, one step earlier. A reader that cannot be BUILT must end the chunk exactly like a
+     * reader that cannot READ: a {@link ChunkResult.Failure} carrying the refusal's own words.
+     *
+     * <p>Before this, the {@code Prepared} step sat OUTSIDE every try/catch in {@code executeChunk}
+     * and the exception escaped the method entirely. The engine's last-resort catch then finalized
+     * the run {@code Failed} while bypassing {@code failRun} — so no {@code connector.run.failed}
+     * event was ever emitted — and logged "failed unexpectedly" with a stack trace, showing an
+     * operator a crash where a configuration refusal was all that had happened.
+     */
+    @Test
+    void a_reader_that_cannot_be_built_fails_the_chunk() {
+        ChunkResult result = TenantContext.callAsSystem(
+            () -> exec.executeChunk(run, new UnbuildableType(), endpoint, ConnectorCursor.empty(), null));
+
+        assertThat(result).isInstanceOf(ChunkResult.Failure.class);
+        ChunkResult.Failure f = (ChunkResult.Failure) result;
+        assertThat(f.message()).isEqualTo(UnbuildableType.REFUSAL);
+        assertThat(f.retryable()).isFalse();
+
+        assertThat(persistedCursor())
+            .as("nothing was read, so no position may be persisted")
+            .isNull();
+        assertThat(persistedRun().getChunkCount()).isZero();
+    }
+
+    /**
+     * The SECOND symptom of the same hole, and the reason the catch must live INSIDE the lambda:
+     * {@code QuarkusTransaction.joiningExisting()} marks the JOINED transaction rollback-only when
+     * the callable throws — catching afterwards is already too late. A caller that holds a
+     * transaction (every IT that drives a chunk, and any future in-transaction caller) would find
+     * its own transaction poisoned by a refusal the chunk had already reported cleanly.
+     *
+     * <p>Nothing is caught here on purpose: should the refusal start escaping again, this test must
+     * fail with that exception's own stack trace rather than with an assertion about a throwable it
+     * captured. The {@code finally} is only there so a poisoned transaction cannot leak into the
+     * next test.
+     */
+    @Test
+    void a_reader_that_cannot_be_built_leaves_the_callers_transaction_usable() {
+        Attempt attempt = TenantContext.callAsSystem(() -> {
+            tm.begin();
+            try {
+                ChunkResult result = exec.executeChunk(run, new UnbuildableType(), endpoint,
+                                                       ConnectorCursor.empty(), null);
+                return new Attempt(result, tm.getStatus());
+            } finally {
+                tm.rollback();
+            }
+        });
+
+        assertThat(attempt.result()).isInstanceOf(ChunkResult.Failure.class);
+        assertThat(attempt.statusAfter())
+            .as("the caller's transaction must still be ACTIVE — a refusal the chunk reported"
+                + " cleanly must not leave it rollback-only")
+            .isEqualTo(Status.STATUS_ACTIVE);
+    }
+
+    /** What one in-transaction attempt at a chunk leaves behind. */
+    private record Attempt(ChunkResult result, int statusAfter) {}
 }

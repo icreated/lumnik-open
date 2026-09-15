@@ -201,6 +201,11 @@ class IntegrationResourceIT {
             .body("""
                   {"eventType":"does.not.exist"}""")
         .when().post("/api/tenants/" + TENANT + "/integrations/" + id + "/test")
-            .then().statusCode(400);
+            .then().statusCode(400)
+            // The BODY, not only the status: this door refuses by throwing, and until
+            // BadRequestExceptionMapper that refusal crossed the wire empty — admin-console-guide.md
+            // documented the emptiness three times and sent the reader to the SERVER LOG for the
+            // sentence. The doc now quotes this body, so the claim is pinned where the door is.
+            .body("error", equalTo("Unknown event type: does.not.exist"));
     }
 }

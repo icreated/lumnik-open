@@ -48,6 +48,59 @@ class JdbcConnectorValidatorTest {
      * Dropping the declaration hands the refusal to the closed sweep, which already owns the right
      * sentence — so the integrator is told instead of reassured, and no new code says it.
      */
+    // ── #552: a key written with nothing after it, at the per-table cross-field rules ─────
+
+    private static final String JDBC_HEAD = """
+        {"apiVersion":"connectors.lumnik.io/v1","kind":"Connector",
+         "metadata":{"name":"empty-key","connector_type":"jdbc-generic","scopes":["test"]},
+         "spec":{"connection":{"url":"jdbc:postgresql://db.acme.io:5432/billing",
+                               "user":"ro_user","password_env":"ACME_DB_PASSWORD"},
+                 "source":{"tables":[%s]}}}""";
+
+    /**
+     * A pin on behaviour that is already right, and on the distance that makes it right (#552).
+     * {@code pk_columns:} written empty is a NullNode: not missing, and not an array either, so
+     * this rule's own predicate answers false on BOTH terms and would never fire. It fires because
+     * the node never reaches it in that shape — {@code TableDefaultsMerger} drops null-valued fields
+     * (#551), so the merged table this rule reads has no {@code pk_columns} at all.
+     *
+     * <p>Which is why it is pinned HERE rather than at the merger: the guarantee lives one class
+     * away from the rule that depends on it, and nothing else would say so if it moved.
+     */
+    @Test void pkColumnsWrittenEmpty_isRefused() throws Exception {
+        ValidationResult r = service.validate(mapper.readTree(JDBC_HEAD.formatted(
+            "{\"name\":\"invoices\",\"mode\":\"full\",\"pk_columns\":null}")));
+
+        assertFalse(r.isValid(), () -> "pk_columns written empty names no key");
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().endsWith(".pk_columns")),
+            () -> "the refusal must name pk_columns, got: " + r.errors());
+    }
+
+    /** The same question one rule over, safe by the same distance: mode=watermark, column empty. */
+    @Test void watermarkColumnWrittenEmpty_isRefused() throws Exception {
+        ValidationResult r = service.validate(mapper.readTree(JDBC_HEAD.formatted(
+            "{\"name\":\"invoices\",\"mode\":\"watermark\",\"watermark_column\":null,"
+            + "\"pk_columns\":[\"id\"]}")));
+
+        assertFalse(r.isValid(), () -> "watermark mode with no column to watermark on");
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().endsWith(".watermark_column")),
+            () -> "the refusal must name watermark_column, got: " + r.errors());
+    }
+
+    /**
+     * And the other direction of the same misreading, also already right: {@code chunk_size} is a
+     * dead knob this validator refuses loudly (#286) so no manifest claims a lever that does not
+     * exist — but written empty it claims nothing, and the merger having dropped it, nothing is
+     * what gets refused.
+     */
+    @Test void chunkSizeWrittenEmpty_isNotRefused() throws Exception {
+        ValidationResult r = service.validate(mapper.readTree(JDBC_HEAD.formatted(
+            "{\"name\":\"invoices\",\"mode\":\"full\",\"pk_columns\":[\"id\"],"
+            + "\"chunk_size\":null}")));
+
+        assertTrue(r.isValid(), () -> "a knob claiming nothing must not be refused, got: " + r.errors());
+    }
+
     @Test void deadTargetBlock_isNamed() throws Exception {
         ValidationResult r = service.validate(load("jdbc-dead-target.yaml"));
         assertTrue(r.isValid(), () -> "an unknown key is a warning, not a refusal: " + r.errors());

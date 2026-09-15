@@ -68,7 +68,8 @@ public class ChunkExecutor {
    * <p>Step 1 keeps {@code type.reader/writer(ctx)} inside the transaction on purpose: building a
    * reader can hit the DB (jdbc-generic resolves its credential through {@code CredentialResolver}),
    * and without a JTA transaction the Agroal interceptor never sets {@code app.current_tenant}, so
-   * an RLS-enforced datasource returns nothing.
+   * an RLS-enforced datasource returns nothing. It is also inside the same failure funnel as every
+   * other step — see {@link #prepare}.
    *
    * <p><b>Atomicity is unchanged.</b> Step 3 is a single transaction, in the same order as before:
    * the write happens first and the cursor is persisted only after it returns, so a cursor can
@@ -79,11 +80,11 @@ public class ChunkExecutor {
   public ChunkResult executeChunk(ConnectorRun run, ConnectorType type,
                                   ConnectorEndpoint endpoint, ConnectorCursor cursorIn,
                                   RunBound bound) {
-    Prepared prepared = QuarkusTransaction.joiningExisting().call(() -> {
-      Connector conn = connectors.findById(run.getConnectorId());
-      ConnectorContext context = buildContext(run, conn, endpoint, bound);
-      return new Prepared(conn, context, type.reader(context), type.writer(context));
-    });
+    Preparation.Ready prepared;
+    switch (QuarkusTransaction.joiningExisting().call(() -> prepare(run, type, endpoint, bound))) {
+      case Preparation.Refused refused -> { return refused.failure(); }
+      case Preparation.Ready ready     -> prepared = ready;
+    }
     Connector c = prepared.connector();
     ConnectorContext ctx = prepared.ctx();
     ItemReader reader = prepared.reader();
@@ -182,6 +183,45 @@ public class ChunkExecutor {
     });
   }
 
+  /**
+   * Step 1: load the connector row and build the reader/writer, INSIDE the transaction and inside
+   * the funnel. A refusal here is a refusal like any other — {@code jdbc-generic} resolves its
+   * credential from {@code reader(ctx)}, so "no secret named X" arrives at this exact line.
+   *
+   * <p>Before this method existed the preparation block sat outside every try/catch in
+   * {@link #executeChunk} and a construction failure escaped the method entirely. Three things
+   * followed: {@link ConnectorEngine}'s last-resort catch finalized the run {@code Failed} while
+   * bypassing {@code failRun}, so no {@code connector.run.failed} event was ever emitted; the log
+   * read "failed unexpectedly" with a stack trace, showing an operator a crash where a
+   * configuration refusal was all that had happened; and a caller already holding a transaction
+   * had it left rollback-only.
+   *
+   * <p>The catch lives INSIDE this method — that is, inside the transactional callable — and not
+   * around {@code joiningExisting().call(...)}, for the third reason: an exception escaping a
+   * JOINED transaction marks it rollback-only on its way out, so catching afterwards is already
+   * too late. Same rule, same reason, as the catch inside step 4's lambda.
+   *
+   * <p>A connector row that is not there is named rather than dereferenced: the NPE it would
+   * otherwise raise says nothing an operator can act on, and the engine already spells the twin
+   * case exactly this way for a missing run row.
+   */
+  private Preparation prepare(ConnectorRun run, ConnectorType type,
+                              ConnectorEndpoint endpoint, RunBound bound) {
+    Connector conn = null;
+    try {
+      conn = connectors.findById(run.getConnectorId());
+      if (conn == null) {
+        return new Preparation.Refused(new ChunkResult.Failure(
+            "Connector not found: " + run.getConnectorId(), null, false));
+      }
+      ConnectorContext context = buildContext(run, conn, endpoint, bound);
+      return new Preparation.Ready(conn, context, type.reader(context), type.writer(context));
+    } catch (Throwable t) {
+      return new Preparation.Refused(
+          failure(conn != null ? conn.getName() : String.valueOf(run.getConnectorId()), t));
+    }
+  }
+
   /** A writerless target writes nothing and everything counts as written — the pass-through case. */
   @SuppressWarnings({"rawtypes", "unchecked"})
   private static WriteOutcome writeOrPassThrough(ItemWriter writer, List records, ConnectorContext ctx) {
@@ -214,9 +254,21 @@ public class ChunkExecutor {
     r.setChunkCount(r.getChunkCount() + 1);
   }
 
-  /** Everything the chunk needs from the DB-bound preparation step, carried across the read. */
-  private record Prepared(Connector connector, ConnectorContext ctx,
-                          ItemReader<?> reader, ItemWriter<?> writer) {}
+  /**
+   * What step 1 hands back: either everything the chunk needs from the DB-bound preparation step —
+   * carried across the read — or the refusal that replaced all of it.
+   *
+   * <p>Two records rather than one with a nullable failure, so the compiler holds their
+   * exclusivity instead of a javadoc sentence asserting it. It is also the shape the method above
+   * already switches over twice, for {@link ReadResult} and {@link WriteOutcome}.
+   */
+  private sealed interface Preparation {
+
+    record Ready(Connector connector, ConnectorContext ctx,
+                 ItemReader<?> reader, ItemWriter<?> writer) implements Preparation {}
+
+    record Refused(ChunkResult.Failure failure) implements Preparation {}
+  }
 
   /**
    * A wholesale write refusal. {@code AllFailed.cause()} may be null (the record permits it), so the
@@ -238,8 +290,16 @@ public class ChunkExecutor {
    * either way.
    */
   static ChunkResult.Failure failure(Connector c, Throwable t) {
+    return failure(c.getName(), t);
+  }
+
+  /**
+   * The same funnel for the one step that can fail BEFORE the connector row is in hand: when
+   * {@code findById} itself is what threw, the id is the only name there is.
+   */
+  private static ChunkResult.Failure failure(String connectorName, Throwable t) {
     Logger.getLogger(ChunkExecutor.class)
-        .warnf(t, "Chunk failure for connector %s: %s", c.getName(), t.getMessage());
+        .warnf(t, "Chunk failure for connector %s: %s", connectorName, t.getMessage());
     return new ChunkResult.Failure(
         SqlFailureText.withCause(t), t, t instanceof TransientFailureException);
   }

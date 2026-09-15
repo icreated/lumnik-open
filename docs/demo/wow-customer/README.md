@@ -91,7 +91,7 @@ failure they cause is silent, so run their ✔ checks:
   You should see the start of a SOAP envelope — `<soap:Envelope xmlns:soap=…`.
   (It's a fake *Siebel*: it speaks XML, as the real one would.) Without it the
   Siebel run below fails — and only `lm run list` will tell you.
-- The `lm` binary on PATH (needs Go 1.25+ — the floor is `lm/go.mod`):
+- The `lm` binary on PATH (download it from a release, or build it — Go 1.26+, the floor is `lm/go.mod`):
   `make -C lm install` — builds and copies it to `~/.local/bin`, no `sudo`
   — or, on Windows, `lm.exe` ([Deploy on Windows, step 6](../../deploy-windows.md)).
 

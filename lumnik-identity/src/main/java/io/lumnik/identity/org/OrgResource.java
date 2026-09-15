@@ -121,7 +121,11 @@ public class OrgResource {
                 String msg = "Organization cycle: " + id + " is an ancestor of the proposed parent";
                 // A plain BadRequestException(String) only sets the exception message, not the
                 // response body — build the Response explicitly, with the uniform {"error": …}
-                // refusal shape, so the caller can see why.
+                // refusal shape, so the caller can see why. The hub's BadRequestExceptionMapper does
+                // exactly this deployment-wide, but it CANNOT be relied on here: lumnik-identity does
+                // not depend on lumnik-hub, and OrgTreeIT boots THIS module's deployment, where that
+                // provider is absent. Simplify this site to the plain constructor and that test goes
+                // red — the reason is a module boundary, not taste.
                 throw new BadRequestException(Response.status(Response.Status.BAD_REQUEST)
                     .entity(Map.of("error", msg)).build());
             }

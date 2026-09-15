@@ -14,7 +14,9 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
 import org.junit.jupiter.api.*;
+import io.lumnik.hub.connector.transport.sftp.SftpTestImage;
 import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.MountableFile;
 
 import java.sql.Connection;
@@ -42,8 +44,13 @@ class CsvSftpConnectorIT {
 
     @BeforeAll
     static void start() throws Exception {
-        sftp = new GenericContainer<>("atmoz/sftp:alpine").withExposedPorts(22)
-            .withCommand(USER + ":" + PASS + ":::upload");
+        sftp = new GenericContainer<>(SftpTestImage.PINNED).withExposedPorts(22)
+            .withCommand(USER + ":" + PASS + ":::upload")
+            // Wait for sshd to LISTEN, not merely for the published port to accept: the
+            // docker-proxy binds that port at container start, while the entrypoint is still
+            // generating host keys — a connection landing in that window is accepted and then
+            // dropped, which is what a bare withExposedPorts(22) races against.
+            .waitingFor(Wait.forLogMessage(".*Server listening on 0\\.0\\.0\\.0.*", 1));
         sftp.start();
         sftp.copyFileToContainer(MountableFile.forClasspathResource("/csv/customers-simple.csv"),
             "/home/" + USER + "/upload/customers.csv");

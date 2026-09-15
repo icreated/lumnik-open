@@ -46,7 +46,11 @@ archives:
       - THIRD-PARTY-LICENSES.md
 
 checksum:
-  name_template: "checksums.txt"
+  # Named after what it covers. These archives now also hang on the open edition's PRODUCT
+  # release (scripts/publish-open-edition.sh), where a page already carries the hub, the PWA
+  # and the docs — a bare "checksums.txt" there would claim all of it. The version is in the
+  # name for the same reason it is in the archives': one page can hold two lm releases.
+  name_template: "lm_{{ envOrDefault \"LM_VERSION\" .Version }}_checksums.txt"
 
 changelog:
   sort: asc

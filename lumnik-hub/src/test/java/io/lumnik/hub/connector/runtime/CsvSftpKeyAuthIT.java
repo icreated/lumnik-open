@@ -15,7 +15,9 @@ import jakarta.transaction.UserTransaction;
 import org.apache.sshd.common.config.keys.PublicKeyEntry;
 import org.apache.sshd.common.config.keys.writer.openssh.OpenSSHKeyPairResourceWriter;
 import org.junit.jupiter.api.*;
+import io.lumnik.hub.connector.transport.sftp.SftpTestImage;
 import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.images.builder.Transferable;
 import org.testcontainers.utility.MountableFile;
 
@@ -69,10 +71,15 @@ class CsvSftpKeyAuthIT {
 
         // No password set → key-only auth. The .pub is copied into the atmoz key dir before the
         // entrypoint runs, so it is appended to authorized_keys on startup.
-        sftp = new GenericContainer<>("atmoz/sftp:alpine").withExposedPorts(22)
+        sftp = new GenericContainer<>(SftpTestImage.PINNED).withExposedPorts(22)
             .withCopyToContainer(Transferable.of(pubLine + "\n"),
                 "/home/" + USER + "/.ssh/keys/id_test_rsa.pub")
-            .withCommand(USER + "::::upload");
+            .withCommand(USER + "::::upload")
+            // Wait for sshd to LISTEN, not merely for the published port to accept: the
+            // docker-proxy binds that port at container start, while the entrypoint is still
+            // generating host keys — a connection landing in that window is accepted and then
+            // dropped, which is what a bare withExposedPorts(22) races against.
+            .waitingFor(Wait.forLogMessage(".*Server listening on 0\\.0\\.0\\.0.*", 1));
         sftp.start();
         sftp.copyFileToContainer(MountableFile.forClasspathResource("/csv/customers-simple.csv"),
             "/home/" + USER + "/upload/customers.csv");

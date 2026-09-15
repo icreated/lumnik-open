@@ -131,6 +131,75 @@ class CsvFileConnectorValidatorTest {
             () -> "the refusal must name spec.archive_path, got: " + r.errors());
     }
 
+    // ── #552: what a key written with nothing after it does to a CROSS-FIELD rule ──────────
+
+    /**
+     * {@code key_env:} written empty is a NullNode, so {@code !isMissingNode()} calls the credential
+     * PRESENT and the rule returns clean. The manifest then applies, and the run reaches for a
+     * secret nobody named — at run time, which is the tier this apply-time refusal exists to move
+     * the failure off.
+     */
+    @Test void sftpWithACredentialKeyWrittenEmpty_isRefused() throws Exception {
+        JsonNode manifest = mapper.readTree("""
+            {"apiVersion":"connectors.lumnik.io/v1","kind":"Connector",
+             "metadata":{"name":"empty-key","connector_type":"csv-file","scopes":["test"]},
+             "spec":{"transport":{"kind":"sftp","host":"sftp.acme.io","user":"lumnik",
+                                  "path":"/export/*.csv","key_env":null},
+                     "after_process":"none"}}""");
+
+        ValidationResult r = service.validate(manifest);
+
+        assertFalse(r.isValid(), () -> "a credential key written empty names no credential");
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.transport")),
+            () -> "the refusal must name spec.transport, got: " + r.errors());
+    }
+
+    /** The twin of the rule above, on the other key of the same either-or. */
+    @Test void headerlessWithColumnsWrittenEmpty_isRefused() throws Exception {
+        JsonNode manifest = mapper.readTree("""
+            {"apiVersion":"connectors.lumnik.io/v1","kind":"Connector",
+             "metadata":{"name":"empty-columns","connector_type":"csv-file","scopes":["test"]},
+             "spec":{"transport":{"kind":"local","path":"/export/*.csv"},
+                     "parser":{"has_header":false,"columns":null},
+                     "after_process":"none"}}""");
+
+        ValidationResult r = service.validate(manifest);
+
+        assertFalse(r.isValid(), () -> "headerless rows still need names");
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.parser.columns")),
+            () -> "the refusal must name spec.parser.columns, got: " + r.errors());
+    }
+
+    /**
+     * The other direction of the same misreading: a rule that REFUSES what it sees as written. A
+     * one-shot-only key with nothing after it declares nothing, so there is nothing to teach about.
+     */
+    @Test void aOneShotOnlyKeyWrittenEmpty_isNotRefused() throws Exception {
+        JsonNode manifest = mapper.readTree("""
+            {"apiVersion":"connectors.lumnik.io/v1","kind":"Connector",
+             "metadata":{"name":"empty-oneshot","connector_type":"csv-file","scopes":["test"]},
+             "spec":{"transport":{"kind":"local","path":"/export/*.csv","pre_process":null},
+                     "after_process":"none"}}""");
+
+        ValidationResult r = service.validate(manifest);
+
+        assertTrue(r.isValid(), () -> "a key declaring nothing must not be refused, got: " + r.errors());
+    }
+
+    /** The shared indexes block, same question: {@code unique:} written empty declares nothing. */
+    @Test void indexUniqueWrittenEmpty_isNotRefused() throws Exception {
+        JsonNode manifest = mapper.readTree("""
+            {"apiVersion":"connectors.lumnik.io/v1","kind":"Connector",
+             "metadata":{"name":"empty-unique","connector_type":"csv-file","scopes":["test"]},
+             "spec":{"transport":{"kind":"local","path":"/export/*.csv"},
+                     "target":{"indexes":[{"columns":["email"],"unique":null}]},
+                     "after_process":"none"}}""");
+
+        ValidationResult r = service.validate(manifest);
+
+        assertTrue(r.isValid(), () -> "a flag declaring nothing must not be refused, got: " + r.errors());
+    }
+
     @Test void invalidCron_isError() throws Exception {
         ValidationResult r = service.validate(load("csv-invalid-cron.yaml"));
         assertFalse(r.isValid());

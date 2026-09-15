@@ -19,7 +19,7 @@ Items marked *(real ingestion only)* are not needed for the demo/parcours itself
 | Sizing | a **4 vCPU / 16 GB / NVMe** VPS holds the full authenticated read mix cleanly at 50 concurrent users ([measured](../operations/sizing.md)) | the LLM runs on its own budget — see below |
 | Free disk | **~20 GB** for a comfortable first install (images + models + data) | the models alone are most of it |
 | Outbound network | required **during install**: github.com (clone), the container registries, ollama.com (models) | there is **no air-gapped install path today** — no image pre-load or mirror tooling ships. Plan the install from a network that can reach out; at *runtime* the AI layer is local by default ([Models](../rag/models.md)) |
-| Go 1.25+ | **required** — `lm` is built from source today; the floor is `lm/go.mod` | offline builds fail on older toolchains; `GOTOOLCHAIN=auto` masks this by silently downloading |
+| Go 1.26+ | **only to build `lm` from source** — pre-built archives are attached to every [release](https://github.com/icreated/lumnik-open/releases/latest); the floor is `lm/go.mod` | offline builds fail on older toolchains; `GOTOOLCHAIN=auto` masks this by silently downloading |
 | python3 | for the demo's source stubs (`fake-siebel.py`) | parcours/demo only |
 
 ## The AI layer (Ollama)

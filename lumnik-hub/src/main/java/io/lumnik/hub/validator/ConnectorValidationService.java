@@ -33,6 +33,12 @@ public class ConnectorValidationService {
         JsonNode spec = manifest.path("spec");
         List<ValidationError> all = new ArrayList<>();
         all.addAll(ConfigDefRunner.run(v.configDef(), spec, "spec"));
+        // Deliberately the RAW spec, and #552 is the measurement that says why: stripping its nulls
+        // here — the one-place fix this door was the obvious home for — broke `rename: {id: null}`
+        // and `map-columns` with it. A manifest carries nulls of two kinds. A DECLARATION written
+        // empty means absent; a null inside a user-supplied MAP is a value, and "rename id to
+        // nothing" is a typo those rules exist to refuse. No reading of the document tells the two
+        // apart, so the rules that want "absent" ask for it by name (JsonNodes.absent / nonBlank).
         all.addAll(v.validateCrossField(spec));
         all.addAll(ScopesValidator.warnings(manifest));
 

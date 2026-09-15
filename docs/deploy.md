@@ -197,7 +197,7 @@ Once the stack is healthy, wire the CLI to it. A context needs only the **server
 `.well-known` document, so nothing else is hand-copied:
 
 ```bash
-cd lm && go build -o lm ./cmd/lm          # build the CLI (Go 1.25+ — the floor is lm/go.mod)
+cd lm && go build -o lm ./cmd/lm          # build the CLI (Go 1.26+ — the floor is lm/go.mod)
 
 ./lm config set-context local \
      --server http://localhost:8080 \

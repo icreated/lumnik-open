@@ -9,6 +9,7 @@ import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
 import io.lumnik.hub.connector.rest.pagination.preset.PaginationPresetRegistry;
 import io.lumnik.hub.validator.*;
 import io.lumnik.hub.validator.ConfigDef.Importance;
+import static io.lumnik.hub.validator.JsonNodes.absent;
 import static io.lumnik.hub.validator.JsonNodes.blankOrNull;
 import io.lumnik.hub.validator.ConfigDef.Type;
 import io.lumnik.hub.validator.ValidationError.Severity;
@@ -185,7 +186,8 @@ public class RestConnectorValidator implements ConnectorValidator {
         JsonNode endpoint = expandPresetIfAny(ep, basePath, errs);
         boolean isSoap = "soap".equals(endpoint.path("kind").asText());
         boolean isGraphql = !isSoap
-            && ("graphql".equals(endpoint.path("kind").asText()) || !endpoint.path("query").isMissingNode());
+            && ("graphql".equals(endpoint.path("kind").asText())
+                || !absent(endpoint.path("query")));
 
         errs.addAll(incrementalIsHonest(endpoint, basePath));
         errs.addAll(ConfigDefRunner.run(endpointDefFor(isSoap, isGraphql), endpoint, basePath));
@@ -305,7 +307,9 @@ public class RestConnectorValidator implements ConnectorValidator {
      * connector (ChunkExecutor), so an endpoint-level headers key would silently override them.
      */
     private static List<ValidationError> headersStayAtConnectorLevel(JsonNode endpoint, String basePath) {
-        if (endpoint.path("headers").isMissingNode()) return List.of();
+        // absent: a `headers:` written empty declares no per-endpoint header, so there is nothing
+        // to move up to spec.headers and nothing to refuse (#552).
+        if (absent(endpoint.path("headers"))) return List.of();
         return List.of(new ValidationError(basePath + ".headers", Severity.ERROR,
             "per-endpoint headers are not supported in this release; declare headers at spec.headers",
             List.of("Move the headers block up to spec.headers (connector level)")));

@@ -26,6 +26,27 @@ class TableDefaultsMergerTest {
         assertEquals("full", merged.path("mode").asText());
     }
 
+    /**
+     * The rule at its own tier (#551): a table field written with nothing after it must not win over
+     * the default. It is a NullNode — absent by ConfigDefRunner's reading, which is what let the
+     * merged table validate clean — and copying it erased the value the same manifest had just
+     * declared. Pinned here as well as at the apply door because this node is what BOTH read.
+     */
+    @Test void merge_tableFieldWrittenEmpty_doesNotOverrideTheDefault() throws Exception {
+        JsonNode defaults = mapper.readTree("{\"schema\":\"legacy\"}");
+        JsonNode table = mapper.readTree("{\"name\":\"invoices\",\"schema\":null}");
+        JsonNode merged = TableDefaultsMerger.merge(defaults, table);
+        assertEquals("legacy", merged.path("schema").asText());
+    }
+
+    /** And the same on the other side of the merge: a default written empty declares nothing. */
+    @Test void merge_defaultWrittenEmpty_isNotADeclaredValue() throws Exception {
+        JsonNode defaults = mapper.readTree("{\"schema\":null}");
+        JsonNode table = mapper.readTree("{\"name\":\"invoices\"}");
+        JsonNode merged = TableDefaultsMerger.merge(defaults, table);
+        assertTrue(merged.path("schema").isMissingNode());
+    }
+
     @Test void merge_missingDefaultsNode_returnsTableUnchanged() throws Exception {
         JsonNode defaults = mapper.readTree("{}");
         JsonNode table = mapper.readTree("{\"name\":\"x\"}");

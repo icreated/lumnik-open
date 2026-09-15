@@ -31,6 +31,35 @@ class RestConnectorValidatorTest {
 
     // The runtime parses default_rate_limit on the first request of a run; before this rule an
     // unparseable value passed validate, passed apply, and crashed the run instead.
+    // ── #552 probes: a key written with nothing after it, at the endpoint cross-field rules ──
+
+    private static final String REST_HEAD = """
+        {"apiVersion":"connectors.lumnik.io/v1","kind":"Connector",
+         "metadata":{"name":"empty-key","connector_type":"rest-generic","scopes":["test"]},
+         "spec":{"base_url":"https://api.example.com","endpoints":[%s]}}""";
+
+    private static final String EP_TAIL =
+        "\"pagination\":{\"kind\":\"cursor\",\"cursor_param\":\"after\","
+        + "\"cursor_path\":\"$.data[-1:].id\",\"has_more_path\":\"$.has_more\","
+        + "\"response_path\":\"$.data\"},"
+        + "\"target\":{\"kind\":\"hybrid\",\"table\":\"ext.contacts\",\"unique_key\":\"$.id\"}";
+
+    @Test void endpointHeadersWrittenEmpty_isNotRefused() throws Exception {
+        ValidationResult r = service.validate(mapper.readTree(REST_HEAD.formatted(
+            "{\"id\":\"contacts\",\"method\":\"GET\",\"path\":\"/v1/contacts\","
+            + "\"headers\":null," + EP_TAIL + "}")));
+
+        assertTrue(r.isValid(), () -> "headers declaring nothing must not be refused, got: " + r.errors());
+    }
+
+    @Test void endpointQueryWrittenEmpty_staysARestEndpoint() throws Exception {
+        ValidationResult r = service.validate(mapper.readTree(REST_HEAD.formatted(
+            "{\"id\":\"contacts\",\"method\":\"GET\",\"path\":\"/v1/contacts\","
+            + "\"query\":null," + EP_TAIL + "}")));
+
+        assertTrue(r.isValid(), () -> "a query declaring nothing must not make this a GraphQL endpoint, got: " + r.errors());
+    }
+
     @Test void malformedRateLimit_isError() throws Exception {
         ValidationResult r = service.validate(load("rest-bad-rate-limit.yaml"));
         assertFalse(r.isValid());

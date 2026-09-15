@@ -101,8 +101,12 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
 
     private static List<ValidationError> sftpNeedsACredential(JsonNode tr, String tKind) {
         if (!"sftp".equals(tKind)) return List.of();
-        boolean hasKey = !tr.path("key_env").isMissingNode();
-        boolean hasPwd = !tr.path("password_env").isMissingNode();
+        // nonBlank, not isMissingNode: these name a SECRET, and `key_env:` written empty — or
+        // written blank — names none. Asking presence let a NullNode satisfy the either-or, so the
+        // manifest applied and the run died reaching for a secret nobody had named: at run time,
+        // which is the tier this apply-time refusal exists to move the failure off (#552).
+        boolean hasKey = JsonNodes.nonBlank(tr.path("key_env"));
+        boolean hasPwd = JsonNodes.nonBlank(tr.path("password_env"));
         if (hasKey || hasPwd) return List.of();
         return List.of(new ValidationError("spec.transport", Severity.ERROR,
             "SFTP transport requires key_env or password_env",
@@ -143,7 +147,10 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
     private static List<ValidationError> oneShotOnlyTransportKeys(JsonNode tr) {
         List<ValidationError> errs = new ArrayList<>();
         for (String key : List.of("file_filter", "pre_process", "post_process", "max_file_size")) {
-            if (!tr.path(key).isMissingNode()) {
+            // absent, not isMissingNode: this rule TEACHES about a key the reader declared, and
+            // `pre_process:` with nothing after it declares nothing — refusing it taught about a
+            // lever the manifest never pulled (#552).
+            if (!JsonNodes.absent(tr.path(key))) {
                 errs.add(new ValidationError("spec.transport." + key, Severity.ERROR,
                     key + " runs only on one-shot lm csv ingest — "
                         + "scheduled connector runs ignore it",

@@ -106,7 +106,7 @@ receiver is reachable and that its HMAC check agrees with ours.
 !!! note "The test event cannot be a `decision.*` one"
     The sample payload is built from the platform event catalog, so `POST …/test` only
     accepts a type declared in a module's `META-INF/events.yaml` — an unknown one is
-    refused with a body-less `400` (the log records `Unknown event type: …`). `decision.*`
+    refused with `400 {"error": "Unknown event type: …"}`. `decision.*`
     types are declared by `kind:Process` and `kind:Workflow` manifests, not by that catalog,
     so they are **not testable this way**.
     Subscribe with the pattern regardless: matching happens at fire time against the event
@@ -344,8 +344,8 @@ Content-Type: application/json
 This fires a **real delivery attempt** to the configured `targetUrl` using the configured `authMode`. The result is recorded in the delivery history just like a production delivery. Use this to verify connectivity and signature verification before enabling the integration for live events.
 
 The payload is synthesised from the event type's declared schema in the catalog, so the
-type must be one the catalog knows — an unknown one is refused with a body-less `400`
-(the log records `Unknown event type: …`).
+type must be one the catalog knows — an unknown one is refused with
+`400 {"error": "Unknown event type: …"}`.
 
 ### Delivery history
 
@@ -783,7 +783,7 @@ When impersonating, the red badge is visible on all `/admin/:tid/*` routes and p
 | `403 missing role lm_integrator` on `/api/platform/*` | authenticated, but the token does not carry `lm_integrator` | `GET /api/bff/v1/me` returns your `roles`; ask whoever manages your Keycloak realm to grant it |
 | `403` with an **empty body** on `/api/tenants/{tid}/integrations` | the role gate: that surface requires `lm_admin`, and roles are not hierarchical — `lm_superadmin` alone does not open it. Nothing on the wire names the missing role (the log records `Insufficient permissions`) | check `roles` from `/api/bff/v1/me`, then have `lm_admin` granted |
 | `403` with an **empty body** on `/api/tenants/{tid}/…` while you *do* hold `lm_admin` | the tenant check, not the role gate: the `{tid}` in the path is not the tenant your token resolves to (the log records `Tenant mismatch`) | use `tenant.id` from `/api/bff/v1/me`. Another tenant needs impersonation (`lm_superadmin`) — and `lm_admin` still on top of it, since impersonation switches the tenant, not the roles |
-| `POST …/test` answers `400` with an **empty body** | the test payload is built from the catalog, and this type is not in any `META-INF/events.yaml` — `decision.*` types never are (the log records `Unknown event type: …`) | subscribe with the pattern anyway (matching happens at fire time) and verify with a real decision instead |
+| `POST …/test` answers `400 {"error": "Unknown event type: …"}` | the test payload is built from the catalog, and this type is not in any `META-INF/events.yaml` — `decision.*` types never are | subscribe with the pattern anyway (matching happens at fire time) and verify with a real decision instead |
 | a delivery row shows `HMAC mode but no secret configured` and no HTTP status | `authMode` is `HMAC` — the default when the field is omitted — but no `secret` was ever stored | `PUT` the integration with a `secret`, then replay the delivery. `Bearer mode but no token configured` is the same fault in `BEARER` mode |
 | a failed delivery stops being retried | the retry sweep only claims rows with `succeeded = false` **and** fewer than 3 attempts | replay it explicitly once the receiver is back: `POST /api/platform/deliveries/{id}/replay` |
 | a delivery closes with `endpoint gone, unsubscribed, or entity_filter no longer matches — retries stopped` | between the first attempt and the retry, the integration was switched to `enabled: false` or its `eventTypes` stopped matching that event | re-enable or re-subscribe the integration, then replay the delivery |

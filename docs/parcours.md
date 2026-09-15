@@ -22,7 +22,7 @@ Do the steps — don't just read them.
 <div class="lm-meta-item lm-meta-item--accent" markdown>
 <strong>Before you start</strong>
 
-Docker, Go 1.25+ (to build `lm` — the floor is `lm/go.mod`), and [Ollama](https://ollama.com) — the parcours' chat and ask steps need it. The exhaustive list — sizes, traps, the 60-second self-check — is [Prerequisites](quickstart/prerequisites.md).
+Docker, Go 1.26+ (only if you build `lm` rather than download it — the floor is `lm/go.mod`), and [Ollama](https://ollama.com) — the parcours' chat and ask steps need it. The exhaustive list — sizes, traps, the 60-second self-check — is [Prerequisites](quickstart/prerequisites.md).
 </div>
 </div>
 </section>

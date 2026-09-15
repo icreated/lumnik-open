@@ -91,12 +91,7 @@ class CsvFileConnectorApplyHandlerIT {
             .body("endpointsApplied", equalTo(1))
             .extract().path("connectorId");
 
-        given()
-            .headers(TestIdentity.tenantAndUser(1))
-        .when().get("/api/platform/connectors/" + connectorId)
-        .then()
-            .statusCode(200)
-            .body("config", not(hasKey("parser")));
+        configHasNoKey(connectorId, "parser");
     }
 
     /**
@@ -109,12 +104,7 @@ class CsvFileConnectorApplyHandlerIT {
     @Test void apply_csvWithExplicitlyNullParser_storesNoParserKey() {
         String connectorId = applyCsv("csv-nullparser-%d", "  parser:\n");
 
-        given()
-            .headers(TestIdentity.tenantAndUser(1))
-        .when().get("/api/platform/connectors/" + connectorId)
-        .then()
-            .statusCode(200)
-            .body("config", not(hasKey("parser")));
+        configHasNoKey(connectorId, "parser");
     }
 
     /**
@@ -136,12 +126,7 @@ class CsvFileConnectorApplyHandlerIT {
 
         String reapplied = applyCsvNamed(name, "");
 
-        given()
-            .headers(TestIdentity.tenantAndUser(1))
-        .when().get("/api/platform/connectors/" + reapplied)
-        .then()
-            .statusCode(200)
-            .body("config", not(hasKey("parser")));
+        configHasNoKey(reapplied, "parser");
     }
 
     /**
@@ -163,12 +148,7 @@ class CsvFileConnectorApplyHandlerIT {
 
         String reapplied = applyCsvNamed(name, "");
 
-        given()
-            .headers(TestIdentity.tenantAndUser(1))
-        .when().get("/api/platform/connectors/" + reapplied)
-        .then()
-            .statusCode(200)
-            .body("config", not(hasKey("indexes")));
+        configHasNoKey(reapplied, "indexes");
     }
 
     /**
@@ -181,12 +161,7 @@ class CsvFileConnectorApplyHandlerIT {
     @Test void apply_csvWithExplicitlyNullIndexes_storesNoIndexesKey() {
         String connectorId = applyCsv("csv-nullindex-%d", "  target:\n    indexes:\n");
 
-        given()
-            .headers(TestIdentity.tenantAndUser(1))
-        .when().get("/api/platform/connectors/" + connectorId)
-        .then()
-            .statusCode(200)
-            .body("config", not(hasKey("indexes")));
+        configHasNoKey(connectorId, "indexes");
     }
 
     /**
@@ -200,12 +175,49 @@ class CsvFileConnectorApplyHandlerIT {
     @Test void apply_csvWithExplicitlyNullArchivePath_storesNoArchivePathKey() {
         String connectorId = applyCsv("csv-nullarchive-%d", "  archive_path:\n");
 
+        configHasNoKey(connectorId, "archive_path");
+    }
+
+    /**
+     * The third block on this handler, left standing when #545 closed its two neighbours (#551).
+     * `mapping` is where the cell and row hooks live, so a stored `mapping: null` is a block the
+     * integrator never wrote sitting in front of the one place a reader looks for a transform.
+     */
+    @Test void apply_csvWithExplicitlyNullMapping_storesNoMappingKey() {
+        String connectorId = applyCsv("csv-nullmapping-%d", "  mapping:\n");
+
+        configHasNoKey(connectorId, "mapping");
+    }
+
+    /**
+     * And its omission half: deleting the transform is the gesture that says "ingest the column
+     * raw again". A guard that only puts keeps yesterday's hooks running against a manifest that
+     * no longer declares a single one.
+     */
+    @Test void reapplyWithoutMapping_dropsThePreviouslyAppliedBlock() {
+        String name = "csv-remapping-%d".formatted(System.nanoTime());
+        String withMapping = applyCsvNamed(name,
+            "  mapping:\n    dataset:\n      - skip-empty-rows: {}\n");
+
+        given()
+            .headers(TestIdentity.tenantAndUser(1))
+        .when().get("/api/platform/connectors/" + withMapping)
+        .then().statusCode(200).body("config.mapping.dataset[0]", hasKey("skip-empty-rows"));
+
+        String reapplied = applyCsvNamed(name, "");
+
+        configHasNoKey(reapplied, "mapping");
+    }
+
+
+    /** The read-back every case here ends on: what `lm connector get` would show. */
+    private void configHasNoKey(String connectorId, String key) {
         given()
             .headers(TestIdentity.tenantAndUser(1))
         .when().get("/api/platform/connectors/" + connectorId)
         .then()
             .statusCode(200)
-            .body("config", not(hasKey("archive_path")));
+            .body("config", not(hasKey(key)));
     }
 
     private String applyCsv(String nameTemplate, String specBlock) {

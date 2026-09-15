@@ -74,4 +74,128 @@ class JdbcGenericConnectorApplyHandlerIT {
             .body("window", equalTo("22:00-06:00"))
             .body("config.schedule", nullValue());
     }
+
+    /**
+     * The same two claims as the csv door, one connector type over (#551). {@code defaults} is the
+     * per-table defaults block: stored under its own key and merged into every endpoint, so a
+     * {@code defaults: null} is both a block the integrator never wrote and — on the omission half
+     * — yesterday's schema still silently qualifying every table in today's manifest.
+     */
+    @Test void apply_jdbcWithExplicitlyNullDefaults_storesNoDefaultsKey() {
+        String connectorId = applyJdbc("jdbc-nulldefaults-%d", "  defaults:\n");
+
+        configHasNoKey(connectorId, "defaults");
+    }
+
+    @Test void reapplyWithoutDefaults_dropsThePreviouslyAppliedBlock() {
+        String name = "jdbc-redefaults-%d".formatted(System.nanoTime());
+        String withDefaults = applyJdbcNamed(name, "  defaults:\n    schema: legacy\n");
+
+        given()
+            .headers(TestIdentity.tenantAndUser(1))
+        .when().get("/api/platform/connectors/" + withDefaults)
+        .then().statusCode(200).body("config.defaults.schema", equalTo("legacy"));
+
+        String reapplied = applyJdbcNamed(name, "");
+
+        configHasNoKey(reapplied, "defaults");
+    }
+
+
+    /** The read-back every case here ends on: what `lm connector get` would show. */
+    private void configHasNoKey(String connectorId, String key) {
+        given()
+            .headers(TestIdentity.tenantAndUser(1))
+        .when().get("/api/platform/connectors/" + connectorId)
+        .then()
+            .statusCode(200)
+            .body("config", not(hasKey(key)));
+    }
+
+    /**
+     * The endpoint door of the same family, and the one where the null is not cosmetic: a table key
+     * written empty is a NullNode that {@code TableDefaultsMerger} copies over the inherited value,
+     * so {@code defaults: {schema: legacy}} plus a table carrying {@code schema:} loses the default
+     * the manifest declares three lines above — silently, because the merged node validates clean
+     * (the validator reads null as absent, and {@code schema} is optional).
+     *
+     * <p>Required keys are safe by a different mechanism: a {@code mode:} written empty makes the
+     * merged node fail {@code requireEnum}, so the manifest is refused. Only the optional inherited
+     * keys leak — which is why this pins one of those.
+     */
+    @Test void aTableKeyWrittenEmpty_keepsTheDeclaredDefault() {
+        String name = "jdbc-emptytablekey-%d".formatted(System.nanoTime());
+        String yaml = """
+            apiVersion: connectors.lumnik.io/v1
+            kind: Connector
+            metadata:
+              name: %s
+              connector_type: jdbc-generic
+              tenant: 1
+              scopes: [erp]
+            spec:
+              connection:
+                url: jdbc:postgresql://db.acme.io:5432/billing
+                user: ro_user
+                password_env: ACME_DB_PASSWORD
+              defaults:
+                schema: legacy
+              source:
+                tables:
+                  - name: invoices
+                    mode: full
+                    pk_columns: [id]
+                    schema:
+            """.formatted(name);
+
+        String connectorId = given().config(YamlBody.CONFIG)
+            .headers(TestIdentity.tenantAndUser(1))
+            .contentType("application/yaml")
+            .body(yaml)
+        .when().post("/api/platform/connectors/apply")
+        .then().statusCode(200).extract().path("connectorId");
+
+        given()
+            .headers(TestIdentity.tenantAndUser(1))
+        .when().get("/api/platform/connectors/" + connectorId + "/endpoints")
+        .then()
+            .statusCode(200)
+            .body("[0].config.schema", equalTo("legacy"));
+    }
+
+    private String applyJdbc(String nameTemplate, String specBlock) {
+        return applyJdbcNamed(nameTemplate.formatted(System.nanoTime()), specBlock);
+    }
+
+    /** One jdbc manifest with one table, varying only the spec block under test. */
+    private String applyJdbcNamed(String name, String specBlock) {
+        String yaml = """
+            apiVersion: connectors.lumnik.io/v1
+            kind: Connector
+            metadata:
+              name: %s
+              connector_type: jdbc-generic
+              tenant: 1
+              scopes: [erp]
+            spec:
+              connection:
+                url: jdbc:postgresql://db.acme.io:5432/billing
+                user: ro_user
+                password_env: ACME_DB_PASSWORD
+            %s  source:
+                tables:
+                  - name: invoices
+                    mode: full
+                    pk_columns: [id]
+            """.formatted(name, specBlock);
+
+        return given().config(YamlBody.CONFIG)
+            .headers(TestIdentity.tenantAndUser(1))
+            .contentType("application/yaml")
+            .body(yaml)
+        .when().post("/api/platform/connectors/apply")
+        .then()
+            .statusCode(200)
+            .extract().path("connectorId");
+    }
 }

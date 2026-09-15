@@ -7,6 +7,46 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.7.2 — 2026-09-15
+
+A patch release about refusals that said nothing. A `400` from the API used to reach `lm` with no
+body at all, so the sentence naming your mistake never left the server. A run whose row had been
+deleted mid-flight ended without telling anyone. And this is the first release you can install
+without a Go toolchain.
+
+### Added
+- **Pre-built `lm` binaries are attached to this release.** Five archives — macOS (Intel and Apple
+  Silicon), Linux (x86-64 and arm64), Windows x86-64 — with a checksums file beside them. Take the
+  one for your platform, unpack it, put `lm` on your `PATH`; the Go toolchain is now needed only if
+  you would rather build. The archives carry **`lm`'s own version**, which advances on its own tags
+  rather than the hub's — that is why `lm_1.3.1_…` hangs on a `v1.7.2` release. `lm version` prints
+  that number for a downloaded binary and `dev` for one you built, which is the line to quote in a
+  bug report.
+
+### Changed — read before upgrading
+- **A refused request now tells you why.** Eleven doors used to answer `400` with an empty body, so
+  `lm` printed `API error 400 (no details from the server)` and the admin console sent you to the
+  server log to find the sentence. The sentence now travels on the wire. Nothing you send changes;
+  what comes back does. One gap is deliberately left named rather than claimed closed: a request
+  body malformed enough that the JSON parser gives up still answers empty.
+- **A manifest key written with nothing after it is treated as absent — except inside a map you
+  wrote.** `rename: {id: null}` still refuses, because "rename id to nothing" is a typo and not an
+  omission; a declaration left empty means you did not declare it. The two look identical in YAML
+  and only the schema tells them apart, so the doors now ask for absence by name instead of
+  guessing. If a manifest of yours relied on the older, inconsistent reading, `lm validate` will
+  say so before an apply does.
+- **Building from source now needs Go 1.26+** (the floor is `lm/go.mod`, which CI follows). This
+  only concerns you if you build rather than download.
+
+### Fixed
+- **A run whose connector was deleted mid-flight no longer goes silent.** The run row is read once
+  when the chunk loop starts, and deleting a connector removes its runs — so a run already under
+  way could find its own row gone. It then either left the row stuck at `Running` until the next
+  restart, or finished it `Failed` **without emitting the event**, which is what `lm run list`, the
+  TUI and every webhook subscriber read. It is a refusal now, announced like any other ending.
+- **A chunk whose refusal could not even be built escaped the same funnel** — one layer down, the
+  same defect.
+
 ## v1.7.1 — 2026-09-14
 
 A patch release about what a key written with nothing after it means. Three blocks and one path

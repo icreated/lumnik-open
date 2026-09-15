@@ -567,6 +567,24 @@ public class ConnectorEngine {
         ConnectorRun run = TenantContext.callAsSystem(() ->
                 QuarkusTransaction.requiringNew()
                         .call(() -> runs.findById(runId)));
+        // The row can be gone: deleting a connector removes its runs (V26) and the reaper clears
+        // rows at boot, both racing a run already under way. Unguarded, the very next line threw an
+        // NPE that left the chunk loop entirely — on the synchronous entry point nothing catches it
+        // at all (the caller gets the exception and the row, when there is one, stays Running until
+        // the next boot); on the async worker executeEndpointRun's last-resort catch finalizes it
+        // Failed while BYPASSING failRun, so no connector.run.failed is emitted and every watcher
+        // sees the run go silent. The shape ChunkExecutor carried one layer down until #560, and
+        // the sentence is the one executeChunkManaged already writes for this very read.
+        // finalizeRun then finds no row to stamp and returns; the ending is still ANNOUNCED,
+        // because whoever asked for this run is owed it either way. "Announced" holds on the
+        // production path and only there: runSyncEndpoint has put this thread in TenantScope, and
+        // EventOutboxService.publish drops an event raised with no tenant in context. That is why
+        // executeEndpointRun's catch, which runs OUTSIDE that scope, would still emit nothing if it
+        // were routed through failRun — and why an IT driving runChunks directly must enter the
+        // scope to observe the event at all.
+        if (run == null) {
+            return failRun(runId, new ChunkResult.Failure("Run not found: " + runId, null, false));
+        }
         // paired with the end line in finalizeRun, whatever the ending
         LOG.infof("run %s started: connector %s (%s), endpoint %s, trigger %s",
                 runId, c.getName(), c.getTypeId(), endpoint.getName(), run.getTriggeredBy());

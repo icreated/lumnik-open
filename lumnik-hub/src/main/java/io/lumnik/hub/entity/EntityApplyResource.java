@@ -40,13 +40,12 @@ public class EntityApplyResource {
     try {
       m = parser.parse(body);
     } catch (IllegalArgumentException e) {
-      // Through ApiErrors, NOT `new BadRequestException(message)`: that constructor sets the JAVA
-      // exception's message and leaves the RESPONSE bodyless, so every refusal EntityManifestParser
-      // raises — the twelve docs/entities.md tables as "quoting the exact problem" — reached lm as
-      // "400 (no details from the server)", and nothing was logged either. The throw-shaped twin of
-      // the bare Response.status(404) sites #418 fixed; ApiErrors.notFound's javadoc already names
-      // this exact failure mode for its own status.
-      throw new BadRequestException(ApiErrors.badRequest(e.getMessage()));
+      // The message IS the refusal: the twelve docs/entities.md tables promise the exact problem
+      // quoted back. This site used to hand-build the Response, because the plain constructor sets
+      // the JAVA exception's message and leaves the RESPONSE bodyless — every parser refusal reached
+      // lm as "400 (no details from the server)". BadRequestExceptionMapper closes that channel for
+      // the whole deployment now, so the plain form carries the text; EntityApplyIT asserts it.
+      throw new BadRequestException(e.getMessage());
     }
     // C3, for the kind that never got it. Jackson deserializes this manifest with
     // FAIL_ON_UNKNOWN_PROPERTIES=false, so a key the record does not declare is dropped in silence:

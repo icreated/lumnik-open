@@ -60,9 +60,7 @@ public class JdbcGenericConnectorApplyHandler implements ConnectorApplyHandler {
         Map<String, Object> connCfg = new HashMap<>(conn.getConfig() != null ? conn.getConfig() : Map.of());
         connCfg.put("kind", KIND_JDBC_GENERIC);
         connCfg.put("connection", JSON.convertValue(spec.path("connection"), Map.class));
-        if (!spec.path(DEFAULTS).isMissingNode()) {
-            connCfg.put(DEFAULTS, JSON.convertValue(spec.path(DEFAULTS), Map.class));
-        }
+        ApplyUpsert.putOrRemove(connCfg, DEFAULTS, spec.path(DEFAULTS), Map.class);
         return connCfg;
     }
 }

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.validator.ConfigDef;
 import io.lumnik.hub.validator.ConfigDef.Importance;
 import io.lumnik.hub.validator.ConfigDef.Type;
+import io.lumnik.hub.validator.JsonNodes;
 import io.lumnik.hub.validator.ValidationError;
 import io.lumnik.hub.validator.ValidationError.Severity;
 
@@ -69,7 +70,8 @@ public final class TargetBlockValidator {
             }
         }
         JsonNode uniq = e.path("unique");
-        if (!uniq.isMissingNode() && !uniq.isBoolean()) {
+        // absent: `unique:` written empty declares no flag, so there is no wrong type to report.
+        if (!JsonNodes.absent(uniq) && !uniq.isBoolean()) {
             errs.add(new ValidationError(p + ".unique", Severity.ERROR,
                 "'unique' must be a boolean (true/false)", List.of()));
         }

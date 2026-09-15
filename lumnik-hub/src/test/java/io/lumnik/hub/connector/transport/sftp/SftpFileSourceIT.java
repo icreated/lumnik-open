@@ -7,7 +7,7 @@ import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.sftp.client.SftpClientFactory;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.utility.DockerImageName;
+import org.testcontainers.containers.wait.strategy.Wait;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -25,9 +25,14 @@ class SftpFileSourceIT {
 
     @BeforeAll
     static void startSftp() throws Exception {
-        sftp = new GenericContainer<>(DockerImageName.parse("atmoz/sftp:alpine"))
+        sftp = new GenericContainer<>(SftpTestImage.PINNED)
             .withCommand(USER + ":" + PASS + ":1001::upload")
-            .withExposedPorts(22);
+            .withExposedPorts(22)
+            // Wait for sshd to LISTEN, not merely for the published port to accept: the
+            // docker-proxy binds that port at container start, while the entrypoint is still
+            // generating host keys — a connection landing in that window is accepted and then
+            // dropped, which is what a bare withExposedPorts(22) races against.
+            .waitingFor(Wait.forLogMessage(".*Server listening on 0\\.0\\.0\\.0.*", 1));
         sftp.start();
         port = sftp.getMappedPort(22);
 
