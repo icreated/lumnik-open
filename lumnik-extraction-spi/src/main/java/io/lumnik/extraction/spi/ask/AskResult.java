@@ -9,11 +9,12 @@ import java.util.Map;
  * <p>{@code dataAsOf}: ISO-8601 end of the scope's last completed ingestion run — how fresh the
  * answer's ground is. Null on refusals, and when the scope has no completed run.
  *
- * <p>{@code otherDoors}: when this door abstains and the scope holds the answer somewhere text-to-
- * SQL structurally cannot read, the tokens naming those doors — {@code "lifecycle"},
+ * <p>{@code otherDoors}: when this door reaches a signposted dead end — not only the model's own
+ * abstention, but any refusal for which the scope holds the answer somewhere text-to-SQL
+ * structurally cannot read (#527) — the tokens naming those doors — {@code "lifecycle"},
  * {@code "conflicts"}. Empty otherwise, and empty is the common case.
  *
- * <p>The abstention's own sentence already states the FACT, and deliberately names no command:
+ * <p>The dead end's own sentence already states the FACT, and deliberately names no command:
  * the same string is served to {@code lm ask}, to the PWA and to anything else on the API, so a
  * backtick-quoted CLI command would send a métier on a phone to a terminal they do not have. The
  * consequence was that the client which COULD act had to be told in prose it cannot parse — which

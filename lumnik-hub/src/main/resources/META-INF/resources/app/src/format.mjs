@@ -1,6 +1,8 @@
 // Display formatting for the real PWA at /app/ — ported verbatim from the spike's since()
 // (m/index.html, ~L474), with `now` injected so tests can pin it instead of racing Date.now().
 
+import { DOOR_CONFLICTS } from './door-tokens.mjs';
+
 export function since(iso, now = Date.now()) {
   const s = (now - Date.parse(iso)) / 1000;
   if (s < 3600) return `il y a ${Math.max(1, Math.round(s / 60))} min`;
@@ -21,7 +23,7 @@ export function cell(v) {
 // button does not reach. `lifecycle` gets nothing at all — the PWA has no lifecycle surface, and
 // the sentence in `answer` has already told the métier the declaration exists.
 export function doorGesture(door) {
-  if (door === 'conflicts') return 'Ouvrir les fiches — les désaccords sont sur chaque fiche';
+  if (door === DOOR_CONFLICTS) return 'Ouvrir les fiches — les désaccords sont sur chaque fiche';
   return null;
 }
 

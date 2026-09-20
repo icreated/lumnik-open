@@ -120,7 +120,7 @@ func TestDecodeManifest(t *testing.T) {
 			// a real file here would suggest a filesystem dependency the decoder no longer has.
 			path := filepath.Join("/tmp/tenant", tc.file)
 
-			payload, err := decodeManifest([]byte(tc.body), path, "connector")
+			payload, err := decodeManifest([]byte(tc.body), path)
 
 			if !tc.wantErr {
 				if err != nil {
@@ -173,65 +173,38 @@ func TestDecodeManifestMissingFile(t *testing.T) {
 	}
 }
 
-// The wiring, not the decoder: both commands that parse a manifest locally must route through
-// decodeManifest, so the honest refusal actually reaches the reader. Neither reaches the network
-// — the refusal happens before a client is ever built, which is also why no server is stubbed.
+// The wiring, not the decoder: `connector apply` must route through decodeManifest, so the
+// honest refusal actually reaches the reader, names "connector" specifically rather than a
+// hardcoded/borrowed kind, and offers the CSV-ingest hint. It never reaches the network — the
+// refusal happens before a client is ever built, which is also why no server is stubbed.
 //
-// What is asserted here is only what the two sites SHARE. Which manifest each one names is the
-// business of TestRefusalNamesTheKindTheCommandWanted — this test asserted "connector" for both
-// until the review caught it, which is how a test comes to encode the bug it was meant to guard.
-func TestApplyCommandsRefuseANonManifestInTheReadersTerms(t *testing.T) {
-	for _, cmdPath := range [][]string{{"connector", "apply"}, {"hook", "apply"}} {
-		t.Run(strings.Join(cmdPath, " "), func(t *testing.T) {
-			csv := filepath.Join(t.TempDir(), "ad_user.csv")
-			if err := os.WriteFile(csv, []byte("ad_user_id,name,email\n1,alpha,a@x\n"), 0o600); err != nil {
-				t.Fatalf("seeding: %v", err)
-			}
-
-			cmd := NewRootCmd()
-			cmd.SetOut(new(strings.Builder))
-			cmd.SetErr(new(strings.Builder))
-			cmd.SetArgs(append(append([]string{}, cmdPath...), "-f", csv))
-
-			err := cmd.Execute()
-			if err == nil {
-				t.Fatal("expected a refusal")
-			}
-			for _, want := range []string{"is not a", "manifest", "lm csv ingest"} {
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("error must carry %q, got: %v", want, err)
-				}
-			}
-			if strings.Contains(err.Error(), "map[string]interface") {
-				t.Errorf("the library's vocabulary must not reach the reader: %v", err)
-			}
-		})
+// This used to be two tests looping over `connector apply` and `hook apply`, guarding a decoder
+// shared between them (a hardcoded "connector" once lied at hook apply's call site). #610
+// removed `hook apply`'s decodeManifest wiring entirely (it refuses unconditionally, see
+// hook_test.go) and decodeManifest itself dropped the now-single-caller `kind` parameter, leaving
+// one caller and one test.
+func TestConnectorApplyRefusesANonManifestInTheReadersTerms(t *testing.T) {
+	csv := filepath.Join(t.TempDir(), "ad_user.csv")
+	if err := os.WriteFile(csv, []byte("ad_user_id,name,email\n1,alpha,a@x\n"), 0o600); err != nil {
+		t.Fatalf("seeding: %v", err)
 	}
-}
 
-// The refusal must name the manifest the command actually wanted. Sharing one decoder between
-// `connector apply` and `hook apply` made it say "connector" at both — a message that lies at one
-// site is worse than two messages that were honest.
-func TestRefusalNamesTheKindTheCommandWanted(t *testing.T) {
-	for _, tc := range []struct{ cmd, want string }{
-		{"connector", "not a connector manifest"},
-		{"hook", "not a hook manifest"},
-	} {
-		t.Run(tc.cmd, func(t *testing.T) {
-			csv := filepath.Join(t.TempDir(), "ad_user.csv")
-			if err := os.WriteFile(csv, []byte("ad_user_id,name\n1,a\n"), 0o600); err != nil {
-				t.Fatalf("seeding: %v", err)
-			}
-			cmd := NewRootCmd()
-			cmd.SetOut(new(strings.Builder))
-			cmd.SetErr(new(strings.Builder))
-			cmd.SetArgs([]string{tc.cmd, "apply", "-f", csv})
+	cmd := NewRootCmd()
+	cmd.SetOut(new(strings.Builder))
+	cmd.SetErr(new(strings.Builder))
+	cmd.SetArgs([]string{"connector", "apply", "-f", csv})
 
-			err := cmd.Execute()
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("expected %q, got: %v", tc.want, err)
-			}
-		})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	for _, want := range []string{"not a connector manifest", "lm csv ingest"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error must carry %q, got: %v", want, err)
+		}
+	}
+	if strings.Contains(err.Error(), "map[string]interface") {
+		t.Errorf("the library's vocabulary must not reach the reader: %v", err)
 	}
 }
 

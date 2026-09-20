@@ -313,8 +313,10 @@ Authorization: Bearer <secret>
 
 No authentication header is added. Use only for endpoints that enforce their own access control at the network layer.
 
-Every delivery, whatever the mode, also carries `Content-Type: application/json` and
-`X-Lumnik-Event: <event type>`.
+Every delivery, whatever the mode, also carries `Content-Type: application/json`,
+`X-Lumnik-Event: <event type>` and — when the delivery traces back to an outbox row —
+`X-Lumnik-Event-Id: <core.event_outbox id>`. A synthetic `/test` delivery has no outbox
+row behind it, so it omits the id header.
 
 ### Where the secret lives
 
@@ -476,6 +478,12 @@ header_value = "sha256=" + hex(signature)
 ```
 
 The `X-Lumnik-Signature` header is set to `header_value`. Receivers must compute the same HMAC using the shared secret and compare it in constant time.
+
+The signature covers **only the raw body** — `X-Lumnik-Event-Id` is not part of what it signs.
+A receiver correlating deliveries by that id is trusting transport security (TLS) for the id
+itself, not the HMAC. A replay of a delivery, and every retry of it, carries the same event
+id as the original attempt: it is the `core.event_outbox` row's own id, unchanged across
+attempts.
 
 ### Retries
 

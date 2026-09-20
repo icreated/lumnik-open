@@ -18,7 +18,7 @@ flowchart LR
     conn["Connectors — CSV · JDBC ·<br/>REST / GraphQL / SOAP"]
     tables[("Multi-tenant hub —<br/>RLS on every row")]
     ent["Entities — fused,<br/>conflicts kept"]
-    apps["Views · Processes ·<br/>Workflows · Inbox · PWA"]
+    apps["Views · Apps · Processes ·<br/>Workflows · Inbox · PWA"]
     out["Outputs — webhooks ·<br/>email · event registry"]
     askcore["Ask pipeline + five guards —<br/>native, <b>no door onto it</b>"]
     conn --> tables --> ent --> apps

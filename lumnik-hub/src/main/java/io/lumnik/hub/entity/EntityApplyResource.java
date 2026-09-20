@@ -75,10 +75,18 @@ public class EntityApplyResource {
     // and sets scopes = EXCLUDED.scopes, so a caller who holds every scope they DECLARE can still
     // rewrite a manifest that lives in scopes they do not — re-homing it, or simply narrowing it out
     // of a métier by re-applying a subset. Same words as the check above (#509).
+    //
+    // ORDERED — read, then write — which a race can jump; the compiler re-asks atomically and
+    // refuseUnlessApplied below is that second answer. This earlier one is kept because it refuses
+    // BEFORE the compiler does any work and before the discovery/rediscover side effects, which no
+    // rollback reaches (#582).
     ApplyScopeBoundary.refuseUnlessCallerHolds(registry.storedScopes(m.name()));
 
     try {
-      compiler.apply(m, body);
+      // granted().orElse(null) — empty Optional means unscoped, i.e. every scope. The compiler
+      // rolled its whole transaction back on a refusal, DDL included, so the view is as it was.
+      ApplyScopeBoundary.refuseUnlessApplied(
+          compiler.apply(m, body, ScopeGrants.granted().orElse(null)));
     } catch (MissingSourceTableException e) {
       // Predictable fresh-install state — an honest refusal, not an anonymous 500.
       throw new WebApplicationException(

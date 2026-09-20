@@ -28,7 +28,7 @@ class WorkflowRegistryIT {
 
     @Test
     void registry_serves_graphs_from_the_store_per_tenant() {
-        store.upsert(7101L, new WorkflowManifestParser().parse(YAML), YAML);
+        store.upsert(7101L, new WorkflowManifestParser().parse(YAML), YAML, null);
 
         var graphs = registry.all(7101L);
         assertThat(graphs).extracting(WorkflowGraph::name).contains("wf-registry-it");

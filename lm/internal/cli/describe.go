@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/spf13/cobra"
 )
 
@@ -48,6 +49,11 @@ func newDescribeConnectorTypeCmd() *cobra.Command {
 			var def configDefBlock
 			if err := json.Unmarshal(raw, &def); err != nil {
 				return err
+			}
+			// -o is a persistent root flag, so it arrives here whether or not this command looks
+			// at it — see source_schema.go.
+			if format, _ := cmd.Flags().GetString("output"); format != "table" {
+				return output.PrintObject(cmd.OutOrStdout(), format, def)
 			}
 			return renderConfigDef(cmd.OutOrStdout(), args[0], def, 0)
 		},

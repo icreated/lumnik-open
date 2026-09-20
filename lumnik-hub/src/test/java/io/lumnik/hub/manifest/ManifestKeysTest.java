@@ -90,4 +90,38 @@ class ManifestKeysTest {
 
         assertEquals(List.of(), ManifestKeys.unknownKeys(root, allowedByPath));
     }
+
+    @Test
+    void requiredTextReturnsTheValueWhenPresent() throws Exception {
+        JsonNode root = MAPPER.readTree("metadata:\n  name: clients-desk\n");
+        assertEquals("clients-desk",
+            ManifestKeys.requiredText(root.path("metadata"), "name", "metadata.name"));
+    }
+
+    @Test
+    void requiredTextRefusesAMissingField() throws Exception {
+        JsonNode root = MAPPER.readTree("metadata: {}\n");
+        IllegalArgumentException e = org.junit.jupiter.api.Assertions.assertThrows(
+            IllegalArgumentException.class,
+            () -> ManifestKeys.requiredText(root.path("metadata"), "name", "metadata.name"));
+        assertEquals("metadata.name is required", e.getMessage());
+    }
+
+    @Test
+    void requiredTextRefusesABlankField() throws Exception {
+        JsonNode root = MAPPER.readTree("metadata:\n  name: \"   \"\n");
+        IllegalArgumentException e = org.junit.jupiter.api.Assertions.assertThrows(
+            IllegalArgumentException.class,
+            () -> ManifestKeys.requiredText(root.path("metadata"), "name", "metadata.name"));
+        assertEquals("metadata.name is required", e.getMessage());
+    }
+
+    @Test
+    void requiredTextRefusesAnExplicitNull() throws Exception {
+        JsonNode root = MAPPER.readTree("metadata:\n  name: null\n");
+        IllegalArgumentException e = org.junit.jupiter.api.Assertions.assertThrows(
+            IllegalArgumentException.class,
+            () -> ManifestKeys.requiredText(root.path("metadata"), "name", "metadata.name"));
+        assertEquals("metadata.name is required", e.getMessage());
+    }
 }

@@ -206,7 +206,39 @@ func TestViewHelp_namesAllVerbs(t *testing.T) {
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
 
-	for _, verb := range []string{"list", "get", "apply", "generate"} {
+	for _, verb := range []string{"list", "get", "apply", "generate", "rm"} {
 		assert.Contains(t, out.String(), verb)
 	}
+}
+
+func TestViewRmCmd_requiresNameArg(t *testing.T) {
+	cmd := newViewCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"rm"})
+	err := cmd.Execute()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "accepts 1 arg")
+}
+
+func TestViewRmCmd_e2e_deletesAndConfirms(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/views/gold-desk" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"view", "rm", "gold-desk"})
+	require.NoError(t, cmd.Execute())
+	assert.Contains(t, buf.String(), "gold-desk")
 }

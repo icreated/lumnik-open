@@ -15,6 +15,7 @@ func splitmix64(x uint64) uint64 {
 // Scenario is one generated adversarial case.
 type Scenario struct {
 	Seed         int64
+	CaseID       CaseID // catalogue identity; see caseid.go
 	Category     string // "logical" | "weird" | "textual" | "hack"
 	Variant      string // e.g. "rtl-override"
 	Field        string // the csv-file field the attack targets
@@ -34,13 +35,15 @@ func Generate(seed int64) Scenario {
 	v := vs[int(h%uint64(len(vs)))]
 
 	h = splitmix64(h)
-	payload := v.payloads[int(h%uint64(len(v.payloads)))]
+	payloadIdx := int(h % uint64(len(v.payloads)))
+	payload := v.payloads[payloadIdx]
 
 	m := baseline(seed)
 	v.mutate(&m, payload)
 
 	return Scenario{
 		Seed:         seed,
+		CaseID:       applyCaseID(cat, v.name, payloadIdx),
 		Category:     cat,
 		Variant:      v.name,
 		Field:        v.field,
@@ -71,6 +74,7 @@ func renderFeature(seed int64, cat, variant, field string) string {
 // manifest pointing at a per-seed path, plus the adversarial source written there.
 type RunScenario struct {
 	Seed         int64
+	CaseID       CaseID
 	Category     string
 	Variant      string
 	Field        string
@@ -91,6 +95,7 @@ func GenerateRun(seed int64) RunScenario {
 	m.path = path
 	return RunScenario{
 		Seed:         seed,
+		CaseID:       runCaseID(sc.Category, sc.Variant),
 		Category:     sc.Category,
 		Variant:      sc.Variant,
 		Field:        sc.Field,
@@ -130,6 +135,7 @@ var authDefects = []string{
 // AuthScenario is one generated adversarial auth case.
 type AuthScenario struct {
 	Seed       int64
+	CaseID     CaseID
 	DefectName string // one of authDefects
 	Feature    string // human-readable Gherkin
 }
@@ -141,6 +147,7 @@ func GenerateAuth(seed int64) AuthScenario {
 	defect := authDefects[int(h%uint64(len(authDefects)))]
 	return AuthScenario{
 		Seed:       seed,
+		CaseID:     authCaseID(defect),
 		DefectName: defect,
 		Feature:    renderAuthFeature(seed, defect),
 	}
@@ -168,13 +175,15 @@ func GenerateRest(seed int64) Scenario {
 	v := vs[int(h%uint64(len(vs)))]
 
 	h = splitmix64(h)
-	payload := v.payloads[int(h%uint64(len(v.payloads)))]
+	payloadIdx := int(h % uint64(len(v.payloads)))
+	payload := v.payloads[payloadIdx]
 
 	m := restBaseline(seed)
 	v.mutate(&m, payload)
 
 	return Scenario{
 		Seed:         seed,
+		CaseID:       restCaseID(cat, v.name, payloadIdx),
 		Category:     cat,
 		Variant:      v.name,
 		Field:        v.field,
@@ -196,6 +205,7 @@ func GenerateEntity(seed int64) EntityScenario {
 		v := applyVariants[idx]
 		return EntityScenario{
 			Seed:         seed,
+			CaseID:       entityCaseID("apply", v.name),
 			SubType:      "apply",
 			ManifestYAML: v.manifestYAML,
 			Variant:      v.name,
@@ -209,7 +219,9 @@ func GenerateEntity(seed int64) EntityScenario {
 	v := readVariants[idx]
 	return EntityScenario{
 		Seed:        seed,
+		CaseID:      entityCaseID("read", v.name),
 		SubType:     "read",
+		Variant:     v.name, // was left empty: the read branch had no name at all
 		ReadTarget:  v.readTarget,
 		ReadQuery:   v.readQuery,
 		CrossTenant: v.crossTenant,
@@ -228,6 +240,7 @@ func GenerateProcess(seed int64) ProcessScenario {
 		v := applyVariants[int(splitmix64(h)%uint64(len(applyVariants)))]
 		return ProcessScenario{
 			Seed:           seed,
+			CaseID:         processCaseID("apply", v.name),
 			SubType:        "apply",
 			ManifestYAML:   v.manifestYAML,
 			Variant:        v.name,
@@ -240,6 +253,7 @@ func GenerateProcess(seed int64) ProcessScenario {
 	v := inbox[int(splitmix64(h)%uint64(len(inbox)))]
 	return ProcessScenario{
 		Seed:           seed,
+		CaseID:         processCaseID("inbox", v.name),
 		SubType:        "inbox",
 		Variant:        v.name,
 		InboxOp:        v.op,

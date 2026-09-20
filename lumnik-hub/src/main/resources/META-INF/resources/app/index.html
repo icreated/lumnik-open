@@ -1,8 +1,9 @@
 <!doctype html>
 <!-- lumnik PWA — the real métier app. Mounts <App/> over the tested logic layer
-     (config/auth/api/views/format under src/). Per-métier identity (title, manifest, icons)
-     is resolved from ?m= and swapped in before first paint, ported from the spike's head
-     logic (m/index.html). -->
+     (appRegistry/auth/api/views/format under src/). Per-app identity (title, manifest, icons)
+     is resolved from ?m= against the runtime kind:App registry and swapped in before first
+     paint — see appRegistry.mjs's header comment for the two-phase resolution this is phase 1
+     of (#571). -->
 <html lang="fr">
 <head>
 <meta charset="utf-8">
@@ -19,16 +20,18 @@
 <body>
 <div id="root"></div>
 <script type="module">
-  import { resolveMetier } from './src/config.mjs';
+  import { resolveCached, applyIdentity, applyTheme } from './src/appRegistry.mjs';
   import { html, render } from './src/html.mjs';
   import { App } from './src/components/app.mjs';
 
-  // wear the métier's identity: tab title, manifest, icons (iOS reads apple-touch-icon)
-  const metier = resolveMetier(location.search);
-  document.title = metier.title;
-  document.querySelector('link[rel="manifest"]').href = metier.manifest;
-  document.querySelector('link[rel="apple-touch-icon"]').href = metier.icon;
-  document.querySelector('link[rel="icon"]').href = metier.icon;
+  // wear the cached (or built-in/neutral fallback) identity AND theme: tab title,
+  // manifest, icons (iOS reads apple-touch-icon), accent and mobile-chrome tint.
+  // app.mjs corrects this once phase 2 resolves the real registry entry, so an
+  // unrecognised tag or a first-ever visit to a runtime app never sees the WRONG
+  // identity for more than one frame.
+  const cached = resolveCached(location.search);
+  applyIdentity(cached);
+  applyTheme(cached);
 
   // app-shell cache only (E2) — data is never cached; a failed registration is not fatal
   if ('serviceWorker' in navigator) {

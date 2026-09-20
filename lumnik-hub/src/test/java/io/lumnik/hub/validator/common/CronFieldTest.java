@@ -31,4 +31,18 @@ class CronFieldTest {
         assertTrue(err.isPresent(),
             () -> "expected error for out-of-range numbers, got empty");
     }
+
+    @Test void validCronString_5fields_returnsEmpty() {
+        assertTrue(CronField.validCron("0 6 * * *").isEmpty());
+    }
+
+    @Test void validCronString_blank_returnsError() {
+        Optional<String> err = CronField.validCron("");
+        assertTrue(err.isPresent());
+    }
+
+    @Test void validCronString_garbage_returnsError() {
+        Optional<String> err = CronField.validCron("not a cron");
+        assertTrue(err.isPresent());
+    }
 }

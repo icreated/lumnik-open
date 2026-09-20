@@ -153,7 +153,8 @@ public class IntegrationResource {
         try { payload = mapper.writeValueAsString(sample); }
         catch (Exception ex) { throw new InternalServerErrorException(ex); }
 
-        var r = deliveryService.deliver(e, body.eventType(), payload);
+        // No outbox row backs a synthetic test event, so no X-Lumnik-Event-Id header is sent.
+        var r = deliveryService.deliver(e, body.eventType(), null, payload);
         return new TestResponse(r.ok(), r.httpStatus(), r.responseBody(), r.error(), r.durationMs());
     }
 

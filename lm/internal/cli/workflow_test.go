@@ -55,6 +55,30 @@ func TestWorkflowGetCmd_requiresNameArg(t *testing.T) {
 	assert.Contains(t, err.Error(), "accepts 1 arg")
 }
 
+func TestWorkflowMutatingCmds_takeExactlyOneName(t *testing.T) {
+	// The delete/enable/disable gestures #487 gave kind:Process, missing here (#507). Each
+	// needs a name and nothing else: a missing one must be a usage error, not a call against
+	// the whole tenant.
+	for _, verb := range []string{"rm", "enable", "disable"} {
+		cmd := newWorkflowCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs([]string{verb})
+		require.Error(t, cmd.Execute(), verb)
+		assert.Contains(t, out.String(), "accepts 1 arg", verb)
+
+		named := newWorkflowCmd()
+		named.SetOut(&out)
+		named.SetErr(&out)
+		named.SetArgs([]string{verb, "commande-lifecycle"})
+		// no context configured → it reaches client resolution, so the args were accepted
+		err := named.Execute()
+		require.Error(t, err, verb)
+		assert.NotContains(t, err.Error(), "accepts 1 arg", verb)
+	}
+}
+
 // --- e2e contracts through the full root command against an httptest hub (the
 // setupCfg pattern from entity_test.go / rag_test.go / view_store_test.go) ---
 
@@ -139,7 +163,7 @@ func TestWorkflowHelp_namesAllVerbs(t *testing.T) {
 	cmd.SetArgs([]string{"--help"})
 	require.NoError(t, cmd.Execute())
 
-	for _, verb := range []string{"apply", "list", "get"} {
+	for _, verb := range []string{"apply", "list", "get", "rm", "enable", "disable"} {
 		assert.Contains(t, out.String(), verb)
 	}
 }

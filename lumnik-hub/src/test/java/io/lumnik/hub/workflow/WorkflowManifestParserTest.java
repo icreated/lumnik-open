@@ -52,7 +52,7 @@ class WorkflowManifestParserTest {
         return Stream.of(
             Arguments.of("metadata.name must be a simple identifier",
                 VALID.replace("name: commande-lifecycle", "name: Commande Lifecycle"),
-                "metadata.name is required"),
+                "metadata.name must be a simple identifier"),
             Arguments.of("spec.scope is required",
                 VALID.replace("  scope: magasin\n", ""),
                 "spec.scope is required"),
@@ -77,6 +77,45 @@ class WorkflowManifestParserTest {
             .as(rule)
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining(expected);
+    }
+
+    @Test
+    void refusesABlankNameSeparatelyFromAMalformedOne() {
+        assertThatThrownBy(() -> parser.parse(VALID.replace("  name: commande-lifecycle\n", "")))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("metadata.name is required")
+            .hasMessageNotContaining("simple identifier");
+    }
+
+    @Test
+    void refusesANullBody() {
+        assertThatThrownBy(() -> parser.parse((String) null))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("invalid kind:Workflow manifest");
+    }
+
+    @Test
+    void refusesSyntacticallyMalformedYaml() {
+        assertThatThrownBy(() -> parser.parse("kind: [unclosed"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("invalid kind:Workflow manifest");
+    }
+
+    @Test
+    void anEmptyOrBlankDocumentIsRefusedAsAWrongKindNotAsUnparsable() {
+        assertThatThrownBy(() -> parser.parse(""))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("kind must be 'Workflow'");
+        assertThatThrownBy(() -> parser.parse("   \n  \n"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("kind must be 'Workflow'");
+    }
+
+    @Test
+    void aBareDocumentMarkerIsRefusedAsAWrongKindNotAsUnparsable() {
+        assertThatThrownBy(() -> parser.parse("---\n"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("kind must be 'Workflow'");
     }
 
     private static final String NO_STATES = """
@@ -112,6 +151,17 @@ class WorkflowManifestParserTest {
         assertThatThrownBy(() -> parser.parse(VALID.replace("kind: Workflow", "kind: Process")))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessageContaining("kind must be 'Workflow'");
+    }
+
+    /** A scope tag becomes the case-sensitive Keycloak role {@code scope:<tag>}, so a name no
+     *  role could carry declares a lifecycle visible to unscoped users and permanently invisible
+     *  to every bound one — see #577. */
+    @Test
+    void rejects_scope_name_no_role_could_carry() {
+        assertThatThrownBy(() -> parser.parse(VALID.replace("scope: magasin", "scope: CRM")))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("spec.scope")
+            .hasMessageContaining("lowercase");
     }
 
     @Test

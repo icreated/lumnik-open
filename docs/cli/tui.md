@@ -121,7 +121,7 @@ input for a new question. The scope it asks against is the session scope shown i
 header: seeded at startup from your default (`lm scope`), changed with `:scopes` →
 `Enter` or `:scope <tag>` for the rest of the session.
 
-`:view` opens a [`kind:View`](../how-it-works.md#five-kinds-two-families) manifest file
+`:view` opens a [`kind:View`](../how-it-works.md#six-kinds-two-families) manifest file
 and renders it — `Enter` opens the suggested living example on an empty path, or type
 your own.
 
@@ -146,14 +146,15 @@ but never destroys it: your edits are written to a temp file first, so nothing i
 ever lost to a stray `Esc`.
 
 `:processes` lists declared
-[`kind:Process`](../how-it-works.md#five-kinds-two-families) rules; `e` re-opens a
+[`kind:Process`](../how-it-works.md#six-kinds-two-families) rules; `e` re-opens a
 stored manifest through that same edit → validate → apply loop, so create and edit
 share one path.
 
 ## Admin corner
 
-`:modules` lists installed business modules. `:hooks` lists installed Kotlin hooks;
-`^L` reloads the selected one. `:migrations` shows Flyway status per schema.
+`:modules` lists installed business modules. `:hooks` lists installed Kotlin hooks
+(read-only — they load from deployment manifests at startup, not applied or
+reloaded individually). `:migrations` shows Flyway status per schema.
 `:scopes` lists the tenant's per-métier scopes (declared as `metadata.scopes` on connectors and entities) — `Enter` sets the
 active one, as noted above.
 
@@ -173,7 +174,6 @@ active one, as noted above.
 | `Enter` / `e` / `Esc` | `:new` | edit the kind's living example in `$EDITOR` · re-edit after refusals · abandon (buffer kept in a temp file) |
 | `e` | `:processes` | edit the stored manifest through the same validate → apply loop |
 | `Enter` / `f` `F` / `g` / `a` / `o` / `r` | `:view` | record detail (`_conflicts` ledger) · add/clear server-side filters (refusals name the reason) · generate from a sentence (AI) · apply the rendered view to the hub store · open another file · refresh |
-| `^L` | `:hooks` | reload |
 | `Enter` | `:scopes` | set the active scope (used by `:ask`) |
 | `Enter` / `y` / `e` / `n` | `:ask` | run · yank the SQL (OSC52) · export rows to CSV · new question |
 

@@ -220,6 +220,64 @@ class MapColumnsRenameTest {
         Arguments.of("drop with nothing after the colon", "drop:\n"));
   }
 
+  /**
+   * {@code rename: {a: a}} is a valid manifest — nothing in {@code MapColumnsRules} refuses a
+   * target equal to its own source. It must be a no-op, not a false collision: an earlier shape of
+   * the #526 order fix checked the target against the ORIGINAL row, where the source was still
+   * present under its own name, and counted a loss that never happened.
+   */
+  @Test
+  void a_rename_to_its_own_name_is_a_no_op_and_counts_nothing() throws Exception {
+    var row = new HashMap<String, Object>();
+    row.put("a", 1);
+    var state = new MappingState();
+
+    var out = applyTo(row, "rename:\n  a: a\n", state);
+
+    assertThat(out).containsEntry("a", 1);
+    assertThat(state.counters().cellErrors().get()).isZero();
+  }
+
+  /**
+   * {@code MapColumnsRules} does not refuse a rename chain (a target that is itself another
+   * rename's source) — renames run in manifest order, each against the result of the one before,
+   * so {@code a: b} followed by {@code b: c} lands the value under {@code c}. The #526 order fix
+   * must not flatten this into evaluating every rename against the row as it stood before any of
+   * them ran, which would leave the value under {@code b} instead.
+   */
+  @Test
+  void a_rename_chain_applies_each_step_to_the_previous_steps_result() throws Exception {
+    var row = new HashMap<String, Object>();
+    row.put("a", 1);
+    var state = new MappingState();
+
+    var out = applyTo(row, "rename:\n  a: b\n  b: c\n", state);
+
+    assertThat(out).containsExactly(Map.entry("c", 1));
+    assertThat(state.counters().cellErrors().get()).isZero();
+  }
+
+  /**
+   * A rename cycle ({@code a: b} then {@code b: a}) is likewise unrefused. Step one collides with
+   * the row's own {@code b} (counted); step two then collides with nothing, since step one already
+   * consumed {@code b}. Same reasoning as the chain test above, on the shape a naive "evaluate
+   * every rename against the original row" rewrite gets wrong in the other direction.
+   */
+  @Test
+  void a_rename_cycle_lets_the_second_step_see_the_first_steps_output() throws Exception {
+    var row = new HashMap<String, Object>();
+    row.put("a", 1);
+    row.put("b", 2);
+    var state = new MappingState();
+
+    var out = applyTo(row, "rename:\n  a: b\n  b: a\n", state);
+
+    assertThat(out).containsExactly(Map.entry("a", 1));
+    assertThat(state.counters().cellErrors().get())
+        .as("only the first step collides — the second finds no 'b' left to collide with")
+        .isEqualTo(1L);
+  }
+
   @Test
   void drop_still_removes_what_it_names_without_counting_anything() throws Exception {
     var row = new HashMap<String, Object>();

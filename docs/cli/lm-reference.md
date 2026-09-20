@@ -44,6 +44,7 @@ hubs (sent as `X-Tenant-ID` / `X-User-ID` headers); a real hub ignores them.
 | `lm apply -f FILE` | apply a `kind: Connector` manifest — upserts by (tenant, `metadata.name`), so re-applying an edited file updates it. Not to be confused with `lm connector apply`, which takes those flat stored fields instead |
 | `lm entity apply -f FILE` | apply a `kind: Entity` fusion manifest |
 | `lm entity delete NAME` | remove an entity — drops its view, deletes the manifest, rediscovers its scopes (`lm_admin`; the inverse of `entity apply`). This is what frees a connector blocked by the 409 below |
+| `lm app apply -f FILE` | declare a [`kind: App`](../apps/pwa.md) métier app — title, scope, icon and theme; prints the app and, when it takes the default flag, the app that lost it |
 | `lm process apply -f FILE` / `lm process list` | apply/list `kind: Process` notify rules |
 | `lm process enable/disable NAME` | stop a process firing, or start it again — the manifest stays stored and re-appliable |
 | `lm process rm NAME` | delete a process for good (no prompt); `404` if the tenant has no process by that name |
@@ -159,6 +160,7 @@ c58de40c  487ed9d1   f0466804  MalformedSource  1         /tmp/exports/orders.cs
 | `lm view list [--scope S]` | list the saved views visible to the caller (scope-bound reads apply) |
 | `lm view get NAME [-o FILE]` | fetch one saved view's manifest YAML — to stdout, or to a file |
 | `lm view apply -f FILE` | validate and upsert a `kind: View` manifest into the saved-view store |
+| `lm app apply -f FILE` | declare a [`kind: App`](../apps/pwa.md) métier app — title, scope, icon and theme; prints the app and, when it takes the default flag, the app that lost it |
 | `lm workflow apply -f FILE` | declare a [`kind: Workflow`](../apps/workflows.md) lifecycle; prints the data-truth report — values in the column the manifest never declared, and declared states never seen. Never blocks |
 | `lm workflow list` | the tenant's declared lifecycles (name, table, column, scope) |
 | `lm workflow get NAME` | fetch one workflow's manifest YAML to stdout (redirect with `>` to save; the global `-o` here means output *format*, it does not write a file) |

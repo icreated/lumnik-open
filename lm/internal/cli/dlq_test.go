@@ -240,6 +240,37 @@ func TestDlqGet_showsReasonDetailPayload(t *testing.T) {
 	}
 }
 
+// -o being a persistent root flag, `dlq get` accepted -o json and ignored it, always printing
+// the aligned card (#532).
+func TestDlqGetHonoursJson(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "d3000000-0000-0000-0000-000000000003", "skipReason": "ValidationFailed",
+			"connectorId": "11111111-2222-3333-4444-555555555555", "connectorName": "orders-csv",
+			"errorMessage": "amount < 0", "attempts": 2,
+		})
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"dlq", "get", "d3000000-0000-0000-0000-000000000003", "-o", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("-o json must emit parseable JSON, got %q: %v", buf.String(), err)
+	}
+	if got["skipReason"] != "ValidationFailed" || got["connectorName"] != "orders-csv" {
+		t.Fatalf("the entry lost its shape: %v", got)
+	}
+}
+
 // Registry case: the hub's POST /dlq/{id}/replayed takes an optional ?newRunId= linking
 // the entry to the run that replayed it — the CLI never passed it.
 func TestDlqReplayed_sendsNewRunId(t *testing.T) {

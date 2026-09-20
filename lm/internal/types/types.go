@@ -114,13 +114,39 @@ type DeadLetter struct {
 }
 
 // Hook is one registered lifecycle hook: its type, the entity it targets, its
-// scope, and its load status.
+// scope, and its load status. This is the LIST endpoint's shape
+// (GET /api/platform/admin/hooks, HookAdminResource.toDto) — see HookDetail for the different,
+// richer shape the singular endpoint sends.
 type Hook struct {
 	ID     string `json:"id"`
 	Type   string `json:"type"`
 	Entity string `json:"entity"`
 	Scope  string `json:"scope"`
 	Status string `json:"status"`
+}
+
+// HookHandler is HookBinding's sealed handler, JavaHandler{className} or
+// KotlinHandler{scriptPath} — Jackson encodes whichever one the hook actually uses as a plain
+// object carrying that record's one field; the other is simply absent, not null.
+type HookHandler struct {
+	ClassName  string `json:"className,omitempty" yaml:"className,omitempty"`
+	ScriptPath string `json:"scriptPath,omitempty" yaml:"scriptPath,omitempty"`
+}
+
+// HookDetail is one hook exactly as GET /api/platform/hooks/{id} returns it
+// (HookResource.summarize) — a different, richer shape than Hook, the list endpoint's DTO.
+type HookDetail struct {
+	ID          string      `json:"id" yaml:"id"`
+	Module      string      `json:"module" yaml:"module"`
+	Description string      `json:"description" yaml:"description"`
+	Target      string      `json:"target" yaml:"target"`
+	Action      string      `json:"action" yaml:"action"`
+	Events      []string    `json:"events" yaml:"events"`
+	Handler     HookHandler `json:"handler" yaml:"handler"`
+	Priority    int         `json:"priority" yaml:"priority"`
+	Tenants     []any       `json:"tenants" yaml:"tenants"`
+	Enabled     bool        `json:"enabled" yaml:"enabled"`
+	ActionPhase string      `json:"actionPhase" yaml:"actionPhase"`
 }
 
 // MigrationStatus reports one schema's Flyway migration state: current version,

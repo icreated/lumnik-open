@@ -37,6 +37,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newViewCmd())
 	root.AddCommand(newProcessCmd())
 	root.AddCommand(newWorkflowCmd())
+	root.AddCommand(newAppCmd())
 	root.AddCommand(newInboxCmd())
 	root.AddCommand(newScopeCmd())
 	root.AddCommand(newScopesCmd())

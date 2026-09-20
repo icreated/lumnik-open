@@ -1,5 +1,8 @@
 import { html, useState, useEffect, useRef } from '../html.mjs';
-import { resolveMetier, kcBase, redirectUri } from '../config.mjs';
+import { urlKey, kcBase, redirectUri } from '../config.mjs';
+import {
+  resolveCached, resolveFromRegistry, cacheRegistry, applyIdentity, applyTheme,
+} from '../appRegistry.mjs';
 import { createAuth } from '../auth.mjs';
 import { createApi } from '../api.mjs';
 import { hasChat } from '../capabilities.mjs';
@@ -10,9 +13,10 @@ import { Fiches } from './fiches.mjs';
 import { Inbox } from './inbox.mjs';
 import { Chat } from './chat.mjs';
 
-// Resolved once at module load — the métier never changes without a page reload, and both
-// the auth redirect_uri and the header title need it before the first render.
-const METIER = resolveMetier(location.search);
+// The raw ?m= tag (or 'clients' when absent) — ALL the auth redirect needs, and stable for
+// the whole session regardless of what appRegistry later resolves it to (see config.mjs's
+// header comment: it must round-trip a tag the registry does not recognise, not rewrite it).
+const REDIRECT_KEY = urlKey(location.search);
 const EXPIRED_NOTE = 'Session expirée — reconnecte-toi.';
 
 // The conductor (A-series wiring): boots the session, drives the login/tabs screen switch,
@@ -20,7 +24,11 @@ const EXPIRED_NOTE = 'Session expirée — reconnecte-toi.';
 // log) — navigation (history.replaceState, location.href) lives HERE, deliberately never
 // inside auth.mjs, which stays pure injected-effect logic (see its header comment).
 export function App() {
-  const [screen, setScreen] = useState('boot'); // 'boot' | 'login' | 'offline' | 'tabs'
+  // Phase 1 (appRegistry.mjs): the cached guess, worn until the boot effect's phase-2 fetch
+  // (or refusal) corrects it. index.html already painted the SAME guess into the document
+  // head before this component ever mounted — this is the in-app half of that identity.
+  const [metier, setMetier] = useState(() => resolveCached(location.search));
+  const [screen, setScreen] = useState('boot'); // 'boot' | 'login' | 'offline' | 'refused' | 'tabs'
   const [note, setNote] = useState('');
   const [tab, setTab] = useState('fiches'); // 'fiches' | 'inbox' | 'chat'
   const [count, setCount] = useState(''); // header count slot — set per-tab in Tasks 6–7
@@ -40,7 +48,7 @@ export function App() {
     authRef.current = createAuth({
       kc: kcBase(location),
       clientId: 'lumnik-spa',
-      redirect: redirectUri(location, METIER.key),
+      redirect: redirectUri(location, REDIRECT_KEY),
       storage: sessionStorage,
       fetchFn: fetch,
       now: Date.now,
@@ -59,10 +67,9 @@ export function App() {
       fetchFn: fetch,
     });
   }
+  // Deferred behind phase 2 (below): it needs the AUTHORITATIVE scope, not the phase-1 guess,
+  // so it is built once inside the boot effect rather than eagerly here.
   const viewsRef = useRef(null);
-  if (!viewsRef.current) {
-    viewsRef.current = createViews(apiRef.current, METIER.scope);
-  }
 
   function scheduleRenewal() {
     clearTimeout(renewTimerRef.current);
@@ -84,7 +91,7 @@ export function App() {
       if (params.has('code')) {
         try {
           await auth.exchange(params.get('code'));
-          history.replaceState(null, '', redirectUri(location, METIER.key)); // strip ?code
+          history.replaceState(null, '', redirectUri(location, REDIRECT_KEY)); // strip ?code
         } catch (e) {
           setNote(e.message);
         }
@@ -92,6 +99,32 @@ export function App() {
       const state = auth.bootState();
       if (state === 'live') {
         scheduleRenewal();
+        // Phase 2: the authoritative registry. A failure here (network blip, CORS, a 5xx)
+        // is 'offline' — the app cannot know its own scope, so it must not guess its way
+        // into tabs. A refusal (unknown tag, or out-of-scope — the server does not
+        // distinguish the two) is 'refused', never a fallthrough to another métier.
+        try {
+          const entries = await apiRef.current.json('/api/apps', { method: 'GET' });
+          cacheRegistry(entries);
+          const resolved = resolveFromRegistry(entries, location.search);
+          if (resolved.screen === 'refused') {
+            // The phase-1 guess must not linger in the head under a body that says
+            // "Application inconnue" — resolveFromRegistry hands back the same neutral
+            // identity phase 1 falls back to, so this wears it without a second copy.
+            applyIdentity(resolved.entry);
+            applyTheme(resolved.entry);
+            setScreen('refused');
+            return;
+          }
+          setMetier(resolved.entry);
+          applyIdentity(resolved.entry);
+          applyTheme(resolved.entry);
+          viewsRef.current = createViews(apiRef.current, resolved.entry.scope);
+        } catch (e) {
+          if (e && e.kind === 'auth') return; // onAuthLost already set screen to 'login'
+          setScreen('offline');
+          return;
+        }
         setScreen('tabs');
         // C3: quiet badge refresh at boot — fire the inbox GET once on entering tabs, without
         // visiting the tab, so the ⚡ badge shows what waits from the first frame.
@@ -125,7 +158,7 @@ export function App() {
 
   return html`
     <header>
-      <h1>${METIER.title}</h1>
+      <h1>${metier.title}</h1>
       <span class="count">${count}</span>
       ${claims
         ? html`<span class="who" title="Se déconnecter" onClick=${onLogout}>${(claims.preferred_username || '') + ' ⏻'}</span>`
@@ -138,10 +171,14 @@ export function App() {
         <p>Hors ligne — tes données reviendront avec le réseau.</p>
         <button class="primary" onClick=${() => location.reload()}>Réessayer</button>
       </div>` : null}
+      ${screen === 'refused' ? html`<div class="center">
+        <span class="glyph">🚫</span>
+        <p>Application inconnue — vérifie le lien ou contacte ton intégrateur.</p>
+      </div>` : null}
       ${screen === 'login' ? html`<${Login} note=${note} onLogin=${onLogin} />` : null}
       ${screen === 'tabs' && tab === 'fiches' ? html`<${Fiches} views=${viewsRef.current} onCount=${setCount} />` : null}
       ${screen === 'tabs' && tab === 'inbox' ? html`<${Inbox} api=${apiRef.current} onBadge=${setBadge} />` : null}
-      ${screen === 'tabs' && tab === 'chat' ? html`<${Chat} api=${apiRef.current} scope=${METIER.scope} log=${chatLog} setLog=${setChatLog} available=${chatAvailable} onOpenFiches=${() => goTab('fiches')} />` : null}
+      ${screen === 'tabs' && tab === 'chat' ? html`<${Chat} api=${apiRef.current} scope=${metier.scope} log=${chatLog} setLog=${setChatLog} available=${chatAvailable} onOpenFiches=${() => goTab('fiches')} />` : null}
     </main>
     ${screen === 'tabs' ? html`<${TabBar} tab=${tab} onTab=${goTab} badge=${badge} />` : null}
   `;

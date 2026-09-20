@@ -3,6 +3,10 @@ site_description: Defrost the enterprise — deploy the hub, connect a legacy so
 site_url: https://docs.lumnik.io/
 docs_dir: docs
 
+validation:
+  links:
+    anchors: warn
+
 theme:
   name: material
   # overrides/main.html adds the Umami analytics tag (cookieless — no consent
@@ -113,6 +117,7 @@ nav:
     - The five guards: transparency/ask-honesty.md
     - Scopes: rag/scopes.md
     - Models & providers: rag/models.md
+    - Advanced provider configuration: rag/providers-advanced.md
     - HTTP API: rag/http-api.md
   - Apps (the ladder):
     - Views — see: apps/views.md

@@ -1,6 +1,7 @@
 package io.lumnik.hub.entity;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -25,27 +26,55 @@ public class EntityViewCompiler {
   @DataSource("admin")
   AgroalDataSource adminDs;
 
-  /** Run DROP/CREATE/GRANT + manifest UPSERT atomically on the admin (BYPASSRLS) datasource. */
-  public void apply(EntityManifest m, String yaml) {
+  /**
+   * Run DROP/CREATE/GRANT + manifest UPSERT atomically on the admin (BYPASSRLS) datasource,
+   * refusing to overwrite a name whose stored scopes the caller's grants do not all reach.
+   *
+   * <p>{@code callerScopes} is an authorization predicate, not a filter ({@code null} = unscoped
+   * caller, tenant-wide); {@link ScopeGuardedUpsert} says why the door's earlier check is not enough
+   * on its own, and do not "simplify" this one away on the grounds that the door already asked.
+   *
+   * <p><b>Containment, not membership</b>, and a non-empty stored array — the SQL twin of
+   * {@code ScopeGrants.allowsAll}, which this door asks rather than {@code allowsAny}: taking over a
+   * manifest tagged {@code [clients, magasin]} while holding only {@code clients} publishes into
+   * magasin. {@code '{}' <@ anything} is true, so the {@code cardinality} clause is what keeps a
+   * scopeless manifest out of a bound caller's reach — the same rule that stops them creating one.
+   *
+   * <p><b>The guarded upsert runs FIRST, before the DDL.</b> Order inside one transaction is
+   * invisible from outside — a refusal would roll the DROP/CREATE VIEW back either way — but taken
+   * first it costs one statement instead of five, and does not take an ACCESS EXCLUSIVE lock on the
+   * view name only to hand it straight back. The manifest row is not read by the view it compiles,
+   * so nothing here depends on the old order.
+   */
+  public ScopeGuardedUpsert apply(EntityManifest m, String yaml, Set<String> callerScopes) {
     try (Connection c = adminDs.getConnection()) {
       boolean prevAuto = c.getAutoCommit();
       c.setAutoCommit(false);
       try {
+        // The predicate reads the EXISTING row — which in a DO UPDATE is the one spelled with the
+        // table name, `excluded` being the row we proposed.
+        try (var ps = c.prepareStatement(
+            "INSERT INTO connector.entity_manifest (name, yaml_text, scopes) VALUES (?, ?, ?) "
+            + "ON CONFLICT (name) DO UPDATE SET yaml_text = EXCLUDED.yaml_text, "
+            + "scopes = EXCLUDED.scopes, updated_at = now() "
+            + "WHERE (?::text[] IS NULL OR (connector.entity_manifest.scopes <@ ?::text[] "
+            + "AND cardinality(connector.entity_manifest.scopes) > 0))")) {
+          ps.setString(1, m.name().toLowerCase(Locale.ROOT));
+          ps.setString(2, yaml);
+          ps.setArray(3, c.createArrayOf("text", m.scopes().toArray()));
+          ScopeGuardedUpsert.bindGrants(ps, 4, callerScopes);
+          if (ps.executeUpdate() == 0) {
+            c.rollback();
+            return new ScopeGuardedUpsert.NameHeldOutOfScope();
+          }
+        }
         for (String sql : buildStatements(m)) {
           try (Statement st = c.createStatement()) {
             st.execute(sql);
           }
         }
-        try (var ps = c.prepareStatement(
-            "INSERT INTO connector.entity_manifest (name, yaml_text, scopes) VALUES (?, ?, ?) "
-            + "ON CONFLICT (name) DO UPDATE SET yaml_text = EXCLUDED.yaml_text, "
-            + "scopes = EXCLUDED.scopes, updated_at = now()")) {
-          ps.setString(1, m.name().toLowerCase(Locale.ROOT));
-          ps.setString(2, yaml);
-          ps.setArray(3, c.createArrayOf("text", m.scopes().toArray()));
-          ps.executeUpdate();
-        }
         c.commit();
+        return new ScopeGuardedUpsert.Applied();
       } catch (Exception e) {
         c.rollback();
         throw e;

@@ -77,14 +77,24 @@ func newProcessCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(apply, list, rm,
-		toggleCmd("enable", true, "Turn a process back on"),
-		toggleCmd("disable", false, "Stop a process firing, keeping its manifest"))
+		toggleCmd("process", "enable", true, "Turn a process back on", processSetEnabled),
+		toggleCmd("process", "disable", false, "Stop a process firing, keeping its manifest", processSetEnabled))
 	return cmd
 }
 
-// toggleCmd builds `lm process enable|disable <name>` — one shape, so the two verbs cannot drift
-// apart in flags, output or error handling.
-func toggleCmd(verb string, enabled bool, short string) *cobra.Command {
+func processSetEnabled(c *client.Client, name string, enabled bool) (string, bool, error) {
+	out, err := c.ProcessSetEnabled(name, enabled)
+	if err != nil {
+		return "", false, err
+	}
+	return out.Name, out.Enabled, nil
+}
+
+// toggleCmd builds `lm <noun> enable|disable <name>` — one shape shared by every kind that
+// carries an `enabled` column, so the two verbs cannot drift apart in flags, output or error
+// handling, and a second kind (kind:Workflow, #507) does not fork its own copy.
+func toggleCmd(noun, verb string, enabled bool, short string,
+	setEnabled func(c *client.Client, name string, enabled bool) (string, bool, error)) *cobra.Command {
 	return &cobra.Command{
 		Use:   verb + " <name>",
 		Short: short,
@@ -94,11 +104,11 @@ func toggleCmd(verb string, enabled bool, short string) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			out, err := c.ProcessSetEnabled(args[0], enabled)
+			name, gotEnabled, err := setEnabled(c, args[0], enabled)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "process %s enabled=%t\n", out.Name, out.Enabled)
+			fmt.Fprintf(cmd.OutOrStdout(), "%s %s enabled=%t\n", noun, name, gotEnabled)
 			return nil
 		},
 	}

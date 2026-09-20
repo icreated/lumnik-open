@@ -44,14 +44,36 @@ Subcommands manage the saved-view store: list, get, apply, generate.`,
 	cmd.Flags().StringArrayVar(&filters, "filter", nil,
 		"filter rows: col=value (exact), col~text (contains), col>v col<v col>=v col<=v (number/ISO date); repeatable (AND)")
 	_ = cmd.MarkFlagRequired("file")
-	// Accepted collision: a detail KEY literally named "generate", "list", "get", or "apply"
-	// now routes to the subcommand (cobra resolves subcommands before positionals); no real
-	// key is named that.
+	// Accepted collision: a detail KEY literally named "generate", "list", "get", "apply", or
+	// "rm" now routes to the subcommand (cobra resolves subcommands before positionals); no
+	// real key is named that.
 	cmd.AddCommand(newViewGenerateCmd())
 	cmd.AddCommand(newViewListCmd())
 	cmd.AddCommand(newViewGetCmd())
 	cmd.AddCommand(newViewApplyCmd())
+	cmd.AddCommand(newViewRmCmd())
 	return cmd
+}
+
+// newViewRmCmd deletes one saved view for good — the delete gesture #487 gave kind:Process,
+// missing here (#507).
+func newViewRmCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "rm <name>",
+		Short: "Delete a saved view for good",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := ClientFromCmd(cmd)
+			if err != nil {
+				return err
+			}
+			if err := c.ViewDelete(args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "view %s deleted\n", args[0])
+			return nil
+		},
+	}
 }
 
 // newViewListCmd lists the saved views visible to the caller (optionally narrowed to one

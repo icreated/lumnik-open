@@ -132,6 +132,22 @@ class AbstentionSignpostTest {
     }
 
     @Test
+    void signpost_composes_onto_any_dead_end_sentence_not_only_cannot_answer() {
+        // SqlGuard rejection and ZeroRowGuard.CAVEAT are just as structurally true as NO_ANSWER
+        // (#527) — signpost() is the mechanism cannotAnswer() itself is built from.
+        String base = "I couldn't translate that into a safe query.";
+
+        AbstentionGuard.Abstention a =
+            guard.signpost(base, true, guard.hasAFusedEntity(cardOf("connector.v_customer")));
+
+        assertThat(a.answer()).startsWith(base);
+        assertThat(a.answer())
+            .contains(AbstentionGuard.LIFECYCLE_SIGNPOST)
+            .endsWith(AbstentionGuard.CONFLICTS_SIGNPOST);
+        assertThat(a.otherDoors()).containsExactly(AskResult.DOOR_LIFECYCLE, AskResult.DOOR_CONFLICTS);
+    }
+
+    @Test
     void isCannotAnswer_recognises_the_abstention_with_and_without_its_signposts() {
         assertThat(guard.isCannotAnswer(AbstentionGuard.CANNOT_ANSWER_MESSAGE)).isTrue();
         assertThat(guard.isCannotAnswer(guard.cannotAnswer(true, guard.hasAFusedEntity(cardOf("connector.v_customer"))).answer()))

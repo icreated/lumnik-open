@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,6 +23,38 @@ func TestDescribeConnectorType_unknownKind_errors(t *testing.T) {
 	_, err := c.DescribeConnectorType("nope")
 	if err == nil {
 		t.Fatal("expected error on unknown kind")
+	}
+}
+
+// -o is a persistent root flag, so `lm describe connector-type` accepted -o json and ignored
+// it, always printing the tree rendering instead (#532).
+func TestDescribeConnectorTypeHonoursJson(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"fields":[{"name":"base_url","type":"STRING","importance":"HIGH","required":true,"doc":"Base URL"}]}`))
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"describe", "connector-type", "rest-generic", "-o", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	var got struct {
+		Fields []struct {
+			Name     string `json:"name"`
+			Required bool   `json:"required"`
+		} `json:"fields"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("-o json must emit parseable JSON, got %q: %v", buf.String(), err)
+	}
+	if len(got.Fields) != 1 || got.Fields[0].Name != "base_url" || !got.Fields[0].Required {
+		t.Fatalf("the config def lost its shape: %+v", got.Fields)
 	}
 }
 

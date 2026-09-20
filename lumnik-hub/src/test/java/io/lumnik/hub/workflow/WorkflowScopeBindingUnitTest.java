@@ -287,4 +287,41 @@ class WorkflowScopeBindingUnitTest {
 
         assertThat(res.manifest("commande").getStatus()).isEqualTo(200);
     }
+
+    // ---- disable and delete: the two gestures #487 gave kind:Process, missing here (#507) ----
+
+    @Test
+    void delete_and_enabled_of_a_foreign_scope_are_refused() {
+        // Answered BEFORE touching the row, so a bound integrator cannot learn that 'facture'
+        // exists by trying to remove it — the same boundary the manifest door already draws.
+        bindTo("magasin");
+        WorkflowApplyResource res = new WorkflowApplyResource();
+        res.store = storeWith(row("facture", "compta"));
+
+        Response deleted = res.delete("facture");
+        Response toggled = res.setEnabled("facture", new WorkflowApplyResource.EnabledRequest(false));
+
+        assertThat(deleted.getStatus()).isEqualTo(403);
+        assertThat(errorOf(deleted)).isEqualTo("scope not granted");
+        assertThat(toggled.getStatus()).isEqualTo(403);
+        assertThat(errorOf(toggled)).isEqualTo("scope not granted");
+    }
+
+    @Test
+    void delete_and_enabled_of_an_unknown_workflow_are_404_not_403() {
+        bindTo("magasin");
+        WorkflowApplyResource res = new WorkflowApplyResource();
+        res.store = storeWith();
+
+        assertThat(res.delete("nope").getStatus()).isEqualTo(404);
+        assertThat(res.setEnabled("nope", new WorkflowApplyResource.EnabledRequest(true)).getStatus())
+            .isEqualTo(404);
+    }
+
+    @Test
+    void enabled_without_a_flag_is_refused_before_the_store_is_touched() {
+        bindTo("magasin");
+        // No store wired: a 400 here proves the body check runs first.
+        assertThat(new WorkflowApplyResource().setEnabled("commande", null).getStatus()).isEqualTo(400);
+    }
 }

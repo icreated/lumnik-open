@@ -50,6 +50,11 @@ func newRagCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// -o is a persistent root flag, so it arrives here whether or not this command looks
+			// at it — see source_schema.go.
+			if format, _ := cmd.Flags().GetString("output"); format != "table" {
+				return output.PrintObject(cmd.OutOrStdout(), format, st)
+			}
 			cmd.Printf("corpus_size: %d\nlast_reindex: %s\n", st.CorpusSize, st.LastReindex)
 			return nil
 		},

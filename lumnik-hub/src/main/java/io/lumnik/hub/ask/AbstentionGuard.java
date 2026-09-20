@@ -73,7 +73,19 @@ public class AbstentionGuard {
      * public so the caller can ask it — and so it can be tested — but the rendering stays pure.
      */
     public Abstention cannotAnswer(boolean scopeDeclaresALifecycle, boolean scopeHasAFusedEntity) {
-        StringBuilder answer = new StringBuilder(CANNOT_ANSWER_MESSAGE);
+        return signpost(CANNOT_ANSWER_MESSAGE, scopeDeclaresALifecycle, scopeHasAFusedEntity);
+    }
+
+    /**
+     * {@link #cannotAnswer} generalised to any dead-end sentence: the SqlGuard-rejection and
+     * {@code ZeroRowGuard.CAVEAT} refusals reach the same two structural reasons the model's own
+     * {@link #SENTINEL} exit does — the schema has nothing to answer from, or nothing runnable came
+     * of it — and the doors are just as true there (#527). {@link #isCannotAnswer}'s prefix match
+     * stays bound to {@link #CANNOT_ANSWER_MESSAGE} only; gaining a door does not make the other two
+     * dead ends into that abstention.
+     */
+    public Abstention signpost(String baseMessage, boolean scopeDeclaresALifecycle, boolean scopeHasAFusedEntity) {
+        StringBuilder answer = new StringBuilder(baseMessage);
         List<String> doors = new ArrayList<>(2);
         if (scopeDeclaresALifecycle) { answer.append(LIFECYCLE_SIGNPOST); doors.add(DOOR_LIFECYCLE); }
         if (scopeHasAFusedEntity)    { answer.append(CONFLICTS_SIGNPOST); doors.add(DOOR_CONFLICTS); }
@@ -81,7 +93,10 @@ public class AbstentionGuard {
     }
 
     /**
-     * The abstention in the two shapes its readers need — {@link AskResult} says why there are two.
+     * A signposted dead end in the two shapes its readers need — {@link AskResult} says why there
+     * are two. Not only the model's own abstention: SqlGuard rejection and {@code
+     * ZeroRowGuard.CAVEAT} reach {@link #signpost} directly, so "abstention" here names the shape
+     * of the refusal, not only the {@link #SENTINEL} exit.
      *
      * <p>ONE method builds both, appending the signpost and adding its token in the same branch:
      * the shape that makes them unable to drift. Two methods reading the same two booleans would

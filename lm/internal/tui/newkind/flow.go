@@ -31,6 +31,8 @@ func ClassifyManifest(yamlText string) (class string, kind string, err error) {
 		return "process", k, nil
 	case "Workflow":
 		return "workflow", k, nil
+	case "App":
+		return "app", k, nil
 	}
 	return "", k, nil
 }

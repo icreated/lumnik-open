@@ -137,6 +137,9 @@ func newDlqCmd() *cobra.Command {
 				return err
 			}
 			w := cmd.OutOrStdout()
+			if format, _ := cmd.Flags().GetString("output"); format != "table" {
+				return output.PrintObject(w, format, dl)
+			}
 			fmt.Fprintf(w, "ID:        %s\n", dl.ID)
 			fmt.Fprintf(w, "Connector: %s\n", dl.ConnectorNameAndID())
 			fmt.Fprintf(w, "Run:       %s\n", dl.RunID)

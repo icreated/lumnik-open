@@ -65,6 +65,7 @@ public final class ScopeGrants {
     }
 
     /** Empty = unscoped user (tenant-wide); present = the bound set, prefix stripped. */
+    @ScopeDecision
     public static Optional<Set<String>> granted() {
         Set<String> scopes = CurrentRolesHolder.get().stream()
             .filter(r -> r.startsWith(PREFIX))
@@ -74,6 +75,7 @@ public final class ScopeGrants {
     }
 
     /** May this user read the named scope? Unscoped: always; a null scope is denied when bound. */
+    @ScopeDecision
     public static boolean allows(String scope) {
         return granted().map(g -> scope != null && g.contains(scope)).orElse(true);
     }
@@ -82,6 +84,7 @@ public final class ScopeGrants {
      * May this user read a resource carrying these scope tags? Unscoped: always.
      * Bound: needs a non-empty intersection — a scopeless resource is invisible.
      */
+    @ScopeDecision
     public static boolean allowsAny(Collection<String> scopes) {
         return granted()
             .map(g -> scopes != null && scopes.stream().anyMatch(g::contains))
@@ -99,6 +102,7 @@ public final class ScopeGrants {
      * resource someone else tagged with one of your scopes is fine; creating one that lands in a
      * scope you were never granted is escalation.
      */
+    @ScopeDecision
     public static boolean allowsAll(Collection<String> scopes) {
         return granted()
             .map(g -> scopes != null && !scopes.isEmpty() && g.containsAll(scopes))

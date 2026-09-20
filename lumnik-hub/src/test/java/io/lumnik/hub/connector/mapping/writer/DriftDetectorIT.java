@@ -27,4 +27,25 @@ class DriftDetectorIT {
         Map.of("mapping_id", "TEXT"));
     assertThat(warnings).isEmpty();
   }
+
+  /**
+   * #525 — the physical truth {@code DynamicTableWriter.createSchema} reconciles against instead
+   * of a chunk's own fresh inference. Types must come back in the same DDL vocabulary
+   * {@code SchemaInferrer} emits, not {@code information_schema}'s own spelling.
+   */
+  @Test
+  void actualSchema_translatesPhysicalTypesIntoTheRegistrysDdlVocabulary() {
+    var actual = detector.actualSchema("connector", "dynamic_table");
+
+    assertThat(actual).isNotNull();
+    assertThat(actual.get("table_name")).isEqualTo("TEXT");
+    assertThat(actual.get("tenant_id")).isEqualTo("BIGINT");
+    assertThat(actual.get("schema_inferred")).isEqualTo("JSONB");
+    assertThat(actual.get("created_at")).isEqualTo("TIMESTAMPTZ");
+  }
+
+  @Test
+  void actualSchema_isNullWhenTheTableDoesNotExist() {
+    assertThat(detector.actualSchema("connector", "table_that_does_not_exist_525")).isNull();
+  }
 }

@@ -106,8 +106,8 @@ class WorkflowApplyIT {
             .contentType("application/yaml").body(YAML.replace("scope: demo", "scope: demo\n  scop: x"))
             .when().post("/api/workflows/apply")
             .then().statusCode(400)
-            .body("error", containsString("spec.scop"))
-            .body("error", containsString("honors"));
+            .body("error", equalTo("unknown key(s) in the manifest: spec.scop — kind:Workflow honors "
+                + WorkflowManifestParser.honoredSurface()));
     }
 
     @Test
@@ -243,5 +243,67 @@ class WorkflowApplyIT {
             .contentType("application/yaml").body(CROSS_SCOPE_YAML)
             .when().post("/api/workflows/apply")
             .then().statusCode(200);
+    }
+
+    // ── Disable and delete: the two gestures #487 gave kind:Process, missing here (#507) ─
+
+    private static final String DISABLE_YAML = YAML
+        .replace("name: wf-apply-it", "name: wf-disable-it")
+        .replace("connector.t_wf_apply_it", "connector.t_wf_disable_it");
+
+    @Test
+    @Order(20)
+    void disableStopsItListingAsEnabledAndEnablePutsItBack() {
+        asIntegrator().contentType("application/yaml").body(DISABLE_YAML)
+            .post("/api/workflows/apply").then().statusCode(200);
+
+        asIntegrator().contentType("application/json").body("{\"enabled\": false}")
+            .when().put("/api/workflows/wf-disable-it/enabled")
+            .then().statusCode(200).body("enabled", is(false));
+
+        asIntegrator().when().get("/api/workflows")
+            .then().body("find { it.name == 'wf-disable-it' }.enabled", is(false));
+
+        asIntegrator().contentType("application/json").body("{\"enabled\": true}")
+            .put("/api/workflows/wf-disable-it/enabled").then().statusCode(200);
+        asIntegrator().when().get("/api/workflows")
+            .then().body("find { it.name == 'wf-disable-it' }.enabled", is(true));
+    }
+
+    private static final String DELETE_YAML = YAML
+        .replace("name: wf-apply-it", "name: wf-delete-it")
+        .replace("connector.t_wf_apply_it", "connector.t_wf_delete_it");
+
+    @Test
+    @Order(21)
+    void deleteRemovesItAndTheSecondDeleteIs404() {
+        asIntegrator().contentType("application/yaml").body(DELETE_YAML)
+            .post("/api/workflows/apply").then().statusCode(200);
+
+        asIntegrator().when().delete("/api/workflows/wf-delete-it")
+            .then().statusCode(204);
+
+        asIntegrator().when().get("/api/workflows")
+            .then().body("findAll { it.name == 'wf-delete-it' }", hasSize(0));
+
+        // An unknown name is the same 404 the manifest door answers — one boundary, one word.
+        asIntegrator().when().delete("/api/workflows/wf-delete-it")
+            .then().statusCode(404).body("error", containsString("wf-delete-it"));
+    }
+
+    @Test
+    @Order(22)
+    void enabledWithoutABody_400() {
+        asIntegrator().contentType("application/yaml").body(DISABLE_YAML)
+            .post("/api/workflows/apply").then().statusCode(200);
+        asIntegrator().contentType("application/json").body("{}")
+            .when().put("/api/workflows/wf-disable-it/enabled")
+            .then().statusCode(400).body("error", containsString("enabled"));
+    }
+
+    @Test
+    @Order(23)
+    void deleteWithoutTenant_401() {
+        given().when().delete("/api/workflows/wf-disable-it").then().statusCode(401);
     }
 }

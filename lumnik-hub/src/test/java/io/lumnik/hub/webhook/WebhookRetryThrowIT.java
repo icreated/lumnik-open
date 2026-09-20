@@ -69,7 +69,7 @@ class WebhookRetryThrowIT {
 
     @Test
     void aThrowingRetryStillCountsTheAttemptAndCapsAtThree() {
-        when(deliveryService.deliver(any(), any(), any()))
+        when(deliveryService.deliver(any(), any(), any(), any()))
             .thenThrow(new RuntimeException("boom"));
         seedEndpointAndRetryableDelivery();
 
@@ -79,7 +79,7 @@ class WebhookRetryThrowIT {
 
         assertEquals(0, countRetryable(),
             "a row that throws on every retry must cap at attempts=3, not loop forever");
-        verify(deliveryService, times(2)).deliver(any(), any(), any());
+        verify(deliveryService, times(2)).deliver(any(), any(), any(), any());
     }
 
     @Transactional
@@ -109,7 +109,7 @@ class WebhookRetryThrowIT {
 
     @Test
     void aThrowingRetryClearsStaleHttpFields() {
-        when(deliveryService.deliver(any(), any(), any()))
+        when(deliveryService.deliver(any(), any(), any(), any()))
             .thenThrow(new RuntimeException("boom"));
         seedEndpointAndStaleDelivery();
 

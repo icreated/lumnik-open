@@ -15,10 +15,10 @@ are never written to. [Deploy it](deploy.md).
 request shapes on the same REST engine — plus Kafka for inbound events.
 [Overview](connectors/index.md).
 
-**Manifest / `kind:`** — the YAML you `lm apply`. Five kinds across two families:
-`Connector` and `Entity` describe ingestion and fusion; `View`, `Process` and
+**Manifest / `kind:`** — the YAML you `lm apply`. Six kinds across two families:
+`Connector` and `Entity` describe ingestion and fusion; `View`, `App`, `Process` and
 `Workflow` build the [app ladder](apps/views.md). [How lumnik works](how-it-works.md)
-maps all five in one place.
+maps all six in one place.
 
 **Endpoint** — one queryable surface inside a connector (a table, a file, a REST
 resource). A run fans out over the connector's enabled endpoints, and the scheduler,
@@ -100,6 +100,12 @@ business decision. [Ask honesty](transparency/ask-honesty.md).
 **View (`kind: View`)** — a saved, server-side description of what a métier sees: a
 table, its columns, filters. The PWA and `lm` discover views from the hub — writes are
 curated, reads are scope-bound. [Views](apps/views.md).
+
+**App (`kind: App`)** — a métier application's own identity, declared instead of compiled: its
+title, the scope it reads through, one identifier from the curated icon set, and its accent/background
+theme. Applied by an integrator and discovered by the PWA at load, so a temporary sales-event or
+crisis app can exist without a product build. Exactly one app carries the default flag — the one a
+bare `/app/` opens.
 
 **Process (`kind: Process`)** — a declarative reaction: when data matching a
 condition arrives, notify. Refusable by design, like everything on the ladder.

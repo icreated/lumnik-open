@@ -18,7 +18,7 @@ Full walkthroughs: [Deploy](deploy.md) · [Reading the logs](recipes/logs.md).
 | # | Command | What it does |
 |---|---|---|
 | 1 | `lm login` | authenticate once; `lm` remembers the context |
-| 2 | `lm validate -f FILE` | dry-run a **`kind: Connector`** manifest without applying — errors field by field. The other four kinds have no dry-run: their checks happen at apply, which refuses rather than half-writes |
+| 2 | `lm validate -f FILE` | dry-run a **`kind: Connector`** manifest without applying — errors field by field. The other five kinds have no dry-run: their checks happen at apply, which refuses rather than half-writes |
 | 3 | `lm apply -f FILE` | apply a connector manifest (upsert) |
 | 4 | `lm connector run NAME` | run it now |
 | 5 | `lm run list --connector NAME` | the run ledger — records in/out/skip at a glance |

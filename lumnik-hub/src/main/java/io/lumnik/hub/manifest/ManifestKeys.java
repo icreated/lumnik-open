@@ -68,4 +68,18 @@ public final class ManifestKeys {
         JsonNode n = node.path(field);
         return n.isMissingNode() || n.isNull() ? null : n.asText();
     }
+
+    /**
+     * Reads a scalar text field and refuses it if missing, explicit null, or blank — the one
+     * mandatory-field message shape every app-ladder parser should speak, sibling to {@link #text}.
+     * Not every "required" check reduces to this: a field whose message also explains WHY, or that
+     * carries a second rule fused into the same sentence, stays its own inline check in the parser
+     * (see the design doc's "Message drift" section for which ones and why).
+     */
+    public static String requiredText(JsonNode node, String field, String path) {
+        String value = text(node, field);
+        if (value == null || value.isBlank())
+            throw new IllegalArgumentException(path + " is required");
+        return value;
+    }
 }

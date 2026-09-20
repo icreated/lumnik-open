@@ -4,6 +4,7 @@ import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.api.ApiErrors;
 import jakarta.inject.Inject;
+import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
@@ -55,5 +56,29 @@ public class SavedViewsResource {
       return ApiErrors.scopeNotGranted();
     }
     return Response.ok(row.get().yaml(), "application/yaml").build();
+  }
+
+  /**
+   * Removes one saved view for good — the delete gesture #487 gave kind:Process, missing here
+   * (#507). A mutation, so it does not ride the class's read-only {@code lm_user} default.
+   * Scope-bound like {@link #get}: the 404 is answered from the stored scope BEFORE anything is
+   * touched, so a bound user cannot learn that a view they may not hold exists by deleting it.
+   *
+   * <p>Uses {@code findScope} rather than {@link #get}'s {@code find}: a delete has no yaml to
+   * return, so there is no reason to pull it off the row just to answer the boundary.
+   */
+  @DELETE
+  @Path("/{name}")
+  @RequiresPermission("lm_integrator")
+  public Response delete(@PathParam("name") String name) {
+    Optional<String> scope = store.findScope(name);
+    if (scope.isEmpty()) {
+      return ApiErrors.notFound("no saved view named '" + name + "'");
+    }
+    if (!ScopeGrants.allows(scope.get())) {
+      return ApiErrors.scopeNotGranted();
+    }
+    store.delete(name);
+    return Response.noContent().build();
   }
 }

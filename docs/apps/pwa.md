@@ -151,20 +151,42 @@ one command (`lm run list`, or the TUI's `:runs`).
 
 ### Add a métier
 
-A métier is an entry in the app's registry, not a deployment. Today the registry is
-part of the hub's baked-in app sources
-(`lumnik-hub/src/main/resources/META-INF/resources/app/`), so adding one is a source
-change plus a hub rebuild:
+A métier app's identity — its title, the scope it reads through, its icon and its
+accent/background colours — is something you *declare*, in a `kind: App` manifest
+applied with `lm app apply -f`. The hub validates and stores it; the PWA reads its
+whole registry live from `GET /api/apps` on every login. A métier is an entry in that
+registry, not a deployment — no hub rebuild, no PWA source change.
 
-1. **Manifest + icons** — `manifest-<tag>.json` (name, `start_url: /app/?m=<tag>`)
-   and its `icon-<tag>-192/512.png`.
-2. **Registry entry** — add `<tag>` to `METIERS` in `src/config.mjs` (scope, title,
-   manifest, icon).
-3. **Shell list** — add the new files to `SHELL` in `sw.js` and **bump `CACHE`**.
-4. **Server side** — apply at least one saved view for the scope
+```yaml
+kind: App
+apiVersion: apps.lumnik.io/v1
+metadata:
+  name: lumilait
+spec:
+  title: Lumilait
+  scope: lumilait
+  icon: generic
+  theme:
+    accentColor: "#4fd1a5"
+    backgroundColor: "#f4f1ea"
+  default: false
+```
+
+- **`icon`** — one of a curated set: `clients`, `stock`, `generic`, `event`, `alert`,
+  `contract`. There is no upload path for a custom icon; `generic` is the right choice
+  for a métier with no dedicated one.
+- **`theme`** — both colours are optional, defaulting to today's shared
+  `#8b7ff0`/`#14121f`. `accentColor` is contrast-checked (WCAG AA) because it doubles
+  as the chat bubble's background, not only its text colour.
+- **`default`** — the app an absent `?m=` resolves to. At most one manifest may hold
+  it; the apply door refuses to demote the current default without another manifest
+  promoting a replacement in the same apply.
+
+1. **Declare it** — `lm app apply -f app.yaml`.
+2. **Server side** — apply at least one saved view for the scope
    (`POST /api/views/apply`) and grant the users their `scope:<tag>` role in Keycloak.
 
-Without step 4 the app still opens — Fiches states that no view is applied, and
+Without step 2 the app still opens — Fiches states that no view is applied, and
 every scoped call refuses with the uniform 403.
 
 ## See also

@@ -2,6 +2,7 @@ package io.lumnik.hub.view;
 
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.http.ContentType;
+import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
 import static io.restassured.RestAssured.given;
@@ -22,6 +23,10 @@ import static org.hamcrest.Matchers.containsString;
 @QuarkusTest
 class SavedViewsResourceIT {
 
+  @Inject SavedViewStore store;
+
+  private static final String YAML = "apiVersion: apps.lumnik.io/v1\nkind: View\n";
+
   @Test
   void get_unknown_view_is_404_with_a_json_body_naming_it() {
     given().header("X-Tenant-Id", "1")
@@ -30,5 +35,25 @@ class SavedViewsResourceIT {
     .then().statusCode(404)
         .contentType(ContentType.JSON)
         .body("error", containsString("no-such-view"));
+  }
+
+  // ── Delete: the gesture #487 gave kind:Process, missing here (#507) ─
+
+  @Test
+  void deleteRemovesItAndTheSecondDeleteIs404() {
+    store.upsert("it-507-delete-desk", "clients", "To delete", YAML, null);
+
+    given().header("X-Tenant-Id", "1").when().delete("/api/views/it-507-delete-desk")
+    .then().statusCode(204);
+
+    given().header("X-Tenant-Id", "1")
+        .header("Accept", "application/yaml, application/json;q=0.9")
+    .when().get("/api/views/it-507-delete-desk")
+    .then().statusCode(404);
+
+    // An unknown name is the same 404 the get door answers — one boundary, one word.
+    given().header("X-Tenant-Id", "1").when().delete("/api/views/it-507-delete-desk")
+    .then().statusCode(404).contentType(ContentType.JSON)
+        .body("error", containsString("it-507-delete-desk"));
   }
 }

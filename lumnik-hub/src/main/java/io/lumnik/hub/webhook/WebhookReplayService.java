@@ -26,12 +26,15 @@ public class WebhookReplayService {
         try { payloadBody = mapper.writeValueAsString(payloadNode); }
         catch (Exception ex) { throw new InternalServerErrorException(ex); }
 
-        var r = deliveryService.deliver(ep, original.getEventType(), payloadBody);
+        var r = deliveryService.deliver(ep, original.getEventType(), original.getEventId(), payloadBody);
 
         WebhookDelivery rec = new WebhookDelivery();
         rec.setTenantId(original.getTenantId());
         rec.setEndpointId(ep.getId());
         rec.setEventType(original.getEventType());
+        // Carried from the original, not re-derived: a replay-of-a-replay must keep the same
+        // outbox event id all the way down the chain, so every attempt correlates to the same event.
+        rec.setEventId(original.getEventId());
         rec.setPayload(payloadNode);
         rec.setHttpStatus(r.httpStatus());
         rec.setResponseBody(r.responseBody());

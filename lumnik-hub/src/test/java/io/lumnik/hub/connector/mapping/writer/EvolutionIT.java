@@ -72,9 +72,8 @@ class EvolutionIT {
     later.put("email", "b@x.com");
     later.put("amount", new BigDecimal("42.5"));
     later.put("paid", Boolean.TRUE);
-    // java.sql.Timestamp, not Instant: SchemaInferrer types an Instant as TIMESTAMPTZ but
-    // pgJDBC's setObject cannot bind one at all ("Impossible de déduire le type SQL…"), so an
-    // Instant is unwritable today whichever chunk introduces it — a neighbour, not this defect.
+    // java.sql.Timestamp: what a live jdbc reader actually yields for a TIMESTAMPTZ column.
+    // Instant/ZonedDateTime are exercised directly in DynamicTableWriterIT (#506).
     later.put("seen", Timestamp.valueOf("2026-09-13 10:15:30"));
     later.put("label", "still text");
     writeChunk(spec, "t2_" + mappingId, later);

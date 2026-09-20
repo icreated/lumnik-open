@@ -43,15 +43,22 @@ ID    NAME  URL                                     EVENTS      ENABLED
 
 ### What arrives, and how to verify it
 
-One HTTP `POST` per event, JSON payload as in the registry, with two headers:
+One HTTP `POST` per event, JSON payload as in the registry, with three headers:
 
 ```
 X-Lumnik-Event: decision.commande-bloquee
+X-Lumnik-Event-Id: 3639
 X-Lumnik-Signature: sha256=<hex HMAC-SHA256 of the raw request body, keyed with your secret>
 ```
 
 Recompute the HMAC over the **raw body bytes** and compare — reject on mismatch. (n8n and
 Make have ready-made HMAC-verification nodes; point them at the `sha256=`-stripped value.)
+`X-Lumnik-Event-Id` is **not** covered by that signature — it rides alongside the signed
+body, so treat it as best-effort correlation, not as a verified claim. It carries the
+outbox event's own id, the same id `lm inbox` shows and a later ack echoes back as
+`annotation.decision.acked`'s `decision_id` — store a `decision.*` delivery keyed by this
+id and you can resolve its ack without asking lumnik again. A replay of a delivery
+carries the same id as the original attempt.
 
 ### Delivery semantics
 

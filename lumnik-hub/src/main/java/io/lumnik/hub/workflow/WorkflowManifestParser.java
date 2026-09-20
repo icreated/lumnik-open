@@ -1,19 +1,18 @@
 package io.lumnik.hub.workflow;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
+import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.manifest.ManifestKeys;
+import io.lumnik.hub.manifest.ManifestSurface;
 import io.lumnik.hub.sql.SqlIdentifiers;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeSet;
 
 /**
  * Parses a kind:Workflow YAML manifest — the declarative document lifecycle. Structural
@@ -24,7 +23,6 @@ import java.util.TreeSet;
  */
 public class WorkflowManifestParser {
 
-    private static final YAMLMapper MAPPER = new YAMLMapper();
     private static final String METADATA = "metadata";
 
     private static final Set<String> ROOT_KEYS = Set.of("apiVersion", "kind", METADATA, "spec");
@@ -36,16 +34,15 @@ public class WorkflowManifestParser {
     private static final Set<String> TRANSITION_KEYS = Set.of("from", "to");
     private static final Set<String> DORMANCY_KEYS = Set.of("after");
 
-    private static final Map<String, Set<String>> ALLOWED_BY_PATH = new LinkedHashMap<>();
-    static {
-        ALLOWED_BY_PATH.put("", ROOT_KEYS);
-        ALLOWED_BY_PATH.put(METADATA, METADATA_KEYS);
-        ALLOWED_BY_PATH.put("spec", SPEC_KEYS);
-        ALLOWED_BY_PATH.put("spec.on", ON_KEYS);
-        ALLOWED_BY_PATH.put("spec.dormancy", DORMANCY_KEYS);
-        ALLOWED_BY_PATH.put("spec.states[]", STATE_KEYS);
-        ALLOWED_BY_PATH.put("spec.transitions[]", TRANSITION_KEYS);
-    }
+    private static final ManifestSurface SURFACE = ManifestSurface.builder()
+        .group("", "root", ROOT_KEYS)
+        .group(METADATA, "metadata", METADATA_KEYS)
+        .group("spec", "spec", SPEC_KEYS)
+        .group("spec.on", "spec.on", ON_KEYS)
+        .group("spec.dormancy", "spec.dormancy", DORMANCY_KEYS)
+        .group("spec.states[]", "states[]", STATE_KEYS)
+        .group("spec.transitions[]", "transitions[]", TRANSITION_KEYS)
+        .build();
 
     /** What a workflow may watch — see {@link #requireWatchedTable}. {@code t_} is
      *  DynamicTableRegistry's ingest convention, {@code v_} an EntityViewCompiler fused view. */
@@ -72,7 +69,10 @@ public class WorkflowManifestParser {
      * which is what makes the split safe.
      */
     public WorkflowManifest parse(String yaml) {
-        JsonNode root = readTree(yaml);
+        return parse(readTree(yaml));
+    }
+
+    public WorkflowManifest parse(JsonNode root) {
         requireWorkflowKind(root);
         JsonNode meta = root.path(METADATA);
         JsonNode spec = root.path("spec");
@@ -97,9 +97,16 @@ public class WorkflowManifestParser {
     /** The declared states, with their codes normalized once for every later membership test. */
     private record Declared(List<WorkflowManifest.StateDef> states, Set<String> codes) {}
 
-    private JsonNode readTree(String yaml) {
+    /**
+     * Parses once, catching broadly (SnakeYAML/Jackson raise a mix of checked and unchecked
+     * failures for a null or malformed body — the existing message must fire for both; an empty
+     * or blank-only body does not throw here at all, {@link #parse(JsonNode)} refuses it with its
+     * ordinary "kind must be 'Workflow'" check instead). Package-visible so the door can call it
+     * once and reuse the node for both parse() and unknownKeys().
+     */
+    JsonNode readTree(String yaml) {
         try {
-            return MAPPER.readTree(yaml);
+            return SURFACE.readTree(yaml);
         } catch (Exception e) {
             throw new IllegalArgumentException("invalid kind:Workflow manifest: " + e.getMessage(), e);
         }
@@ -110,18 +117,25 @@ public class WorkflowManifestParser {
             throw new IllegalArgumentException("kind must be 'Workflow'");
     }
 
+    /**
+     * Split from the formerly-fused "metadata.name is required and must be a simple
+     * identifier..." sentence — a blank name and a malformed one are different rules and now get
+     * different messages (#579's message-drift table).
+     */
     private static String requireSimpleName(JsonNode meta) {
-        String name = ManifestKeys.text(meta, "name");
-        if (name == null || !name.matches("[a-z0-9-]+"))
+        String name = ManifestKeys.requiredText(meta, "name", "metadata.name");
+        if (!name.matches("[a-z0-9-]+"))
             throw new IllegalArgumentException(
-                "metadata.name is required and must be a simple identifier (a-z, 0-9, -): " + name);
+                "metadata.name must be a simple identifier (a-z, 0-9, -): " + name);
         return name;
     }
 
     private static String requireScope(JsonNode spec) {
-        String scope = ManifestKeys.text(spec, "scope");
-        if (scope == null || scope.isBlank())
-            throw new IllegalArgumentException("spec.scope is required");
+        String scope = ManifestKeys.requiredText(spec, "scope", "spec.scope");
+        // the tag becomes the case-sensitive Keycloak role scope:<tag> — the same rule
+        // AppManifestParser, ViewManifestParser, ScopesValidator and EntityManifestParser ask (#577).
+        ScopeGrants.nameProblem(scope)
+            .ifPresent(problem -> { throw new IllegalArgumentException("spec.scope: " + problem); });
         return scope;
     }
 
@@ -354,21 +368,18 @@ public class WorkflowManifestParser {
     public List<String> unknownKeys(String yaml) {
         JsonNode root;
         try {
-            root = MAPPER.readTree(yaml);
+            root = SURFACE.readTree(yaml);
         } catch (Exception e) {
             return List.of();
         }
-        return ManifestKeys.unknownKeys(root, ALLOWED_BY_PATH);
+        return unknownKeys(root);
+    }
+
+    public List<String> unknownKeys(JsonNode root) {
+        return SURFACE.unknownKeys(root);
     }
 
     public static String honoredSurface() {
-        return "root {" + sorted(ROOT_KEYS) + "}, metadata {" + sorted(METADATA_KEYS)
-            + "}, spec {" + sorted(SPEC_KEYS) + "}, spec.on {" + sorted(ON_KEYS)
-            + "}, spec.dormancy {" + sorted(DORMANCY_KEYS)
-            + "}, states[] {" + sorted(STATE_KEYS) + "}, transitions[] {" + sorted(TRANSITION_KEYS) + "}";
-    }
-
-    private static String sorted(Set<String> keys) {
-        return String.join(", ", new TreeSet<>(keys));
+        return SURFACE.honoredSurface();
     }
 }

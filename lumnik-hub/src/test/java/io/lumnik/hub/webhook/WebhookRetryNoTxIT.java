@@ -67,7 +67,7 @@ class WebhookRetryNoTxIT {
 
     @Test
     void deliverRunsWithNoTransactionHeld() {
-        when(deliveryService.deliver(any(), any(), any())).thenAnswer(inv -> {
+        when(deliveryService.deliver(any(), any(), any(), any())).thenAnswer(inv -> {
             txActiveAtDelivery.add(QuarkusTransaction.isActive());
             return WebhookDeliveryService.DeliveryResult.failure("stubbed", 0, 1);
         });

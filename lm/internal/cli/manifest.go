@@ -63,8 +63,11 @@ func rerunCommand(path string) string {
 	return "lm apply -f " + shellArg(path)
 }
 
-// decodeManifest reads a YAML manifest of the given kind ("connector", "hook") and refuses, in
-// the reader's own terms, anything that is not one.
+// decodeManifest reads a YAML connector manifest and refuses, in the reader's own terms,
+// anything that is not one. `connector apply` is its only caller — `hook apply` shared it too
+// until #610 removed hook mutation entirely, and a hardcoded "connector" lied at hook apply's
+// call site while the two shared one decoder; now there is only the one caller this hardcodes
+// for, honestly.
 //
 // The parse is the detector, deliberately: yaml.Unmarshal into a map fails exactly when the file
 // is not a mapping, and it is the same step that would have consumed the manifest. A peek at the
@@ -82,25 +85,21 @@ func rerunCommand(path string) string {
 // CSVs — so that error is handed back untouched. Swallowing it would have traded one unhelpful
 // message for another.
 //
-// The kind is a parameter because it must be: one shared decoder saying "connector" at
-// `lm hook apply` would be a message that lies at one site, which is worse than the two honest
-// duplicates it replaced.
-//
 // The bytes are read by the caller (readManifest) rather than here: a decoder that also opens the
 // file cannot be handed a manifest that arrived on stdin.
-func decodeManifest(data []byte, path, kind string) (map[string]any, error) {
+func decodeManifest(data []byte, path string) (map[string]any, error) {
 	var payload map[string]any
 	if err := yaml.Unmarshal(data, &payload); err != nil {
 		var shape *yaml.TypeError
 		if !errors.As(err, &shape) {
 			return nil, err // a syntax error in a real manifest: its line number is the message
 		}
-		return nil, notAManifest(path, data, kind, "YAML expects `key: value` lines")
+		return nil, notAManifest(path, data, "YAML expects `key: value` lines")
 	}
 	if len(payload) == 0 {
-		return nil, notAManifest(path, data, kind, "it is empty")
+		return nil, notAManifest(path, data, "it is empty")
 	}
-	if err := refuseManifestEnvelope(path, payload, kind); err != nil {
+	if err := refuseManifestEnvelope(path, payload); err != nil {
 		return nil, err
 	}
 	return payload, nil
@@ -117,10 +116,9 @@ func decodeManifest(data []byte, path, kind string) (map[string]any, error) {
 // told them it was the wrong door.
 //
 // An envelope (apiVersion or kind) is what tells the two apart: the flat payload has neither.
-// Only the connector side has somewhere to send them — `lm apply` posts the YAML untouched to the
-// endpoint that parses manifests — so only it offers the redirect. Elsewhere the diagnosis stands
-// alone rather than inventing a door.
-func refuseManifestEnvelope(path string, payload map[string]any, kind string) error {
+// `lm apply` posts the YAML untouched to the endpoint that parses manifests, so the redirect
+// names it directly.
+func refuseManifestEnvelope(path string, payload map[string]any) error {
 	envelope, _ := payload["kind"].(string)
 	if envelope == "" && payload["apiVersion"] == nil {
 		return nil
@@ -129,18 +127,16 @@ func refuseManifestEnvelope(path string, payload map[string]any, kind string) er
 	if envelope != "" {
 		msg += fmt.Sprintf(" (kind: %s)", envelope)
 	}
-	msg += fmt.Sprintf(", not the flat %s payload this command takes.", kind)
-	if kind == "connector" {
-		msg += fmt.Sprintf("\nTo apply a manifest: lm apply -f %s", shellArg(path))
-	}
+	msg += ", not the flat connector payload this command takes."
+	msg += fmt.Sprintf("\nTo apply a manifest: lm apply -f %s", shellArg(path))
 	return errors.New(msg)
 }
 
 // notAManifest says what happened, then — only if it can guess — what would have worked.
 // The guess never gates anything: when it is wrong or absent the refusal still stands, the reader
 // simply gets no tip.
-func notAManifest(path string, data []byte, kind, why string) error {
-	msg := fmt.Sprintf("%s is not a %s manifest: %s", manifestLabel(path), kind, why)
+func notAManifest(path string, data []byte, why string) error {
+	msg := fmt.Sprintf("%s is not a connector manifest: %s", manifestLabel(path), why)
 	if looksLikeCsv(path, data) {
 		msg += fmt.Sprintf("\nIt looks like a CSV — to ingest it: lm csv ingest %s --scope <scope>",
 			shellArg(path))

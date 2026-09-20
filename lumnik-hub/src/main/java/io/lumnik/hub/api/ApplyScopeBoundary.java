@@ -77,4 +77,42 @@ public final class ApplyScopeBoundary {
     public static void refuseUnlessCallerHoldsScope(Optional<String> storedScope) {
         refuseUnlessCallerHolds(storedScope.map(List::of));
     }
+
+    /**
+     * The same refusal, spoken by the WRITE rather than by the read before it. The two checks above
+     * are ORDERED — read the stored scope, then upsert — which is correct single-threaded and porous
+     * under concurrency; {@link ScopeGuardedUpsert} explains the window and how the store closes it.
+     * This is where the store's answer becomes the door's refusal.
+     *
+     * <p><b>It takes the outcome and returns {@code void}, for the reason the sibling above gives:</b>
+     * a door that received a value could write {@code store.upsert(…);} on a line of its own, drop
+     * the refusal on the floor, and still read like a guarded door. Consumed by a {@code void} call,
+     * the outcome cannot be had and ignored — the return type is the invariant, so no source sweep
+     * has to be invented to police what the type already forbids.
+     *
+     * <p>The words are {@link ScopeGrants#REFUSAL} again, byte-identical to the ordered check's, so a
+     * caller cannot tell which of the two answered — and therefore cannot learn whether the name was
+     * taken before their request or during it.
+     *
+     * <p><b>This does not replace the ordered check; it backs it.</b> Both are kept because they
+     * refuse at different moments, and the earlier moment is the one that keeps other refusals from
+     * talking: an apply door goes on to answer {@code 404 "no schema for scope 'x'"} and to name the
+     * métier that owns a table, and a caller who must be refused for the NAME must not read those
+     * first. The ordered check also refuses before side effects this one can only roll back (the
+     * entity compiler's DROP/CREATE VIEW) or could not (the audit record, the RAG index).
+     *
+     * @param outcome what the guarded write was allowed to do
+     * @throws WebApplicationException 403 {@link ScopeGrants#REFUSAL}, when the write met a row the
+     *         caller's grants do not reach — nothing was committed
+     */
+    public static void refuseUnlessApplied(ScopeGuardedUpsert outcome) {
+        // An exhaustive switch rather than an instanceof: a third arm added to the sealed family
+        // would then fail to compile HERE, instead of silently falling through as "applied" at
+        // every door at once. That is the whole reason the store answers a type and not a boolean.
+        switch (outcome) {
+            case ScopeGuardedUpsert.Applied ignored -> { }
+            case ScopeGuardedUpsert.NameHeldOutOfScope ignored ->
+                throw new WebApplicationException(ApiErrors.scopeNotGranted());
+        }
+    }
 }

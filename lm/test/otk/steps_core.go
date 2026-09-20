@@ -212,6 +212,12 @@ var stepPatterns []string
 // allFindings collects findings across all scenarios for the suite verdict.
 var allFindings []oracle.Finding
 
+// scenariosAttempted counts the scenarios godog STARTED, not the ones that passed.
+// The calibration floor is about whether the battery actually ran: a faulted hub is
+// EXPECTED to fail steps, and counting passes would make the floor unreachable by
+// construction in the one mode that needs it.
+var scenariosAttempted int
+
 func InitializeScenario(ctx *godog.ScenarioContext) {
 	st := &scenarioState{}
 	for _, reg := range laneRegistrars {
@@ -223,6 +229,7 @@ func InitializeScenario(ctx *godog.ScenarioContext) {
 	// this makes the per-scenario-clean invariant explicit and robust to any change
 	// in how/when the initializer is invoked.
 	ctx.Before(func(ctx context.Context, sc *godog.Scenario) (context.Context, error) {
+		scenariosAttempted++
 		*st = scenarioState{}
 		return ctx, nil
 	})

@@ -1,7 +1,7 @@
 # Integration as code
 
 An integrator who defrosts one ERP writes its universe once: a directory of YAML manifests,
-one per connector, entity, view, process and workflow. That directory *is* the installation.
+one per connector, entity, view, app, process and workflow. That directory *is* the installation.
 It goes in git, it is reviewed in a pull request, and it is replayed against another tenant
 by a loop.
 
@@ -15,8 +15,8 @@ The point is to put those four together.
 
 | In git | Never in git | Rebuilt, not stored |
 |---|---|---|
-| `kind: Connector`, `Entity`, `View`, `Process`, `Workflow` manifests | secret **values** — manifests carry the *name* (`password_env`, `token_env`, `key_env`), never the credential | the dynamic tables under schema `connector` (ingestion writes them) |
-| hook scripts (`lm hook apply`) and mapping overrides (`lm mapping apply`) | the OIDC token in `~/.lm/config.yaml` | the RAG corpus (re-indexed from what was ingested) |
+| `kind: Connector`, `Entity`, `View`, `App`, `Process`, `Workflow` manifests | secret **values** — manifests carry the *name* (`password_env`, `token_env`, `key_env`), never the credential | the dynamic tables under schema `connector` (ingestion writes them) |
+| hook scripts (`META-INF/hooks.yaml`, deployed with the extension — not applied through `lm`) and mapping overrides (`lm mapping apply`) | the OIDC token in `~/.lm/config.yaml` | the RAG corpus (re-indexed from what was ingested) |
 | the apply order (below) — a `Makefile` or a numbered prefix | ingested rows, dead letters, run history | discovered schema cards (`lm source rediscover`) |
 
 Credentials are referenced by name and resolved where the **hub** runs — its environment or
@@ -68,8 +68,8 @@ lm run list --connector ad_user -o json     # verify: the ledger, as data
 tenant — there is no separate "create" and "update".
 
 !!! warning "`lm validate` covers `kind: Connector` only"
-    The validator behind it is the connector validator: hand it an `Entity`, `View`,
-    `Process` or `Workflow` manifest and it fails on the envelope. Those four kinds are
+    The validator behind it is the connector validator: hand it an `Entity`, `View`, `App`,
+    `Process` or `Workflow` manifest and it fails on the envelope. Those five kinds are
     checked **at apply**, which refuses rather than half-writes. A CI gate must therefore
     route by kind — validate the connectors, apply the rest against a non-production tenant.
 
@@ -78,8 +78,8 @@ tenant — there is no separate "create" and "update".
 `lm` reads manifests from stdin and writes results as data:
 
 - **In** — `-f -` reads the manifest from stdin, at every `-f` door (`apply`, `validate`,
-  `entity apply`, `view apply`, `process apply`, `workflow apply`, `connector apply`,
-  `hook apply`, `mapping apply`).
+  `entity apply`, `view apply`, `app apply`, `process apply`, `workflow apply`,
+  `connector apply`, `mapping apply`).
 - **Out** — `-o json` (or `yaml`) on every listing, plus the two discovery surfaces a
   generator reads: `lm source schema` and `lm source jdbc list-tables`. Notes such as
   *"result hit the limit"* go to **stderr**, so stdout stays parseable. (The one listing

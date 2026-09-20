@@ -2,15 +2,15 @@ package io.lumnik.hub.security;
 
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.api.ApplyScopeBoundary;
+import io.lumnik.testkit.sources.ScopeBoundaryRule;
+import io.lumnik.testkit.sources.ScopeBoundaryRule.Sweep;
 import io.lumnik.testkit.sources.SourceTree;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.lang.reflect.Method;
-import java.lang.reflect.Modifier;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,6 +37,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code ScopeGrants} fails; an exemption whose file no longer exists, or that no longer touches a
  * scope at all, fails too — a stale exemption is a rule quietly widening.
  *
+ * <p>This walk and its shared mechanics live behind {@link ScopeBoundaryRule}, in
+ * {@code lumnik-testkit}, because the rule is not this module's alone: the rag module runs its own
+ * copy of this same test, against its own axis and its own decider ({@code ScopeAccess}), from its
+ * own module, so the check holds even when only that module's tests run (#508).
+ *
  * <p>This is the shape {@code lm}'s TUI already uses for its describe-body escaping
  * ({@code TestEveryDescribePageIsInTheEscapeInventory}), which is why that sweep has no holes.
  */
@@ -55,6 +60,8 @@ class ScopeBoundaryInventoryTest {
   private static final List<String> SCOPE_TOUCHING =
       List.of("SchemaCardStore", "DiscoveryService", "ApplyUpsert.scopes(");
 
+  private static final List<String> DECIDING_CALLS = ScopeBoundaryRule.decidingCalls(ScopeGrants.class);
+
   /**
    * Doors that touch a scope's schema and deliberately do NOT bind to it. Each needs a reason a
    * reader can check, not just a name — an exemption without one is how the rule erodes.
@@ -63,8 +70,8 @@ class ScopeBoundaryInventoryTest {
 
   @Test
   void everyDoorThatTouchesAScopeDecidesWhetherTheCallerHoldsIt() throws IOException {
-    Sweep sweep = sweep("Resource.java", ScopeBoundaryInventoryTest::touchesAScope,
-        ScopeBoundaryInventoryTest::consultsScopeGrants, EXEMPT.keySet());
+    Sweep sweep = ScopeBoundaryRule.sweep(HUB_SOURCES, "Resource.java", SCOPE_TOUCHING,
+        DECIDING_CALLS, EXEMPT.keySet());
 
     assertThat(sweep.seen())
         .as("the scan must find the doors it is meant to police — an empty sweep is not a clean one")
@@ -100,24 +107,8 @@ class ScopeBoundaryInventoryTest {
 
   /** Does this door work inside one métier scope's schema? Comments do not count as code. */
   static boolean touchesAScope(String javaSource) {
-    String code = SourceTree.code(javaSource);
-    return SCOPE_TOUCHING.stream().anyMatch(code::contains);
+    return ScopeBoundaryRule.touches(SCOPE_TOUCHING, javaSource);
   }
-
-  /**
-   * The calls that ASK the question, derived from {@link ScopeGrants} itself rather than copied
-   * from it. A hand-kept list goes stale the moment the primitive grows a method — which is exactly
-   * what happened: adding {@code allowsAll} for write doors made this sweep report an
-   * already-guarded door as unguarded. Reflection over the public static METHODS also excludes
-   * {@code REFUSAL} for free, because a constant is a field: it renders the answer's words without
-   * asking anything.
-   */
-  private static final List<String> DECIDING_CALLS = Arrays.stream(ScopeGrants.class.getMethods())
-      .filter(m -> Modifier.isStatic(m.getModifiers()) && Modifier.isPublic(m.getModifiers()))
-      .filter(m -> m.getDeclaringClass() == ScopeGrants.class)
-      .map(m -> "ScopeGrants." + m.getName() + "(")
-      .distinct()
-      .toList();
 
   /**
    * Does this door actually ASK whether the caller holds the scope?
@@ -125,12 +116,11 @@ class ScopeBoundaryInventoryTest {
    * <p>Twice narrowed, each time for the same reason. A bare mention is not a guard — an unused
    * import, a javadoc {@code @link} or a comment explaining the check's absence all contain the
    * type name. And a reference is not a decision: {@code ScopeGrants.REFUSAL} is a constant, so a
-   * door can render the refusal's words without ever asking the question. Only the three deciding
-   * calls count.
+   * door can render the refusal's words without ever asking the question. Only a deciding call
+   * counts.
    */
   static boolean consultsScopeGrants(String javaSource) {
-    String code = SourceTree.code(javaSource);
-    return DECIDING_CALLS.stream().anyMatch(code::contains);
+    return ScopeBoundaryRule.consults(DECIDING_CALLS, javaSource);
   }
 
   // ---- the second signal: WHICH scope a door asks about ----
@@ -154,7 +144,8 @@ class ScopeBoundaryInventoryTest {
    */
   @Test
   void everyApplyDoorAlsoAsksAboutTheScopeItIsAboutToOverwrite() throws IOException {
-    Sweep sweep = sweep("ApplyResource.java", ScopeBoundaryInventoryTest::consultsTheStoredScope);
+    Sweep sweep = sweep(HUB_SOURCES, "ApplyResource.java",
+        ScopeBoundaryInventoryTest::consultsTheStoredScope);
 
     assertThat(sweep.seen())
         .as("the sweep must find the apply doors it is meant to police")
@@ -233,37 +224,22 @@ class ScopeBoundaryInventoryTest {
         .isTrue();
   }
 
-  // ---- one walk, two axes ----
-
-  /** What a sweep saw, and which of those files failed its guard predicate. */
-  private record Sweep(List<String> seen, Map<String, String> unguarded) {}
+  // ---- the apply-door sweep (hub-only: ApplyScopeBoundary has no rag counterpart) ----
 
   /**
-   * Walk the hub's resources whose name ends with {@code suffix}, keep the ones {@code onAxis}
-   * admits, and report those {@code guarded} rejects that are not {@code exempt}. One walk rather
-   * than one per axis: a third question would otherwise land as a third copy of the same fourteen
-   * lines.
-   *
-   * <p>The exemptions are applied HERE rather than subtracted from the result afterwards. They were
-   * subtracted, once, into a local the assertion then did not read — so the filtering was dead code
-   * and a non-empty EXEMPT would have failed the build for doors it had excused, while nothing said
-   * so as long as EXEMPT stayed empty (Copilot round 1). There is now one map, and no second one to
-   * assert on by mistake.
+   * Walk the hub's resources whose name ends with {@code suffix}, and report the {@code guarded}
+   * rejects. Unlike the first sweep (now {@link ScopeBoundaryRule#sweep}), there is no separate
+   * on-axis filter here: the file-name suffix IS the axis (see {@link #noDoorTakesAManifestWithoutBeingNamedLikeOne}).
    */
-  private static Sweep sweep(String suffix, Predicate<String> guarded) throws IOException {
-    return sweep(suffix, src -> true, guarded, Set.of());
-  }
-
-  private static Sweep sweep(String suffix, Predicate<String> onAxis, Predicate<String> guarded,
-                             Set<String> exempt) throws IOException {
+  private static Sweep sweep(SourceTree root, String suffix, Predicate<String> guarded)
+      throws IOException {
     List<String> seen = new ArrayList<>();
     Map<String, String> unguarded = new LinkedHashMap<>();
-    for (Path p : HUB_SOURCES.javaFiles(suffix)) {
+    for (Path p : root.javaFiles(suffix)) {
       String src = Files.readString(p);
-      if (!onAxis.test(src)) continue;
       String name = p.getFileName().toString();
       seen.add(name);
-      if (!guarded.test(src) && !exempt.contains(name)) unguarded.put(name, pathOf(src));
+      if (!guarded.test(src)) unguarded.put(name, pathOf(src));
     }
     return new Sweep(seen, unguarded);
   }
@@ -296,13 +272,18 @@ class ScopeBoundaryInventoryTest {
   @Test
   void theDecidingCallsAreDerivedFromThePrimitiveNotCopiedFromIt() {
     assertThat(DECIDING_CALLS)
-        .as("every public static method of ScopeGrants asks something, so all of them count — "
+        .as("every @ScopeDecision method of ScopeGrants asks something, so all of them count — "
             + "and a new one is picked up without editing this test")
         .contains("ScopeGrants.allows(", "ScopeGrants.allowsAny(",
                   "ScopeGrants.allowsAll(", "ScopeGrants.granted(");
     assertThat(DECIDING_CALLS)
         .as("REFUSAL is a field, so it can never enter this list")
         .noneSatisfy(c -> assertThat(c).contains("REFUSAL"));
+    assertThat(DECIDING_CALLS)
+        .as("nameProblem() validates a NAME's shape and grantedForLog() renders a log line — "
+            + "neither asks whether the caller holds a scope, so neither may enter this list "
+            + "just for being public and static")
+        .doesNotContain("ScopeGrants.nameProblem(", "ScopeGrants.grantedForLog(");
   }
 
   @Test

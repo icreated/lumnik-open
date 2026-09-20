@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.mapping.writer;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
@@ -12,6 +13,7 @@ import jakarta.inject.Inject;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -243,6 +245,22 @@ public class DynamicTableRegistry {
   /** Upsert the schema registry entry, linking it to its owning connector (for scope discovery). */
   public void register(Long tenantId, String mappingId, String tableSchema, String tableName,
                        Map<String, String> schema, UUID connectorId) {
+    try (Connection c = adminDs.getConnection()) {
+      register(c, tenantId, mappingId, tableSchema, tableName, schema, connectorId);
+    } catch (Exception e) {
+      throw new RuntimeException("DynamicTableRegistry.register: " + e.getMessage(), e);
+    }
+  }
+
+  /**
+   * Same as {@link #register(Long, String, String, String, Map, UUID)}, on a caller-supplied
+   * connection — so {@code DynamicTableWriter.createSchema} can write it inside the SAME
+   * transaction that holds its advisory lock and creates the table, instead of checking out a
+   * second connection from the pool while the first sits idle (round 3 review: that pattern
+   * starves the admin pool under enough concurrent distinct-table creations).
+   */
+  public void register(Connection c, Long tenantId, String mappingId, String tableSchema, String tableName,
+                       Map<String, String> schema, UUID connectorId) throws SQLException {
     String sql = "INSERT INTO connector.dynamic_table " +
                  "(tenant_id, mapping_id, table_schema, table_name, schema_inferred, connector_id) " +
                  "VALUES (?, ?, ?, ?, ?::jsonb, ?) " +
@@ -252,8 +270,7 @@ public class DynamicTableRegistry {
                  "  table_name = EXCLUDED.table_name, " +
                  "  connector_id = EXCLUDED.connector_id, " +
                  "  updated_at = now()";
-    try (Connection c = adminDs.getConnection();
-         PreparedStatement ps = c.prepareStatement(sql)) {
+    try (PreparedStatement ps = c.prepareStatement(sql)) {
       ps.setLong(1, tenantId);
       ps.setString(2, mappingId);
       ps.setString(3, tableSchema);
@@ -261,7 +278,7 @@ public class DynamicTableRegistry {
       ps.setString(5, M.writeValueAsString(schema));
       ps.setObject(6, connectorId);
       ps.executeUpdate();
-    } catch (Exception e) {
+    } catch (JsonProcessingException e) {
       throw new RuntimeException("DynamicTableRegistry.register: " + e.getMessage(), e);
     }
   }

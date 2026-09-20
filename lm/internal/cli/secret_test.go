@@ -71,6 +71,37 @@ func TestSecretDescribe(t *testing.T) {
 	}
 }
 
+// `lm secret describe NAME -o json` was silently ignored (#532): the flag is accepted (root
+// persistent) but the command always printed the aligned card. Same never-carries-a-value
+// pin as TestSecretListHonoursJsonAndNeverCarriesAValue: SecretMeta has no value field.
+func TestSecretDescribeHonoursJsonAndNeverCarriesAValue(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"1","name":"db-password","description":"main db","createdAt":"2026-01-01T00:00:00Z","value":"hunter2"}`))
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"secret", "describe", "db-password", "-o", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("-o json must emit parseable JSON, got %q: %v", buf.String(), err)
+	}
+	if got["name"] != "db-password" {
+		t.Fatalf("the metadata must survive: %v", got)
+	}
+	if strings.Contains(buf.String(), "hunter2") {
+		t.Errorf("a secret value reached stdout: %s", buf.String())
+	}
+}
+
 func TestSecretSet_Create(t *testing.T) {
 	var gotMethod, gotPath string
 	var gotBody map[string]string

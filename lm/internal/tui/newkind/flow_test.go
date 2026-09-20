@@ -16,6 +16,9 @@ func TestClassifyManifest(t *testing.T) {
 	if class, kind, _ := ClassifyManifest("apiVersion: x"); class != "" || kind != "" {
 		t.Errorf("missing kind: got (%q,%q)", class, kind)
 	}
+	if class, kind, err := ClassifyManifest("kind: App"); class != "app" || kind != "App" || err != nil {
+		t.Errorf("App: got (%q,%q,%v), want (\"app\",\"App\",nil)", class, kind, err)
+	}
 	// A scalar is VALID yaml that just isn't a manifest — missing kind, not a syntax error.
 	if class, kind, err := ClassifyManifest("no kind at all"); class != "" || kind != "" || err != nil {
 		t.Errorf("scalar yaml: got (%q,%q,%v), want missing-kind with nil err", class, kind, err)
@@ -28,6 +31,7 @@ func TestManifestClass(t *testing.T) {
 		{"kind: Entity\nspec: {}", "entity"},
 		{"kind: Process\n", "process"},
 		{"kind: Workflow\n", "workflow"},
+		{"kind: App\nspec: {}", "app"},
 		{"kind: View\n", ""}, // rung 4 — not routable here
 		{"no kind at all", ""},
 	}

@@ -4,6 +4,7 @@ import io.lumnik.common.security.CurrentRolesHolder;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.extraction.spi.ask.SchemaCard;
+import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.audit.AuditRecorder;
 import jakarta.ws.rs.Path;
@@ -41,10 +42,15 @@ class ViewApplyContractUnitTest {
 
   static final class RecordingStore extends SavedViewStore {
     String name, scope, title, yaml;
+    /** The grants the door carried into the write's own WHERE — null means an unscoped caller. */
+    Set<String> callerScopes;
     /** Who already owns the name apply is about to write — empty means it is free. */
     String storedScope;
-    @Override public void upsert(String name, String scope, String title, String yaml) {
+    @Override public ScopeGuardedUpsert upsert(String name, String scope, String title, String yaml,
+                                               Set<String> callerScopes) {
       this.name = name; this.scope = scope; this.title = title; this.yaml = yaml;
+      this.callerScopes = callerScopes;
+      return new ScopeGuardedUpsert.Applied();
     }
     @Override public Optional<String> findScope(String name) { return Optional.ofNullable(storedScope); }
   }
@@ -223,7 +229,32 @@ class ViewApplyContractUnitTest {
     assertThat(store.scope).isEqualTo("clients");
     assertThat(store.title).isEqualTo("Clients");
     assertThat(store.yaml).isEqualTo(GOOD);
+    assertThat(store.callerScopes)
+        .as("no scope: role — null is what the store reads as 'unscoped, every scope'")
+        .isNull();
     assertThat(((Map<String,Object>) r.getEntity())).containsEntry("name", "clients-desk");
+  }
+
+  @Test
+  void a_bound_integrator_carries_its_grants_into_the_write() {
+    // The door passes ScopeGrants.granted() to the store, and the store puts it in the write's own
+    // WHERE (#582). Nothing else pins that wiring: the store ITs call upsert directly, so a door
+    // that regressed to passing null would disarm the guard for every bound caller and stay green.
+    CurrentRolesHolder.set(Set.of("lm_integrator", "lm_user", "scope:clients"));
+    RecordingStore store = new RecordingStore();
+    ViewApplyResource res = new ViewApplyResource();
+    res.store = store;
+    res.audit = new RecordingAudit();
+    res.cards = new SchemaCardStore() {
+      @Override public Optional<SchemaCard> load(long tenantId, String scope) {
+        return Optional.of(new SchemaCard(scope, List.of(new SchemaCard.Table(
+            "connector.v_customer", "v_customer",
+            List.of(new SchemaCard.Column("customer_code", "text", "Code client", null, null, null))))));
+      }
+    };
+
+    assertThat(res.apply(GOOD).getStatus()).isEqualTo(200);
+    assertThat(store.callerScopes).containsExactly("clients");
   }
 
   // ---- the STORED scope: an apply may not re-home what the caller does not hold (#509) ----
@@ -274,5 +305,34 @@ class ViewApplyContractUnitTest {
 
     assertThat(res.apply(GOOD.replace("scope: clients", "scope: magasin")).getStatus())
         .as("nothing is stored under this name — creating it is not re-homing").isEqualTo(404);
+  }
+
+  @Test
+  void an_unknown_key_refusal_body_matches_the_shared_helper_exactly() {
+    RecordingStore store = new RecordingStore();
+    ViewApplyResource res = new ViewApplyResource();
+    res.store = store;
+    res.cards = emptyCards;
+
+    Response r = res.apply(GOOD.replace("title: \"Clients\"", "titel: \"Clients\""));
+
+    assertThat(r.getStatus()).isEqualTo(400);
+    assertThat(((Map<String, Object>) r.getEntity()).get("error")).isEqualTo(
+        "unknown key(s) in the manifest: spec.titel — kind:View honors "
+            + ViewManifestParser.honoredSurface());
+  }
+
+  @Test
+  void a_reserved_name_refusal_body_matches_the_shared_helper_exactly() {
+    RecordingStore store = new RecordingStore();
+    ViewApplyResource res = new ViewApplyResource();
+    res.store = store;
+
+    Response r = res.apply(GOOD.replace("name: Clients-Desk", "name: Apply"));
+
+    assertThat(r.getStatus()).isEqualTo(400);
+    assertThat(((Map<String, Object>) r.getEntity()).get("error")).isEqualTo(
+        "metadata.name must be a URL-safe slug ([a-z0-9_-], starting with a letter or digit) "
+            + "and not one of " + ViewApplyResource.RESERVED_NAMES);
   }
 }

@@ -36,11 +36,11 @@ periodically *observes* a document's state and *alerts*
 (`decision.dormant.<workflow>`) when it has sat too long — but it never rewrites the
 manifest or the data.
 
-## Five kinds, two families
+## Six kinds, two families
 
-Every manifest starts with `kind:` — five kinds, grouped into two families by what they
+Every manifest starts with `kind:` — six kinds, grouped into two families by what they
 build, not by a shared envelope: `apiVersion` is required and validated for `Connector`,
-declared-but-not-yet-enforced for the three app kinds (accepted today for forward
+declared-but-not-yet-enforced for the four app kinds (accepted today for forward
 compatibility), and simply absent from `Entity`'s schema.
 
 | `kind:` | `apiVersion:` | What it declares | Apply command | Owning page |
@@ -48,13 +48,14 @@ compatibility), and simply absent from `Entity`'s schema.
 | `Connector` | `connectors.lumnik.io/v1` — required, validated | ingestion from one legacy source | `lm apply -f` | [Connectors — Overview](connectors/index.md) |
 | `Entity` | not part of this manifest's schema | canonical fusion of N sources into one thing | `lm entity apply -f` | [Entities](entities.md) |
 | `View` | `apps.lumnik.io/v1` — accepted, ignored | a read-only list a métier sees | `lm view apply -f` | [Views](apps/views.md) |
+| `App` | `apps.lumnik.io/v1` — accepted, ignored | a métier app's own title, scope, icon and theme | `lm app apply -f` | [The métier PWA](apps/pwa.md) |
 | `Process` | `apps.lumnik.io/v1` — accepted, ignored | a declared reaction to a row landing | `lm process apply -f` | [Processes](apps/processes.md) |
 | `Workflow` | `apps.lumnik.io/v1` — accepted, ignored | a declared document lifecycle over a status column | `lm workflow apply -f` | [Workflows](apps/workflows.md) |
 
-`Connector` and `Entity` ingest and fuse; `View`, `Process` and `Workflow` build the
+`Connector` and `Entity` ingest and fuse; `View`, `App`, `Process` and `Workflow` build the
 [app ladder](apps/views.md) on top of what's been fused. Note the one CLI irregularity:
 `lm apply -f` (no prefix) is `Connector`'s own command — every other kind uses its own
-prefixed `apply` (`lm entity apply`, `lm view apply`, `lm process apply`,
+prefixed `apply` (`lm entity apply`, `lm view apply`, `lm app apply`, `lm process apply`,
 `lm workflow apply`), as the [CLI reference](cli/lm-reference.md) documents.
 
 ### Living with your objects
@@ -69,10 +70,14 @@ by kind (verified against the `lm` CLI source, `lm/internal/cli/`):
 | `Workflow` | yes | yes | no |
 | `Process` | yes | no | no |
 | `Entity` | no | no | yes |
+| `App` | no | no | no |
 
 `Entity` has no `list`/`get` — `lm entity apply` and `lm entity delete NAME` are its CLI
 surface, and a fused entity is read back through
-[`GET /api/entities/{name}`](entities.md#read-api), not through `lm`.
+[`GET /api/entities/{name}`](entities.md#read-api), not through `lm`. `App` has no
+`list`/`get`/`delete` at all — `lm app apply` is its only CLI surface, and the registry is
+read back through [`GET /api/apps`](cli/lm-reference.md) (`lm_user`, scope-bound), which is
+how the PWA discovers its own identity at load.
 There is no single command that lists every kind at once — each shelf keeps its own
 `list`. See [CLI & TUI reference](cli/lm-reference.md) for the full command tables.
 
@@ -126,5 +131,5 @@ for what a real refusal (and a real warning) look like on the wire.
 
 - [Quickstart](quickstart/installer.md) — show value with a real connector in under a minute.
 - [Connectors — Overview](connectors/index.md) — the ingestion half of the manifest model.
-- [Views](apps/views.md) · [Processes](apps/processes.md) · [Workflows](apps/workflows.md) — the app ladder built on `apps.lumnik.io/v1`.
+- [Views](apps/views.md) · Apps · [Processes](apps/processes.md) · [Workflows](apps/workflows.md) — the app ladder built on `apps.lumnik.io/v1`.
 - [Glossary](glossary.md) — every lumnik word, one breath each.

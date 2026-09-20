@@ -98,11 +98,75 @@ Severity attaches to the **consequence**, not the attack — a hack cleanly reje
 |---|---|---|
 | 🥉 **Bronze** | 0 CRITICAL | Community minimum |
 | 🥈 **Silver** | 0 CRITICAL + 0 HIGH | Production bar |
-| 🥇 **Gold** | 0 of any severity, N ≥ 500 | Grand-compte badge (deferred) |
+| 🥇 **Gold** | 0 of any severity, every catalogue case | Grand-compte badge (deferred) |
 
 The declared tier lives in `lm/test/otk/tier` (`OTK_TIER` overrides it). The current tier is **🥈 Silver** (0 CRITICAL + 0 HIGH), live-proven over the 81-scenario real-auth battery.
 
-> **Reaching Silver:** the run lane originally surfaced a HIGH — a read-time *malformed* source row was dead-lettered and counted in `recordsSkipped` but not in the hub's `recordsIn`, so conservation (`recordsIn == recordsOut + recordsSkipped`) read `recordsIn=0, recordsOut=0, recordsSkipped=1`. Fixed in the hub (`ChunkExecutor` now counts read-time-malformed rows as input); the battery is green at Silver. Remaining findings are 3 LOW text-glitches (bidi/NUL reflected), which don't gate Silver. **Gold** (0 of any severity over N≥500) stays deferred.
+> **Reaching Silver:** the run lane originally surfaced a HIGH — a read-time *malformed* source row was dead-lettered and counted in `recordsSkipped` but not in the hub's `recordsIn`, so conservation (`recordsIn == recordsOut + recordsSkipped`) read `recordsIn=0, recordsOut=0, recordsSkipped=1`. Fixed in the hub (`ChunkExecutor` now counts read-time-malformed rows as input); the battery is green at Silver. Remaining findings are 3 LOW text-glitches (bidi/NUL reflected), which don't gate Silver. **Gold** (0 of any severity over every catalogue case) stays deferred.
+
+---
+
+## Calibration — proving the battery detects
+
+A green OTK run means *no check fired*. It does not mean *the checks can fire*.
+Calibration is the second statement: it breaks the hub on purpose and requires the
+declared finding to appear — and to be absent without the break.
+
+```bash
+cd lm
+OTK_FAULT=atomicity-underreport-landed make otk-calibrate
+```
+
+One run is **three phases, always**, and the control is not optional:
+
+| phase | hub | the declared finding must be | a failure here accuses |
+|---|---|---|---|
+| 1. control | unfaulted, built from clean source | **absent** | the **product** — the branch already exhibits what this fault imitates |
+| 2. injected | faulted | **present** | the **harness** — the hub was broken and the battery did not say so |
+| 3. restored | stopped, artefacts gone | — | the runner — something it changed was not put back |
+
+**The gate inverts; it does not switch off.** In calibration the *absence* of the
+declared finding is the failure. `gateFailures` does not apply: the hub is
+deliberately broken, so steps will fail, and reading the godog status as a verdict
+would make every calibration trivially successful. A floor of **90 % of the
+catalogue's cases, counted as scenarios godog *attempted***, guards the obvious false
+green.
+
+A fault is declared in `calibration/fault.go`, and its artefact lives beside it in
+`calibration/faults/`. The declaration names the family, the severity floor, the
+detail pattern, a sample that pattern must match, the capabilities the expectation
+needs **alive**, and whether the hub needs repackaging. A pattern must match its own
+sample and **no decoy**, which refuses a catch-all by construction.
+
+`otkcal` **refuses to start on a dirty tree**, and it **removes**
+`lumnik-hub/target` when it is done — the contract there is *absence*, not
+restoration: packaging the faulted hub overwrote whatever was there. The next build
+starts from clean source.
+
+### The mode variables
+
+| variable | rule |
+|---|---|
+| `OTK_GOLD_SEEDS` | present at all → **hard error**: removed; the Gold gate is a coverage, not a volume |
+| `OTK_GOLD` | unset/empty → off · `1` → on · anything else → hard error |
+| `OTK_FAULT` | unset/empty → off · a name in the table → that fault · anything else → hard error listing the known faults |
+| `OTK_TIER` | unset/empty → the committed `tier` file · a valid tier → that tier · anything else → hard error |
+| `OTK_FAULT_PHASE` | unset/empty → injected · `control` → control · anything else → hard error · present without `OTK_FAULT` → hard error |
+
+The first four are then arbitrated by six ordered rules, first match wins: Gold
+**and** a fault is a hard error; Gold **and** a tier is a hard error (Gold forces the
+tier, so a declared one would be silently ignored); a fault **and** a tier is a hard
+error (the tier decides nothing in calibration).
+
+`OTK_FAULT_PHASE` is not among them, and that is the point: it selects no mode, it
+only modulates one `OTK_FAULT` has already chosen. **`otkcal` sets it for you** — it
+drives both phases — so it is rarely one to set by hand.
+
+`otkcal` also **refuses to start on a tree carrying untracked files**, not only
+modified ones. Maven compiles an untracked `.java` as happily as a tracked one, and
+phase 1's whole claim is about *this branch*, not this branch plus whatever is lying
+beside it. Its own hub log therefore lives outside the checkout — at
+`$OTK_CAL_LOG`, or `$TMPDIR/otkcal-hub.log`.
 
 ---
 
@@ -182,8 +246,11 @@ The corpus is locked to seeds 1–20 per lane. To regenerate (e.g. after changin
 
 ```bash
 cd lm/
-OTK_REGEN=1 go test -run TestRegenerateCorpus ./test/otk/generator/      # seed_*, run_*, auth_*
-OTK_REGEN=1 go test -run TestRegenerateRestCorpus ./test/otk/generator/  # rest_*
+OTK_REGEN=1 go test -run TestRegenerateCorpus ./test/otk/generator/        # seed_*, run_*, auth_*
+OTK_REGEN=1 go test -run TestRegenerateRestCorpus ./test/otk/generator/    # rest_*
+OTK_REGEN=1 go test -run TestRegenerateEntityCorpus ./test/otk/generator/  # entity_*
+OTK_REGEN=1 go test -run TestRegenerateProcessCorpus ./test/otk/generator/ # process_*
+OTK_REGEN=1 go test -run TestRegenerateViewCorpus ./test/otk/generator/    # view_*
 ```
 
 Commit the diff — the golden lock (`TestCorpusMatchesGenerator`) and the bind-guard (`TestEveryCorpusStepIsBound`) will catch any drift or step that lost its registration.

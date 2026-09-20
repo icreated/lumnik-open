@@ -53,3 +53,30 @@ func TestGetWorkflowManifest_urlEscapesName(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, yaml, string(data))
 }
+
+func TestDeleteWorkflow_escapesNameAndSendsDelete(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodDelete, r.Method)
+		assert.Equal(t, "/api/workflows/commande%20lifecycle%2Fv2", r.URL.EscapedPath())
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := New(config.Context{Server: srv.URL})
+	require.NoError(t, c.DeleteWorkflow("commande lifecycle/v2"))
+}
+
+func TestSetWorkflowEnabled_putsTheFlagAndReadsItBack(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPut, r.Method)
+		assert.Equal(t, "/api/workflows/commande-lifecycle/enabled", r.URL.EscapedPath())
+		body, _ := io.ReadAll(r.Body)
+		assert.JSONEq(t, `{"enabled":false}`, string(body))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"commande-lifecycle","enabled":false}`))
+	}))
+	defer srv.Close()
+	c := New(config.Context{Server: srv.URL})
+	out, err := c.SetWorkflowEnabled("commande-lifecycle", false)
+	require.NoError(t, err)
+	assert.Equal(t, WorkflowEnabled{Name: "commande-lifecycle", Enabled: false}, *out)
+}

@@ -109,6 +109,16 @@ class ProcessApplyResourceIT {
     }
 
     @Test
+    void refusesAnUnknownKeyWithTheHonoredSurface() {
+        given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml")
+            .body(MANIFEST.replace("scope: procdesk", "scope: procdesk\n  scop: x"))
+        .when().post("/api/processes/apply")
+        .then().statusCode(400)
+            .body("error", equalTo("unknown key(s) in the manifest: spec.scop — kind:Process honors "
+                + ProcessManifestParser.honoredSurface()));
+    }
+
+    @Test
     void manifestIsRetrievable() {
         given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml").body(MANIFEST)
             .post("/api/processes/apply").then().statusCode(200);

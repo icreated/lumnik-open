@@ -65,7 +65,7 @@ class WorkflowDormancySweepIT {
                 + "(" + TENANT + ", 'CMD-LITIGE', 'EN LITIGE'),"
                 + "(" + TENANT + ", 'CMD-FINI', 'fini')");
         }
-        manifests.upsert(TENANT, new WorkflowManifestParser().parse(YAML), YAML);
+        manifests.upsert(TENANT, new WorkflowManifestParser().parse(YAML), YAML, null);
     }
 
     private void ageAll() throws Exception {
@@ -325,7 +325,7 @@ class WorkflowDormancySweepIT {
             s.execute("INSERT INTO " + table + " (tenant_id, \"N° Commande\", \"Statut Commande\") "
                 + "VALUES (" + tenant + ", 'CMD-1', 'en cours'), (" + tenant + ", 'CMD-2', 'fini')");
         }
-        manifests.upsert(tenant, new WorkflowManifestParser().parse(yaml), yaml);
+        manifests.upsert(tenant, new WorkflowManifestParser().parse(yaml), yaml, null);
 
         sweep.sweepNow();
         assertThat(observations.loadAll(tenant, "wf-sweep-verbatim-it"))

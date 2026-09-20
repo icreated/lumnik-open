@@ -12,6 +12,7 @@ import io.lumnik.hub.connector.runtime.ConnectorEngine;
 import io.lumnik.hub.entity.EntityRegistry;
 import io.lumnik.hub.entity.EntityViewCompiler;
 import io.lumnik.hub.tenant.RequireUser;
+import io.lumnik.hub.validator.common.CronField;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -22,6 +23,7 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.POST;
+import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.connector.runtime.RunWindow;
 import jakarta.ws.rs.PUT;
 import jakarta.ws.rs.DELETE;
@@ -66,7 +68,9 @@ public class ConnectorAdminResource {
   @Transactional
   public Response create(ConnectorCreateRequest req) {
     Response bad = refuseBadMapColumns(req.config());
+    if (bad == null) bad = refuseBadSchedule(req.schedule());
     if (bad == null) bad = refuseBadWindow(req.window());
+    if (bad == null) bad = refuseBadTags(req.tags());
     if (bad != null) return bad;
     var c = new Connector();
     c.setTenantId(req.tenantId());
@@ -76,6 +80,7 @@ public class ConnectorAdminResource {
     c.setRunWindow(req.window());
     c.setEnabled(req.enabled());
     c.setConfig(req.config());
+    c.setTags(req.tags() != null ? req.tags() : List.of());
     repo.persist(c);
     repo.flush();
     return Response.status(201).entity(ConnectorAdminDto.from(c)).build();
@@ -88,7 +93,9 @@ public class ConnectorAdminResource {
     var c = repo.findById(id);
     if (c == null) return ApiErrors.notFound("connector " + id + " not found");
     Response bad = refuseBadMapColumns(req.config());
+    if (bad == null) bad = refuseBadSchedule(req.schedule());
     if (bad == null) bad = refuseBadWindow(req.window());
+    if (bad == null) bad = refuseBadTags(req.tags());
     if (bad != null) return bad;
     c.setName(req.name());
     c.setTypeId(req.typeId());
@@ -96,6 +103,14 @@ public class ConnectorAdminResource {
     c.setRunWindow(req.window());
     c.setEnabled(req.enabled());
     c.setConfig(req.config());
+    // Unlike window/schedule/config, tags double as the scope:<tag> read boundary
+    // (ConnectorTagsResource's javadoc) — an empty list means UNSCOPED, tenant-wide visible, not a
+    // harmless default. A full-replace null->List.of() here (this door's usual "absent means
+    // reset" rule) would let any caller that omits tags from a PUT body silently broaden a scoped
+    // connector's data to the whole tenant. null therefore means "not specified, leave the
+    // existing grant alone"; only an explicit (even empty) array replaces it — the one field on
+    // this door where the request's silence must NOT read as a value.
+    if (req.tags() != null) c.setTags(req.tags());
     return Response.ok(ConnectorAdminDto.from(c)).build();
   }
 
@@ -155,6 +170,24 @@ public class ConnectorAdminResource {
   }
 
   /**
+   * Refuses a malformed {@code schedule} before it is stored (#523).
+   *
+   * <p>Unlike {@code window}, {@code ConnectorScheduler.isCronDue} fails <b>safe</b>, not open: an
+   * unparseable cron is caught, logged at WARN, and the connector is treated as never-due — it
+   * cannot silently run unfenced. But "safe" there still means silent from the operator's side: a
+   * typo'd {@code schedule} just never fires again, forever, discoverable only by reading server
+   * logs. Refusing it here, at the door {@code lm connector apply} and the TUI's edit loop drive,
+   * turns that into an immediate 400 instead of a connector that quietly stops mattering.
+   *
+   * <p>{@code CronField.validCron(String)} is the same UNIX-cron parser the manifest door's
+   * {@code CronField.check} runs per connector type, so both refuse the same strings.
+   */
+  private Response refuseBadSchedule(String schedule) {
+    if (schedule == null || schedule.isBlank()) return null;   // no schedule is legal
+    return CronField.validCron(schedule).map(ApiErrors::badRequest).orElse(null);
+  }
+
+  /**
    * Refuses a malformed {@code window} before it is stored.
    *
    * <p>This door validates almost nothing — a deliberate, documented gap: the manifest door runs
@@ -165,13 +198,26 @@ public class ConnectorAdminResource {
    * ticket set out to close, arriving through the field it added.
    *
    * <p>{@code RunWindow.validate} is the same truth {@code WindowField} serves the manifest door,
-   * so both refuse the same strings. {@code schedule} has the identical hole and is NOT closed
-   * here: it is older than this change and closing it needs the cron validator's own wording —
-   * filed, not smuggled in.
+   * so both refuse the same strings. {@code schedule} had the identical hole; {@link
+   * #refuseBadSchedule} closes it.
    */
   private Response refuseBadWindow(String window) {
     if (window == null || window.isBlank()) return null;   // no fence is legal
     return RunWindow.validate(window).map(ApiErrors::badRequest).orElse(null);
+  }
+
+  /**
+   * Refuses a malformed tag before it is stored, reusing the exact rule the dedicated
+   * {@code /tags} door ({@link ConnectorTagsResource#set}) already enforces — so a tag {@code
+   * apply} accepts here cannot be refused by {@code lm connector scope set} one command later.
+   */
+  private Response refuseBadTags(List<String> tags) {
+    if (tags == null) return null;   // no tags is legal
+    for (String t : tags) {
+      var problem = ScopeGrants.nameProblem(t);
+      if (problem.isPresent()) return ApiErrors.badRequest(problem.get());
+    }
+    return null;
   }
 
   @POST

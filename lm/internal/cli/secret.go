@@ -108,6 +108,9 @@ func newSecretDescribeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if format, _ := cmd.Flags().GetString("output"); format != "table" {
+				return output.PrintObject(cmd.OutOrStdout(), format, s)
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "name:        %s\n", s.Name)
 			fmt.Fprintf(cmd.OutOrStdout(), "description: %s\n", s.Description)
 			fmt.Fprintf(cmd.OutOrStdout(), "created_at:  %s   by %s\n", orDash(s.CreatedAt), orDashInt(s.CreatedBy))

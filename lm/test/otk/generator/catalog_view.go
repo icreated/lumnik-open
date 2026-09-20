@@ -129,6 +129,7 @@ spec:
 // ViewScenario holds the generated scenario for one seed of the view lane.
 type ViewScenario struct {
 	Seed           int64
+	CaseID         CaseID
 	Feature        string
 	Variant        string
 	ManifestYAML   string
@@ -156,6 +157,7 @@ func GenerateView(seed int64) ViewScenario {
 	v := variants[int(splitmix64(h)%uint64(len(variants)))]
 	return ViewScenario{
 		Seed:           seed,
+		CaseID:         viewCaseID(v.name),
 		Variant:        v.name,
 		ManifestYAML:   v.manifestYAML,
 		Filter:         v.filter,

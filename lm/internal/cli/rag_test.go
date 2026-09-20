@@ -73,6 +73,37 @@ func TestRagSearchNamesARowlessChunkByItsRef(t *testing.T) {
 	}
 }
 
+// -o is a persistent root flag, so cobra accepts it on `rag status` whether or not the command
+// reads it. Before this test, it didn't: -o json returned the same two summary lines, exit 0,
+// silently ignoring the flag (#532).
+func TestRagStatusHonoursJson(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"corpusSize": 42, "lastReindex": "2026-09-01T00:00:00Z"})
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"rag", "status", "-o", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	var st struct {
+		CorpusSize  int    `json:"corpusSize"`
+		LastReindex string `json:"lastReindex"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &st); err != nil {
+		t.Fatalf("-o json must emit parseable JSON, got %q: %v", buf.String(), err)
+	}
+	if st.CorpusSize != 42 || st.LastReindex != "2026-09-01T00:00:00Z" {
+		t.Errorf("status lost its shape: %+v", st)
+	}
+}
+
 // truncate cuts a column to a width in CHARACTERS — see output.Truncate for why bytes were wrong.
 // The cases here are the shapes that reached it: a cut inside an em dash, and a string shorter in
 // runes than in bytes.

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/icreated/lumnik-open/lm/internal/ask"
 	"github.com/spf13/cobra"
 )
 
@@ -49,9 +50,9 @@ func gestureFor(door, scope string) string {
 		suffix = " --scope " + scope
 	}
 	switch door {
-	case "lifecycle":
+	case ask.Lifecycle:
 		return "lm chat" + suffix + "  — the declared lifecycle is retrieved there, not by SQL"
-	case "conflicts":
+	case ask.Conflicts:
 		return "lm conflicts list" + suffix + "  — where this scope's sources disagree, row by row"
 	default:
 		return ""

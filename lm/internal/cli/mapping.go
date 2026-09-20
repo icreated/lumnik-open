@@ -55,6 +55,9 @@ func newMappingCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if format, _ := cmd.Flags().GetString("output"); format != "table" {
+				return output.PrintObject(cmd.OutOrStdout(), format, d)
+			}
 			cmd.Printf("id: %s\nversion: %d\ntarget: %s\nmode: %s\ndataset: %d hooks\nrow: %d hooks\ncell: %d hooks\n",
 				d.ID, d.Version, d.Target, d.Mode, d.Dataset, d.Row, d.Cell)
 			return nil

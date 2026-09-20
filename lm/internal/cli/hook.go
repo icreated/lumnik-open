@@ -46,72 +46,41 @@ func newHookCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// -o is a persistent root flag, so it arrives here whether or not this command looks
+			// at it. table and yaml keep today's rendering (the default already IS the YAML
+			// below); only json was silently ignored (#532).
+			if format, _ := cmd.Flags().GetString("output"); format == "json" {
+				return output.PrintObject(cmd.OutOrStdout(), "json", hk)
+			}
 			data, _ := yaml.Marshal(hk)
 			cmd.Print(string(data))
 			return nil
 		},
 	})
 
-	apply := &cobra.Command{
+	h.AddCommand(&cobra.Command{
 		Use:   "apply",
-		Short: "Apply a hook from YAML file",
+		Short: "(stub) Apply is not implemented — hooks come from deployment manifests",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			file, _ := cmd.Flags().GetString("file")
-			body, err := readManifest(cmd, file)
-			if err != nil {
-				return err
-			}
-			payload, err := decodeManifest(body, file, "hook")
-			if err != nil {
-				return err
-			}
-			c, err := ClientFromCmd(cmd)
-			if err != nil {
-				return err
-			}
-			if err := c.HookApply(payload); err != nil {
-				return err
-			}
-			id, _ := payload["id"].(string)
-			cmd.Println("hook applied:", id)
-			return nil
+			return hookMutationNotImplemented("apply")
 		},
-	}
-	apply.Flags().StringP("file", "f", "", "Path to hook YAML, or - for stdin")
-	_ = apply.MarkFlagRequired("file")
-	h.AddCommand(apply)
+	})
 
 	h.AddCommand(&cobra.Command{
 		Use:   "delete NAME",
-		Short: "Delete a hook",
+		Short: "(stub) Delete is not implemented — hooks come from deployment manifests",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := ClientFromCmd(cmd)
-			if err != nil {
-				return err
-			}
-			if err := c.HookDelete(args[0]); err != nil {
-				return err
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), "deleted:", args[0])
-			return nil
+			return hookMutationNotImplemented("delete")
 		},
 	})
 
 	h.AddCommand(&cobra.Command{
 		Use:   "reload NAME",
-		Short: "Reload a hook",
+		Short: "(stub) Reload is not implemented — hooks come from deployment manifests",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			c, err := ClientFromCmd(cmd)
-			if err != nil {
-				return err
-			}
-			if err := c.HookReload(args[0]); err != nil {
-				return err
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), "reloaded:", args[0])
-			return nil
+			return hookMutationNotImplemented("reload")
 		},
 	})
 
@@ -124,4 +93,14 @@ func newHookCmd() *cobra.Command {
 	})
 
 	return h
+}
+
+// hookMutationNotImplemented refuses apply/delete/reload before any file is read or client
+// built: none of the endpoints they used to call exist on the hub — HookResource declares only
+// GET (list) and GET/{id}, and HookRegistry has no update/delete method at all. Hooks are
+// registered once, in-memory, from classpath manifests (HookManifestScanner's
+// META-INF/hooks.yaml) at startup — there is nothing here to apply, delete or reload
+// individually (#610).
+func hookMutationNotImplemented(verb string) error {
+	return fmt.Errorf("`lm hook %s` is not implemented: hooks are loaded from deployment manifests at startup", verb)
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -27,6 +28,12 @@ func featureFor(base string) (text string, ok bool) {
 	}
 	if _, err := fmt.Sscanf(base, "entity_%d.feature", &seed); err == nil {
 		return GenerateEntity(seed).Feature, true
+	}
+	if _, err := fmt.Sscanf(base, "process_%d.feature", &seed); err == nil {
+		return GenerateProcess(seed).Feature, true
+	}
+	if _, err := fmt.Sscanf(base, "view_%d.feature", &seed); err == nil {
+		return GenerateView(seed).Feature, true
 	}
 	return "", false
 }
@@ -114,5 +121,39 @@ func TestCsvCorpusCoversAllCategories(t *testing.T) {
 		if !seen[cat] {
 			t.Errorf("CSV corpus (seed_*/run_*) does not cover category %q; raise corpusSeedMax and regenerate", cat)
 		}
+	}
+}
+
+// The guardian of the guardian. TestCorpusMatchesGenerator skips any file featureFor
+// cannot resolve, silently — which is how the twenty process_ and twenty view_ files
+// sat outside the lock while it stayed green on the other five families. This test
+// anchors the lock on the corpus that is actually committed, so a family added later
+// cannot leave the same way.
+//
+// Generated files are exactly the <family>_NNNN.feature shape. Hand-written ones
+// (smoke_validate.feature, view_store_smoke.feature) do not match it and are not
+// the lock's business.
+func TestGoldenLockCoversEveryFamily(t *testing.T) {
+	files, err := filepath.Glob("../corpus/*.feature")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no corpus files found: %v", err)
+	}
+	generated := regexp.MustCompile(`^([a-z]+(?:_[a-z]+)*)_\d{4}\.feature$`)
+	families := map[string]bool{}
+	for _, f := range files {
+		base := filepath.Base(f)
+		m := generated.FindStringSubmatch(base)
+		if m == nil {
+			continue // hand-written; not under the lock
+		}
+		families[m[1]] = true
+		if _, ok := featureFor(base); !ok {
+			t.Errorf("%s is a generated corpus file that featureFor does not resolve: "+
+				"the golden lock skips it silently", base)
+		}
+	}
+	if want := len(lanes); len(families) < want {
+		t.Errorf("found %d generated corpus families (%v); want one per Gold lane (%d)",
+			len(families), families, want)
 	}
 }

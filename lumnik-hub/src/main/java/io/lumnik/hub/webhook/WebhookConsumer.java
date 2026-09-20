@@ -94,7 +94,7 @@ public class WebhookConsumer {
 
     /** A claimed delivery, detached from its claim transaction. A null endpoint = already given up on. */
     private record Claim(long deliveryId, long tenantId, WebhookEndpoint endpoint,
-                         String eventType, String payload) {}
+                         String eventType, Long eventId, String payload) {}
 
     /**
      * Claims the next retryable delivery and resolves its endpoint, in one short transaction.
@@ -117,9 +117,10 @@ public class WebhookConsumer {
                     d.setAttempts(3); // endpoint gone, unsubscribed, or entity_filter no longer matches: stop retrying
                     markNoHttpResult(d, "endpoint gone, unsubscribed, or entity_filter no longer matches — retries stopped");
                     d.setClaimedUntil(null);
-                    return new Claim(d.getId(), d.getTenantId(), null, null, null);
+                    return new Claim(d.getId(), d.getTenantId(), null, null, null, null);
                 }
-                return new Claim(d.getId(), d.getTenantId(), ep, d.getEventType(), d.getPayload().toString());
+                return new Claim(d.getId(), d.getTenantId(), ep, d.getEventType(), d.getEventId(),
+                                 d.getPayload().toString());
             } finally {
                 CurrentTenantHolder.clear();
                 em.createNativeQuery(SET_SYSTEM_TENANT).executeUpdate();
@@ -131,7 +132,7 @@ public class WebhookConsumer {
     private void deliverClaimed(Claim c) {
         WebhookDeliveryService.DeliveryResult r;
         try {
-            r = deliveryService.deliver(c.endpoint(), c.eventType(), c.payload());
+            r = deliveryService.deliver(c.endpoint(), c.eventType(), c.eventId(), c.payload());
         } catch (RuntimeException e) {
             // Count the failed attempt so a row that throws every time still caps at 3
             // (claimNext: attempts < 3) instead of being reprocessed every 30s forever.
@@ -217,7 +218,7 @@ public class WebhookConsumer {
         JsonNode payloadNode = mapper.valueToTree(row.getPayload());
 
         for (WebhookEndpoint ep : targets) {
-            var r = deliveryService.deliver(ep, row.getEventType(), body);
+            var r = deliveryService.deliver(ep, row.getEventType(), row.getId(), body);
             persistAttempt(row, ep.getId(), payloadNode, r);
             if (!r.ok()) {
                 LOG.warnf("Webhook delivery failed: event %d endpoint %s — %s (retry sweep will pick it up)",

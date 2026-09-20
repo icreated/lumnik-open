@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -90,6 +91,33 @@ func newWorkflowCmd() *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(apply, list, get)
+	rm := &cobra.Command{
+		Use:   "rm <name>",
+		Short: "Delete a declared workflow for good",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := ClientFromCmd(cmd)
+			if err != nil {
+				return err
+			}
+			if err := c.DeleteWorkflow(args[0]); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "workflow %s deleted\n", args[0])
+			return nil
+		},
+	}
+
+	cmd.AddCommand(apply, list, get, rm,
+		toggleCmd("workflow", "enable", true, "Turn a workflow back on", workflowSetEnabled),
+		toggleCmd("workflow", "disable", false, "Stop a workflow being served, keeping its manifest", workflowSetEnabled))
 	return cmd
+}
+
+func workflowSetEnabled(c *client.Client, name string, enabled bool) (string, bool, error) {
+	out, err := c.SetWorkflowEnabled(name, enabled)
+	if err != nil {
+		return "", false, err
+	}
+	return out.Name, out.Enabled, nil
 }

@@ -231,7 +231,7 @@ func (n *NewKind) edit(k newkind.KindTemplate, initial string) {
 }
 
 // validateOrApply: Connector manifests validate first (rich field-by-field errors),
-// then apply; Entity/Process/Workflow apply directly — their apply IS the refusable validation.
+// then apply; Entity/App/Process/Workflow apply directly — their apply IS the refusable validation.
 func (n *NewKind) validateOrApply(buf string) (issues string, note string, err error) {
 	class, kindVal, parseErr := newkind.ClassifyManifest(buf)
 	if parseErr != nil {
@@ -267,10 +267,14 @@ func (n *NewKind) validateOrApply(buf string) (issues string, note string, err e
 		if _, err := n.client.ApplyWorkflow([]byte(buf)); err != nil {
 			return newkind.FormatIssues([]newkind.Issue{{Path: "apply", Message: err.Error()}}, nil), "", nil
 		}
+	case "app":
+		if _, err := n.client.AppApply([]byte(buf)); err != nil {
+			return newkind.FormatIssues([]newkind.Issue{{Path: "apply", Message: err.Error()}}, nil), "", nil
+		}
 	default:
-		msg := "missing top-level kind — expected Connector, Entity, Process, or Workflow"
+		msg := "missing top-level kind — expected Connector, Entity, App, Process, or Workflow"
 		if kindVal != "" {
-			msg = "kind '" + kindVal + "' is not routable here — expected Connector, Entity, Process, or Workflow"
+			msg = "kind '" + kindVal + "' is not routable here — expected Connector, Entity, App, Process, or Workflow"
 		}
 		return newkind.FormatIssues([]newkind.Issue{{Path: "kind", Message: msg}}, nil), "", nil
 	}

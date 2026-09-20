@@ -1,15 +1,13 @@
 package io.lumnik.hub.process;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
+import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.manifest.ManifestKeys;
+import io.lumnik.hub.manifest.ManifestSurface;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.TreeSet;
 
 /**
  * Parses a kind:Process YAML manifest — structural refusals only; the condition honesty
@@ -18,7 +16,6 @@ import java.util.TreeSet;
  */
 public class ProcessManifestParser {
 
-    private static final YAMLMapper MAPPER = new YAMLMapper();
     private static final String TRIGGER = "data.row.changed";
 
     // The closed inventory (C3). Kept beside parse() on purpose: a field added there without a key
@@ -34,14 +31,13 @@ public class ProcessManifestParser {
     private static final Set<String> ON_KEYS = Set.of("event", "table");
     private static final Set<String> EMIT_KEYS = Set.of("type", "message");
 
-    private static final Map<String, Set<String>> ALLOWED_BY_PATH = new LinkedHashMap<>();
-    static {
-        ALLOWED_BY_PATH.put("", ROOT_KEYS);
-        ALLOWED_BY_PATH.put(METADATA, METADATA_KEYS);
-        ALLOWED_BY_PATH.put("spec", SPEC_KEYS);
-        ALLOWED_BY_PATH.put("spec.on", ON_KEYS);
-        ALLOWED_BY_PATH.put("spec.emit", EMIT_KEYS);
-    }
+    private static final ManifestSurface SURFACE = ManifestSurface.builder()
+        .group("", "root", ROOT_KEYS)
+        .group(METADATA, "metadata", METADATA_KEYS)
+        .group("spec", "spec", SPEC_KEYS)
+        .group("spec.on", "spec.on", ON_KEYS)
+        .group("spec.emit", "spec.emit", EMIT_KEYS)
+        .build();
 
     /**
      * Every key the manifest declares that this parser does not honor, as dotted paths in document
@@ -51,11 +47,15 @@ public class ProcessManifestParser {
     public List<String> unknownKeys(String yaml) {
         JsonNode root;
         try {
-            root = MAPPER.readTree(yaml);
+            root = SURFACE.readTree(yaml);
         } catch (Exception e) {
             return List.of();
         }
-        return ManifestKeys.unknownKeys(root, ALLOWED_BY_PATH);
+        return unknownKeys(root);
+    }
+
+    public List<String> unknownKeys(JsonNode root) {
+        return SURFACE.unknownKeys(root);
     }
 
     /**
@@ -65,33 +65,47 @@ public class ProcessManifestParser {
      * a sentence.
      */
     public static String honoredSurface() {
-        return "root {" + sorted(ROOT_KEYS) + "}, metadata {" + sorted(METADATA_KEYS)
-            + "}, spec {" + sorted(SPEC_KEYS) + "}, spec.on {" + sorted(ON_KEYS)
-            + "}, spec.emit {" + sorted(EMIT_KEYS) + "}";
+        return SURFACE.honoredSurface();
     }
 
-    private static String sorted(Set<String> keys) {
-        return String.join(", ", new TreeSet<>(keys));
-    }
-
-    public ProcessManifest parse(String yaml) {
-        JsonNode root;
+    /**
+     * Parses once, catching broadly (SnakeYAML/Jackson raise a mix of checked and unchecked
+     * failures for a null or malformed body — the existing message must fire for both; an empty
+     * or blank-only body does not throw here at all, {@link #parse(JsonNode)} refuses it with its
+     * ordinary "kind must be 'Process'" check instead). Package-visible so the door can call it
+     * once and reuse the node for both parse() and unknownKeys().
+     */
+    JsonNode readTree(String yaml) {
         try {
-            root = MAPPER.readTree(yaml);
+            return SURFACE.readTree(yaml);
         } catch (Exception e) {
             throw new IllegalArgumentException("invalid kind:Process manifest: " + e.getMessage(), e);
         }
+    }
+
+    public ProcessManifest parse(String yaml) {
+        return parse(readTree(yaml));
+    }
+
+    public ProcessManifest parse(JsonNode root) {
         if (!"Process".equals(ManifestKeys.text(root, "kind")))
             throw new IllegalArgumentException("kind must be 'Process'");
         JsonNode meta = root.path(METADATA);
         JsonNode spec = root.path("spec");
-        String name = ManifestKeys.text(meta, "name");
-        if (name == null || !name.matches("[a-z0-9-]+"))
+
+        // Split from the formerly-fused "metadata.name is required and must be a simple
+        // identifier..." sentence — a blank name and a malformed one are different rules and now
+        // get different messages (#579's message-drift table).
+        String name = ManifestKeys.requiredText(meta, "name", "metadata.name");
+        if (!name.matches("[a-z0-9-]+"))
             throw new IllegalArgumentException(
-                "metadata.name is required and must be a simple identifier (a-z, 0-9, -): " + name);
-        String scope = ManifestKeys.text(spec, "scope");
-        if (scope == null || scope.isBlank())
-            throw new IllegalArgumentException("spec.scope is required");
+                "metadata.name must be a simple identifier (a-z, 0-9, -): " + name);
+
+        String scope = ManifestKeys.requiredText(spec, "scope", "spec.scope");
+        // the tag becomes the case-sensitive Keycloak role scope:<tag> — the same rule
+        // AppManifestParser, ViewManifestParser, ScopesValidator and EntityManifestParser ask (#577).
+        ScopeGrants.nameProblem(scope)
+            .ifPresent(problem -> { throw new IllegalArgumentException("spec.scope: " + problem); });
         JsonNode on = spec.path("on");
         String onEvent = ManifestKeys.text(on, "event");
         if (!TRIGGER.equals(onEvent))
@@ -109,9 +123,7 @@ public class ProcessManifestParser {
         if (emitType == null || !emitType.startsWith("decision."))
             throw new IllegalArgumentException(
                 "spec.emit.type is required and must start with 'decision.' — the governed taxonomy");
-        String emitMessage = ManifestKeys.text(emit, "message");
-        if (emitMessage == null || emitMessage.isBlank())
-            throw new IllegalArgumentException("spec.emit.message is required");
+        String emitMessage = ManifestKeys.requiredText(emit, "message", "spec.emit.message");
         return new ProcessManifest(name, scope, onEvent, onTable, when, emitType, emitMessage);
     }
 }

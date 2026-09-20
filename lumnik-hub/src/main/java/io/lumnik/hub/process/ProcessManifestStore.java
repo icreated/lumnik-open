@@ -2,12 +2,14 @@ package io.lumnik.hub.process;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /** Persists kind:Process manifests (per-tenant; RLS on the app DS, tenant bound here on admin). */
 @ApplicationScoped
@@ -22,20 +24,35 @@ public class ProcessManifestStore {
     public record StoredProcess(String name, String scope, String onTable, List<String> when,
                                 String emitType, String emitMessage, boolean enabled) {}
 
-    public void upsert(long tenantId, ProcessManifest m, String yamlText) {
+    /**
+     * Upsert this process, refusing to overwrite a name the caller's grants do not reach.
+     *
+     * <p>{@code callerScopes} is an authorization predicate, not a filter ({@code null} = unscoped
+     * caller, tenant-wide); {@link ScopeGuardedUpsert} says why the door's earlier check is not
+     * enough on its own, and do not "simplify" this one away on the grounds that the door already
+     * asked. Re-homing a process takes its emitted text with it.
+     *
+     * <p>One statement, so autocommit IS the unit of work.
+     */
+    public ScopeGuardedUpsert upsert(long tenantId, ProcessManifest m, String yamlText,
+                                     Set<String> callerScopes) {
+        // The predicate reads the EXISTING row — which in a DO UPDATE is the one spelled with the
+        // table name, `excluded` being the row we proposed.
         String sql = "INSERT INTO core.process_manifest "
             + "(tenant_id, name, yaml_text, scope, on_table, emit_type) VALUES (?, ?, ?, ?, ?, ?) "
             + "ON CONFLICT (tenant_id, name) DO UPDATE SET yaml_text = EXCLUDED.yaml_text, "
             + "scope = EXCLUDED.scope, on_table = EXCLUDED.on_table, emit_type = EXCLUDED.emit_type, "
-            + "updated_at = NOW()";
-        Jdbc.update(adminDs, "ProcessManifestStore.upsert", sql, ps -> {
+            + "updated_at = NOW() "
+            + "WHERE (?::text[] IS NULL OR core.process_manifest.scope = ANY (?::text[]))";
+        return ScopeGuardedUpsert.of(Jdbc.update(adminDs, "ProcessManifestStore.upsert", sql, ps -> {
             ps.setLong(1, tenantId);
             ps.setString(2, m.name());
             ps.setString(3, yamlText);
             ps.setString(4, m.scope());
             ps.setString(5, m.onTable());
             ps.setString(6, m.emitType());
-        });
+            ScopeGuardedUpsert.bindGrants(ps, 7, callerScopes);
+        }));
     }
 
     /**

@@ -264,4 +264,45 @@ class AskToSqlAgentIT {
         assertThat(r.rowCount()).isEqualTo(0);
         Mockito.verify(chatPort, Mockito.times(1)).chat(Mockito.anyString()); // gen only, never phrasing
     }
+
+    /** A {@code connector.v_}-prefixed table is the fused-entity signal {@code EntityViewCompiler}
+     *  writes — no live workflow/entity fixture needed to trip {@code hasAFusedEntity} (#527). */
+    private void seedFusedEntityScope() {
+        agent.seedDdl("CREATE TABLE IF NOT EXISTS connector.v_customer (name text)");
+        agent.seedDdl("TRUNCATE connector.v_customer");
+        agent.seedDdl("INSERT INTO connector.v_customer VALUES ('ACME')");
+        store.save(7L, "fused", new SchemaCard("fused", List.of(
+            new SchemaCard.Table("connector.v_customer", "Customer", List.of(
+                new SchemaCard.Column("name", "text", "Name"))))));
+    }
+
+    @Test
+    void rejectedSqlAlsoNamesTheConflictsDoorWhenTheScopeHasAFusedEntity() {
+        seedFusedEntityScope();
+        Mockito.when(chatPort.chat(Mockito.anyString()))
+            .thenReturn("UPDATE connector.v_customer SET name = 'x'");
+
+        AskResult r = agent.ask(7L, "fused", "wipe the customer name");
+
+        assertThat(r.answer())
+            .as("SqlGuard rejection is just as structurally true a dead end as NO_ANSWER (#527)")
+            .containsIgnoringCase("couldn't")
+            .endsWith(AbstentionGuard.CONFLICTS_SIGNPOST);
+        assertThat(r.otherDoors()).containsExactly(AskResult.DOOR_CONFLICTS);
+    }
+
+    @Test
+    void zeroRowsAlsoNameTheConflictsDoorWhenTheScopeHasAFusedEntity() {
+        seedFusedEntityScope();
+        Mockito.when(chatPort.chat(Mockito.anyString()))
+            .thenReturn("SELECT name FROM connector.v_customer WHERE name = 'NOPE'");
+
+        AskResult r = agent.ask(7L, "fused", "find customer NOPE");
+
+        assertThat(r.answer())
+            .as("ZeroRowGuard.CAVEAT is just as structurally true a dead end as NO_ANSWER (#527)")
+            .startsWith(ZeroRowGuard.CAVEAT)
+            .endsWith(AbstentionGuard.CONFLICTS_SIGNPOST);
+        assertThat(r.otherDoors()).containsExactly(AskResult.DOOR_CONFLICTS);
+    }
 }

@@ -71,4 +71,58 @@ class ProcessManifestParserTest {
                 YAML.replace("name: gold-client-arrive", "name: \"gold client!\"")))
             .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("name");
     }
+
+    @Test
+    void refusesABlankNameSeparatelyFromAMalformedOne() {
+        // Before the split: both a blank name and "gold client!" produced the SAME fused sentence
+        // ("...is required and must be a simple identifier..."). After it, a blank name gets ONLY
+        // the "is required" half — the malformed-but-present case is refusesANonSimpleName above.
+        assertThatThrownBy(() -> new ProcessManifestParser().parse(
+                YAML.replace("  name: gold-client-arrive\n", "")))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("metadata.name is required")
+            .hasMessageNotContaining("simple identifier");
+    }
+
+    /** A scope tag becomes the case-sensitive Keycloak role {@code scope:<tag>}, so a name no
+     *  role could carry declares a process visible to unscoped users and permanently invisible
+     *  to every bound one — see #577. */
+    @Test
+    void refusesAScopeNameNoRoleCouldCarry() {
+        assertThatThrownBy(() -> new ProcessManifestParser().parse(YAML.replace("scope: clients", "scope: CRM")))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("spec.scope")
+            .hasMessageContaining("lowercase");
+    }
+
+    @Test
+    void refusesANullBody() {
+        assertThatThrownBy(() -> new ProcessManifestParser().parse((String) null))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("invalid kind:Process manifest");
+    }
+
+    @Test
+    void refusesSyntacticallyMalformedYaml() {
+        assertThatThrownBy(() -> new ProcessManifestParser().parse("kind: [unclosed"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("invalid kind:Process manifest");
+    }
+
+    @Test
+    void anEmptyOrBlankDocumentIsRefusedAsAWrongKindNotAsUnparsable() {
+        assertThatThrownBy(() -> new ProcessManifestParser().parse(""))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("kind must be 'Process'");
+        assertThatThrownBy(() -> new ProcessManifestParser().parse("   \n  \n"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("kind must be 'Process'");
+    }
+
+    @Test
+    void aBareDocumentMarkerIsRefusedAsAWrongKindNotAsUnparsable() {
+        assertThatThrownBy(() -> new ProcessManifestParser().parse("---\n"))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("kind must be 'Process'");
+    }
 }

@@ -6,14 +6,12 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/icreated/lumnik-open/lm/internal/client"
-	"github.com/icreated/lumnik-open/lm/internal/types"
 	"github.com/rivo/tview"
 )
 
 type Hooks struct {
 	table   *tview.Table
 	client  *client.Client
-	items   []types.Hook
 	mu      sync.Mutex
 	onError func(string)
 }
@@ -29,7 +27,7 @@ func NewHooks(c *client.Client, onError func(string)) *Hooks {
 
 func (h *Hooks) View() tview.Primitive { return h.table }
 func (h *Hooks) Hints() string {
-	return "^L: reload  r: refresh  :: switch  ?: help  q: quit"
+	return "r: refresh  :: switch  ?: help  q: quit"
 }
 
 func (h *Hooks) setHeader() {
@@ -49,7 +47,6 @@ func (h *Hooks) Refresh() {
 		}
 		return
 	}
-	h.items = list
 	h.table.Clear()
 	h.setHeader()
 	for i, hk := range list {
@@ -62,17 +59,11 @@ func (h *Hooks) Refresh() {
 	}
 }
 
+// handleKey no longer binds Ctrl-L: it used to call HookReload, POST
+// /api/platform/hooks/{id}/reload — an endpoint that does not exist on the hub. Hooks are
+// registered once, in-memory, from classpath manifests at startup; there is nothing here to
+// reload individually (#610, same finding as `lm hook reload`).
 func (h *Hooks) handleKey(ev *tcell.EventKey) *tcell.EventKey {
-	if ev.Key() == tcell.KeyCtrlL {
-		row, _ := h.table.GetSelection()
-		if row >= 1 && row-1 < len(h.items) {
-			if err := h.client.HookReload(h.items[row-1].ID); err != nil && h.onError != nil {
-				h.onError(fmt.Sprintf("reload: %v", err))
-			}
-			h.Refresh()
-		}
-		return nil
-	}
 	if ev.Rune() == 'r' {
 		h.Refresh()
 		return nil

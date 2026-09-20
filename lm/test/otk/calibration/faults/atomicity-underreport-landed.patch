@@ -1,0 +1,13 @@
+diff --git a/lumnik-hub/src/main/java/io/lumnik/hub/connector/runtime/ChunkExecutor.java b/lumnik-hub/src/main/java/io/lumnik/hub/connector/runtime/ChunkExecutor.java
+index f595b831..d3c10a0e 100644
+--- a/lumnik-hub/src/main/java/io/lumnik/hub/connector/runtime/ChunkExecutor.java
++++ b/lumnik-hub/src/main/java/io/lumnik/hub/connector/runtime/ChunkExecutor.java
+@@ -246,7 +246,7 @@ public class ChunkExecutor {
+                        int recordsRead, WriteOutcome outcome) {
+     int malformed = captureMalformed(reader, c.getId(), r.getId());
+     r.setRecordsIn(r.getRecordsIn() + recordsRead + malformed);
+-    r.setRecordsOut(r.getRecordsOut() + outcomeWritten(outcome));
++    r.setRecordsOut(r.getRecordsOut() + Math.max(0, outcomeWritten(outcome) - 1));
+     r.setRecordsSkipped(r.getRecordsSkipped()
+         + outcomeSkipped(outcome, deadLetter, c.getId(), r.getId(), mapper)
+         + malformed);

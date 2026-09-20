@@ -1,15 +1,12 @@
 # Ask honesty — the five guards
 
 !!! info "Which builds can run this"
-    The pipeline on this page is **native to the hub**: `AskToSqlAgent` and all five guards
-    live in `lumnik-hub/…/ask/` and ship in every edition, the open one included. What an
-    **open-edition** build lacks is the way *in* and the model *behind* — both chat doors are
-    in `lumnik-rag` (`/api/platform/rag/chat`, behind `lm ask` and TUI `:ask`; `/api/rag/chat`,
-    behind the PWA chat), and every `ChatPort`/`EmbeddingPort` implementation is in
-    `lumnik-llm-langchain`. Neither module is in that tree, so the guards are there and nothing
-    can reach them. Check with `GET /api/platform/health`: a build with the chat extensions
-    lists both a `rag` module (the doors) and an `llm` one (the model provider); an open-edition
-    one lists only `core` and `identity`.
+    The five guards below run in every edition, the open one included — they are not a Pro
+    feature. What an **open-edition** build lacks is the doors and the model behind them:
+    analytic and semantic chat (`lm ask`/TUI `:ask` and `POST /api/platform/rag/chat`; the PWA
+    chat and `POST /api/rag/chat`) need two extra modules. Check `GET /api/platform/health`: an
+    open-edition build lists only `core` and `identity`; a build with chat also lists `rag` and
+    `llm`.
 
 When you ask your data an **analytic** question, lumnik translates it to SQL and runs it
 read-only over the hub. Every door that asks in analytic mode rides the same pipeline —
@@ -28,10 +25,9 @@ table, and the scope's real lists.
 
 ## The pipeline, in order
 
-!!! note "Seven stages, five guards — the arithmetic, before the client counts"
-    The diagram numbers seven stages; the name says five guards. Abstention is **one guard
-    standing at two doors** (floor and exit), and SQL safety is **its own layer beneath the
-    guards**, not one of them. Count stages on the diagram, guards in the name.
+The diagram below numbers seven stages, one more than "five guards" in the title: abstention
+stands at two doors (floor and exit) and counts once, and SQL safety is a layer beneath the
+guards, not one of them.
 
 ```mermaid
 flowchart TB
@@ -54,8 +50,7 @@ flowchart TB
 ```
 
 Stages 1–6 each eject to a refusal when they trigger. Stage 7 never refuses — an
-empty result is delivered, reframed honestly instead of becoming a confident *"there
-are none"*.
+empty result is delivered with a caveat, never phrased as a confident *"there are none"*.
 
 ### 1. Abstention floor — nothing declared yet
 
@@ -69,7 +64,7 @@ A stored schema that cannot be **read** is refused the same way and says so, rat
 somewhere later with an error id: the name of a table or a column is what every part of the ask
 dereferences, so a card carrying one that names nothing is unusable rather than degraded.
 
-> The stored schema card for scope '<scope>' cannot be read (…) — re-run discovery, or apply the entity again, to replace it.
+> The stored schema card for scope '`<scope>`' cannot be read (…) — re-run discovery, or apply the entity again, to replace it.
 
 ### 2. Abstention exit — the model's honest "I can't"
 
@@ -132,7 +127,7 @@ Row-Level Security already isolates *tenants*; this guard is the *scope* boundar
 [binding users to scopes](../rag/scopes.md#binding-users-to-scopes-opt-in): a scope-bound user
 gets `403 scope not granted` before any SQL is even generated.)
 
-> I won't run this: '<schema.table>' is not a table in this scope (declared: …). The query may not read data outside this métier's declared scope.
+> I won't run this: '`<schema.table>`' is not a table in this scope (declared: …). The query may not read data outside this métier's declared scope.
 
 **Do next:** switch to the scope that owns the table (`lm scopes`), or add this scope to the
 connector's `metadata.scopes` and re-run it.
@@ -143,7 +138,7 @@ connector's `metadata.scopes` and re-run it.
 invented column, or an internal one (`tenant_id`, `_row_hash`) the chat was never meant to
 reason over.
 
-> I won't run this: '<column>' is not a declared column of this scope (known: …). If it should exist, add it to the entity manifest.
+> I won't run this: '`<column>`' is not a declared column of this scope (known: …). If it should exist, add it to the entity manifest.
 
 (The "known" list is capped at 12 names to keep the message readable.)
 
@@ -154,7 +149,7 @@ value-domain (the entity manifest's `values:` list). This is the direct counter 
 sin: a query that returns 0 rows *for the wrong reason*, then gets phrased as a confident
 "there are none".
 
-> I won't run this: '<value>' is not a declared value of <column> (known: …). If it should exist, add it to the entity manifest.
+> I won't run this: '`<value>`' is not a declared value of `<column>` (known: …). If it should exist, add it to the entity manifest.
 
 **Do next:** if the value is legitimate, add it to the entity manifest's declared values and
 re-apply; if it was a typo, re-ask with a declared value.
@@ -168,6 +163,29 @@ re-apply; if it was a typo, re-ask with a declared value.
 The SQL that ran is always shown with the answer (CLI prints it; TUI lets you yank it with `y`) —
 verification is one glance away.
 
+Two more things can happen once the query actually runs — after every guard above has already let
+it through, so neither is a guard veto:
+
+- **A filter matches more than one row** — e.g. a customer name that isn't unique. lumnik re-runs
+  just that filter and tells you what it matched instead of failing flat:
+
+  > That filter matches `<N>` rows, so the question has no single answer. Matching `<column>`: `<id-1>`, `<id-2>`, …. Ask again naming one of them — for example by filtering on `<column>` instead of the name.
+
+  If the probe hit its own row cap, `<N>` reads "at least `<N>`" — a floor, never presented as
+  exact. The id list is deduplicated and stops at 10 distinct values, appending ", and `<k>` more"
+  when there were more.
+
+- **Any other read failure** (a genuine syntax error, a permission or timeout issue) gets a
+  refusal naming the SQL and, when it's safe to, the database's own reason:
+
+  > I couldn't run that query — the database refused it: `<reason>` The SQL is below; if it looks
+  > wrong for this scope, re-run discovery.
+
+  `<reason>` is the database's own first line when its SQLSTATE class describes pure structure
+  (`21`, `42`, `53`, `54`, `57`); for any other class it becomes `SQLSTATE <code> (the message is
+  withheld — that class can carry stored values; the server log has it).` instead of the raw
+  message.
+
 ## Fail-open by design
 
 The value/column/table guards inspect only **clean, unambiguous** SQL shapes (bare identifiers
@@ -178,32 +196,23 @@ block a legitimate query on a parsing glitch. The guards are a floor of honesty,
 ## Names the source chose
 
 A column keeps the name its source gave it: a JSON field named `c_bpartner.id`, a CSV header
-`Partner Name`, an ERP column `MONTANT_€`. The schema card the model reads names every column
-**quoted**, so all three are ordinary askable columns — the generated SQL quotes them, and the
-answer comes back with the row keyed by the source's own name.
-
-Bare, none of them could work, and not for a subtle reason: a dot reads as the *table*.*column*
-separator, so the query asks about a table that does not exist; a space cannot be read as one name
-at all; and an unquoted name case-folds to lowercase and stops matching a mixed-case column. The
-model is told to use the listed names exactly and never invent one — given a name it cannot copy,
-it had nothing honest left to do.
+`Partner Name`, an ERP column `MONTANT_€`. The schema card names every column **quoted**, so all
+three are ordinary askable columns — the generated SQL quotes them, and a refusal about one names
+it in full, never a fragment (`montant_€_ht` stays `montant_€_ht`). Use the name exactly as the
+card lists it; none of the three would resolve correctly left unquoted.
 
 This matters most where there is no rename. A kafka manifest carries no mapping hooks, so the
 producer's field name *is* the column name; a CSV or JDBC source can also
 [rename on the way in](../connectors/jdbc.md#per-table-keys), but nothing has to.
-
-The guards read such a name as **one** identifier, the way the server does — including a name
-carrying a currency sign, a guillemet or a `$`. A refusal about `montant_€_ht` names
-`montant_€_ht`, never a fragment of it.
 
 The same holds one rung up the ladder: a
 [`kind:Workflow`](../apps/workflows.md#names-the-source-chose) declares its lifecycle over the
 column's real name too, so the graph the chat answers from and the column it answers about are
 spelled the same way.
 
-## When a wrong number lands anyway
+## When an answer looks wrong
 
-The guards lower the odds; they do not abolish them. The circuit, honestly:
+The guards lower the odds; they do not abolish them. The circuit:
 
 - **Detect** — the SQL travels with every answer: reading it *is* the verification
   gesture, and the reason a wrong number is catchable at all.

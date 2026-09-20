@@ -15,6 +15,17 @@ import (
 	"github.com/icreated/lumnik-open/lm/internal/textsafe"
 )
 
+// greeting names the connected hub's edition when it's worth naming: the Open edition,
+// specifically, per lumnik/issue #544. A commercial edition or a failed enrichment call both
+// fall back to the plain message — this is informative, never a reason to treat login as failed.
+func greeting(name string, c config.Context) string {
+	edition, err := client.NewForContext(name, c).Edition()
+	if err != nil || edition != "open" {
+		return "Logged in."
+	}
+	return "Logged in to lumnik Open Edition."
+}
+
 // Run executes the OIDC device flow for cfg.Contexts[name], prints the URL +
 // user code to out, polls for the token, and persists Access/Refresh/ExpiresAt
 // back to path. Reused by the `lm login` command and the TUI's re-login modal.
@@ -65,8 +76,11 @@ func Run(ctx context.Context, h *http.Client, cfg *config.Config, path, name str
 	c.Refresh = tok.RefreshToken
 	c.ExpiresAt = time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second).Unix()
 	cfg.Contexts[name] = c
-	fmt.Fprintln(out, "Logged in.")
-	return cfg.Save(path)
+	if err := cfg.Save(path); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, greeting(name, c))
+	return nil
 }
 
 // HTTPClient builds the login http client, honoring a context's TLS trust settings

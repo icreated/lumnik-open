@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/icreated/lumnik-open/lm/internal/ask"
 	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/tui/style"
 	"github.com/rivo/tview"
@@ -177,7 +178,7 @@ func (a *Ask) render(res *client.AskResult) {
 func doorGestures(doors []string) []string {
 	var out []string
 	for _, d := range doors {
-		if d == "conflicts" {
+		if d == ask.Conflicts {
 			out = append(out, "where this scope's sources disagree: :conflicts")
 		}
 	}

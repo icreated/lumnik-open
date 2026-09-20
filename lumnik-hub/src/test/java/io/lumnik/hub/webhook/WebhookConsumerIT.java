@@ -71,22 +71,26 @@ class WebhookConsumerIT {
     }
 
     @Transactional
-    void seedEvent(String type) {
+    long seedEvent(String type) {
         em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
-        em.persist(EventOutboxRow.of(1L, type, Map.of("k", "v")));
+        EventOutboxRow row = EventOutboxRow.of(1L, type, Map.of("k", "v"));
+        em.persist(row);
+        return row.getId();
     }
 
-    /** Seeds a failed (retryable) delivery dated one day ago, tied to the named endpoint. */
+    /** Seeds a failed (retryable) delivery dated one day ago, tied to the named endpoint.
+     *  {@code eventId} may be null — only the correlation test needs one set. */
     @Transactional
-    void seedStaleFailedDelivery(String endpointName, String eventType) {
+    void seedStaleFailedDelivery(String endpointName, String eventType, Long eventId) {
         em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
         em.createNativeQuery("""
             INSERT INTO core.webhook_delivery
-                (tenant_id, endpoint_id, event_type, payload, attempted_at, attempts, succeeded)
-            SELECT 1, e.id, :etype, '{"k":"v"}'::jsonb, NOW() - INTERVAL '1 day', 1, FALSE
+                (tenant_id, endpoint_id, event_type, event_id, payload, attempted_at, attempts, succeeded)
+            SELECT 1, e.id, :etype, :eventId, '{"k":"v"}'::jsonb, NOW() - INTERVAL '1 day', 1, FALSE
             FROM core.webhook_endpoint e WHERE e.name = :name
             """)
           .setParameter("etype", eventType)
+          .setParameter("eventId", eventId)
           .setParameter("name", endpointName)
           .executeUpdate();
     }
@@ -104,7 +108,7 @@ class WebhookConsumerIT {
     void retryRefreshesAttemptedAt() {
         wm.stubFor(post("/stamp").willReturn(aResponse().withStatus(200)));
         seedEndpoint("whc-stamp", "/stamp");
-        seedStaleFailedDelivery("whc-stamp", "whc.test.stamp");
+        seedStaleFailedDelivery("whc-stamp", "whc.test.stamp", null);
 
         double before = attemptedEpochFor("whc.test.stamp");
         TenantContext.runAsSystem(consumer::retryBatch);
@@ -138,6 +142,33 @@ class WebhookConsumerIT {
         wm.verify(1, postRequestedFor(urlEqualTo("/ok")));
         wm.verify(2, postRequestedFor(urlEqualTo("/broken")));
         assertEquals(0, countFailedRetryable());
+    }
+
+    @Test
+    void initialDeliveryCarriesTheOutboxEventIdHeader() {
+        wm.stubFor(post("/eventid").willReturn(aResponse().withStatus(200)));
+        seedEndpoint("whc-eventid", "/eventid");
+        long eventId = seedEvent("whc.test.eventid");
+
+        TenantContext.runAsSystem(() -> sweeper.sweep("webhook", 100, consumer::process));
+
+        // The header must carry the SAME id core.event_outbox assigned this event — the id the
+        // inbox later echoes back as `decision_id` in the annotation.decision.acked event, so a
+        // receiver can correlate a decision.* delivery with its later ack without calling back.
+        wm.verify(1, postRequestedFor(urlEqualTo("/eventid"))
+            .withHeader("X-Lumnik-Event-Id", equalTo(String.valueOf(eventId))));
+    }
+
+    @Test
+    void retryCarriesTheSameEventIdAsTheOriginalDelivery() {
+        wm.stubFor(post("/retry-eventid").willReturn(aResponse().withStatus(500)));
+        seedEndpoint("whc-retry-eventid", "/retry-eventid");
+        seedStaleFailedDelivery("whc-retry-eventid", "whc.test.retry-eventid", 424242L);
+
+        TenantContext.runAsSystem(consumer::retryBatch);
+
+        wm.verify(1, postRequestedFor(urlEqualTo("/retry-eventid"))
+            .withHeader("X-Lumnik-Event-Id", equalTo("424242")));
     }
 
     @Test

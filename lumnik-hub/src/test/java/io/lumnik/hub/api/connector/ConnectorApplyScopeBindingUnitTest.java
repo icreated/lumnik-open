@@ -68,7 +68,7 @@ class ConnectorApplyScopeBindingUnitTest {
         ConnectorApplyResource res = new ConnectorApplyResource();
         res.json = new ObjectMapper();
         res.connectors = new ConnectorRepository() {
-            @Override public Optional<List<String>> scopesOf(long tenant, String name) { return storedScopes; }
+            @Override public Optional<List<String>> lockedScopesOf(long tenant, String name) { return storedScopes; }
         };
         return res;
     }

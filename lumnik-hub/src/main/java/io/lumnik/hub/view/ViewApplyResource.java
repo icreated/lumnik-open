@@ -1,10 +1,13 @@
 package io.lumnik.hub.view;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.api.ApplyDoorSupport;
 import io.lumnik.hub.api.ApplyScopeBoundary;
+import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.tenant.RequireTenant;
@@ -48,9 +51,11 @@ public class ViewApplyResource {
   public Response apply(String body) {
     long tenant = RequireTenant.current();
 
+    JsonNode root;
     ViewManifest manifest;
     try {
-      manifest = parser.parse(body);
+      root = parser.readTree(body);
+      manifest = parser.parse(root);
     } catch (IllegalArgumentException e) {
       return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
     }
@@ -59,21 +64,16 @@ public class ViewApplyResource {
     // cost the integrator their title with no word said. Refused at the curated door only — the
     // store holds manifests as YAML, and refusing on the read path would break a view already
     // saved with an extra key.
-    List<String> unknown = parser.unknownKeys(body);
-    if (!unknown.isEmpty()) {
-      return Response.status(400).entity(ApiErrors.error(
-          "unknown key(s) in the manifest: " + String.join(", ", unknown)
-              + " — kind:View honors " + ViewManifestParser.honoredSurface())).build();
-    }
+    List<String> unknown = parser.unknownKeys(root);
+    Optional<Response> unknownRefusal =
+        ApplyDoorSupport.refuseUnknownKeys("View", unknown, ViewManifestParser.honoredSurface());
+    if (unknownRefusal.isPresent()) return unknownRefusal.get();
 
     // the name becomes the PK and a URL path segment in GET /api/views/{name}: refuse
     // anything unfetchable (unsafe characters) or shadowed (sibling endpoint literals)
     String name = manifest.name().strip().toLowerCase(Locale.ROOT);
-    if (!name.matches("[a-z0-9][a-z0-9_-]*") || RESERVED_NAMES.contains(name)) {
-      return Response.status(400).entity(ApiErrors.error(
-          "metadata.name must be a URL-safe slug ([a-z0-9_-], starting with a letter or digit) "
-              + "and not one of " + RESERVED_NAMES)).build();
-    }
+    Optional<Response> slugRefusal = ApplyDoorSupport.refuseReservedOrInvalidSlug(name, RESERVED_NAMES);
+    if (slugRefusal.isPresent()) return slugRefusal.get();
 
     if (!ScopeGrants.allows(manifest.scope())) {
       return ApiErrors.scopeNotGranted();
@@ -83,6 +83,11 @@ public class ViewApplyResource {
     // sets scope = EXCLUDED.scope, so declaring into a scope you hold under a name that belongs to
     // one you do not would re-home that view: the métier that owned the screen stops seeing it.
     // Same words as the check above, so the two refusals are indistinguishable (#509).
+    //
+    // ORDERED — read, then write — which a race can jump; the store re-asks atomically and
+    // refuseUnlessApplied below is that second answer. This earlier one is kept because it refuses
+    // BEFORE the 404 further down names a scope, and a caller refused for the NAME must not read
+    // which scopes exist on the way out (#582).
     ApplyScopeBoundary.refuseUnlessCallerHoldsScope(store.findScope(name));
 
     Optional<SchemaCard> card = cards.load(tenant, manifest.scope());
@@ -98,7 +103,12 @@ public class ViewApplyResource {
       return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
     }
 
-    store.upsert(name, manifest.scope(), rv.title(), body);
+    // granted().orElse(null) — empty Optional means unscoped, i.e. every scope, the same
+    // expression the scope-filtered list reads its filter from. The write's own answer goes
+    // straight into the void guard, so it cannot be had and dropped.
+    ApplyScopeBoundary.refuseUnlessApplied(
+        store.upsert(name, manifest.scope(), rv.title(), body, ScopeGrants.granted().orElse(null)));
+
     // Audit P4: the upsert goes through raw JDBC, outside every Hibernate listener — this
     // explicit capture is the only record of who changed which métier screen when.
     audit.record("SavedView", name, "APPLY", Map.of(

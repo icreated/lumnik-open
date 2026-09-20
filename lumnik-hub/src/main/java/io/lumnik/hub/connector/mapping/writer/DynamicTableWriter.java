@@ -19,6 +19,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -55,6 +58,7 @@ public class DynamicTableWriter {
   @Inject RunTableStats stats;
   @Inject RowEventGate gate;
   @Inject ObjectMapper mapper;
+  @Inject DriftDetector driftDetector;
 
   @Inject
   @DataSource("admin")
@@ -103,16 +107,75 @@ public class DynamicTableWriter {
     insertRows(spec, rows, systemContexts, tenantId, registered, connectorId);
   }
 
-  /** First write for this mapping: infer the schema, create the table + indexes + RLS, register it. */
+  /**
+   * First write for THIS mapping: {@code registry.findSchema} came back null, but the physical
+   * table may not be new — a sibling mapping can already have created {@code spec}'s table, an
+   * earlier registry row for this same mapping can have been deleted with the table left
+   * standing, or a CONCURRENT first write from another mapping onto the same new table can be
+   * racing this one right now (connector runs fan out onto virtual threads). {@code CREATE TABLE
+   * IF NOT EXISTS} is then a silent no-op for whichever call loses that race, so registering
+   * whatever THIS chunk infers would let the registry disagree with the table it is supposed to
+   * describe from the very first write — the gap #525 named.
+   *
+   * <p>A {@code pg_advisory_xact_lock} keyed by {@code schema.table} removes the concurrent case
+   * outright: only one writer at a time runs this body for a given physical table, so
+   * {@code CREATE TABLE IF NOT EXISTS} is a genuine, uncontended existence check exactly like the
+   * sequential case, and {@link DriftDetector#actualSchema} — read only AFTER creation, never
+   * before — sees the table whichever writer created it. Two earlier review rounds tried to reach
+   * this by catching the specific SQLSTATEs a lost "IF NOT EXISTS" race can surface as; that could
+   * not stay correct, because {@code createIndexes()} can raise that exact same SQLSTATE for a
+   * genuine unique constraint violated by real duplicate data, which must still fail the write.
+   *
+   * <p>Everything the locked body touches — the create DDL, the physical-schema read, and the
+   * registry write — runs on this ONE connection {@code c}, never a second one checked out from
+   * the same pool while this one sits idle: round 3 review found that shape starves the admin
+   * pool once enough concurrent first-writes to DISTINCT tables are each holding a lock connection
+   * and blocking on a second. {@code pg_advisory_xact_lock} then releases automatically on commit
+   * or rollback, including the exceptional path.
+   */
   private Map<String, String> createSchema(MappingTarget.Table spec, List<Map<String, Object>> rows,
                                            Map<String, String> sourceTypeHints, Long tenantId,
                                            String mappingId, UUID connectorId) {
-    Map<String, String> inferred = inferrer.infer(rows, sourceTypeHints);
-    createTable(spec, inferred);
-    createIndexes(spec);
-    enableRLS(spec);
-    registry.register(tenantId, mappingId, spec.schema(), spec.name(), inferred, connectorId);
-    return inferred;
+    try (Connection c = adminDs.getConnection()) {
+      c.setAutoCommit(false);
+      try {
+        advisoryXactLock(c, spec.schema() + "." + spec.name());
+
+        Map<String, String> inferred = inferrer.infer(rows, sourceTypeHints);
+        createTable(c, spec, inferred);
+        createIndexes(c, spec);
+        enableRLS(c, spec);
+
+        Map<String, String> actual = driftDetector.actualSchema(c, spec.schema(), spec.name());
+        actual.keySet().removeAll(SYSTEM_COLUMNS);
+        Map<String, String> reconciled = applyDrift(c, spec, rows, actual, sourceTypeHints);
+
+        registry.register(c, tenantId, mappingId, spec.schema(), spec.name(), reconciled, connectorId);
+        c.commit();
+        return reconciled;
+      } catch (Exception e) {
+        rollbackQuietly(c);
+        throw new ConnectorException("DynamicTableWriter.createSchema: " + e.getMessage(), e);
+      }
+    } catch (SQLException e) {
+      throw new ConnectorException("DynamicTableWriter.createSchema: " + e.getMessage(), e);
+    }
+  }
+
+  /** Best-effort: the original failure above already carries the real cause. */
+  private void rollbackQuietly(Connection c) {
+    try {
+      c.rollback();
+    } catch (SQLException ignore) {
+      // best-effort
+    }
+  }
+
+  private void advisoryXactLock(Connection c, String key) throws SQLException {
+    try (PreparedStatement ps = c.prepareStatement("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))")) {
+      ps.setString(1, key);
+      ps.execute();
+    }
   }
 
   /**
@@ -134,14 +197,46 @@ public class DynamicTableWriter {
                                            Map<String, String> registered,
                                            Map<String, String> sourceTypeHints, Long tenantId,
                                            String mappingId, UUID connectorId) {
-    Set<String> newCols = detectNewColumns(rows, registered);
-    Set<String> tooNarrow = widenings(rows, registered);
-    if (newCols.isEmpty() && tooNarrow.isEmpty()) return registered;
+    Map<String, String> updated = applyDrift(spec, rows, registered, sourceTypeHints);
+    if (updated.equals(registered)) return registered;
 
-    Map<String, String> updated = new LinkedHashMap<>(registered);
+    // Run all DDL BEFORE advancing the registry — mirrors the creation branch, where register()
+    // is the last step (the "commit" of successful DDL). If createIndexes throws, the registry
+    // stays in its pre-evolution state so the next run re-detects newCols and retries; ALTER and
+    // index DDL are both IF NOT EXISTS, so the retry is safe.
+    registry.register(tenantId, mappingId, spec.schema(), spec.name(), updated, connectorId);
+    return updated;
+  }
+
+  /** {@link #applyDrift(Connection, MappingTarget.Table, List, Map, Map)} on its own connection —
+   *  {@link #evolveSchema}'s unlocked call, where no wider transaction is already in hand. */
+  private Map<String, String> applyDrift(MappingTarget.Table spec, List<Map<String, Object>> rows,
+                                         Map<String, String> base, Map<String, String> sourceTypeHints) {
+    try (Connection c = adminDs.getConnection()) {
+      return applyDrift(c, spec, rows, base, sourceTypeHints);
+    } catch (SQLException e) {
+      throw new ConnectorException("DynamicTableWriter.applyDrift: " + e.getMessage(), e);
+    }
+  }
+
+  /**
+   * Widens too-narrow columns then adds new ones against {@code base}, issuing whatever ALTER DDL
+   * each requires, and returns the resulting schema — equal to {@code base} (by content) when
+   * this chunk drove no change. {@code base} is registry truth for {@link #evolveSchema}'s own
+   * call and physical truth (via {@link DriftDetector}) for {@link #createSchema}'s — the one
+   * place #525 found the two disagreeing.
+   */
+  private Map<String, String> applyDrift(Connection c, MappingTarget.Table spec, List<Map<String, Object>> rows,
+                                         Map<String, String> base, Map<String, String> sourceTypeHints)
+                                         throws SQLException {
+    Set<String> newCols = detectNewColumns(rows, base);
+    Set<String> tooNarrow = widenings(rows, base);
+    if (newCols.isEmpty() && tooNarrow.isEmpty()) return base;
+
+    Map<String, String> updated = new LinkedHashMap<>(base);
 
     if (!tooNarrow.isEmpty()) {
-      widenColumns(spec, tooNarrow);
+      widenColumns(c, spec, tooNarrow);
       for (String col : tooNarrow) updated.put(col, NUMERIC);
       LOG.infof("%s.%s: %d column(s) widened to %s by this chunk's first fractional value: %s",
           spec.schema(), spec.name(), tooNarrow.size(), NUMERIC, String.join(", ", tooNarrow));
@@ -151,7 +246,7 @@ public class DynamicTableWriter {
       Map<String, String> inferred = inferrer.infer(rows, sourceTypeHints);
       for (String col : newCols) {
         String pgType = inferred.getOrDefault(col, "TEXT");
-        alterAddColumn(spec, col, pgType);
+        alterAddColumn(c, spec, col, pgType);
         updated.put(col, pgType);
       }
       // In the order they were ADDED, which is now the chunk's own order and therefore the
@@ -159,16 +254,11 @@ public class DynamicTableWriter {
       // deterministic, and it read as a different order from the one `\d` shows.
       LOG.infof("%s.%s: %d column(s) added mid-run, typed from this chunk: %s",
           spec.schema(), spec.name(), newCols.size(),
-          newCols.stream().map(c -> c + " " + updated.get(c)).collect(Collectors.joining(", ")));
+          newCols.stream().map(col -> col + " " + updated.get(col)).collect(Collectors.joining(", ")));
       // Index DDL only has something to do when a column appeared; widening one changes no index.
-      createIndexes(spec);
+      createIndexes(c, spec);
     }
 
-    // Run all DDL BEFORE advancing the registry — mirrors the creation branch, where register()
-    // is the last step (the "commit" of successful DDL). If createIndexes throws, the registry
-    // stays in its pre-evolution state so the next run re-detects newCols and retries; ALTER and
-    // index DDL are both IF NOT EXISTS, so the retry is safe.
-    registry.register(tenantId, mappingId, spec.schema(), spec.name(), updated, connectorId);
     return updated;
   }
 
@@ -192,8 +282,9 @@ public class DynamicTableWriter {
     return newCols;
   }
 
-  private void alterAddColumn(MappingTarget.Table spec, String column, String pgType) {
-    exec("ALTER TABLE " + fqn(spec) + " ADD COLUMN IF NOT EXISTS " + quoteIdent(column) + " " + pgType);
+  private void alterAddColumn(Connection c, MappingTarget.Table spec, String column, String pgType)
+      throws SQLException {
+    exec(c, "ALTER TABLE " + fqn(spec) + " ADD COLUMN IF NOT EXISTS " + quoteIdent(column) + " " + pgType);
   }
 
   /** The widening pair, read from the inferrer that emits them: {@code bigint -> numeric(18,4)}. */
@@ -235,11 +326,11 @@ public class DynamicTableWriter {
    * comma-separated form and pays for one. (Its {@code ADD COLUMN} neighbour above stays a
    * statement per column on purpose: adding a column without a default is metadata-only.)
    */
-  private void widenColumns(MappingTarget.Table spec, Set<String> columns) {
+  private void widenColumns(Connection c, MappingTarget.Table spec, Set<String> columns) throws SQLException {
     String alters = columns.stream()
-        .map(c -> "ALTER COLUMN " + quoteIdent(c) + " TYPE " + NUMERIC)
+        .map(col -> "ALTER COLUMN " + quoteIdent(col) + " TYPE " + NUMERIC)
         .collect(Collectors.joining(", "));
-    exec("ALTER TABLE " + fqn(spec) + " " + alters);
+    exec(c, "ALTER TABLE " + fqn(spec) + " " + alters);
   }
 
   // ── DDL ────────────────────────────────────────────────────────────────────
@@ -305,9 +396,10 @@ public class DynamicTableWriter {
     }
   }
 
-  private void createTable(MappingTarget.Table spec, Map<String, String> schema) {
-    exec("CREATE SCHEMA IF NOT EXISTS " + quoteIdent(spec.schema()));
-    exec(createTableDdl(spec, schema));
+  private void createTable(Connection c, MappingTarget.Table spec, Map<String, String> schema)
+      throws SQLException {
+    exec(c, "CREATE SCHEMA IF NOT EXISTS " + quoteIdent(spec.schema()));
+    exec(c, createTableDdl(spec, schema));
   }
 
   /**
@@ -334,7 +426,7 @@ public class DynamicTableWriter {
     return t.toString();
   }
 
-  private void createIndexes(MappingTarget.Table spec) {
+  private void createIndexes(Connection c, MappingTarget.Table spec) throws SQLException {
     if (spec.indexes() == null || spec.indexes().isEmpty()) return;
     for (var idx : spec.indexes()) {
       StringBuilder s = new StringBuilder("CREATE ");
@@ -347,25 +439,35 @@ public class DynamicTableWriter {
         s.append(quoteIdent(idx.columns().get(i)));
       }
       s.append(')');
-      exec(s.toString());
+      exec(c, s.toString());
     }
   }
 
   /**
    * Stamps the shared tenant-isolation DDL ({@link RlsDdl}) on a freshly created table.
-   * Package-visible so the emitted DDL can be pinned without a live datasource.
+   * Package-visible so the emitted DDL can be pinned without a live datasource ({@code
+   * RlsDdlCharacterizationTest} calls this exact connectionless overload against a mocked
+   * {@code adminDs}).
    */
   void enableRLS(MappingTarget.Table spec) {
+    try (Connection c = adminDs.getConnection()) {
+      enableRLS(c, spec);
+    } catch (SQLException e) {
+      throw new ConnectorException("DDL failed: " + e.getMessage(), e);
+    }
+  }
+
+  private void enableRLS(Connection c, MappingTarget.Table spec) throws SQLException {
     String schema = spec.schema();
     String table = spec.name();
-    exec(RlsDdl.enableRowLevelSecurity(schema, table));
-    exec(RlsDdl.tenantIsolationPolicy(schema, table));
-    exec(RlsDdl.tenantIdIndex(schema, table));
+    exec(c, RlsDdl.enableRowLevelSecurity(schema, table));
+    exec(c, RlsDdl.tenantIsolationPolicy(schema, table));
+    exec(c, RlsDdl.tenantIdIndex(schema, table));
     // One guarded block per grant: each stands or falls on its own, so a missing lumnik_app never
     // costs the table its lumnik_readonly grant.
-    exec(RlsDdl.guarded(RlsDdl.grantAppDml(schema, table)));
-    exec(RlsDdl.guarded(RlsDdl.grantReadonlySelect(schema, table)));
-    exec(RlsDdl.guarded(RlsDdl.grantSequenceUsage(schema, table + "_id_seq")));
+    exec(c, RlsDdl.guarded(RlsDdl.grantAppDml(schema, table)));
+    exec(c, RlsDdl.guarded(RlsDdl.grantReadonlySelect(schema, table)));
+    exec(c, RlsDdl.guarded(RlsDdl.grantSequenceUsage(schema, table + "_id_seq")));
   }
 
   // ── DML ────────────────────────────────────────────────────────────────────
@@ -657,7 +759,22 @@ public class DynamicTableWriter {
       ps.setObject(idx, toJson(v), Types.OTHER);
       return;
     }
-    ps.setObject(idx, v);
+    ps.setObject(idx, bindable(v));
+  }
+
+  /**
+   * pgJDBC infers a SQL type from the Java type it is handed, and its {@code java.time} support
+   * does not cover every temporal {@link SchemaInferrer#isTimestamp} accepts: an {@code Instant}
+   * or {@code ZonedDateTime} reaches a bare {@code setObject} and pgJDBC refuses it ("Impossible
+   * de déduire le type SQL…") — on the FIRST chunk, since the column is already TIMESTAMPTZ before
+   * any row is bound. Both convert losslessly to {@code OffsetDateTime}, which pgJDBC does bind to
+   * TIMESTAMPTZ, so the inferrer's promise and the binder's capability stay pinned together
+   * (#506, {@code SchemaTypingInventoryTest}).
+   */
+  private static Object bindable(Object v) {
+    if (v instanceof Instant instant) return instant.atOffset(ZoneOffset.UTC);
+    if (v instanceof ZonedDateTime zdt) return zdt.toOffsetDateTime();
+    return v;
   }
 
   /**
@@ -677,11 +794,9 @@ public class DynamicTableWriter {
     }
   }
 
-  private void exec(String sql) {
-    try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
+  private void exec(Connection c, String sql) throws SQLException {
+    try (Statement st = c.createStatement()) {
       st.execute(sql);
-    } catch (Exception e) {
-      throw new ConnectorException("DDL failed: " + sql + " — " + e.getMessage(), e);
     }
   }
 

@@ -11,28 +11,34 @@ import (
 
 	"github.com/cucumber/godog"
 	"github.com/icreated/lumnik-open/lm/test/otk/auth"
+	"github.com/icreated/lumnik-open/lm/test/otk/calibration"
+	"github.com/icreated/lumnik-open/lm/test/otk/generator"
 	"github.com/icreated/lumnik-open/lm/test/otk/oracle"
 )
 
 func TestOTK(t *testing.T) {
-	goldM, gerr := goldSeedsFromEnv()
-	if gerr != nil {
-		// A present-but-invalid OTK_GOLD_SEEDS must fail, not silently fall back to
-		// the Silver corpus path (which would be a false-green "gold" run).
-		t.Fatalf("OTK gold mode misconfigured: %v", gerr)
+	res, rerr := resolveMode()
+	if rerr != nil {
+		// A present-but-invalid value must fail, not silently fall back to the corpus
+		// path (which would be a false-green "gold" run).
+		t.Fatalf("OTK mode misconfigured: %v", rerr)
 	}
-	gold := goldM > 0
+	gold := res.Mode == ModeCatalogue
+	cal := res.Mode == ModeCalibration
+	// Calibration runs the whole catalogue against a deliberately broken hub, so it
+	// inherits every precondition the catalogue path enforces up front.
+	whole := gold || cal
 
 	if os.Getenv("LUMNIK_URL") == "" {
-		// Gold mode must never pass by skipping — that would make the badge a lie.
-		// A missing hub in gold mode is a hard failure, not a skip.
-		if gold {
-			t.Fatalf("OTK gold mode requires LUMNIK_URL (a live real-auth hub); " +
-				"set it or unset OTK_GOLD_SEEDS")
+		// Gold and calibration must never pass by skipping — that would make the badge
+		// a lie and the calibration a tautology.
+		if whole {
+			t.Fatalf("OTK %s mode requires LUMNIK_URL (a live real-auth hub); "+
+				"set it or unset OTK_GOLD/OTK_FAULT", res.Mode)
 		}
 		t.Skip("set LUMNIK_URL to run OTK (hub must use the non-owner app DB role)")
 	}
-	if gold {
+	if whole {
 		// Gold must exercise every lane through real-auth + DB truth with the SHARED
 		// signing key (not an ephemeral one), or it is not Gold. Enforce the full
 		// precondition up front — before any key minting or scenario runs — so an
@@ -48,14 +54,15 @@ func TestOTK(t *testing.T) {
 			missing = append(missing, "OTK_KEY_FILE (shared signing key; an ephemeral key would not match the hub)")
 		}
 		if len(missing) > 0 {
-			t.Fatalf("OTK gold mode requires %s; set them or unset OTK_GOLD_SEEDS",
-				strings.Join(missing, ", "))
+			t.Fatalf("OTK %s mode requires %s; set them or unset OTK_GOLD/OTK_FAULT",
+				res.Mode, strings.Join(missing, ", "))
 		}
 	}
 	// Make the run hermetic: lm resolves a context from ~/.lm/config.yaml and
 	// errors without a current-context even when LUMNIK_URL is set.
 	writeHermeticConfig(t)
 	allFindings = nil
+	scenariosAttempted = 0
 
 	// Real-auth battery: when the hub trusts our key (OTK_OIDC_ISSUER set by the
 	// harness/CI), mint a valid integrator token for the functional lanes. The key
@@ -89,16 +96,7 @@ func TestOTK(t *testing.T) {
 		otkKey = k
 	}
 
-	var tier oracle.Tier
-	if gold {
-		tier = oracle.Gold // gold preconditions already enforced above
-	} else {
-		var err error
-		tier, err = resolveTier()
-		if err != nil {
-			t.Fatalf("OTK tier misconfigured: %v", err)
-		}
-	}
+	tier := res.Tier
 
 	// Surface the hub-side intactness state once, up front. A precondition error
 	// here (psql present but failing) fails hard; pure dormancy only logs.
@@ -109,26 +107,42 @@ func TestOTK(t *testing.T) {
 			"to enable the schema-diff + API/DB-divergence security families")
 	}
 
+	if cal {
+		// A calibration that cannot possibly observe its own finding must never run:
+		// its red would be a lie about the harness, indistinguishable from "the check
+		// is blind". Not a skip, not a warning.
+		if err := calibration.CheckCapabilities(res.Fault, calibrationProbes()); err != nil {
+			t.Fatalf("OTK calibration REFUSES to start: %v", err)
+		}
+	}
+
 	// The entity read variants target a pre-seeded otk_customer entity; the harness
 	// seeds it itself (dormant without OTK_DB_DSN, like the variants).
 	ensureEntityReadSeed(t)
 
 	opts := &godog.Options{Format: "pretty", Paths: []string{"corpus"}}
-	if gold {
-		// Validate the scenario count (overflow-guarded) BEFORE building the slice,
-		// so a misconfigured OTK_GOLD_SEEDS fails with a clear message instead of a
-		// huge/overflowing allocation.
-		want, cerr := expectedGoldScenarios(goldM)
+	catalogueCases := 0
+	if whole {
+		// The sweep must witness every catalogue case before anything runs: a partial
+		// corpus that still went green is the exact failure this gate replaced.
+		feats, cerr := catalogueFeatures()
 		if cerr != nil {
-			t.Fatalf("OTK gold: %v", cerr)
+			t.Fatalf("OTK %s: %v", res.Mode, cerr)
 		}
-		if !enoughForGold(want) {
-			t.Fatalf("OTK gold: %d scenarios < %d floor — raise OTK_GOLD_SEEDS",
-				want, goldMinScenarios)
+		catalogueCases = len(feats)
+		// Strict mode: a certification gate must fail towards refusal, not skip
+		// silently. Without it, a step godog cannot match (undefined) or a step that
+		// yields Pending runs zero assertions and godog still reports success — the
+		// exact false green TestEveryGoldCatalogueStepIsBound exists to catch before
+		// a hub is ever involved; Strict makes the live Gold run refuse it too.
+		opts = &godog.Options{Format: "progress", FeatureContents: feats, Strict: true}
+		if cal {
+			t.Logf("OTK calibration: fault=%s phase=%s, %d catalogue cases, fingerprint=%s",
+				res.Fault.Name, res.Phase, catalogueCases, generator.CatalogueFingerprint())
+		} else {
+			t.Logf("OTK gold mode: %d catalogue cases, fingerprint=%s, tier=GOLD",
+				catalogueCases, generator.CatalogueFingerprint())
 		}
-		feats := goldFeatures(goldM)
-		opts = &godog.Options{Format: "progress", FeatureContents: feats}
-		t.Logf("OTK gold mode: %d scenarios (%d seeds x %d lanes), tier=GOLD", want, goldM, goldLanes)
 	}
 	suite := godog.TestSuite{
 		ScenarioInitializer: InitializeScenario,
@@ -154,59 +168,23 @@ func TestOTK(t *testing.T) {
 		t.Logf("OTK: no tier passes — Bronze unmet")
 	}
 
+	if cal {
+		// gateFailures does NOT apply. The hub is deliberately broken, so steps will
+		// fail and the godog status will be non-zero; treating that as a verdict would
+		// make every calibration trivially "successful".
+		t.Logf("OTK calibration: godog status=%d (collected, never a verdict), %d scenario(s) attempted of %d",
+			status, scenariosAttempted, catalogueCases)
+		if err := calibration.Judge(res.Phase, res.Fault, allFindings, scenariosAttempted, catalogueCases); err != nil {
+			t.Error(err)
+		} else {
+			t.Logf("OTK calibration PASSED: %s phase of fault %q", res.Phase, res.Fault.Name)
+		}
+		return
+	}
+
 	for _, reason := range gateFailures(v, status) {
 		t.Error(reason)
 	}
-}
-
-func TestResolveTier(t *testing.T) {
-	// Env override wins.
-	t.Setenv("OTK_TIER", "silver")
-	got, err := resolveTier()
-	if err != nil || got != oracle.Silver {
-		t.Fatalf("env override: got (%v,%v), want (Silver,nil)", got, err)
-	}
-
-	// Garbage env value is a hard error.
-	t.Setenv("OTK_TIER", "garbage")
-	if _, err := resolveTier(); err == nil {
-		t.Fatal("garbage OTK_TIER must return an error")
-	}
-
-	// Empty env falls back to the committed lm/test/otk/tier file. Compare against
-	// the file's own parsed value so this never goes stale when the gate is bumped.
-	t.Setenv("OTK_TIER", "")
-	got, err = resolveTier()
-	if err != nil {
-		t.Fatalf("file default returned error: %v", err)
-	}
-	raw, rerr := os.ReadFile(tierFile)
-	if rerr != nil {
-		t.Fatalf("read tier file %q: %v", tierFile, rerr)
-	}
-	want, perr := oracle.ParseTier(string(raw))
-	if perr != nil {
-		t.Fatalf("committed tier file %q is unparseable: %v", tierFile, perr)
-	}
-	if got != want {
-		t.Fatalf("file default: got %v, want %v (from %s)", got, want, tierFile)
-	}
-}
-
-const tierFile = "tier"
-
-// resolveTier returns the tier the gate must enforce: OTK_TIER overrides the
-// committed lm/test/otk/tier file. Any read/parse problem is returned as an
-// error so the caller can fail the test hard.
-func resolveTier() (oracle.Tier, error) {
-	if v := os.Getenv("OTK_TIER"); v != "" {
-		return oracle.ParseTier(v)
-	}
-	b, err := os.ReadFile(tierFile)
-	if err != nil {
-		return oracle.Bronze, fmt.Errorf("read %s: %w", tierFile, err)
-	}
-	return oracle.ParseTier(string(b))
 }
 
 func TestRlsScoped_prefixesTenantSet(t *testing.T) {

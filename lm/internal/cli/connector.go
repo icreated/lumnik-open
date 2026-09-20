@@ -98,8 +98,8 @@ func newConnectorCmd() *cobra.Command {
 		Use:   "apply",
 		Short: "Create or update a connector from its `get` YAML (flat fields, not a manifest)",
 		Long: "Create or update a connector from the FLAT stored fields — tenantId, name, typeId,\n" +
-			"schedule, window, enabled, config — which is what `lm connector get` writes. The designed loop is\n" +
-			"`get` → edit → `apply`, the same one the TUI runs against $EDITOR.\n\n" +
+			"schedule, window, enabled, config, tags — which is what `lm connector get` writes. The designed\n" +
+			"loop is `get` → edit → `apply`, the same one the TUI runs against $EDITOR.\n\n" +
 			"A `kind: Connector` manifest goes to `lm apply -f` instead: different format,\n" +
 			"different endpoint. Hand one here and this command says so rather than posting it.",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -108,7 +108,7 @@ func newConnectorCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			payload, err := decodeManifest(body, file, "connector")
+			payload, err := decodeManifest(body, file)
 			if err != nil {
 				return err
 			}

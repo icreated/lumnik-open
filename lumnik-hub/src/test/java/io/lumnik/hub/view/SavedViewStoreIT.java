@@ -19,14 +19,14 @@ class SavedViewStoreIT {
 
   @Test
   void upsert_find_roundtrip_and_overwrite() {
-    store.upsert("it-clients-desk", "clients", "Clients", YAML + "# v1");
+    store.upsert("it-clients-desk", "clients", "Clients", YAML + "# v1", null);
     var row = store.find("it-clients-desk");
     assertThat(row).isPresent();
     assertThat(row.get().scope()).isEqualTo("clients");
     assertThat(row.get().title()).isEqualTo("Clients");
     assertThat(row.get().yaml()).endsWith("# v1");
 
-    store.upsert("it-clients-desk", "clients", "Clients v2", YAML + "# v2");
+    store.upsert("it-clients-desk", "clients", "Clients v2", YAML + "# v2", null);
     var again = store.find("it-clients-desk");
     assertThat(again.get().title()).isEqualTo("Clients v2");
     assertThat(again.get().yaml()).endsWith("# v2");
@@ -36,8 +36,8 @@ class SavedViewStoreIT {
 
   @Test
   void list_filters_by_scope_set() {
-    store.upsert("it-stock-articles", "stock", "Articles", YAML);
-    store.upsert("it-achats-cmd", "achats", "Commandes", YAML);
+    store.upsert("it-stock-articles", "stock", "Articles", YAML, null);
+    store.upsert("it-achats-cmd", "achats", "Commandes", YAML, null);
 
     List<SavedViewStore.Summary> bound = store.list(Set.of("stock"));
     assertThat(bound).extracting(SavedViewStore.Summary::name).contains("it-stock-articles");
@@ -57,7 +57,7 @@ class SavedViewStoreIT {
   void upsert_normalizes_case_so_every_caller_reaches_the_same_row() {
     // the store owns normalization on BOTH sides — a mixed-case upsert from any
     // future caller must land on the row find() reaches.
-    store.upsert("IT-MiXeD-Desk", "clients", "Mixed", YAML);
+    store.upsert("IT-MiXeD-Desk", "clients", "Mixed", YAML, null);
     assertThat(store.find("it-mixed-desk")).isPresent();
     assertThat(store.find("it-mixed-desk").get().name()).isEqualTo("it-mixed-desk");
   }
@@ -66,7 +66,24 @@ class SavedViewStoreIT {
   void find_is_case_insensitive_like_the_entity_pattern() {
     // apply lowercases names on write (entity_manifest rule) — find must lowercase on
     // read too, or a hand-typed 'Clients-Desk' 404s while 'clients-desk' exists.
-    store.upsert("it-case-desk", "clients", "Case", YAML);
+    store.upsert("it-case-desk", "clients", "Case", YAML, null);
     assertThat(store.find("IT-Case-DESK")).isPresent();
+  }
+
+  @Test
+  void delete_removes_the_row_and_a_second_delete_is_a_no_op() {
+    store.upsert("it-delete-desk", "clients", "To delete", YAML, null);
+    assertThat(store.find("it-delete-desk")).isPresent();
+
+    assertThat(store.delete("it-delete-desk")).isTrue();
+    assertThat(store.find("it-delete-desk")).isEmpty();
+    assertThat(store.delete("it-delete-desk")).as("nothing left to remove").isFalse();
+  }
+
+  @Test
+  void delete_is_case_insensitive_like_find() {
+    store.upsert("it-delete-case", "clients", "Case", YAML, null);
+    assertThat(store.delete("IT-Delete-CASE")).isTrue();
+    assertThat(store.find("it-delete-case")).isEmpty();
   }
 }

@@ -67,4 +67,40 @@ class RegistrySchemaBuilderIT {
         SchemaCard card = builder.build(8100L, "nope");
         assertThat(card.tables()).isEmpty();
     }
+
+    /**
+     * #521 — jsonb canonicalises object keys by length then bytes, so a naive read of
+     * {@code schema_inferred} hands back {@code city, code, name, segment, credit_limit}
+     * for the very header (#496's own bench) that was inferred and physically created as
+     * {@code code, name, city, segment, credit_limit}. The card must follow the PHYSICAL
+     * table's column order ({@code information_schema.columns.ordinal_position}), which is
+     * the order {@code \d} and {@code SELECT *} already show, not jsonb's canonical order.
+     */
+    @Test
+    void cardColumnsFollowThePhysicalTableOrderNotJsonbsCanonicalOrder() {
+        long tenant = 8100L;
+        UUID mappingId = UUID.fromString("00000000-0000-0000-0000-0000000081cc");
+        UUID connId    = UUID.fromString("00000000-0000-0000-0000-0000000081dd");
+        exec("DROP TABLE IF EXISTS connector.t_c_customer");
+        exec("CREATE TABLE connector.t_c_customer "
+           + "(code text, name text, city text, segment text, credit_limit numeric(18,4))");
+        exec("INSERT INTO connector.connector_mapping (id, tenant_id, name, target_entity, spec_format, spec_content) "
+           + "VALUES ('" + mappingId + "', " + tenant + ", 'm_customer', 'public.c_customer', 'yaml', 'x')");
+        exec("INSERT INTO connector.connector (id, tenant_id, name, type_id, config, mapping_id, enabled, tags, "
+           + "sync_mode, skip_policy) "
+           + "VALUES ('" + connId + "', " + tenant + ", 'src--c_customer', 'jdbc-generic', '{}'::jsonb, '"
+           + mappingId + "', true, ARRAY['atelierA'], "
+           + "'Incremental', '{\"type\":\"SkipUpTo\",\"maxSkips\":100}'::jsonb)");
+        exec("INSERT INTO connector.dynamic_table (id, tenant_id, mapping_id, table_schema, table_name, schema_inferred, connector_id) "
+           + "VALUES (gen_random_uuid(), " + tenant + ", 'jdbc:c_customer', 'connector', 't_c_customer', "
+           + "'{\"code\":\"text\",\"name\":\"text\",\"city\":\"text\",\"segment\":\"text\",\"credit_limit\":\"numeric(18,4)\"}'::jsonb, '"
+           + connId + "')");
+
+        SchemaCard card = builder.build(tenant, "atelierA");
+
+        SchemaCard.Table t = card.tables().stream()
+            .filter(tbl -> tbl.name().equals("connector.t_c_customer")).findFirst().orElseThrow();
+        assertThat(t.columns()).extracting(SchemaCard.Column::name)
+            .containsExactly("code", "name", "city", "segment", "credit_limit");
+    }
 }

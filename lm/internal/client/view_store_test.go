@@ -152,3 +152,27 @@ func TestViewApply_validationRefusal_surfacesHonestRendering(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, "API error 400: filter column 'nope' is not part of this view", err.Error())
 }
+
+func TestViewDelete_escapesNameAndSendsDelete(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodDelete, r.Method)
+		assert.Equal(t, "/api/views/gold%20desk%2Fv2", r.URL.EscapedPath())
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := New(config.Context{Server: srv.URL})
+	require.NoError(t, c.ViewDelete("gold desk/v2"))
+}
+
+func TestViewDelete_notFound_surfacesHonestRendering(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(404)
+		_, _ = w.Write([]byte(`{"error":"no saved view named 'nope'"}`))
+	}))
+	defer srv.Close()
+	c := New(config.Context{Server: srv.URL})
+	err := c.ViewDelete("nope")
+	require.Error(t, err)
+	assert.Equal(t, "API error 404: no saved view named 'nope'", err.Error())
+}

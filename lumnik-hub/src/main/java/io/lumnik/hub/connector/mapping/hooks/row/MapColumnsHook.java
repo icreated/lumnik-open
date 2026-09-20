@@ -8,6 +8,8 @@ import io.lumnik.hub.connector.mapping.hooks.HookId;
 import io.lumnik.hub.connector.mapping.hooks.RowHook;
 import jakarta.enterprise.context.ApplicationScoped;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -51,30 +53,9 @@ public class MapColumnsHook implements RowHook {
 
   @Override
   public List<Map<String, Object>> apply(Map<String, Object> row, JsonNode params, MappingState s) {
-    Map<String, Object> out = new LinkedHashMap<>(row);
-    if (params.has("rename")) {
-      JsonNode rename = params.get("rename");
-      rename.fields().forEachRemaining(e -> {
-        // containsKey, not "remove returned non-null": a column PRESENT with a null value must be
-        // renamed like any other. Testing the value instead removed the source key and created no
-        // target, so the column vanished — and DynamicTableWriter types its DDL from the keys a
-        // row carries, which made the column's very existence depend on its first value.
-        if (!out.containsKey(e.getKey())) return;
-        Object v = out.remove(e.getKey());
-        String target = e.getValue().asText();
-        // The target is already in this ROW. No manifest check could have caught it: the collision
-        // is with the data, not with another rename entry. The rename still wins — counting makes
-        // the overwritten value visible, it does not change which one lands.
-        //
-        // This is the FIRST counting site outside hooks/cell/, and the shape it adds to
-        // cell_errors is 'overwritten': the cell holds a value the source really sent, from
-        // another column. (Distinct from 'replaced', which is a value the source never sent.)
-        // The tier of the HOOK is not the tier of the EVENT — one lost value in a row that still
-        // lands is the cell_errors contract, where state.dropped() would quarantine a good row.
-        if (out.containsKey(target)) s.counters().cellErrors().incrementAndGet();
-        out.put(target, v);
-      });
-    }
+    Map<String, Object> out = params.has("rename")
+        ? renamed(row, params.get("rename"), s)
+        : new LinkedHashMap<>(row);
     if (params.has("drop")) {
       JsonNode drop = params.get("drop");
       for (JsonNode col : drop) {
@@ -82,6 +63,77 @@ public class MapColumnsHook implements RowHook {
       }
     }
     return List.of(out);
+  }
+
+  /**
+   * One slot per row column, in source order, plus an index by the column's CURRENT name — a
+   * rename mutates a slot's key in place (keeping its position) or, on collision, tombstones the
+   * source and overwrites the target slot's value, then the final map is built once at the end.
+   * {@code O(columns + renames)}, one allocation for the result, versus rebuilding a
+   * {@code LinkedHashMap} per non-colliding rename (#526 review round 2).
+   */
+  private static Map<String, Object> renamed(Map<String, Object> row, JsonNode rename, MappingState s) {
+    List<Slot> slots = new ArrayList<>(row.size());
+    Map<String, Slot> byKey = new HashMap<>();
+    row.forEach((k, v) -> {
+      Slot slot = new Slot(k, v);
+      slots.add(slot);
+      byKey.put(k, slot);
+    });
+
+    rename.fields().forEachRemaining(e -> {
+      // byKey.get, not "was the column ever seen": a column PRESENT with a null value must be
+      // renamed like any other. Testing the value instead removed the source key and created no
+      // target, so the column vanished — and DynamicTableWriter types its DDL from the keys a
+      // row carries, which made the column's very existence depend on its first value.
+      String oldKey = e.getKey();
+      Slot src = byKey.get(oldKey);
+      if (src == null) return;
+      String target = e.getValue().asText();
+      // A rename to its OWN name touches nothing — not a data collision. Checking anyway would
+      // count a false loss, since the "old" and "new" name are the same key (#526 review).
+      if (target.equals(oldKey)) return;
+      Slot existing = byKey.get(target);
+      if (existing != null) {
+        // The target is already live at THIS STEP. No manifest check could have caught it: the
+        // collision is with the data (or an earlier rename's own output — renames run in
+        // manifest order, each against the one before, so a chain or a cycle sees exactly what
+        // it did before this fix), not with another rename entry by name alone. The rename still
+        // wins — counting makes the overwritten value visible, it does not change which one lands.
+        //
+        // This is the FIRST counting site outside hooks/cell/, and the shape it adds to
+        // cell_errors is 'overwritten': the cell holds a value the source really sent, from
+        // another column. (Distinct from 'replaced', which is a value the source never sent.)
+        // The tier of the HOOK is not the tier of the EVENT — one lost value in a row that still
+        // lands is the cell_errors contract, where state.dropped() would quarantine a good row.
+        s.counters().cellErrors().incrementAndGet();
+        existing.value = src.value; // the TARGET's slot keeps its position; only the value moves
+        src.tombstoned = true;
+        byKey.remove(oldKey);
+      } else {
+        src.key = target; // no collision: rename the slot in place, so its position doesn't move
+        byKey.remove(oldKey);
+        byKey.put(target, src);
+      }
+    });
+
+    Map<String, Object> out = new LinkedHashMap<>();
+    for (Slot slot : slots) {
+      if (!slot.tombstoned) out.put(slot.key, slot.value);
+    }
+    return out;
+  }
+
+  /** A row column a rename can relocate ({@code key}) or replace ({@code value}) in place. */
+  private static final class Slot {
+    String key;
+    Object value;
+    boolean tombstoned;
+
+    Slot(String key, Object value) {
+      this.key = key;
+      this.value = value;
+    }
   }
 
   /** Each door renders the shared rule its own way; this one throws on the first violation. */

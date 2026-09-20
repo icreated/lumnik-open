@@ -210,6 +210,7 @@ func inboxVariants() []inboxVariant {
 // ProcessScenario holds the generated scenario for one seed of the process lane.
 type ProcessScenario struct {
 	Seed    int64
+	CaseID  CaseID
 	SubType string // "apply" or "inbox"
 	Feature string
 	// apply fields

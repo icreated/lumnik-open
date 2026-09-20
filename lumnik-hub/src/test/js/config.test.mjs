@@ -1,22 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { METIERS, resolveMetier, kcBase, redirectUri } from '../../main/resources/META-INF/resources/app/src/config.mjs';
+import { urlKey, kcBase, redirectUri } from '../../main/resources/META-INF/resources/app/src/config.mjs';
 
-test('resolveMetier: known métier param resolves to that métier', () => {
-  const m = resolveMetier('?m=stock');
-  assert.equal(m.key, 'stock');
-  assert.equal(m.scope, METIERS.stock.scope);
-  assert.equal(m.title, METIERS.stock.title);
+test('urlKey: a known métier param passes through', () => {
+  assert.equal(urlKey('?m=stock'), 'stock');
 });
 
-test('resolveMetier: unknown métier param falls back to clients', () => {
-  const m = resolveMetier('?m=nope');
-  assert.equal(m.key, 'clients');
+test('urlKey: any explicit param passes through, even one the registry does not know yet', () => {
+  assert.equal(urlKey('?m=lumilait'), 'lumilait');
 });
 
-test('resolveMetier: absent param falls back to clients', () => {
-  const m = resolveMetier('');
-  assert.equal(m.key, 'clients');
+test('urlKey: absent param defaults to clients', () => {
+  assert.equal(urlKey(''), 'clients');
 });
 
 test('kcBase: https façade uses same-origin realm path', () => {
@@ -37,4 +32,9 @@ test('redirectUri: clients métier has no query string', () => {
 test('redirectUri: non-clients métier rides ?m= on the redirect', () => {
   const loc = { origin: 'https://lumnik.example' };
   assert.equal(redirectUri(loc, 'stock'), 'https://lumnik.example/app/?m=stock');
+});
+
+test('redirectUri: a tag needing encoding does not break the query string', () => {
+  const loc = { origin: 'https://lumnik.example' };
+  assert.equal(redirectUri(loc, 'a&b'), 'https://lumnik.example/app/?m=a%26b');
 });

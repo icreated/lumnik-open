@@ -98,4 +98,58 @@ class ViewManifestParserTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("columns");
     }
+
+    /** A scope tag becomes the case-sensitive Keycloak role {@code scope:<tag>}, so a name no
+     *  role could carry declares a view visible to unscoped users and permanently invisible to
+     *  every bound one — see #577. */
+    @Test
+    void refusesAScopeNameNoRoleCouldCarry() {
+        String yaml = """
+            kind: View
+            metadata:
+              name: clients-desk
+            spec:
+              scope: CRM
+              columns: [name]
+            """;
+        assertThatThrownBy(() -> new ViewManifestParser().parse(yaml))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("spec.scope")
+                .hasMessageContaining("lowercase");
+    }
+
+    @Test
+    void refusesANullBody() {
+        assertThatThrownBy(() -> new ViewManifestParser().parse((String) null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("invalid kind:View manifest");
+    }
+
+    @Test
+    void refusesSyntacticallyMalformedYaml() {
+        assertThatThrownBy(() -> new ViewManifestParser().parse("kind: [unclosed"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("invalid kind:View manifest");
+    }
+
+    /** YAMLMapper.readTree("") / readTree(blank) return a MissingNode without throwing — verified
+     *  empirically against this project's actual Jackson 2.21.5/SnakeYAML 2.5. The ordinary
+     *  "kind must be 'View'" check is what refuses these, not the broad parse-failure catch. */
+    @Test
+    void anEmptyOrBlankDocumentIsRefusedAsAWrongKindNotAsUnparsable() {
+        assertThatThrownBy(() -> new ViewManifestParser().parse(""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("kind must be 'View'");
+        assertThatThrownBy(() -> new ViewManifestParser().parse("   \n  \n"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("kind must be 'View'");
+    }
+
+    /** A bare "---" returns a NullNode, same reasoning as the empty-document case above. */
+    @Test
+    void aBareDocumentMarkerIsRefusedAsAWrongKindNotAsUnparsable() {
+        assertThatThrownBy(() -> new ViewManifestParser().parse("---\n"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("kind must be 'View'");
+    }
 }

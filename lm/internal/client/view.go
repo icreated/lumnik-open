@@ -172,6 +172,13 @@ func (c *Client) ViewApply(manifest []byte) (*ViewApplyResult, error) {
 	return &result, nil
 }
 
+// ViewDelete removes one saved view for good — the delete gesture #487 gave kind:Process,
+// missing here (#507). connector.saved_view carries no `enabled` column, so there is no
+// reversible half the way ProcessSetEnabled/SetWorkflowEnabled have one.
+func (c *Client) ViewDelete(name string) error {
+	return c.DELETE("/api/views/" + url.PathEscape(name))
+}
+
 // ViewGenerate asks the hub's AI to write a kind:View manifest over a scope from a
 // natural-language description. Returns the YAML text verbatim (comment line included).
 func (c *Client) ViewGenerate(scope, description string) (string, error) {

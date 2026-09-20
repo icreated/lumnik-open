@@ -20,3 +20,26 @@ func (c *Client) GetWorkflowManifest(name string) ([]byte, error) {
 	return c.doRaw("GET", "/api/workflows/"+url.PathEscape(name)+"/manifest", "",
 		"application/yaml, application/json;q=0.9", nil)
 }
+
+// DeleteWorkflow removes one declared workflow for good — the delete gesture #487 gave
+// kind:Process, missing here (#507).
+func (c *Client) DeleteWorkflow(name string) error {
+	return c.DELETE("/api/workflows/" + url.PathEscape(name))
+}
+
+// WorkflowEnabled is the hub's answer to a SetWorkflowEnabled call.
+type WorkflowEnabled struct {
+	Name    string `json:"name"`
+	Enabled bool   `json:"enabled"`
+}
+
+// SetWorkflowEnabled turns one workflow on or off — the reversible half of DeleteWorkflow: the
+// manifest stays readable and the hub stops treating it as a live lifecycle.
+func (c *Client) SetWorkflowEnabled(name string, enabled bool) (*WorkflowEnabled, error) {
+	var out WorkflowEnabled
+	if err := c.PUT("/api/workflows/"+url.PathEscape(name)+"/enabled",
+		map[string]any{"enabled": enabled}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

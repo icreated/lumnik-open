@@ -35,12 +35,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code kind:View} that declares no explicit columns — all of which read the table Postgres
  * created from {@code inferred}, in memory, before anything is persisted.
  *
- * <p><b>The schema card is NOT fixed by this, and measuring stopped short of saying so.</b> The
- * card's road is the registry: {@code schema_inferred} is {@code jsonb} (V11), and jsonb
- * canonicalises object keys by length then bytes — so {@code RegistrySchemaBuilder} reads back
- * {@code city, code, name, segment, credit_limit}, the very order this test's first case
- * attributes to {@code HashMap}. Order that must survive a round trip has to travel in an ARRAY,
- * not in object keys; that is a second change, and it is filed rather than implied here.
+ * <p>The schema card is a separate path — {@code RegistrySchemaBuilder} reads {@code
+ * schema_inferred} back through {@code jsonb}, which canonicalises object keys by length then
+ * bytes, so the type map's own iteration order is not the source's (#521). Its card now reorders
+ * against the physical table's {@code information_schema.columns.ordinal_position} instead — the
+ * physical truth this test's DDL cases already establish, needing no new storage. See {@code
+ * RegistrySchemaBuilderIT#cardColumnsFollowThePhysicalTableOrderNotJsonbsCanonicalOrder}.
  */
 class SourceFieldOrderTest {
 
@@ -164,24 +164,37 @@ class SourceFieldOrderTest {
     }
 
     /**
-     * The one hook whose output order is NOT the row's: {@code map-columns} renames by
-     * {@code remove} then {@code put}, so a renamed column moves to the end of the row.
-     *
-     * <p>Pinned rather than fixed, and pinned as RESIDUE, not as intent. Renaming in place means
-     * rebuilding the row in source order, and the naive one-pass form flips a collision rule this
-     * hook states deliberately: when a rename's target name is already in the row, the renamed
-     * value wins and the collision is counted; rebuilt in one pass, a target appearing later in
-     * the row would win instead. Two passes — collect the renames present, then rebuild with
-     * rename precedence — keep both properties, in about eight lines. That is a change to a hook's
-     * output for a defect about column order in {@code \d}, so it is filed, not smuggled in here.
+     * {@code map-columns} keeps a renamed column in its source slot (#526 fix) instead of moving
+     * it to the end. See {@code MapColumnsHook} for the slot-based shape that keeps this AND the
+     * sequential collision rule {@code MapColumnsRenameTest} pins.
      */
     @Test
-    void mapColumns_sendsARenamedColumnToTheEnd() throws Exception {
+    void mapColumns_keepsARenamedColumnInItsSourcePosition() throws Exception {
         JsonNode p = M.readTree("{\"rename\":{\"code\":\"customer_code\"}}");
         Map<String, Object> out = new MapColumnsHook().apply(row(HEADER), p, new MappingState()).get(0);
 
         assertThat(out.keySet())
-            .containsExactly("name", "city", "segment", "credit_limit", "customer_code");
+            .containsExactly("customer_code", "name", "city", "segment", "credit_limit");
+    }
+
+    /**
+     * A rename CHAIN ({@code a: b} then {@code b: c}, neither target present in the row) still
+     * lands at the first step's slot, with the untouched columns around it keeping their own
+     * relative order — the case the slot rewrite's {@code O(columns + renames)} shape has to get
+     * right without a rebuild per step.
+     */
+    @Test
+    void mapColumns_aChainLandsAtItsFirstStepsSourcePositionAmongUntouchedColumns() throws Exception {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("a", "a-value");
+        row.put("keep1", "keep1-value");
+        row.put("keep2", "keep2-value");
+        JsonNode p = M.readTree("{\"rename\":{\"a\":\"b\",\"b\":\"c\"}}");
+
+        Map<String, Object> out = new MapColumnsHook().apply(row, p, new MappingState()).get(0);
+
+        assertThat(out.keySet()).containsExactly("c", "keep1", "keep2");
+        assertThat(out.get("c")).isEqualTo("a-value");
     }
 
     /** The payload columns of a CREATE TABLE, in the order the DDL declares them. */

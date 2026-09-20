@@ -13,7 +13,8 @@ public record BffMeResponse(
     String email,
     TenantSummary tenant,
     Set<String> roles,
-    List<ModuleSummary> modules
+    List<ModuleSummary> modules,
+    String edition
 ) {
     public record TenantSummary(Long id, String code, String name) {}
 

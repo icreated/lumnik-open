@@ -16,7 +16,7 @@ pty: build ## Run the manual pty lane (test/pty/no-echo-secrets.sh): the keyboar
 	./test/pty/no-echo-secrets.sh
 
 .PHONY: otk-unit
-otk-unit: ## Run the hub-free OTK unit tests (oracle/generator/checks/runner + tagged helpers); the live TestOTK is always excluded so the run is deterministic regardless of ambient LUMNIK_URL/OTK_GOLD_SEEDS
+otk-unit: ## Run the hub-free OTK unit tests (oracle/generator/checks/runner + tagged helpers); the live TestOTK is always excluded so the run is deterministic regardless of ambient LUMNIK_URL/OTK_GOLD
 	go test -tags otk -skip '^TestOTK$$' ./test/otk/...
 
 .PHONY: otk
@@ -24,5 +24,9 @@ otk: build otk-unit ## Run OTK: hub-free unit tests, then the declared-tier batt
 	go test -tags otk ./test/otk/ -run TestOTK -v
 
 .PHONY: otk-gold
-otk-gold: build otk-unit ## Run the OTK Gold gate (N>=500 generated; needs LUMNIK_URL + OTK_DB_DSN + real-auth env)
-	OTK_GOLD_SEEDS=$${OTK_GOLD_SEEDS:-125} go test -tags otk ./test/otk/ -run TestOTK -v
+otk-gold: build otk-unit ## Run the OTK Gold gate (every catalogue case; needs LUMNIK_URL + OTK_DB_DSN + real-auth env)
+	OTK_GOLD=1 go test -tags otk ./test/otk/ -run TestOTK -v
+
+.PHONY: otk-calibrate
+otk-calibrate: build otk-unit ## Prove the battery DETECTS: run one fault through control -> injected -> restored (set OTK_FAULT; needs a DB + real-auth env). It PACKAGES and BOOTS the hub itself and REMOVES lumnik-hub/target when done.
+	go run -tags otk ./test/otk/cmd/otkcal

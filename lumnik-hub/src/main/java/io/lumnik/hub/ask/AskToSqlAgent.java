@@ -81,6 +81,13 @@ public class AskToSqlAgent implements AskPort {
             return new AskResult(AbstentionGuard.NO_SCHEMA_MESSAGE, "", List.of(), 0);
         }
 
+        // ONE snapshot, reused by every dead end below (#527): NO_ANSWER, SqlGuard rejection and
+        // ZeroRowGuard.CAVEAT are all the same structural refusal — the schema has nothing to
+        // answer from, or nothing runnable came of it — so they read the same two booleans rather
+        // than each deciding for itself whether a door is worth naming.
+        boolean scopeDeclaresALifecycle = scopeDeclaresALifecycle(tenantId, scope);
+        boolean scopeHasAFusedEntity = abstentionGuard.hasAFusedEntity(card);
+
         String genPrompt = """
             You are a careful PostgreSQL analyst. Translate the question into ONE PostgreSQL SELECT.
             Use ONLY these tables and columns (the text after -- is the business meaning):
@@ -116,8 +123,7 @@ public class AskToSqlAgent implements AskPort {
         // does (#494 the declared lifecycle, #495 the fusion ledger). The refusal is unchanged; only
         // the dead end is.
         if (abstentionGuard.isAbstention(rawSql)) {
-            var abstention = abstentionGuard.cannotAnswer(
-                scopeDeclaresALifecycle(tenantId, scope), abstentionGuard.hasAFusedEntity(card));
+            var abstention = abstentionGuard.cannotAnswer(scopeDeclaresALifecycle, scopeHasAFusedEntity);
             return new AskResult(abstention.answer(), "", List.of(), 0, null, abstention.otherDoors());
         }
 
@@ -126,8 +132,9 @@ public class AskToSqlAgent implements AskPort {
             safeSql = guard.check(rawSql);
         } catch (SqlGuard.SqlRejectedException e) {
             LOG.warnf("SqlGuard rejected generated SQL: %s", e.getMessage());
-            return new AskResult("I couldn't translate that into a safe query.",
-                                 rawSql, List.of(), 0);
+            var abstention = abstentionGuard.signpost(
+                "I couldn't translate that into a safe query.", scopeDeclaresALifecycle, scopeHasAFusedEntity);
+            return new AskResult(abstention.answer(), rawSql, List.of(), 0, null, abstention.otherDoors());
         }
 
         // Scope boundary: refuse a query that reads a table outside this scope's declared schema.
@@ -178,7 +185,10 @@ public class AskToSqlAgent implements AskPort {
 
         // Honesty over a deceptive "none": never let a 0-row result be phrased as a confident negative.
         if (rows.isEmpty()) {
-            return new AskResult(ZeroRowGuard.CAVEAT, safeSql, List.of(), 0, dataAsOf(tenantId, scope));
+            var abstention = abstentionGuard.signpost(
+                ZeroRowGuard.CAVEAT, scopeDeclaresALifecycle, scopeHasAFusedEntity);
+            return new AskResult(abstention.answer(), safeSql, List.of(), 0,
+                dataAsOf(tenantId, scope), abstention.otherDoors());
         }
 
         String answerPrompt = """

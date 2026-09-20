@@ -33,13 +33,15 @@ var manifestDoors = []manifestDoor{
 	{[]string{"apply"}, "apiVersion: connectors.lumnik.io/v1\nkind: Connector\nmetadata:\n  name: " + marker + "\nspec: {}\n"},
 	{[]string{"validate"}, "apiVersion: connectors.lumnik.io/v1\nkind: Connector\nmetadata:\n  name: " + marker + "\nspec: {}\n"},
 	{[]string{"entity", "apply"}, "kind: Entity\nmetadata:\n  name: " + marker + "\nspec: {}\n"},
+	{[]string{"app", "apply"}, "kind: App\nmetadata:\n  name: " + marker + "\nspec: {}\n"},
 	{[]string{"process", "apply"}, "apiVersion: apps.lumnik.io/v1\nkind: Process\nmetadata:\n  name: " + marker + "\nspec: {}\n"},
 	{[]string{"workflow", "apply"}, "apiVersion: apps.lumnik.io/v1\nkind: Workflow\nmetadata:\n  name: " + marker + "\nspec: {}\n"},
 	{[]string{"view"}, "apiVersion: apps.lumnik.io/v1\nkind: View\nmetadata:\n  name: " + marker + "\nspec: {}\n"},
 	{[]string{"view", "apply"}, "apiVersion: apps.lumnik.io/v1\nkind: View\nmetadata:\n  name: " + marker + "\nspec: {}\n"},
-	// The three flat-payload doors: an envelope (kind/apiVersion) is refused here by design.
+	// The flat-payload doors: an envelope (kind/apiVersion) is refused here by design.
+	// `hook apply` used to be a third one here — #610 removed it entirely (not implemented:
+	// hooks come from deployment manifests, no `-f` flag left to read from stdin at all).
 	{[]string{"connector", "apply"}, "tenantId: 1\nname: " + marker + "\ntypeId: csv-file\nenabled: true\n"},
-	{[]string{"hook", "apply"}, "id: " + marker + "\nlanguage: kotlin\nscript: \"1\"\n"},
 	{[]string{"mapping", "apply"}, "id: " + marker + "\ntarget: t_ad_user\n"},
 }
 

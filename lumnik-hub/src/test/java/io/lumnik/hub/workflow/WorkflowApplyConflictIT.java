@@ -62,7 +62,7 @@ class WorkflowApplyConflictIT {
         SQLException unique = new SQLException("duplicate key value violates unique constraint "
             + "\"uq_workflow_manifest_tenant_column\"", "23505");
         Mockito.doThrow(new RuntimeException("WorkflowManifestStore.upsert: " + unique.getMessage(), unique))
-            .when(store).upsert(Mockito.anyLong(), Mockito.any(), Mockito.anyString());
+            .when(store).upsert(Mockito.anyLong(), Mockito.any(), Mockito.anyString(), Mockito.any());
 
         given().config(YamlBody.CONFIG).header("X-Tenant-ID", TENANT).header("X-User-ID", "1")
             .contentType("application/yaml").body(YAML)

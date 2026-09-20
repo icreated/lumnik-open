@@ -200,6 +200,7 @@ func entityReadVariants() []entityReadVariant {
 // EntityScenario holds the generated scenario for one seed.
 type EntityScenario struct {
 	Seed    int64
+	CaseID  CaseID
 	SubType string // "apply" or "read"
 	Feature string // Gherkin feature text
 	// apply fields

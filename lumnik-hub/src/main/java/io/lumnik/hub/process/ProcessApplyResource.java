@@ -1,9 +1,11 @@
 package io.lumnik.hub.process;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.api.ApplyDoorSupport;
 import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
@@ -57,21 +59,21 @@ public class ProcessApplyResource {
     public Response apply(String body) {
         long tenant = RequireTenant.current();
 
+        JsonNode root;
         ProcessManifest m;
         try {
-            m = parser.parse(body);
+            root = parser.readTree(body);
+            m = parser.parse(root);
         } catch (IllegalArgumentException e) {
             return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
         }
 
         // C3: a key the parser does not honor used to be accepted and stored in silence — a
         // misspelled `mesage:` would have cost the decision its text with no word said.
-        List<String> unknown = parser.unknownKeys(body);
-        if (!unknown.isEmpty()) {
-            return Response.status(400).entity(ApiErrors.error(
-                "unknown key(s) in the manifest: " + String.join(", ", unknown)
-                    + " — kind:Process honors " + ProcessManifestParser.honoredSurface())).build();
-        }
+        List<String> unknown = parser.unknownKeys(root);
+        Optional<Response> unknownRefusal =
+            ApplyDoorSupport.refuseUnknownKeys("Process", unknown, ProcessManifestParser.honoredSurface());
+        if (unknownRefusal.isPresent()) return unknownRefusal.get();
 
         // May this user declare into that scope at all? BEFORE the card lookup: a 404 naming the
         // scope would otherwise tell a bound admin which scopes exist. Same order, same words as
@@ -84,6 +86,11 @@ public class ProcessApplyResource {
         // (tenant_id, name) and sets scope = EXCLUDED.scope, so declaring into a scope you hold
         // under a name that belongs to one you do not would re-home that process and delete its
         // text. Same words as the check above, so the two refusals are indistinguishable (#509).
+        //
+        // ORDERED — read, then write — which a race can jump; the store re-asks atomically and
+        // refuseUnlessApplied below is that second answer. This earlier one is kept because it
+        // refuses BEFORE the 404 further down names a scope, and a caller refused for the NAME must
+        // not read which scopes exist on the way out (#582).
         ApplyScopeBoundary.refuseUnlessCallerHoldsScope(store.findScope(tenant, m.name()));
 
         Optional<SchemaCard> card = cards.load(tenant, m.scope());
@@ -107,7 +114,10 @@ public class ProcessApplyResource {
             return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
         }
 
-        store.upsert(tenant, m, body);
+        // granted().orElse(null) — empty Optional means unscoped, i.e. every scope. The write's own
+        // answer goes straight into the void guard, so it cannot be had and dropped.
+        ApplyScopeBoundary.refuseUnlessApplied(
+            store.upsert(tenant, m, body, ScopeGrants.granted().orElse(null)));
         return Response.ok(new ApplyResult(m.name(), m.onTable(), m.emitType())).build();
     }
 

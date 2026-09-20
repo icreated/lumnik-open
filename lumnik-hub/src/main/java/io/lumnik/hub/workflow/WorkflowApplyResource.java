@@ -1,10 +1,12 @@
 package io.lumnik.hub.workflow;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.extraction.spi.ExtractionSink;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.api.ApplyDoorSupport;
 import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.audit.AuditRecorder;
@@ -16,11 +18,14 @@ import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
+import jakarta.ws.rs.PUT;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
@@ -68,18 +73,18 @@ public class WorkflowApplyResource {
     public Response apply(String body) {
         long tenant = RequireTenant.current();
 
+        JsonNode root;
         WorkflowManifest m;
         try {
-            m = parser.parse(body);
+            root = parser.readTree(body);
+            m = parser.parse(root);
         } catch (IllegalArgumentException e) {
             return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
         }
-        List<String> unknown = parser.unknownKeys(body);
-        if (!unknown.isEmpty()) {
-            return Response.status(400).entity(ApiErrors.error(
-                "unknown key(s) in the manifest: " + String.join(", ", unknown)
-                    + " — kind:Workflow honors " + WorkflowManifestParser.honoredSurface())).build();
-        }
+        List<String> unknown = parser.unknownKeys(root);
+        Optional<Response> unknownRefusal =
+            ApplyDoorSupport.refuseUnknownKeys("Workflow", unknown, WorkflowManifestParser.honoredSurface());
+        if (unknownRefusal.isPresent()) return unknownRefusal.get();
 
         // May this user declare into that scope at all? BEFORE the card lookup, because a 404
         // "no schema for scope 'x'" would otherwise tell a bound integrator which scopes exist —
@@ -94,6 +99,11 @@ public class WorkflowApplyResource {
         // under a name that belongs to one you do not would re-home that lifecycle — manifest,
         // chunk and observation ledger — into a métier its owner does not hold. Same words as the
         // check above, so the two refusals are indistinguishable (#509).
+        //
+        // ORDERED — read, then write — which a race can jump; the store re-asks atomically and
+        // refuseUnlessApplied below is that second answer. This earlier one is kept because it
+        // refuses BEFORE the 404 further down names a scope and before the refusal below names
+        // another métier's owner, and a caller refused for the NAME must not read either (#582).
         ApplyScopeBoundary.refuseUnlessCallerHoldsScope(store.findScope(tenant, m.name()));
 
         // The scope must be a real, discovered scope. A typo'd `scope: demoo` used to be
@@ -146,7 +156,12 @@ public class WorkflowApplyResource {
         // stable JSON error instead of a leaked stack trace; the real exception is logged
         // server-side. Mirrors DataRowResource's convention (error message only, no stack).
         try {
-            store.upsert(tenant, m, body);
+            // granted().orElse(null) — empty Optional means unscoped, i.e. every scope. The
+            // write's own answer goes straight into the void guard, so it cannot be had and
+            // dropped. It THROWS, like its siblings, and reaches the wire intact because the
+            // WebApplicationException arm below re-throws ahead of the broad catch.
+            ApplyScopeBoundary.refuseUnlessApplied(
+                store.upsert(tenant, m, body, ScopeGrants.granted().orElse(null)));
             WorkflowGraph g = WorkflowGraph.from(m);
             // truth.check issues SET LOCAL, which needs an ambient transaction (see
             // TenantRlsScope); index() must NOT have one. Scoping the transaction to the check
@@ -161,6 +176,12 @@ public class WorkflowApplyResource {
                 "manifest_sha256", AuditRecorder.sha256(body)));
             return Response.ok(
                 new ApplyResult(m.name(), m.scope(), m.table(), m.column(), report)).build();
+        } catch (WebApplicationException e) {
+            // A refusal this door already dressed is not a store failure. WebApplicationException
+            // IS a RuntimeException, so without this arm the broad catch below would swallow every
+            // 403/404/400 raised inside the try and re-serve it as an anonymous 500 — the scope
+            // refusal above first, and whatever a future edit adds here after it (#582).
+            throw e;
         } catch (RuntimeException e) {
             // The pre-check above (findOtherOnColumn) is not a lock: two concurrent applies of
             // different names on the same column can both pass it under READ COMMITTED, and the
@@ -230,17 +251,94 @@ public class WorkflowApplyResource {
     @Transactional
     public Response manifest(@PathParam("name") String name) {
         long tenant = RequireTenant.current();
-        Optional<String> scope = store.findScope(tenant, name);
-        if (scope.isEmpty()) {
-            return Response.status(404).entity(ApiErrors.error("unknown workflow: " + name)).build();
-        }
-        if (!ScopeGrants.allows(scope.get())) {
-            return ApiErrors.scopeNotGranted();
-        }
+        Response refusal = refuseUnlessHeld(tenant, name);
+        if (refusal != null) return refusal;
         return store.findYaml(tenant, name)
             .map(yaml -> Response.ok(yaml).type("application/yaml").build())
             .orElseGet(() -> Response.status(404)
                 .entity(ApiErrors.error("unknown workflow: " + name)).build());
+    }
+
+    public record EnabledRequest(Boolean enabled) {}
+    public record EnabledResult(String name, boolean enabled) {}
+
+    /**
+     * Removes one workflow for good — the delete gesture #487 gave kind:Process, missing here
+     * (#507). Scope-bound like {@link #manifest}: the 404 is answered from the stored scope
+     * BEFORE anything is touched, so a bound integrator cannot learn that a lifecycle they may
+     * not hold exists by trying to delete it.
+     *
+     * <p>Deliberately NOT {@code @Transactional} — same reason as {@link #apply}: {@link
+     * #clearIndex} calls the sink and must run with no ambient JTA transaction (review round
+     * on #507; a deleted workflow's chunk was otherwise left servable, so the chat could keep
+     * answering from a lifecycle that no longer exists).
+     */
+    @DELETE
+    @Path("/{name}")
+    public Response delete(@PathParam("name") String name) {
+        long tenant = RequireTenant.current();
+        Response refusal = refuseUnlessHeld(tenant, name);
+        if (refusal != null) return refusal;
+        store.delete(tenant, name);
+        clearIndex(tenant, name);
+        return Response.noContent().build();
+    }
+
+    /**
+     * Turns one lifecycle on or off. Disabling is the reversible half of {@link #delete}: the
+     * manifest stays readable and re-appliable, and {@code WorkflowRegistry}/
+     * {@code WorkflowDormancySweep} already filter on {@code enabled} — this door is the hand
+     * that was missing to reach the switch (#507).
+     *
+     * <p>Also the reversible half of {@link #clearIndex}: disabling clears the chunk the same
+     * way delete does (review round on #507 — the promise that the hub stops treating this as
+     * a live lifecycle must hold for what the chat can retrieve too), and enabling rebuilds it
+     * from the stored manifest rather than leaving the corpus silently missing it until a future
+     * re-apply. Deliberately NOT {@code @Transactional}, same reason as {@link #delete}.
+     */
+    @PUT
+    @Path("/{name}/enabled")
+    @Consumes(MediaType.APPLICATION_JSON)
+    public Response setEnabled(@PathParam("name") String name, EnabledRequest body) {
+        long tenant = RequireTenant.current();
+        if (body == null || body.enabled() == null) {
+            return Response.status(400).entity(ApiErrors.error(
+                "body must carry {\"enabled\": true|false}")).build();
+        }
+        Response refusal = refuseUnlessHeld(tenant, name);
+        if (refusal != null) return refusal;
+        store.setEnabled(tenant, name, body.enabled());
+        if (body.enabled()) {
+            store.findYaml(tenant, name)
+                .ifPresent(yaml -> index(tenant, WorkflowGraph.from(parser.parse(yaml))));
+        } else {
+            clearIndex(tenant, name);
+        }
+        return Response.ok(new EnabledResult(name, body.enabled())).build();
+    }
+
+    /**
+     * Removes this workflow's chunk from every sink — the disable/delete half of {@link #index}.
+     * Same no-ambient-transaction requirement, and the same per-sink catch-and-warn so one
+     * sink's failure cannot block the others or the door's 200/204.
+     */
+    private void clearIndex(long tenant, String name) {
+        for (ExtractionSink sink : sinks) {
+            try {
+                sink.clear(tenant, "workflow:" + name);
+            } catch (Exception e) {
+                LOG.warnf("workflow chunk clear failed on sink %s: %s", sink.name(), e.getMessage());
+            }
+        }
+    }
+
+    /** 404 when this tenant has no such workflow, 403 when the caller's scopes exclude it, else null. */
+    private Response refuseUnlessHeld(long tenant, String name) {
+        Optional<String> scope = store.findScope(tenant, name);
+        if (scope.isEmpty()) {
+            return Response.status(404).entity(ApiErrors.error("unknown workflow: " + name)).build();
+        }
+        return ScopeGrants.allows(scope.get()) ? null : ApiErrors.scopeNotGranted();
     }
 
     /**

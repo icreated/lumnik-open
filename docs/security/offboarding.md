@@ -26,9 +26,10 @@ IdP's keys and does not ask the IdP whether the account still exists.
 | **Disable the account in the IdP, with `LUMNIK_AUTH_VERIFY_WITH_IDP=true`** | the hub then asks the IdP's UserInfo endpoint on every request and fails authentication when the IdP refuses; on the bundled realm UserInfo refuses a disabled account at once | refused on the IdP's answer |
 
 Do both. Your own IdP's lifespans may differ. The knob costs one IdP round trip per request and
-is off by default; on Helm it is `auth.verifyWithIdp`. Measured on the bundled realm: UserInfo
-answers 401 the moment the account is disabled. The hub-side refusal with the knob on is not
-yet part of the shipped rehearsal.
+is off by default; on Helm it is `auth.verifyWithIdp`. Rehearsed end to end in the `oidc-external`
+kind smoke test (`deploy/helm/up.sh`): with the knob on, a live, still-valid token is refused the
+moment its account is disabled in the IdP; with the knob off, the same disabled account keeps
+answering until the token expires, as the row above says.
 
 ## The last-day checklist
 

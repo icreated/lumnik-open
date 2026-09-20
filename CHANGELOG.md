@@ -7,6 +7,77 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.7.3 — 2026-09-20
+
+A métier app no longer needs a hub rebuild. This release's headline is `kind:App`: declare a métier
+app's title, scope, icon and theme as a manifest, apply it, and the app surface picks it up live.
+Everything else here tightens doors that were already meant to refuse and, in a few places, quietly
+didn't.
+
+### Added
+- **`kind:App` manifests.** `lm app apply -f app.yaml` declares a métier app at runtime — title,
+  `spec.scope`, a curated icon, and an accent/background theme (checked for WCAG AA contrast,
+  since the accent colour is the chat bubble's background, not just its text). `lm app rm` removes
+  one, refusing rather than silently promoting a successor if it would leave the deployment with no
+  default app. The app surface (`/app/?m=<tag>`) now resolves its identity from this live registry
+  instead of a name baked into the build: an unrecognized or out-of-scope tag gets a clear refusal
+  instead of silently opening the wrong app.
+- **`kind:Workflow` and `kind:View` gain delete and enable/disable**, matching what `kind:Process`
+  already had. `lm workflow rm|enable|disable` and `lm view rm`.
+- **Webhook deliveries carry `X-Lumnik-Event-Id`.** If you subscribe to both a `decision.*` event
+  and its later acknowledgement, this header — the same id on the initial delivery, every retry,
+  and every replay — is what lets you join the two without inventing your own correlation key.
+- **The hub reports its own edition, and `lm login` shows it** alongside the binary version already
+  printed there.
+- **Six `lm` detail commands honour `-o json/yaml`** where they used to silently print the table
+  form regardless: `describe connector-type`, `dlq get`, `secret describe`, `rag status`, `mapping
+  get`, `hook get`. `hook get` also now decodes the *right* response shape — it used to print a
+  correct id and silently blank everything else.
+- **`lm hook apply/delete/reload` refuse honestly** instead of a bare 404. Hooks are registered
+  once, from classpath manifests, at startup; there is no live CRUD to route those commands to,
+  and now they say so.
+
+### Changed — read before upgrading
+- **A connector manifest apply and a flat CRUD write can no longer race each other into handing a
+  manifest to the wrong métier.** Four apply doors (View, Process, Workflow, Entity) used to check
+  who owns a name and write it in two separate steps; a concurrent legitimate apply landing between
+  them could move a manifest out of a scope its actual owner still holds. The connector apply door
+  gets the same guarantee through a row lock, since it works differently under the hood. Nothing
+  changes in a manifest you apply alone; this only closes a window that needed two integrators
+  racing the same name.
+- **A connector edit that omits `tags` no longer wipes its scope.** If you use the `get → edit →
+  apply` round trip on a scoped connector and your edited body doesn't carry `tags`, the connector
+  keeps its existing scope grant instead of silently becoming visible tenant-wide. (`tags` are also
+  now carried by the flat create/update door at all — a short-lived gap this same release closed
+  and then closed again.)
+- **A malformed cron schedule on the flat connector door is refused at write time**, not discovered
+  later as a connector that silently never runs. The manifest apply door already validated this;
+  the flat door now shares the same check.
+- **`spec.scope` is validated the same way on every manifest kind.** `kind:View`, `Process` and
+  `Workflow` used to accept a scope tag no Keycloak role could ever carry — the manifest applied
+  cleanly and then was invisible to every scope-bound user, with no way to fix it afterwards.
+- **An Ask answer that has to give up now always tells you why**, whichever of the three ways it
+  gave up: no schema, a rejected generated query, or zero matching rows. All three now carry the
+  same door signpost when your scope declares a lifecycle or a fused entity that could have
+  answered instead.
+- **A column you renamed with `map-columns` stays where it was** in the row instead of jumping to
+  the end.
+- **The schema shown for a dynamic table follows the source's real column order** again in every
+  case — a storage detail had been scrambling it in the schema card (and in the text an ask query
+  is generated against) even though the table itself was already correct.
+- **A second connector mapped onto a column an earlier one created no longer fights it.** If a
+  later chunk would need a wider column type than the one already on disk, the writer now checks
+  the real table before deciding, instead of trusting its own fresh guess and failing on the
+  insert that should have widened it.
+- **`GET /app` redirects to `/app/`** instead of a bare 404.
+
+### Testing
+- The acceptance harness's Gold badge (`make otk-gold`) now measures coverage of a fixed 136-case
+  catalogue instead of a scenario count that measured nothing meaningful. A new calibration mode
+  (`make otk-calibrate`) deliberately breaks the hub with a declared fault to prove the checks can
+  still fire, not only that they stayed quiet.
+- This release ships `lm` **1.3.2** binaries (six archives, `checksums.txt` alongside).
+
 ## v1.7.2 — 2026-09-15
 
 A patch release about refusals that said nothing. A `400` from the API used to reach `lm` with no

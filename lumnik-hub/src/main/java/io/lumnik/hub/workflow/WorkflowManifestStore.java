@@ -2,12 +2,16 @@ package io.lumnik.hub.workflow;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /** Persists kind:Workflow manifests (per-tenant; RLS on the app DS, tenant bound here on admin). */
 @ApplicationScoped
@@ -20,20 +24,37 @@ public class WorkflowManifestStore {
     public record StoredWorkflow(String name, String scope, String table, String column,
                                  boolean enabled, String yaml) {}
 
-    public void upsert(long tenantId, WorkflowManifest m, String yamlText) {
+    /**
+     * Upsert this workflow, refusing to overwrite a name the caller's grants do not reach.
+     *
+     * <p>{@code callerScopes} is an authorization predicate, not a filter ({@code null} = unscoped
+     * caller, tenant-wide); {@link ScopeGuardedUpsert} says why the door's earlier check is not
+     * enough on its own, and do not "simplify" this one away on the grounds that the door already
+     * asked. Re-homing a lifecycle takes its chunk and its observation ledger with it.
+     *
+     * <p>One statement, so autocommit IS the unit of work. A
+     * {@code uq_workflow_manifest_tenant_column} violation is not a zero-row outcome — it throws,
+     * and the door unwraps it by SQLSTATE.
+     */
+    public ScopeGuardedUpsert upsert(long tenantId, WorkflowManifest m, String yamlText,
+                                     Set<String> callerScopes) {
+        // The predicate reads the EXISTING row — which in a DO UPDATE is the one spelled with the
+        // table name, `excluded` being the row we proposed.
         String sql = "INSERT INTO core.workflow_manifest "
             + "(tenant_id, name, yaml_text, scope, on_table, on_column) VALUES (?, ?, ?, ?, ?, ?) "
             + "ON CONFLICT (tenant_id, name) DO UPDATE SET yaml_text = EXCLUDED.yaml_text, "
             + "scope = EXCLUDED.scope, on_table = EXCLUDED.on_table, on_column = EXCLUDED.on_column, "
-            + "updated_at = NOW()";
-        Jdbc.update(adminDs, "WorkflowManifestStore.upsert", sql, ps -> {
+            + "updated_at = NOW() "
+            + "WHERE (?::text[] IS NULL OR core.workflow_manifest.scope = ANY (?::text[]))";
+        return ScopeGuardedUpsert.of(Jdbc.update(adminDs, "WorkflowManifestStore.upsert", sql, ps -> {
             ps.setLong(1, tenantId);
             ps.setString(2, m.name());
             ps.setString(3, yamlText);
             ps.setString(4, m.scope());
             ps.setString(5, m.table());
             ps.setString(6, m.column());
-        });
+            ScopeGuardedUpsert.bindGrants(ps, 7, callerScopes);
+        }));
     }
 
     /** Another workflow already declaring a (table, column), and the scope it was declared in. */
@@ -100,6 +121,68 @@ public class WorkflowManifestStore {
             ps.setLong(1, tenantId);
             ps.setString(2, name);
         }, rs -> rs.getString(1));
+    }
+
+    /**
+     * Removes one workflow for good — the manifest AND its ledger. Existence is the caller's
+     * question, answered by findScope.
+     *
+     * <p>Neither {@code core.workflow_observation} nor {@code core.workflow_transition} carries
+     * a FK/cascade to {@code core.workflow_manifest} (V33's own comment on the schema), so a
+     * manifest-only delete would strand them: a name reapplied later would inherit the deleted
+     * lifecycle's stale {@code since}/{@code alerted_at} and transition tape (review round on
+     * #507). One connection, one transaction — {@link Jdbc} is deliberately not for this shape
+     * (its own javadoc): a partial purge (manifest gone, ledger stranded, or the reverse) would
+     * be worse than deleting nothing.
+     */
+    public void delete(long tenantId, String name) {
+        try (Connection c = adminDs.getConnection()) {
+            c.setAutoCommit(false);
+            try {
+                deleteFrom(c, "core.workflow_manifest", "name", tenantId, name);
+                deleteFrom(c, "core.workflow_observation", "workflow_name", tenantId, name);
+                deleteFrom(c, "core.workflow_transition", "workflow_name", tenantId, name);
+                c.commit();
+            } catch (Exception e) {
+                c.rollback();
+                throw e;
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("WorkflowManifestStore.delete: " + e, e);
+        }
+    }
+
+    private static void deleteFrom(Connection c, String table, String nameColumn,
+                                   long tenantId, String name) throws Exception {
+        try (PreparedStatement ps = c.prepareStatement(
+                "DELETE FROM " + table + " WHERE tenant_id = ? AND " + nameColumn + " = ?")) {
+            ps.setLong(1, tenantId);
+            ps.setString(2, name);
+            ps.executeUpdate();
+        }
+    }
+
+    /**
+     * Flips the {@code enabled} column. Already fully wired: {@code WorkflowRegistry.all} filters
+     * on it and {@code WorkflowDormancySweep} only iterates enabled lifecycles — this is the hand
+     * that was missing to reach the switch (#507).
+     *
+     * <p>V32's {@code uq_workflow_manifest_tenant_column} javadoc-in-SQL says "there is no path
+     * that ever sets it false" — this is that path, and the constraint's own plain-UNIQUE choice
+     * still stands: a disabled lifecycle still occupies its (table, column), on purpose, so a
+     * rename cannot slip past the one-lifecycle-per-column rule just by disabling the original
+     * first. The migration comment is now stale prose, not a stale rule — left as-is rather than
+     * edited, since editing a shipped migration's bytes breaks Flyway's checksum validation on
+     * every environment that already ran it.
+     */
+    public void setEnabled(long tenantId, String name, boolean enabled) {
+        String sql = "UPDATE core.workflow_manifest SET enabled = ?, updated_at = NOW() "
+            + "WHERE tenant_id = ? AND name = ?";
+        Jdbc.update(adminDs, "WorkflowManifestStore.setEnabled", sql, ps -> {
+            ps.setBoolean(1, enabled);
+            ps.setLong(2, tenantId);
+            ps.setString(3, name);
+        });
     }
 
     public List<StoredWorkflow> listByTenant(long tenantId) {

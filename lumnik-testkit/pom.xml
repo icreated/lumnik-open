@@ -24,6 +24,14 @@
             <artifactId>lumnik-llm-spi</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- Foundational, no internal deps of its own (same reason lumnik-llm-spi above is
+             safe): ScopeBoundaryRule reflects over @ScopeDecision-annotated methods on the
+             deciders that live here (ScopeGrants, ScopeAccess). -->
+        <dependency>
+            <groupId>io.lumnik</groupId>
+            <artifactId>lumnik-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <!-- @ApplicationScoped / Instance<T>. `provided`: every consumer runs inside a CDI
              container that already supplies the API. -->
         <dependency>

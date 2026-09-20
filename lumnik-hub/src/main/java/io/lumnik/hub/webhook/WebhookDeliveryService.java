@@ -21,13 +21,20 @@ public class WebhookDeliveryService {
 
     @Inject SecretCipher cipher;
 
-    public DeliveryResult deliver(WebhookEndpoint ep, String eventType, String body) {
+    /**
+     * {@code eventId} — the {@code core.event_outbox} id — rides an UNSIGNED header: the HMAC
+     * (below) covers only the raw body, so a receiver correlating by this id must trust transport
+     * security, not the signature. May be null (the {@code /test} door fires a synthetic event with
+     * no outbox row); the header is then simply omitted.
+     */
+    public DeliveryResult deliver(WebhookEndpoint ep, String eventType, Long eventId, String body) {
         long start = System.nanoTime();
         try {
             HttpRequest.Builder rq = HttpRequest.newBuilder(URI.create(ep.getTargetUrl()))
                 .timeout(Duration.ofSeconds(10))
                 .header("Content-Type", "application/json")
                 .header("X-Lumnik-Event", eventType);
+            if (eventId != null) rq.header("X-Lumnik-Event-Id", String.valueOf(eventId));
 
             String secret = cipher.decrypt(ep.getSecretEncrypted());
 

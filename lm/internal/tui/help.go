@@ -28,7 +28,6 @@ var mutatingKeyEntries = []struct{ page, key string }{
 	{"inbox", "a"},
 	{"inbox", "A"},
 	{"view", "a"},
-	{"hooks", "^L"},
 	{"runs", "c"},
 	{"processes", "e"},
 	{"processes", "^P"},
@@ -90,7 +89,6 @@ const helpBody = `[yellow]Global keys[white]
                      ^R  mark replayed
                      ^D  discard
   :hooks          installed Kotlin hooks
-                     ^L  reload
   :migrations     Flyway status per schema
   :modules        installed business modules
   :processes      declared kind:Process rules

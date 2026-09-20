@@ -18,18 +18,20 @@ public final class CronField {
         new CronParser(CronDefinitionBuilder.instanceDefinitionFor(CronType.UNIX));
 
     public static Function<JsonNode, Optional<String>> validCron() {
-        return v -> {
-            String expr = v.asText();
-            if (expr == null || expr.isBlank()) {
-                return Optional.of("cron expression must not be blank");
-            }
-            try {
-                UNIX_PARSER.parse(expr).validate();
-                return Optional.empty();
-            } catch (Exception e) {
-                return Optional.of("invalid cron expression: " + expr);
-            }
-        };
+        return v -> validCron(v.asText());
+    }
+
+    /** Empty when valid; otherwise the reason, named (the validators' Optional contract). */
+    public static Optional<String> validCron(String expr) {
+        if (expr == null || expr.isBlank()) {
+            return Optional.of("cron expression must not be blank");
+        }
+        try {
+            UNIX_PARSER.parse(expr).validate();
+            return Optional.empty();
+        } catch (Exception e) {
+            return Optional.of("invalid cron expression: " + expr);
+        }
     }
 
     /**

@@ -1,20 +1,16 @@
 package io.lumnik.hub.view;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
+import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.manifest.ManifestKeys;
+import io.lumnik.hub.manifest.ManifestSurface;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.TreeSet;
 
 /** Parses a kind:View YAML manifest into a ViewManifest. Structural only — the ViewResolver validates columns. */
 public class ViewManifestParser {
-
-    private static final YAMLMapper MAPPER = new YAMLMapper();
 
     // The closed inventory (C3). Kept beside parse() on purpose: a field added there without a key
     // added here is the drift that would make this check cry wolf, and the tests pin both halves.
@@ -27,12 +23,11 @@ public class ViewManifestParser {
     private static final Set<String> METADATA_KEYS = Set.of("name");
     private static final Set<String> SPEC_KEYS = Set.of("scope", "table", "title", "columns");
 
-    private static final Map<String, Set<String>> ALLOWED_BY_PATH = new LinkedHashMap<>();
-    static {
-        ALLOWED_BY_PATH.put("", ROOT_KEYS);
-        ALLOWED_BY_PATH.put(METADATA, METADATA_KEYS);
-        ALLOWED_BY_PATH.put("spec", SPEC_KEYS);
-    }
+    private static final ManifestSurface SURFACE = ManifestSurface.builder()
+        .group("", "root", ROOT_KEYS)
+        .group(METADATA, "metadata", METADATA_KEYS)
+        .group("spec", "spec", SPEC_KEYS)
+        .build();
 
     /**
      * Every key the manifest declares that this parser does not honor, as dotted paths in document
@@ -45,11 +40,15 @@ public class ViewManifestParser {
     public List<String> unknownKeys(String yaml) {
         JsonNode root;
         try {
-            root = MAPPER.readTree(yaml);
+            root = SURFACE.readTree(yaml);
         } catch (Exception e) {
             return List.of();
         }
-        return ManifestKeys.unknownKeys(root, ALLOWED_BY_PATH);
+        return unknownKeys(root);
+    }
+
+    public List<String> unknownKeys(JsonNode root) {
+        return SURFACE.unknownKeys(root);
     }
 
     /**
@@ -59,41 +58,52 @@ public class ViewManifestParser {
      * a sentence.
      */
     public static String honoredSurface() {
-        return "root {" + sorted(ROOT_KEYS) + "}, metadata {" + sorted(METADATA_KEYS)
-            + "}, spec {" + sorted(SPEC_KEYS) + "}";
+        return SURFACE.honoredSurface();
     }
 
-    private static String sorted(Set<String> keys) {
-        return String.join(", ", new TreeSet<>(keys));
-    }
-
-    public ViewManifest parse(String yaml) {
-        JsonNode root;
+    /**
+     * Parses once, catching broadly (SnakeYAML/Jackson raise a mix of checked and unchecked
+     * failures for a null or malformed body — the existing message must fire for both; an empty
+     * or blank-only body does not throw here at all, {@link #parse(JsonNode)} refuses it with its
+     * ordinary "kind must be 'View'" check instead). Package-visible so the door can call it once
+     * and reuse the node for both parse() and unknownKeys().
+     */
+    JsonNode readTree(String yaml) {
         try {
-            root = MAPPER.readTree(yaml);
+            return SURFACE.readTree(yaml);
         } catch (Exception e) {
             throw new IllegalArgumentException("invalid kind:View manifest: " + e.getMessage(), e);
         }
+    }
+
+    public ViewManifest parse(String yaml) {
+        return parse(readTree(yaml));
+    }
+
+    public ViewManifest parse(JsonNode root) {
         if (!"View".equals(ManifestKeys.text(root, "kind")))
             throw new IllegalArgumentException("kind must be 'View'");
         JsonNode meta = root.path(METADATA);
         JsonNode spec = root.path("spec");
-        String name = ManifestKeys.text(meta, "name");
-        String scope = ManifestKeys.text(spec, "scope");
+        String name = ManifestKeys.requiredText(meta, "name", "metadata.name");
+        String scope = ManifestKeys.requiredText(spec, "scope", "spec.scope");
         String table = ManifestKeys.text(spec, "table");
         String title = ManifestKeys.text(spec, "title");
         List<String> columns = new ArrayList<>();
         for (JsonNode c : spec.path("columns")) columns.add(c.asText());
 
-        if (name == null || name.isBlank())
-            throw new IllegalArgumentException("metadata.name is required");
-        if (scope == null || scope.isBlank())
-            throw new IllegalArgumentException("spec.scope is required");
         if (columns.isEmpty())
             throw new IllegalArgumentException("spec.columns must declare at least one column");
 
         // scope is normalized at the threshold: accidental whitespace must not leak into
         // authorization (a bound user would get a lying 403) or the SchemaCard lookup.
-        return new ViewManifest(name, scope.strip(), table, title, columns);
+        String tag = scope.strip();
+
+        // …and the normalized tag still has to be a NAME a scope can have — the same rule
+        // AppManifestParser, ScopesValidator and EntityManifestParser already ask (#577).
+        ScopeGrants.nameProblem(tag)
+            .ifPresent(problem -> { throw new IllegalArgumentException("spec.scope: " + problem); });
+
+        return new ViewManifest(name, tag, table, title, columns);
     }
 }

@@ -78,12 +78,25 @@ class PlatformDeliveryReplayIT {
     }
 
     private void insertFailed(int tenant, String endpointName, String type) {
+        insertFailedWithEventId(tenant, endpointName, type, null);
+    }
+
+    /** Own transaction: unlike {@link #insertFailed}, called directly from a test rather than from
+     *  the already-transactional {@link #seedTwoTenants}. */
+    @Transactional
+    void seedFailedWithEventId(int tenant, String endpointName, String type, Long eventId) {
+        em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
+        insertFailedWithEventId(tenant, endpointName, type, eventId);
+    }
+
+    /** Same seed, but tied to a given outbox event id — for the replay-correlation test. */
+    private void insertFailedWithEventId(int tenant, String endpointName, String type, Long eventId) {
         em.createNativeQuery("""
             INSERT INTO core.webhook_delivery
-                (tenant_id, endpoint_id, event_type, payload, http_status, error, duration_ms, attempted_at, attempts, succeeded)
-            SELECT :t, e.id, :type, '{"probe":1}'::jsonb, 502, 'boom', 10, NOW(), 1, FALSE
+                (tenant_id, endpoint_id, event_type, event_id, payload, http_status, error, duration_ms, attempted_at, attempts, succeeded)
+            SELECT :t, e.id, :type, :eventId, '{"probe":1}'::jsonb, 502, 'boom', 10, NOW(), 1, FALSE
             FROM core.webhook_endpoint e WHERE e.name = :name
-            """).setParameter("t", tenant).setParameter("type", type)
+            """).setParameter("t", tenant).setParameter("type", type).setParameter("eventId", eventId)
             .setParameter("name", endpointName).executeUpdate();
     }
 
@@ -117,6 +130,15 @@ class PlatformDeliveryReplayIT {
         return (Boolean) em.createNativeQuery(
                 "SELECT succeeded FROM core.webhook_delivery WHERE event_type = :type ORDER BY id DESC LIMIT 1")
             .setParameter("type", type).getSingleResult();
+    }
+
+    @Transactional
+    Long newestEventId(String type) {
+        em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
+        Number n = (Number) em.createNativeQuery(
+                "SELECT event_id FROM core.webhook_delivery WHERE event_type = :type ORDER BY id DESC LIMIT 1")
+            .setParameter("type", type).getSingleResult();
+        return n == null ? null : n.longValue();
     }
 
     /**
@@ -188,6 +210,24 @@ class PlatformDeliveryReplayIT {
         assertThat(newestSucceeded("replay.probe.live"))
             .as("a replay that got a 200 back must not be recorded as a failure")
             .isTrue();
+    }
+
+    /** The correlation contract from #570: a replay must carry the SAME outbox event id as the
+     *  original delivery, both as the outbound header and on the new journal row — a
+     *  replay-of-a-replay chain must not lose it. */
+    @Test
+    void replayCarriesTheOriginalEventIdAsAHeaderAndPersistsItOnTheNewRow() {
+        wm.stubFor(post("/live").willReturn(aResponse().withStatus(200)));
+        seedFailedWithEventId(1, "replay-probe-live", "replay.probe.eventid", 555777L);
+        long id = idOf("replay.probe.eventid");
+
+        given().headers(TestIdentity.tenantAndUser(1))
+            .when().post("/api/platform/deliveries/" + id + "/replay")
+            .then().statusCode(200);
+
+        wm.verify(1, WireMock.postRequestedFor(WireMock.urlEqualTo("/live"))
+            .withHeader("X-Lumnik-Event-Id", WireMock.equalTo("555777")));
+        assertThat(newestEventId("replay.probe.eventid")).isEqualTo(555777L);
     }
 
     /** The pre-existing tenant-in-URL address: the platform sibling shares its service, but this

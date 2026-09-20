@@ -67,7 +67,7 @@ public class ConnectorApplyResource {
         // scopes they do not — or narrow it out of one by re-applying a subset. Same words as the
         // check above, and before validation for the same reason (#509).
         ApplyScopeBoundary.refuseUnlessCallerHolds(
-            connectors.scopesOf(tenant, doc.path(METADATA).path("name").asText()));
+            connectors.lockedScopesOf(tenant, doc.path(METADATA).path("name").asText()));
 
         ValidationResult vr = validationService.validate(doc);
         if (!vr.isValid()) return Response.status(400).entity(vr).build();

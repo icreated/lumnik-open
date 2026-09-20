@@ -262,7 +262,8 @@ Collect these for your risk register. None are softened.
 - SCIM writes skip the audit trail (above).
 - Disabling an account in the IdP does not revoke a live access token: archive the hub row
   ([Offboarding](offboarding.md#the-clock)). `LUMNIK_AUTH_VERIFY_WITH_IDP=true` makes the hub
-  ask the IdP on every request; the hub-side refusal is not yet part of the shipped rehearsal.
+  ask the IdP on every request and refuse a still-valid token once the account is disabled —
+  rehearsed end to end in the `oidc-external` kind smoke test.
 
 **Edition boundary**
 

@@ -58,10 +58,12 @@ func keysOf(m map[string]any) string {
 // tags and lowercases the field name instead, so `TypeID` went out as `typeid` while the hub bound
 // `typeId` and set it null.
 //
-// types.Hook passes today by accident — every field is one word, so lowercasing matches. Add a
-// multi-word field to it and this fails, which is the point.
+// types.HookDetail is what `hook get` actually round-trips (#607) — types.Hook is only the
+// `hook list` table's DTO, never marshalled to YAML for an apply. types.HookHandler is checked
+// too even though it is nested inside HookDetail, not top-level: this loop only inspects the
+// fields of what it's given, so a nested type's own tags need their own entry to be guarded.
 func TestYamlKeysMatchJsonKeys_forEveryRoundTrippedType(t *testing.T) {
-	for _, v := range []any{types.Connector{}, types.Hook{}} {
+	for _, v := range []any{types.Connector{}, types.HookDetail{}, types.HookHandler{}} {
 		rt := reflect.TypeOf(v)
 		for i := 0; i < rt.NumField(); i++ {
 			f := rt.Field(i)
