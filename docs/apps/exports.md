@@ -1,7 +1,8 @@
 # kind: Export — deliver an entity as CSV
 
 > A `kind: Export` manifest is a stored delivery contract: **one canonical entity, the columns
-> you pick, one CSV, one destination**, on demand or on a cron. Each execution is a **managed
+> you pick (renamed and formatted for the receiver if you want), one CSV, one destination**, on
+> demand or on a cron. Each execution is a **managed
 > run**, recorded from claim to receipt. The file is published atomically and **never
 > overwrites** anything.
 
@@ -10,6 +11,7 @@
 | **Kind** | `Export` (`apiVersion: apps.lumnik.io/v1`, strictly checked) |
 | **Source** | one [entity](../entities.md) |
 | **Format** | CSV, UTF-8 |
+| **Shaping** | header names, per-column formatters, a row filter ([below](#shape-the-file-for-a-partner)) |
 | **Destinations** | `sftp`, `s3` |
 | **Schedulable** | cron, UTC |
 | **Role** | `lm_integrator` for everything, reads included |
@@ -58,7 +60,8 @@ Location      /inbound/customers-2026-09-24.csv
 | `metadata.name` | yes | the export's name, a slug, stored lower-cased (`Customers-Daily` becomes `customers-daily`), one per tenant. Re-applying the same name updates it |
 | `spec.scope` | yes | one of the entity's declared `scopes`, and one you hold ([below](#scope-and-tenant)) |
 | `spec.source.entity` | yes | an existing [entity](../entities.md), case-insensitive |
-| `spec.columns` | yes | canonical columns of the entity, no duplicates, in file order. `_entity_id`, `_conflicts`, `_resolution` and `_handle` are refused |
+| `spec.columns` | yes | canonical columns of the entity, no duplicates, in file order. Each one a bare name, or `{name, as, format}` ([below](#shape-the-file-for-a-partner)). `_entity_id`, `_conflicts`, `_resolution` and `_handle` are refused |
+| `spec.filter` | no | the rows to keep: `column` plus `equals` or `in` ([below](#keep-only-some-rows)) |
 | `spec.order` | yes | the sort, columns taken from `spec.columns` ([ordering](#ordering-and-the-receipt)) |
 | `spec.format.kind` | yes | `csv`, the only format |
 | `spec.format.delimiter` | no | one character, default `,`. Not `"`, a line break or NUL |
@@ -169,8 +172,201 @@ With `delimiter: ";"`, two rows where the second has no city (each line ends in 
 "P-1005";"ATELIERS DU ""NORD""";
 ```
 
-Values are the canonical text in the entity view, as-is. There is no type formatting and no
-date conversion.
+Values are the canonical text in the entity view, as-is, unless the column declares
+[`format` steps](#shape-the-file-for-a-partner).
+
+## Shape the file for a partner
+
+A partner's file spec usually asks for its own header names, its own codes, its own number
+shape, no readable personal data, and only some rows. Declare it in the manifest. The hub then
+builds the partner's file itself, with the same receipt and never-overwrite guarantees:
+
+```yaml
+--8<-- "docs/apps/exports/40-partner-file.yaml"
+```
+
+```
+$ lm export apply -f docs/apps/exports/40-partner-file.yaml
+Applied export "partner-customers" → entity AcmeCustomer, scope desk
+$ lm export run partner-customers --wait
+…
+Status        Completed
+Rows          8
+Bytes         587
+SHA-256       9599dfa99244aebf1677c2b0251bd07b37688761e46cd481b1cba97432e73c01
+Location      s3://acme-outbound/partner/customers-2026-10-15.csv
+```
+
+The file the partner receives (`;` delimiter, each line ends in `\r\n`):
+
+```
+"CUST_NO";"RAISON_SOCIALE";"CAT";"ENCOURS";"EMAIL"
+"P-1000";"Hydraulique Lyon 1000";"A";"500,00";"co**********************.example"
+"P-1001";"Roulements Bruxelles 1001";"B";"637,00";
+"P-1003";"Pneumatique Porto 1003";"A";"911,00";"ge*********************.example"
+"P-1004";"Étanchéité Kraków 1004";"B";"1048,00";
+…
+```
+
+A column is written in one of two ways. A bare name exports it as the entity holds it. The
+long form renames it, formats it, or both:
+
+```yaml
+columns:
+  - code                      # as the entity holds it, header "code"
+  - name: segment             # the entity's column
+    as: CAT                   # the header in the file
+    format:                   # steps, run top to bottom on each value
+      - lookup: { table: { GOLD: A, SILVER: B } }
+```
+
+- Manifests written before this keep working unchanged.
+- Headers must be unique in the file.
+- `order` and `filter` always use the entity's names (`segment`, not `CAT`), and sort or filter on
+  the entity's values, before any formatting.
+- An empty cell stays empty. No formatter touches it.
+- The same data still gives the same file and the same SHA-256, so you can compare a retry. One
+  exception: after a hub upgrade, a `format-date` with a `zone` can move an hour if that zone's
+  daylight-saving rules changed.
+
+### Keep only some rows
+
+```yaml
+filter:
+  - column: segment
+    in: [GOLD, SILVER]
+  - column: city
+    equals: Lyon
+```
+
+- Each entry is `column` plus `equals` (one value) or `in` (a list), never both. A row is kept only
+  when **every** entry matches.
+- `column` can be any column of the entity, even one you do not export.
+- Values must match exactly what the entity holds: `Gold` is not `GOLD`. An empty cell never
+  matches.
+- Quote a value that looks like a number: `equals: "2024"`.
+
+### Formatters
+
+Four formatters exist. Each one below shows the manifest line, then what it writes.
+
+#### `lookup`: your codes to the partner's codes
+
+```yaml
+format:
+  - lookup: { table: { ACTIVE: A, CLOSED: C }, on-missing: error }
+```
+
+| Value | `on-missing` | Written |
+|---|---|---|
+| `ACTIVE` | any | `A` |
+| `OTHER` | `keep` (default) | `OTHER` |
+| `OTHER` | `UNKNOWN` (any other text) | `UNKNOWN` |
+| `OTHER` | `error` | the run fails, nothing is published ([below](#what-is-checked-and-when)) |
+
+`on-missing: ""` is refused when you apply: it would hand the partner empty cells without telling
+anyone.
+
+#### `format-date`: the partner's date shape
+
+```yaml
+format:
+  - format-date: { pattern: dd/MM/yyyy HH:mm, zone: Europe/Paris }
+```
+
+| Value in the entity | `pattern` | Written |
+|---|---|---|
+| `2019-12-31` | `dd/MM/yyyy` | `31/12/2019` |
+| `2004-10-18 23:42:39+00` | `dd/MM/yyyy HH:mm` | `18/10/2004 23:42` (UTC, the default) |
+| `2004-10-18 23:42:39+00` | `dd/MM/yyyy HH:mm`, `zone: Europe/Paris` | `19/10/2004 01:42` |
+| `2026-08-01 14:30:00` (no time zone in the value) | `HH:mm` | `14:30`: `zone` only converts a value that carries one |
+| `2019-12-31` | `dd MMM yyyy` | `31 Dec 2019`: month names are in English |
+
+Pattern letters: `dd` day, `MM` month, `yyyy` year, `HH` hour (00–23), `mm` minutes, `ss`
+seconds. Capital **M** is the month, lowercase `mm` the minutes: mixing them up is the classic
+mistake.
+
+#### `format-number`: decimal comma, fixed decimals
+
+```yaml
+format:
+  - format-number: { decimal-separator: ",", scale: 2 }
+```
+
+| Value | Parameters | Written |
+|---|---|---|
+| `1234.5600` | none | `1234.5600` |
+| `1234.5600` | `decimal-separator: ","` | `1234,5600` |
+| `1234.5650` | `decimal-separator: ","`, `scale: 2` | `1234,57` (rounded half up) |
+| `-1234.5` | `scale: 0` | `-1235` |
+| `42` | `scale: 2` | `42.00` |
+
+No thousands separator is ever written.
+
+#### `mask`: hide personal data
+
+```yaml
+format:
+  - mask: { keep-first: 2, keep-last: 4 }      # mask-char: "*" by default
+```
+
+| Value | Parameters | Written |
+|---|---|---|
+| `4556123498761234` | `keep-last: 4` | `************1234` |
+| `contact@example.com` | `keep-first: 2, keep-last: 4` | `co*************.com` |
+| `1234` | `keep-last: 4` | `****` |
+
+A value too short to keep anything is masked **entirely**. On the way in, the `mask` hook lets
+such a value through; a file leaving the house never does.
+
+### What is checked, and when
+
+Every formatter and filter is checked when you apply. The error names the field:
+
+```
+$ lm export apply -f partner.yaml
+Error: API error 400: spec.columns[3].format[0]: unknown formatter 'format-numbr' — expected one of [format-date, format-number, lookup, mask]
+$ lm export apply -f partner.yaml
+Error: API error 400: spec.filter[0].column: 'segmnt' is not a canonical column of entity 'AcmeCustomer'
+```
+
+A value a formatter cannot write **fails the run** (`generation`). No file is published: a
+half-formatted column is worse than none. The reason names the column and the formatter, never
+the value. Here, the same manifest without its filter meets a `BRONZE` customer, which the table
+does not list:
+
+```
+$ lm export run partner-customers-all --wait
+…
+Status        Failed
+Failure       generation
+Reason        column 'segment', formatter 'lookup': no entry in table for this value
+```
+
+To find the value, look at the column as the entity holds it, then add the value to the table,
+choose an `on-missing`, or filter the row out:
+
+```
+$ lm entity export AcmeCustomer -o - | cut -d, -f1,4 | grep -v -e GOLD -e SILVER
+"code","segment"
+"P-1002","BRONZE"
+"P-1006","BRONZE"
+"P-1009","BRONZE"
+"P-1011",
+"P-1012",
+"P-1013",
+```
+
+`BRONZE` is the value the table lacks. The three customers with no segment are not a problem:
+an empty cell never reaches the formatter, so it stays empty in the file.
+
+`format-date` fails the same way on a value that is not a date, `2019-02-30` included: it is
+never moved to a valid day. It also fails when `pattern` asks for a field the value lacks
+(`HH:mm` on a date). `format-number` fails on a value that is not a number, or one with more
+than 1 000 digits on either side of the separator.
+
+`lm entity export` (the one-shot download) never formats or filters: it always gives every
+column, as the entity holds it.
 
 ## Ordering and the receipt
 
@@ -345,7 +541,10 @@ left on the remote side:
 - **No resume.** A retry rewrites the whole file.
 - **No delta or incremental export.** `mode: snapshot` means the full entity every time.
 - **CSV only**, UTF-8 only. No JSON, Parquet or Excel, no compression, no encryption.
-- **One entity per export.** No joins and no row filter; `spec.columns` is the only projection.
+- **One entity per export.** No joins. The filter knows only `equals` and `in`: no ranges, no
+  patterns, no `OR` between entries.
+- **Four formatters.** No computed or constant columns, no fixed-width output, no inbound repair
+  hooks (`fix-mojibake`, `parse-*`). Clean the data on the way in, and shape it on the way out.
 - **No other destinations:** no local disk, email or HTTP push. No sidecar or `.done` marker file.
 - No back-fill of missed slots and no automatic retry.
 

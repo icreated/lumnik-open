@@ -3,6 +3,9 @@ package io.lumnik.jdbc.postgresql;
 import io.lumnik.jdbc.spi.ColumnDescriptor;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Proxy;
+import java.sql.ResultSetMetaData;
+import java.sql.Types;
 import java.util.List;
 import java.util.Optional;
 
@@ -88,5 +91,24 @@ class PostgresDialectTest {
         new ColumnDescriptor("code", "VARCHAR", 10, false),
         new ColumnDescriptor("name", "VARCHAR", 255, true));
     assertEquals(Optional.empty(), d.inferWatermarkColumn(cols, List.of("code")));
+  }
+
+  /** pgJDBC reports timestamp and timestamptz with the same code (93): only the type name tells a
+   *  wall-clock time from an instant (#1093, measured with pgJDBC 42.7.8). */
+  @Test
+  void only_a_timestamp_without_time_zone_is_a_wall_clock() throws Exception {
+    assertTrue(d.isWallClock(metadata(Types.TIMESTAMP, "timestamp"), 1));
+    assertFalse(d.isWallClock(metadata(Types.TIMESTAMP, "timestamptz"), 1));
+    assertFalse(d.isWallClock(metadata(Types.DATE, "date"), 1));
+    assertFalse(d.isWallClock(metadata(Types.VARCHAR, "text"), 1));
+  }
+
+  static ResultSetMetaData metadata(int type, String typeName) {
+    return (ResultSetMetaData) Proxy.newProxyInstance(PostgresDialectTest.class.getClassLoader(),
+        new Class<?>[] {ResultSetMetaData.class}, (proxy, method, args) -> switch (method.getName()) {
+          case "getColumnType" -> type;
+          case "getColumnTypeName" -> typeName;
+          default -> throw new UnsupportedOperationException(method.getName());
+        });
   }
 }

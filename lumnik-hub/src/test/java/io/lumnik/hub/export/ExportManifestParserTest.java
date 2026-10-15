@@ -345,7 +345,7 @@ class ExportManifestParserTest {
         assertThatThrownBy(() -> parser.parse(
             VALID.replace("columns: [code, name, city, email]", "columns: [code, 123]")))
             .isInstanceOf(IllegalArgumentException.class)
-            .hasMessageContaining("spec.columns must contain only strings");
+            .hasMessageContaining("spec.columns[1] must be a column name or a mapping {name, as, format}");
     }
 
     @Test

@@ -21,7 +21,8 @@ class ExportDocExamplesTest {
     @CsvSource({
         "10-sftp-daily.yaml, AcmeCustomer, desk",
         "20-s3-hourly.yaml, AcmeCustomer, desk",
-        "30-product-catalogue-s3.yaml, ProductWithCategory, catalogue"})
+        "30-product-catalogue-s3.yaml, ProductWithCategory, catalogue",
+        "40-partner-file.yaml, AcmeCustomer, desk"})
     void a_documented_example_passes_the_apply_door_parser(String file, String entity, String scope)
             throws IOException {
         JsonNode root = parser.readTree(Files.readString(EXAMPLES.resolve(file)));

@@ -1,5 +1,7 @@
 package io.lumnik.hub.export;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 import java.util.List;
 
 /**
@@ -25,13 +27,33 @@ public record ExportManifest(
     String name,
     String scope,
     String entity,
-    List<String> columns,
     List<String> order,
     Format format,
     Destination destination,
     String mode,
-    String schedule
+    String schedule,
+    List<Column> output,
+    List<Filter> filter
 ) {
+
+    /** The canonical columns read, in file order: each {@link Column}'s {@code name}. */
+    public List<String> columns() {
+        return output.stream().map(Column::name).toList();
+    }
+
+    /**
+     * One exported column as the file shows it (#1090): {@code name} is the canonical column,
+     * {@code header} its {@code as} or else its name, and
+     * {@code format} the declared steps, empty when none. The steps are carried raw; the
+     * {@code ColumnFormatterRegistry} compiles them — the parser has no beans.
+     */
+    public record Column(String name, String header, List<FormatStep> format) {}
+
+    /** One {@code - <kind>: {params}} entry of a column's {@code format} list. */
+    public record FormatStep(String kind, JsonNode params) {}
+
+    /** One {@code spec.filter} entry: {@code column} equals one of {@code values} (equals = one value). */
+    public record Filter(String column, List<String> values) {}
 
     public record Format(String kind, char delimiter, String encoding, boolean header) {
 

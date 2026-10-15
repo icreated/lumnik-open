@@ -394,7 +394,7 @@ public class HybridJsonbWriter {
             case BOOLEAN     -> ps.setBoolean(idx, (Boolean) val);
             case DECIMAL     -> ps.setBigDecimal(idx,
                                     val instanceof BigDecimal b ? b : new BigDecimal(val.toString()));
-            case TIMESTAMPTZ -> ps.setObject(idx, val);
+            case TIMESTAMPTZ -> ps.setObject(idx, DynamicTableWriter.bindable(val, "TIMESTAMPTZ"));
             case DATE        -> ps.setObject(idx, val);
             case JSONB       -> {
                 try { ps.setObject(idx, JSON.writeValueAsString(val), Types.OTHER); }

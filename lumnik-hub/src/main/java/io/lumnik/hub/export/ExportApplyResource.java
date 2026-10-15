@@ -9,6 +9,7 @@ import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityRegistry;
+import io.lumnik.hub.export.format.ColumnFormatterRegistry;
 import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
@@ -41,6 +42,7 @@ public class ExportApplyResource {
     @Inject ExportManifestStore store;
     @Inject EntityRegistry entities;
     @Inject AuditRecorder audit;
+    @Inject ColumnFormatterRegistry formatters;
 
     private final ExportManifestParser parser = new ExportManifestParser();
 
@@ -92,9 +94,9 @@ public class ExportApplyResource {
         ApplyScopeBoundary.refuseUnlessCallerHoldsScope(store.findScope(tenant, name));
 
         EntityManifest entity = entities.findReloadingIfMissing(manifest.entity());
-        Optional<String> problem = ExportDefinitionCheck.problem(manifest, entity);
-        if (problem.isPresent()) {
-            return ApiErrors.badRequest(problem.get());
+        if (ExportDefinitionCheck.resolve(manifest, entity, formatters)
+                instanceof ExportDefinitionCheck.Problem problem) {
+            return ApiErrors.badRequest(problem.sentence());
         }
 
         // entity.name(), not manifest.entity(): EntityRegistry resolves case-insensitively, so

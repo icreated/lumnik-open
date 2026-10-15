@@ -583,6 +583,32 @@ cell:
 - Cheat sheet: `dd` = day, `MM` = month — capital **M**, lowercase `mm` means *minutes*, the
   classic trap — `yyyy` = year. Add `H`/`h`/`m`/`s` only when the source carries a time.
 
+#### Which time zone a time is in
+
+An ERP export writes `2026-08-02 23:30:00` with no time zone. Say which one it is with `zone`:
+
+```yaml
+cell:
+  - parse-date: { column: stamp, formats: ["yyyy-MM-dd HH:mm:ss"], zone: Europe/Paris }
+```
+
+| in | `zone` | stored (shown in UTC) |
+|---|---|---|
+| `2026-08-02 23:30:00` | *(none)* | `2026-08-02 23:30:00+00`: read as UTC |
+| `2026-08-02 23:30:00` | `Europe/Paris` | `2026-08-02 21:30:00+00`: Paris is UTC+2 in summer |
+| `2026-01-15 23:30:00` | `Europe/Paris` | `2026-01-15 22:30:00+00`: UTC+1 in winter |
+| `2026-08-02` | `Europe/Paris` | `2026-08-02`: a date has no time, `zone` changes nothing |
+
+- Without `zone` (or with an empty one), a time is always read as UTC, wherever the hub runs.
+- An unknown zone stops the run before its first row:
+  `parse-date hook: 'zone' is not a time zone: "Europe/Pariss" (for example Europe/Paris or UTC)`.
+
+!!! warning "A hub that ran outside UTC before this version"
+    A hub started from the jar on a machine set to another zone used to read a time in **that**
+    zone: `23:30` landed as `21:30+00` on a machine in Paris. The published Docker image runs in
+    UTC and was never affected. A row that already landed keeps its value until its source line
+    changes. Add `zone:` to say what the source really means.
+
 ### `parse-number` — numbers are `1 234,56 €` or `(123)`
 
 ```yaml
@@ -859,7 +885,7 @@ One per cell, readable once the run ends:
 | `regex-extract` | `column`; `pattern`; `groups` (map group-index → column) | capture groups into named columns; a miss writes `null`, **not** counted; bad `groups` keys refused at start |
 | `default` | `column`; `value` | fills a null or blank cell; never overwrites |
 | `lookup` | `column`; `table` (inline map); `on-missing` (`keep`; or `null` / `error` / any literal) | replaces via the map; on a miss: keep, null (+1), fail the run, or the literal |
-| `parse-date` | `column`; `formats` (list of Java `DateTimeFormatter` patterns) | first matching format wins; `H/h/m/s` → timestamp, else date; no match → `null` +1 |
+| `parse-date` | `column`; `formats` (list of Java `DateTimeFormatter` patterns); `zone` (UTC) | first matching format wins; `H/h/m/s` → timestamp in `zone`, else date; no match → `null` +1 |
 | `parse-number` | `column`; `decimal-separator` (`auto`; or `","`/`"."`); `negatives-in-parens` (false) | strips `$€£¥` and spaces, `(123)` → `-123`; decimal out; failure → `null` +1 |
 | `parse-email` | `column`; `lower` (false) | trim, optional lowercase, validate; invalid → `null` +1 |
 | `parse-phone` | `column`; `default-region` (`US`) | E.164 (`+33612345678`); failure → `null` +1 |

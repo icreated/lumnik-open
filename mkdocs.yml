@@ -112,6 +112,7 @@ nav:
       - The demo broker: connectors/kafka/demo-broker.md
     - Transformers: connectors/transformers.md
   - Entities — fuse: entities.md
+  - Entities — resolve: entities-resolution.md
   - Search:
     - Declare an index: search/search-indexes.md
     - Query it: search/querying.md

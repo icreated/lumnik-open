@@ -7,6 +7,7 @@ import io.lumnik.hub.connector.api.types.ReadResult;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.jdbc.spi.JdbcDialect;
 import io.lumnik.hub.connector.mapping.writer.SchemaInferrer;
+import io.lumnik.hub.connector.mapping.writer.WallClockTimestamp;
 
 import javax.sql.DataSource;
 import org.jboss.logging.Logger;
@@ -137,11 +138,17 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
         ResultSetMetaData md = rs.getMetaData();
         int colCount = md.getColumnCount();
         captureSourceColumnTypes(md, colCount, ctx);
+        boolean[] wallClock = new boolean[colCount + 1];
+        for (int i = 1; i <= colCount; i++) wallClock[i] = dialect.isWallClock(md, i);
 
         while (rs.next()) {
           Map<String, Object> row = new LinkedHashMap<>();
           for (int i = 1; i <= colCount; i++) {
-            row.put(md.getColumnLabel(i), dialect.readColumn(rs, i));
+            Object value = dialect.readColumn(rs, i);
+            // A source time with no zone, read in the JVM's zone: marked, so the writer stores the
+            // wall-clock time as UTC (#1093). Same time and nanos, so hash and cursor are unmoved.
+            if (wallClock[i] && value instanceof Timestamp read) value = WallClockTimestamp.of(read);
+            row.put(md.getColumnLabel(i), value);
           }
           rows.add(row);
         }

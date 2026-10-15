@@ -13,12 +13,14 @@ import io.lumnik.hub.export.ExportManifest;
 import io.lumnik.hub.export.ExportManifestParser;
 import io.lumnik.hub.export.ExportManifestStore;
 import io.lumnik.hub.export.ExportManifestStore.Row;
+import io.lumnik.hub.export.SnapshotShape;
 import io.lumnik.hub.export.SnapshotStats;
 import io.lumnik.hub.export.destination.FileDestination;
 import io.lumnik.hub.export.destination.FileDestinationCollisionException;
 import io.lumnik.hub.export.destination.FileDestinationException;
 import io.lumnik.hub.export.destination.FileDestinationRegistry;
 import io.lumnik.hub.export.destination.PublishedArtifact;
+import io.lumnik.hub.export.format.ColumnFormatterRegistry;
 import io.lumnik.hub.export.run.ExportRunLedger.Claim;
 import io.lumnik.hub.export.run.ExportRunLedger.Claimed;
 import io.lumnik.hub.export.run.ExportRunLedger.NewRun;
@@ -74,6 +76,7 @@ public class ExportRunner {
     @Inject EntityRegistry registry;
     @Inject EntitySnapshotStreamer streamer;
     @Inject FileDestinationRegistry destinations;
+    @Inject ColumnFormatterRegistry formatters;
     @Inject AuditRecorder auditRecorder;
     @Inject @DataSource("admin") AgroalDataSource adminDs;
     @Inject RunQueueSettings runQueue;
@@ -258,7 +261,7 @@ public class ExportRunner {
     private record Failed(ExportFailureCode code, Throwable cause) implements Outcome {}
 
     /** What the re-checked stored definition resolves to for this run. */
-    private record Definition(ExportManifest manifest, EntityManifest entity,
+    private record Definition(ExportManifest manifest, EntityManifest entity, SnapshotShape shape,
                               Map<String, Object> cfg) {}
 
     /** Spec steps 3–6. Never throws: every failure comes back as a Failed, already aborted. */
@@ -324,10 +327,12 @@ public class ExportRunner {
         }
         EntityManifest entity =
             inTenant(tenantId, () -> registry.findReloadingIfMissing(manifest.entity()));
-        ExportDefinitionCheck.problem(manifest, entity).ifPresent(problem -> {
-            throw new ExportRunFailure(ExportFailureCode.DEFINITION, problem);
-        });
-        return new Definition(manifest, entity, destinationConfig(root, artifactTime));
+        SnapshotShape shape = switch (ExportDefinitionCheck.resolve(manifest, entity, formatters)) {
+            case ExportDefinitionCheck.Problem problem ->
+                throw new ExportRunFailure(ExportFailureCode.DEFINITION, problem.sentence());
+            case ExportDefinitionCheck.Holds holds -> holds.shape();
+        };
+        return new Definition(manifest, entity, shape, destinationConfig(root, artifactTime));
     }
 
     /** Spec step 5: the snapshot, on the readonly datasource under the tenant, into {@code out}. */
@@ -337,7 +342,7 @@ public class ExportRunner {
             QuarkusTransaction.requiringNew().timeout(timeoutSeconds).call(() -> {
                 try (Connection c = readonlyDs.getConnection()) {
                     TenantRlsScope.applyTo(c, tenantId);
-                    return streamer.stream(c, definition.entity(), manifest.columns(),
+                    return streamer.stream(c, definition.entity(), definition.shape(),
                         manifest.order(), manifest.format(), out);
                 }
             }));

@@ -86,7 +86,7 @@ class EntitySnapshotStreamerStreamingIT {
         QuarkusTransaction.requiringNew().run(() -> {
             try (Connection c = readonlyDs.getConnection()) {
                 TenantRlsScope.applyTo(c, 1L);
-                streamer.stream(c, entity, columns, orderColumns, ExportManifest.Format.DEFAULT, out);
+                streamer.stream(c, entity, SnapshotShape.canonical(columns), orderColumns, ExportManifest.Format.DEFAULT, out);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
@@ -169,7 +169,7 @@ class EntitySnapshotStreamerStreamingIT {
         QuarkusTransaction.requiringNew().run(() -> {
             try (Connection c = readonlyDs.getConnection()) {
                 TenantRlsScope.applyTo(c, 1L);
-                streamer.stream(c, entity, List.of("code", "name"), List.of("code"),
+                streamer.stream(c, entity, SnapshotShape.canonical(List.of("code", "name")), List.of("code"),
                     ExportManifest.Format.DEFAULT, trackingRejectingSink);
             } catch (Exception e) {
                 throw new RuntimeException(e);

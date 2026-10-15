@@ -20,6 +20,7 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
@@ -520,7 +521,7 @@ public class DynamicTableWriter {
     try (Connection c = adminDs.getConnection();
          PreparedStatement ps = c.prepareStatement(sql)) {
       for (int r = 0; r < rows.size(); r++) {
-        bindRow(ps, 0, rows.get(r), sys.get(r), tenantId, schemaCols);
+        bindRow(ps, 0, rows.get(r), sys.get(r), tenantId, schemaCols, schema);
         ps.addBatch();
       }
       int[] counts = ps.executeBatch();
@@ -581,7 +582,7 @@ public class DynamicTableWriter {
       try (PreparedStatement outbox = c.prepareStatement(OUTBOX_SQL)) {
         for (int start = 0; start < idx.size(); start += sub) {
           int end = Math.min(start + sub, idx.size());
-          SubBatchResult sb = writeSubBatch(c, outbox, spec, rows, sys, tenantId, schemaCols,
+          SubBatchResult sb = writeSubBatch(c, outbox, spec, rows, sys, tenantId, schemaCols, schema,
                                             idx, start, end, fqn, source, runId);
           written += sb.written();
           returned += sb.returned();
@@ -636,7 +637,8 @@ public class DynamicTableWriter {
   @SuppressWarnings("java:S107")
   private SubBatchResult writeSubBatch(Connection c, PreparedStatement outbox, MappingTarget.Table spec,
                             List<Map<String, Object>> rows, List<Map<String, Object>> sys,
-                            Long tenantId, List<String> schemaCols, List<Integer> idx,
+                            Long tenantId, List<String> schemaCols, Map<String, String> schema,
+                            List<Integer> idx,
                             int start, int end, String fqn, String source, UUID runId)
                             throws SQLException, JsonProcessingException {
     int n = end - start;
@@ -647,7 +649,7 @@ public class DynamicTableWriter {
     try (PreparedStatement ps = c.prepareStatement(sql)) {
       for (int k = start; k < end; k++) {
         int r = idx.get(k);
-        bindRow(ps, (k - start) * colsPerRow, rows.get(r), sys.get(r), tenantId, schemaCols);
+        bindRow(ps, (k - start) * colsPerRow, rows.get(r), sys.get(r), tenantId, schemaCols, schema);
       }
       try (ResultSet rs = ps.executeQuery()) {
         while (rs.next()) {
@@ -723,14 +725,16 @@ public class DynamicTableWriter {
 
   /** Binds one row's columns into ps starting at {@code base} (0-based offset; +1 for JDBC index). */
   private void bindRow(PreparedStatement ps, int base, Map<String, Object> row,
-                       Map<String, Object> s, Long tenantId, List<String> schemaCols) throws SQLException {
+                       Map<String, Object> s, Long tenantId, List<String> schemaCols,
+                       Map<String, String> schema) throws SQLException {
     ps.setString(base + 1, (String) s.get(ROW_HASH));
     ps.setString(base + 2, (String) s.getOrDefault(SOURCE, "unknown"));
     ps.setObject(base + 3, s.get(RUN_ID));
     ps.setInt(base + 4, (int) s.getOrDefault(MAPPING_VERSION, 1));
     ps.setLong(base + 5, tenantId);
     for (int i = 0; i < schemaCols.size(); i++) {
-      bindValue(ps, base + 6 + i, row.get(schemaCols.get(i)));
+      String col = schemaCols.get(i);
+      bindValue(ps, base + 6 + i, row.get(col), schema.get(col));
     }
   }
 
@@ -757,12 +761,12 @@ public class DynamicTableWriter {
    * and a throw here becomes a {@code ChunkResult.Failure} — cursor unmoved, nothing dead-lettered,
    * the retry replaying the same failure.
    */
-  private void bindValue(PreparedStatement ps, int idx, Object v) throws SQLException {
+  private void bindValue(PreparedStatement ps, int idx, Object v, String columnType) throws SQLException {
     if (v instanceof List<?> || v instanceof Map<?, ?>) {
       ps.setObject(idx, toJson(v), Types.OTHER);
       return;
     }
-    ps.setObject(idx, bindable(v));
+    ps.setObject(idx, bindable(v, columnType));
   }
 
   /**
@@ -773,9 +777,20 @@ public class DynamicTableWriter {
    * any row is bound. Both convert losslessly to {@code OffsetDateTime}, which pgJDBC does bind to
    * TIMESTAMPTZ, so the inferrer's promise and the binder's capability stay pinned together
    * (#506, {@code SchemaTypingInventoryTest}).
+   *
+   * <p>A {@code LocalDateTime} (parse-date without a {@code zone}) going into a TIMESTAMPTZ column
+   * is stored as UTC: pgJDBC sends it as a {@code timestamp}, which PostgreSQL places in the session
+   * zone — the hub JVM's — so the same 23:30 landed 23:30Z on a UTC hub and 21:30Z on a Paris one
+   * (#1092). Into any other column (a TEXT column whose first chunk mixed dates and times) it stays
+   * as it is: there an offset would be rendered in the session zone, "2026-08-03 01:30:00+02".
+   * A {@link WallClockTimestamp} — a jdbc source time with no zone (#1093) — is the same case.
    */
-  private static Object bindable(Object v) {
+  static Object bindable(Object v, String columnType) {
     if (v instanceof Instant instant) return instant.atOffset(ZoneOffset.UTC);
+    if (v instanceof LocalDateTime local && "TIMESTAMPTZ".equals(columnType))
+      return local.atOffset(ZoneOffset.UTC);
+    if (v instanceof WallClockTimestamp wallClock && "TIMESTAMPTZ".equals(columnType))
+      return wallClock.toLocalDateTime().atOffset(ZoneOffset.UTC);
     if (v instanceof ZonedDateTime zdt) return zdt.toOffsetDateTime();
     return v;
   }

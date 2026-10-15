@@ -66,7 +66,7 @@ public class EntitySnapshotDownloadResource {
             SnapshotStats stats = QuarkusTransaction.requiringNew().timeout(timeoutSeconds).call(() -> {
                 try (Connection c = readonlyDs.getConnection()) {
                     TenantRlsScope.applyTo(c, tenantId);
-                    return streamer.stream(c, entity, cols, cols, ExportManifest.Format.DEFAULT, os);
+                    return streamer.stream(c, entity, SnapshotShape.canonical(cols), cols, ExportManifest.Format.DEFAULT, os);
                 } catch (SQLException e) {
                     throw new RuntimeException("EntitySnapshotDownloadResource: " + e.getMessage(), e);
                 }

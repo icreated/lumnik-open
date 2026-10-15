@@ -100,6 +100,12 @@ public class CascadeResolver {
         resolveWithin(c, tenantId, entityType, source, sourceId, cascade, rawFieldValues, runId));
   }
 
+  /** The identity_ref of one source row, or empty when the crosswalk has never seen it (#1087). */
+  public Optional<UUID> identityRefOf(long tenantId, String entityType, String source, String sourceId) {
+    return repository.inTransaction(c -> repository.find(c, tenantId, entityType, source, sourceId)
+        .map(EntityIdentityRepository.ExistingIdentity::identityRef));
+  }
+
   /** "These two source identities are the same" (#619) — one of the two doors into the correction path. */
   public void assertSame(long tenantId, String entityType, UUID leftRef, UUID rightRef,
       String assertedBy, String reason) {

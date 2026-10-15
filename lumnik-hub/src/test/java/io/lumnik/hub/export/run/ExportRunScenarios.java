@@ -143,6 +143,51 @@ abstract class ExportRunScenarios extends ExportRunITSupport {
         assertThat(run.byteCount()).isEqualTo(expected.length);
     }
 
+    /** #1090: header names, formatters and a filter shape the delivered file; the same data gives
+     *  the same bytes twice, so the receipt stays checkable. */
+    @Test
+    void aShapedExportDeliversThePartnersFileAndTheSameBytesTwice() throws Exception {
+        String name = applyShapedExport("partner-${timestamp}.csv", """
+              columns:
+                - name: code
+                  as: CUST_NO
+                  format: [{lookup: {table: {"1": C-001, "2": C-002}, on-missing: error}}]
+                - name: name
+                  as: NAME
+                  format: [{mask: {keep-first: 1}}]
+              filter: [{column: name, in: [Ann, Bob]}]""");
+
+        ExportRunView first = run(name, AT);
+        ExportRunView second = run(name, AT.plusSeconds(1));
+
+        byte[] expected = "\"CUST_NO\",\"NAME\"\r\n\"C-001\",\"A**\"\r\n\"C-002\",\"B**\"\r\n"
+            .getBytes(StandardCharsets.UTF_8);
+        assertThat(first.status()).isEqualTo(ExportRunStatus.COMPLETED);
+        assertThat(first.rowCount()).isEqualTo(2L);
+        assertThat(remote("partner-20260924T040000Z.csv")).isEqualTo(expected);
+        assertThat(second.status()).isEqualTo(ExportRunStatus.COMPLETED);
+        assertThat(second.sha256()).isEqualTo(first.sha256());
+    }
+
+    /** #1090: a value a formatter cannot write fails the run — no half-formatted file — and the
+     *  reason names the column and the formatter, never the value. */
+    @Test
+    void aValueAFormatterCannotWriteFailsAsGenerationWithoutTheValue() throws Exception {
+        String target = "unwritable-" + UUID.randomUUID().toString().substring(0, 8) + ".csv";
+        String name = applyShapedExport(target, """
+              columns: [code, {name: name, format: [{format-number: {}}]}]""");
+
+        ExportRunView run = run(name, AT);
+
+        assertThat(run.status()).isEqualTo(ExportRunStatus.FAILED);
+        assertThat(run.failureCode()).isEqualTo(ExportFailureCode.GENERATION);
+        assertThat(run.failureReason())
+            .isEqualTo("column 'name', formatter 'format-number': not a decimal number")
+            .doesNotContain("Ann");
+        assertThat(remote(target)).isNull();
+        assertNoLeftover(target);
+    }
+
     @Test
     void anUnknownExportIsNotFound() {
         assertThat(runner.start(ExportRunRequest.manual(TENANT, "no-such-export-680", 7L)))

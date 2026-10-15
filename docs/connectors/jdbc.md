@@ -307,7 +307,8 @@ The hub types each column from the source's declared JDBC type:
 |---|---|
 | `smallint`, `integer`, `bigint` | `BIGINT` |
 | `real`, `double precision`, `numeric`, `decimal` | `NUMERIC(18,4)` |
-| `timestamp`, `timestamptz` | `TIMESTAMPTZ` |
+| `timestamp` (no time zone) | `TIMESTAMPTZ`, the time read as UTC ([below](#a-time-without-a-time-zone)) |
+| `timestamptz` | `TIMESTAMPTZ`, the same instant |
 | `date` | `DATE` |
 | `boolean`, `bit` | `BOOLEAN` |
 | everything else | `TEXT` |
@@ -321,6 +322,23 @@ The hub types each column from the source's declared JDBC type:
   field overflow`. Expose it as text through a view: `SELECT event_id::text AS event_id, ...`.
   An id declared `bigint` is not concerned: it lands in `BIGINT`, which holds everything the
   source column can.
+- <a id="a-time-without-a-time-zone"></a>**A time without a time zone is read as UTC.** A
+  `timestamp` column holds `2026-08-02 23:30:00` with no zone. The hub stores it as
+  `2026-08-02 23:30:00+00`, wherever the hub runs. A `timestamptz` column already holds an
+  instant and keeps it. On a hub running in Paris, read back in UTC:
+
+    ```
+     order_id |       ordered_at       |        paid_at
+    ----------+------------------------+------------------------
+            1 | 2026-08-02 23:30:00+00 | 2026-08-02 23:30:00+00
+            2 | 2026-01-15 23:30:00+00 | 2026-01-15 23:30:00+00
+    ```
+
+    `ordered_at` is a `timestamp` at the source, `paid_at` a `timestamptz` holding the same
+    instants. The published Docker image runs in UTC and always stored them this way. A hub run
+    from the jar on a machine set to another zone used to read a `timestamp` in that zone
+    (`21:30+00` in Paris in summer). A row that already landed keeps its value until its source
+    row changes.
 - **A table the hub already created keeps the types it was created with.** There is no backfill:
   columns typed `numeric(18,4)` before this stay that way and keep printing four decimals. To
   retype them, drop the connector (which drops its tables) and re-ingest, or `ALTER` the columns
@@ -669,6 +687,9 @@ spec:
   the `UNSUPPORTED` column, and `add` refuses it by name. Nothing is ingested wrongly.
 - **Zoned timestamps are read as instants** (`TIMESTAMP WITH [LOCAL] TIME ZONE` lands as `timestamptz`), as
   PostgreSQL's driver does — which is what lets such a column serve as a watermark.
+- **`DATE` and `TIMESTAMP` carry no time zone**: they are read as UTC, like a PostgreSQL `timestamp`
+  ([A time without a time zone](#a-time-without-a-time-zone)). `DATE '2026-01-02'` lands as
+  `2026-01-02 00:00:00+00`, never as the evening before.
 - **Empty string is `NULL`.** Oracle stores `''` as `NULL`; the hub receives `NULL`.
 - **Index `(watermark, key)` on every Oracle table you page.** Without an index starting with the
   watermark column, every page scans the whole table — the cost grows with the table and gets worse

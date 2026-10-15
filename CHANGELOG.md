@@ -7,6 +7,40 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.8.1 — 2026-10-15
+
+What the documentation already showed is now in the binary: export files shaped for a partner,
+corrections that name a row the way you see it, and a time zone you can declare. And a date and
+time with no time zone is now stored the same way wherever the hub runs.
+
+### Before you upgrade
+- **Nothing to do.** No migration, no new setting.
+
+### After you upgrade
+- **If your hub runs from the jar on a machine not set to UTC, read this.** A date and time with no
+  time zone used to be stored in that machine's zone: `23:30` landed as `21:30` UTC on a machine in
+  Paris in summer. It is now stored as UTC. This concerns `parse-date` with a time, and a
+  `jdbc-generic` source column of type `timestamp`.
+  - The published Docker image runs in UTC and was never affected.
+  - Rows already landed keep their value until their source row changes.
+  - If the source's times are in a known zone, say so: `parse-date: { …, zone: Europe/Paris }`.
+
+### Added
+- **Exports shaped for a partner.** A column can be renamed in the file (`as:`) and formatted:
+  `lookup` (your codes to the partner's), `format-date`, `format-number` (decimal comma, fixed
+  decimals), `mask` (hide personal data). `spec.filter` keeps only some rows. A value a formatter
+  cannot write fails the run and nothing is published. Existing export manifests are unchanged.
+  See *Shape the file for a partner* in the exports page.
+- **`parse-date` takes `zone:`**: say which time zone the source's times were written in.
+- **Name a row by what you see.** `lm entity assert-same` and `lm entity assert-distinct` take
+  `<source table>:<source id>`, the same pair `lm entity history` takes:
+  `lm entity assert-same Customer --left t_res_crm:9003 --right t_res_erp:C-003 --reason "…"`.
+- **A guide to entity resolution** for the installer, with every screen from a live hub
+  (*Entities — resolve*).
+
+### Changed
+- `lm` 1.4.1 (the assertion handles above).
+
 ## v1.8.0 — 2026-10-15
 
 The hub now sends data out as well as taking it in. Three capabilities land whole:

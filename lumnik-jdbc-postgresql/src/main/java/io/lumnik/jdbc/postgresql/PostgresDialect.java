@@ -178,4 +178,14 @@ public class PostgresDialect implements JdbcDialect {
     }
     return 0L;
   }
+
+  /**
+   * pgJDBC reports {@code timestamp} and {@code timestamptz} with the same code, {@code
+   * Types.TIMESTAMP} — only the type name tells the wall-clock time from the instant (#1093,
+   * measured with pgJDBC 42.7.8).
+   */
+  @Override
+  public boolean isWallClock(ResultSetMetaData md, int index) throws SQLException {
+    return "timestamp".equals(md.getColumnTypeName(index));
+  }
 }

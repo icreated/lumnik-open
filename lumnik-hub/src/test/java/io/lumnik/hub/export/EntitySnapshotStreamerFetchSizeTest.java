@@ -45,7 +45,7 @@ class EntitySnapshotStreamerFetchSizeTest {
         when(ps.executeQuery()).thenReturn(rs);
         when(rs.next()).thenReturn(false); // empty result: only the header/wiring matters here
 
-        streamer.stream(connection, entity, List.of("code"), List.of("code"), ExportManifest.Format.DEFAULT,
+        streamer.stream(connection, entity, SnapshotShape.canonical(List.of("code")), List.of("code"), ExportManifest.Format.DEFAULT,
             new ByteArrayOutputStream());
 
         var order = inOrder(ps);

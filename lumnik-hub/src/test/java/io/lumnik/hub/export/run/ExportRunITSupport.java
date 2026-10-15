@@ -7,6 +7,7 @@ import io.lumnik.hub.entity.EntityRegistry;
 import io.lumnik.hub.export.EntitySnapshotStreamer;
 import io.lumnik.hub.export.ExportManifest;
 import io.lumnik.hub.export.ExportManifestStore;
+import io.lumnik.hub.export.SnapshotShape;
 import io.lumnik.hub.export.SnapshotStats;
 import io.lumnik.hub.scheduler.TenantScope;
 import io.lumnik.hub.sql.TenantRlsScope;
@@ -123,17 +124,26 @@ abstract class ExportRunITSupport {
     /** {@code specExtra}: further {@code spec} lines (a schedule), indented for the manifest. */
     String applyExport(String target, boolean wrongCredential, String formatExtra, String specExtra) {
         String name = "export-run-" + UUID.randomUUID().toString().substring(0, 8);
-        reapply(name, target, wrongCredential, formatExtra, specExtra);
+        reapply(name, target, wrongCredential, formatExtra, specExtra, DEFAULT_COLUMNS);
         return name;
     }
 
+    /** {@code columns}: the {@code spec.columns} line(s), plus any {@code spec.filter}, unindented. */
+    String applyShapedExport(String target, String columns) {
+        String name = "export-run-" + UUID.randomUUID().toString().substring(0, 8);
+        reapply(name, target, false, "", "", columns.indent(2).stripTrailing());
+        return name;
+    }
+
+    private static final String DEFAULT_COLUMNS = "  columns: [code, name]";
+
     /** Applies (or re-applies, keeping its id) export {@code name} writing to {@code target}. */
     void reapply(String name, String target, boolean wrongCredential) {
-        reapply(name, target, wrongCredential, "", "");
+        reapply(name, target, wrongCredential, "", "", DEFAULT_COLUMNS);
     }
 
     private void reapply(String name, String target, boolean wrongCredential, String formatExtra,
-                         String specExtra) {
+                         String specExtra, String columns) {
         String yaml = """
             apiVersion: apps.lumnik.io/v1
             kind: Export
@@ -143,7 +153,7 @@ abstract class ExportRunITSupport {
               scope: sales
               source:
                 entity: %s
-              columns: [code, name]
+            %s
               order: [code]
               format:
                 kind: csv
@@ -152,7 +162,7 @@ abstract class ExportRunITSupport {
             %s
               mode: snapshot
             %s
-            """.formatted(name, entity(), formatExtra, destination(target, wrongCredential), specExtra);
+            """.formatted(name, entity(), columns, formatExtra, destination(target, wrongCredential), specExtra);
         given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
             .contentType("application/yaml").body(yaml)
             .post("/api/exports/apply")
@@ -189,7 +199,7 @@ abstract class ExportRunITSupport {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             try (Connection c = readonlyDs.getConnection()) {
                 TenantRlsScope.applyTo(c, TENANT);
-                SnapshotStats stats = streamer.stream(c, e, List.of("code", "name"), List.of("code"),
+                SnapshotStats stats = streamer.stream(c, e, SnapshotShape.canonical(List.of("code", "name")), List.of("code"),
                     ExportManifest.Format.DEFAULT, out);
                 return new Local(out.toByteArray(), stats);
             }

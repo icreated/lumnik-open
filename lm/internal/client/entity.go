@@ -118,12 +118,15 @@ func (c *Client) EntityHistory(name, source, sourceID string) ([]EvidenceEvent, 
 	return out, nil
 }
 
-// EntityAssertion is a human correction over two identity refs — the {@code same}/{@code
-// distinct} door's request body. No assertedBy field: the hub attributes it to the
-// authenticated caller, never to whatever this struct is given.
+// EntityAssertion is a human correction over two rows — the {@code same}/{@code distinct}
+// door's request body. Each side is an identity ref (LeftRef/RightRef) or a source handle
+// "<source table>:<source id>" (Left/Right), never both (#1087). No assertedBy field: the hub
+// attributes it to the authenticated caller, never to whatever this struct is given.
 type EntityAssertion struct {
-	LeftRef  string `json:"leftRef"`
-	RightRef string `json:"rightRef"`
+	LeftRef  string `json:"leftRef,omitempty"`
+	RightRef string `json:"rightRef,omitempty"`
+	Left     string `json:"left,omitempty"`
+	Right    string `json:"right,omitempty"`
 	Reason   string `json:"reason,omitempty"`
 }
 

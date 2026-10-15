@@ -109,6 +109,48 @@ class ExportApplyResourceIT {
             .body("error", containsString("'not_a_real_column' is not a canonical column"));
     }
 
+    @Test
+    void aShapedManifestIsAcceptedAndStoredAsWritten() {
+        String name = "export-shaped-" + System.nanoTime();
+        String yaml = manifest(name, "sales", "ExportApplyEntity676",
+                "code, {name: city, as: VILLE, format: [{lookup: {table: {Lyon: LYS}}}, {mask: {keep-first: 1}}]}")
+            .replace("  order: [code]", "  filter: [{column: name, in: [Ann, Bob]}]\n  order: [code]");
+        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
+            .contentType("application/yaml").body(yaml)
+            .post("/api/exports/apply")
+            .then().statusCode(200);
+
+        given().headers(TestIdentity.tenantAndUser(1))
+            .get("/api/exports/" + name)
+            .then().statusCode(200)
+            .body(containsString("as: VILLE"))
+            .body(containsString("filter: [{column: name, in: [Ann, Bob]}]"));
+    }
+
+    @Test
+    void anUnknownFormatterIsRefusedNamingItsPath() {
+        String name = "export-badformatter-" + System.nanoTime();
+        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
+            .contentType("application/yaml")
+            .body(manifest(name, "sales", "ExportApplyEntity676", "code, {name: name, format: [{format-dat: {}}]}"))
+            .post("/api/exports/apply")
+            .then().statusCode(400)
+            .body("error", containsString("spec.columns[1].format[0]: unknown formatter 'format-dat'"));
+    }
+
+    @Test
+    void aFilterOnAColumnTheEntityLacksIsRefused() {
+        String name = "export-badfilter-" + System.nanoTime();
+        String yaml = manifest(name, "sales", "ExportApplyEntity676", "code")
+            .replace("  order: [code]", "  filter: [{column: status, equals: A}]\n  order: [code]");
+        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
+            .contentType("application/yaml").body(yaml)
+            .post("/api/exports/apply")
+            .then().statusCode(400)
+            .body("error", containsString(
+                "spec.filter[0].column: 'status' is not a canonical column of entity 'ExportApplyEntity676'"));
+    }
+
     /** The end-to-end proof for the fixture's hyphenated column: a real entity can legitimately
      *  declare one, EntityViewCompiler quotes rather than restricts it, and the apply door must
      *  accept it via the entity.canonicalColumns() cross-check — not refuse it on shape alone. */

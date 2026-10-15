@@ -46,8 +46,18 @@ public class EntityAssertionResource {
   @Inject EntityRegistry registry;
   @Inject CascadeResolver resolver;
 
-  /** No {@code assertedBy} field — the whole point (see class javadoc). */
-  public record AssertionRequest(UUID leftRef, UUID rightRef, String reason) {}
+  /**
+   * No {@code assertedBy} field — the whole point (see class javadoc). Each side is named either by
+   * its identity_ref or by its source handle {@code <source table>:<source id>} (#1087), the form
+   * the entity view's {@code _handle} and {@code lm entity history} use — no door hands out the
+   * identity_ref of a resolved row.
+   */
+  public record AssertionRequest(UUID leftRef, UUID rightRef, String left, String right, String reason) {}
+
+  private static final String HANDLE_FORM = "<source table>:<source id>";
+
+  /** A side's identity_ref, or the refusal that names what is wrong with it. */
+  private record Side(UUID ref, Response refusal) {}
 
   @POST
   @Path("/same")
@@ -63,8 +73,9 @@ public class EntityAssertionResource {
 
   private Response record(String name, AssertionRequest body, boolean same) {
     EntityManifest m = ResolutionGate.requireResolvable(registry, name, true);
-    if (body == null || body.leftRef() == null || body.rightRef() == null) {
-      return ApiErrors.badRequest("leftRef and rightRef are required");
+    if (body == null) {
+      return ApiErrors.badRequest("left and right are required: each an identity_ref or a source handle "
+          + HANDLE_FORM);
     }
 
     long tenantId = RequireTenant.current();
@@ -72,11 +83,16 @@ public class EntityAssertionResource {
     String entityType = m.name().toLowerCase(Locale.ROOT);
     String assertedBy = String.valueOf(userId);
 
+    Side left = side(name, tenantId, entityType, "left", body.leftRef(), body.left());
+    if (left.refusal() != null) return left.refusal();
+    Side right = side(name, tenantId, entityType, "right", body.rightRef(), body.right());
+    if (right.refusal() != null) return right.refusal();
+
     try {
       if (same) {
-        resolver.assertSame(tenantId, entityType, body.leftRef(), body.rightRef(), assertedBy, body.reason());
+        resolver.assertSame(tenantId, entityType, left.ref(), right.ref(), assertedBy, body.reason());
       } else {
-        resolver.assertDistinct(tenantId, entityType, body.leftRef(), body.rightRef(), assertedBy, body.reason());
+        resolver.assertDistinct(tenantId, entityType, left.ref(), right.ref(), assertedBy, body.reason());
       }
     } catch (SameSourceAssertionException e) {
       // icreated/lumnik#735: refuse with a clear 400 instead of recording an assertion that would
@@ -91,5 +107,36 @@ public class EntityAssertionResource {
       throw e;
     }
     return Response.noContent().build();
+  }
+
+  /**
+   * One side of the pair: its identity_ref as given, or the ref its source handle names. The source
+   * is split at the FIRST colon — a table name never holds one, a source id may. A table name holds
+   * no whitespace either, so a padded one is malformed; the source id is NOT trimmed — it is
+   * compared as the source holds it (a CHAR-padded ERP key keeps its spaces), only a blank one is
+   * malformed.
+   */
+  private Side side(String name, long tenantId, String entityType, String which, UUID ref, String handle) {
+    if (ref != null && handle != null) {
+      return new Side(null, ApiErrors.badRequest(which + " is given twice: send " + which + "Ref (an "
+          + "identity_ref) or " + which + " (a source handle " + HANDLE_FORM + "), not both"));
+    }
+    if (ref != null) return new Side(ref, null);
+    if (handle == null) {
+      return new Side(null, ApiErrors.badRequest(which + " is required: an identity_ref (" + which
+          + "Ref) or a source handle " + HANDLE_FORM + " (" + which + ")"));
+    }
+    int colon = handle.indexOf(':');
+    String source = colon < 0 ? "" : handle.substring(0, colon);
+    String sourceId = colon < 0 ? "" : handle.substring(colon + 1);
+    if (source.isEmpty() || source.chars().anyMatch(Character::isWhitespace) || sourceId.isBlank()) {
+      return new Side(null, ApiErrors.badRequest("'" + handle + "' is not a source handle: write "
+          + HANDLE_FORM + ", for example t_crm:9003"));
+    }
+    return resolver.identityRefOf(tenantId, entityType, source, sourceId)
+        .map(found -> new Side(found, null))
+        .orElseGet(() -> new Side(null, ApiErrors.notFound("entity '" + name + "' has no row " + handle
+            + " — check it with lm entity history " + name + " " + source + " " + sourceId
+            + ", or run lm entity resolve " + name + " if the row is new")));
   }
 }

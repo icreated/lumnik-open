@@ -187,7 +187,7 @@ class EntityResolutionApiIT {
         repository.find(c, tenant, ENTITY_TYPE, "crm", "contact-b").orElseThrow().identityRef());
 
     Response r = assertionResource().same("customer",
-        new EntityAssertionResource.AssertionRequest(refA, refB, "same person, two mailboxes"));
+        new EntityAssertionResource.AssertionRequest(refA, refB, null, null, "same person, two mailboxes"));
 
     assertThat(r.getStatus()).isEqualTo(204);
     List<UUID> partners = repository.inTransaction(c ->
@@ -214,8 +214,50 @@ class EntityResolutionApiIT {
     });
 
     Response r = assertionResource().same("customer",
-        new EntityAssertionResource.AssertionRequest(refA, refB, "cross-tenant mistake"));
+        new EntityAssertionResource.AssertionRequest(refA, refB, null, null, "cross-tenant mistake"));
 
     assertThat(r.getStatus()).isEqualTo(404);
+  }
+
+  @Test
+  void the_assertion_door_names_both_rows_by_their_source_handle() {
+    // #1087: no door hands out a resolved row's identity_ref, so an integrator names the row the
+    // way the entity view's _handle and `lm entity history` do — <source>:<source id>.
+    long tenant = freshTenant();
+    asTenant(tenant);
+    EntityManifest.CascadeRule email = new EntityManifest.CascadeRule(
+        "email", new EntityManifest.Exact(List.of("email"), List.of("lower")), null);
+    resolver.resolve(tenant, ENTITY_TYPE, "erp", "C-003", List.of(email), Map.of("email", "a@example.com"), null);
+    ResolutionResult b = resolver.resolve(tenant, ENTITY_TYPE, "crm", "9003",
+        List.of(email), Map.of("email", "b@example.com"), null);
+    UUID refA = repository.inTransaction(c ->
+        repository.find(c, tenant, ENTITY_TYPE, "erp", "C-003").orElseThrow().identityRef());
+
+    Response r = assertionResource().same("customer",
+        new EntityAssertionResource.AssertionRequest(null, null, "erp:C-003", "crm:9003", "shared mailbox"));
+
+    assertThat(r.getStatus()).isEqualTo(204);
+    List<UUID> partners = repository.inTransaction(c ->
+        repository.assertedSameEntityIds(c, tenant, ENTITY_TYPE, refA).stream()
+            .map(EntityIdentityRepository.AssertedPartner::entityId).toList());
+    assertThat(partners).containsExactly(b.entityId());
+  }
+
+  @Test
+  void a_source_handle_of_another_tenant_is_404_naming_the_handle() {
+    long tenantA = freshTenant();
+    long tenantB = freshTenant();
+    asTenant(tenantB);
+    repository.inTransaction(c -> repository.upsertIdentity(c, tenantB, ENTITY_TYPE, "crm", "9003",
+        EntityResolutionState.UNRESOLVED_NO_RULE, null, "automatic"));
+    asTenant(tenantA);
+    repository.inTransaction(c -> repository.upsertIdentity(c, tenantA, ENTITY_TYPE, "erp", "C-003",
+        EntityResolutionState.UNRESOLVED_NO_RULE, null, "automatic"));
+
+    Response r = assertionResource().same("customer",
+        new EntityAssertionResource.AssertionRequest(null, null, "erp:C-003", "crm:9003", null));
+
+    assertThat(r.getStatus()).isEqualTo(404);
+    assertThat(r.getEntity().toString()).contains("crm:9003");
   }
 }

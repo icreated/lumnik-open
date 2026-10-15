@@ -2,7 +2,9 @@ package io.lumnik.jdbc.spi;
 
 import java.sql.Connection;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -62,6 +64,16 @@ public interface JdbcDialect {
    */
   default Object readColumn(ResultSet rs, int index) throws SQLException {
     return rs.getObject(index);
+  }
+
+  /**
+   * Whether column {@code index} holds a wall-clock time — a date and time the source wrote with no
+   * time zone. The driver reads it in the hub JVM's zone, so the hub must not take it for an instant
+   * (#1093). Default: JDBC's own reading, {@code Types.TIMESTAMP} being the type without a zone. A
+   * provider whose driver reports a zoned type with that same code overrides it — PostgreSQL's does.
+   */
+  default boolean isWallClock(ResultSetMetaData md, int index) throws SQLException {
+    return md.getColumnType(index) == Types.TIMESTAMP;
   }
 
   /**

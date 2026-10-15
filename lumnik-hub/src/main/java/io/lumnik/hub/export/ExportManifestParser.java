@@ -1,6 +1,7 @@
 package io.lumnik.hub.export;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.export.run.ArtifactName;
@@ -26,9 +27,11 @@ public class ExportManifestParser {
     private static final Set<String> ROOT_KEYS = Set.of("apiVersion", "kind", METADATA, "spec");
     private static final Set<String> METADATA_KEYS = Set.of("name");
     private static final Set<String> SPEC_KEYS =
-        Set.of("scope", "source", "columns", "order", "format", "destination", "mode", "schedule");
+        Set.of("scope", "source", "columns", "filter", "order", "format", "destination", "mode", "schedule");
     private static final Set<String> SOURCE_KEYS = Set.of("entity");
     private static final Set<String> FORMAT_KEYS = Set.of("kind", "delimiter", "encoding", "header");
+    private static final Set<String> COLUMN_KEYS = Set.of("name", "as", "format");
+    private static final Set<String> FILTER_KEYS = Set.of("column", "equals", "in");
 
     /** SFTP's own fields — never read by parseS3, so an s3 destination carrying one is refused. */
     private static final List<String> SFTP_ONLY_KEYS = List.of(
@@ -60,6 +63,8 @@ public class ExportManifestParser {
         .group(METADATA, "metadata", METADATA_KEYS)
         .group("spec", "spec", SPEC_KEYS)
         .group("spec.source", "spec.source", SOURCE_KEYS)
+        .group("spec.columns[]", "columns[]", COLUMN_KEYS)
+        .group("spec.filter[]", "filter[]", FILTER_KEYS)
         .group("spec.format", "spec.format", FORMAT_KEYS)
         .group("spec.destination", "spec.destination", DESTINATION_KEYS)
         .build();
@@ -152,8 +157,8 @@ public class ExportManifestParser {
         JsonNode source = spec.path("source");
         String entity = requireText(source, "entity", "spec.source.entity");
 
-        List<String> columns = readStringList(spec, "columns", "spec.columns");
-        if (columns.isEmpty())
+        List<ExportManifest.Column> output = readColumns(spec);
+        if (output.isEmpty())
             throw new IllegalArgumentException("spec.columns must declare at least one column");
         // No character-class check here: EntityViewCompiler quotes every canonical column via
         // SqlIdentifiers.quoteIdent, whose own class javadoc states the principle directly —
@@ -163,13 +168,20 @@ public class ExportManifestParser {
         // door's cross-check against that entity's actual canonicalColumns() — not this parser,
         // which has no entity to check against — can tell a real column from an invented one.
         Set<String> seenColumns = new HashSet<>();
-        for (String col : columns) {
+        Set<String> seenHeaders = new HashSet<>();
+        for (int i = 0; i < output.size(); i++) {
+            String col = output.get(i).name();
             if (RESERVED_COLUMNS.contains(col))
                 throw new IllegalArgumentException(
                     "spec.columns: '" + col + "' is an internal column and cannot be exported");
             if (!seenColumns.add(col))
                 throw new IllegalArgumentException("spec.columns: duplicate column '" + col + "'");
+            if (!seenHeaders.add(output.get(i).header()))
+                throw new IllegalArgumentException("spec.columns[" + i + "]: duplicate header '"
+                    + output.get(i).header() + "'");
         }
+
+        List<ExportManifest.Filter> filter = readFilter(spec);
 
         List<String> order = readStringList(spec, "order", "spec.order");
         if (order.isEmpty())
@@ -178,7 +190,7 @@ public class ExportManifestParser {
         for (String col : order) {
             if (!seenOrder.add(col))
                 throw new IllegalArgumentException("spec.order: duplicate column '" + col + "'");
-            if (!columns.contains(col))
+            if (!seenColumns.contains(col))
                 throw new IllegalArgumentException(
                     "spec.order: '" + col + "' must also appear in spec.columns");
         }
@@ -197,7 +209,108 @@ public class ExportManifestParser {
                 .ifPresent(problem -> { throw new IllegalArgumentException("spec.schedule: " + problem); });
         }
 
-        return new ExportManifest(name, scope, entity, columns, order, format, destination, mode, schedule);
+        return new ExportManifest(name, scope, entity, order, format, destination, mode, schedule,
+            output, filter);
+    }
+
+    /**
+     * spec.columns: each element a bare canonical name, or a mapping {@code {name, as?, format?}}
+     * (#1090). A bare name {@code x} is exactly {@code {name: x}}, so every manifest written before
+     * the mapping form keeps its meaning. The steps stay raw here: compiling them needs the
+     * formatter beans, which this plain class does not have.
+     */
+    private static List<ExportManifest.Column> readColumns(JsonNode spec) {
+        JsonNode arr = spec.path("columns");
+        if (arr.isMissingNode() || arr.isNull()) return List.of();
+        if (!arr.isArray())
+            throw new IllegalArgumentException("spec.columns must be a list");
+        List<ExportManifest.Column> out = new ArrayList<>();
+        int i = 0;
+        for (JsonNode n : arr) {
+            String path = "spec.columns[" + i++ + "]";
+            if (n.isTextual()) {
+                out.add(new ExportManifest.Column(n.asText(), n.asText(), List.of()));
+            } else if (n.isObject()) {
+                String name = requireText(n, "name", path + ".name");
+                String header = optionalText(n, "as", path + ".as");
+                if (header == null) {
+                    header = name;
+                } else if (header.isBlank()) {
+                    throw new IllegalArgumentException(path + ".as must not be blank");
+                } else if (header.indexOf('\n') >= 0 || header.indexOf('\r') >= 0) {
+                    throw new IllegalArgumentException(path + ".as must not contain a line break");
+                }
+                out.add(new ExportManifest.Column(name, header, readFormat(n.path("format"), path + ".format")));
+            } else {
+                throw new IllegalArgumentException(
+                    path + " must be a column name or a mapping {name, as, format}");
+            }
+        }
+        return out;
+    }
+
+    private static List<ExportManifest.FormatStep> readFormat(JsonNode format, String path) {
+        if (format.isMissingNode() || format.isNull()) return List.of();
+        if (!format.isArray())
+            throw new IllegalArgumentException(path + " must be a list");
+        if (format.isEmpty())
+            throw new IllegalArgumentException(path + " must declare at least one formatter");
+        List<ExportManifest.FormatStep> steps = new ArrayList<>();
+        int j = 0;
+        for (JsonNode step : format) {
+            String stepPath = path + "[" + j++ + "]";
+            if (!step.isObject() || step.size() != 1)
+                throw new IllegalArgumentException(stepPath + " must name exactly one formatter");
+            Map.Entry<String, JsonNode> only = step.properties().iterator().next();
+            JsonNode params = only.getValue();
+            if (params.isNull()) params = JsonNodeFactory.instance.objectNode();
+            if (!params.isObject())
+                throw new IllegalArgumentException(stepPath + "." + only.getKey() + " must be a mapping");
+            steps.add(new ExportManifest.FormatStep(only.getKey(), params));
+        }
+        return List.copyOf(steps);
+    }
+
+    /**
+     * spec.filter: optional; each entry {@code column} plus exactly one of {@code equals} (a
+     * string) or {@code in} (a non-empty list of strings), entries combined with AND. Whether the
+     * column is canonical is the apply door's check ({@link ExportDefinitionCheck}).
+     */
+    private static List<ExportManifest.Filter> readFilter(JsonNode spec) {
+        JsonNode arr = spec.path("filter");
+        if (arr.isMissingNode() || arr.isNull()) return List.of();
+        if (!arr.isArray())
+            throw new IllegalArgumentException("spec.filter must be a list");
+        if (arr.isEmpty())
+            throw new IllegalArgumentException("spec.filter must declare at least one entry");
+        List<ExportManifest.Filter> out = new ArrayList<>();
+        int i = 0;
+        for (JsonNode entry : arr) {
+            String path = "spec.filter[" + i++ + "]";
+            if (!entry.isObject())
+                throw new IllegalArgumentException(path + " must be a mapping {column, equals | in}");
+            String column = requireText(entry, "column", path + ".column");
+            if (RESERVED_COLUMNS.contains(column))
+                throw new IllegalArgumentException(path + ".column: '" + column
+                    + "' is an internal column and cannot be filtered on");
+            boolean hasEquals = entry.has("equals");
+            boolean hasIn = entry.has("in");
+            if (hasEquals == hasIn)
+                throw new IllegalArgumentException(path + " must declare exactly one of equals or in");
+            List<String> values;
+            if (hasEquals) {
+                JsonNode equals = entry.get("equals");
+                if (!equals.isTextual())
+                    throw new IllegalArgumentException(path + ".equals must be a string (quote it)");
+                values = List.of(equals.asText());
+            } else {
+                values = readStringList(entry, "in", path + ".in");
+                if (values.isEmpty())
+                    throw new IllegalArgumentException(path + ".in must list at least one value");
+            }
+            out.add(new ExportManifest.Filter(column, values));
+        }
+        return List.copyOf(out);
     }
 
     /**

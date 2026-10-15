@@ -1,18 +1,21 @@
 # Where lumnik stands
 
-**beta.** lumnik no longer grows surfaces. Between the `v1.6.2` tag (7 September 2026) and this
-page's last revision (13 September 2026): 59 pull requests, 243 commits, **126 of them fixes** —
-and no new subsystem. The twenty-one additions all closed doors that were already open: a run can
-be cancelled, a run names the endpoint each row came from, an abstention names the door that *can*
-answer. What is not here is not here on purpose, and the page that owns each gap says so in its
-own words.
+**beta.** Between the `v1.7.3` tag (20 September 2026) and `v1.8.0` (15 October 2026): 240 pull
+requests and 1 212 commits. **370 of those commits are fixes**, against 233 additions. The additions
+are new surfaces this time:
+- [entity resolution](entities-resolution.md), one identity across systems that never shared a key;
+- [managed exports](apps/exports.md), lumnik's first outbound path;
+- [queued runs](operations/upgrade.md#turning-on-the-run-queue);
+- views that read past their old 1 000-row cut.
+
+What is not here is not here on purpose, and the page that owns each gap says so in its own words.
 
 What we do not know yet: **nobody outside this team has run lumnik in production.**
 
 That paragraph is checkable, which is why it is written that way — the evidence is one command:
 
 ```bash
-git log v1.6.2..HEAD --no-merges --pretty=%s \
+git log v1.7.3..v1.8.0 --no-merges --pretty=%s \
   | sed -E 's/^([a-z]+)(\(.*\))?:.*/\1/' | sort | uniq -c | sort -rn
 ```
 
@@ -34,12 +37,14 @@ can be seen at once instead of met one page at a time.
 | **Events** | REST-, GraphQL- and SOAP-ingested tables are event-silent — the respiration rides jdbc, CSV and kafka ingestion | [How lumnik breathes](respiration.md) |
 | **Chat** | declared status aliases feed the dormancy watch and the chat's background knowledge, **not** the chat's SQL or a view's filters — the chat matches the literal values in the column | [How lumnik breathes](respiration.md) |
 | **Workflows** | the transition journal's retention is unbounded, and the dormancy sweep costs the database a full pass over the source table every tick — both on purpose in v1 | [Workflows](apps/workflows.md) |
+| **Exports** | CSV only, one entity per export, `mode: snapshot` only (no delta, no resume); SFTP and S3 only; four formatters, a row filter with `equals`/`in` only; no back-fill of missed slots, no automatic retry | [Exports — Not in this version](apps/exports.md#not-in-this-version) |
+| **Search** | a row deleted straight from an ingested table — or by `lm endpoint purge` on a `connector`-schema hybrid target — stays searchable until the index is rebuilt | [SearchIndex — Rows deleted directly in the database](search/search-indexes.md#rows-deleted-directly-in-the-database) |
 | **PWA** | decisions are not bounded by métier — the tab shows the whole tenant's, and says so in its own footer | [The métier PWA](apps/pwa.md) |
 | **SCIM** (Pro) | no `/Groups`; no bulk, sorting, etags or `changePassword`; no pagination beyond the two `eq` filters; not the full PATCH path grammar; no `/Schemas` or `/ResourceTypes` | [SCIM — Not supported](security/scim.md#not-supported) |
 | **Identity** | SAML-only IdPs are not supported by direct trust — front them with a broker and point lumnik at the broker | [Bring your own IdP](security/byo-idp.md) |
 | **Encryption** | rotating the **master** key. Rotating one secret's value is supported, and stamps `rotated_at` | [RLS and encryption](security/rls.md) |
 
-Twelve surfaces, twelve decisions. Two of them — Kafka and SCIM — are not gaps at all but the
+Fourteen surfaces, fourteen decisions. Two of them — Kafka and SCIM — are not gaps at all but the
 shape of the paid build; [The two editions](editions.md) draws that boundary properly.
 
 ## What is not finished
@@ -47,9 +52,6 @@ shape of the paid build; [The two editions](editions.md) draws that boundary pro
 These are different in kind from the table above: started, known, and not yet closed. They are on
 this page because **you may meet them**.
 
-- **Some refusals answer with a bare status and no body.** Malformed input is correctly rejected,
-  but a handful of doors return the status alone — the refusal is right, the explanation is
-  missing. Being swept door by door.
 - **A few conflict refusals do not name what holds the name.** A `409` can tell you a name is
   taken without telling you which integration took it. Most now name it; the rest are on the list.
 - **The live event tail is best-effort, and says so here rather than in a footnote.** An event's

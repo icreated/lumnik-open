@@ -238,3 +238,38 @@ func TestEntityAssertDistinctCmd_posts(t *testing.T) {
 		t.Errorf("expected a confirmation line, got: %s", buf.String())
 	}
 }
+
+// #1087: a row is named by its source handle (<source table>:<source id>, as `lm entity history`
+// takes it) or by its identity_ref; a UUID travels as leftRef/rightRef, anything else as left/right.
+func TestEntityAssertSameCmd_sendsASourceHandleBesideARef(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"entity", "assert-same", "Customer",
+		"--left", "t_res_crm:9003",
+		"--right", "22222222-2222-2222-2222-222222222222"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if gotBody["left"] != "t_res_crm:9003" || gotBody["rightRef"] != "22222222-2222-2222-2222-222222222222" {
+		t.Errorf("expected left as a handle and rightRef as a ref, got: %v", gotBody)
+	}
+	if _, sent := gotBody["leftRef"]; sent {
+		t.Errorf("a handle must not also travel as leftRef: %v", gotBody)
+	}
+	if _, sent := gotBody["right"]; sent {
+		t.Errorf("a ref must not also travel as right: %v", gotBody)
+	}
+	if !strings.Contains(buf.String(), "t_res_crm:9003") {
+		t.Errorf("the confirmation must name the row as written, got: %s", buf.String())
+	}
+}

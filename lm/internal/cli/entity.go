@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/spf13/cobra"
@@ -154,14 +155,16 @@ func newEntityAssertCmd(same bool) *cobra.Command {
 	var left, right, reason string
 	cmd := &cobra.Command{
 		Use:   "assert-" + verb + " NAME",
-		Short: "Assert that two identity refs belong to " + subject,
+		Short: "Assert that two rows belong to " + subject,
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
 				return err
 			}
-			assertion := client.EntityAssertion{LeftRef: left, RightRef: right, Reason: reason}
+			assertion := client.EntityAssertion{Reason: reason}
+			assertion.LeftRef, assertion.Left = refOrHandle(left)
+			assertion.RightRef, assertion.Right = refOrHandle(right)
 			if same {
 				err = c.EntityAssertSame(args[0], assertion)
 			} else {
@@ -174,12 +177,21 @@ func newEntityAssertCmd(same bool) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&left, "left", "", "first identity_ref (uuid, required)")
-	cmd.Flags().StringVar(&right, "right", "", "second identity_ref (uuid, required)")
+	cmd.Flags().StringVar(&left, "left", "", "first row: SOURCE:ID as in lm entity history (t_crm:9003), or an identity_ref (required)")
+	cmd.Flags().StringVar(&right, "right", "", "second row: SOURCE:ID, or an identity_ref (required)")
 	cmd.Flags().StringVar(&reason, "reason", "", "why (optional, recorded in the decision ledger)")
 	_ = cmd.MarkFlagRequired("left")
 	_ = cmd.MarkFlagRequired("right")
 	return cmd
+}
+
+// refOrHandle sends a UUID as an identity ref and anything else as a source handle; the hub
+// says what is wrong with a malformed one.
+func refOrHandle(v string) (ref, handle string) {
+	if _, err := uuid.Parse(v); err == nil {
+		return v, ""
+	}
+	return "", v
 }
 
 func newEntityDeleteCmd() *cobra.Command {

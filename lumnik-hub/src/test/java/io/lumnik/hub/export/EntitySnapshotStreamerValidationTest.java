@@ -26,28 +26,28 @@ class EntitySnapshotStreamerValidationTest {
     void emptyColumnsIsRejected() {
         EntitySnapshotStreamer streamer = new EntitySnapshotStreamer();
         assertThrows(IllegalArgumentException.class,
-            () -> streamer.validate(List.of(), List.of("code"), entity("code")));
+            () -> streamer.validate(List.of(), List.of("code"), List.of(), entity("code")));
     }
 
     @Test
     void emptyOrderColumnsIsRejected() {
         EntitySnapshotStreamer streamer = new EntitySnapshotStreamer();
         assertThrows(IllegalArgumentException.class,
-            () -> streamer.validate(List.of("code"), List.of(), entity("code")));
+            () -> streamer.validate(List.of("code"), List.of(), List.of(), entity("code")));
     }
 
     @Test
     void duplicateColumnsIsRejected() {
         EntitySnapshotStreamer streamer = new EntitySnapshotStreamer();
         assertThrows(IllegalArgumentException.class,
-            () -> streamer.validate(List.of("code", "code"), List.of("code"), entity("code")));
+            () -> streamer.validate(List.of("code", "code"), List.of("code"), List.of(), entity("code")));
     }
 
     @Test
     void duplicateOrderColumnsIsRejected() {
         EntitySnapshotStreamer streamer = new EntitySnapshotStreamer();
         assertThrows(IllegalArgumentException.class,
-            () -> streamer.validate(List.of("code"), List.of("code", "code"), entity("code")));
+            () -> streamer.validate(List.of("code"), List.of("code", "code"), List.of(), entity("code")));
     }
 
     /** The invariant added during design review: a hidden sort key would let two rows the
@@ -56,19 +56,19 @@ class EntitySnapshotStreamerValidationTest {
     void orderColumnNotInProjectionIsRejected() {
         EntitySnapshotStreamer streamer = new EntitySnapshotStreamer();
         assertThrows(IllegalArgumentException.class,
-            () -> streamer.validate(List.of("code"), List.of("code", "hidden"), entity("code", "hidden")));
+            () -> streamer.validate(List.of("code"), List.of("code", "hidden"), List.of(), entity("code", "hidden")));
     }
 
     @Test
     void columnNotOnTheEntityIsRejected() {
         EntitySnapshotStreamer streamer = new EntitySnapshotStreamer();
         assertThrows(IllegalArgumentException.class,
-            () -> streamer.validate(List.of("code", "not_canonical"), List.of("code"), entity("code")));
+            () -> streamer.validate(List.of("code", "not_canonical"), List.of("code"), List.of(), entity("code")));
     }
 
     @Test
     void aValidProjectionDoesNotThrow() {
         EntitySnapshotStreamer streamer = new EntitySnapshotStreamer();
-        streamer.validate(List.of("code", "name"), List.of("code"), entity("code", "name"));
+        streamer.validate(List.of("code", "name"), List.of("code"), List.of(), entity("code", "name"));
     }
 }

@@ -599,6 +599,7 @@ no claim on another.
 
 ## See also
 
+- [kind: Entity — resolve](entities-resolution.md) — when the systems share no key: rules, review, corrections
 - [The demo desk](apps/demo-desk.md) — the sources every screen here reads, and the hand count
 - [kind: View](apps/views.md) — see the fused entity; the detail shows one record's ledger
 - [WOW demo](demo/wow-customer/README.md) — the full fusion walkthrough, two legacy sources to one Customer

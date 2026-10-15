@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 
 import java.sql.SQLException;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -79,7 +80,7 @@ class EntityAssertionResourceTest {
   }
 
   private static final EntityAssertionResource.AssertionRequest VALID_PAIR =
-      new EntityAssertionResource.AssertionRequest(UUID.randomUUID(), UUID.randomUUID(), "shared mailbox");
+      new EntityAssertionResource.AssertionRequest(UUID.randomUUID(), UUID.randomUUID(), null, null, "shared mailbox");
 
   @Test
   void bound_user_foreign_entity_same_is_403() {
@@ -105,7 +106,7 @@ class EntityAssertionResourceTest {
   @Test
   void a_missing_ref_in_the_body_is_400() {
     CurrentRolesHolder.set(Set.of("lm_admin"));
-    var body = new EntityAssertionResource.AssertionRequest(null, UUID.randomUUID(), "reason");
+    var body = new EntityAssertionResource.AssertionRequest(null, UUID.randomUUID(), null, null, "reason");
     Response r = resourceServing(resolvable("customer", List.of()), null).same("customer", body);
     assertThat(r.getStatus()).isEqualTo(400);
   }
@@ -182,5 +183,92 @@ class EntityAssertionResourceTest {
     assertThatThrownBy(() -> res.distinct("articles", VALID_PAIR))
         .isInstanceOf(NullPointerException.class)
         .hasMessageContaining("this.resolver");
+  }
+
+  /** A resolver that knows one handle and records what reached assertSame. */
+  private static class RecordingResolver extends CascadeResolver {
+    final UUID known = UUID.randomUUID();
+    UUID left;
+    UUID right;
+    @Override public Optional<UUID> identityRefOf(long tenantId, String entityType, String source,
+        String sourceId) {
+      return "t_erp".equals(source) && "C-003".equals(sourceId) ? Optional.of(known) : Optional.empty();
+    }
+    @Override public void assertSame(long tenantId, String entityType, UUID leftRef, UUID rightRef,
+        String assertedBy, String reason) {
+      left = leftRef;
+      right = rightRef;
+    }
+  }
+
+  private static EntityAssertionResource.AssertionRequest handles(UUID leftRef, String left, String right) {
+    return new EntityAssertionResource.AssertionRequest(leftRef, null, left, right, null);
+  }
+
+  @Test
+  void a_source_handle_reaches_the_resolver_as_its_identity_ref_and_mixes_with_a_ref() {
+    CurrentRolesHolder.set(Set.of("lm_admin"));
+    RecordingResolver resolver = new RecordingResolver();
+    UUID other = UUID.randomUUID();
+    var body = new EntityAssertionResource.AssertionRequest(null, other, "t_erp:C-003", null, null);
+
+    Response r = resourceServing(resolvable("customer", List.of()), resolver).same("customer", body);
+
+    assertThat(r.getStatus()).isEqualTo(204);
+    assertThat(resolver.left).isEqualTo(resolver.known);
+    assertThat(resolver.right).isEqualTo(other);
+  }
+
+  @Test
+  void a_source_handle_the_crosswalk_never_saw_is_404_naming_it() {
+    CurrentRolesHolder.set(Set.of("lm_admin"));
+    Response r = resourceServing(resolvable("customer", List.of()), new RecordingResolver())
+        .same("customer", handles(null, "t_erp:C-003", "t_crm:9999"));
+    assertThat(r.getStatus()).isEqualTo(404);
+    assertThat(r.getEntity().toString()).contains("t_crm:9999");
+  }
+
+  @Test
+  void a_malformed_source_handle_is_400_naming_the_expected_form() {
+    CurrentRolesHolder.set(Set.of("lm_admin"));
+    for (String bad : List.of("t_crm", ":9003", "t_crm:", " ", " t_crm:9003", "t crm:9003", "t_crm:  ")) {
+      Response r = resourceServing(resolvable("customer", List.of()), new RecordingResolver())
+          .same("customer", handles(null, "t_erp:C-003", bad));
+      assertThat(r.getStatus()).as(bad).isEqualTo(400);
+      assertThat(r.getEntity().toString()).as(bad).contains("<source table>:<source id>");
+    }
+  }
+
+  @Test
+  void a_side_given_both_as_a_ref_and_as_a_handle_is_400() {
+    CurrentRolesHolder.set(Set.of("lm_admin"));
+    Response r = resourceServing(resolvable("customer", List.of()), new RecordingResolver())
+        .same("customer", handles(UUID.randomUUID(), "t_erp:C-003", "t_erp:C-003"));
+    assertThat(r.getStatus()).isEqualTo(400);
+  }
+
+  @Test
+  void a_source_id_may_itself_contain_a_colon() {
+    CurrentRolesHolder.set(Set.of("lm_admin"));
+    RecordingResolver resolver = new RecordingResolver() {
+      @Override public Optional<UUID> identityRefOf(long tenantId, String entityType, String source,
+          String sourceId) {
+        return "t_erp".equals(source) && "A:1".equals(sourceId) ? Optional.of(known) : Optional.empty();
+      }
+    };
+    Response r = resourceServing(resolvable("customer", List.of()), resolver)
+        .same("customer", new EntityAssertionResource.AssertionRequest(null, UUID.randomUUID(), "t_erp:A:1", null, null));
+    assertThat(r.getStatus()).isEqualTo(204);
+    assertThat(resolver.left).isEqualTo(resolver.known);
+  }
+
+  @Test
+  void a_source_id_is_taken_verbatim_so_a_padded_one_is_looked_up_not_trimmed() {
+    // A source id is compared as the source holds it — a CHAR-padded ERP key keeps its spaces —
+    // so only a BLANK id is malformed; "C-003 " is a different row from "C-003", hence a 404.
+    CurrentRolesHolder.set(Set.of("lm_admin"));
+    Response r = resourceServing(resolvable("customer", List.of()), new RecordingResolver())
+        .same("customer", handles(null, "t_erp:C-003 ", "t_erp:C-003"));
+    assertThat(r.getStatus()).isEqualTo(404);
   }
 }
