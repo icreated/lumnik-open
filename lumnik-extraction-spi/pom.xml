@@ -12,7 +12,7 @@
 
     <artifactId>lumnik-extraction-spi</artifactId>
     <name>lumnik :: Extraction SPI</name>
-    <description>Neutral extraction primitives: ExtractedChunk, ExtractionSink, SearchPort.</description>
+    <description>Neutral extraction primitives: ExtractedChunk, ExtractionSink, SearchPort, IndexedSearchPort, ProjectionSink.</description>
 
     <dependencies>
         <dependency>

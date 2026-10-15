@@ -20,6 +20,8 @@
 
     <modules>
         <module>lumnik-common</module>
+        <module>lumnik-jdbc-spi</module>
+        <module>lumnik-jdbc-postgresql</module>
         <module>lumnik-identity</module>
         <module>lumnik-hub</module>
         <module>lumnik-extraction-spi</module>

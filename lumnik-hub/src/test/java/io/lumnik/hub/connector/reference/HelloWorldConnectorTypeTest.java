@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.reference;
 
+import io.lumnik.hub.connector.runtime.OwnedRunScope;
 import io.lumnik.hub.connector.api.ItemReader;
 import io.lumnik.hub.connector.api.ItemWriter;
 import io.lumnik.hub.connector.api.types.*;
@@ -26,7 +27,7 @@ class HelloWorldConnectorTypeTest {
         "test", "hello-world", Map.of("count", count),
         new SyncMode.Incremental(),
         Logger.getLogger("test"),
-        null, null, Clock.systemUTC(), null);
+        null, null, Clock.systemUTC(), null, new OwnedRunScope("test"));
   }
 
   @Test

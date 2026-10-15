@@ -7,6 +7,8 @@ import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.ApplyDoorSupport;
 import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.audit.AuditRecorder;
+import io.lumnik.hub.manifest.ModuleManifestRegistry;
+import io.lumnik.hub.validator.ValidationError;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
@@ -16,6 +18,7 @@ import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -48,6 +51,7 @@ public class AppApplyResource {
 
     @Inject AppRegistrationStore store;
     @Inject AuditRecorder audit;
+    @Inject ModuleManifestRegistry modules;
 
     private final AppManifestParser parser = new AppManifestParser();
 
@@ -137,7 +141,7 @@ public class AppApplyResource {
 
         AppManifest stored = new AppManifest(name, manifest.scope(), manifest.title(),
             manifest.icon(), manifest.accentColor(), manifest.backgroundColor(),
-            manifest.isDefault());
+            manifest.isDefault(), manifest.tabs());
         // granted().orElse(null) — empty Optional means unscoped, i.e. every scope, the same
         // expression AppRegistryResource.list() reads its filter from.
         AppRegistrationStore.Upserted outcome =
@@ -180,6 +184,26 @@ public class AppApplyResource {
         result.put("scope", stored.scope());
         result.put("default", stored.isDefault());
         demoted.ifPresent(d -> result.put("demotedDefault", d));
+        if (stored.tabs() != null) result.put("tabs", stored.tabs());
+        // Absent rather than empty, like the Connector door: applied, and worth saying something.
+        List<ValidationError> warnings = tabWarnings(stored.tabs());
+        if (!warnings.isEmpty()) result.put("warnings", warnings);
         return Response.ok(result).build();
+    }
+
+    /** A declared tab this hub does not offer is KEPT (the manifest stays portable) and reported. */
+    private List<ValidationError> tabWarnings(List<String> declared) {
+        if (declared == null) return List.of();
+        List<String> offered = modules.offeredTabs();
+        List<ValidationError> out = new ArrayList<>();
+        for (int i = 0; i < declared.size(); i++) {
+            if (!offered.contains(declared.get(i))) {
+                out.add(new ValidationError("spec.tabs[" + i + "]", ValidationError.Severity.WARNING,
+                    "tab '" + declared.get(i) + "' is not offered by this hub; the declaration is kept and takes "
+                        + "effect when a module offering it is active",
+                    List.of("offered here: " + offered)));
+            }
+        }
+        return out;
     }
 }

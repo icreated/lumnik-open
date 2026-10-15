@@ -3,9 +3,9 @@ package io.lumnik.hub.ask;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.DiscoveryResult;
 import io.lumnik.extraction.spi.ask.SchemaCard;
-import io.lumnik.hub.connector.domain.ConnectorCredential;
-import io.lumnik.hub.connector.repository.ConnectorCredentialRepository;
-import io.lumnik.hub.webhook.SecretCipher;
+import io.lumnik.hub.connector.api.helpers.CredentialResolver;
+import io.lumnik.hub.connector.api.types.ResolvedCredential;
+import io.lumnik.hub.connector.exceptions.CredentialNotFoundException;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
@@ -60,21 +60,19 @@ class DiscoveryServiceAdEnrichmentTest {
         @Override public Optional<SchemaCard> load(long tenantId, String scope) { return Optional.empty(); }
     }
 
-    static final class FakeCredentials extends ConnectorCredentialRepository {
-        ConnectorCredential cred;
-        @Override public ConnectorCredential findById(UUID id) { return cred; }
-    }
-
-    static final class FakeCipher extends SecretCipher {
-        String plain = "aduser:adpass";
-        @Override public String decrypt(byte[] ciphertext) { return plain; }
+    /** The resolver's two answers that matter here: a secret, or the not-found it throws for a missing one. */
+    static final class FakeCredentials implements CredentialResolver {
+        ResolvedCredential cred = new ResolvedCredential.Basic("aduser", "adpass");
+        @Override public ResolvedCredential resolve(UUID id) {
+            if (cred == null) throw new CredentialNotFoundException("credential not found: " + id);
+            return cred;
+        }
     }
 
     private final FakeRegistry registry = new FakeRegistry();
     private final CapturingLabels labels = new CapturingLabels();
     private final RecordingStore store = new RecordingStore();
     private final FakeCredentials credentials = new FakeCredentials();
-    private final FakeCipher cipher = new FakeCipher();
 
     /** A datasource whose single row is the JDBC connector discovery looks for. */
     private AgroalDataSource datasourceReturningCredentials() throws Exception {
@@ -99,10 +97,8 @@ class DiscoveryServiceAdEnrichmentTest {
         s.entityViews = new FakeEntityViews();
         s.adLabels = labels;
         s.store = store;
-        s.credentialRepo = credentials;
-        s.cipher = cipher;
+        s.credentials = credentials;
         s.adminDs = ds;
-        credentials.cred = mock(ConnectorCredential.class);
         return s;
     }
 
@@ -179,13 +175,25 @@ class DiscoveryServiceAdEnrichmentTest {
     void a_credential_row_that_vanished_falls_back_to_no_enrichment() throws Exception {
         registry.tables.add(hub("public.c_order", "code"));
         DiscoveryService s = service(datasourceReturningCredentials());
-        credentials.cred = null;                    // deleted between the query and the lookup
+        credentials.cred = null;                    // deleted between the query and the lookup: the resolver throws
 
         DiscoveryResult r = s.rediscover(1L, "sales");
 
         assertFalse(r.enriched(), "a missing credential is best-effort, never a failure");
         assertEquals("registry", r.sourceType());
         assertNull(labels.table, "and the AD provider is not called at all");
+    }
+
+    @Test
+    void a_secret_that_is_not_basic_falls_back_to_no_enrichment() throws Exception {
+        registry.tables.add(hub("public.c_order", "code"));
+        DiscoveryService s = service(datasourceReturningCredentials());
+        credentials.cred = new ResolvedCredential.ApiKey("token");
+
+        DiscoveryResult r = s.rediscover(1L, "sales");
+
+        assertEquals("registry", r.sourceType(), "a JDBC source needs user and password; a token enriches nothing");
+        assertNull(labels.table);
     }
 
     @Test

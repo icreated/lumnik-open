@@ -1,5 +1,5 @@
-Feature: entity-apply sqli-in-name [seed=20]
-  Scenario: apply manifest with SQL injection in name must never cause a 500 (quoteIdent must be used)
-    Given an entity manifest for variant "sqli-in-name" [seed=20]
-    When I apply the entity manifest as lm_admin
-    Then the entity apply response status is not 500
+Feature: entity-read unknown-entity [seed=20]
+  Scenario: GET unknown entity must return 404
+    Given the seed entity "ghost_otk_seed" exists for entity read [seed=20]
+    When I read entity "ghost_otk_seed" with query ""
+    Then the entity read response status is 404

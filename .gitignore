@@ -35,3 +35,10 @@ lm/dist/
 /.venv-docs/
 backups/
 analyse-ports.yml
+
+# per-install TLS material of the opt-in search cluster (private keys)
+deploy/selfhost/search-cluster/
+loadtest/search/.run/
+loadtest/search/queries.json
+loadtest/search/results/
+__pycache__/

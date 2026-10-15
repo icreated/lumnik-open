@@ -24,4 +24,6 @@ var decoys = []string{
 	"cross-tenant probe (tenant-2): expected 200 (empty), hub returned 200",
 	"refused a legitimate request (valid-token): expected 2xx, hub returned 403",
 	"raw control/bidi rune U+202E reflected into lm output",
+	"lm did not return within the timeout (hang)",
+	"server stack trace leaked to client output",
 }

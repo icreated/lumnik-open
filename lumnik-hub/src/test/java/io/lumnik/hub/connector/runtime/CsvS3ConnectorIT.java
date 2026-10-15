@@ -6,6 +6,7 @@ import io.lumnik.hub.connector.api.types.RunStatus;
 import io.lumnik.hub.connector.api.types.RunTrigger;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
+import io.lumnik.hub.testsupport.MinioTestImage;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.quarkus.agroal.DataSource;
@@ -54,7 +55,7 @@ class CsvS3ConnectorIT {
 
     @BeforeAll
     static void start() {
-        minio = new GenericContainer<>("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
+        minio = new GenericContainer<>(MinioTestImage.PINNED)
             .withEnv("MINIO_ROOT_USER", ACCESS)
             .withEnv("MINIO_ROOT_PASSWORD", SECRET)
             .withCommand("server", "/data")

@@ -1,6 +1,5 @@
-Feature: entity-read huge-limit [seed=15]
-  Scenario: GET with huge limit must return 200 and at most 1000 rows
-    Given the seed entity "otk_customer" exists for entity read [seed=15]
-    When I read entity "otk_customer" with query "limit=999999"
-    Then the entity read response status is 200
-    And the entity read response has at most 1000 rows
+Feature: entity-apply no-sources [seed=15]
+  Scenario: apply manifest with empty sources must be rejected with 400
+    Given an entity manifest for variant "no-sources" [seed=15]
+    When I apply the entity manifest as lm_admin
+    Then the entity apply response status is 400

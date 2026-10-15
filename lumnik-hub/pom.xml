@@ -33,6 +33,19 @@
         </dependency>
         <dependency>
             <groupId>io.lumnik</groupId>
+            <artifactId>lumnik-jdbc-spi</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- The embedded PostgreSQL provider. runtime scope: hub main code compiles against the SPI only,
+             exactly as it does against lumnik-extraction-spi; Arc picks the provider up as a bean. -->
+        <dependency>
+            <groupId>io.lumnik</groupId>
+            <artifactId>lumnik-jdbc-postgresql</artifactId>
+            <version>${project.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.lumnik</groupId>
             <artifactId>lumnik-llm-spi</artifactId>
             <version>${project.version}</version>
         </dependency>
@@ -277,6 +290,11 @@
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-oracle-free</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers-redpanda</artifactId>
             <scope>test</scope>
         </dependency>
@@ -348,8 +366,13 @@
                     <includes>
                         <include>**/*IT.java</include>
                     </includes>
-                    <!-- @{argLine} late-binding picks up the JaCoCo -javaagent. -->
-                    <argLine>@{argLine}</argLine>
+                    <!-- @{argLine} late-binding picks up the JaCoCo -javaagent.
+                         -Xmx: quarkus-junit builds one application per (profile, test resources) group when
+                         it DISCOVERS the classes, and the JVM holds every one of them until the run ends
+                         (~85 MB each, measured; #1072). The JVM default is a quarter of RAM, ~2 GB on the
+                         7.9 GB CI runner: the nightly's search selection died there, and locally at 19 groups
+                         under 1.75 GB. Pinned so every machine runs the CI heap, not its own share of RAM. -->
+                    <argLine>@{argLine} -Xmx3g</argLine>
                     <systemPropertyVariables>
                         <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
                         <!-- See surefire note above. -->

@@ -1,15 +1,13 @@
 package io.lumnik.hub.audit;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
-
-import java.sql.Connection;
-import java.sql.PreparedStatement;
 
 /**
  * Bounds the audit log (P9): {@code core.audit_event} snapshots logins/emails and was kept
@@ -52,10 +50,10 @@ public class AuditRetentionPurger {
             LOG.info("AuditRetentionPurger: retention disabled (<= 0) — audit rows are kept forever by operator choice");
             return;
         }
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(
-                "DELETE FROM core.audit_event WHERE occurred_at < NOW() - make_interval(days => ?)")) {
-            ps.setInt(1, days);
-            int purged = ps.executeUpdate();
+        try {
+            int purged = Jdbc.update(adminDs, "AuditRetentionPurger.purge",
+                "DELETE FROM core.audit_event WHERE occurred_at < NOW() - make_interval(days => ?)",
+                ps -> ps.setInt(1, days));
             if (purged > 0) LOG.infof("AuditRetentionPurger: purged %d audit row(s) older than %dd", purged, days);
         } catch (Exception e) {
             LOG.error("AuditRetentionPurger: purge failed — retrying tomorrow", e);

@@ -249,6 +249,13 @@ work on a laptop. **On the open edition this knob has nothing to reach:** the ex
 that call Ollama are not in that build (see the edition note above), so an open-edition
 install needs no Ollama at all.
 
+### Switch the AI off
+
+Set `LUMNIK_AI_ENABLED=false` in `.env` and re-run `up.sh` (on Helm: `LUMNIK_AI_ENABLED=false` for
+`deploy/helm/up.sh`). The chat, the ask and the embeddings stop; the modules stay installed, the
+data is kept, and the PWA drops its Chat tab. Exactly `true` or `false`. What you see, and what a
+switch back on does and does not bring back: [Switching the AI off](rag/models.md#switching-the-ai-off).
+
 ### Turn on email delivery
 
 Notification rules (`lm notify add`) route matching events to email. Delivery is **mocked

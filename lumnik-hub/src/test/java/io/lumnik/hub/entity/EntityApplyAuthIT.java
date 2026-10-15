@@ -1,12 +1,11 @@
 package io.lumnik.hub.entity;
 
 import io.lumnik.hub.testsupport.YamlBody;
+import io.lumnik.hub.auth.DevBypassOffProfile;
 import io.quarkus.test.junit.QuarkusTest;
-import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
 import org.junit.jupiter.api.Test;
 
-import java.util.Map;
 
 import static io.restassured.RestAssured.given;
 
@@ -18,15 +17,8 @@ import static io.restassured.RestAssured.given;
  * Symmetric to RoleResourceNoBypassIT for the entity surface.
  */
 @QuarkusTest
-@TestProfile(EntityApplyAuthIT.NoBypassProfile.class)
+@TestProfile(DevBypassOffProfile.class)
 class EntityApplyAuthIT {
-
-    public static class NoBypassProfile implements QuarkusTestProfile {
-        @Override
-        public Map<String, String> getConfigOverrides() {
-            return Map.of("lumnik.security.dev-bypass", "false");
-        }
-    }
 
     static final String VALID_MANIFEST = """
             kind: Entity

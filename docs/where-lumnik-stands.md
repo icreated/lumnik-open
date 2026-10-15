@@ -33,7 +33,7 @@ can be seen at once instead of met one page at a time.
 | **Transformers** | `validate-row` after `split-row`, and `aggregator` on a `csv-file` run — both refused at `lm apply`, with the arithmetic reason | [Transformers](connectors/transformers.md) |
 | **Events** | REST-, GraphQL- and SOAP-ingested tables are event-silent — the respiration rides jdbc, CSV and kafka ingestion | [How lumnik breathes](respiration.md) |
 | **Chat** | declared status aliases feed the dormancy watch and the chat's background knowledge, **not** the chat's SQL or a view's filters — the chat matches the literal values in the column | [How lumnik breathes](respiration.md) |
-| **Workflows** | the dormancy sweep reads a workflow's whole observation ledger with no `LIMIT` and no batching, and the transition journal's retention is unbounded — both on purpose in v1 | [Workflows](apps/workflows.md) |
+| **Workflows** | the transition journal's retention is unbounded, and the dormancy sweep costs the database a full pass over the source table every tick — both on purpose in v1 | [Workflows](apps/workflows.md) |
 | **PWA** | decisions are not bounded by métier — the tab shows the whole tenant's, and says so in its own footer | [The métier PWA](apps/pwa.md) |
 | **SCIM** (Pro) | no `/Groups`; no bulk, sorting, etags or `changePassword`; no pagination beyond the two `eq` filters; not the full PATCH path grammar; no `/Schemas` or `/ResourceTypes` | [SCIM — Not supported](security/scim.md#not-supported) |
 | **Identity** | SAML-only IdPs are not supported by direct trust — front them with a broker and point lumnik at the broker | [Bring your own IdP](security/byo-idp.md) |

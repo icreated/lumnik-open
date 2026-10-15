@@ -81,10 +81,6 @@ func calibrate(s *session) error {
 	if err != nil {
 		return err
 	}
-	if fault.Kind != calibration.KindPatch {
-		return fmt.Errorf("fault %q is of kind %s; otkcal drives patch faults only in this lot — "+
-			"the SQL path arrives with the first SQL fault", fault.Name, fault.Kind)
-	}
 
 	root, err := repoRoot()
 	if err != nil {
@@ -93,23 +89,51 @@ func calibrate(s *session) error {
 	if clean, dirt, cerr := calibration.TreeClean(root); cerr != nil {
 		return cerr
 	} else if !clean {
-		return fmt.Errorf("REFUSING to start on a dirty tree — this run reverts a patch, and a revert "+
-			"must never be able to discard your work. Commit or stash first:\n%s", dirt)
+		return fmt.Errorf("REFUSING to start on a dirty tree — a patch-kind run reverts a patch, and a "+
+			"revert must never be able to discard your work. Commit or stash first:\n%s", dirt)
 	}
 
 	// calibration.FaultsDir is relative to the calibration PACKAGE, which lives at
-	// lm/test/otk/calibration/ — so the runner spells the package path itself.
-	patch := filepath.Join(root, "lm", "test", "otk", "calibration", calibration.FaultsDir, fault.ArtefactName())
-	if err := calibration.PatchApplies(root, patch); err != nil {
-		return fmt.Errorf("the fault no longer applies to the code it faults (a stale patch, which is "+
-			"exactly what a patch is chosen to make loud): %w", err)
-	}
+	// lm/test/otk/calibration/ — so the runner spells the package path itself. Every
+	// kind owns exactly one artefact there (Name+Kind.Ext()), so this path is the
+	// same expression whether it resolves to a .patch or a .sql file.
+	artefact := filepath.Join(root, "lm", "test", "otk", "calibration", calibration.FaultsDir, fault.ArtefactName())
 
-	// Arming the session is what creates the obligation to restore. It happens BEFORE
-	// anything is packaged or applied, so there is no window in which a fault exists
-	// with no obligation to remove it — and main() and the signal handler both reach
-	// restore() through the same sync.Once.
-	s.arm(root, patch)
+	// Arming the session is what creates the obligation to restore. Each branch
+	// below arms BEFORE anything is packaged or applied, so there is no window in
+	// which a fault could exist with no obligation to remove it — and main() and
+	// the signal handler both reach restore() through the same sync.Once. arm's
+	// root is set regardless of kind: TreeClean/RemoveAndVerify at restore time
+	// need it even for a SQL fault, which never touches the patch field.
+	switch fault.Kind {
+	case calibration.KindPatch:
+		if err := calibration.PatchApplies(root, artefact); err != nil {
+			return fmt.Errorf("the fault no longer applies to the code it faults (a stale patch, which is "+
+				"exactly what a patch is chosen to make loud): %w", err)
+		}
+		s.arm(root, artefact)
+	case calibration.KindSQL:
+		dsn := os.Getenv("OTK_DB_ADMIN_DSN")
+		if dsn == "" {
+			return fmt.Errorf("fault %q is a SQL fault: set OTK_DB_ADMIN_DSN to the admin (BYPASSRLS) "+
+				"role's DSN — applying and undoing an RLS-policy mutation needs DDL rights the app role "+
+				"does not have", fault.Name)
+		}
+		// Parsed here, read-only, before anything is packaged — the same posture
+		// PatchApplies takes for a patch: a stale or malformed artefact is a hard
+		// error before any hub is built, not a surprise forty seconds into a battery.
+		b, rerr := os.ReadFile(artefact)
+		if rerr != nil {
+			return fmt.Errorf("read SQL fault artefact: %w", rerr)
+		}
+		if _, _, perr := calibration.ParseSQLFault(string(b)); perr != nil {
+			return fmt.Errorf("the SQL fault artefact does not parse: %w", perr)
+		}
+		s.arm(root, "")
+		s.armSQL(dsn, artefact)
+	default:
+		return fmt.Errorf("fault %q declares unknown kind %q", fault.Name, fault.Kind)
+	}
 
 	artefacts := filepath.Join(root, calibration.FaultedArtefacts)
 
@@ -135,23 +159,52 @@ func calibrate(s *session) error {
 		return fmt.Errorf("PHASE 1 (control) FAILED — the unfaulted branch does not behave as the "+
 			"calibration assumes: %w", err)
 	}
-	s.stopChildren()
 
-	// PHASE 2 — injected. The same catalogue against a hub broken on purpose, and the
-	// declared finding must be PRESENT. An injected failure accuses the HARNESS.
-	fmt.Println("otkcal: PHASE 2 (injected) — applying", fault.ArtefactName())
-	if err := s.applyFault(); err != nil {
-		return fmt.Errorf("phase 2: %w", err)
+	// Only RebuildHub needs the phase 1 hub stopped: it lives entirely in the
+	// database (RebuildNone) or rebuilds the lm CLI, not the hub (RebuildCLI), and
+	// either way the phase 1 hub is still correct to serve phase 2 — stopping it
+	// would only cost a second package+boot for nothing. Rebuild — not Kind — is
+	// what decides this, so a future fault of either kind can declare any answer
+	// without this runner needing to change.
+	switch fault.Rebuild {
+	case calibration.RebuildHub:
+		s.stopChildren()
+	case calibration.RebuildCLI:
+		fmt.Println("otkcal: fault rebuilds the CLI, not the hub — the phase 1 hub stays up for phase 2")
+	default:
+		fmt.Println("otkcal: fault needs no repackage — the phase 1 hub stays up for phase 2")
 	}
-	if err := s.packageAndBoot(root, artefacts, "injected"); err != nil {
-		return fmt.Errorf("phase 2: %w", err)
+
+	// PHASE 2 — injected. The same catalogue against a hub, database, or CLI broken
+	// on purpose, and the declared finding must be PRESENT. An injected failure
+	// accuses the HARNESS.
+	fmt.Println("otkcal: PHASE 2 (injected) — applying", fault.ArtefactName())
+	switch fault.Kind {
+	case calibration.KindPatch:
+		if err := s.applyFault(); err != nil {
+			return fmt.Errorf("phase 2: %w", err)
+		}
+	case calibration.KindSQL:
+		if err := s.applySQLFault(); err != nil {
+			return fmt.Errorf("phase 2: %w", err)
+		}
+	}
+	switch fault.Rebuild {
+	case calibration.RebuildHub:
+		if err := s.packageAndBoot(root, artefacts, "injected"); err != nil {
+			return fmt.Errorf("phase 2: %w", err)
+		}
+	case calibration.RebuildCLI:
+		if err := s.buildCLI(root); err != nil {
+			return fmt.Errorf("phase 2: %w", err)
+		}
 	}
 	if err := s.battery(root, fault.Name, ""); err != nil {
 		return fmt.Errorf("PHASE 2 (injected) FAILED: %w", err)
 	}
 
 	// PHASE 3 is s.restore(), called by main() on every exit path, so an interrupted
-	// run gets exactly the same four checks as a successful one.
+	// run gets exactly the same checks as a successful one.
 	return nil
 }
 
@@ -182,10 +235,21 @@ type child struct {
 type session struct {
 	// mu guards the fields below. It is held only for short operations — a field
 	// read, a process start, a `git apply` — never across a wait.
-	mu       sync.Mutex
-	root     string
-	patch    string
-	applied  bool
+	mu      sync.Mutex
+	root    string
+	patch   string
+	applied bool
+
+	// sqlDSN/sqlFault/sqlApplied are the SQL-kind analog of patch/applied: the
+	// admin (BYPASSRLS) DSN a SQL fault is applied and undone against, the
+	// artefact path, and whether the apply half has run. A session only ever
+	// populates ONE of {patch+applied, sqlFault+sqlApplied} — calibrate's own
+	// switch on fault.Kind guarantees that — so doRestore can check both without
+	// either ever doing something the other fault kind's run did not ask for.
+	sqlDSN     string
+	sqlFault   string
+	sqlApplied bool
+
 	children []*child
 	tornDown bool
 
@@ -206,11 +270,24 @@ type session struct {
 }
 
 // arm gives the session something to restore. Until it is called, restore() has
-// nothing to undo and says so.
+// nothing to undo and says so. root is required by every fault kind (restore's
+// TreeClean/RemoveAndVerify both need it); patch is the empty string for a SQL
+// fault, which arms its own DSN/artefact separately via armSQL.
 func (s *session) arm(root, patch string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.root, s.patch = root, patch
+}
+
+// armSQL records a SQL fault's admin DSN and artefact path — additive to arm,
+// which every calibration still calls first for root. Kept as a second method
+// rather than folded into arm's signature so a patch-kind session's zero-value
+// sqlDSN/sqlFault can never be mistaken for "armed": doRestore gates the SQL undo
+// on sqlApplied, set only by applySQLFault, never by arm/armSQL themselves.
+func (s *session) armSQL(dsn, path string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sqlDSN, s.sqlFault = dsn, path
 }
 
 // start launches cmd in its OWN PROCESS GROUP and registers it, both under the lock.
@@ -346,6 +423,24 @@ func (s *session) applyFault() error {
 	return nil
 }
 
+// applySQLFault is applyFault's SQL-kind analog: runs the fault's apply half
+// against the admin DSN and records that sqlApplied, under the same lock and the
+// same tornDown race guard, for the same reason — restoration must never be able
+// to observe "not applied" while the mutation lands on the database a moment
+// later.
+func (s *session) applySQLFault() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tornDown {
+		return fmt.Errorf("refusing to apply the SQL fault: the session is already being torn down")
+	}
+	if err := calibration.ApplySQL(s.sqlDSN, s.sqlFault); err != nil {
+		return err
+	}
+	s.sqlApplied = true
+	return nil
+}
+
 // restore performs phase 3 and asserts all of it: the source reverted, the process
 // stopped, the artefacts GONE, and (for SQL faults, when they exist) the injected
 // mutation undone.
@@ -384,11 +479,13 @@ func restoreOnPanic(s *session) {
 func (s *session) doRestore() error {
 	s.mu.Lock()
 	root, patch, applied := s.root, s.patch, s.applied
+	sqlDSN, sqlFault, sqlApplied := s.sqlDSN, s.sqlFault, s.sqlApplied
 	s.restores++
-	// tornDown closes the two holes a late writer could open: a child started after
-	// this point would never be caught by the sweep below, and a patch applied after
-	// this point would never be reverted, because `applied` was just read. start() and
-	// applyFault() both refuse once it is set.
+	// tornDown closes the holes a late writer could open: a child started after this
+	// point would never be caught by the sweep below, and a patch or SQL fault
+	// applied after this point would never be reverted, because `applied`/`sqlApplied`
+	// were just read. start(), applyFault() and applySQLFault() all refuse once it is
+	// set.
 	s.tornDown = true
 	s.mu.Unlock()
 	if root == "" {
@@ -398,7 +495,19 @@ func (s *session) doRestore() error {
 	fmt.Println("otkcal: PHASE 3 (restore)")
 	var problems []string
 
-	// FIRST, and not negotiably first: nothing below means anything while a build is
+	// The SQL undo runs FIRST, ahead even of stopChildren. Unlike the file-system
+	// hazard below, undoing a live RLS-policy mutation has no dependency on any
+	// process this runner started — but stopChildren can block for up to a 30s
+	// SIGTERM grace, and every second of that is a second the weakened policy would
+	// otherwise still be sitting on the database. Undo the thing that matters most
+	// first; sweep processes after.
+	if sqlApplied {
+		if err := calibration.UndoSQL(sqlDSN, sqlFault); err != nil {
+			problems = append(problems, "sql: "+err.Error())
+		}
+	}
+
+	// Next, and not negotiably next: nothing below means anything while a build is
 	// still running. A `mvn package` that outlives this sweep recreates the artefacts
 	// AFTER they were deleted and verified, and does it from a half-reverted tree.
 	s.stopChildren()
@@ -414,7 +523,13 @@ func (s *session) doRestore() error {
 		problems = append(problems, "source: the tree is not clean after the revert:\n"+dirt)
 	}
 
-	if err := calibration.RemoveAndVerify(filepath.Join(root, calibration.FaultedArtefacts)); err != nil {
+	// Both removed unconditionally, regardless of which one (if either) this fault
+	// actually rebuilt: see FaultedCLIBinary's own doc comment for why that is
+	// simpler and cheaper than doRestore needing to know the fault's Rebuild target.
+	if err := calibration.RemoveAndVerify(
+		filepath.Join(root, calibration.FaultedArtefacts),
+		filepath.Join(root, calibration.FaultedCLIBinary),
+	); err != nil {
 		problems = append(problems, "artefacts: "+err.Error())
 	}
 
@@ -422,8 +537,12 @@ func (s *session) doRestore() error {
 		return fmt.Errorf("RESTORATION INCOMPLETE — %d problem(s):\n  %s",
 			len(problems), strings.Join(problems, "\n  "))
 	}
-	fmt.Printf("otkcal: restored — source reverted and clean, hub stopped, %s removed. "+
-		"The next build starts from clean source.\n", calibration.FaultedArtefacts)
+	detail := "source clean"
+	if sqlApplied {
+		detail = "SQL fault undone"
+	}
+	fmt.Printf("otkcal: restored — %s, hub stopped, %s removed. "+
+		"The next build starts from clean source.\n", detail, calibration.FaultedArtefacts)
 	return nil
 }
 
@@ -510,6 +629,17 @@ func hubReady(log string) bool {
 // to hardcode a second copy of the same literal.
 const hubURL = "http://localhost:8080"
 
+// batteryTimeout bounds a single phase's `go test` call. go test's own default is
+// 10 minutes — comfortably enough for every fault calibrated before
+// security-terminal-run-hidden-from-api, whose ~20 run-lane catalogue cases each
+// pay its full 90s poll deadline (thenRunTerminal) before that fault's finding can
+// fire, well over 10 minutes on their own. Left at the default, phase 2 panics on
+// go test's own timeout — a harness defect indistinguishable in its own output from
+// the fault having hung the hub for real. 45 minutes is generous over that fault's
+// worst case while leaving otk-calibrate.yml's 60-minute job budget enough margin
+// for the packaging/boot overhead around both phases.
+const batteryTimeout = 45 * time.Minute
+
 // battery runs the whole catalogue for one fault in one phase. Its exit code is the
 // phase's verdict: the inverted gate lives inside TestOTK, not here.
 //
@@ -529,7 +659,8 @@ const hubURL = "http://localhost:8080"
 // this after os.Environ() overrides any ambient value regardless of what the shell
 // set.
 func (s *session) battery(root, fault, phase string) error {
-	cmd := exec.Command("go", "test", "-tags", "otk", "./test/otk/", "-run", "TestOTK", "-v", "-count=1")
+	cmd := exec.Command("go", "test", "-tags", "otk", "./test/otk/", "-run", "TestOTK", "-v", "-count=1",
+		"-timeout", batteryTimeout.String())
 	cmd.Dir = filepath.Join(root, "lm")
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	cmd.Env = append(os.Environ(), "OTK_FAULT="+fault, "OTK_FAULT_PHASE="+phase, "LUMNIK_URL="+hubURL)
@@ -541,6 +672,19 @@ func (s *session) battery(root, fault, phase string) error {
 func (s *session) pkg(root string) error {
 	cmd := exec.Command("mvn", "-q", "-pl", "lumnik-hub", "-am", "package", "-DskipTests")
 	cmd.Dir = root
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return s.run(cmd)
+}
+
+// buildCLI rebuilds the lm binary at lm/lm — the RebuildCLI analog of pkg(), for a
+// fault that lives in the CLI's own source rather than the hub's. It goes through
+// s.run for the same reason pkg does, and needs no artefact-clearing precaution to
+// match packageAndBoot's: unlike Maven's mtime-based incremental staleness (the
+// exact bug this repo has already watched replay a stale class), `go build -o`
+// always overwrites its output fresh, unconditionally.
+func (s *session) buildCLI(root string) error {
+	cmd := exec.Command("go", "build", "-o", "lm", "./cmd/lm")
+	cmd.Dir = filepath.Join(root, "lm")
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return s.run(cmd)
 }

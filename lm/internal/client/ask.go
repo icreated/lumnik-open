@@ -3,8 +3,23 @@ package client
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"strings"
 )
+
+// Disputed is a fused record the answer filtered on while its sources disagree (#874).
+type Disputed struct {
+	Key      string           `json:"key"`
+	Column   string           `json:"column"`
+	Label    string           `json:"label"`
+	Matched  string           `json:"matched"`
+	Retained *string          `json:"retained"` // nil when the fused record holds no value
+	Counted  bool             `json:"counted"`
+	Sources  []DisputedSource `json:"sources"`
+}
+
+// DisputedSource is one ledger entry — the same shape the record detail carries.
+type DisputedSource = DetailSource
 
 // AskResult is the analytic (text-to-SQL) answer: the LLM's plain answer, the
 // SQL that ran, and the result rows flattened to ordered string columns ready
@@ -19,27 +34,35 @@ type AskResult struct {
 	// OtherDoors names, as hub tokens ("lifecycle", "conflicts"), the doors that CAN answer when
 	// this one abstains; usually empty. Rendering a token is each surface's own job — see the
 	// hub's AskResult for why the wire carries tokens and not commands.
-	OtherDoors []string
+	OtherDoors       []string
+	Disputed         []Disputed
+	DisputedTruncated bool
 }
 
 // analyticWire mirrors the platform AnalyticResponse JSON
 // ({answer, sql, rowCount, rows:[{...}]}). Rows stay raw so we can recover the
 // column order that unmarshalling into a Go map would discard.
 type analyticWire struct {
-	Answer     string            `json:"answer"`
-	SQL        string            `json:"sql"`
-	RowCount   int               `json:"rowCount"`
-	Rows       []json.RawMessage `json:"rows"`
-	DataAsOf   string            `json:"dataAsOf"`
-	OtherDoors []string          `json:"otherDoors"`
+	Answer            string            `json:"answer"`
+	SQL               string            `json:"sql"`
+	RowCount          int               `json:"rowCount"`
+	Rows              []json.RawMessage `json:"rows"`
+	DataAsOf          string            `json:"dataAsOf"`
+	OtherDoors        []string          `json:"otherDoors"`
+	Disputed          []Disputed        `json:"disputed"`
+	DisputedTruncated bool              `json:"disputedTruncated"`
 }
 
 // RagAsk runs an analytic question over the ingested hub via mode=analytic.
-// scope is sent only when non-empty (the backend defaults it to "system").
-func (c *Client) RagAsk(question, scope string) (*AskResult, error) {
+// scope is sent only when non-empty (the backend defaults it to "system"); lang, the answer
+// language, likewise — absent, the hub follows the question's own language (#879).
+func (c *Client) RagAsk(question, scope, lang string) (*AskResult, error) {
 	body := map[string]any{"question": question, "mode": "analytic"}
 	if scope != "" {
 		body["scope"] = scope
+	}
+	if lang != "" {
+		body["lang"] = lang
 	}
 	var wire analyticWire
 	if err := c.POSTSlow("/api/platform/rag/chat", body, &wire); err != nil {
@@ -47,13 +70,15 @@ func (c *Client) RagAsk(question, scope string) (*AskResult, error) {
 	}
 	cols, rows := parseRows(wire.Rows)
 	return &AskResult{
-		Answer:     wire.Answer,
-		SQL:        wire.SQL,
-		RowCount:   wire.RowCount,
-		Columns:    cols,
-		Rows:       rows,
-		DataAsOf:   wire.DataAsOf,
-		OtherDoors: wire.OtherDoors,
+		Answer:            wire.Answer,
+		SQL:               wire.SQL,
+		RowCount:          wire.RowCount,
+		Columns:           cols,
+		Rows:              rows,
+		DataAsOf:          wire.DataAsOf,
+		OtherDoors:        wire.OtherDoors,
+		Disputed:          wire.Disputed,
+		DisputedTruncated: wire.DisputedTruncated,
 	}, nil
 }
 
@@ -130,4 +155,31 @@ func stringifyJSON(raw json.RawMessage) string {
 		}
 	}
 	return s
+}
+
+// AnswerLang is the answer language to send: explicit when given, else the language of the
+// POSIX message locale, which LC_ALL overrides, then LC_MESSAGES, then LANG (#879).
+func AnswerLang(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	for _, v := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
+		if locale := os.Getenv(v); locale != "" {
+			return LangFromLocale(locale)
+		}
+	}
+	return ""
+}
+
+// LangFromLocale reads the two-letter language of a POSIX locale such as LANG
+// ("fr_FR.UTF-8" → "fr"). A locale that names no language ("C", "POSIX", "") gives "".
+func LangFromLocale(locale string) string {
+	lang := strings.ToLower(locale)
+	if i := strings.IndexAny(lang, "_.@"); i >= 0 {
+		lang = lang[:i]
+	}
+	if len(lang) != 2 || lang[0] < 'a' || lang[0] > 'z' || lang[1] < 'a' || lang[1] > 'z' {
+		return ""
+	}
+	return lang
 }

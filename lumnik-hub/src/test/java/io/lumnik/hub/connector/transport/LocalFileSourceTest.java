@@ -35,6 +35,34 @@ class LocalFileSourceTest {
     }
 
     @Test
+    void stat_returns_exactly_what_the_listing_returns_for_that_path() throws Exception {
+        Files.write(dir.resolve("a.csv"), "x".getBytes());
+        Files.write(dir.resolve("b.csv"), "y".getBytes());
+        Files.write(dir.resolve("empty.csv"), new byte[0]);
+        Files.write(dir.resolve("note.txt"), "z".getBytes());
+        Files.createDirectories(dir.resolve("sub"));
+        Files.write(dir.resolve("sub/deep.csv"), "d".getBytes());
+        Files.createDirectories(dir.resolve("dir.csv"));
+
+        List<String> probes = new ArrayList<>();
+        for (String name : List.of("a.csv", "b.csv", "empty.csv", "note.txt", "sub/deep.csv", "dir.csv",
+                "missing.csv", "sub", "./a.csv")) {
+            probes.add(dir.toString() + "/" + name);
+        }
+        probes.add("a.csv");
+
+        for (String glob : List.of(dir + "/*.csv", dir + "/a.csv")) {
+            var source = new LocalFileSource(glob);
+            Map<String, FileDescriptor> listed = source.listSince(Instant.EPOCH)
+                .collect(Collectors.toMap(FileDescriptor::path, d -> d));
+            assertFalse(listed.isEmpty(), glob);
+            for (String path : probes) {
+                assertEquals(Optional.ofNullable(listed.get(path)), source.stat(path), glob + " → " + path);
+            }
+        }
+    }
+
+    @Test
     void open_returns_streaming_inputstream() throws Exception {
         Files.write(dir.resolve("data.csv"), "hello,world".getBytes());
         var source = new LocalFileSource(dir.toString() + "/*.csv");

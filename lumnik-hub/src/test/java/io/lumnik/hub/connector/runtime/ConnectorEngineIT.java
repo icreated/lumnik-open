@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.runtime;
 
+import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.api.types.RunStatus;
 import io.lumnik.hub.connector.api.types.RunTrigger;
@@ -8,11 +9,15 @@ import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.repository.ConnectorRunRepository;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
 import org.junit.jupiter.api.Test;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -28,6 +33,7 @@ class ConnectorEngineIT {
     @Inject ConnectorRunRepository runs;
     @Inject ConnectorEndpointRepository endpoints;
     @Inject UserTransaction utx;
+    @Inject @DataSource("admin") AgroalDataSource adminDs;
 
     @Test
     void run_completes_synchronously_and_writes_history() throws Exception {
@@ -66,6 +72,58 @@ class ConnectorEngineIT {
         assertThat(reloadEndpointLastRunAt(history.get(0).getEndpointId()))
                 .as("endpoint.last_run_at must be stamped alongside the status")
                 .isNotNull();
+    }
+
+    /**
+     * On the engine's own ending path, {@code finalizeRun} is reached only through a bare self-invocation ({@code finalizeRun(...)}
+     * from {@code finishRun}, itself called the same way from {@code completeRun}) — every call
+     * site is the method's own class calling itself, never through the injected CDI proxy. Quarkus
+     * ArC intercepts self-invocation on a normal-scoped bean's non-private methods (unlike plain
+     * CDI), so {@code @Transactional} should still fire — but this asserts the OBSERVABLE
+     * consequence directly rather than trusting that: a raw JDBC connection, entirely outside
+     * Hibernate/JTA, sees the terminal row the instant {@code runSync} returns. If the
+     * self-invoked {@code @Transactional} had no effect and nothing else committed the write, this
+     * would read {@code status=Running, ended_at=null} instead.
+     */
+    @Test
+    void finalizeRun_commits_synchronously_visible_to_a_raw_jdbc_connection() throws Exception {
+        UUID connectorId = TenantContext.callAsSystem(() -> {
+            utx.begin();
+            Connector c = new Connector();
+            c.setTenantId(1L);
+            c.setName("engine-raw-visibility-test-" + System.nanoTime());
+            c.setTypeId("hello-world");
+            c.setConfig(Map.of("count", 5));
+            connectors.persist(c);
+            connectors.flush();
+            utx.commit();
+            return c.getId();
+        });
+
+        RunStatus status = engine.runSync(connectorId, new RunTrigger.Manual(1L));
+        assertThat(status).isInstanceOf(RunStatus.Completed.class);
+
+        UUID runId = TenantContext.callAsSystem(() -> {
+            utx.begin();
+            var h = runs.findRecentActiveByConnector(connectorId, 1);
+            utx.commit();
+            return h.get(0).getId();
+        });
+
+        try (Connection raw = adminDs.getConnection();
+             PreparedStatement ps = raw.prepareStatement(
+                     "SELECT status, ended_at FROM connector.connector_run WHERE id = ?")) {
+            ps.setObject(1, runId);
+            try (ResultSet rs = ps.executeQuery()) {
+                assertThat(rs.next()).as("run row must exist").isTrue();
+                assertThat(rs.getString("status"))
+                        .as("finalizeRun's self-invoked @Transactional write must already be " +
+                                "committed and visible on an INDEPENDENT connection the instant " +
+                                "runSync() returns")
+                        .isEqualTo("Completed");
+                assertThat(rs.getTimestamp("ended_at")).isNotNull();
+            }
+        }
     }
 
     @Test

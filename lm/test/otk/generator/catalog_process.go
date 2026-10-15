@@ -226,24 +226,28 @@ type ProcessScenario struct {
 	MaxRows        int
 }
 
-// ProcessApplyManifest returns the fields for the named apply variant.
-func ProcessApplyManifest(name string) (yaml string, useUserRole bool, expectedStatus int, found bool) {
+// ProcessApplyManifest returns the fields for the named apply variant, including
+// its catalogue CaseID — the identity a Given step cannot otherwise recover, since
+// the constructor (processCaseID) is unexported and lives with the rest of the
+// catalogue's own identity in caseid.go.
+func ProcessApplyManifest(name string) (yaml string, useUserRole bool, expectedStatus int, caseID CaseID, found bool) {
 	for _, v := range processApplyVariants() {
 		if v.name == name {
-			return v.manifestYAML, v.useUserRole, v.expectedStatus, true
+			return v.manifestYAML, v.useUserRole, v.expectedStatus, processCaseID("apply", v.name), true
 		}
 	}
-	return "", false, 0, false
+	return "", false, 0, "", false
 }
 
-// InboxVariantByName returns the inbox variant fields for the given name.
-func InboxVariantByName(name string) (op string, crossTenant, wrongRole, found bool) {
+// InboxVariantByName returns the inbox variant fields for the given name, including
+// its catalogue CaseID (see ProcessApplyManifest).
+func InboxVariantByName(name string) (op string, crossTenant, wrongRole bool, caseID CaseID, found bool) {
 	for _, cand := range inboxVariants() {
 		if cand.name == name {
-			return cand.op, cand.crossTenant, cand.wrongRole, true
+			return cand.op, cand.crossTenant, cand.wrongRole, processCaseID("inbox", cand.name), true
 		}
 	}
-	return "", false, false, false
+	return "", false, false, "", false
 }
 
 func renderProcessApplyFeature(seed int64, v processApplyVariant) string {

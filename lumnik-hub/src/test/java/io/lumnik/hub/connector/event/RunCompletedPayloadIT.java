@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -91,7 +92,9 @@ class RunCompletedPayloadIT {
         assertThat(t1.get("written").asLong()).isEqualTo(3L);
         assertThat(t1.get("skipped").asLong()).isEqualTo(0L);
 
-        // Re-run the SAME file: identical content → all rows conflict (SKIP) → written: 0, skipped: 3
+        // Re-run the SAME content: a file read in full is skipped while unchanged, so touch it —
+        // a new modification time makes the run read it again → all rows conflict (SKIP) → written: 0, skipped: 3
+        Files.setLastModifiedTime(csvFile, FileTime.from(Files.getLastModifiedTime(csvFile).toInstant().plusSeconds(10)));
         RunStatus s2 = engine.runSync(connectorId, new RunTrigger.Manual(1L));
         assertThat(s2).isInstanceOf(RunStatus.Completed.class);
 

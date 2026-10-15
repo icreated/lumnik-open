@@ -1,5 +1,6 @@
 package io.lumnik.hub.view;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.extraction.spi.ask.SchemaCard;
@@ -34,21 +35,30 @@ public class ViewRenderResource {
 
     @Inject SchemaCardStore cards;
     @Inject ViewDataReader reader;
+    @Inject ViewCursors cursors;
 
     @Inject ScopeFreshness freshness;
 
     private final ViewManifestParser parser = new ViewManifestParser();
     private final ViewResolver resolver = new ViewResolver();
 
+    /**
+     * {@code truncated} stays the honest "more rows exist than shown" (the 1 000-row cut, or the
+     * end of a page); {@code hasMore} says the same for the paged contract, and {@code nextCursor}
+     * (null on the last page and on an unpaged read) is the opaque token that continues it.
+     */
     public record RenderResponse(String title, List<ResolvedView.Column> columns,
                                  List<Map<String,Object>> rows, boolean truncated,
-                                 String dataAsOf) {}
+                                 String dataAsOf, boolean hasMore, String nextCursor,
+                                 @JsonInclude(JsonInclude.Include.NON_EMPTY) List<ViewLink> links) {}
 
     @POST
     @Path("/render")
     @Consumes({"application/yaml", "text/yaml", MediaType.APPLICATION_JSON})
     @Transactional
-    public Response render(@QueryParam("filter") List<String> filters, String body) {
+    public Response render(@QueryParam("filter") List<String> filters,
+                           @QueryParam("pageSize") Integer pageSize,
+                           @QueryParam("cursor") String cursor, String body) {
         long tenant = RequireTenant.current();
 
         ViewManifest manifest;
@@ -81,15 +91,34 @@ public class ViewRenderResource {
             return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
         }
 
-        ViewDataReader.ReadResult read;
+        String dataAsOf = freshness.lastCompletedRun(tenant, manifest.scope())
+            .map(Instant::toString).orElse(null);
+        boolean paged = pageSize != null || (cursor != null && !cursor.isBlank());
+        if (!paged) {
+            ViewDataReader.ReadResult read;
+            try {
+                read = reader.read(tenant, rv, viewFilters);
+            } catch (IllegalArgumentException e) {
+                return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
+            }
+            return Response.ok(new RenderResponse(rv.title(), rv.columns(), read.rows(), read.truncated(),
+                dataAsOf, read.truncated(), null, manifest.links())).build();
+        }
+
+        ViewDataReader.PageResult page;
+        String next = null;
         try {
-            read = reader.read(tenant, rv, viewFilters);
+            int size = ViewPageContract.resolvePageSize(pageSize);
+            boolean hasId = ViewPageContract.relationHasId(rv.table());
+            String binding = ViewPageContract.binding(tenant, manifest.scope(), manifest.name(), rv,
+                ViewPageContract.orderKey(rv, hasId), viewFilters, size);
+            ViewCursor.Boundary after = cursor == null || cursor.isBlank() ? null : cursors.open(binding, cursor);
+            page = reader.readPage(tenant, rv, viewFilters, hasId, new ViewDataReader.Page(size, after));
+            if (page.next() != null) next = cursors.seal(binding, page.next());
         } catch (IllegalArgumentException e) {
             return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
         }
-        String dataAsOf = freshness.lastCompletedRun(tenant, manifest.scope())
-            .map(Instant::toString).orElse(null);
-        return Response.ok(new RenderResponse(rv.title(), rv.columns(), read.rows(), read.truncated(), dataAsOf))
-            .build();
+        return Response.ok(new RenderResponse(rv.title(), rv.columns(), page.rows(), page.hasMore(),
+            dataAsOf, page.hasMore(), next, manifest.links())).build();
     }
 }

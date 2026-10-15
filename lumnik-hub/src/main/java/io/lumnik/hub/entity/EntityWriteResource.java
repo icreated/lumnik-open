@@ -5,6 +5,8 @@ import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.ask.DiscoveryService;
+import io.lumnik.hub.search.SearchIndexStore;
+import io.lumnik.hub.tenant.TenantContextFilter;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.Path;
@@ -31,13 +33,23 @@ public class EntityWriteResource {
   @Inject EntityRegistry registry;
   @Inject EntityViewCompiler compiler;
   @Inject DiscoveryService discovery;
+  @Inject SearchIndexStore searchIndexStore;
 
   /**
-   * Remove an entity: drop its view, delete its manifest row (atomically, admin DS), evict the
-   * in-memory entry, and rediscover its scopes best-effort so the RAG schema card drops it. Same
-   * scope asymmetry as apply — a bound integrator must hold ALL the entity's scopes (allowsAll, the
-   * write rule); an unknown name is a 404. Not {@code @Transactional}: the compiler runs its own
-   * atomic admin-DS transaction and rediscover manages its own, mirroring apply.
+   * Remove an entity: purge every tenant's SearchIndex over it, drop its view, delete its manifest
+   * row (atomically, admin DS), evict the in-memory entry, and rediscover its scopes best-effort so
+   * the RAG schema card drops it. Same scope asymmetry as apply — a bound integrator must hold ALL
+   * the entity's scopes (allowsAll, the write rule); an unknown name is a 404. Not
+   * {@code @Transactional}: the compiler runs its own atomic admin-DS transaction and rediscover
+   * needs none, mirroring apply.
+   *
+   * <p>Trigger 6 (design §4, row 6): {@code purgeAllForEntity} runs INSIDE {@code compiler.delete}'s
+   * own transaction (its {@link EntityViewCompiler.ConnectionWork} overload), not before it as a
+   * separately-committed admin-DS statement — a review of this PR (#709) found that ordering left a
+   * window where the purge had already landed but the DROP VIEW/manifest delete had not, if the
+   * latter then failed. One commit now covers both, so a deleted entity's already-projected
+   * documents are never stranded AND the SearchIndex rows can never disappear without the entity
+   * itself actually going with them.
    */
   @DELETE
   @Path("/{name}")
@@ -48,7 +60,8 @@ public class EntityWriteResource {
     EntityManifest m = registry.findReloadingIfMissing(name);
     if (m == null) return ApiErrors.notFound("entity " + name + " not found");
     if (!ScopeGrants.allowsAll(m.scopes())) return ApiErrors.scopeNotGranted();
-    compiler.delete(m.name());
+    Long actor = TenantContextFilter.currentUser();
+    compiler.delete(m.name(), c -> searchIndexStore.purgeAllForEntity(c, m.name(), actor));
     registry.remove(m.name());
     // Best-effort, like apply: the view + manifest row are already gone, so a card-refresh failure
     // must not fail the delete. No tenant context (system caller) → skip: every tenant picks the

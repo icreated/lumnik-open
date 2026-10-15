@@ -75,7 +75,7 @@ stateDiagram-v2
 
 ```
 $ lm workflow apply -f docs/apps/demo/workflows/10-order-lifecycle.yaml
-{"name":"acme-order-lifecycle","scope":"desk","table":"connector.t_acme_desk_orders","column":"status","dataTruth":{"undeclared":[{"value":"EN LITIGE","rows":3},{"value":"Terminé","rows":1}],"unobserved":["ANNULE"],"nullOrBlank":1,"tableMissing":false,"keyColumnMissing":false,"checkUnavailable":false,"unavailableReason":null}}
+{"name":"acme-order-lifecycle","scope":"desk","table":"connector.t_acme_desk_orders","column":"status","dataTruth":{"undeclared":[{"value":"EN LITIGE","rows":3},{"value":"Terminé","rows":1}],"unobserved":["ANNULE"],"nullOrBlank":1,"tableMissing":false,"keyColumnMissing":false,"keyNullOrBlank":0,"checkUnavailable":false,"unavailableReason":null}}
 $ lm workflow list
 NAME                  TABLE                         COLUMN  SCOPE  ENABLED
 acme-order-lifecycle  connector.t_acme_desk_orders  status  desk   true
@@ -239,6 +239,7 @@ contains — and that confrontation never becomes a refusal:
 | `nullOrBlank` | rows carrying no status at all. Its own bucket, never folded into silence: a column `NULL` on 90 % of its rows would otherwise report `undeclared: []`, which *reads* as agreement | `1` |
 | `tableMissing` | the trigger table does not exist yet, or any more. Still `200` | `false` |
 | `keyColumnMissing` | `spec.on.key` names a column the table does not have — the **only** signal a typo'd key ever produces; `key: order_n` satisfies the grammar, applies clean, and then makes the sweep fail on every tick with nothing but a log line to show for it | `false` |
+| `keyNullOrBlank` | rows whose `spec.on.key` is `NULL` or blank — the documents the dormancy sweep skips, permanently. Counted with the sweep's own predicate, so it says how much of the table dormancy cannot cover. `null` means *not measured* (no key declared, the key column or the table missing, or the check unavailable); `0` means measured, and no such row. Counted independently of the status: a row with neither belongs to both counters, so do not add them up. It shows the key is *there*, not that it is unique or stable over time | `0` |
 | `checkUnavailable` + `unavailableReason` | the confrontation could not run — a statement timeout on a huge table, a dropped column, a revoked grant. It means *"we could not confront the data"*, **not** *"the data agrees"*; the other fields are empty out of ignorance. Re-apply once the cause is gone | `false` |
 
 All of it lands in the same `200`, always — even when the probe itself fails: the declaration is
@@ -256,7 +257,7 @@ Applying a workflow (re)indexes it as **one chunk** in the manifest's scope, spe
 states, the aliases, the transitions and the provenance. Two doors read it differently, and it is
 worth knowing which is which:
 
-- **The semantic door** — `POST /api/rag/chat` with the scope, the PWA's chat panel, `lm chat` —
+- **The semantic door** — `POST /api/rag/chat` with the scope, `lm chat` —
   retrieves the chunk and answers about the *graph*:
 
     ```
@@ -271,13 +272,16 @@ worth knowing which is which:
     ever reached. What it hedges on is the *document*: the chunk carries the graph, not the
     table, so *"SO-000004 is in BROUILLON"* is a guess it flags as one.
 
-- **The analytic door** — `lm ask`, `mode: analytic` — generates SQL over the scope's card and
-  answers about the *rows*:
+- **The analytic door** — `lm ask`, the PWA's chat panel, `mode: analytic` — generates SQL over
+  the scope's card and answers about the *rows*:
 
     ```
     $ lm ask --scope desk "Dans quel statut est la commande SO-000004 ?"
-    The command SO-000004 is currently in the "BROUILLON" status.
+    La commande SO-000004 est dans le statut BROUILLON.
+      data as of: 2026-09-13T00:49:13.894142Z (last completed run)
+
       SQL: SELECT status FROM "connector"."t_acme_desk_orders" WHERE order_no = 'SO-000004'
+    LIMIT 500
     ```
 
     It does not read the lifecycle chunk: a *"why can't I close it"* question, asked here, is met
@@ -453,6 +457,100 @@ into your own tracker — see [Re-alert semantics](#re-alert-semantics).
 under the same name. **Result:** the next report no longer lists it, the chat knows what it
 means, and the sweep watches it as a declared non-terminal state rather than a raw value.
 
+## Checking a proposal dossier
+
+A business person can describe a problem on lumnik.fr and download a **proposal dossier**: a file of
+their answers, and of what lumnik could do about them. Before you turn it into manifests, you can ask
+the hub what it can establish on your data. The gesture, once you have applied the workflow you
+want to check it against:
+
+```bash
+curl -X POST "$HUB/api/proposal/check?workflow=<name>" \
+  -H "Authorization: Bearer $TOKEN" \
+  --data-binary @dossier.md > dossier-checked.md
+```
+
+You name a workflow **you already applied**; lumnik reads it and the table it names, read-only, and
+never applies anything. The answer is the same file, checked: it can be sent back as input, and the
+original answers are untouched. Without `workflow=`, the answer is the dossier recomputed and nothing
+more.
+
+What can change, and only that:
+
+- *a status column exists* — **confirmed** when the confrontation query read the column, **refuted**
+  when the table is there and the column is not;
+- *an identifier column exists* — **confirmed** when the table has the column your workflow names in
+  `spec.on.key`, **refuted** when the table is there and does not have it. It is judged only when the
+  status probe could run: if the status column is missing, the identifier is left alone;
+- *the target is accepted by the watch validation* — **confirmed** by the stored workflow; never
+  refuted, because a refused apply leaves nothing to read.
+
+What never changes: a condition only a person can establish (*the column describes the document's
+lifecycle*, *the identifier stays the same for one document over time*) stays *to be established* —
+the proof is not a judgement. A table not ingested yet, a timeout or a missing grant leave the state
+where it was: **not finding is not proving absence**.
+
+Good to know:
+
+- The proof is about your data **today**, not about the report `lm workflow apply` printed when you
+  applied.
+- A dossier written for another catalogue version than the one this hub holds is still returned
+  (recomputed), without verification; so is one whose proposal no longer matches the catalogue's.
+- The answer is the same whether the workflow does not exist, is not yours to read, or no longer
+  parses: nothing is said about a workflow you cannot see.
+- A dossier that breaks the format is refused with `400` and the reason (for example `duplicate-key`),
+  never with the content of the file.
+- The file is read as UTF-8, whatever charset the request declares. A file that is not valid UTF-8 (a
+  copy saved as Latin-1, say) is refused with `400` and `malformed-header` rather than answered with its
+  accents silently replaced.
+
+## Drafting a manifest from a dossier
+
+Once you hold a proposal dossier — checked or not — `lm` can write the **start** of the manifest it
+proposes. It is a draft generator, not a dry-run: it does not contact the hub, does not call apply,
+and does not claim that the table you give it exists.
+
+```bash
+lm proposal draft dossier.md \
+  --name orders-lifecycle --scope sales \
+  --table connector.t_commandes --column statut --key n_commande --after 14d \
+  -o orders-lifecycle.yaml
+```
+
+Every flag is optional. What the dossier cannot know — the workflow's name, its scope, the table, the
+status column, the key, the threshold — comes from the flags; a value you leave out is **left out of
+the file**, with a comment saying where it goes. The states and transitions are never generated:
+you write them, and until you do the file is not a manifest `lm workflow apply` will accept. A
+dormancy (`--after`) needs its key: `--after` without `--key` is accepted here, and apply refuses it
+until you add the key (`--key` alone is fine).
+
+The comments at the top list what the dossier says about each point, **in the order that needs you
+first**: refuted, then missing, then unverified, then what the hub confirmed. They state what the
+dossier *carries* — a confirmation is "carried by the dossier (schema 1 does not date it)", never
+"verified now" — and a point nobody can check by tool (*the column describes the document's
+lifecycle*, *the identifier stays the same*) is marked **to establish yourself**.
+
+`-o` refuses an existing file and leaves it untouched; without it the draft goes to stdout, and the
+dossier can come from stdin:
+
+```bash
+curl -X POST "$HUB/api/proposal/check?workflow=orders-lifecycle" \
+  -H "Authorization: Bearer $TOKEN" --data-binary @dossier.md | lm proposal draft -
+```
+
+The hub confirms only against a workflow it has already stored, so the first draft is mostly open
+points. The loop is:
+
+1. `lm proposal draft dossier.md …` — an incomplete draft with its open points.
+2. You complete it (name, scope, graph, whatever the flags left) and run `lm workflow apply -f`.
+3. `curl … /api/proposal/check?workflow=<name>` — the hub replays the stored manifest on today's
+   data and returns the checked dossier.
+4. `lm proposal draft` again on the checked dossier, to a new file: the same draft, now with the
+   confirmations and refutations the hub could establish.
+
+If the dossier carries no `stalled-documents@1` lead, or carries it twice, `lm` refuses rather than
+choose. Other leads are named on stderr and not drafted.
+
 ## Troubleshooting
 
 | Symptom | Cause | Gesture |
@@ -467,9 +565,9 @@ means, and the sweep watches it as a declared non-terminal state rather than a r
 | apply refused: `alias '…' … collides with state code` / `exactly one state must be initial` / `terminal state '…' has an outgoing transition` | a contradiction in the declaration | fix the graph |
 | dormancy declared, but no alert ever arrives | `spec.on.key` names a column the table does not have | check `keyColumnMissing` in the apply response |
 | a document that has *already* been stuck for weeks does not alert on day one | the threshold counts from lumnik's own first sighting | wait out `after` from the apply date; `lm observations list` shows `SINCE` per document |
-| a document is missing from `lm observations list` | its key or its status is `NULL` or blank — there is nothing to follow it by | give it a key and a status at the source; `nullOrBlank` counts the second |
+| a document is missing from `lm observations list` | its key or its status is `NULL` or blank — there is nothing to follow it by | give it a key and a status at the source; `keyNullOrBlank` counts the first, `nullOrBlank` the second |
 | a status value never shows up in chat answers | real but undeclared — no state or alias matches it | check `dataTruth.undeclared`, add it, re-apply |
-| `lm ask` abstains on a "why can't I close it" question | the analytic door does not read the lifecycle chunk | ask through the semantic door with the scope — `lm chat` after `lm scope set <tag>`, or the PWA |
+| `lm ask` abstains on a "why can't I close it" question | the analytic door does not read the lifecycle chunk | ask through the semantic door with the scope — `lm chat` after `lm scope set <tag>` (the PWA's chat panel is on the analytic door) |
 | `403 {"error":"scope not granted"}` on a read that touches this scope | you do not hold the `spec.scope` role | ask an integrator to grant that `scope:` role |
 | `403` with an **empty body** | you do not hold `lm_integrator` (apply) or `lm_admin` on top (observations) | `GET /api/bff/v1/me` returns your roles under `roles` |
 
@@ -503,8 +601,10 @@ arrives.
 
     Those rows are not hidden from you — `apply`'s report counts blank statuses in
     [`nullOrBlank`](#the-data-truth-report-never-blocks), so a column that is NULL on most of its rows
-    says so at declaration time. A NULL *key* has no equivalent counter in v1; if your source leaves
-    business keys empty, dormancy silently covers only the rows that have one.
+    says so at declaration time. A NULL or blank *key* has its own counter,
+    [`keyNullOrBlank`](#the-data-truth-report-never-blocks): when it is above zero, dormancy covers
+    only the rows that have a key. It counts presence only — a key that is there may still not be a
+    stable identity for the document.
 
     **The threshold is declared, not learned.** This is the same posture as
     [`provenance: declared`](#provenance-and-why-it-exists-for-a-single-accepted-value) below:
@@ -599,20 +699,28 @@ arrives.
     `:observations` screen shows `WORKFLOW · DOC · STATE · SINCE · ALERTED` with humanised ages,
     stillest first, alerted rows marked.
 
-    ### Scale: the sweep materialises every document, every tick
+    ### Scale: the sweep reads every document, every tick
 
-    Each tick, for each workflow, the sweep loads the latest state of **every** business key and the
-    **whole** observation ledger for that workflow into memory — there is no `LIMIT`, no cursor and no
-    batching in v1. The supporting indexes are in place, so this is a memory-footprint bound, not a
-    query-plan one: free at demo and departmental scale, hundreds of megabytes on a table with millions
-    of distinct documents. If you point dormancy at a table of that size, expect the hub's heap to feel
-    it. Batching is deferred until a real deployment needs it — the same posture as the transition
-    journal's retention policy, which v1 also leaves unbounded on purpose (the tape is the asset the
-    next rung of the time staircase computes on).
+    Each tick, for each workflow, the database computes the latest state of **every** business key,
+    joins it to the observation ledger, and the hub reads the result a thousand rows at a time. The
+    hub's heap does not depend on how many documents the workflow has. What does grow with the table
+    is the **database's** work: a full sort of the source table per workflow per tick, and a copy of
+    the whole result into temporary storage (both spill to disk past `work_mem`, and the copy counts
+    against `temp_file_limit`). The source table is locked for that read, not for the reconciliation
+    that follows. On a table with millions of distinct documents, lengthen
+    `lumnik.workflow.sweep.every` rather than expecting the hub to feel it. The ledger and the transition
+    journal are unbounded on purpose in v1 (the tape is the asset the next rung of the time staircase
+    computes on).
 
-    A workflow whose table has been dropped fails its sweep on every tick and is skipped, with one
-    log line per tick (`dormancy sweep failed for tenant … workflow … — skipped`). Nothing else is
-    affected, but the line does not stop until the workflow is re-applied over a table that exists.
+    A workflow whose source table has been dropped, or whose declared status or key column no longer
+    exists, is skipped and said **once**: the first failed tick logs a warning
+    (`dormancy sweep standing down for tenant … workflow …`) naming what is missing, and the sweep then
+    stays silent about that workflow while the condition stands. Once the table is readable again —
+    re-ingest the source, or re-apply the workflow over a table that exists — the sweep resumes by itself
+    and logs one line saying so. Any other failure (a statement timeout, a revoked grant, an exhausted
+    pool) is not a state but an incident: it keeps logging an error on every tick
+    (`dormancy sweep failed for tenant … workflow … — skipped`) so that an operator sees it recur.
+    Other workflows are never affected.
 
     ### An undeclared value can never be terminal
 

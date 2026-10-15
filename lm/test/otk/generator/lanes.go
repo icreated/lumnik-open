@@ -25,6 +25,8 @@ var lanes = []Lane{
 	{"entity", func(s int64) CaseID { return GenerateEntity(s).CaseID }, func(s int64) string { return GenerateEntity(s).Feature }},
 	{"process", func(s int64) CaseID { return GenerateProcess(s).CaseID }, func(s int64) string { return GenerateProcess(s).Feature }},
 	{"view", func(s int64) CaseID { return GenerateView(s).CaseID }, func(s int64) string { return GenerateView(s).Feature }},
+	{"entityres", func(s int64) CaseID { return GenerateEntityResolution(s).CaseID }, func(s int64) string { return GenerateEntityResolution(s).Feature }},
+	{"export", func(s int64) CaseID { return GenerateExport(s).CaseID }, func(s int64) string { return GenerateExport(s).Feature }},
 }
 
 // Lanes returns the lane table. Adding a lane is one entry here; every consumer —

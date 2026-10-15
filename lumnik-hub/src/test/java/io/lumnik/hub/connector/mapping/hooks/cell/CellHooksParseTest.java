@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -70,6 +71,42 @@ class CellHooksParseTest {
     var row = new HashMap<String, Object>(Map.of("d", "not-a-date"));
     hook.apply(row, params, new MappingState());
     assertThat(row.get("d")).isNull();
+  }
+
+  // The fall-through between formats, pinned on its edges (#910 stopped asking each format by
+  // catching its exception): a text that FITS an earlier format's shape but cannot resolve under it
+  // — month 23 — must still reach the later format; so must a text an earlier format reads only a
+  // prefix of; and a text that resolves under none is nulled and counted.
+
+  @Test
+  void parse_date_falls_through_a_format_the_text_fits_but_cannot_resolve() throws Exception {
+    var hook = catalog.cell("parse-date");
+    var params = yaml("column: d\nformats: ['dd/MM/yyyy', 'MM/dd/yyyy']");
+    var row = new HashMap<String, Object>(Map.of("d", "05/23/2026"));
+    var s = new MappingState();
+    hook.apply(row, params, s);
+    assertThat(row.get("d")).isEqualTo(LocalDate.of(2026, 5, 23));
+    assertThat(s.counters().cellErrors().get()).isZero();
+  }
+
+  @Test
+  void parse_date_falls_through_a_format_that_reads_only_a_prefix() throws Exception {
+    var hook = catalog.cell("parse-date");
+    var params = yaml("column: d\nformats: ['yyyy-MM-dd', \"yyyy-MM-dd'T'HH:mm\"]");
+    var row = new HashMap<String, Object>(Map.of("d", "2026-05-23T10:30"));
+    hook.apply(row, params, new MappingState());
+    assertThat(row.get("d")).isEqualTo(LocalDateTime.of(2026, 5, 23, 10, 30));
+  }
+
+  @Test
+  void parse_date_counts_a_text_that_fits_every_format_shape_but_resolves_under_none() throws Exception {
+    var hook = catalog.cell("parse-date");
+    var params = yaml("column: d\nformats: ['dd/MM/yyyy', 'MM/dd/yyyy']");
+    var row = new HashMap<String, Object>(Map.of("d", "45/45/2026"));
+    var s = new MappingState();
+    hook.apply(row, params, s);
+    assertThat(row).containsEntry("d", null);
+    assertThat(s.counters().cellErrors().get()).isEqualTo(1);
   }
 
   @Test

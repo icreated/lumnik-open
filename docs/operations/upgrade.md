@@ -16,6 +16,17 @@
    the container `unhealthy` — it never restarts it. Watch
    `docker compose -f docker-compose.selfhost.yml logs -f hub` until healthy.
 
+## Turning on the run queue
+
+`LUMNIK_RUN_QUEUE_ENABLED` (Helm: `runQueue.enabled`) makes the manual connector run and the on-demand export runs queue instead of start at once
+([connectors](../connectors/index.md), [exports](../apps/exports.md#runs-can-queue)). Set it only when **every** hub replica runs a
+release that carries migration V68 and the queue dispatcher: a replica older than that fails when it reads a
+`Queued` run. The setting is global to the deployment, so upgrade all replicas first, then turn it on.
+
+To turn it off, set it back. Runs already queued (connector or export) are still started, or ended once they pass
+`LUMNIK_RUN_QUEUE_MAX_AGE`; new manual and on-demand runs are no longer queued but start at once, as before (an export or endpoint that still has a run queued answers 409 or a `Cancelled` run until that one drains), and nothing is left stuck. When another replica starts the run, the
+wait is bounded by `LUMNIK_RUN_QUEUE_POLL_INTERVAL` (default `5s`).
+
 ## Running from source
 
 ```bash

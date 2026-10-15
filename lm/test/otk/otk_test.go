@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cucumber/godog"
 	"github.com/icreated/lumnik-open/lm/test/otk/auth"
@@ -63,6 +64,9 @@ func TestOTK(t *testing.T) {
 	writeHermeticConfig(t)
 	allFindings = nil
 	scenariosAttempted = 0
+	attemptedCaseIDs = nil
+	dormancyLog = nil
+	battStart := time.Now()
 
 	// Real-auth battery: when the hub trusts our key (OTK_OIDC_ISSUER set by the
 	// harness/CI), mint a valid integrator token for the functional lanes. The key
@@ -103,8 +107,11 @@ func TestOTK(t *testing.T) {
 	if _, live, err := hubSnapshot(os.Getenv("OTK_DB_DSN")); err != nil {
 		t.Fatalf("hub-side snapshot precondition failed at startup: %v", err)
 	} else if !live {
-		t.Logf("OTK hub-side intactness DORMANT: set OTK_DB_DSN (and have psql on PATH) " +
-			"to enable the schema-diff + API/DB-divergence security families")
+		// Not a godog scenario — a once-per-battery precondition probe — so it is
+		// recorded under the synthetic "hub-intactness" lane (see knownDormancyLanes),
+		// never counted in attemptedCaseIDs.
+		recordDormant("hub-intactness/db-dsn", "set OTK_DB_DSN (and have psql on PATH) "+
+			"to enable the schema-diff + API/DB-divergence + RLS-isolation security families")
 	}
 
 	if cal {
@@ -119,6 +126,10 @@ func TestOTK(t *testing.T) {
 	// The entity read variants target a pre-seeded otk_customer entity; the harness
 	// seeds it itself (dormant without OTK_DB_DSN, like the variants).
 	ensureEntityReadSeed(t)
+	// The entity-resolution lane (#643) needs its own resolution-bearing manifest and
+	// backing table, distinct from otk_customer's match: manifest — the two are mutually
+	// exclusive on one manifest. Dormant without OTK_DB_DSN, like the lane itself.
+	ensureEntityResolutionSeed(t)
 
 	opts := &godog.Options{Format: "pretty", Paths: []string{"corpus"}}
 	catalogueCases := 0
@@ -167,6 +178,16 @@ func TestOTK(t *testing.T) {
 	default:
 		t.Logf("OTK: no tier passes — Bronze unmet")
 	}
+
+	// The tier/count verdict above says nothing about what was exercised: a green
+	// with seven dormant oracle families looks exactly like a green with none. An
+	// error here means a CaseID slipped through with no lane the summary
+	// recognizes — a harness defect, never something to pass through quietly.
+	summary, serr := buildSummary(attemptedCaseIDs, dormancyLog, allFindings, time.Since(battStart))
+	if serr != nil {
+		t.Fatalf("OTK: could not build the battery summary: %v", serr)
+	}
+	t.Logf("%s", summary)
 
 	if cal {
 		// gateFailures does NOT apply. The hub is deliberately broken, so steps will

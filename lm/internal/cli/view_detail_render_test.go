@@ -18,7 +18,7 @@ func TestFormatDetail_divergenceShowsEachSource(t *testing.T) {
 		ConflictLedger: true,
 		Conflicts: []client.DetailConflict{{
 			Column: "name", Label: "Nom",
-			Sources: []client.DetailSource{{Src: "cust_siebel", Value: "Marie"}, {Src: "t_cust_csv", Value: "MARIE A."}},
+			Sources: []client.DetailSource{{Src: "cust_siebel", Value: client.StrPtr("Marie")}, {Src: "t_cust_csv", Value: client.StrPtr("MARIE A.")}},
 		}},
 	}
 	var b bytes.Buffer
@@ -26,7 +26,7 @@ func TestFormatDetail_divergenceShowsEachSource(t *testing.T) {
 	out := b.String()
 	assert.Contains(t, out, "Clients / C-200")
 	assert.Contains(t, out, "Code client")
-	assert.Contains(t, out, "(!) Où les sources divergent")
+	assert.Contains(t, out, "(!) Ambiguïtés et divergences")
 	assert.Contains(t, out, "cust_siebel «Marie»")
 	assert.Contains(t, out, "t_cust_csv «MARIE A.»")
 	assert.Contains(t, out, " · ")
@@ -42,7 +42,7 @@ func TestFormatDetail_agreementShowsPositiveLine(t *testing.T) {
 	var b bytes.Buffer
 	formatDetail(&b, res)
 	out := b.String()
-	assert.Contains(t, out, "✓ toutes les sources concordent")
+	assert.Contains(t, out, "✓ aucune ambiguïté ni divergence")
 	assert.NotContains(t, out, "divergent")
 }
 
@@ -56,6 +56,25 @@ func TestFormatDetail_noLedgerOmitsConflictSection(t *testing.T) {
 	formatDetail(&b, res)
 	out := b.String()
 	assert.Contains(t, out, "Raw / X")
-	assert.NotContains(t, out, "concordent")
+	assert.NotContains(t, out, "aucune ambiguïté")
 	assert.NotContains(t, out, "divergent")
+}
+
+func TestFormatDetail_anEmptyLookupValueReadsEmptyNotBlankAndNotAsADisagreement(t *testing.T) {
+	res := &client.ViewDetailResult{
+		Title: "T", Key: "K", ConflictLedger: true,
+		Conflicts: []client.DetailConflict{{Column: "category_name", Label: "Category", Sources: []client.DetailSource{
+			{Src: "t_product_categories", Value: client.StrPtr("Pumps")},
+			{Src: "t_product_categories", Value: nil},
+			{Src: "t_product_categories", Value: client.StrPtr("")},
+		}}},
+	}
+	var b bytes.Buffer
+	formatDetail(&b, res)
+	out := b.String()
+	assert.Contains(t, out, "t_product_categories «Pumps»")
+	assert.Contains(t, out, "t_product_categories «(empty)»")
+	assert.Contains(t, out, "t_product_categories «»")
+	assert.NotContains(t, out, "sources divergent")
+	assert.NotContains(t, out, "Où les sources")
 }

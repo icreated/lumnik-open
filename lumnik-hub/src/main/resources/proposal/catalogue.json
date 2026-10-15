@@ -1,0 +1,105 @@
+{
+  "catalogue": "2026.10.0",
+  "questions": [
+    {
+      "id": "goal",
+      "kind": "choice",
+      "options": [
+        { "id": "stalled-documents", "label": { "fr": "Repérer les dossiers qui n'avancent plus", "en": "Spot documents that have stopped moving" } },
+        { "id": "find-information", "label": { "fr": "Retrouver une information dans mes données", "en": "Find information in my data" } },
+        { "id": "reconcile-sources", "label": { "fr": "Rapprocher plusieurs sources", "en": "Reconcile several sources" } }
+      ],
+      "asked": { "fr": "Que voulez-vous obtenir ?", "en": "What do you want to achieve?" }
+    },
+    {
+      "id": "has-status",
+      "kind": "yes-no-unknown",
+      "asked": { "fr": "Vos documents portent-ils un statut (en cours, terminé…) ?", "en": "Do your documents carry a status (in progress, done…)?" }
+    },
+    {
+      "id": "has-stable-id",
+      "kind": "yes-no-unknown",
+      "asked": { "fr": "Chaque document a-t-il un identifiant qui ne change pas ?", "en": "Does each document have an identifier that never changes?" }
+    }
+  ],
+  "rules": [
+    {
+      "id": "stalled-documents",
+      "version": 1,
+      "when": { "answer": "goal", "is": "stalled-documents" },
+      "meaning": {
+        "fr": {
+          "title": "Surveiller les documents qui n'avancent plus",
+          "says": "lumnik peut déclarer le cycle de vie d'une colonne de statut et alerter quand un document reste dans le même état au-delà d'un seuil.",
+          "does-not-say": [
+            "L'immobilité est mesurée depuis la première observation par lumnik, jamais depuis la date d'entrée dans votre ERP.",
+            "Un document sans identifiant n'est pas suivi.",
+            "La surveillance porte sur les données d'une source telles qu'elles sont reçues, pas sur une fiche fusionnée de plusieurs sources."
+          ]
+        },
+        "en": {
+          "title": "Watch documents that have stopped moving",
+          "says": "lumnik can declare the lifecycle of a status column and alert when a document stays in the same state beyond a threshold.",
+          "does-not-say": [
+            "Stillness is measured from lumnik's first observation, never from the date the document entered your ERP.",
+            "A document without an identifier is not followed.",
+            "Monitoring applies to one source's data as received, not to a record merged from several sources."
+          ]
+        }
+      },
+      "proposes": { "kind": "Workflow", "uses": ["spec.on.table", "spec.on.column", "spec.on.key", "spec.dormancy.after"] },
+      "grounds": {
+        "doc": { "page": "docs/apps/workflows.md", "anchor": "dormancy-the-memory-of-the-breathing" },
+        "behaviour": "lumnik-hub/src/test/java/io/lumnik/hub/workflow/WorkflowDormancySweepIT.java"
+      },
+      "conditions": [
+        {
+          "needs": "status-column-exists",
+          "asked-by": "has-status",
+          "label": { "fr": "Une colonne de statut existe", "en": "A status column exists" },
+          "verifier": "workflow-data-truth",
+          "target": "the document table and its status column, designated by the integrator",
+          "confirmed-when": "a workflow apply report for a Workflow whose spec.on.table and spec.on.column are exactly the designated table and column, with tableMissing false and checkUnavailable false",
+          "refuted-when": "a workflow apply report for that same binding, with tableMissing false and an unavailableReason carrying SQLSTATE 42703 (never the bare checkUnavailable flag)"
+        },
+        {
+          "needs": "status-column-is-lifecycle",
+          "asked-by": "has-status",
+          "label": { "fr": "Cette colonne décrit le cycle de vie du document", "en": "That column describes the document's lifecycle" },
+          "verifier": "none",
+          "target": "the designated status column",
+          "property": "existence is provable; business meaning is not — an integrator attestation, recorded with its origin"
+        },
+        {
+          "needs": "key-column-exists",
+          "asked-by": "has-stable-id",
+          "label": { "fr": "Une colonne d'identifiant existe", "en": "An identifier column exists" },
+          "verifier": "workflow-data-truth",
+          "target": "the key column (spec.on.key), designated by the integrator",
+          "confirmed-when": "a workflow apply report for a Workflow whose spec.on.table is the designated table and whose spec.on.key is exactly the designated key column, with tableMissing false, checkUnavailable false and keyColumnMissing false",
+          "refuted-when": "a workflow apply report for that same binding, with tableMissing false and keyColumnMissing true"
+        },
+        {
+          "needs": "stable-document-identity",
+          "asked-by": "has-stable-id",
+          "label": { "fr": "L'identifiant désigne durablement chaque document", "en": "The identifier durably designates each document" },
+          "verifier": "none",
+          "target": "the designated key column",
+          "note": {
+            "fr": "L'intégrateur doit établir que la clé identifie durablement chaque document suivi. Le contrôle actuel ne vérifie pas cette garantie.",
+            "en": "The integrator must establish that the key durably identifies each tracked document. The current check does not verify this guarantee."
+          }
+        },
+        {
+          "needs": "dormancy-target-accepted",
+          "label": { "fr": "La cible choisie est acceptée par la validation de la surveillance", "en": "The chosen target is accepted by the monitoring validation" },
+          "verifier": "workflow-apply-door",
+          "target": "the designated spec.on.table",
+          "property": "the target passes the dormancy validation — nothing about its existence or physical nature",
+          "confirmed-when": "an earlier human apply was accepted (200) for a Workflow declaring spec.dormancy with spec.on.table exactly the designated target",
+          "refuted-when": "an earlier human apply was refused with 'spec.dormancy cannot be declared on a fused entity view' for that exact target"
+        }
+      ]
+    }
+  ]
+}

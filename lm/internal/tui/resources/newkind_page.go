@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -268,9 +269,11 @@ func (n *NewKind) validateOrApply(buf string) (issues string, note string, err e
 			return newkind.FormatIssues([]newkind.Issue{{Path: "apply", Message: err.Error()}}, nil), "", nil
 		}
 	case "app":
-		if _, err := n.client.AppApply([]byte(buf)); err != nil {
+		resp, err := n.client.AppApply([]byte(buf))
+		if err != nil {
 			return newkind.FormatIssues([]newkind.Issue{{Path: "apply", Message: err.Error()}}, nil), "", nil
 		}
+		note = appApplyNote(resp)
 	default:
 		msg := "missing top-level kind — expected Connector, Entity, App, Process, or Workflow"
 		if kindVal != "" {
@@ -279,6 +282,18 @@ func (n *NewKind) validateOrApply(buf string) (issues string, note string, err e
 		return newkind.FormatIssues([]newkind.Issue{{Path: "kind", Message: msg}}, nil), "", nil
 	}
 	return "", note, nil
+}
+
+// appApplyNote is the toast's note for an applied kind:App: the hub keeps a declared tab it does not
+// offer and answers with a warning, which this surface used to drop with the whole response.
+func appApplyNote(resp []byte) string {
+	var r struct {
+		Warnings []client.ValidationError `json:"warnings"`
+	}
+	if json.Unmarshal(resp, &r) != nil {
+		return ""
+	}
+	return applyNote(r.Warnings)
 }
 
 // applyNote is what the toast says beyond "applied." — the paths the hub advised on, not their

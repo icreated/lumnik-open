@@ -8,8 +8,10 @@ three facts:
 - **Nothing purges the ingested data.** The source mirror (`connector.t_*`), the RAG corpus
   (`rag.chunk`) and the run history grow until a connector is deleted (which purges its
   tables) or you clean up manually — [no retention policy exists](../security/gdpr.md#where-personal-data-can-live).
-- **The one automatic purge** is the event outbox: daily at 04:30, 30-day window
-  (`lumnik.events.retention-days`), never past the slowest consumer.
+- **Three automatic purges** bound the rest: the event outbox (daily at 04:30, 30-day window,
+  `lumnik.events.retention-days`, never past the slowest consumer), the audit trail (04:45, 365 days,
+  `LUMNIK_AUDIT_RETENTION_DAYS`) and the webhook delivery journal (05:00, 90 days,
+  `LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS`) — payloads and receiver responses included.
 - **No disk gauge ships**: `/q/metrics` carries JVM/HTTP/pool, not volume usage
   ([observability](observability.md)) — PostgreSQL disk supervision is yours, sized from
   your real source volumes. No measured growth multiplier exists yet (mirror ≈ the

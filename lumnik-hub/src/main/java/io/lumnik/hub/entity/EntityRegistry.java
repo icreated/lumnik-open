@@ -10,6 +10,7 @@ import jakarta.inject.Inject;
 
 import java.sql.Array;
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -99,17 +100,32 @@ public class EntityRegistry {
    * <p>An empty list is a real answer (a scopeless entity), distinct from an absent row.
    */
   public Optional<List<String>> storedScopes(String name) {
+    return stored(name).map(Stored::scopes);
+  }
+
+  /** One entity as stored right now: its exact YAML (a version other writes can bind to) and scopes. */
+  public record Stored(String yaml, List<String> scopes) {}
+
+  /**
+   * The row itself — the same cold-path read as {@link #storedScopes}, for a door that must decide on
+   * the stored definition rather than on this instance's copy (#669: a SearchIndex apply validates
+   * columns and scopes against it, then binds its write to {@code yaml}).
+   */
+  public Optional<Stored> stored(String name) {
     if (name == null) return Optional.empty();
-    return Jdbc.queryOne(adminDsInstance.get(), "EntityRegistry.storedScopes",
-        "SELECT scopes FROM connector.entity_manifest WHERE name = ?",
+    return Jdbc.queryOne(adminDsInstance.get(), "EntityRegistry.stored",
+        "SELECT yaml_text, scopes FROM connector.entity_manifest WHERE name = ?",
         ps -> ps.setString(1, name.toLowerCase(Locale.ROOT)),
-        rs -> {
-          Array arr = rs.getArray(1);
-          if (arr == null) return List.of();
-          // Arrays.asList, not List.of: a NULL element in the text[] would make List.of throw, and
-          // a malformed row must be REFUSED (allowsAll sees a tag nobody holds), not answered 500.
-          return Arrays.asList((String[]) arr.getArray());
-        });
+        rs -> new Stored(rs.getString(1), scopes(rs.getArray(2))));
+  }
+
+  /**
+   * A {@code text[]} of scope tags as a list. Arrays.asList, not List.of: a NULL element in the text[]
+   * would make List.of throw, and a malformed row must be REFUSED (allowsAll sees a tag nobody holds),
+   * not answered 500.
+   */
+  public static List<String> scopes(Array arr) throws SQLException {
+    return arr == null ? List.of() : Arrays.asList((String[]) arr.getArray());
   }
 
   /** Drop a manifest from the in-memory map (its row is removed from the DB by the compiler). */

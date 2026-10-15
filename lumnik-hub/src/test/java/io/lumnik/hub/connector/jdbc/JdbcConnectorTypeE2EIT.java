@@ -2,9 +2,8 @@ package io.lumnik.hub.connector.jdbc;
 
 import io.lumnik.hub.connector.api.types.TriggerMode;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
-import io.lumnik.hub.connector.jdbc.dialect.JdbcDialect;
 import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
-import io.lumnik.hub.connector.jdbc.dialect.PostgresDialect;
+import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -24,13 +23,8 @@ class JdbcConnectorTypeE2EIT {
   private JdbcConnectorType type;
 
   @BeforeEach
-  @SuppressWarnings("unchecked")
   void setup() throws Exception {
-    PostgresDialect dialect = new PostgresDialect();
-    JdbcDialectRegistry dialectRegistry = new JdbcDialectRegistry();
-    Field byId = JdbcDialectRegistry.class.getDeclaredField("byId");
-    byId.setAccessible(true);
-    ((Map<String, JdbcDialect>) byId.get(dialectRegistry)).put(dialect.id(), dialect);
+    JdbcDialectRegistry dialectRegistry = JdbcDialectRegistry.of(List.of(new PostgresDialect()));
 
     HikariPoolRegistry poolRegistry = new HikariPoolRegistry();
 

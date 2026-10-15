@@ -1,11 +1,14 @@
 package io.lumnik.hub.connector.csv;
 
+import io.lumnik.hub.connector.api.types.ConnectorContext;
+import io.lumnik.hub.connector.runtime.OwnedRunScope;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
 import io.lumnik.hub.connector.transport.AfterProcessAction;
 import io.lumnik.hub.connector.transport.FileDescriptor;
 import io.lumnik.hub.connector.transport.FileSource;
 import io.lumnik.hub.connector.transport.FileSourceRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
@@ -15,6 +18,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -29,6 +33,17 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class FileSourceCursorReaderArchiveTest {
 
+    private OwnedRunScope scope = new OwnedRunScope("test");
+
+    @AfterEach
+    void closeRunScope() {
+        scope.close();
+    }
+
+    private ConnectorContext ctx() {
+        return ReaderTestContexts.of(scope);
+    }
+
     private static final Instant T1 = Instant.parse("2026-07-25T10:00:00Z");
     private static final Instant T2 = Instant.parse("2026-07-25T10:05:00Z");
 
@@ -38,6 +53,9 @@ class FileSourceCursorReaderArchiveTest {
 
         @Override public Stream<FileDescriptor> listSince(Instant cursor) {
             return files.stream().filter(f -> !f.lastModified().isBefore(cursor));
+        }
+        @Override public Optional<FileDescriptor> stat(String path) {
+            return files.stream().filter(f -> f.path().equals(path)).findFirst();
         }
         @Override public InputStream open(FileDescriptor file) {
             return new ByteArrayInputStream("id,name\n1,a\n".getBytes(StandardCharsets.UTF_8));
@@ -70,7 +88,7 @@ class FileSourceCursorReaderArchiveTest {
 
         // read #1: returns a.csv's rows — the file must NOT be archived yet (its chunk
         // transaction has not committed; a crash here must leave the file in place).
-        ReadResult<Map<String, Object>> r1 = newReader().read(500, ConnectorCursor.empty(), null);
+        ReadResult<Map<String, Object>> r1 = newReader().read(500, ConnectorCursor.empty(), ctx());
         assertThat(r1).isInstanceOf(ReadResult.HasMore.class);
         assertThat(source.marked)
             .as("a file must never be archived inside the read() that first returns its rows")
@@ -79,13 +97,13 @@ class FileSourceCursorReaderArchiveTest {
         // read #2: the persisted cursor now proves a.csv's chunk committed → archive it,
         // then read b.csv (not archived yet).
         ConnectorCursor c1 = ((ReadResult.HasMore<Map<String, Object>>) r1).nextCursor();
-        ReadResult<Map<String, Object>> r2 = newReader().read(500, c1, null);
+        ReadResult<Map<String, Object>> r2 = newReader().read(500, c1, ctx());
         assertThat(source.marked).containsExactly("/in/a.csv");
         assertThat(r2).isInstanceOf(ReadResult.HasMore.class);
 
         // read #3: b.csv's commit is proven by the cursor → archived; nothing new → EOS.
         ConnectorCursor c2 = ((ReadResult.HasMore<Map<String, Object>>) r2).nextCursor();
-        ReadResult<Map<String, Object>> r3 = newReader().read(500, c2, null);
+        ReadResult<Map<String, Object>> r3 = newReader().read(500, c2, ctx());
         assertThat(source.marked).containsExactly("/in/a.csv", "/in/b.csv");
         assertThat(r3).isInstanceOf(ReadResult.EndOfStream.class);
     }
@@ -99,9 +117,9 @@ class FileSourceCursorReaderArchiveTest {
             "parser", Map.of("has_header", true));
         var overrides = CsvFileConnectorType.buildParserOverrides(Map.of("has_header", true));
 
-        var r1 = new FileSourceCursorReader(config, overrides, registry).read(500, ConnectorCursor.empty(), null);
+        var r1 = new FileSourceCursorReader(config, overrides, registry).read(500, ConnectorCursor.empty(), ctx());
         var c1 = ((ReadResult.HasMore<Map<String, Object>>) r1).nextCursor();
-        new FileSourceCursorReader(config, overrides, registry).read(500, c1, null);
+        new FileSourceCursorReader(config, overrides, registry).read(500, c1, ctx());
 
         assertThat(source.marked).isEmpty();
     }

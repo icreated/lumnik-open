@@ -202,19 +202,8 @@ public class MappingEngine {
     return transformAndWrite(spec, input, tenantId, runId, endOfStream, connectorId, tags, Map.of());
   }
 
-  /** @param sourceTypeHints source-declared column types, forwarded to the writer for DDL typing. */
-  public MappingOutcome transformAndWrite(MappingSpec spec, List<Map<String, Object>> input,
-                                Long tenantId, UUID runId, boolean endOfStream,
-                                UUID connectorId, List<String> tags,
-                                Map<String, String> sourceTypeHints) {
-    return transformAndWrite(spec, input, tenantId, runId, endOfStream, connectorId, tags, sourceTypeHints, null);
-  }
-
   /**
    * @param sourceTypeHints source-declared column types, forwarded to the writer for DDL typing.
-   * @param preparedVectors row_hash → vector computed ahead of this transaction by
-   *                        {@link #prepareEmbeddings}; {@code null} means no prepare phase ran,
-   *                        so the RAG target embeds inline — the original, unchanged behaviour.
    * @return the rows this transform dropped (empty when every source row was written) — the
    *         mapping tier's honest count, source of {@code WriteOutcome.PartialWrite} — paired
    *         with how many cells the pipeline's cell hooks nulled because they could not parse
@@ -228,13 +217,46 @@ public class MappingEngine {
   public MappingOutcome transformAndWrite(MappingSpec spec, List<Map<String, Object>> input,
                                 Long tenantId, UUID runId, boolean endOfStream,
                                 UUID connectorId, List<String> tags,
-                                Map<String, String> sourceTypeHints,
-                                Map<String, float[]> preparedVectors) {
+                                Map<String, String> sourceTypeHints) {
     MappingState state = new MappingState();
     var transformed = transform(spec, input, state, endOfStream);
-    if (state.dropped().size() > input.size()) {
+    return write(spec, input.size(), transformed, state, tenantId, runId, connectorId, tags,
+        sourceTypeHints, null);
+  }
+
+  /**
+   * The {@code ItemWriter.prepare} half of a chunk, called OUTSIDE the write transaction: runs the
+   * chunk's one transform — fresh {@link MappingState}, {@code endOfStream=false} like every
+   * {@link #itemWriter} write — and, when the spec has a RAG target, renders and embeds the chunk
+   * texts ahead of time: the one network call ({@code embedAll}), no JDBC, no tenant-scoped
+   * connection. {@link #writePrepared} then writes these rows without transforming them again;
+   * {@link PreparedChunk} says why the chunk is never transformed twice.
+   */
+  public PreparedChunk prepare(MappingSpec spec, List<Map<String, Object>> input, Long tenantId, UUID runId) {
+    MappingState state = new MappingState();
+    var transformed = transform(spec, input, state, false);
+    Map<String, float[]> vectors = multiWriter.prepare(spec.targets(), transformed, tenantId, runId,
+        spec.id(), spec.version(), spec.id());
+    return new PreparedChunk(input.size(), transformed, state, vectors);
+  }
+
+  /** Writes a {@link #prepare}d chunk in the caller's transaction: {@link #transformAndWrite}'s
+   *  outcome and refusal, without its transform. */
+  public MappingOutcome writePrepared(MappingSpec spec, PreparedChunk chunk, Long tenantId, UUID runId,
+                                      UUID connectorId, List<String> tags,
+                                      Map<String, String> sourceTypeHints) {
+    return write(spec, chunk.sourceRows(), chunk.rows(), chunk.state(), tenantId, runId, connectorId,
+        tags, sourceTypeHints, chunk.vectors());
+  }
+
+  /** @param preparedVectors row_hash → vector embedded by {@link #prepare}; {@code null} embeds inline. */
+  private MappingOutcome write(MappingSpec spec, int sourceRows, List<Map<String, Object>> transformed,
+                               MappingState state, Long tenantId, UUID runId, UUID connectorId,
+                               List<String> tags, Map<String, String> sourceTypeHints,
+                               Map<String, float[]> preparedVectors) {
+    if (state.dropped().size() > sourceRows) {
       throw new MappingValidationException(
-          "mapping recorded " + state.dropped().size() + " drops for " + input.size()
+          "mapping recorded " + state.dropped().size() + " drops for " + sourceRows
               + " source rows — a hook dropped fanned fragments individually (e.g. validate-row "
               + "after split-row), which would corrupt records_out into a negative count; "
               + "refusing to write");
@@ -242,44 +264,6 @@ public class MappingEngine {
     multiWriter.write(spec.targets(), transformed, tenantId, runId,
         spec.id(), spec.version(), spec.id(), connectorId, tags, sourceTypeHints, preparedVectors);
     return new MappingOutcome(state.dropped(), state.counters().cellErrors().get());
-  }
-
-  /**
-   * Prepare-phase counterpart to {@link #transformAndWrite}, meant to be called OUTSIDE the
-   * write transaction (the {@code ItemWriter.prepare} hook). Runs the SAME transform — fresh
-   * {@link MappingState}, {@code endOfStream=false} (matching every call site's own
-   * {@code transformAndWrite} call, so the two passes agree on the row set) — purely to render
-   * the RAG target's chunk texts and embed them ahead of time. CPU-only re-work plus the one
-   * network call ({@code embedAll}); no JDBC, no tenant-scoped connection.
-   *
-   * @return a {@link PrepareOutcome} carrying row_hash → vector (empty when there is no RAG
-   *         target) alongside how many cells THIS pass's cell hooks nulled — see
-   *         {@link PrepareOutcome}'s javadoc for why that count, not the write pass's own, is the
-   *         one that must reach the run, and why this method deliberately mutates {@code input}
-   *         in place rather than working on a copy.
-   */
-  public PrepareOutcome prepareEmbeddings(MappingSpec spec, List<Map<String, Object>> input,
-                                                Long tenantId, UUID runId,
-                                                UUID connectorId, List<String> tags) {
-    // Deliberately mutates the CALLER'S row maps in place — the SAME maps
-    // ChunkExecutor.executeChunk hands to `write(...)` right afterwards — exactly like
-    // transformAndWrite does. This is NOT an oversight: `to-uuid`'s `generate: true` and
-    // `enrich-context`'s `${now}` are content-nondeterministic across separate transform passes,
-    // and RagWriter.useCachedVectors looks its prepared vector up by the TRANSFORMED row's hash
-    // (MultiTargetWriter.java buildSystemContexts). If this pass worked on a copy, it would
-    // generate a DIFFERENT uuid/timestamp into a DIFFERENT object than the write pass does right
-    // after, the two hashes would disagree, and the prepared vector would silently miss — the
-    // chunk vanishes from RAG with only a WARN log. Sharing the mutation means the value THIS
-    // pass generates is still sitting in the row when the write pass runs over the same map, so
-    // the two hashes agree. See PrepareOutcome for how the cell-error count is still made honest
-    // without copying: this pass reports its OWN count, which the caller sums with the write
-    // pass's (necessarily zero for the same cells — every cell hook starts
-    // `if (v == null) return;`).
-    MappingState state = new MappingState();
-    var transformed = transform(spec, input, state, false);
-    Map<String, float[]> vectors = multiWriter.prepare(spec.targets(), transformed, tenantId, runId,
-        spec.id(), spec.version(), spec.id());
-    return new PrepareOutcome(vectors, state.counters().cellErrors().get());
   }
 
   /**
@@ -302,30 +286,25 @@ public class MappingEngine {
 
   /**
    * Per-chunk bridge between {@code ItemWriter}'s two-phase lifecycle and
-   * {@code transformAndWrite}/{@code prepareEmbeddings}. {@code ConnectorType.writer(ctx)} is
-   * called once per chunk by {@code ChunkExecutor} (a fresh {@code Prepared} step per
+   * {@link #prepare}/{@link #writePrepared}/{@link #transformAndWrite}. {@code ConnectorType.writer(ctx)}
+   * is called once per chunk by {@code ChunkExecutor} (a fresh {@code Prepared} step per
    * {@code executeChunk}), so a fresh instance of this class is built every chunk — its
-   * {@code preparedVectors} and {@code cellErrors} fields cannot leak across chunks or tenants:
-   * there is no bean-scoped storage for a later chunk to read, the fields die with this object at
-   * the end of the chunk. {@code cellErrors} is additionally drained (zeroed) by
-   * {@link #drainCellErrors}, mirroring {@code ItemReader.drainMalformed()} on the reader side.
+   * {@code prepared} and {@code cellErrors} fields cannot leak across chunks or tenants: there is
+   * no bean-scoped storage for a later chunk to read, the fields die with this object at the end
+   * of the chunk. {@code cellErrors} is additionally drained (zeroed) by {@link #drainCellErrors},
+   * mirroring {@code ItemReader.drainMalformed()} on the reader side.
    *
-   * <p>{@code cellErrors} is counted from TWO places summed together: {@code rehearsalCellErrors}
-   * (this chunk's {@code prepare()} pass, if it ran) plus {@code write()}'s own
-   * {@code outcome.cellErrors()}. This is not double-counting — see {@link PrepareOutcome}: when
-   * {@code prepare()} ran, it shared-mutated the same row maps {@code write()} transforms again,
-   * so every nulled cell is already {@code null} by the time {@code write()}'s own cell hooks see
-   * it and their {@code if (v == null) return;} guard contributes 0 for it — the sum is exactly
-   * the rehearsal's count. When {@code prepare()} never ran (a writer used outside
-   * {@code ChunkExecutor}, or a mapping with no RAG target skipping straight past the rehearsal),
-   * {@code rehearsalCellErrors} stays at its initial 0 and the sum is {@code write()}'s own count.
+   * <p>When {@code prepare()} ran, {@code write()} lands the chunk it prepared — and refuses any
+   * other list, whose rows it would otherwise not be landing. When it did not (a writer used
+   * outside {@code ChunkExecutor}), {@code write()} transforms and writes in one step. Either way
+   * the chunk is transformed exactly once, so that transform's cell-error count is the chunk's.
    */
   private static final class MappingSpecItemWriter implements ItemWriter<Map<String, Object>> {
     private final MappingEngine engine;
     private final MappingSpec spec;
     private final Function<ConnectorContext, Map<String, String>> sourceTypeHints;
-    private Map<String, float[]> preparedVectors = Map.of();
-    private long rehearsalCellErrors;
+    private List<Map<String, Object>> preparedFor;
+    private PreparedChunk prepared;
     private long cellErrors;
 
     MappingSpecItemWriter(MappingEngine engine, MappingSpec spec,
@@ -337,18 +316,26 @@ public class MappingEngine {
 
     @Override
     public void prepare(List<Map<String, Object>> records, ConnectorContext ctx) {
-      PrepareOutcome outcome = engine.prepareEmbeddings(spec, records, ctx.tenantId(), ctx.runId(),
-          ctx.connectorId(), List.of());
-      preparedVectors = outcome.preparedVectors();
-      rehearsalCellErrors = outcome.cellErrors();
+      prepared = engine.prepare(spec, records, ctx.tenantId(), ctx.runId());
+      preparedFor = records;
     }
 
     @Override
     public WriteOutcome write(List<Map<String, Object>> items, ConnectorContext ctx) {
-      var outcome = engine.transformAndWrite(spec, items, ctx.tenantId(), ctx.runId(), /* endOfStream */ false,
-          ctx.connectorId(), List.of(), sourceTypeHints.apply(ctx), preparedVectors);
-      cellErrors += rehearsalCellErrors + outcome.cellErrors();
-      rehearsalCellErrors = 0;
+      MappingOutcome outcome;
+      if (prepared == null) {
+        outcome = engine.transformAndWrite(spec, items, ctx.tenantId(), ctx.runId(), /* endOfStream */ false,
+            ctx.connectorId(), List.of(), sourceTypeHints.apply(ctx));
+      } else {
+        if (items != preparedFor) {
+          throw new IllegalStateException("write() must be handed the records prepare() was given");
+        }
+        outcome = engine.writePrepared(spec, prepared, ctx.tenantId(), ctx.runId(), ctx.connectorId(),
+            List.of(), sourceTypeHints.apply(ctx));
+        prepared = null;
+        preparedFor = null;
+      }
+      cellErrors += outcome.cellErrors();
       var drops = outcome.dropped();
       if (drops.isEmpty()) {
         return new WriteOutcome.AllWritten(items.size());

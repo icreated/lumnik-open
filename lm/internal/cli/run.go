@@ -15,7 +15,7 @@ func runRow(r types.Run) []string {
 		shortID(r.ID), r.ConnectorLabel(), r.EndpointLabel(), r.Status,
 		fmt.Sprintf("%d", r.RecordsIn), fmt.Sprintf("%d", r.RecordsOut),
 		fmt.Sprintf("%d", r.RecordsSkipped), fmt.Sprintf("%d", r.DeadLetterCount),
-		output.HumanTime(&r.StartedAt), output.HumanTime(r.EndedAt),
+		output.HumanTime(r.StartedAt), output.HumanTime(r.EndedAt),
 	}
 }
 
@@ -129,7 +129,14 @@ func newRunCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := c.RunCancel(id); err != nil {
+			status, err := c.RunCancel(id)
+			if err != nil {
+				return err
+			}
+			if status == "cancelled" {
+				// A queued run was ended on the spot: there is no chunk to wait for.
+				_, err = fmt.Fprintf(cmd.ErrOrStderr(),
+					"• cancelled — the run never started; re-read with: lm run get %s\n", id)
 				return err
 			}
 			// The 202 is a request recorded, not a run stopped — the run ends after the

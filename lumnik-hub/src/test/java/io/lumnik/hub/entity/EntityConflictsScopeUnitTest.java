@@ -24,7 +24,7 @@ class EntityConflictsScopeUnitTest {
   @Test
   void bound_user_aggregate_skips_non_granted_entities_without_touching_the_db() {
     EntityRegistry registry = new EntityRegistry();
-    registry.put(new EntityManifest("Entity", "Stock", null, List.of("sku"), List.of(), List.of("magasin"), null, null));
+    registry.put(new EntityManifest("Entity", "Stock", null, List.of("sku"), List.of(), List.of("magasin"), null, null, null));
     CurrentRolesHolder.set(Set.of("lm_user", "scope:ventes")); // bound, but NOT scope:magasin
 
     EntityConflictsResource res = new EntityConflictsResource();

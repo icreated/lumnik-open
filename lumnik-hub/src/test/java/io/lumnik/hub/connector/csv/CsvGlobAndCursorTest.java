@@ -47,14 +47,14 @@ class CsvGlobAndCursorTest {
 
     // chunk of 2: b.csv is mid-file, the cursor persists at (b.csv, 2 events)
     var r1 = new CsvFileConnectorType.CsvGlobCursorReader(glob, overrides)
-        .read(2, ConnectorCursor.empty(), null);
+        .read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
     assertThat(r1).isInstanceOf(ReadResult.HasMore.class);
     var c1 = ((ReadResult.HasMore<?>) r1).nextCursor();
 
     // a.csv arrives later but sorts BEFORE the cursor file
     Files.writeString(dir.resolve("a.csv"), "id,name\n9,never-read\n");
 
-    var r2 = new CsvFileConnectorType.CsvGlobCursorReader(glob, overrides).read(500, c1, null);
+    var r2 = new CsvFileConnectorType.CsvGlobCursorReader(glob, overrides).read(500, c1, ReaderTestContexts.newRun());
     assertThat(r2).isInstanceOf(ReadResult.EndOfStream.class);
     List<?> rows = ((ReadResult.EndOfStream<?>) r2).records();
     List<Object> names = rows.stream().map(r -> (Object) ((Map<?, ?>) r).get("name")).toList();

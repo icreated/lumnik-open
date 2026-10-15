@@ -55,7 +55,12 @@ func newRagCmd() *cobra.Command {
 			if format, _ := cmd.Flags().GetString("output"); format != "table" {
 				return output.PrintObject(cmd.OutOrStdout(), format, st)
 			}
-			cmd.Printf("corpus_size: %d\nlast_reindex: %s\n", st.CorpusSize, st.LastReindex)
+			indexedAt := "-"
+			if st.IndexedAt != nil {
+				indexedAt = *st.IndexedAt
+			}
+			cmd.Printf("indexed: %t\nchunks: %d\nindexed_at: %s\nprovider: %s\nembedding_model: %s\n",
+				st.Indexed, st.Chunks, indexedAt, st.Provider, st.EmbeddingModel)
 			return nil
 		},
 	})

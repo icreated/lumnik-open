@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -21,4 +22,22 @@ func humanizeAge(t, now time.Time) string {
 	default:
 		return fmt.Sprintf("%dj", int(d.Hours()/24))
 	}
+}
+
+// optInt renders a nullable count; absent stays blank.
+func optInt(v *int64) string {
+	if v == nil {
+		return ""
+	}
+	return strconv.FormatInt(*v, 10)
+}
+
+// optStr renders a nullable string (e.g. SearchIndexStatus.LiveGeneration when no projection-state
+// row exists yet); absent stays blank rather than the zero value's own empty string, which reads
+// identically to a genuinely empty one (code review finding).
+func optStr(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }

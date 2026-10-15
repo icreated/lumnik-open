@@ -1,0 +1,182 @@
+# #704 labelled relevance corpus for direct search (IndexedSearchPort).
+#
+# schemaVersion bumps on any structural change to this format; seed documents corpus stability
+# even though the data here is entirely declarative (no generator). Row and query ids are globally
+# unique and human-readable. YAML order carries no meaning.
+#
+# Judgments are graded relevance, not a full expected ranking:
+#   3 = ideal result — directly answers the query's intent, belongs at the top
+#   2 = relevant — clearly useful, but secondary
+#   1 = marginal — a plausible or contextual link, acceptable far down the ranking
+#   (absent = 0, implicitly irrelevant; an explicit 0 documents a notable confusion)
+#
+# recall@k treats grade >= 2 as "relevant"; nDCG uses all four grades with gain 2^grade - 1.
+#
+# Tags in use: exact-token, identifier, typo, accent, transliteration, abbreviation, prefix,
+# cross-entity, company-name. Exact-token/identifier cases are designed to be reused as one half
+# of #675's RAG corpus without duplication.
+schemaVersion: 1
+seed: 704
+entities:
+  - name: customer
+    rows:
+      - id: customer-de-001
+        tenantId: 1
+        fields:
+          name: Müller GmbH
+          customerCode: DE-0042
+          city: Köln
+      - id: customer-de-002
+        tenantId: 1
+        fields:
+          name: Schmidt & Bauer GmbH
+          customerCode: DE-0056
+          city: Berlin
+      - id: customer-fr-001
+        tenantId: 1
+        fields:
+          name: Société Générale du Nord
+          customerCode: FR-0107
+          city: Lyon
+      - id: customer-fr-002
+        tenantId: 1
+        fields:
+          name: Dupont SARL
+          customerCode: FR-0231
+          city: Paris
+      - id: customer-fr-003
+        tenantId: 2
+        fields:
+          name: Dupont SARL
+          customerCode: FR-0231-T2
+          city: Marseille
+      - id: customer-en-001
+        tenantId: 1
+        fields:
+          name: Acme Industries Ltd
+          customerCode: EN-0088
+          city: London
+      - id: customer-en-002
+        tenantId: 1
+        fields:
+          name: Northwind Traders
+          customerCode: EN-0099
+          city: Manchester
+  - name: order
+    rows:
+      - id: order-001
+        tenantId: 1
+        fields:
+          reference: ORD-DE-0042-1
+          customerCode: DE-0042
+          status: shipped
+      - id: order-002
+        tenantId: 1
+        fields:
+          reference: ORD-FR-0107-1
+          customerCode: FR-0107
+          status: pending
+queries:
+  - id: de-transliteration-mueller
+    language: de
+    text: Mueller
+    tenantId: 1
+    allowedEntities: [customer]
+    tags: [transliteration, accent, company-name]
+    judgments:
+      - hit: customer-de-001
+        relevance: 3
+  - id: de-transliteration-muller
+    language: de
+    text: Muller
+    tenantId: 1
+    allowedEntities: [customer]
+    tags: [transliteration, accent, company-name]
+    judgments:
+      - hit: customer-de-001
+        relevance: 3
+  - id: fr-typo-dupont
+    language: fr
+    text: Dupnot SARL
+    tenantId: 1
+    allowedEntities: [customer]
+    tags: [typo, company-name]
+    judgments:
+      - hit: customer-fr-002
+        relevance: 3
+  - id: fr-abbreviation-societe
+    language: fr
+    text: Sté Générale
+    tenantId: 1
+    allowedEntities: [customer]
+    tags: [abbreviation, company-name]
+    judgments:
+      - hit: customer-fr-001
+        relevance: 3
+  - id: de-abbreviation-gmbh
+    language: de
+    text: Schmidt Bauer GmbH
+    tenantId: 1
+    allowedEntities: [customer]
+    tags: [abbreviation, company-name]
+    judgments:
+      - hit: customer-de-002
+        relevance: 3
+  - id: exact-code-de-0042
+    language: de
+    text: DE-0042
+    tenantId: 1
+    allowedEntities: [customer]
+    tags: [exact-token, identifier]
+    judgments:
+      - hit: customer-de-001
+        relevance: 3
+  - id: en-prefix-acme
+    language: en
+    text: Acme
+    tenantId: 1
+    allowedEntities: [customer]
+    tags: [prefix, company-name]
+    judgments:
+      - hit: customer-en-001
+        relevance: 3
+  - id: cross-entity-order-by-code
+    language: en
+    text: DE-0042
+    tenantId: 1
+    allowedEntities: [customer, order]
+    tags: [cross-entity, identifier]
+    judgments:
+      - hit: customer-de-001
+        relevance: 3
+      - hit: order-001
+        relevance: 2
+  - id: de-accent-koln
+    language: de
+    text: Koln
+    tenantId: 1
+    allowedEntities: [customer]
+    tags: [accent]
+    judgments:
+      - hit: customer-de-001
+        relevance: 2
+  - id: fr-tenant-isolated-dupont
+    language: fr
+    text: Dupont SARL
+    tenantId: 2
+    allowedEntities: [customer]
+    tags: [typo, company-name, cross-entity]
+    judgments:
+      - hit: customer-fr-003
+        relevance: 3
+  - id: en-marginal-northwind-ltd
+    language: en
+    text: Northwind Ltd
+    tenantId: 1
+    allowedEntities: [customer]
+    tags: [prefix, company-name]
+    judgments:
+      - hit: customer-en-002
+        relevance: 2
+      - hit: customer-en-001
+        relevance: 1

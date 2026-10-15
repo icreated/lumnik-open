@@ -1,0 +1,10 @@
+package io.lumnik.testkit.search.contract;
+
+public enum HubLaneDimension {
+    ISOLATION_END_TO_END,
+    ALLOWLIST_ENFORCEMENT,
+    CHANGE_FEED_TRIGGERS,
+    SCOPE_CHANGE_EFFECTIVE_NEXT_QUERY,
+    REBUILD_WHILE_READS_CONTINUE,
+    STALE_CANONICAL_ROWS
+}

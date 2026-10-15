@@ -124,13 +124,43 @@ class ProcessConditionTest {
     }
 
     @Test
-    void scientificMagnitudeNativeNumbersAreIncomparable_matchingTheSqlGuard() {
-        List<ViewFilter> over100 = List.of(ViewFilter.parse("amount>100"));
-        // a native Double whose toString() is scientific ("1.0E20") is excluded in-memory just as
-        // the SQL NUMERIC_SHAPE guard excludes the text "1e20" — the two worlds stay consistent
-        assertThat(ProcessRuleEvaluator.matches(Map.of("amount", 1.0e20), over100)).isFalse();
-        // a plain-form magnitude still compares (BigDecimal from a numeric column, plain toString)
-        assertThat(ProcessRuleEvaluator.matches(Map.of("amount", new BigDecimal("150")), over100)).isTrue();
+    void aNativeNumberIsComparedAsANumber_whateverItsJavaTextLooksLike() {
+        // #795: Double.toString() is scientific for small and large magnitudes (2.0E-5, 1.0E20). A native
+        // Number has no dirty form, so it is compared by value; the strict text shape is for Strings only.
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", 0.00002), List.of(ViewFilter.parse("x>1e-5")))).isTrue();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", 0.00002), List.of(ViewFilter.parse("x>0.00003")))).isFalse();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", 1.0e20), List.of(ViewFilter.parse("x>100")))).isTrue();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", 1.0e20), List.of(ViewFilter.parse("x<1e21")))).isTrue();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", 2.0e-5f), List.of(ViewFilter.parse("x>=0.00002")))).isTrue();   // Float
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", new BigDecimal("1E+3")), List.of(ViewFilter.parse("x>999")))).isTrue();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", new BigDecimal("150")), List.of(ViewFilter.parse("x>100")))).isTrue();
+    }
+
+    @Test
+    void aScientificStringStaysIncomparable_andNonFiniteNumbersToo() {
+        // the strict text shape still guards STRING values (a dirty CSV cell must not match)
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", "1e5"), List.of(ViewFilter.parse("x>100")))).isFalse();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", "2.0E-5"), List.of(ViewFilter.parse("x>1e-6")))).isFalse();
+        for (double bad : new double[] {Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY})
+            assertThat(ProcessRuleEvaluator.matches(Map.of("x", bad), List.of(ViewFilter.parse("x>=0")))).isFalse();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", Float.NaN), List.of(ViewFilter.parse("x>=0")))).isFalse();
+    }
+
+    @Test
+    void equalityOnANativeNumberIsNumeric_whenTheOperandIsANumber() {
+        // text equality made Double 5.0 never equal "5", and BigDecimal 5.00 never equal "5"
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", 5.0), List.of(ViewFilter.parse("x=5")))).isTrue();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", new BigDecimal("5.00")), List.of(ViewFilter.parse("x=5")))).isTrue();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", 5), List.of(ViewFilter.parse("x=5")))).isTrue();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", 0.00002), List.of(ViewFilter.parse("x=0.00002")))).isTrue();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", 1.0e-5), List.of(ViewFilter.parse("x=1e-5")))).isTrue();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", 0.1f), List.of(ViewFilter.parse("x=0.1")))).isTrue();   // Float: its shortest text, not its binary expansion
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", 5.5), List.of(ViewFilter.parse("x=5")))).isFalse();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", Double.NaN), List.of(ViewFilter.parse("x=5")))).isFalse();
+        // a String is still an exact text comparison, and a non-numeric operand never turns a Number numeric
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", "5.0"), List.of(ViewFilter.parse("x=5")))).isFalse();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", "GOLD"), List.of(ViewFilter.parse("x=GOLD")))).isTrue();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", 5), List.of(ViewFilter.parse("x=abc")))).isFalse();
     }
 
     @Test
@@ -156,5 +186,15 @@ class ProcessConditionTest {
         assertThatThrownBy(() -> ProcessConditionResolver.resolve(List.of("name='Marie'"), table))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("name=Marie");
+    }
+
+    @Test
+    void aScientificOperandEvaluatesLikeItsPlainForm() {
+        // #792: the shared operand grammar accepts 1e-5; #795: a native Double 0.00002 (text 2.0E-5) is compared by value
+        List<ViewFilter> gt = List.of(ViewFilter.parse("x>1e-5"));
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", 0.00002), gt)).isTrue();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", new BigDecimal("0.00002")), gt)).isTrue();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", new BigDecimal("0.000001")), gt)).isFalse();
+        assertThat(ProcessRuleEvaluator.matches(Map.of("x", "5"), List.of(ViewFilter.parse("x<6.022e23")))).isTrue();
     }
 }

@@ -67,7 +67,18 @@ class ViewScopeBindingUnitTest {
   void render_foreign_scope_is_403_for_a_bound_user() {
     bindTo("stock");
     ViewRenderResource res = new ViewRenderResource();   // no deps: the gate must fire before the store
-    Response r = res.render(List.of(), CLIENTS_VIEW);
+    Response r = res.render(List.of(), null, null, CLIENTS_VIEW);
+    assertThat(r.getStatus()).isEqualTo(403);
+    assertThat(errorOf(r)).isEqualTo("scope not granted");
+  }
+
+  @Test
+  void render_foreign_scope_is_403_even_with_a_cursor_in_hand() {
+    // A cursor authorizes nothing: the scope gate fires before the cursor is even opened, so a
+    // valid-looking (or garbage) token neither bypasses it nor changes its answer.
+    bindTo("stock");
+    ViewRenderResource res = new ViewRenderResource();   // no deps: neither store nor cursors are reached
+    Response r = res.render(List.of(), 50, "any-token", CLIENTS_VIEW);
     assertThat(r.getStatus()).isEqualTo(403);
     assertThat(errorOf(r)).isEqualTo("scope not granted");
   }
@@ -77,7 +88,7 @@ class ViewScopeBindingUnitTest {
     bindTo("clients");
     ViewRenderResource res = new ViewRenderResource();
     res.cards = emptyStore;
-    Response r = res.render(List.of(), CLIENTS_VIEW);
+    Response r = res.render(List.of(), null, null, CLIENTS_VIEW);
     assertThat(r.getStatus()).isEqualTo(404);            // honest "no schema" — the gate let it through
   }
 
@@ -88,7 +99,7 @@ class ViewScopeBindingUnitTest {
     bindTo("clients");
     ViewRenderResource res = new ViewRenderResource();
     res.cards = emptyStore;
-    Response r = res.render(List.of(), CLIENTS_VIEW.replace("scope: clients", "scope: \" clients \""));
+    Response r = res.render(List.of(), null, null, CLIENTS_VIEW.replace("scope: clients", "scope: \" clients \""));
     assertThat(r.getStatus()).isEqualTo(404);            // past the gate, honest no-schema
   }
 
@@ -97,7 +108,7 @@ class ViewScopeBindingUnitTest {
     CurrentRolesHolder.set(Set.of("lm_user"));
     ViewRenderResource res = new ViewRenderResource();
     res.cards = emptyStore;
-    Response r = res.render(List.of(), CLIENTS_VIEW);
+    Response r = res.render(List.of(), null, null, CLIENTS_VIEW);
     assertThat(r.getStatus()).isEqualTo(404);
   }
 

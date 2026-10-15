@@ -26,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteTable;
+import static java.util.stream.Collectors.joining;
 
 /**
  * Writes REST connector payloads into hybrid Postgres tables:
@@ -297,16 +298,29 @@ public class HybridJsonbWriter {
         cols.add("connector_id"); qs.add("?");
         cols.add("endpoint_id");  qs.add("?");
 
-        StringBuilder upd = new StringBuilder();
-        for (PromotedColumn col : spec.promote()) {
-            upd.append(qi(col.name())).append(" = EXCLUDED.").append(qi(col.name())).append(", ");
-        }
-        upd.append("row_hash = EXCLUDED.row_hash, data = EXCLUDED.data, indexed_at = now()");
+        // Every column the UPDATE copies from the incoming row, data aside (row_hash stands for it).
+        List<String> copied = new ArrayList<>();
+        copied.add(ROW_HASH);
+        for (PromotedColumn col : spec.promote()) copied.add(qi(col.name()));
+        String set      = copied.stream().map(c -> c + " = EXCLUDED." + c).collect(joining(", "));
+        String stored   = copied.stream().map(c -> "cur." + c).collect(joining(", "));
+        String incoming = copied.stream().map(c -> "EXCLUDED." + c).collect(joining(", "));
 
-        return "INSERT INTO " + fqn(spec.table()) +
+        // A row that came back unchanged is left alone (#903): a full-mode endpoint re-reads every
+        // row on every run, and an unconditional UPDATE made each one a new tuple version — a new
+        // TOAST value, index entries, a dead tuple, and the WAL for all of it. Unchanged means every
+        // column the SET writes keeps its value: row_hash stands for data (both are the payload),
+        // and the promoted columns are compared themselves, since a spec change (a column promoted
+        // later, a new transform) moves them without moving the hash. A NULL incoming hash says
+        // nothing about the payload, so it always writes. indexed_at thus marks the last change,
+        // not the last read. A skipped row is still locked, so it still logs a small lock record.
+        return "INSERT INTO " + fqn(spec.table()) + " AS cur" +
                " (" + String.join(", ", cols) + ")" +
                " VALUES (" + String.join(", ", qs) + ")" +
-               " ON CONFLICT (tenant_id, external_id) DO UPDATE SET " + upd;
+               " ON CONFLICT (tenant_id, external_id) DO UPDATE SET " + set +
+               ", data = EXCLUDED.data, indexed_at = now()" +
+               " WHERE EXCLUDED." + ROW_HASH + " IS NULL" +
+               " OR (" + stored + ") IS DISTINCT FROM (" + incoming + ")";
     }
 
     // ── Row binding ──────────────────────────────────────────────────────────

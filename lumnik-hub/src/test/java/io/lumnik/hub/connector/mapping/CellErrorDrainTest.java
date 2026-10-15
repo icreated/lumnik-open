@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.mapping;
 
+import io.lumnik.hub.connector.runtime.OwnedRunScope;
 import io.lumnik.hub.connector.api.ItemWriter;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.SyncMode;
@@ -17,6 +18,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The counter escapes the chunk (docs/superpowers/specs/2026-08-21-cell-errors-visible-design.md
@@ -26,14 +28,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * so {@code ChunkExecutor} can read it after the write, exactly the way it already drains
  * {@code ItemReader.drainMalformed()}.
  *
- * <p>The REAL cell-error count comes from the {@code prepare()} rehearsal pass, not from
- * {@code write()}: {@code prepare()} and {@code write()} deliberately transform the SAME row maps
- * (see {@link PrepareOutcome}'s javadoc — two hooks are content-nondeterministic across separate
- * passes, so the rows cannot be copied), which means by the time {@code write()}'s own cell hooks
- * run, the cells {@code prepare()} nulled are already {@code null} and every cell hook's
- * {@code if (v == null) return;} guard skips them. {@code MappingSpecItemWriter} sums
- * {@code prepare()}'s reported count with {@code write()}'s own — see the tests below for why
- * that sum is exactly right in both the prepare-ran and no-prepare cases.
+ * <p>A chunk is transformed exactly once (#888, {@link PreparedChunk}): by {@code prepare()} when
+ * {@code ChunkExecutor} ran it — {@code write()} then lands those rows — or by {@code write()}
+ * itself when it did not. The count that reaches the run is that one transform's count, in both
+ * cases; the tests below pin each.
  */
 @QuarkusTest
 class CellErrorDrainTest {
@@ -43,7 +41,7 @@ class CellErrorDrainTest {
   private static ConnectorContext ctx() {
     return new ConnectorContext(
         UUID.randomUUID(), null, null, 1L, "test", "test", Map.of(),
-        new SyncMode.FullRefresh(), null, null, null, Clock.systemUTC(), null);
+        new SyncMode.FullRefresh(), null, null, null, Clock.systemUTC(), null, new OwnedRunScope("test"));
   }
 
   @Test
@@ -99,19 +97,11 @@ class CellErrorDrainTest {
   }
 
   @Test
-  void prepare_then_write_still_counts_because_the_rehearsal_is_where_the_count_comes_from() {
+  void prepare_then_write_counts_the_transform_prepare_ran() {
     // ChunkExecutor's real sequence (executeChunk): writer.prepare(recordsRead, ctx) runs first,
-    // OUTSIDE any transaction, on the SAME list of row maps that writer.write(...) is handed
-    // afterwards — see ChunkExecutor.java:102-110 and :122-123/:141-142. This test reproduces that
-    // exact composition.
-    //
-    // prepare() DELIBERATELY shares the row maps with write() (see PrepareOutcome's javadoc: two
-    // hooks — to-uuid's generate:true, enrich-context's ${now} — are content-nondeterministic
-    // across separate transform passes, and RagWriter.useCachedVectors would silently drop a
-    // chunk whose prepare-pass and write-pass hashes disagree). So write()'s own transform sees
-    // the cell prepare() already nulled and contributes 0 for it — the count this test proves
-    // reaches drainCellErrors() is the REHEARSAL's count, reported back via PrepareOutcome and
-    // summed in MappingSpecItemWriter.write.
+    // OUTSIDE any transaction, and writer.write(...) is handed the SAME list afterwards. This test
+    // reproduces that exact composition: prepare() is where the chunk's one transform runs, so its
+    // count is the one write() must report.
     MappingSpec spec = MappingLoader.load("""
         id: cell-error-prepare-then-write
         version: 1
@@ -127,17 +117,16 @@ class CellErrorDrainTest {
 
     assertThat(outcome).isInstanceOf(WriteOutcome.AllWritten.class);
     assertThat(writer.drainCellErrors())
-        .as("the rehearsal pass (prepare()) is where the cell hooks actually run and count — "
-            + "MappingSpecItemWriter must report that count, not rely on write()'s own pass "
-            + "seeing a value to fail on")
+        .as("prepare() is where the cell hooks run and count — write() lands its rows and must "
+            + "report that count, not lose it because nothing transforms the chunk again")
         .isEqualTo(1);
   }
 
   @Test
   void write_alone_without_a_preceding_prepare_still_counts() {
     // The no-prepare path: a writer used outside ChunkExecutor's prepare phase (or a chunk with
-    // no rows to prepare) never calls prepare(), so rehearsalCellErrors stays at its initial 0 —
-    // the count must still come through entirely from write()'s own pass.
+    // no rows to prepare) never calls prepare(), so write() runs the chunk's one transform and the
+    // count comes entirely from it.
     MappingSpec spec = MappingLoader.load("""
         id: cell-error-write-alone
         version: 1
@@ -156,11 +145,8 @@ class CellErrorDrainTest {
 
   @Test
   void prepare_then_write_counts_each_failure_exactly_once_not_twice() {
-    // The risk the sum (rehearsalCellErrors + outcome.cellErrors()) introduces: if write()'s own
-    // pass did NOT see the already-nulled cells (e.g. a future change broke the shared-mutation
-    // contract), it would recompute its own cellErrors independently and the sum would DOUBLE
-    // count. Two rows, each with one unparseable cell: the rehearsal must report 2, and write()'s
-    // own contribution over the same (now-nulled) maps must be 0 — total 2, never 4.
+    // A second transform in write() would count every failure again (#888 counted a split
+    // shortfall twice). Two rows, each with one unparseable cell: 2, never 4.
     MappingSpec spec = MappingLoader.load("""
         id: cell-error-exactly-once
         version: 1
@@ -178,9 +164,8 @@ class CellErrorDrainTest {
 
     assertThat(outcome).isInstanceOf(WriteOutcome.AllWritten.class);
     assertThat(writer.drainCellErrors())
-        .as("each of the 2 unparseable cells must be counted exactly once — the rehearsal's "
-            + "count, not the rehearsal's count PLUS a redundant recount by write()'s own pass "
-            + "over the same already-nulled cells")
+        .as("each of the 2 unparseable cells must be counted exactly once — prepare()'s count, "
+            + "never that count PLUS a recount by a second transform in write()")
         .isEqualTo(2);
   }
 
@@ -212,12 +197,10 @@ class CellErrorDrainTest {
 
   @Test
   void prepare_then_write_share_the_same_generated_uuid_not_two_different_ones() {
-    // Regression guard for the deep-copy this fix's prior round introduced and then reverted:
-    // to-uuid's generate:true stamps a NEW random value on every transform call. prepare() and
-    // write() MUST transform the SAME row map, or the two passes would stamp two DIFFERENT UUIDs
-    // into two different objects — RagWriter.useCachedVectors looks its prepared vector up by
-    // the transformed row's hash, so a mismatch here means a real RAG chunk silently vanishes
-    // (warn-and-skip, no error). See PrepareOutcome's javadoc for the full reasoning.
+    // to-uuid's generate:true stamps a NEW random value on every transform call. The row write()
+    // lands must carry the value prepare() stamped — RagWriter.useCachedVectors looks its prepared
+    // vector up by the transformed row's hash, so a second stamp means a real RAG chunk silently
+    // vanishes (warn-and-skip, no error). See PreparedChunk for why nothing transforms twice.
     MappingSpec spec = MappingLoader.load("""
         id: cell-error-shared-mutation-uuid
         version: 1
@@ -237,9 +220,26 @@ class CellErrorDrainTest {
 
     assertThat(afterPrepare).isNotNull();
     assertThat(afterWrite)
-        .as("write() must transform the SAME row map prepare() did, or to-uuid's generate:true "
-            + "stamps a second, different UUID and the two passes' row hashes disagree")
+        .as("write() must land the row prepare() transformed, or to-uuid's generate:true "
+            + "stamps a second, different UUID and the two phases' row hashes disagree")
         .isEqualTo(afterPrepare);
+  }
+
+  @Test
+  void write_refuses_records_other_than_the_ones_it_prepared() {
+    // write() lands the rows prepare() transformed (#888); handed any other list it would land rows
+    // that are not the ones it was given. ChunkExecutor always hands write() the list it handed
+    // prepare(), so this is a contract, refused loudly rather than written wrongly.
+    MappingSpec spec = MappingLoader.load("""
+        id: prepared-for-another-list
+        version: 1
+        target: x
+        """);
+    ItemWriter<Map<String, Object>> writer = engine.itemWriter(spec);
+    writer.prepare(List.of(new HashMap<>(Map.of("a", "1"))), ctx());
+
+    assertThatThrownBy(() -> writer.write(List.of(new HashMap<>(Map.of("a", "2"))), ctx()))
+        .isInstanceOf(IllegalStateException.class);
   }
 
   @Test

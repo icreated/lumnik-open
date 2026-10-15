@@ -152,6 +152,50 @@ class WorkflowDataTruthIT {
     }
 
     /**
+     * The dormancy sweep skips a document whose key is NULL or blank, for good. The report counts
+     * them — with the sweep's own predicate — so an integrator can see that dormancy covers only part
+     * of the table. {@code null} (not {@code 0}) is "not measured": 0 must only ever mean a valid
+     * measure found nobody.
+     */
+    @Test
+    @Transactional
+    void rows_without_a_usable_key_are_counted_and_not_measuring_is_null_not_zero() throws Exception {
+        try (Connection c = adminDs.getConnection(); Statement s = c.createStatement()) {
+            s.execute("CREATE TABLE IF NOT EXISTS connector.t_wf_truth_keynull_it "
+                + "(id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, num TEXT, statut TEXT)");
+            s.execute("DELETE FROM connector.t_wf_truth_keynull_it");
+            // two keyed rows, then NULL, '' and whitespace-only keys; one blank-key row has no status
+            // either (it belongs to both diagnostics)
+            s.execute("INSERT INTO connector.t_wf_truth_keynull_it (tenant_id, num, statut) VALUES "
+                + "(" + TENANT + ", 'A1', 'fini'), (" + TENANT + ", 'A2', 'fini'), "
+                + "(" + TENANT + ", NULL, 'fini'), (" + TENANT + ", '', 'fini'), "
+                + "(" + TENANT + ", '  ', NULL)");
+        }
+        String table = "connector.t_wf_truth_keynull_it";
+
+        WorkflowDataTruth.Report r = truth.check(TENANT, graph(table, "statut", "num"));
+        assertThat(r.keyNullOrBlank()).isEqualTo(3L);
+        assertThat(r.nullOrBlank()).isEqualTo(1L); // independent buckets, not meant to be summed
+
+        // measured and clean is 0 — a different statement from "not measured"
+        try (Connection c = adminDs.getConnection(); Statement s = c.createStatement()) {
+            s.execute("DELETE FROM connector.t_wf_truth_keynull_it WHERE tenant_id = " + TENANT);
+            s.execute("INSERT INTO connector.t_wf_truth_keynull_it (tenant_id, num, statut) "
+                + "VALUES (" + TENANT + ", 'A1', 'fini')");
+        }
+        assertThat(truth.check(TENANT, graph(table, "statut", "num")).keyNullOrBlank()).isEqualTo(0L);
+
+        // not measured: no key declared, key column absent, table absent
+        assertThat(truth.check(TENANT, graph(table, "statut")).keyNullOrBlank()).isNull();
+        WorkflowDataTruth.Report typo = truth.check(TENANT, graph(table, "statut", "nu"));
+        assertThat(typo.keyColumnMissing()).isTrue();
+        assertThat(typo.checkUnavailable()).isFalse(); // a typo'd key stays a normal answer
+        assertThat(typo.keyNullOrBlank()).isNull();
+        assertThat(truth.check(TENANT, graph("connector.t_does_not_exist", "statut", "num"))
+            .keyNullOrBlank()).isNull();
+    }
+
+    /**
      * A table created exactly the way {@code DynamicTableWriter} creates one — quoted, so the names
      * are the source's own (see {@code docs/apps/workflows.md#names-the-source-chose}).
      *

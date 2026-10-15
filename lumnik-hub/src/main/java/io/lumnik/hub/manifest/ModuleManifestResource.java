@@ -1,5 +1,6 @@
 package io.lumnik.hub.manifest;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
@@ -17,17 +18,8 @@ public class ModuleManifestResource {
 
     @GET
     public ModulesResponse get() {
-        List<ModuleDto> modules = registry.all().stream()
-            .map(m -> new ModuleDto(
-                m.id(),
-                m.version(),
-                displayName(m),
-                m.depends() != null ? m.depends() : List.of(),
-                m.menu() != null ? m.menu() : List.of(),
-                m.permissions() != null ? m.permissions() : List.of(),
-                m.eventsPublished() != null ? m.eventsPublished() : List.of(),
-                true
-            ))
+        List<ModuleDto> modules = registry.statuses().stream()
+            .map(ModuleManifestResource::dto)
             .toList();
 
         return new ModulesResponse(
@@ -36,7 +28,24 @@ public class ModuleManifestResource {
         );
     }
 
-    private String displayName(ModuleManifest m) {
+    /** Every installed module with its verdict; a module that is off is still listed (D3). */
+    static ModuleDto dto(ModuleStatus s) {
+        ModuleManifest m = s.manifest();
+        return new ModuleDto(
+            m.id(),
+            m.version(),
+            displayName(m),
+            m.depends() != null ? m.depends() : List.of(),
+            m.menu() != null ? m.menu() : List.of(),
+            m.permissions() != null ? m.permissions() : List.of(),
+            m.eventsPublished() != null ? m.eventsPublished() : List.of(),
+            s.active(),
+            s.inactiveReason(),
+            m.tabsOrEmpty()
+        );
+    }
+
+    private static String displayName(ModuleManifest m) {
         if (m.displayName() == null) return m.id();
         return m.displayName().getOrDefault("en", m.id());
     }
@@ -53,6 +62,8 @@ public class ModuleManifestResource {
         List<ModuleManifest.ManifestMenu> menus,
         List<ModuleManifest.ManifestPermission> permissions,
         List<String> eventsPublished,
-        boolean active
+        boolean active,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String inactiveReason,
+        List<String> tabs
     ) {}
 }

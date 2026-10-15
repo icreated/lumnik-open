@@ -41,7 +41,7 @@ class SftpHostKeyVerificationIT {
             .waitingFor(Wait.forLogMessage(".*Server listening on 0\\.0\\.0\\.0.*", 1));
         sftp.start();
         port = sftp.getMappedPort(22);
-        try (var helper = new SftpFileSourceIT.TestSftpHelper("localhost", port, USER, PASS)) {
+        try (var helper = new SftpTestHelper("localhost", port, USER, PASS)) {
             helper.put("upload/a.csv", "alpha,1\n");
         }
         actualFingerprint = readHostKeyFingerprint();

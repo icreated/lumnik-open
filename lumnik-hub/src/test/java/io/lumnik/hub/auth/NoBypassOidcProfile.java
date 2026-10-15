@@ -123,12 +123,16 @@ public final class NoBypassOidcProfile implements QuarkusTestProfile {
     }
 
     /** A real, signed bearer JWT for tenant 1 carrying the given {@code groups} roles and,
-     *  when non-null, an {@code acting_as_tenant} claim (impersonation). */
-    static String token(Set<String> roles, Long actingAsTenant) {
+     *  when non-null, an {@code acting_as_tenant} claim (impersonation). Public: used across
+     *  packages, e.g. {@code io.lumnik.hub.export.EntitySnapshotDownloadResourceIT}. */
+    public static String token(Set<String> roles, Long actingAsTenant) {
         return token(roles, actingAsTenant, 1L);
     }
 
-    private static String token(Set<String> roles, Long actingAsTenant, long tenantId) {
+    /** Public: {@code io.lumnik.hub.search.contract.RestHubSearchContractDriver} (#674) needs a
+     *  signed JWT for an explicit, non-default tenant AND an explicit role set together — the two
+     *  existing public overloads only vary one of those independently. */
+    public static String token(Set<String> roles, Long actingAsTenant, long tenantId) {
         JwtClaimsBuilder claims = Jwt.claims()
             .issuer(ISSUER)
             .audience(AUDIENCE)

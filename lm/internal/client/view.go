@@ -56,13 +56,27 @@ func (c *Client) ViewRender(yaml []byte, filters []string) (*ViewResult, error) 
 	return &ViewResult{Title: wire.Title, Columns: wire.Columns, Rows: rows}, nil
 }
 
-// DetailSource is one source's value for a conflicted column.
+// DetailSource is one entry of the _conflicts ledger for a column: a source's value, or — for a
+// lookup whose key is ambiguous — one duplicate row's value. Value is nil when the ledger carries an
+// explicit null (a lookup row with nothing to say), which is NOT the empty string.
 type DetailSource struct {
-	Src   string `json:"src"`
-	Value string `json:"value"`
+	Src   string  `json:"src"`
+	Value *string `json:"value"`
 }
 
-// DetailConflict is one column where the fused sources disagreed.
+// StrPtr is the literal-friendly constructor for a present value.
+func StrPtr(s string) *string { return &s }
+
+// Display is how a ledger line shows the value: an absent one reads "(empty)", never a blank, so a
+// null cannot pass for the empty string. The real "" stays "".
+func (s DetailSource) Display() string {
+	if s.Value == nil {
+		return "(empty)"
+	}
+	return *s.Value
+}
+
+// DetailConflict is one column where the fused sources conflicted or a lookup key was ambiguous.
 type DetailConflict struct {
 	Column  string         `json:"column"`
 	Label   string         `json:"label"`
@@ -155,8 +169,9 @@ func (c *Client) ViewGet(name string) ([]byte, error) {
 // ViewApplyResult is the hub's confirmation of a validate-then-upsert into the
 // saved-view store.
 type ViewApplyResult struct {
-	Name  string `json:"name"`
-	Scope string `json:"scope"`
+	Name     string            `json:"name"`
+	Scope    string            `json:"scope"`
+	Warnings []ValidationError `json:"warnings"` // applied, and worth saying (a link target not there yet)
 }
 
 // ViewApply validates and upserts a kind:View manifest into the saved-view store.

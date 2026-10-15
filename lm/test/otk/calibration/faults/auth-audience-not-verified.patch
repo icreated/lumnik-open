@@ -1,0 +1,12 @@
+diff --git a/lumnik-hub/src/main/resources/application.properties b/lumnik-hub/src/main/resources/application.properties
+index 8256bf1b..111bf36e 100644
+--- a/lumnik-hub/src/main/resources/application.properties
++++ b/lumnik-hub/src/main/resources/application.properties
+@@ -184,7 +184,6 @@ lumnik.oidc.subject-claim=${OIDC_SUBJECT_CLAIM:sub}
+ %otkauth.lumnik.security.dev-bypass=false
+ %otkauth.quarkus.oidc.public-key=${OTK_OIDC_PUBLIC_KEY}
+ %otkauth.quarkus.oidc.token.issuer=${OTK_OIDC_ISSUER}
+-%otkauth.quarkus.oidc.token.audience=${OTK_OIDC_AUDIENCE:lumnik-backend}
+ %otkauth.quarkus.oidc.application-type=service
+ %otkauth.quarkus.oidc.roles.source=accesstoken
+ %otkauth.quarkus.oidc.roles.role-claim-path=groups

@@ -157,6 +157,10 @@ func newViewApplyCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "applied: %s (scope %s)\n", res.Name, res.Scope)
+			if len(res.Warnings) > 0 {
+				// Applied, and still worth saying something: stderr, exit 0 — as `lm app apply` does.
+				return output.FormatValidation(cmd.ErrOrStderr(), manifestLabel(file), "", &client.ValidationResult{Warnings: res.Warnings})
+			}
 			return nil
 		},
 	}
@@ -299,14 +303,14 @@ func formatDetail(out io.Writer, res *client.ViewDetailResult) {
 	if res.ConflictLedger {
 		fmt.Fprintln(out)
 		if len(res.Conflicts) == 0 {
-			fmt.Fprintln(out, "  ✓ toutes les sources concordent")
+			fmt.Fprintln(out, "  ✓ aucune ambiguïté ni divergence")
 		} else {
-			fmt.Fprintln(out, "  (!) Où les sources divergent")
+			fmt.Fprintln(out, "  (!) Ambiguïtés et divergences")
 			ctw := newPadWriter()
 			for _, cf := range res.Conflicts {
 				parts := make([]string, len(cf.Sources))
 				for i, s := range cf.Sources {
-					parts[i] = fmt.Sprintf("%s «%s»", s.Src, s.Value)
+					parts[i] = fmt.Sprintf("%s «%s»", s.Src, s.Display())
 				}
 				ctw.line("  "+cf.Label, strings.Join(parts, " · "))
 			}

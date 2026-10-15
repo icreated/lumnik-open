@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -98,4 +99,13 @@ func restoreTerminalOnSignal(tty *os.File) func() {
 		}
 	}()
 	return func() { signal.Stop(sig); close(done) }
+}
+
+// interruptible derives a context that SIGINT or SIGTERM cancels, so an in-flight request or a
+// --wait loop stops cleanly and says what state it left, instead of the process dying mid-line.
+func interruptible(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 }

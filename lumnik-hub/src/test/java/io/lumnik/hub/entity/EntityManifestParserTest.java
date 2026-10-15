@@ -1,5 +1,8 @@
 package io.lumnik.hub.entity;
 
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -268,6 +271,19 @@ class EntityManifestParserTest {
   }
 
   @Test
+  void rejects_reserved_canonical_names_the_resolved_projection_now_emits() {
+    // #618: the resolved projection exposes _entity_id/_resolution alongside every canonical
+    // column, and each source branch carries its identity value under _source_id — a manifest
+    // colliding with any of those would silently corrupt the view's own columns.
+    for (String reserved : new String[] {"_entity_id", "_resolution", "_source_id", "_handle"}) {
+      String bad = FUSED_YAML.replace("email: email", "email: " + reserved);
+      assertThatThrownBy(() -> new EntityManifestParser().parse(bad))
+          .as("canonical name '%s' must be reserved", reserved)
+          .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("reserved");
+    }
+  }
+
+  @Test
   void rejects_duplicate_canonical_within_a_source() {
     String bad = FUSED_YAML.replace("cust_name: name", "cust_name: customer_code");
     assertThatThrownBy(() -> new EntityManifestParser().parse(bad))
@@ -334,5 +350,25 @@ class EntityManifestParserTest {
           - table: t_a
             map: { code: customer_code }
         """)).isInstanceOf(IllegalArgumentException.class);
+  }
+
+  @Test
+  void canonical_columns_are_the_fused_columns_then_the_joined_ones() {
+    EntityManifest m = new EntityManifest("Entity", "Product", null, List.of("product_id"),
+        List.of(new EntityManifest.Source("t_p", new LinkedHashMap<>(
+            Map.of("pid", "product_id")))),
+        List.of(), null, Map.of(), null,
+        List.of(new EntityManifest.Join("t_c", "category_id", "cid",
+            new LinkedHashMap<>(Map.of("cname", "category_name")))));
+    assertThat(m.fusedColumns()).containsExactly("product_id");
+    assertThat(m.joinedColumns()).containsExactly("category_name");
+    assertThat(m.canonicalColumns()).containsExactly("product_id", "category_name");
+  }
+
+  @Test
+  void a_manifest_without_joins_has_the_same_canonical_and_fused_columns() {
+    EntityManifest m = new EntityManifestParser().parse(CUSTOMER_YAML);
+    assertThat(m.joins()).isEmpty();
+    assertThat(m.canonicalColumns()).isEqualTo(m.fusedColumns());
   }
 }

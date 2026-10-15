@@ -27,7 +27,7 @@ class CsvGlobCursorReaderMalformedTest {
     Files.writeString(file, "a,b,c\n1,2,3\nONLY_ONE\n7,8,9\n");
 
     var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), DEFAULTS);
-    ReadResult<Map<String, Object>> r = reader.read(500, ConnectorCursor.empty(), null);
+    ReadResult<Map<String, Object>> r = reader.read(500, ConnectorCursor.empty(), ReaderTestContexts.newRun());
 
     List<Map<String, Object>> good = recordsOf(r);
     assertThat(good).hasSize(2);
@@ -49,7 +49,7 @@ class CsvGlobCursorReaderMalformedTest {
     List<MalformedRecord> allBad = new ArrayList<>();
     ConnectorCursor cursor = ConnectorCursor.empty();
     for (int i = 0; i < 5 && cursor != null; i++) {
-      ReadResult<Map<String, Object>> r = reader.read(2, cursor, null);
+      ReadResult<Map<String, Object>> r = reader.read(2, cursor, ReaderTestContexts.newRun());
       allGood.addAll(recordsOf(r));
       allBad.addAll(reader.drainMalformed());
       cursor = nextCursorOrNull(r);
@@ -73,7 +73,7 @@ class CsvGlobCursorReaderMalformedTest {
     List<MalformedRecord> allBad = new ArrayList<>();
     ConnectorCursor cursor = ConnectorCursor.empty();
     for (int i = 0; i < 8 && cursor != null; i++) {
-      ReadResult<Map<String, Object>> r = reader.read(2, cursor, null);
+      ReadResult<Map<String, Object>> r = reader.read(2, cursor, ReaderTestContexts.newRun());
       allGood.addAll(recordsOf(r));
       allBad.addAll(reader.drainMalformed());
       cursor = nextCursorOrNull(r);
@@ -90,12 +90,26 @@ class CsvGlobCursorReaderMalformedTest {
     Files.writeString(file, "a,b\n1,1\n2,2\n");   // exactly 2 good rows, chunkSize 2
 
     var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), DEFAULTS);
-    ReadResult<Map<String, Object>> r = reader.read(2, ConnectorCursor.empty(), null);
+    ReadResult<Map<String, Object>> r = reader.read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
 
     // The chunk fills AND the file ends exactly there → EndOfStream in this read, not HasMore
     // (HasMore would force a second, wasted read that re-opens and re-parses the whole file).
     assertThat(r).isInstanceOf(ReadResult.EndOfStream.class);
     assertThat(recordsOf(r)).hasSize(2);
+  }
+
+  @Test
+  void a_file_whose_tail_is_malformed_still_ends_with_its_finished_position(@TempDir Path tmp) throws Exception {
+    Path file = tmp.resolve("tail.csv");
+    Files.writeString(file, "a,b\n1,1\n2,2\nonly-one\n");   // two good rows, then a malformed one; chunk of 2
+
+    var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), DEFAULTS);
+    var first = (ReadResult.HasMore<Map<String, Object>>) reader.read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
+    var last = (ReadResult.EndOfStream<Map<String, Object>>) reader.read(2, first.nextCursor(), ReaderTestContexts.newRun());
+
+    assertThat(last.records()).isEmpty();
+    assertThat(reader.drainMalformed()).hasSize(1);
+    assertThat(last.finalCursor().isEmpty()).as("the malformed tail was consumed, the position is saved").isFalse();
   }
 
   @SuppressWarnings("unchecked")

@@ -68,31 +68,6 @@ func TestUniquifyStatErrorDoesNotSpin(t *testing.T) {
 	}
 }
 
-// writeNew is the overwrite invariant itself: O_EXCL means even a raced or
-// mis-probed name can never silently clobber an existing file.
-func TestWriteNewRefusesExisting(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "a.yaml")
-	if err := os.WriteFile(p, []byte("precious"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeNew(p, []byte("clobber")); err == nil {
-		t.Fatal("writing over an existing file must error")
-	}
-	data, _ := os.ReadFile(p)
-	if string(data) != "precious" {
-		t.Errorf("existing content must survive, got %q", data)
-	}
-	fresh := filepath.Join(dir, "b.yaml")
-	if err := writeNew(fresh, []byte("kind: View\n")); err != nil {
-		t.Fatalf("fresh write must succeed: %v", err)
-	}
-	data, _ = os.ReadFile(fresh)
-	if string(data) != "kind: View\n" {
-		t.Errorf("fresh content = %q", data)
-	}
-}
-
 func TestPersistBuffer(t *testing.T) {
 	path, err := persistBuffer("lm-view-*.yaml", "kind: View\n")
 	if err != nil {

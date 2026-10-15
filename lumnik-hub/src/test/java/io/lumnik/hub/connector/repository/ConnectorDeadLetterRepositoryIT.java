@@ -53,6 +53,31 @@ class ConnectorDeadLetterRepositoryIT {
     }
   }
 
+  /**
+   * #892: the runs ledger counts a whole page in one query. Each run gets its own count — not the
+   * page's total — and a run with no real loss is still answered, with 0, so no caller has to
+   * remember that an absent key means zero.
+   */
+  @Test
+  void countByRuns_answers_every_run_asked_with_its_own_real_losses() throws Exception {
+    UUID[] a = seedConnectorAndRun();
+    UUID[] b = seedConnectorAndRun();
+    UUID[] c = seedConnectorAndRun();
+    var empty = JsonNodeFactory.instance.objectNode();
+
+    TenantContext.callAsSystem(() -> {
+      capture.capture(a[0], a[1], empty, new SkipReason.ValidationFailed(List.of("amount < 0")));
+      capture.capture(a[0], a[1], empty, new SkipReason.ValidationFailed(List.of("qty < 0")));
+      capture.capture(a[0], a[1], empty, new SkipReason.Duplicate("BK-1"));
+      capture.capture(c[0], c[1], empty, new SkipReason.ValidationFailed(List.of("amount < 0")));
+      capture.capture(c[0], c[1], empty, new SkipReason.PolicyExcluded("price-policy"));
+      return null;
+    });
+
+    assertEquals(Map.of(a[1], 2L, b[1], 0L, c[1], 1L), repo.countByRuns(List.of(a[1], b[1], c[1])));
+    assertEquals(Map.of(), repo.countByRuns(List.of()), "an empty page asks nothing");
+  }
+
   // ── helpers ──────────────────────────────────────────────────────────────────
 
   /** Returns [connectorId, runId] */

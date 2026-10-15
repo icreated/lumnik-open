@@ -32,7 +32,7 @@ public class BffResource {
 
     @GET
     @Path("/me")
-    @Operation(summary = "Current user context — user info, tenant, roles, and accessible modules")
+    @Operation(summary = "Current user context — user info, tenant, roles, active modules, and the tabs this hub offers")
     @Transactional
     public BffMeResponse me() {
         Long tenantId = requireTenantId();
@@ -49,7 +49,7 @@ public class BffResource {
 
         Set<String> roles = TenantContextFilter.currentRoles();
 
-        List<BffMeResponse.ModuleSummary> moduleList = manifests.all().stream()
+        List<BffMeResponse.ModuleSummary> moduleList = manifests.active().stream()
             .map(BffMeResponse.ModuleSummary::from)
             .toList();
 
@@ -61,7 +61,8 @@ public class BffResource {
             new BffMeResponse.TenantSummary(tenant.getId(), tenant.getCode(), tenant.getName()),
             roles,
             moduleList,
-            editionOf(editionMarker)
+            editionOf(editionMarker),
+            manifests.offeredTabs()
         );
     }
 

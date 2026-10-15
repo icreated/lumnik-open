@@ -19,7 +19,7 @@ export LUMNIK_URL=http://localhost:8080
 make otk
 ```
 
-`make otk` builds the binary, runs the hub-free units, then fires the declared-tier battery (all 81 corpus scenarios).
+`make otk` builds the binary, runs the hub-free units, then fires the declared-tier battery (all 182 corpus scenarios).
 
 ---
 
@@ -34,6 +34,7 @@ make otk
 | `OTK_OIDC_ISSUER` | For the **auth lane** | — | When set, the harness runs in **real-auth** mode: it mints a valid integrator JWT for the functional lanes and adversarial tokens for the auth lane. The hub must boot on the `%otkauth` profile trusting the matching public key. Without it the auth lane is **DORMANT**. |
 | `OTK_OIDC_AUDIENCE` | No | `lumnik-backend` | The `aud` the minted tokens carry (must match `%otkauth`). |
 | `OTK_KEY_FILE` | With `OTK_OIDC_ISSUER` | — | Path to the **shared** private-key PEM (written by `cmd/otkkey`) so the harness signs with the exact key the hub verifies. Absent → an ephemeral key is generated **and a warning is logged** (it will not match an external hub). |
+| `OTK_EXPORT_SFTP_HOST`, `_USER`, `_DIR`, `_FINGERPRINT`, `_PASSWORD` (`_PORT` optional, default 22) | For `export/managed/delivers` | — | A real SFTP server the export lane delivers one snapshot to. Any one missing leaves that case **DORMANT**; every other export case needs no destination. |
 
 > **Important:** the hub must run under the **non-owner app DB role** (the same role that `RlsEnforcedProfile` enforces in ITs). Owner-mode DevServices defeats the RLS checks.
 
@@ -50,9 +51,15 @@ test/otk/corpus/
   run_0001.feature  … run_0020.feature    # run lane  (adversarial source rows)
   rest_0001.feature … rest_0020.feature   # rest lane (adversarial REST manifest)
   auth_0001.feature … auth_0020.feature   # auth lane (adversarial JWT)
+  entity_0001.feature … entity_0020.feature       # entity lane (apply/read/CLI)
+  entityres_0001.feature … entityres_0020.feature # entity-resolution lane
+  process_0001.feature … process_0020.feature     # process lane (apply + inbox)
+  view_0001.feature … view_0020.feature           # view lane (render honesty + RLS)
+  view_store_smoke.feature                        # hand-written smoke: saved-view store (4 scenarios)
+  export_NNNN.feature                     # export lane: one file per case, named by its witness seed (17)
 ```
 
-81 scenarios in total. The corpus is **locked** — seeds are deterministic, so a break in CI is always replayable.
+182 scenarios in total. The corpus is **locked** — seeds are deterministic, so a break in CI is always replayable.
 
 ### Surface lanes
 
@@ -63,8 +70,33 @@ test/otk/corpus/
 | `rest` (rest_*) | REST manifest fields | as `apply` | reuses the apply probes |
 | `run` (run_*) | source CSV rows | `OTK_DB_DSN` (DORMANT otherwise) | `ReconcileCounts` (Law 1, Law 1b), `ReconcileLanded` (Law 2) |
 | `auth` (auth_*) | adversarial JWT | `OTK_OIDC_ISSUER` + `%otkauth` hub (DORMANT otherwise) | `AuthOutcome`, `CrossTenantLeak` |
+| `export` (export_*) | kind:Export manifests, one-shot downloads | `OTK_DB_DSN` (seeded `otk_customer`); scope cases also real-auth; `delivers` a real SFTP server | `SecretEcho`, `Robustness`, refused-means-not-stored, exact bytes, no partial file |
 
 The **auth lane** probes the platform API over raw HTTP (it needs the exact status code — 401 vs 403 vs 200 — which `lm` collapses into a generic exit). Each seed forges one defect (wrong-role → expect 403; expired / bad-audience / bad-issuer / tampered-sig / garbage → expect 401; cross-tenant → expect an empty result). An adversarial token that **lands** (200 with data, or foreign rows) is CRITICAL; a clean rejection or correctly-empty result is a PASS.
+
+### The export lane
+
+`export` holds the two export surfaces to their contracts through the `lm` binary, graded on
+exit status, output and the files left on disk.
+
+- **Managed** (`lm export apply|list|get|run|status`): a valid manifest round-trips; seven
+  invalid ones are refused and never stored; a run to an unreachable SFTP port (`127.0.0.1:1`)
+  ends `Failed` with failure code `publication`, and `lm` and the ledger agree on it; a URL
+  credential is masked by `lm export get`; an identity bound to another scope can neither read
+  nor run the export, and starts nothing. `managed/delivers` sends a real snapshot and expects
+  `Completed` with its receipt, so it needs the `OTK_EXPORT_SFTP_*` variables.
+- **One-shot** (`lm entity export`): the file and `-o -` hold the hub's exact bytes; an existing
+  file stays untouched; an unknown entity or a scope refusal leaves no file and no `.part`.
+- A sentinel credential is planted as a stored secret, inline in a refused manifest, and in an
+  endpoint URL. Its appearance in any `lm` output is **CRITICAL**.
+
+The committed corpus has one feature per case, each named after its witness seed. That keeps
+the declared-tier battery covering all 17 cases.
+
+The half that lives entirely in `lm` runs without a hub, in `make otk-unit`: `TestExportLocal`
+builds `lm` from the checkout and drives it against a fake hub. It covers argument refusals that
+never reach the hub, exact bytes to a file and to stdout, a collision, a truncated body, a scope
+refusal, SIGINT mid-stream (no file, no `.part`), and credential masking.
 
 ---
 

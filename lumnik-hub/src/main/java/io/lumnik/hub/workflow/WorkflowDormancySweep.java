@@ -14,6 +14,8 @@ import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -58,6 +60,9 @@ public class WorkflowDormancySweep {
         + "VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, NOW(), NOW()) "
         + "ON CONFLICT (tenant_id, dedup_key) WHERE dedup_key IS NOT NULL DO NOTHING";
 
+    /** Rows the sweep holds at a time: the hub's heap does not depend on how many documents a workflow has. */
+    private static final int PAGE = 1_000;
+
     private static final String TENANTS_SQL =
         "SELECT DISTINCT tenant_id FROM core.workflow_manifest WHERE enabled";
 
@@ -98,7 +103,7 @@ public class WorkflowDormancySweep {
 
     public void sweepNow() {
         for (long tenant : tenants()) {
-            for (WorkflowGraph g : registry.all(tenant)) {
+            for (WorkflowGraph g : registry.allParsable(tenant)) {
                 if (g.dormancy() == null || g.key() == null) continue;
                 try {
                     sweepOne(tenant, g);
@@ -171,32 +176,58 @@ public class WorkflowDormancySweep {
 
     private void sweepOne(long tenant, WorkflowGraph g) {
         Instant now = Instant.now();
-        Map<String, String> current = latestStatePerKey(tenant, g);
-        Map<String, WorkflowObservationStore.Observation> known =
-            observations.loadAll(tenant, g.name());
         Map<String, String> terminalByNorm = new LinkedHashMap<>();
         for (WorkflowGraph.StateDto s : g.states()) {
             if (s.terminal()) terminalByNorm.put(norm(s.code()), s.code());
         }
 
-        for (Map.Entry<String, String> e : current.entrySet()) {
-            // Per-DOCUMENT isolation, the project's per-row DLQ posture: the result order is
-            // deterministic, so a single poison key escaping to the per-workflow net below would
-            // abandon every document after it — the same ones, on every tick, forever.
-            try {
-                reconcileOne(tenant, g, terminalByNorm, known, e.getKey(), e.getValue(), now);
-            } catch (RuntimeException ex) {
-                LOG.warnf(ex, "dormancy: document skipped (tenant %d, workflow %s, key %s)",
-                    tenant, g.name(), e.getKey());
+        // A name of its own per sweep: a cursor that failed to close can then never collide with
+        // the next DECLARE on the same pooled connection.
+        String cursor = "lumnik_dormancy_" + Long.toHexString(System.nanoTime());
+        try (Connection c = adminDs.getConnection()) {
+            declareStream(c, cursor, tenant, g);
+            try (Statement st = c.createStatement()) {
+                int rows;
+                do {
+                    rows = 0;
+                    try (ResultSet rs = st.executeQuery("FETCH FORWARD " + PAGE + " FROM " + cursor)) {
+                        while (rs.next()) {
+                            rows++;
+                            reconcileDocument(tenant, g, terminalByNorm, rs, now);
+                        }
+                    }
+                } while (rows == PAGE);
+            } finally {
+                closeStream(c, cursor);
             }
+        } catch (SQLException e) {
+            throw new RuntimeException("WorkflowDormancySweep.sweepOne: " + e.getMessage(), e);
+        }
+    }
+
+    /** One row of the stream: the document, its latest raw state, and the ledger's entry for it (or none). */
+    private void reconcileDocument(long tenant, WorkflowGraph g, Map<String, String> terminalByNorm,
+                                   ResultSet rs, Instant now) throws SQLException {
+        String key = rs.getString(1);
+        String raw = rs.getString(2);
+        // Per-DOCUMENT isolation, the project's per-row DLQ posture: a single poison key escaping to
+        // the per-workflow net would abandon every document after it — the same ones, on every
+        // tick, forever. Reading its ledger entry is part of its work.
+        try {
+            // doc_key is NULL when the LEFT JOIN found no ledger entry: a document seen for the first time
+            WorkflowObservationStore.Observation obs = rs.getString(3) == null ? null
+                : WorkflowObservationStore.Observation.fromRow(rs, 3);
+            reconcileOne(tenant, g, terminalByNorm, obs, key, raw, now);
+        } catch (RuntimeException ex) {
+            LOG.warnf(ex, "dormancy: document skipped (tenant %d, workflow %s, key %s)",
+                tenant, g.name(), key);
         }
     }
 
     private void reconcileOne(long tenant, WorkflowGraph g, Map<String, String> terminalByNorm,
-                              Map<String, WorkflowObservationStore.Observation> known,
+                              WorkflowObservationStore.Observation obs,
                               String key, String raw, Instant now) {
         String state = resolve(g, raw);
-        WorkflowObservationStore.Observation obs = known.get(key);
         if (obs == null) {
             observations.insertNew(tenant, g.name(), key, state, now);
             return;
@@ -229,15 +260,32 @@ public class WorkflowDormancySweep {
         return raw;
     }
 
-    private Map<String, String> latestStatePerKey(long tenant, WorkflowGraph g) {
+    /**
+     * Opens the sweep's stream: every document of the workflow with its latest raw state, joined to
+     * its ledger entry, as a cursor the DATABASE holds. The hub reads it {@value #PAGE} rows at a
+     * time, so its heap does not grow with the number of documents (#905).
+     *
+     * <p>{@code WITH HOLD} is the point, not decoration; {@code setFetchSize}, which the other
+     * streamers use, is not enough here. A plain cursor lives inside its transaction, and that
+     * transaction would keep a lock on the source table for as long as the documents take to
+     * reconcile — and ingestion issues
+     * {@code ALTER TABLE … ADD COLUMN IF NOT EXISTS}, which waits for ACCESS EXCLUSIVE and stalls
+     * every later reader behind itself. A held cursor is materialised when its statement commits and
+     * the lock goes with it: the table is locked for the database's own read of it (the sort and the
+     * copy of the result, which grow with the table), and no longer for the reconciliation, which
+     * writes one document at a time and is the slower half.
+     */
+    private void declareStream(Connection c, String cursor, long tenant, WorkflowGraph g) throws SQLException {
         // JDBC cannot bind an identifier, so each one is interpolated QUOTED — the escaping is the
         // guard, and the name is whatever the source called it ("Statut Commande", "N° Commande").
         // Bare, those are not a miss but a SYNTAX ERROR, and the per-workflow net above would
         // swallow it as a logged skip: a declared dormancy that never fires, on every tick, forever.
         String key = quoteIdent(g.key());
         String column = quoteIdent(g.column());
-        String sql = "SELECT DISTINCT ON (" + key + ") " + key + "::text, "
-            + column + "::text FROM " + quoteTable(g.table())
+        String sql = "DECLARE " + cursor + " CURSOR WITH HOLD FOR "
+            + "SELECT s.k, s.v, " + WorkflowObservationStore.Observation.columns("o.") + " FROM ("
+            + "SELECT DISTINCT ON (" + key + ") " + key + "::text AS k, "
+            + column + "::text AS v FROM " + quoteTable(g.table())
             + " WHERE tenant_id = ? AND " + key + " IS NOT NULL AND btrim(" + key + "::text) <> '' AND "
             + column + " IS NOT NULL AND btrim(" + column + "::text) <> '' "
             // `id DESC` is not decoration: `_ingested_at` defaults to now(), the TRANSACTION
@@ -246,17 +294,27 @@ public class WorkflowDormancySweep {
             // DISTINCT ON picks arbitrarily, the sweep flip-flops between the two versions, and the
             // append-only journal fills with transitions that never happened. Every dynamic table
             // has `id BIGSERIAL PRIMARY KEY` (DynamicTableWriter), so this is a total order.
-            + "ORDER BY " + key + ", _ingested_at DESC, id DESC";
-        Map<String, String> out = new LinkedHashMap<>();
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+            + "ORDER BY " + key + ", _ingested_at DESC, id DESC) s "
+            + "LEFT JOIN core.workflow_observation o "
+            + "ON o.tenant_id = ? AND o.workflow_name = ? AND o.doc_key = s.k";
+        // The DECLARE must commit by itself: inside a transaction left open it would keep the table
+        // locked, whatever WITH HOLD says. Said here rather than assumed of the pool.
+        c.setAutoCommit(true);
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setLong(1, tenant);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) out.put(rs.getString(1), rs.getString(2));
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("WorkflowDormancySweep.latestStatePerKey: " + e.getMessage(), e);
+            ps.setLong(2, tenant);
+            ps.setString(3, g.name());
+            ps.execute();
         }
-        return out;
+    }
+
+    /** A held cursor outlives its transaction, so it is closed here, not left to the pool's next borrower. */
+    private void closeStream(Connection c, String cursor) {
+        try (Statement st = c.createStatement()) {
+            st.execute("CLOSE " + cursor);
+        } catch (SQLException e) {
+            LOG.warnf(e, "dormancy: could not close cursor %s — it stays on that session until the session ends", cursor);
+        }
     }
 
     private void emit(long tenant, WorkflowGraph g, WorkflowObservationStore.Observation obs) {

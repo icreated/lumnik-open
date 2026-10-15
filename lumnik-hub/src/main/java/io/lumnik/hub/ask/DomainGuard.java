@@ -43,10 +43,11 @@ public class DomainGuard {
     /** A filter literal that is not a declared value of the column. */
     public record Violation(String column, String value, List<String> allowed) {
         public String message() {
-            // SQL-style escape the value so a literal containing a quote stays unambiguous.
-            return "I won't run this: '" + value.replace("'", "''") + "' is not a declared value of " + column
-                + " (known: " + String.join(", ", allowed)
-                + "). If it should exist, add it to the entity manifest.";
+            return message(null);
+        }
+
+        public String message(String lang) {
+            return AskSentences.outOfDomainValue(lang, column, value, allowed);
         }
     }
 

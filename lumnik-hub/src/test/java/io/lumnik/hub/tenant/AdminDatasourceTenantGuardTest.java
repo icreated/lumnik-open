@@ -72,12 +72,74 @@ class AdminDatasourceTenantGuardTest {
       e("AuditDispatcher:select:core.audit_outbox",  "drains every tenant's audit outbox"),
       e("AuditDispatcher:update:core.audit_outbox",  "marks the row that same sweep just drained, by id"),
       e("AuditRetentionPurger:delete:core.audit_event", "operator-wide retention purge, all tenants"),
+      e("WebhookDeliveryRetentionPurger:delete:core.webhook_delivery", "operator-wide retention purge, all tenants"),
       e("ConnectorScheduler:select:connector.connector,connector.connector_run",
           "cross-tenant due-run scan; the run it starts binds its own tenant"),
-      e("RunReaper:update:connector.connector,connector.connector_run",
-          "startup recovery of stale Running rows, all tenants; the RETURNING correlates each "
-          + "reaped run's connector NAME for the operator's warning, keyed by that run's own "
-          + "connector_id — it reads one more table, not one more tenant"),
+      e("ConnectorRunDispatcher:select:connector.connector_run",
+          "the queue dispatcher (#952): the oldest queued run of ANY tenant, FOR UPDATE SKIP LOCKED; every write it "
+          + "makes afterwards is scoped by that run's own tenant_id"),
+      e("ConnectorRunDispatcher:update:connector.connector_endpoint,connector.connector_run",
+          "the expiry sweep (#952): ends every run queued past lumnik.run-queue.max-age, all tenants, by status "
+          + "and age alone, in one statement; the endpoint stamp joins on the ended run's own tenant_id"),
+      e("ExportRunDispatcher:select:connector.export_run",
+          "the queue dispatcher (#952): the oldest queued export run of ANY tenant; its writes are scoped by tenant_id"),
+      e("ExportRunDispatcher:update:connector.export_run",
+          "the expiry sweep (#952): ends every export run queued past lumnik.run-queue.max-age, all tenants"),
+      e("RunReaper:select:connector.connector,connector.connector_run",
+          "recovery of stale Running rows, all tenants; the join reads each run's connector NAME "
+          + "for the operator's warning, keyed by that run's own connector_id — it reads one more "
+          + "table, not one more tenant. The failing write goes through ConnectorEngine.finalizeRun"),
+      e("ExportScheduler:select:connector.export_manifest",
+          "cross-tenant due-export scan over definitions only (tenant, name, schedule, created_at); "
+          + "the run it starts binds its own tenant and reads rows under RLS"),
+      e("SearchIndexRevalidator:select:core.search_index",
+          "an Entity is deployment-global, so its re-apply re-checks every tenant's SearchIndex over it "
+          + "(#669); it reads definitions only (tenant, name, manifest) and each invalidating UPDATE "
+          + "names that row's own tenant_id"),
+      e("SearchIndexStore:delete:core.search_index,core.search_index_purge",
+          "purgeAllForEntity (#701): an Entity is deployment-global, so deleting it purges every "
+          + "tenant's SearchIndex over it, keyed by entity name not tenant_id; each purged row still "
+          + "carries its own tenant_id into the appended core.search_index_purge obligation"),
+      e("SearchIndexStore:select:core.search_index",
+          "the same purgeAllForEntity statement — its WITH gone AS (DELETE ... RETURNING ...) INSERT "
+          + "... SELECT ... FROM gone shape is one statement, textually matched twice by this guard"),
+      e("SearchProjectionMarkStore:select:core.search_index",
+          "tenantsWithValidIndex (#701): SearchProjectionReconciler's cross-tenant fan-out point — it "
+          + "must discover EVERY tenant with an active SearchIndex, by definition before any single "
+          + "tenant_id is known; validIndexNamesByEntity in the same class is properly tenant_id-scoped "
+          + "and does not need this entry on its own"),
+      e("SearchProjectionMarkStore:select:core.search_projection_mark",
+          "pendingMarkPairsAdmin (#671/#712): SearchProjectionWorker.discoveryTick's own cross-tenant "
+          + "fan-out point for every pair that has at least one undrained mark, the exact same shape "
+          + "as validIndexNamesByEntityAndTenantAdmin one level up — this SELECT DISTINCT tenant_id, "
+          + "search_index is the discovery itself, not a caller-scoped read"),
+      e("SearchProjectionMarkStore:update:core.search_projection_mark",
+          "the re-mark ON CONFLICT DO UPDATE (design doc §1, #671): its SET clause only refreshes id "
+          + "and marked_at, and the row Postgres updates is exactly the ONE the INSERT's own VALUES "
+          + "already scoped by the (tenant_id, search_index, mark_kind, canonical_key) unique "
+          + "constraint — it can touch no other tenant's row, even though this scanner reads the SET "
+          + "fragment in isolation from the INSERT above it, built via a loop that breaks the +-chain "
+          + "this guard's own literal-run stitching relies on"),
+      e("SearchProjectionStateStore:select:core.search_projection_state",
+          "SearchProjectionRunReaper's findBuilding (#671): recovery of stale 'building' rows, all "
+          + "tenants; the reaper's own write (degradeIfStillBuilding) is scoped by tenant_id AND "
+          + "search_index in the same statement"),
+      e("SearchProjectionWorker:select:core.search_index_purge",
+          "purgeDrain's fetchUndrainedPurgeRows (§5d, #671): the whole point of D-purge-drain is "
+          + "reading the purge table independent of any tenant's currently-valid SearchIndex rows, so "
+          + "this cross-tenant scan is the discovery point, not a caller-scoped read — each row's own "
+          + "tenant_id is what the per-pair RunLock and every downstream write are keyed by"),
+      e("SearchProjectionWorker:delete:core.search_index_purge",
+          "purgeDrain's deletePurgeRow (§5d, #671): the drained row is deleted by its own primary key "
+          + "(id), already selected under this tenant's own row above — a second tenant_id predicate "
+          + "would be redundant, not a missing scope"),
+      e("SearchProjectionWorker:update:core.search_index_purge",
+          "purgeDrain's starvation-guard touchLastAttempted (code review, #671): same posture as "
+          + "deletePurgeRow just above — the row is updated by its own primary key (id), already "
+          + "selected under this tenant's own row"),
+      e("ExportRunReaper:select:connector.export_run",
+          "recovery of stale Running export runs, all tenants; the failing write goes through "
+          + "ExportRunLedger.fail under that run's own tenant"),
       // Cross-tenant admin surfaces / correlated reads the tenant_id-PREDICATE check surfaced.
       // (EventStreamResource dropped: its SSE query now scopes tenant_id = ?, so it is no longer a
       // deliberate cross-tenant reader — it passes the predicate check like any other statement.)
@@ -94,6 +156,10 @@ class AdminDatasourceTenantGuardTest {
       e("TenantListResource:select:identity.app_user,identity.org",
           "the superadmin cross-tenant listing — its count sub-queries correlate o.tenant_id = "
           + "t.id per LISTED tenant, they do not scope to the caller (which is the whole point)"),
+      e("EntityIdentityRepository:select:core.entity_identity",
+          "assertedPartnerRows' set-aside sub-select (#920), a literal of its own because a ternary builds it: it "
+          + "correlates me.tenant_id = a.tenant_id, and the outer statement scopes a.tenant_id = ? — the "
+          + "correlation, not a missing caller scope. Every other statement in the class carries its own predicate"),
       e("InboxResource:select:core.event_outbox",
           "the ack-match sub-select correlates a.tenant_id = d.tenant_id; its outer query scopes "
           + "d.tenant_id = ?, so the join is the correlation, not a missing caller scope"));

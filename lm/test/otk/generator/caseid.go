@@ -23,6 +23,7 @@ import (
 //	entity/read/cross-tenant-read
 //	process/inbox/huge-limit
 //	view/unknown-scope
+//	export/oneshot/existing-file-refused
 //
 // A CaseID is unique and deterministic within a build. It is NOT a cross-version
 // contract: renaming a variant renames its ID. Replay travels on the seed, and the
@@ -71,11 +72,21 @@ func viewCaseID(variant string) CaseID {
 	return CaseID("view/" + variant)
 }
 
+func entityResCaseID(variant string) CaseID {
+	return CaseID("entityres/" + variant)
+}
+
+func exportCaseID(subType, variant string) CaseID {
+	return CaseID(fmt.Sprintf("export/%s/%s", subType, variant))
+}
+
 // catalogueEntry is one case in declared order. payload carries the payload's own
 // content for the two lanes that have one (apply, rest) — a CaseID alone only encodes
 // that payload's index, not what it contains, so a payload reorder within a variant
-// would remap indices without changing a single ID. Lanes with no payload dimension
-// (run, auth, entity, process, view) leave payload empty.
+// would remap indices without changing a single ID. export carries its fixture manifest
+// there too: its IDs name cases, not manifests, so an edited manifest would otherwise
+// leave the fingerprint untouched. The other lanes (run, auth, entity, process, view,
+// entityres) leave payload empty.
 type catalogueEntry struct {
 	id      CaseID
 	payload string
@@ -121,6 +132,9 @@ func catalogueEntries() []catalogueEntry {
 	for _, v := range entityReadVariants() {
 		out = append(out, catalogueEntry{id: entityCaseID("read", v.name)})
 	}
+	for _, v := range entityCliVariants() {
+		out = append(out, catalogueEntry{id: entityCaseID("cli", v.name)})
+	}
 	for _, v := range processApplyVariants() {
 		out = append(out, catalogueEntry{id: processCaseID("apply", v.name)})
 	}
@@ -129,6 +143,12 @@ func catalogueEntries() []catalogueEntry {
 	}
 	for _, v := range viewVariants() {
 		out = append(out, catalogueEntry{id: viewCaseID(v.name)})
+	}
+	for _, v := range entityResVariants() {
+		out = append(out, catalogueEntry{id: entityResCaseID(v.name)})
+	}
+	for _, v := range exportVariants() {
+		out = append(out, catalogueEntry{id: exportCaseID(v.sub, v.name), payload: v.manifest})
 	}
 	return out
 }

@@ -79,7 +79,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:0.8.6-pg16
         env:
           POSTGRES_DB: lumnik
           POSTGRES_USER: lumnik
@@ -121,6 +121,7 @@ jobs:
             echo "OTK_OIDC_AUDIENCE=lumnik-backend"
             echo "LUMNIK_SECRET_MASTER_KEY=$(openssl rand -base64 32)"
             echo "LUMNIK_CRYPTO_SECRET_KEY=$(openssl rand -base64 32)"
+            echo "LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET=$(openssl rand -base64 32)"
           } >> "$GITHUB_ENV"
           {
             echo "OTK_OIDC_PUBLIC_KEY<<OTK_PEM_EOF"

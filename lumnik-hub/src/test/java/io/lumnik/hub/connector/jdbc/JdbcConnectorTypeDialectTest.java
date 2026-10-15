@@ -1,6 +1,8 @@
 package io.lumnik.hub.connector.jdbc;
 
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
+import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
+import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -19,7 +21,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class JdbcConnectorTypeDialectTest {
 
-    private final JdbcConnectorType type = new JdbcConnectorType();
+    private final JdbcConnectorType type = withRegistry();
+
+    private static JdbcConnectorType withRegistry() {
+        JdbcConnectorType t = new JdbcConnectorType();
+        t.dialectRegistry = JdbcDialectRegistry.of(List.of(new PostgresDialect()));
+        return t;
+    }
 
     private static Map<String, Object> base() {
         return new HashMap<>(Map.of(
@@ -49,7 +57,7 @@ class JdbcConnectorTypeDialectTest {
     void postgresql_alias_resolves_to_the_registered_postgres_id() {
         Map<String, Object> cfg = base();
         cfg.put("dialect", "postgresql");
-        Assertions.assertThat(JdbcConnectorType.resolveDialectId(cfg))
+        Assertions.assertThat(type.resolveDialectId(cfg))
             .as("the validator accepts 'postgresql'; the runtime registry only knows 'postgres' — "
                 + "the alias must normalize or validator==runtime breaks")
             .isEqualTo("postgres");
@@ -59,7 +67,7 @@ class JdbcConnectorTypeDialectTest {
     void dialect_is_trimmed_and_case_insensitive() {
         Map<String, Object> cfg = base();
         cfg.put("dialect", "  PostgreSQL ");
-        Assertions.assertThat(JdbcConnectorType.resolveDialectId(cfg))
+        Assertions.assertThat(type.resolveDialectId(cfg))
             .as("registry keys are lowercase by convention — user casing/whitespace must not leak")
             .isEqualTo("postgres");
     }

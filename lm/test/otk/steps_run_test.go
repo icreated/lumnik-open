@@ -7,9 +7,12 @@ import (
 
 	"github.com/icreated/lumnik-open/lm/internal/types"
 	"github.com/icreated/lumnik-open/lm/test/otk/checks"
+	"github.com/icreated/lumnik-open/lm/test/otk/generator"
 	"github.com/icreated/lumnik-open/lm/test/otk/oracle"
 	"github.com/icreated/lumnik-open/lm/test/otk/runner"
 )
+
+const testRunCaseID generator.CaseID = "run/textual/rtl-in-data-cell"
 
 func TestParseRunID(t *testing.T) {
 	id, err := parseRunID("run scheduled: run-7\n")
@@ -82,13 +85,13 @@ func TestRowsAccountedUsesAuthoritativeCount(t *testing.T) {
 	if balanced.DeadLetterCount != 250 {
 		t.Fatalf("deadLetterCount not parsed: got %d, want 250", balanced.DeadLetterCount)
 	}
-	if f := checks.ReconcileCounts(int(balanced.RecordsIn), int(balanced.RecordsOut), int(balanced.RecordsSkipped), int(balanced.DeadLetterCount), 42); len(f) != 0 {
+	if f := checks.ReconcileCounts(int(balanced.RecordsIn), int(balanced.RecordsOut), int(balanced.RecordsSkipped), int(balanced.DeadLetterCount), testRunCaseID, 42); len(f) != 0 {
 		t.Fatalf("balanced run must produce no finding; got %v", f)
 	}
 
 	// Genuine vanish: 50 rows unaccounted for — must be exactly one HIGH finding.
 	vanish := types.Run{RecordsIn: 250, RecordsOut: 0, RecordsSkipped: 200, DeadLetterCount: 200}
-	fv := checks.ReconcileCounts(int(vanish.RecordsIn), int(vanish.RecordsOut), int(vanish.RecordsSkipped), int(vanish.DeadLetterCount), 42)
+	fv := checks.ReconcileCounts(int(vanish.RecordsIn), int(vanish.RecordsOut), int(vanish.RecordsSkipped), int(vanish.DeadLetterCount), testRunCaseID, 42)
 	if len(fv) != 1 {
 		t.Fatalf("genuine vanish must produce exactly 1 finding; got %v", fv)
 	}

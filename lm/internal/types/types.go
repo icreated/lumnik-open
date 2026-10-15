@@ -5,10 +5,13 @@ import "time"
 // Module is one installed hub module: its identifying name, version, owning
 // schema, activation status, and install timestamp.
 type Module struct {
-	Name        string    `json:"name"`
-	Version     string    `json:"version"`
-	Schema      string    `json:"schema"`
-	Status      string    `json:"status"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Schema  string `json:"schema"`
+	Status  string `json:"status"`
+	// Reason says why a module is INACTIVE (empty when it is active): without it the operator
+	// sees INACTIVE and does not know what to fix.
+	Reason      string    `json:"reason,omitempty"`
 	InstalledAt time.Time `json:"installedAt"`
 }
 
@@ -48,7 +51,7 @@ type Run struct {
 	EndpointID      string     `json:"endpointId"`    // empty for a run with no endpoint, and on older hubs
 	EndpointName    string     `json:"endpointName"`
 	Status          string     `json:"status"`
-	StartedAt       time.Time  `json:"startedAt"`
+	StartedAt       *time.Time `json:"startedAt,omitempty"` // nil while the run is still queued
 	EndedAt         *time.Time `json:"endedAt,omitempty"`
 	RecordsIn       int64      `json:"recordsIn"`
 	RecordsOut      int64      `json:"recordsOut"`

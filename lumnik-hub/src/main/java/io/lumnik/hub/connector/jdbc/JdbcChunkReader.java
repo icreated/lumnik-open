@@ -5,7 +5,7 @@ import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
-import io.lumnik.hub.connector.jdbc.dialect.JdbcDialect;
+import io.lumnik.jdbc.spi.JdbcDialect;
 import io.lumnik.hub.connector.mapping.writer.SchemaInferrer;
 
 import javax.sql.DataSource;
@@ -61,6 +61,7 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
   private final String watermarkColumn;
   private final List<String> pkColumns;
   private final Mode mode;
+  private final JdbcDialect dialect;
   private final HikariPoolRegistry poolRegistry;
   private final JdbcQueryBuilder qb;
 
@@ -76,6 +77,7 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
     this.watermarkColumn = watermarkColumn;
     this.pkColumns = pkColumns;
     this.mode = mode;
+    this.dialect = dialect;
     this.poolRegistry = poolRegistry;
     this.qb = new JdbcQueryBuilder(dialect);
   }
@@ -94,7 +96,7 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
           + " it does not have; set watermark_column, or switch the table to mode 'full'");
     }
     long tenantId = ctx != null ? ctx.tenantId() : -1L;
-    DataSource ds = poolRegistry.acquire(url, user, password, tenantId);
+    DataSource ds = poolRegistry.acquire(url, user, password, tenantId, dialect);
     JdbcCursor jc = JdbcCursor.fromConnectorCursor(cursor);
     // A re-applied manifest that changes mode, watermark_column or pk_columns meets the cursor the
     // previous configuration persisted (apply upserts the endpoint, keeps the cursor row). Honouring
@@ -115,13 +117,20 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
     // was a silent return to the endless run this ceiling exists to end.
     JdbcRunBound bound = ctx != null && ctx.bound() instanceof JdbcRunBound b ? b : null;
 
-    String sql = qb.buildSelect(schema, table, watermarkColumn, pkColumns, jc, bound, chunkSize, qMode);
+    JdbcQueryBuilder.Select select = qb.buildSelect(schema, table, watermarkColumn, pkColumns, jc, bound, chunkSize, qMode);
+    String sql = select.sql();
 
     try (Connection conn = ds.getConnection();
          PreparedStatement ps = conn.prepareStatement(sql)) {
 
-      int bound1 = bindCursorParams(ps, jc, qMode) + 1;
-      bindCeilingParams(ps, bound, bound1);
+      // The whole chunk in one round trip. Left unset, the batch is the driver's: ojdbc 23 read a 500-row
+      // chunk in 5 round trips. At the chunk size it took 2, the second only to learn there was no more; one
+      // row past the limit, the first fetch comes back short and that says it. pgjdbc honours a fetch size
+      // only inside a transaction (it then reads through a server-side cursor); this pool's connections are
+      // autocommit, so PostgreSQL still sends the whole result at once, as before.
+      ps.setFetchSize(chunkSize + 1);
+      int next = bind(ps, select.cursorPlan(), cursorKeyValues(jc, qMode), 1);
+      bind(ps, select.ceilingPlan(), bound == null ? List.of() : bound.values(), next);
 
       try (ResultSet rs = ps.executeQuery()) {
         List<Map<String, Object>> rows = new ArrayList<>();
@@ -132,7 +141,7 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
         while (rs.next()) {
           Map<String, Object> row = new LinkedHashMap<>();
           for (int i = 1; i <= colCount; i++) {
-            row.put(md.getColumnLabel(i), rs.getObject(i));
+            row.put(md.getColumnLabel(i), dialect.readColumn(rs, i));
           }
           rows.add(row);
         }
@@ -171,53 +180,56 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
   }
 
   /**
-   * Bind the cursor parameters into the PreparedStatement: one per key column, reading the very
-   * list {@link JdbcQueryBuilder#keyColumns} gave the SELECT — so a change to the key layout moves
-   * the placeholders and their values together.
+   * The cursor's value for each key column, in the very order {@link JdbcQueryBuilder#keyColumns} gave
+   * the SELECT — so a change to the key layout moves the plan's targets and their values together.
+   * Empty when the cursor carries nothing (a first read).
    *
    * <p>The watermark value is stored as a String (from Timestamp.toString()) to survive
-   * Jackson JSON round-trips. We parse it back to a {@link Timestamp} before binding so
-   * that PostgreSQL can compare it against a TIMESTAMP column without an explicit cast.
+   * Jackson JSON round-trips. We parse it back to a {@link Timestamp} so that PostgreSQL can compare it
+   * against a TIMESTAMP column without an explicit cast.
    */
-  private int bindCursorParams(PreparedStatement ps, JdbcCursor jc, JdbcQueryBuilder.Mode m)
-      throws SQLException {
-    if (jc == null || jc.pk().isEmpty()) return 0;
+  private List<Object> cursorKeyValues(JdbcCursor jc, JdbcQueryBuilder.Mode m) {
+    if (jc == null || jc.pk().isEmpty()) return List.of();
 
     List<String> keys = JdbcQueryBuilder.keyColumns(watermarkColumn, pkColumns, m);
+    List<Object> values = new ArrayList<>(keys.size());
     for (int i = 0; i < keys.size(); i++) {
       // keyColumns puts the watermark first in WATERMARK mode; every other key is a pk column,
-      // bound by name so it cannot drift with the order the store returned the cursor in.
+      // read by name so it cannot drift with the order the store returned the cursor in.
       if (i == 0 && m == JdbcQueryBuilder.Mode.WATERMARK) {
         Timestamp wmTs = toTimestamp(jc.value());
-        if (wmTs != null) {
-          ps.setTimestamp(1, wmTs);
-        } else {
-          ps.setObject(1, jc.value());
-        }
+        values.add(wmTs != null ? wmTs : jc.value());
       } else {
-        ps.setObject(i + 1, jc.pk().get(keys.get(i)));
+        values.add(jc.pk().get(keys.get(i)));
       }
     }
-    return keys.size();
+    return values;
   }
 
   /**
-   * Bind the ceiling's values, in the key order it was measured in, after whatever the cursor
-   * filled. The count the cursor binder RETURNS is what places these — not a re-derivation of
-   * "did the cursor emit a clause?", which is the same question answered twice and the way the two
-   * drift apart.
+   * Bind one value per {@code ?} of a comparison: placeholder {@code i} takes
+   * {@code keyValues[plan[i]]}, starting at JDBC index {@code firstIndex}. Returns the index the next
+   * clause starts at — the count the previous binder RETURNS is what places the ceiling, not a
+   * re-derivation of "did the cursor emit a clause?", which is the same question answered twice and
+   * the way the two drift apart. A dialect that expands a tuple repeats an index in its plan, and the
+   * value is bound once per occurrence.
    *
-   * <p>{@code setObject} with the driver's own values: these never went through jsonb, so there is
-   * nothing to parse back and no {@link #toTimestamp} guesswork. That is the point of measuring the
-   * ceiling per run and never persisting it.
+   * <p>A {@link Timestamp} goes through {@code setTimestamp}; everything else through
+   * {@code setObject} with the driver's own value — the ceiling's values never went through jsonb, so
+   * there is nothing to parse back (that is the point of measuring the ceiling per run and never
+   * persisting it).
    */
-  private static void bindCeilingParams(PreparedStatement ps, JdbcRunBound bound, int firstIndex)
+  static int bind(PreparedStatement ps, List<Integer> plan, List<Object> keyValues, int firstIndex)
       throws SQLException {
-    if (bound == null) return;
-    List<Object> values = bound.values();
-    for (int i = 0; i < values.size(); i++) {
-      ps.setObject(firstIndex + i, values.get(i));
+    for (int i = 0; i < plan.size(); i++) {
+      Object v = keyValues.get(plan.get(i));
+      if (v instanceof Timestamp ts) {
+        ps.setTimestamp(firstIndex + i, ts);
+      } else {
+        ps.setObject(firstIndex + i, v);
+      }
     }
+    return firstIndex + plan.size();
   }
 
   /**

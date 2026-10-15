@@ -17,6 +17,9 @@ flyway:
     - classpath:db/migration/connector
     - classpath:db/migration/platform
 
+# Tabs this module brings to the métier PWA; offered only while the module is active.
+tabs: [fiches, inbox]
+
 menu: []
 permissions:
   - id: platform.secret.manage

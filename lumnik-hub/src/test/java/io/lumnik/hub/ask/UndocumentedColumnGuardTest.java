@@ -43,6 +43,12 @@ class UndocumentedColumnGuardTest {
                      "WHERE tenant_id = '5'", "tenant_id"),
         Arguments.of("an invented column behind NOT IN", "WHERE loyalty_tier NOT IN ('A','B')",
                      "loyalty_tier"),
+        // ── text containment (#1047): the shape the prompt now asks for must not walk past the guard ──
+        Arguments.of("an internal column behind ILIKE", "WHERE \"_row_hash\" ILIKE '%x%'", "_row_hash"),
+        Arguments.of("an invented column behind LIKE", "WHERE loyalty_tier LIKE 'G%'", "loyalty_tier"),
+        Arguments.of("an invented column behind NOT ILIKE", "WHERE tenant_id NOT ILIKE '%5%'", "tenant_id"),
+        Arguments.of("a declared column behind ILIKE", "WHERE \"segment\" ILIKE '%gold%'", null),
+        Arguments.of("a declared column behind NOT ILIKE", "WHERE segment NOT ILIKE '%gold%'", null),
         Arguments.of("an invented column carrying an accent", "WHERE société = 'X'", "société"),
         // The same axis one character further out: the lexer used to end a name at any char that was
         // not a letter, so this row refused '_ht' — a fragment, while listing the real column as known.

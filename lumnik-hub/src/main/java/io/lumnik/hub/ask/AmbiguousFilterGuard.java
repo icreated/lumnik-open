@@ -58,17 +58,11 @@ public final class AmbiguousFilterGuard {
      * confident-wrong this class exists to avoid.
      */
     public static String message(String label, List<String> values, boolean capped) {
-        List<String> distinct = new ArrayList<>(new LinkedHashSet<>(values));
-        List<String> shown = distinct.size() > MAX_LISTED ? distinct.subList(0, MAX_LISTED) : distinct;
-        StringBuilder sb = new StringBuilder("That filter matches ")
-            .append(capped ? "at least " : "").append(values.size())
-            .append(" rows, so the question has no single answer. Matching ").append(label)
-            .append(": ").append(String.join(", ", shown));
-        if (distinct.size() > shown.size()) {
-            sb.append(", and ").append(distinct.size() - shown.size()).append(" more");
-        }
-        return sb.append(". Ask again naming one of them — for example by filtering on ")
-            .append(label).append(" instead of the name.").toString();
+        return message(null, label, values, capped);
+    }
+
+    public static String message(String lang, String label, List<String> values, boolean capped) {
+        return AskSentences.ambiguousFilter(lang, label, values, capped);
     }
 
 }

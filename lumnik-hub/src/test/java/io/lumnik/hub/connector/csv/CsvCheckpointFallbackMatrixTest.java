@@ -49,7 +49,7 @@ class CsvCheckpointFallbackMatrixTest {
     ConnectorCursor cursor = ConnectorCursor.empty();
     boolean first = true;
     while (true) {
-      ReadResult<Map<String, Object>> r = reader.read(chunkSize, cursor, null);
+      ReadResult<Map<String, Object>> r = reader.read(chunkSize, cursor, ReaderTestContexts.newRun());
       if (r instanceof ReadResult.HasMore<Map<String, Object>> hm) {
         all.addAll(hm.records());
         cursor = first ? mutateAfterFirst.apply(hm.nextCursor()) : hm.nextCursor();
@@ -75,7 +75,7 @@ class CsvCheckpointFallbackMatrixTest {
   void fast_path_cursor_carries_the_checkpoint_payload(@TempDir Path tmp) throws Exception {
     Path file = sixRows(tmp);
     var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), DEFAULTS);
-    var r = reader.read(2, ConnectorCursor.empty(), null);
+    var r = reader.read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
     var node = ((ReadResult.HasMore<?>) r).nextCursor().value();
     assertThat(node.get("type").asText()).isEqualTo("CsvFile");
     assertThat(node.get("file").asText()).isEqualTo(file.toString());
@@ -98,7 +98,7 @@ class CsvCheckpointFallbackMatrixTest {
 
     // Fallback demonstrably taken: a fallback (skip>0) window cannot mint checkpoint fields,
     // so the cursor it writes is legacy-shaped for the rest of the file.
-    var r2 = reader.read(2, editNode(mid(reader, file), n -> n.retain("type", "file", "rowsProcessed")), null);
+    var r2 = reader.read(2, editNode(mid(reader, file), n -> n.retain("type", "file", "rowsProcessed")), ReaderTestContexts.newRun());
     var c2 = ((ReadResult.HasMore<?>) r2).nextCursor().value();
     assertThat(c2.has("anchorByte")).isFalse();
     assertThat(c2.has("version")).isFalse();
@@ -106,7 +106,7 @@ class CsvCheckpointFallbackMatrixTest {
 
   /** A fresh mid-file checkpoint cursor for {@code file} (first read of a fresh reader). */
   private static ConnectorCursor mid(CsvFileConnectorType.CsvGlobCursorReader reader, Path file) {
-    var r = reader.read(2, ConnectorCursor.empty(), null);
+    var r = reader.read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
     return ((ReadResult.HasMore<?>) r).nextCursor();
   }
 
@@ -137,7 +137,7 @@ class CsvCheckpointFallbackMatrixTest {
         Charset.forName("GB18030"), true, true,
         List.of("", "NULL", "null", "#N/A"), null);
     var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), overrides);
-    var r = reader.read(2, ConnectorCursor.empty(), null);
+    var r = reader.read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
     var node = ((ReadResult.HasMore<?>) r).nextCursor().value();
     assertThat(node.has("anchorByte"))
         .as("unverified charset: the cursor must stay legacy-shaped (allowlist, not blocklist)")
@@ -151,7 +151,7 @@ class CsvCheckpointFallbackMatrixTest {
   void truncated_file_fails_the_version_token_and_falls_back(@TempDir Path tmp) throws Exception {
     Path file = sixRows(tmp);
     var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), DEFAULTS);
-    var r1 = reader.read(2, ConnectorCursor.empty(), null);
+    var r1 = reader.read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
     List<Map<String, Object>> all = new ArrayList<>(((ReadResult.HasMore<Map<String, Object>>) r1).records());
     ConnectorCursor c1 = ((ReadResult.HasMore<Map<String, Object>>) r1).nextCursor();
 
@@ -163,7 +163,7 @@ class CsvCheckpointFallbackMatrixTest {
 
     ConnectorCursor cursor = c1;
     while (true) {
-      var r = reader.read(2, cursor, null);
+      var r = reader.read(2, cursor, ReaderTestContexts.newRun());
       if (r instanceof ReadResult.HasMore<Map<String, Object>> hm) {
         all.addAll(hm.records());
         assertThat(hm.nextCursor().value().has("anchorByte"))

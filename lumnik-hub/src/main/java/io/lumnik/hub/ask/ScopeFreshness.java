@@ -1,5 +1,8 @@
 package io.lumnik.hub.ask;
 
+import static io.lumnik.hub.connector.domain.ConnectorRunStatus.COMPLETED;
+import static io.lumnik.hub.connector.domain.ConnectorRunStatus.PARTIAL;
+
 import io.agroal.api.AgroalDataSource;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -17,15 +20,22 @@ import java.util.Optional;
  * RUN HISTORY — MAX(ended_at) over the scope's connectors' completed runs — never a MAX over
  * million-row mirror tables (no index on _ingested_at; a seq scan per ask would not survive
  * production volume). Admin datasource (small cross-schema join): the explicit tenant_id
- * filter IS the guard — same contract as WorkflowObservationStore.
+ * filters ARE the guard — same contract as WorkflowObservationStore. The lateral reads the runs
+ * itself, so it binds the caller's tenant too rather than trusting the correlation alone.
+ *
+ * <p>Each connector answers with its newest landed run from the head of
+ * {@code idx_run_connector_ended} (V63, #907). {@code ended_at IS NOT NULL} keeps MAX's
+ * semantics: DESC sorts NULLs first, and a run without an end time dates nothing.
  */
 @ApplicationScoped
 public class ScopeFreshness {
 
-    private static final String SQL =
-        "SELECT MAX(r.ended_at) FROM connector.connector_run r " +
-        "JOIN connector.connector c ON c.id = r.connector_id " +
-        "WHERE c.tenant_id = ? AND ? = ANY(c.tags) AND c.deleted_at IS NULL AND r.status IN ('Completed', 'Partial')";
+    static final String SQL =
+        "SELECT MAX(newest.ended_at) FROM connector.connector c " +
+        "CROSS JOIN LATERAL (SELECT r.ended_at FROM connector.connector_run r " +
+        "WHERE r.tenant_id = ? AND r.connector_id = c.id AND r.status IN ('" + COMPLETED.sqlValue() + "', '" + PARTIAL.sqlValue() + "') " +
+        "AND r.ended_at IS NOT NULL ORDER BY r.ended_at DESC LIMIT 1) newest " +
+        "WHERE c.tenant_id = ? AND ? = ANY(c.tags) AND c.deleted_at IS NULL";
 
     @Inject
     @DataSource("admin")
@@ -40,8 +50,9 @@ public class ScopeFreshness {
      *  a stale "data as of" (or nothing) while fresh rows land on every run. */
     public Optional<Instant> lastCompletedRun(long tenantId, String scope) {
         try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(SQL)) {
-            ps.setLong(1, tenantId);
-            ps.setString(2, scope);
+            ps.setLong(1, tenantId);   // the runs
+            ps.setLong(2, tenantId);   // the connectors
+            ps.setString(3, scope);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) return Optional.empty();
                 Timestamp ts = rs.getTimestamp(1);

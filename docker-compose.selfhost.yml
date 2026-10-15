@@ -9,7 +9,7 @@
 # OIDC endpoints under http://localhost:8180/realms/lumnik.
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:0.8.6-pg16
     restart: unless-stopped
     environment:
       POSTGRES_DB: lumnik
@@ -95,10 +95,22 @@ services:
       # verify with `docker compose -f docker-compose.selfhost.yml exec hub env | grep MODEL`.
       RAG_CHAT_MODEL: ${RAG_CHAT_MODEL:-llama3.2}
       ASK_SQL_MODEL: ${ASK_SQL_MODEL:-qwen2.5-coder:7b}
+      ASK_SQL_NUM_CTX: ${ASK_SQL_NUM_CTX:-32768}
+      ASK_SQL_NUM_PREDICT: ${ASK_SQL_NUM_PREDICT:-1024}
+      LUMNIK_ASK_ANSWER_BUDGET_CHARS: ${LUMNIK_ASK_ANSWER_BUDGET_CHARS:-6000}
       JUDGE_MODEL: ${JUDGE_MODEL:-gemma4}
       RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-nomic-embed-text}
       LUMNIK_EVENTS_RETENTION_DAYS: ${LUMNIK_EVENTS_RETENTION_DAYS:-30}
       LUMNIK_AUDIT_RETENTION_DAYS: ${LUMNIK_AUDIT_RETENTION_DAYS:-365}
+      LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS: ${LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS:-90}
+      # Durable run queue (#952): off unless set. Turn it on only once every hub replica runs a release that can read
+      # the queued status (docs/operations/upgrade.md).
+      LUMNIK_RUN_QUEUE_ENABLED: ${LUMNIK_RUN_QUEUE_ENABLED:-false}
+      LUMNIK_RUN_QUEUE_MAX_AGE: ${LUMNIK_RUN_QUEUE_MAX_AGE:-1h}
+      LUMNIK_RUN_QUEUE_POLL_INTERVAL: ${LUMNIK_RUN_QUEUE_POLL_INTERVAL:-5s}
+      # The AI family (chat, ask, embeddings): `false` switches it off — still installed, nothing calls a model.
+      # Exactly `true` or `false`; anything else stops the hub at startup. A change takes a restart.
+      LUMNIK_AI_ENABLED: ${LUMNIK_AI_ENABLED:-true}
       # Email delivery — mock stays on until BOTH are set (see .env.example):
       # Default mirrors the property's own default: SmallRye (Quarkus 3.33) refuses a
       # DEFINED-but-empty quarkus.mailer.host at boot, where an absent one takes the
@@ -112,6 +124,7 @@ services:
       LUMNIK_SMTP_STARTTLS: ${LUMNIK_SMTP_STARTTLS:-OPTIONAL}
       LUMNIK_SECRET_MASTER_KEY: ${LUMNIK_SECRET_MASTER_KEY:?set a strong key in .env — openssl rand -base64 32}
       LUMNIK_CRYPTO_SECRET_KEY: ${LUMNIK_CRYPTO_SECRET_KEY:?set a strong key in .env — openssl rand -base64 32}
+      LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET: ${LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET:?set a strong secret in .env — openssl rand -base64 32}
     extra_hosts:
       # Make the host's Ollama (and any other host service) reachable as host.docker.internal
       # on Linux too (Docker Desktop provides it automatically; this makes it portable).

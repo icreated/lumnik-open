@@ -12,8 +12,24 @@ import (
 	"github.com/icreated/lumnik-open/lm/internal/tui"
 )
 
-// defaultSkipPatterns hides the catalog and the hub's own tables from discover and the picker.
-const defaultSkipPatterns = "pg_*,information_schema*,t_*"
+// defaultSkipPatterns is empty on purpose: with no --skip-pattern the request carries none, and the hub
+// applies the SOURCE DIALECT's own exclusions (PostgreSQL: pg_*, information_schema*, t_*; Oracle: its
+// recycle bin and materialised-view logs). A CLI that always sent PostgreSQL's three would hide an Oracle
+// table named T_… and keep Oracle's own patterns from ever applying.
+const defaultSkipPatterns = ""
+
+// skipPatternsFor is the request's skipPatterns: nil (JSON null) when --skip-pattern was not given, so the
+// hub applies the source dialect's own exclusions; the parsed list when it was — an EMPTY, non-nil list if
+// the value was blank, which is how a caller says "exclude nothing".
+func skipPatternsFor(cmd *cobra.Command, csv string) []string {
+	if !cmd.Flags().Changed("skip-pattern") {
+		return nil
+	}
+	if out := splitPatterns(csv); out != nil {
+		return out
+	}
+	return []string{}
+}
 
 // splitPatterns turns a comma-separated --skip-pattern value into trimmed, non-empty globs.
 func splitPatterns(csv string) []string {
@@ -92,7 +108,7 @@ func newSourceJdbcDiscoverCmd() *cobra.Command {
 			if schema == "" {
 				schema = "public"
 			}
-			skip := splitPatterns(jdbcSkipPattern)
+			skip := skipPatternsFor(cmd, jdbcSkipPattern)
 			resp, err := c.JdbcDiscover(client.JdbcDiscoverRequest{
 				URL: jdbcURL, User: jdbcUser, Password: pwd,
 				Schema: schema, SkipPatterns: skip, IncludeViews: jdbcIncludeViews,
@@ -104,15 +120,19 @@ func newSourceJdbcDiscoverCmd() *cobra.Command {
 				return json.NewEncoder(machineOut(cmd)).Encode(resp)
 			}
 			w := cmd.OutOrStdout()
-			fmt.Fprintf(w, "%-10s %-25s %10s %5s %-20s %-15s\n", "SCHEMA", "NAME", "ROWS", "COLS", "PK", "WATERMARK")
+			fmt.Fprintf(w, "%-10s %-25s %10s %5s %-20s %-15s %s\n", "SCHEMA", "NAME", "ROWS", "COLS", "PK", "WATERMARK", "UNSUPPORTED")
 			for _, t := range resp.Tables {
 				wm := "-"
 				if t.SuggestedWatermark != nil {
 					wm = *t.SuggestedWatermark
 				}
-				fmt.Fprintf(w, "%-10s %-25s %10d %5d %-20s %-15s\n",
+				unsupported := "-"
+				if len(t.UnsupportedColumns) > 0 {
+					unsupported = strings.Join(t.UnsupportedColumns, "; ")
+				}
+				fmt.Fprintf(w, "%-10s %-25s %10d %5d %-20s %-15s %s\n",
 					t.Schema, t.Name, t.RowEstimate, len(t.Columns),
-					strings.Join(t.PrimaryKey, ","), wm)
+					strings.Join(t.PrimaryKey, ","), wm, unsupported)
 			}
 			return nil
 		},
@@ -121,7 +141,7 @@ func newSourceJdbcDiscoverCmd() *cobra.Command {
 	cmd.Flags().StringVar(&jdbcUser, "user", "", "DB user")
 	addPasswordStdinFlag(cmd)
 	cmd.Flags().StringVar(&jdbcSchema, "schema", "public", "Source schema the tables live in")
-	cmd.Flags().StringVar(&jdbcSkipPattern, "skip-pattern", defaultSkipPatterns, "Comma-separated glob patterns of tables to skip")
+	cmd.Flags().StringVar(&jdbcSkipPattern, "skip-pattern", defaultSkipPatterns, "Comma-separated glob patterns of tables to skip (default: the source dialect's own — e.g. pg_*,information_schema*,t_* for PostgreSQL)")
 	cmd.Flags().BoolVar(&jdbcIncludeViews, "include-views", false, "Include views")
 	cmd.Flags().StringVar(&jdbcOutput, "output", "table", "Output format: table|json")
 	_ = cmd.MarkFlagRequired("url")
@@ -154,7 +174,7 @@ func newSourceJdbcAddCmd() *cobra.Command {
 				disc, err := c.JdbcDiscover(client.JdbcDiscoverRequest{
 					URL: jdbcURL, User: jdbcUser, Password: pwd,
 					Schema:       jdbcSchema,
-					SkipPatterns: splitPatterns(jdbcSkipPattern),
+					SkipPatterns: skipPatternsFor(cmd, jdbcSkipPattern),
 				})
 				if err != nil {
 					return err
@@ -210,7 +230,7 @@ func newSourceJdbcAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&jdbcUser, "user", "", "DB user")
 	addPasswordStdinFlag(cmd)
 	cmd.Flags().StringVar(&jdbcSchema, "schema", "public", "Source schema the tables live in")
-	cmd.Flags().StringVar(&jdbcSkipPattern, "skip-pattern", defaultSkipPatterns, "Comma-separated glob patterns of tables to skip (--interactive)")
+	cmd.Flags().StringVar(&jdbcSkipPattern, "skip-pattern", defaultSkipPatterns, "Comma-separated glob patterns of tables to skip (--interactive; default: the source dialect's own)")
 	cmd.Flags().StringVar(&jdbcTables, "tables", "", "Comma-separated list of tables")
 	cmd.Flags().StringVar(&jdbcScheduleCron, "schedule-cron", "", "Quartz cron expression")
 	cmd.Flags().BoolVar(&jdbcInteractive, "interactive", false, "Open TUI table picker")

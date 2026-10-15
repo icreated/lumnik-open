@@ -1,0 +1,347 @@
+{
+  "candidate" : "pgvector",
+  "warmupPasses" : 1,
+  "measuredPasses" : 2,
+  "corpusFingerprint" : "sha256:c6b840cacddeae1cd8c439857e7f92cbb0e4494e8380a586ce6a3132a7d410b1",
+  "fixture" : {
+    "schemaVersion" : 3,
+    "modelDigest" : "0a109f422b47e3a30ba2b10eca18548e944e8a23073ee3f3e947efcf3c45e59f",
+    "vectorsSha256" : "sha256:1ca50c84799864b8547cdb4f2429866a80b4c0ec3b5818f8b7702eaf1f4e5746"
+  },
+  "perClass" : {
+    "exact-token" : {
+      "queries" : 20,
+      "ndcgAt10" : 0.891606351033477,
+      "recallAt10" : 1.0
+    },
+    "paraphrase" : {
+      "queries" : 21,
+      "ndcgAt10" : 0.4747420472726103,
+      "recallAt10" : 0.7142857142857143
+    },
+    "mixed" : {
+      "queries" : 21,
+      "ndcgAt10" : 0.8413724277966562,
+      "recallAt10" : 1.0
+    }
+  },
+  "overall" : {
+    "queries" : 62,
+    "ndcgAt10" : 0.7333956612439377,
+    "recallAt10" : 0.9032258064516129
+  },
+  "perQuery" : [ {
+    "id" : "q-e01",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 0.47774855460816557,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e02",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 0.5897053367440438,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e03",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e04",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e05",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e06",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e07",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e08",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e09",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e10",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e11",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e12",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 0.9828422279067397,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e13",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e14",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e15",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e16",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 0.36221141861686035,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e17",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e18",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e19",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 0.7098097413968655,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-e20",
+    "queryClass" : "exact-token",
+    "ndcgAt10" : 0.7098097413968655,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-p01",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.0,
+    "recallAt10" : 0.0
+  }, {
+    "id" : "q-p02",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.6309297535714575,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-p03",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.0,
+    "recallAt10" : 0.0
+  }, {
+    "id" : "q-p04",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.0,
+    "recallAt10" : 0.0
+  }, {
+    "id" : "q-p05",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-p06",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.0,
+    "recallAt10" : 0.0
+  }, {
+    "id" : "q-p07",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.6309297535714575,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-p08",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.5,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-p09",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.33333333333333337,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-p10",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.6309297535714575,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-p11",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.43067655807339306,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-p12",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.0,
+    "recallAt10" : 0.0
+  }, {
+    "id" : "q-p13",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.6309297535714575,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-p14",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.6309297535714575,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-p15",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.6309297535714575,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-p16",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-p17",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.6309297535714575,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-p18",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-p19",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-p20",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.2890648263178878,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-p21",
+    "queryClass" : "paraphrase",
+    "ndcgAt10" : 0.0,
+    "recallAt10" : 0.0
+  }, {
+    "id" : "q-m01",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.9737576937588317,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m02",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.9737576937588317,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m03",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.9828422279067397,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m04",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.6442869262030828,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m05",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.9680147827042069,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m06",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.5897053367440438,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m07",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.7098097413968655,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m08",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.9680147827042069,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m09",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.48591322032631384,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m10",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.9828422279067397,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m11",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.9639988080961093,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m12",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.9828422279067397,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m13",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.9610012895088121,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m14",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.6442869262030828,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m15",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.5897053367440438,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m16",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.9828422279067397,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m17",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.7098097413968655,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m18",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.9828422279067397,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m19",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.9828422279067397,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m20",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 0.5897053367440438,
+    "recallAt10" : 1.0
+  }, {
+    "id" : "q-m21",
+    "queryClass" : "mixed",
+    "ndcgAt10" : 1.0,
+    "recallAt10" : 1.0
+  } ],
+  "p95LatencyMillis" : 8.482667,
+  "stableAcrossPasses" : true,
+  "isolationFailures" : [ ]
+}

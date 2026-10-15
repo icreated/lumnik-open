@@ -87,6 +87,10 @@ func TestWitnessSeedReproducesItsCase(t *testing.T) {
 			got = GenerateProcess(w.Seed).CaseID
 		case "view":
 			got = GenerateView(w.Seed).CaseID
+		case "entityres":
+			got = GenerateEntityResolution(w.Seed).CaseID
+		case "export":
+			got = GenerateExport(w.Seed).CaseID
 		default:
 			t.Fatalf("witness %q has unknown lane %q", w.ID, w.ID.Lane())
 		}

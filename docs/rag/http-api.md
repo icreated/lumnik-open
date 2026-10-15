@@ -66,9 +66,11 @@ One endpoint, two modes, selected by the `mode` field:
 | `mode` | string | `"analytic"` (case-insensitive) = text-to-SQL over the ingested hub; anything else or absent = semantic retrieval + chat | semantic |
 | `scope` | string | the métier tag. `"all"` = no specific scope; blank or absent = **your default** (`lm scope set`) if set, else none. Semantic: filters retrieval to chunks carrying the tag. Analytic: names the schema card to ask over — a scope-bound user must name, or default to, a granted scope ([scopes](scopes.md#binding-users-to-scopes-opt-in)). | your default / `system` |
 | `corpus` | string | **semantic only**: restrict retrieval to one corpus (usually a connector source, see [corpora](#corpora)) | all corpora |
-| `topK` | integer | **semantic only**: how many chunks to retrieve as context | 10 |
+| `topK` | integer | **semantic only**: how many chunks to retrieve as context, 1 to 50. Outside → `400 {"error":"topK must be between 1 and 50"}` | 10 |
+| `lang` | string | the answer language, a two-letter code (`"fr"`). The answer is written in it whatever the question's language — a terse question such as `SO-000004 statut ?` carries none. Absent = the question's own language. Any other value → `400 {"error":"lang must be a two-letter language code"}`, in either mode. The métier PWA sends `fr`; `lm ask` sends `--lang`, else the language of `LC_ALL`, `LC_MESSAGES` or `LANG`, in that order. | the question's |
 
-`corpus` and `topK` are silently ignored in analytic mode.
+`corpus` and `topK` are silently ignored in analytic mode. Fixed sentences
+(abstentions, guard refusals) stay in English whatever `lang` says.
 
 ### Semantic response
 
@@ -106,6 +108,42 @@ guarded, executed, and phrased back:
 ```
 
 - `sql` is **always** the query that ran (or was refused) — verification is one glance away.
+- `disputed` (array, **always present**, `[]` when empty) names the fused records the answer
+  filtered on while their sources disagree, and `disputedTruncated` (boolean) says more exist
+  than the ten listed. Each entry: `key` (the record's match key), `column` and `label`,
+  `matched` (the filter value at stake), `retained` (the value the fused record kept),
+  `counted` (`true` = counted on a disputed value, `false` = left out while a source holds
+  `matched`) and `sources` (the `_conflicts` entries, `src` + `value`, in ledger order). When
+  `disputed` is non-empty, `otherDoors` carries `conflicts`. When and why it is empty:
+  [Disputed rows](../transparency/ask-honesty.md#disputed-rows-a-disclosure-not-a-veto).
+
+An illustrative shape with invented values, not a captured run:
+
+```json
+{
+  "answer": "Il y a 2 clients GOLD à Lyon.",
+  "sql": "SELECT COUNT(*) FROM \"connector\".\"v_acmecustomer\" WHERE city = 'Lyon' AND segment = 'GOLD' LIMIT 500",
+  "rowCount": 1,
+  "dataAsOf": "2026-09-13T00:49:13.894142Z",
+  "rows": [ { "count": 2 } ],
+  "otherDoors": ["conflicts"],
+  "disputed": [
+    {
+      "key": "P-1008",
+      "column": "city",
+      "label": "Ville",
+      "matched": "Lyon",
+      "retained": "Lyon",
+      "counted": true,
+      "sources": [
+        { "src": "t_acme_desk_erp", "value": "Lyon" },
+        { "src": "t_acme_desk_crm", "value": "Villeurbanne" }
+      ]
+    }
+  ],
+  "disputedTruncated": false
+}
+```
 - `rows` is the raw result, one `{column: value}` map per row, capped at 500 rows
   (a larger `LIMIT` in the generated SQL is lowered).
 - Execution is read-only, tenant-scoped by Row-Level Security, with a statement timeout.
@@ -157,6 +195,21 @@ prints `lm chat` and `lm conflicts list`; the PWA offers its fiches for `conflic
 silent on `lifecycle`, having no lifecycle surface. A token you do not recognise — a newer hub —
 must be passed over, never rendered raw.
 
+When the question could not be turned into a query, a token is offered when the question's wording is about what that
+door holds (sources that disagree; a lifecycle, its stages and transitions, a blocked document — in French or English; a plain status lookup does not count); an unrelated refusal, such as a
+text search that could not be translated, carries none. The same holds for a question that ran and returned
+no rows: the doors are named only when the question's wording is about them.
+
+**Fixed sentences follow `lang`.** The abstentions, the guard refusals and the zero-row caveat are
+fixed sentences, served in English or French by the request's `lang`; an absent or unsupported
+`lang` gets English. `abstained` is how to tell a refusal without reading them: `true` whenever the
+door declined to answer instead of answering — the model's own "cannot answer" exit, a scope with no
+schema, rejected SQL, a table, column or value the scope does not declare, a filter that matches
+several rows, a query the database refused, a query that returned no rows, a phrased answer
+withheld because it stated a figure the rows do not back, or a model that could not write the answer
+(the query ran: `rows` and `sql` are the result) — and `false` on an answer. Branch on it,
+never on the words.
+
 An app consuming this door should treat a `rowCount: 0` answer as *"read the answer text"*, not
 as *"there are none"* — that asymmetry is the whole point. In the PWA, the **abstentions**
 (the two refusals that return `sql: ""`) get a distinct amber "refusal" bubble; a guard
@@ -180,7 +233,7 @@ answer:
 | Field | Type | Meaning | Default |
 |---|---|---|---|
 | `query` | string | the search text — **required** (blank → 400) | — |
-| `topK` | integer | number of hits | 10 |
+| `topK` | integer | number of hits, 1 to 50. Outside → `400 {"error":"topK must be between 1 and 50"}` | 10 |
 | `corpus` | string | restrict to one corpus (source) | all |
 | `scope` | string | restrict to chunks carrying this métier tag; `"all"`/blank = no tag filter (for a scope-bound user, rewritten onto their granted set — never unfiltered) | none |
 | `filters` | object | accepted in the body but **not applied yet** — reserved; don't rely on it | — |
@@ -305,7 +358,7 @@ erased by deleting their connector ([GDPR → erasure](../security/gdpr.md#the-r
 | `404` | `{"error": "No schema card found for scope: ..."}` | `GET .../schema` on a scope with no discovered schema card yet |
 | `409` | `{"error": "no schema discovered for scope '...' — apply an entity or run discovery first", "hint": "lm entity apply registers a schema for the scope; ask again after it lands"}` | analytic ask on a scope with no schema card at all — a fresh install, or a scope with no `kind: Entity` applied yet |
 | `429` | `{"error": "rate limit exceeded"}` + `Retry-After: <seconds>` header | bucket exhausted — honor `Retry-After` before retrying |
-| `503` | `{"error": "...", "hint": "..."}` | the needed port (chat/embedding/analytic) is not on the classpath, or the LLM/embedding backend is unreachable — a deployment problem, not a caller problem |
+| `503` | `{"error": "...", "hint": "..."}` | the needed port (chat/embedding/analytic) is not on the classpath, or the LLM/embedding backend is unreachable — a deployment problem, not a caller problem. (An analytic ask whose SQL already ran is not a `503` when only the answer could not be written: it is a `200` with `abstained: true`, the rows and the SQL.) |
 
 Rate limits are per **(bucket, tenant)** in a fixed 60-second window. The chat and search
 endpoints ride three buckets — `user-chat`, `platform-chat`, `platform-search` — each

@@ -81,7 +81,9 @@ Rules are swept every 5 s with their own cursor (a webhook outage never starves 
 Delivery is **mocked until the deploy sets the SMTP knobs**
 ([turn on email delivery](deploy.md#turn-on-email-delivery)) — the boot log states the
 posture. Email is **best-effort**: a failed send is logged and skipped, no retry, no
-journal — per-rule, so one broken recipient never starves the others. When delivery
+journal — per-rule, so one broken recipient never starves the others. Mails leave once the
+batch's position is saved, so a slow SMTP server never holds it; a crash in between loses that
+batch's mails rather than repeating them. When delivery
 must be provable, wire a [webhook](outputs.md#wire-a-webhook) as well.
 
 ## How to…

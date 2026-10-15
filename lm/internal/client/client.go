@@ -190,14 +190,15 @@ func (c *Client) POST(path string, body, out any) error {
 	return c.do("POST", path, body, out)
 }
 
-// modelCallTimeout bounds the model-bound calls (ask, chat, view generate): CPU
-// inference legitimately takes minutes on a cold model — the 30s c.http budget
-// killed every cold ask — while still guaranteeing the call cannot hang forever.
+// modelCallTimeout bounds the calls that can legitimately run past the 30s c.http budget: the
+// model-bound ones (ask, chat, view generate — CPU inference takes minutes on a cold model) and
+// EntityResolve (a synchronous bulk SQL scan over one entity's whole extent) — while still
+// guaranteeing the call cannot hang forever.
 const modelCallTimeout = 5 * time.Minute
 
-// POSTSlow is POST for model-bound endpoints: the same request pipeline, but on
-// the stream client (Timeout 0) bounded by modelCallTimeout through the request
-// context — the same pattern the SSE paths already use.
+// POSTSlow is POST for slow endpoints (model-bound, or a synchronous bulk operation): the same
+// request pipeline, but on the stream client (Timeout 0) bounded by modelCallTimeout through the
+// request context — the same pattern the SSE paths already use.
 func (c *Client) POSTSlow(path string, body, out any) error {
 	return c.doOn(c.stream, modelCallTimeout, "POST", path, body, out)
 }
@@ -221,6 +222,12 @@ func (c *Client) do(method, path string, body, out any) error {
 // (0 = rely on hc's own Timeout). The deadline rides the request context, so it
 // bounds the whole round trip even on the Timeout-0 stream client.
 func (c *Client) doOn(hc *http.Client, timeout time.Duration, method, path string, body, out any) error {
+	return c.doOnCtx(context.Background(), hc, timeout, method, path, body, out)
+}
+
+// doOnCtx is doOn under a caller's context: cancelling it (an interrupted command that waits)
+// aborts the round trip instead of leaving it to run out its own timeout.
+func (c *Client) doOnCtx(ctx context.Context, hc *http.Client, timeout time.Duration, method, path string, body, out any) error {
 	var reader io.Reader
 	if body != nil {
 		buf, err := json.Marshal(body)
@@ -230,7 +237,6 @@ func (c *Client) doOn(hc *http.Client, timeout time.Duration, method, path strin
 		reader = bytes.NewReader(buf)
 	}
 	url := strings.TrimRight(c.ctx.Server, "/") + path
-	ctx := context.Background()
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)

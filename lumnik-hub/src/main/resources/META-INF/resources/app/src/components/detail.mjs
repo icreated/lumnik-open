@@ -1,9 +1,9 @@
 import { html, Fragment, useEffect } from '../html.mjs';
-import { cell } from '../format.mjs';
+import { cell, ledgerValue } from '../format.mjs';
 import { Refusal } from './refusal.mjs';
 
 // B6: detail rendering ported from the spike's openDetail (m/index.html ~L435-470) — fields,
-// the amber conflicts ledger, the "sources agree" line. `data` is a small state machine fiches.mjs
+// the amber conflicts ledger, the no-conflict line. `data` is a small state machine fiches.mjs
 // drives: {status:'loading'} while the detail call is in flight, {status:'error',kind,message} on
 // failure, {status:'ready', payload} with the server payload.
 //
@@ -54,17 +54,17 @@ function renderBody(data) {
       ${d.conflicts && d.conflicts.length
         ? html`
           <div class="conflicts">
-            <h3>⚡ Les sources ne sont pas d’accord</h3>
+            <h3>⚡ Ambiguïtés et divergences</h3>
             ${d.conflicts.map(cf => html`
               <div class="conflict">
                 <div class="col">${cf.label || cf.column}</div>
-                ${cf.sources.map(s => html`<div class="src">${s.src} : <b>${s.value}</b></div>`)}
+                ${cf.sources.map(s => html`<div class="src">${s.src} : <b>${ledgerValue(s.value)}</b></div>`)}
               </div>
             `)}
           </div>
         `
         : d.conflictLedger
-          ? html`<div class="agree">✓ Toutes les sources sont d’accord sur cette fiche.</div>`
+          ? html`<div class="agree">✓ Aucune ambiguïté ni divergence sur cette fiche.</div>`
           : null}
     <//>
   `;

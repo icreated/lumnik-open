@@ -158,7 +158,7 @@ func TestNewKindIssuesEscapeServerError(t *testing.T) {
 func TestConflictsCellsAndDescribeEscape(t *testing.T) {
 	c := &Conflicts{table: tview.NewTable(), sortCol: style.NewColumnSort([]string{"ENTITY", "KEY"})}
 	c.items = []client.Conflict{{Entity: evil, Key: evil, Columns: []string{evil},
-		Conflicts: map[string][]client.DetailSource{evil: {{Src: evil, Value: evil}}}}}
+		Conflicts: map[string][]client.DetailSource{evil: {{Src: evil, Value: client.StrPtr(evil)}}}}}
 	c.render()
 	for col := 0; col < 4; col++ {
 		if got := c.table.GetCell(1, col).Text; strings.Contains(got, evil) {
@@ -174,6 +174,44 @@ func TestConflictsCellsAndDescribeEscape(t *testing.T) {
 	}
 	if strings.Contains(body, evil) {
 		t.Errorf("conflicts describe body unescaped: %q", body)
+	}
+}
+
+// Ambiguity rows carry raw ERP identifiers (source, sourceId, candidate entity IDs) straight
+// from the crosswalk — the same class of raw data :conflicts already guards.
+func TestAmbiguousCellsAndDescribeEscape(t *testing.T) {
+	a := &Ambiguous{table: tview.NewTable(), sortCol: style.NewColumnSort([]string{"SOURCE", "OCCURRED_AT"})}
+	a.active.items = []client.AmbiguousIdentity{{
+		IdentityRef: evil, Source: evil, SourceID: evil,
+		Candidates: []string{evil}, DecidedBy: evil,
+		DiscardedCandidates: []client.ProposedCandidate{{EntityID: evil, Score: 0.5}},
+	}}
+	a.render()
+	for col := 0; col < 6; col++ {
+		if got := a.table.GetCell(1, col).Text; strings.Contains(got, evil) {
+			t.Errorf("ambiguous cell %d unescaped: %q", col, got)
+		}
+	}
+	a.table.Select(1, 0)
+	_, body, ok := a.SelectedDescribe()
+	if !ok {
+		t.Fatal("describe !ok")
+	}
+	if strings.Contains(body, evil) {
+		t.Errorf("ambiguous describe body unescaped: %q", body)
+	}
+}
+
+// renderHistory feeds a fixed evidence event through the SAME describe-adjacent panel; the
+// candidates/rule/provider/decidedBy/runId fields are all server data.
+func TestRenderHistoryEscapes(t *testing.T) {
+	got := renderHistory([]client.EvidenceEvent{{
+		Outcome: evil, RuleDeclaredID: evil, Provider: evil, DecidedBy: evil, RunID: evil,
+		Candidates: []string{evil},
+		SetAside:   []client.SetAside{{EntityID: evil, Reason: evil, Rule: strPtr(evil)}},
+	}})
+	if strings.Contains(got, evil) {
+		t.Errorf("renderHistory unescaped: %q", got)
 	}
 }
 
@@ -273,18 +311,11 @@ func TestInboxDescribeBodyEscapes(t *testing.T) {
 }
 
 func TestSourcesDescribeBodyEscapes(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// evil is "[red]evil" — no JSON-special characters, so plain concatenation is safe.
-		_, _ = w.Write([]byte(`{"id":"c-1","tenantId":1,"name":"` + evil + `","typeId":"` + evil +
-			`","schedule":"` + evil + `","enabled":true,"status":"` + evil +
-			`","config":{"url":"` + evil + `"}}`))
-	}))
-	t.Cleanup(srv.Close)
-
+	// The describe renders the listed row itself (#891), so the hostile values ride on it.
 	c := &Sources{table: tview.NewTable(),
-		client:  client.New(config.Context{Server: srv.URL, Token: "static"}),
 		sortCol: style.NewColumnSort([]string{"NAME", "TYPE", "SCHED", "ENABLED"})}
-	c.items = []types.Connector{{ID: "c-1", Name: "probe"}}
+	c.items = []types.Connector{{ID: "c-1", TenantID: 1, Name: evil, TypeID: evil,
+		Schedule: evil, Window: evil, Enabled: true, Status: evil, Config: map[string]any{"url": evil}}}
 	c.render()
 	c.table.Select(1, 0)
 	_, body, ok := c.SelectedDescribe()
@@ -366,7 +397,7 @@ func TestOutputsCellsAndDescribeEscape(t *testing.T) {
 // per page are in the audit; what this test guards is COVERAGE, not correctness.)
 func TestEveryDescribePageIsInTheEscapeInventory(t *testing.T) {
 	covered := map[string]bool{
-		"Conflicts": true, "DLQ": true, "Endpoints": true, "Inbox": true,
+		"Ambiguous": true, "Conflicts": true, "DLQ": true, "Endpoints": true, "Inbox": true,
 		"Observations": true, "Outputs": true, "Processes": true, "Runs": true, "Scopes": true,
 		"Sources": true, "ViewPage": true,
 	}

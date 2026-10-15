@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.api;
 
+import io.lumnik.hub.connector.runtime.OwnedRunScope;
 import io.lumnik.hub.connector.api.types.*;
 import org.junit.jupiter.api.Test;
 
@@ -36,7 +37,7 @@ class SdkApiTest {
         null,
         null,
         Clock.systemUTC(),
-        null);
+        null, new OwnedRunScope("test"));
 
     assertThat(ctx.configValue("host", String.class)).isEqualTo("localhost");
     assertThat(ctx.configValue("port", Integer.class)).isEqualTo(5432);
@@ -58,7 +59,7 @@ class SdkApiTest {
         null,
         null,
         Clock.systemUTC(),
-        null);
+        null, new OwnedRunScope("test"));
 
     assertThat(ctx.configValue("missing", String.class, "default")).isEqualTo("default");
   }

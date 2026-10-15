@@ -54,6 +54,12 @@ public class PlatformIndexer {
     }
 
     public void reindex() {
+        // No embedding model (Open, or lumnik.ai.enabled=false): there is nothing to index with, and
+        // the status must not claim otherwise. Not a warning: it is a state, not a fault.
+        if (embeddingPorts.isUnsatisfied()) {
+            LOG.info("Platform index skipped: no embedding model is available");
+            return;
+        }
         List<ExtractedChunk> chunks = new ArrayList<>();
         chunks.addAll(chunksFromManifests());
         chunks.addAll(openApiChunkBuilder.buildFromClasspath());
@@ -69,8 +75,11 @@ public class PlatformIndexer {
                 LOG.errorf(e, "Sink '%s' failed during index — continuing with others", sink.name());
             }
         }
-        lastChunkCount.set(chunks.size());
-        lastIndexedAt.set(Instant.now());
+        // Recorded only when a sink took the chunks: `indexed` is a claim about the corpus.
+        if (sinkCount > 0) {
+            lastChunkCount.set(chunks.size());
+            lastIndexedAt.set(Instant.now());
+        }
         LOG.infof("Platform index: %d chunks across %d sink(s)", chunks.size(), sinkCount);
     }
 
@@ -118,7 +127,8 @@ public class PlatformIndexer {
 
     private List<ExtractedChunk> chunksFromManifests() {
         List<ExtractedChunk> result = new ArrayList<>();
-        for (ModuleManifest m : manifestRegistry.all()) {
+        // the system corpus tells the chat what this hub OFFERS: active modules only (D2)
+        for (ModuleManifest m : manifestRegistry.active()) {
             String displayName = m.displayName() != null
                 ? m.displayName().getOrDefault("en", m.id()) : m.id();
             String schema = m.schema() != null ? m.schema() : "";

@@ -8,6 +8,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/icreated/lumnik-open/lm/internal/editor"
+	"github.com/icreated/lumnik-open/lm/internal/newfile"
 	"github.com/rivo/tview"
 )
 
@@ -71,7 +72,7 @@ func posixUnquote(s string) (string, bool) {
 
 // uniquify probes for the first free path: p, then stem-2.ext, stem-3.ext, …
 // A candidate that cannot be probed (any Stat error, not just ErrNotExist)
-// comes back as-is instead of spinning the loop — writeNew's O_EXCL is the
+// comes back as-is instead of spinning the loop — newfile.Write's O_EXCL is the
 // overwrite guard, the probe only picks a friendly name.
 func uniquify(p string) string {
 	exists := func(q string) bool {
@@ -89,27 +90,6 @@ func uniquify(p string) string {
 			return q
 		}
 	}
-}
-
-// writeNew creates the file exclusively (O_EXCL) — the overwrite invariant
-// lives HERE, not in uniquify's probe: even a raced or mis-probed name can
-// never silently clobber an existing file. A failed write removes the
-// half-written file; the caller keeps the buffer.
-func writeNew(path string, data []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		return err
-	}
-	if _, werr := f.Write(data); werr != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-		return werr
-	}
-	if cerr := f.Close(); cerr != nil { // a failed flush may leave a partial file
-		_ = os.Remove(path)
-		return cerr
-	}
-	return nil
 }
 
 // persistBuffer writes buffer to a temp file and returns its path. On any
@@ -271,7 +251,7 @@ func (v *ViewPage) renderGenerated(buffer string) {
 		return
 	}
 	path := uniquify(suggestedFileName(buffer))
-	if werr := writeNew(path, []byte(buffer)); werr != nil {
+	if werr := newfile.Write(path, []byte(buffer)); werr != nil {
 		v.enterGenIssues("[red]write failed[white] — "+tview.Escape(werr.Error())+
 			"\n\nYour manifest is intact — e to re-edit.", buffer)
 		return

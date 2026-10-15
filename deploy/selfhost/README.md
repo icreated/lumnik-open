@@ -79,8 +79,9 @@ Then point `lm` at the hub (server `http://localhost:8080`, OIDC `http://localho
 
 ## Secrets
 
-`up.sh` writes `.env` (gitignored, mode `600` — owner-only) with six secrets: the Postgres and Keycloak
+`up.sh` writes `.env` (gitignored, mode `600` — owner-only) with its secrets: the Postgres and Keycloak
 admin passwords, the two hub encryption keys (`LUMNIK_SECRET_MASTER_KEY`, `LUMNIK_CRYPTO_SECRET_KEY`),
+the entity-resolution fingerprint secret (`LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET`),
 and the per-install passwords for the demo realm users (`HUBADMIN_PASSWORD`, `INTEGRATOR_PASSWORD` —
 no known password ever survives an install).
 **Back `.env` up** —
@@ -124,6 +125,13 @@ Back up `.env` separately: it holds the master key.
 The hub's internal DB-role passwords (`lumnik_app` / `admin` / `readonly`) use built-in defaults; Postgres
 is not published outside the compose network, so it is internal-only. Making those configurable is a
 tracked follow-up.
+
+## Switching the AI off (optional)
+
+`LUMNIK_AI_ENABLED=false` in `.env`, then re-run `up.sh`: the chat, the ask and the embeddings
+stop, the PWA drops its Chat tab, `lm module list` shows `rag` and `llm` as `INACTIVE`, and the
+data is kept. Exactly `true` or `false`; absent means on. What a switch back on does and does not
+restore: [Switching the AI off](../../docs/rag/models.md#switching-the-ai-off).
 
 ## Email delivery (optional)
 

@@ -1,5 +1,6 @@
 package io.lumnik.hub.validator.common;
 
+import com.cronutils.model.Cron;
 import com.cronutils.model.CronType;
 import com.cronutils.model.definition.CronDefinitionBuilder;
 import com.cronutils.parser.CronParser;
@@ -16,6 +17,13 @@ public final class CronField {
 
     private static final CronParser UNIX_PARSER =
         new CronParser(CronDefinitionBuilder.instanceDefinitionFor(CronType.UNIX));
+
+    /** {@code expr} in the UNIX 5-field dialect {@link #validCron(String)} accepts; throws
+     *  IllegalArgumentException when it is not a cron. */
+    public static Cron parse(String expr) {
+        // validate() too, exactly as validCron does: a string validCron refuses must never parse.
+        return UNIX_PARSER.parse(expr).validate();
+    }
 
     public static Function<JsonNode, Optional<String>> validCron() {
         return v -> validCron(v.asText());

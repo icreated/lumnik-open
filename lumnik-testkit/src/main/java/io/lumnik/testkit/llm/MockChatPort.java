@@ -2,6 +2,7 @@ package io.lumnik.testkit.llm;
 
 import io.lumnik.llm.spi.ChatMessage;
 import io.lumnik.llm.spi.ChatPort;
+import io.quarkus.arc.lookup.LookupIfProperty;
 import io.quarkus.test.Mock;
 import jakarta.enterprise.context.ApplicationScoped;
 
@@ -17,6 +18,7 @@ import java.util.List;
  */
 @Mock
 @ApplicationScoped
+@LookupIfProperty(name = "lumnik.ai.enabled", stringValue = "true", lookupIfMissing = true)
 public class MockChatPort implements ChatPort {
 
     @Override

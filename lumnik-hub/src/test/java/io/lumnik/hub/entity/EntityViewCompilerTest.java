@@ -196,6 +196,110 @@ class EntityViewCompilerTest {
     assertThat(create).contains("\"weird\"\"col\""); // doubled inner quote
   }
 
+  // #618 — resolution: projection over the crosswalk.
+  // ---------------------------------------------------------------------------------------------
+
+  private static EntityManifest resolvedTwoSources() {
+    Map<String, String> erp = new LinkedHashMap<>();
+    erp.put("cust_id", "customer_id");
+    erp.put("cust_name", "name");
+    Map<String, String> crm = new LinkedHashMap<>();
+    crm.put("contact_ref", "contact_id");
+    crm.put("email_addr", "email");
+    EntityManifest.Resolution resolution = new EntityManifest.Resolution(
+        Map.of("t_erp_customers", "customer_id", "t_crm_contacts", "contact_id"),
+        List.of(new EntityManifest.CascadeRule("erp-key",
+            new EntityManifest.Exact(List.of("customer_id"), List.of()), null)));
+    return new EntityManifest("Entity", "Customer", null, null,
+        List.of(new EntityManifest.Source("t_erp_customers", erp),
+                new EntityManifest.Source("t_crm_contacts", crm)),
+        List.of(), null, Map.of(), resolution);
+  }
+
+  @Test
+  void build_statements_fails_fast_when_neither_match_nor_resolution_is_declared() {
+    EntityManifest m = new EntityManifest("Entity", "Customer", null, null,
+        List.of(new EntityManifest.Source("t_x", new LinkedHashMap<>(Map.of("c", "customer_code")))),
+        List.of(), null, Map.of(), null);
+    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m))
+        .isInstanceOf(IllegalStateException.class);
+  }
+
+  @Test
+  void build_statements_fails_fast_when_a_source_is_missing_from_resolution_identity() {
+    // Same "don't rely solely on the parser" posture as appendMatchNotNull: a programmatic
+    // manifest whose identity map skips a declared source must not silently emit a branch that
+    // joins on nothing.
+    EntityManifest.Resolution resolution = new EntityManifest.Resolution(Map.of(), List.of());
+    EntityManifest m = new EntityManifest("Entity", "Customer", null, null,
+        List.of(new EntityManifest.Source("t_x", new LinkedHashMap<>(Map.of("c", "customer_id")))),
+        List.of(), null, Map.of(), resolution);
+    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m))
+        .isInstanceOf(IllegalStateException.class);
+  }
+
+  @Test
+  void resolved_manifest_compiles_to_the_drop_create_grant_shape() {
+    List<String> sql = new EntityViewCompiler().buildStatements(resolvedTwoSources());
+    assertThat(sql).hasSize(4);
+    assertThat(sql.get(0)).isEqualTo("DROP VIEW IF EXISTS connector.\"v_customer\"");
+    assertThat(sql.get(2)).isEqualTo("GRANT SELECT ON connector.\"v_customer\" TO lumnik_app");
+  }
+
+  @Test
+  void resolved_manifest_left_joins_entity_identity_on_its_own_declared_identity_column_per_source() {
+    String create = new EntityViewCompiler().buildStatements(resolvedTwoSources()).get(1);
+    assertThat(create).contains("LEFT JOIN core.entity_identity");
+    assertThat(create).contains("ei.entity_type = 'customer'"); // lower-cased like the view name
+    assertThat(create).contains("ei.source = 't_erp_customers'");
+    assertThat(create).contains("ei.source = 't_crm_contacts'");
+    // each branch joins on ITS OWN physical identity column, not the other source's.
+    assertThat(create).contains("\"cust_id\"::text");
+    assertThat(create).contains("\"contact_ref\"::text");
+  }
+
+  @Test
+  void resolved_branch_qualifies_every_physical_column_next_to_the_crosswalk_join() {
+    // #967: next to LEFT JOIN core.entity_identity ei, an unqualified physical column named like one of
+    // ei's own (state, source, source_id, created_at…) is ambiguous and CREATE VIEW fails. Every
+    // occurrence of every physical column — projection, _source_id, join condition, NULL filter — is s.
+    String create = new EntityViewCompiler().buildStatements(resolvedTwoSources()).get(1);
+    assertThat(create).contains("FROM connector.\"t_erp_customers\" s LEFT JOIN core.entity_identity ei");
+    for (String physical : List.of("cust_id", "cust_name", "contact_ref", "email_addr")) {
+      assertThat(create).as(physical + " is referenced").contains("s.\"" + physical + "\"");
+      assertThat(create).as(physical + " is never referenced unqualified")
+          .doesNotContainPattern("(?<!s\\.)\"" + physical + "\"");
+    }
+  }
+
+  @Test
+  void resolved_manifest_groups_on_the_coalesced_canonical_id_not_on_a_match_column() {
+    String create = new EntityViewCompiler().buildStatements(resolvedTwoSources()).get(1);
+    assertThat(create).doesNotContain("GROUP BY \"customer_id\"");
+    assertThat(create).contains("GROUP BY coalesce(");
+    assertThat(create).contains("\"_entity_id\"::text");
+    assertThat(create).contains("\"_src\" || ':' || \"_source_id\"");
+  }
+
+  @Test
+  void resolved_manifest_exposes_entity_id_and_resolution_columns() {
+    String create = new EntityViewCompiler().buildStatements(resolvedTwoSources()).get(1);
+    assertThat(create).contains("AS \"_entity_id\"");
+    assertThat(create).contains("AS \"_resolution\"");
+    assertThat(create).contains("AS \"_handle\"");
+  }
+
+  @Test
+  void resolved_manifest_conflicts_ledger_still_only_flags_a_genuine_difference() {
+    // No match: set carves out an "equal by construction" column in resolution mode, so every
+    // canonical column — including the per-source identity ones — goes through the same
+    // count(DISTINCT …) > 1 ledger mechanism as v1's non-match columns (#618 acceptance: unchanged).
+    String create = new EntityViewCompiler().buildStatements(resolvedTwoSources()).get(1);
+    assertThat(create).contains("jsonb_strip_nulls(jsonb_build_object(");
+    assertThat(create).contains("count(DISTINCT \"customer_id\") > 1");
+    assertThat(create).contains("count(DISTINCT \"email\") > 1");
+  }
+
   // The 42P01 translation must fire ONLY for the manifest's own source tables: a
   // missing internal relation (entity_manifest — a migration fault) dressed as a
   // "run your connectors" 409 would be a lie worse than the 500.

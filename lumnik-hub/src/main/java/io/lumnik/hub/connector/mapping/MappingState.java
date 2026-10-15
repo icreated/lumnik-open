@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * atomic counters + the rows dropped by hooks.
  *
  * <p>On the production path ({@code MappingEngine.transformAndWrite} /
- * {@code prepareEmbeddings}) this is built fresh on <b>every call, and every call is one chunk</b>
+ * {@code prepare}) this is built fresh on <b>every call, and every call is one chunk</b>
  * — despite the name, it does not live for the whole run. Consequence: hook state does not
  * survive a chunk boundary, so a hook that needs to buffer across chunks (e.g. {@code aggregator})
  * cannot rely on this class to carry that buffer — see {@code CsvFileConnectorValidator}'s

@@ -15,6 +15,27 @@ export function cell(v) {
   return v === null || v === undefined ? '—' : String(v);
 }
 
+// A ledger value of null is an absent value (a lookup row with nothing to say), distinct from the
+// real empty string — never a blank that could pass for one.
+export function ledgerValue(v) {
+  return v === null || v === undefined ? '(empty)' : String(v);
+}
+
+// #874 — the fused records an answer filtered on while their sources disagree, in métier French.
+// Pure, so the wording is tested here and the component only lays it out.
+export function disputedBlock(disputed, truncated) {
+  if (!disputed || disputed.length === 0) return null;
+  const items = disputed.map(d => {
+    const name = `${d.key} · ${d.label || d.column}`;
+    const head = d.counted
+      ? `${name} — comptée avec « ${d.matched} »`
+      : `${name} — écartée, alors qu'une source indique « ${d.matched} »`;
+    const sources = (d.sources || []).map(s => `${s.src} : ${ledgerValue(s.value)}`).join(' · ');
+    return { head, sources };
+  });
+  return { title: '⚡ Désaccord sur une valeur filtrée', items, more: truncated ? "… et d'autres fiches" : null };
+}
+
 // The doors an abstention names, as THIS surface's gesture — null when it has none, and a token
 // this build does not know maps to null too, so it is passed over rather than rendered raw (#515).
 //
@@ -33,4 +54,10 @@ export function doorGesture(door) {
 export function dataAsOfLabel(iso, now = Date.now()) {
   if (!iso) return null;
   return `données : ${since(iso, now)}`;
+}
+
+// #879: the body of an analytic ask. This shell is French only, so it names its answer language —
+// a terse question ("SO-000004 statut ?") carries none, and the model would fall back to English.
+export function analyticAsk(question, scope) {
+  return { question, mode: 'analytic', scope, lang: 'fr' };
 }

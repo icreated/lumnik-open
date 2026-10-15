@@ -52,25 +52,30 @@ public class InboxResource {
                          @QueryParam("all") @DefaultValue("false") boolean all) {
         long tenant = RequireTenant.current();
         int lim = Math.min(Math.max(limit, 1), 200);
-
-        String ackMatch = "SELECT 1 FROM core.event_outbox a WHERE a.tenant_id = d.tenant_id "
-                        + "AND a.event_type = '" + ACK_TYPE + "' "
-                        + "AND a.payload->>'decision_id' = d.id::text";
-        // Default fold: NOT EXISTS already guarantees every returned row is un-acked, so `acked`
-        // is a constant false there — skip the redundant per-row EXISTS. Only ?all=true computes it.
-        String ackedExpr = all ? "EXISTS (" + ackMatch + ")" : "false";
-        String sql = "SELECT d.id, d.event_type, d.source, d.entity, d.entity_key, d.payload, d.occurred_at, "
-                   + ackedExpr + " AS acked "
-                   + "FROM core.event_outbox d WHERE d.tenant_id = ? AND d.event_type LIKE 'decision.%' "
-                   + (all ? "" : "AND NOT EXISTS (" + ackMatch + ") ")
-                   + "ORDER BY d.id DESC LIMIT ?";
-        List<InboxEntry> out = Jdbc.query(adminDs, "InboxResource.list", sql,
+        List<InboxEntry> out = Jdbc.query(adminDs, "InboxResource.list", listSql(all),
             ps -> { ps.setLong(1, tenant); ps.setInt(2, lim); },
             this::shape);
         return Response.ok(out).build();
     }
 
+    /** The inbox read (binds: tenant, limit) — package-private so its plan can be pinned. */
+    static String listSql(boolean all) {
+        // "Acked" is looked up by the key ack() writes: one uq_event_outbox_dedup probe, whose one
+        // row then has its type checked, so no other writer's key can ever ack a decision.
+        String ackMatch = "SELECT 1 FROM core.event_outbox a WHERE a.tenant_id = d.tenant_id "
+                        + "AND a.dedup_key = '" + ACK_KEY + "' || d.id AND a.event_type = '" + ACK_TYPE + "'";
+        // Default fold: NOT EXISTS already guarantees every returned row is un-acked, so `acked`
+        // is a constant false there — skip the redundant per-row EXISTS. Only ?all=true computes it.
+        String ackedExpr = all ? "EXISTS (" + ackMatch + ")" : "false";
+        return "SELECT d.id, d.event_type, d.source, d.entity, d.entity_key, d.payload, d.occurred_at, "
+             + ackedExpr + " AS acked "
+             + "FROM core.event_outbox d WHERE d.tenant_id = ? AND d.event_type LIKE 'decision.%' "
+             + (all ? "" : "AND NOT EXISTS (" + ackMatch + ") ")
+             + "ORDER BY d.id DESC LIMIT ?";
+    }
+
     private static final String ACK_TYPE = "annotation.decision.acked";
+    private static final String ACK_KEY = "ack:";   // + decision id: the ack's dedup key
     private static final String ACK_SQL =
         "INSERT INTO core.event_outbox "
         + "(tenant_id, event_type, source, entity, entity_key, payload, dedup_key, occurred_at, created_at) "
@@ -104,7 +109,7 @@ public class InboxResource {
             ps.setString(4, decision.get()[0]);
             ps.setString(5, decision.get()[1]);
             ps.setString(6, mapper.writeValueAsString(Map.of("decision_id", id, "by", by)));
-            ps.setString(7, "ack:" + id);
+            ps.setString(7, ACK_KEY + id);
         });   // 0 rows on re-ack (dedup) — same honest 200 either way
         return Response.ok(Map.of("acked", true)).build();
     }

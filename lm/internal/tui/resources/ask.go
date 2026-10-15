@@ -95,7 +95,7 @@ func (a *Ask) submit(question string) {
 	a.headline.SetText("[yellow]…thinking[white]")
 	scope := a.scope // capture on the event loop; SetScope may write a.scope concurrently
 	go func() {
-		res, err := a.client.RagAsk(question, scope)
+		res, err := a.client.RagAsk(question, scope, client.AnswerLang(""))
 		QueueUpdate(a.app, func() {
 			if err != nil {
 				// Calm, full-page degradation — notably for REST/CSV scopes with no
@@ -179,7 +179,7 @@ func doorGestures(doors []string) []string {
 	var out []string
 	for _, d := range doors {
 		if d == ask.Conflicts {
-			out = append(out, "where this scope's sources disagree: :conflicts")
+			out = append(out, "where this scope has source conflicts or lookup ambiguities: :conflicts")
 		}
 	}
 	return out

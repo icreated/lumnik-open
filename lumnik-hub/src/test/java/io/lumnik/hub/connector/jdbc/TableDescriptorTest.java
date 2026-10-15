@@ -1,5 +1,7 @@
 package io.lumnik.hub.connector.jdbc;
 
+import io.lumnik.jdbc.spi.FkDescriptor;
+import io.lumnik.jdbc.spi.ColumnDescriptor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import org.junit.jupiter.api.Test;
@@ -39,7 +41,8 @@ class TableDescriptorTest {
                 new ColumnDescriptor("name", "VARCHAR", 255, true)),
         List.of(new FkDescriptor("c_bp_group_id", "public", "c_bp_group", "c_bp_group_id")),
         Optional.of("updated"),
-        8421L);
+        8421L,
+        List.of("body BLOB"));
     String json = M.writeValueAsString(t);
     TableDescriptor decoded = M.readValue(json, TableDescriptor.class);
     assertEquals(t, decoded);
@@ -53,7 +56,8 @@ class TableDescriptorTest {
         List.of(new ColumnDescriptor("id", "INTEGER", 10, false)),
         List.of(),
         Optional.empty(),
-        12L);
+        12L,
+        List.of());
     String json = M.writeValueAsString(t);
     assertNotNull(json);
     TableDescriptor decoded = M.readValue(json, TableDescriptor.class);

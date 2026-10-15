@@ -35,7 +35,9 @@ var manifestDoors = []manifestDoor{
 	{[]string{"entity", "apply"}, "kind: Entity\nmetadata:\n  name: " + marker + "\nspec: {}\n"},
 	{[]string{"app", "apply"}, "kind: App\nmetadata:\n  name: " + marker + "\nspec: {}\n"},
 	{[]string{"process", "apply"}, "apiVersion: apps.lumnik.io/v1\nkind: Process\nmetadata:\n  name: " + marker + "\nspec: {}\n"},
+	{[]string{"export", "apply"}, "apiVersion: apps.lumnik.io/v1\nkind: Export\nmetadata:\n  name: " + marker + "\nspec: {}\n"},
 	{[]string{"workflow", "apply"}, "apiVersion: apps.lumnik.io/v1\nkind: Workflow\nmetadata:\n  name: " + marker + "\nspec: {}\n"},
+	{[]string{"search", "apply"}, "apiVersion: search.lumnik.io/v1\nkind: SearchIndex\nmetadata:\n  name: " + marker + "\nspec: {}\n"},
 	{[]string{"view"}, "apiVersion: apps.lumnik.io/v1\nkind: View\nmetadata:\n  name: " + marker + "\nspec: {}\n"},
 	{[]string{"view", "apply"}, "apiVersion: apps.lumnik.io/v1\nkind: View\nmetadata:\n  name: " + marker + "\nspec: {}\n"},
 	// The flat-payload doors: an envelope (kind/apiVersion) is refused here by design.

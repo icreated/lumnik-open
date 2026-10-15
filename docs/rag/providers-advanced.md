@@ -24,11 +24,13 @@ both point at the same provider (see [Traps](#traps) below).
 | `OLLAMA_BASE_URL` | `quarkus.langchain4j.ollama.base-url` + `…ollama.analytic.base-url` + `…ollama.judge.base-url` | Where **all three** Ollama clients connect |
 | `RAG_CHAT_MODEL` | `quarkus.langchain4j.ollama.chat-model.model-id` | Conversational RAG chat |
 | `ASK_SQL_MODEL` | `quarkus.langchain4j.ollama.analytic.chat-model.model-id` | Text-to-SQL ask + view generation |
+| `ASK_SQL_NUM_CTX` | `quarkus.langchain4j.ollama.analytic.chat-model.model-options.num-ctx` | Context window of the analytic model (default `32768`) |
+| `ASK_SQL_NUM_PREDICT` | `quarkus.langchain4j.ollama.analytic.chat-model.num-predict` | Most tokens the analytic model may write per call (default `1024`) |
 | `JUDGE_MODEL` | `quarkus.langchain4j.ollama.judge.chat-model.model-id` | Offline faithfulness eval |
 | `RAG_EMBEDDING_MODEL` | `quarkus.langchain4j.ollama.embedding-model.model-id` | Chunk + query embeddings |
 | `RAG_EMBEDDING_DIM` | `quarkus.langchain4j.pgvector.dimension` | Must match the model **and** the `VECTOR(768)` column |
 
-All six are runtime properties (unlike the provider selectors below, which are build-time).
+These are runtime properties (unlike the provider selectors below, which are build-time).
 Override any of them per deployment as a JVM system property or its matching environment
 variable — MicroProfile Config maps `quarkus.langchain4j.ollama.analytic.timeout` to
 `QUARKUS_LANGCHAIN4J_OLLAMA_ANALYTIC_TIMEOUT`, for example.
@@ -43,6 +45,10 @@ Raise one if a slow model needs more, e.g.:
 ```bash
 -Dquarkus.langchain4j.ollama.analytic.timeout=300s
 ```
+
+A call that runs out of its timeout is **not** started again: it is reported once and you ask again. This single
+attempt, and the output bound `ASK_SQL_NUM_PREDICT`, are set on the **Ollama** analytic model; if you rebind that
+slot to another provider, set the equivalent retry and output-length limits there.
 
 ### Labels vs selectors
 

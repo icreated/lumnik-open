@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/icreated/lumnik-open/lm/internal/config"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestParseRowsPreservesColumnOrder(t *testing.T) {
@@ -31,6 +32,16 @@ func TestParseRowsPreservesColumnOrder(t *testing.T) {
 	}
 }
 
+// The hub sends "retained": null when the fused record holds no value (#883): it must not read as "".
+func TestDisputedKeepsANullRetainedDistinctFromEmpty(t *testing.T) {
+	var got []Disputed
+	if err := json.Unmarshal([]byte(`[{"key":"P-1002","retained":null},{"key":"P-1003","retained":""},{"key":"P-1008","retained":"Lyon"}]`), &got); err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, []*string{nil, StrPtr(""), StrPtr("Lyon")},
+		[]*string{got[0].Retained, got[1].Retained, got[2].Retained})
+}
+
 func TestRagAskSendsAnalyticMode(t *testing.T) {
 	var gotMode, gotScope string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -43,7 +54,7 @@ func TestRagAskSendsAnalyticMode(t *testing.T) {
 	defer srv.Close()
 
 	c := New(config.Context{Server: srv.URL})
-	res, err := c.RagAsk("which orders were never invoiced?", "atelier")
+	res, err := c.RagAsk("which orders were never invoiced?", "atelier", "")
 	if err != nil {
 		t.Fatal(err)
 	}

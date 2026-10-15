@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/icreated/lumnik-open/lm/test/otk/generator"
 	"github.com/icreated/lumnik-open/lm/test/otk/oracle"
 )
 
@@ -30,7 +31,7 @@ func ConnectorNames(listJSON string) (map[string]bool, error) {
 // non-mutating validate call — a HIGH atomicity violation. Name-agnostic, so it
 // works even when an attack payload IS the connector name, and it never flags a
 // dirty-hub leftover (present in both snapshots).
-func AtomicitySetDiff(before, after map[string]bool, seed int64) []oracle.Finding {
+func AtomicitySetDiff(before, after map[string]bool, caseID generator.CaseID, seed int64) []oracle.Finding {
 	var newNames []string
 	for name := range after {
 		if !before[name] {
@@ -41,7 +42,7 @@ func AtomicitySetDiff(before, after map[string]bool, seed int64) []oracle.Findin
 	var out []oracle.Finding
 	for _, name := range newNames {
 		out = append(out, oracle.Finding{
-			Severity: oracle.High, Family: oracle.Atomicity, Seed: seed,
+			Severity: oracle.High, Family: oracle.Atomicity, CaseID: caseID, Seed: seed,
 			Detail: "connector born from a non-mutating validate call: " + name,
 		})
 	}
@@ -55,7 +56,7 @@ func AtomicitySetDiff(before, after map[string]bool, seed int64) []oracle.Findin
 //   - exit != 0: nothing must be created (a rejected apply must leak no state)
 //
 // Every deviation is a HIGH atomicity finding.
-func AtomicityApply(before, after map[string]bool, applyExit int, seed int64) []oracle.Finding {
+func AtomicityApply(before, after map[string]bool, applyExit int, caseID generator.CaseID, seed int64) []oracle.Finding {
 	created := 0
 	for name := range after {
 		if !before[name] {
@@ -67,18 +68,18 @@ func AtomicityApply(before, after map[string]bool, applyExit int, seed int64) []
 		switch {
 		case created == 0:
 			out = append(out, oracle.Finding{
-				Severity: oracle.High, Family: oracle.Atomicity, Seed: seed,
+				Severity: oracle.High, Family: oracle.Atomicity, CaseID: caseID, Seed: seed,
 				Detail: "apply reported success (exit 0) but created no connector",
 			})
 		case created > 1:
 			out = append(out, oracle.Finding{
-				Severity: oracle.High, Family: oracle.Atomicity, Seed: seed,
+				Severity: oracle.High, Family: oracle.Atomicity, CaseID: caseID, Seed: seed,
 				Detail: fmt.Sprintf("apply created %d connectors from a single manifest", created),
 			})
 		}
 	} else if created > 0 {
 		out = append(out, oracle.Finding{
-			Severity: oracle.High, Family: oracle.Atomicity, Seed: seed,
+			Severity: oracle.High, Family: oracle.Atomicity, CaseID: caseID, Seed: seed,
 			Detail: fmt.Sprintf("apply rejected (exit %d) but leaked %d connector(s)", applyExit, created),
 		})
 	}

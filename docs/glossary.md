@@ -15,10 +15,10 @@ are never written to. [Deploy it](deploy.md).
 request shapes on the same REST engine — plus Kafka for inbound events.
 [Overview](connectors/index.md).
 
-**Manifest / `kind:`** — the YAML you `lm apply`. Six kinds across two families:
-`Connector` and `Entity` describe ingestion and fusion; `View`, `App`, `Process` and
-`Workflow` build the [app ladder](apps/views.md). [How lumnik works](how-it-works.md)
-maps all six in one place.
+**Manifest / `kind:`** — the YAML you `lm apply`. Seven kinds across two families:
+`Connector` and `Entity` describe ingestion and fusion; `View`, `App`, `Process`,
+`Workflow` and `Export` build the [app ladder](apps/views.md). [How lumnik works](how-it-works.md)
+maps all seven in one place.
 
 **Endpoint** — one queryable surface inside a connector (a table, a file, a REST
 resource). A run fans out over the connector's enabled endpoints, and the scheduler,

@@ -90,7 +90,7 @@ Read the [Home page](index.md). It tells you what lumnik is (a read-only defrost
 <div class="lm-kicker">30 min</div>
 <div class="lm-title">Deploy the hub</div>
 
-Follow [Deploy lumnik](deploy.md), self-host path: one command, `deploy/selfhost/up.sh`. It generates all secrets into a local `.env` — your credentials live there, including `HUBADMIN_PASSWORD`.
+First decide what the hub should carry — Open or Pro, a Search provider, the AI on or off: [The two editions](editions.md), then [Choosing what your hub offers](choosing-what-your-hub-offers.md). Then follow [Deploy lumnik](deploy.md), self-host path: one command, `deploy/selfhost/up.sh`. It generates all secrets into a local `.env` — your credentials live there, including `HUBADMIN_PASSWORD`.
 
 <p class="lm-check" markdown="span">**You know it worked when:** the script reports the stack healthy and prints where the hub answers.</p>
 </div>
@@ -282,7 +282,7 @@ Read [Inbox](apps/inbox.md): where `decision.*` events (including `decision.dorm
 <div class="lm-kicker">30 min</div>
 <div class="lm-title">The métier PWA</div>
 
-Read [The métier PWA](apps/pwa.md) and open `https://<your-host>/app/` on a phone: cards on a phone, a table on a tablet, the same scope rules as everywhere else. A phone cannot reach your laptop's `localhost` — the TLS façade on the [deploy page](deploy.md) is what gives both devices one host and one token issuer.
+Read [The métier PWA](apps/pwa.md) and open `https://<your-host>/app/` on a phone: cards on a phone, a table on a tablet, the same scope rules as everywhere else. A phone cannot reach your laptop's `localhost` — the TLS façade on the [deploy page](deploy.md) is what gives both devices one host and one token issuer. Which tabs each app shows is one line in its manifest: [`spec.tabs`](choosing-what-your-hub-offers.md#3-does-the-app-ask-for-it).
 
 <p class="lm-check" markdown="span">**You know it worked when:** you see the same scope boundary on the phone and on the desktop.</p>
 </div>

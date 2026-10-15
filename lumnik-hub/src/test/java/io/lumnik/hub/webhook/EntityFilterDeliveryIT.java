@@ -95,7 +95,7 @@ class EntityFilterDeliveryIT {
         persistRow(EventOutboxRow.ofFull(1L, null, "data.row.changed", "test",
                 "erp.fact", "h1", Map.of("k", "v"), null, Instant.now()));
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("webhook", 100, consumer::process));
+        TenantContext.runAsSystem(() -> sweeper.drain("webhook", 100, consumer::batchProcessor));
 
         // entity erp.fact: the matching-filter endpoint and the unfiltered endpoint fire; the
         // mismatched-filter endpoint is excluded.
@@ -112,7 +112,7 @@ class EntityFilterDeliveryIT {
         // of(...) sets entity=null: an entity-less event must not be blocked by entity_filter.
         persistRow(EventOutboxRow.of(1L, "connector.run.completed", Map.of("k", "v")));
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("webhook", 100, consumer::process));
+        TenantContext.runAsSystem(() -> sweeper.drain("webhook", 100, consumer::batchProcessor));
 
         wm.verify(1, postRequestedFor(urlEqualTo("/runfilter")));
     }

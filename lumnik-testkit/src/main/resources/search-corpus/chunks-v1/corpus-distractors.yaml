@@ -1,0 +1,94 @@
+# #675 chunk corpus — generated distractors (scripts/gen-chunk-bench-distractors.py, seed 675). Do not edit by hand.
+schemaVersion: 3
+seed: 675
+chunks:
+  - {id: c-d-001, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40000 du client Valentin Bâtiment, montant 5 775,51 EUR, échéance 25/05/2024, statut partiellement payée."}
+  - {id: c-d-002, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61000 for Rossi Fastenings: 21 pallets of anchor plugs, delivery planned on 28/07/2024."}
+  - {id: c-d-003, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 50000: Der Drucker im Versand reagiert nicht. Gelöst durch Neustart des Druckdienstes."}
+  - {id: c-d-004, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1000-C: écrou M8 autofreiné, stock 231 unités, fournisseur Kessler Fournitures."}
+  - {id: c-d-005, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Les salles de réunion se réservent jusqu'à quatre semaines à l'avance depuis le portail des services généraux."}
+  - {id: c-d-006, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40007 du client Lindqvist Tools, montant 6 398,85 EUR, échéance 26/03/2024, statut partiellement payée."}
+  - {id: c-d-007, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61013 for Perrin Mécanique: 35 pallets of bearing sets, delivery planned on 20/01/2024."}
+  - {id: c-d-008, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 50011: Der Etikettendruck zeigt die falsche Chargennummer. Gelöst durch Aktualisierung der Etikettenvorlage."}
+  - {id: c-d-009, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1003-B: kit joint 3/4 pouce, stock 183 unités, fournisseur Hartwig Technik."}
+  - {id: c-d-010, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Le restaurant d'entreprise propose un menu végétarien chaque jeudi et un plat du jour à 6,50 EUR."}
+  - {id: c-d-011, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40014 du client Fischer Werkzeuge, montant 8 018,70 EUR, échéance 08/11/2024, statut partiellement payée."}
+  - {id: c-d-012, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61026 for Nordmann Spedition: 28 pallets of bearing sets, delivery planned on 14/06/2024."}
+  - {id: c-d-013, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 50022: Der Drucker im Versand reagiert nicht. Gelöst durch Neustart des Druckdienstes."}
+  - {id: c-d-014, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1006-C: collier plastique 200 mm, stock 102 unités, fournisseur Nordic Fixings."}
+  - {id: c-d-015, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "La formation à l'ergonomie du poste de travail est proposée à chaque nouvel arrivant durant le premier mois."}
+  - {id: c-d-016, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40021 du client Lindqvist Tools, montant 9 639,59 EUR, échéance 25/11/2024, statut en attente."}
+  - {id: c-d-017, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61039 for Ashdown Supplies: 3 pallets of anchor plugs, delivery planned on 06/12/2024."}
+  - {id: c-d-018, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 50033: Der Bildschirm im Wareneingang flackert. Gelöst durch Tausch des Videokabels."}
+  - {id: c-d-019, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1009-B: vis M8x40 zinguée, stock 446 unités, fournisseur Hartwig Technik."}
+  - {id: c-d-020, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Le tri des déchets en atelier suit un code couleur : bleu pour le carton, jaune pour les plastiques, gris pour le reste."}
+  - {id: c-d-021, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40028 du client Perrin Mécanique, montant 7 185,74 EUR, échéance 03/06/2024, statut payée."}
+  - {id: c-d-022, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61052 for Brosse Électricité: 15 pallets of stainless bolts, delivery planned on 05/05/2024."}
+  - {id: c-d-023, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 50044: Der Drucker im Versand reagiert nicht. Gelöst durch Neustart des Druckdienstes."}
+  - {id: c-d-024, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1012-C: collier plastique 200 mm, stock 25 unités, fournisseur Aubry Industrie."}
+  - {id: c-d-025, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Les places de parking visiteurs sont limitées à deux heures et se signalent à l'accueil."}
+  - {id: c-d-026, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40035 du client Lefèvre Peintures, montant 7 071,03 EUR, échéance 10/01/2024, statut payée."}
+  - {id: c-d-027, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61065 for Perrin Mécanique: 29 pallets of pipe clamps, delivery planned on 19/03/2024."}
+  - {id: c-d-028, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 50055: Der Drucker im Versand reagiert nicht. Gelöst durch Neustart des Druckdienstes."}
+  - {id: c-d-029, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1015-C: collier de serrage 32 mm, stock 539 unités, fournisseur Hartwig Technik."}
+  - {id: c-d-030, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "La journée portes ouvertes du site de Lyon aura lieu le premier samedi de mars."}
+  - {id: c-d-031, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40042 du client Hollis Packaging, montant 5 297,18 EUR, échéance 21/06/2024, statut payée."}
+  - {id: c-d-032, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61078 for Ashdown Supplies: 26 pallets of bearing sets, delivery planned on 19/04/2024."}
+  - {id: c-d-033, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 50066: Die Anbindung des Lagerterminals an das WLAN bricht ab. Gelöst durch Zurücksetzen des Terminalprofils."}
+  - {id: c-d-034, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1018-C: vis M8x40 zinguée, stock 839 unités, fournisseur Aubry Industrie."}
+  - {id: c-d-035, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Die Kantine bietet jeden Donnerstag ein vegetarisches Menü an."}
+  - {id: c-d-036, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40049 du client Okafor Trading, montant 3 047,81 EUR, échéance 23/12/2024, statut en attente."}
+  - {id: c-d-037, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61091 for Brosse Électricité: 5 pallets of zinc washers, delivery planned on 04/07/2024."}
+  - {id: c-d-038, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 50077: Der Etikettendruck zeigt die falsche Chargennummer. Gelöst durch Aktualisierung der Etikettenvorlage."}
+  - {id: c-d-039, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1021-B: cheville 10x50, stock 369 unités, fournisseur Aubry Industrie."}
+  - {id: c-d-040, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Besprechungsräume können bis zu vier Wochen im Voraus über das Facility-Portal gebucht werden."}
+  - {id: c-d-041, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40056 du client Lindqvist Tools, montant 7 351,35 EUR, échéance 03/12/2024, statut payée."}
+  - {id: c-d-042, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61104 for Petit et Fils: 38 pallets of anchor plugs, delivery planned on 28/08/2024."}
+  - {id: c-d-043, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 50088: Der Bildschirm im Wareneingang flackert. Gelöst durch Tausch des Videokabels."}
+  - {id: c-d-044, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1024-C: cheville 10x50, stock 216 unités, fournisseur Kessler Fournitures."}
+  - {id: c-d-045, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Neue Mitarbeitende erhalten im ersten Monat eine Schulung zur ergonomischen Gestaltung des Arbeitsplatzes."}
+  - {id: c-d-046, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40063 du client Lefèvre Peintures, montant 7 621,09 EUR, échéance 09/07/2024, statut en attente."}
+  - {id: c-d-047, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61117 for Winkler Gartenbau: 19 pallets of pipe clamps, delivery planned on 05/01/2024."}
+  - {id: c-d-048, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 50099: Der Etikettendruck zeigt die falsche Chargennummer. Gelöst durch Aktualisierung der Etikettenvorlage."}
+  - {id: c-d-049, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1027-C: vis M8x40 zinguée, stock 767 unités, fournisseur Nordic Fixings."}
+  - {id: c-d-050, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Altpapier und Kartons werden in der Halle in die blauen Container sortiert."}
+  - {id: c-d-051, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40070 du client Nordmann Spedition, montant 1 555,50 EUR, échéance 27/11/2024, statut partiellement payée."}
+  - {id: c-d-052, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61130 for Hollis Packaging: 37 pallets of cable ties, delivery planned on 13/08/2024."}
+  - {id: c-d-053, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 50110: Die Anbindung des Lagerterminals an das WLAN bricht ab. Gelöst durch Zurücksetzen des Terminalprofils."}
+  - {id: c-d-054, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1030-B: collier plastique 200 mm, stock 183 unités, fournisseur Hartwig Technik."}
+  - {id: c-d-055, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Das Sommerfest findet am zweiten Samstag im Juli auf dem Werksgelände statt."}
+  - {id: c-d-056, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40077 du client Hollis Packaging, montant 8 383,90 EUR, échéance 17/05/2024, statut payée."}
+  - {id: c-d-057, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61143 for Petit et Fils: 10 pallets of pipe clamps, delivery planned on 26/06/2024."}
+  - {id: c-d-058, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 50121: Der Drucker im Versand reagiert nicht. Gelöst durch Neustart des Druckdienstes."}
+  - {id: c-d-059, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1033-B: tige filetée M10, stock 76 unités, fournisseur Hartwig Technik."}
+  - {id: c-d-060, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Meeting rooms can be booked up to four weeks ahead through the facilities portal."}
+  - {id: c-d-061, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40084 du client Lefèvre Peintures, montant 1 160,18 EUR, échéance 14/10/2024, statut en attente."}
+  - {id: c-d-062, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61156 for Lindqvist Tools: 17 pallets of bearing sets, delivery planned on 18/02/2024."}
+  - {id: c-d-063, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 50132: Der Drucker im Versand reagiert nicht. Gelöst durch Neustart des Druckdienstes."}
+  - {id: c-d-064, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1036-B: tige filetée M10, stock 852 unités, fournisseur Kessler Fournitures."}
+  - {id: c-d-065, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "The company canteen serves a vegetarian menu every Thursday."}
+  - {id: c-d-066, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40091 du client Brosse Électricité, montant 2 393,66 EUR, échéance 25/01/2024, statut en attente."}
+  - {id: c-d-067, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61169 for Brosse Électricité: 8 pallets of bearing sets, delivery planned on 18/11/2024."}
+  - {id: c-d-068, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 50143: Die Anbindung des Lagerterminals an das WLAN bricht ab. Gelöst durch Zurücksetzen des Terminalprofils."}
+  - {id: c-d-069, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1039-B: écrou M8 autofreiné, stock 739 unités, fournisseur Nordic Fixings."}
+  - {id: c-d-070, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Visitor parking is limited to two hours and must be registered at reception."}
+  - {id: c-d-071, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40098 du client Ashdown Supplies, montant 2 408,33 EUR, échéance 12/02/2024, statut en attente."}
+  - {id: c-d-072, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61182 for Brosse Électricité: 32 pallets of pipe clamps, delivery planned on 13/11/2024."}
+  - {id: c-d-073, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 50154: Der Bildschirm im Wareneingang flackert. Gelöst durch Tausch des Videokabels."}
+  - {id: c-d-074, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1042-B: écrou M8 autofreiné, stock 433 unités, fournisseur Kessler Fournitures."}
+  - {id: c-d-075, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "The annual open day at the Lyon site takes place on the first Saturday of March."}
+  - {id: c-d-076, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40105 du client Schulz Maschinenbau, montant 6 062,25 EUR, échéance 14/12/2024, statut payée."}
+  - {id: c-d-077, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61195 for Rossi Fastenings: 31 pallets of stainless bolts, delivery planned on 26/05/2024."}
+  - {id: c-d-078, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 50165: Die Anbindung des Lagerterminals an das WLAN bricht ab. Gelöst durch Zurücksetzen des Terminalprofils."}
+  - {id: c-d-079, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1045-A: rondelle 8,4 mm, stock 577 unités, fournisseur Nordic Fixings."}
+  - {id: c-d-080, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "New starters receive an ergonomics briefing during their first month."}
+  - {id: c-d-081, tenantId: 91002, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40140 du client Ashdown Supplies, montant 168,66 EUR, échéance 17/04/2024, statut en attente."}
+  - {id: c-d-082, tenantId: 91002, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61260 for Petit et Fils: 6 pallets of zinc washers, delivery planned on 13/01/2024."}
+  - {id: c-d-083, tenantId: 91002, corpus: support, tags: [ventes], type: connector, text: "Ticket 50220: Der Etikettendruck zeigt die falsche Chargennummer. Gelöst durch Aktualisierung der Etikettenvorlage."}
+  - {id: c-d-084, tenantId: 91002, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1060-A: cheville 10x50, stock 364 unités, fournisseur Kessler Fournitures."}
+  - {id: c-d-085, tenantId: 91002, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2022-40147 du client Moreau Transports, montant 9 729,31 EUR, échéance 23/11/2024, statut partiellement payée."}
+  - {id: c-d-086, tenantId: 91002, corpus: orders, tags: [ventes], type: connector, text: "Order SO-61273 for Hollis Packaging: 7 pallets of hex nuts, delivery planned on 03/04/2024."}
+  - {id: c-d-087, tenantId: 91002, corpus: support, tags: [ventes], type: connector, text: "Ticket 50231: Das Scanner-Update bleibt bei 80 Prozent hängen. Gelöst durch Austausch des Scanners."}
+  - {id: c-d-088, tenantId: 91002, corpus: orders, tags: [ventes], type: connector, text: "Article KB-1063-B: écrou M8 autofreiné, stock 224 unités, fournisseur Kessler Fournitures."}
+  - {id: c-d-089, tenantId: 91002, corpus: orders, tags: [ventes], type: connector, text: "Les salles de réunion se réservent jusqu'à quatre semaines à l'avance depuis le portail des services généraux."}
+  - {id: c-d-090, tenantId: 91002, corpus: orders, tags: [ventes], type: connector, text: "Le restaurant d'entreprise propose un menu végétarien chaque jeudi et un plat du jour à 6,50 EUR."}

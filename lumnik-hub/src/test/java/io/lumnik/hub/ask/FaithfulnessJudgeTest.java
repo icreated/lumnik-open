@@ -94,7 +94,7 @@ class FaithfulnessJudgeTest {
   void no_judge_model_on_the_classpath_is_inconclusive_not_a_crash() {
     var r = judgeWith(null).assess("how many in Lyon?", "SELECT 1", card());
     assertThat(r.verdict()).isEqualTo(FaithfulnessJudge.Verdict.INCONCLUSIVE);
-    assertThat(r.reason()).contains("no judge model");
+    assertThat(r.reason()).contains("no judge model").doesNotContain("classpath");
   }
 
   @Test

@@ -1,0 +1,13 @@
+{
+  "schemaVersion" : 1,
+  "corpusFingerprint" : "sha256:200582e3b2f905f3d6061ee380b15ffce7c221503ea9c9343954de7d7e903540",
+  "provider" : {
+    "name" : "reference",
+    "version" : "1"
+  },
+  "metrics" : {
+    "ndcgAt10" : 0.7087915982718642,
+    "recallAt10" : 0.7272727272727273,
+    "p95LatencyMillis" : 0.048125
+  }
+}

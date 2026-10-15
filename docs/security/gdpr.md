@@ -29,7 +29,7 @@ This page is an engineering map, not legal advice.
 | Dead letters | the raw payload of rows that failed mapping, kept for diagnosis | every read surface hides soft-deleted rows; setting that flag is a database operation |
 | Event outbox | entity name, a **key hash**, the operation; **no row content** | purged nightly past `lumnik.events.retention-days` (default 30) |
 | Audit trail | user and secret writes, view and workflow applies, entity reads, each with the acting user. [What it records](index.md#the-audit-trail) | purged nightly past `LUMNIK_AUDIT_RETENTION_DAYS` (default 365, `0` = forever). No per-row erasure |
-| Webhook deliveries | the column values a `kind: Process` template references, posted to the target URL the tenant configured (n8n, Make, your endpoint): HMAC-signed when a secret is set, **not encrypted beyond that URL's TLS** | leaves lumnik; retention is the receiver's. The delivery history row keeps status and attempts only |
+| Webhook deliveries | the column values a `kind: Process` template references, posted to the target URL the tenant configured (n8n, Make, your endpoint): HMAC-signed when a secret is set, **not encrypted beyond that URL's TLS** | leaves lumnik; retention is the receiver's. The delivery history row keeps the **posted payload** and the receiver's **response body** besides status and attempts, purged nightly past `LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS` (default 90, `0` = forever) |
 | Keycloak | its own user store: credentials, sessions | your realm, your policies |
 | Backups | whatever you back up | yours entirely |
 

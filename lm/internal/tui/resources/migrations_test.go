@@ -25,7 +25,7 @@ func TestMigrationsRefresh_lastAppliedIsLocal(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := NewMigrations(client.New(config.Context{Server: srv.URL}))
+	m := NewMigrations(nil, client.New(config.Context{Server: srv.URL}))
 	m.Refresh()
 
 	want := applied.In(time.Local).Format("2006-01-02 15:04")

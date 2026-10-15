@@ -7,6 +7,7 @@ import java.nio.file.*;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 public class LocalFileSource implements FileSource, SeekableSource {
@@ -34,17 +35,30 @@ public class LocalFileSource implements FileSource, SeekableSource {
         if (!Files.isDirectory(baseDir)) return Stream.empty();
         try (Stream<Path> paths = Files.list(baseDir)) {
             return paths
-                .filter(Files::isRegularFile)
-                .filter(matcher::matches)
-                .map(this::toDescriptor)
+                .flatMap(p -> listed(p).stream())
                 .filter(d -> !d.lastModified().isBefore(cursor))   // >= cursor: inclusive boundary (callers dedup via FileProcessingCursor)
-                .filter(d -> d.size() > 0)
                 .sorted(Comparator.comparing(FileDescriptor::lastModified))
                 .toList()
                 .stream();
         } catch (IOException e) {
             throw new RuntimeException("LocalFileSource.list failed for " + baseDir, e);
         }
+    }
+
+    /** Only a direct child of {@code baseDir} can be listed — the same path string the listing builds. */
+    @Override
+    public Optional<FileDescriptor> stat(String path) {
+        Path name = Paths.get(path).getFileName();
+        if (name == null) return Optional.empty();
+        Path child = baseDir.resolve(name);
+        return child.toAbsolutePath().toString().equals(path) ? listed(child) : Optional.empty();
+    }
+
+    /** The listing's filters, shared with {@link #stat}: a non-empty regular file matching the glob. */
+    private Optional<FileDescriptor> listed(Path p) {
+        if (!Files.isRegularFile(p) || !matcher.matches(p)) return Optional.empty();
+        FileDescriptor d = toDescriptor(p);
+        return d.size() > 0 ? Optional.of(d) : Optional.empty();
     }
 
     private FileDescriptor toDescriptor(Path p) {

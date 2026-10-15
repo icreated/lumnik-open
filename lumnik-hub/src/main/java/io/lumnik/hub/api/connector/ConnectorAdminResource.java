@@ -9,6 +9,7 @@ import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.repository.ConnectorRunRepository;
 import io.lumnik.hub.connector.runtime.ConnectorEngine;
+import io.lumnik.hub.connector.runtime.ConnectorRunDispatcher;
 import io.lumnik.hub.entity.EntityRegistry;
 import io.lumnik.hub.entity.EntityViewCompiler;
 import io.lumnik.hub.tenant.RequireUser;
@@ -40,6 +41,7 @@ public class ConnectorAdminResource {
 
   @Inject ConnectorRepository repo;
   @Inject ConnectorEngine engine;
+  @Inject ConnectorRunDispatcher dispatcher;
   @Inject ConnectorRunRepository runs;
   @Inject DynamicTableRegistry dynamicTables;
   @Inject EntityRegistry entities;
@@ -230,7 +232,7 @@ public class ConnectorAdminResource {
     boolean visible = QuarkusTransaction.requiringNew()
         .call(() -> repo.findById(id) != null);
     if (!visible) return ApiErrors.notFound("connector " + id + " not found");
-    // submitRun persists the connector_run row(s) synchronously (status Running) and returns the
+    // submitRun persists the connector_run row(s) synchronously (status Running, or Queued with the run queue on) and returns the
     // REAL run id(s) BEFORE the async chunk loop runs — the caller can immediately dereference them.
     // Deliberately NOT @Transactional: each run row must commit in its own transaction so the async
     // worker (a separate transaction) can read the row it must finalize.
@@ -239,6 +241,7 @@ public class ConnectorAdminResource {
       return Response.status(422)
           .entity(Map.of("error", "no runnable endpoint for connector " + id)).build();
     }
+    dispatcher.wake();   // a no-op unless the door queued (lumnik.run-queue.enabled)
     // Single-endpoint (flat) connectors return one run id under "runId"; multi-endpoint fan-out also
     // exposes every run under "runIds".
     return Response.status(202)

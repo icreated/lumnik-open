@@ -60,6 +60,16 @@ type scenarioState struct {
 	entityReadStatus  int
 	entityReadBody    string
 
+	// entity lane, cli sub-type (#647): lm entity resolve/ambiguous/assert-same/assert-distinct/
+	// history end-to-end over two genuine ambiguities, driven via the lm binary (runner.Run), not
+	// HTTP — distinct from steps_entity_resolution.go's REST-door adversarial battery (#643).
+	entityCliDormant    bool
+	entityCliTargetID   string // pair 1's fixture row — cleared by assert-same
+	entityCliGhostID    string // pair 1: asserted same as the target
+	entityCliTarget2ID  string // pair 2's fixture row — cleared by assert-distinct
+	entityCliGhostDave  string // pair 2: asserted distinct from target2 (excluded)
+	entityCliGhostCarol string // pair 2: target2's expected surviving candidate
+
 	// process lane (kind:Process apply governance + inbox attention surface)
 	processScen        generator.ProcessScenario
 	processApplyStatus int
@@ -71,13 +81,51 @@ type scenarioState struct {
 	viewStatus int
 	viewBody   string
 
+	// entity-resolution lane (#643): ambiguity/assertion/swap-refusal over #622's REST doors
+	resDormant bool
+	res        resFixtureState
+
+	// export lane (#684): managed kind:Export doors + the one-shot entity download, through lm
+	exp exportState
+
 	// view-store lane (#140 apply/list/get round-trip + uniform scope-403 pin)
 	storeVariant      string
+	storeCaseID       generator.CaseID // synthetic, non-catalogue identity; see storeGiven
 	storeManifest     string
 	storeApplyStatus  int
 	storeApplyBody    string
 	storeRenderStatus int
 	storeRenderBody   string
+
+	// auth lane: kept off s.scen because seedTenantOneBaseline (cross-tenant) drives
+	// givenRunForSeed/whenApply as a side effect, which overwrite s.scen/s.runScen.
+	authCaseID generator.CaseID
+}
+
+// caseID returns whichever lane this scenario belongs to has set its identity.
+// Exactly one of these is non-empty for any scenario that reached a Given step;
+// used by the After hook to record what was attempted, dormant or not.
+func (st *scenarioState) caseID() generator.CaseID {
+	switch {
+	case st.authCaseID != "":
+		return st.authCaseID
+	case st.scen.CaseID != "":
+		return st.scen.CaseID
+	case st.runScen.CaseID != "":
+		return st.runScen.CaseID
+	case st.entityScen.CaseID != "":
+		return st.entityScen.CaseID
+	case st.processScen.CaseID != "":
+		return st.processScen.CaseID
+	case st.viewScen.CaseID != "":
+		return st.viewScen.CaseID
+	case st.exp.c.CaseID != "":
+		return st.exp.c.CaseID
+	case st.storeCaseID != "":
+		return st.storeCaseID
+	default:
+		return ""
+	}
 }
 
 func lmEnv() []string {
@@ -218,6 +266,31 @@ var allFindings []oracle.Finding
 // construction in the one mode that needs it.
 var scenariosAttempted int
 
+// attemptedCaseIDs records every scenario's case identity once the After hook sees
+// it — dormant or not. buildSummary derives "distinct cases executed" as this set
+// minus dormancyLog's set, both deduplicated by CaseID.
+var attemptedCaseIDs []generator.CaseID
+
+// dormancyEntry is one recorded reason a case did not actually exercise its lane.
+type dormancyEntry struct {
+	CaseID generator.CaseID
+	Reason string
+}
+
+// dormancyLog collects every dormancy this battery recorded. A CaseID can appear
+// more than once (a scenario can go dormant for more than one reason across its
+// steps) — buildSummary keeps every reason, never collapsing the count.
+var dormancyLog []dormancyEntry
+
+// recordDormant is the single place a lane declares "this case's checks did not
+// run, and here is why" — replacing the ad hoc fmt.Printf each lane used to own.
+// Still prints (so a live run stays readable without waiting for the summary), and
+// also feeds the run summary's dormancy accounting.
+func recordDormant(caseID generator.CaseID, reason string) {
+	fmt.Printf("  OTK %s lane DORMANT: %s\n", caseID.Lane(), reason)
+	dormancyLog = append(dormancyLog, dormancyEntry{CaseID: caseID, Reason: reason})
+}
+
 func InitializeScenario(ctx *godog.ScenarioContext) {
 	st := &scenarioState{}
 	for _, reg := range laneRegistrars {
@@ -235,9 +308,18 @@ func InitializeScenario(ctx *godog.ScenarioContext) {
 	})
 	ctx.After(func(ctx context.Context, sc *godog.Scenario, err error) (context.Context, error) {
 		for _, f := range st.findings {
+			// The single choke point every scenario's findings pass through: a Finding
+			// missing its CaseID is a harness defect (a direct literal that forgot to
+			// set it), and must be as loud as the false green it would otherwise cause.
+			if verr := f.Validate(); verr != nil {
+				panic("otk: " + verr.Error())
+			}
 			fmt.Printf("  OTK finding: %s\n", f)
 		}
 		allFindings = append(allFindings, st.findings...)
+		if id := st.caseID(); id != "" {
+			attemptedCaseIDs = append(attemptedCaseIDs, id)
+		}
 		if needsSafeguardCleanup(st.cleaned, st.beforeAPI) {
 			st.safeguardCleanup()
 		}

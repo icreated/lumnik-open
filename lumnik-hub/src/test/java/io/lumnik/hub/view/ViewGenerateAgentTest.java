@@ -68,7 +68,10 @@ class ViewGenerateAgentTest {
 
         Assertions.assertThat(out.status())
             .isEqualTo(ViewGenerateAgent.Outcome.Status.ABSTAINED);
-        Assertions.assertThat(out.message()).contains("edition");
+        // True whether the model is absent (Open) or merely switched off (lumnik.ai.enabled=false):
+        // it must not send an operator hunting for a licence.
+        Assertions.assertThat(out.message()).contains("no chat model is available")
+            .doesNotContain("edition").doesNotContain("closed extensions");
     }
 
     @Test

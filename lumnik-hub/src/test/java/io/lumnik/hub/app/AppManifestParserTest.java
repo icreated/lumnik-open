@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.TreeSet;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -161,6 +163,47 @@ class AppManifestParserTest {
         String surface = AppManifestParser.honoredSurface();
         assertThat(surface).contains("apiVersion").contains("theme").contains("default")
             .contains("accentColor").contains("backgroundColor");
+    }
+
+    // --- spec.tabs (D7): nullable, stored as written; refuse the malformed, accept any well-formed id
+
+    private static String withTabs(String tabsYaml) {
+        return MINIMAL + "  tabs: " + tabsYaml + "\n";
+    }
+
+    @Test
+    void tabsAbsentOrNullMeansInherit() {
+        assertThat(parser.parse(MINIMAL).tabs()).isNull();
+        assertThat(parser.parse(withTabs("~")).tabs()).isNull();
+    }
+
+    @Test
+    void tabsAreKeptInTheDeclaredOrderIncludingOnesNoHubOffers() {
+        assertThat(parser.parse(withTabs("[chat, fiches, map]")).tabs()).containsExactly("chat", "fiches", "map");
+    }
+
+    @Test
+    void refusesWhatCannotBeATabList() {
+        assertThatThrownBy(() -> parser.parse(withTabs("fiches")))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("spec.tabs must be a list");
+        assertThatThrownBy(() -> parser.parse(withTabs("[]")))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("omit the key");
+        assertThatThrownBy(() -> parser.parse(withTabs("[fiches, fiches]")))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("duplicate");
+        assertThatThrownBy(() -> parser.parse(withTabs("[Fiches]")))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("[a-z][a-z0-9-]{0,31}");
+        assertThatThrownBy(() -> parser.parse(withTabs("[1, 2]")))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("spec.tabs");
+        String seventeen = IntStream.rangeClosed(1, 17).mapToObj(i -> "t" + i)
+            .collect(Collectors.joining(", ", "[", "]"));
+        assertThatThrownBy(() -> parser.parse(withTabs(seventeen)))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("at most 16");
+    }
+
+    @Test
+    void tabsIsAHonouredKeyNotAnUnknownOne() {
+        assertThat(parser.unknownKeys(withTabs("[fiches]"))).isEmpty();
+        assertThat(AppManifestParser.honoredSurface()).contains("tabs");
     }
 
     @Test

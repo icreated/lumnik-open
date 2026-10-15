@@ -59,6 +59,11 @@ func storeGiven(st *scenarioState, variant string) error {
 	}
 	st.storeVariant = variant
 	st.storeManifest = manifest
+	// view-store is deliberately outside the Gold catalogue (a committed-corpus
+	// smoke, not a lane CatalogueFingerprint versions — see caseid.go), so this
+	// identity is never registered in Catalogue()/Witnesses(); it exists only so
+	// every Finding this lane produces still names its case.
+	st.storeCaseID = generator.CaseID("view-store/" + variant)
 	return nil
 }
 
@@ -75,7 +80,7 @@ func storeApply(st *scenarioState) error {
 		return fmt.Errorf("view-store lane: LUMNIK_URL is not set")
 	}
 	if storeNeedsCard(st.storeVariant) && seedDSNAbsent() {
-		fmt.Printf("  OTK view-store lane DORMANT (variant=%q needs the seeded otk card): set OTK_DB_DSN\n", st.storeVariant)
+		recordDormant(st.storeCaseID, fmt.Sprintf("variant %q needs the seeded otk card: set OTK_DB_DSN", st.storeVariant))
 		st.storeApplyStatus = -1
 		return nil
 	}
@@ -101,7 +106,7 @@ func storeApplyStatus(st *scenarioState, code int) error {
 	}
 	if st.storeApplyStatus != code {
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.High, Family: oracle.Security,
+			Severity: oracle.High, Family: oracle.Security, CaseID: st.storeCaseID,
 			Detail: fmt.Sprintf("view-store apply status: got %d (body=%q), want %d", st.storeApplyStatus, st.storeApplyBody, code),
 		})
 	}
@@ -122,7 +127,7 @@ func storeInList(st *scenarioState, name string) error {
 	}
 	if status != 200 {
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.High, Family: oracle.Robustness,
+			Severity: oracle.High, Family: oracle.Robustness, CaseID: st.storeCaseID,
 			Detail: fmt.Sprintf("saved-view list status: got %d, want 200", status),
 		})
 		return nil
@@ -132,7 +137,7 @@ func storeInList(st *scenarioState, name string) error {
 	}
 	if err := json.Unmarshal([]byte(body), &rows); err != nil {
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.High, Family: oracle.Robustness,
+			Severity: oracle.High, Family: oracle.Robustness, CaseID: st.storeCaseID,
 			Detail: fmt.Sprintf("saved-view list is not a JSON array: %v", err),
 		})
 		return nil
@@ -143,7 +148,7 @@ func storeInList(st *scenarioState, name string) error {
 		}
 	}
 	st.findings = append(st.findings, oracle.Finding{
-		Severity: oracle.High, Family: oracle.Robustness,
+		Severity: oracle.High, Family: oracle.Robustness, CaseID: st.storeCaseID,
 		Detail: fmt.Sprintf("saved view %q not found via GET /api/views after apply", name),
 	})
 	return nil
@@ -163,7 +168,7 @@ func storeGetYAML(st *scenarioState, name string) error {
 	}
 	if status != 200 || !strings.Contains(body, "kind: View") {
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.High, Family: oracle.Robustness,
+			Severity: oracle.High, Family: oracle.Robustness, CaseID: st.storeCaseID,
 			Detail: fmt.Sprintf("GET /api/views/%s: status=%d body=%q (want 200 + YAML containing 'kind: View')", name, status, body),
 		})
 	}
@@ -197,7 +202,7 @@ func storeRenderStatusStep(st *scenarioState, code int) error {
 	}
 	if st.storeRenderStatus != code {
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.High, Family: oracle.Security,
+			Severity: oracle.High, Family: oracle.Security, CaseID: st.storeCaseID,
 			Detail: fmt.Sprintf("view-store render status: got %d, want %d", st.storeRenderStatus, code),
 		})
 	}
@@ -213,7 +218,7 @@ func storeScopeBoundRender(st *scenarioState, scope string) error {
 		return fmt.Errorf("view-store lane: LUMNIK_URL is not set")
 	}
 	if otkKey == nil {
-		fmt.Printf("  OTK view-store lane DORMANT (scope-403 pin): set OTK_OIDC_ISSUER + boot %%otkauth\n")
+		recordDormant(st.storeCaseID, "scope-403 pin: set OTK_OIDC_ISSUER + boot %otkauth")
 		st.storeRenderStatus = -1
 		return nil
 	}
@@ -239,7 +244,7 @@ func storeScopeRefusal(st *scenarioState) error {
 	}
 	if st.storeRenderStatus != 403 {
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.Critical, Family: oracle.Security,
+			Severity: oracle.Critical, Family: oracle.Security, CaseID: st.storeCaseID,
 			Detail: fmt.Sprintf("scope-bound render: got status %d, want 403 (scope not granted)", st.storeRenderStatus),
 		})
 		return nil
@@ -247,14 +252,14 @@ func storeScopeRefusal(st *scenarioState) error {
 	var body map[string]any
 	if err := json.Unmarshal([]byte(st.storeRenderBody), &body); err != nil {
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.High, Family: oracle.Robustness,
+			Severity: oracle.High, Family: oracle.Robustness, CaseID: st.storeCaseID,
 			Detail: fmt.Sprintf("scope-403 body is not JSON: %v (body=%q)", err, st.storeRenderBody),
 		})
 		return nil
 	}
 	if len(body) != 1 || body["error"] != "scope not granted" {
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.Medium, Family: oracle.Security,
+			Severity: oracle.Medium, Family: oracle.Security, CaseID: st.storeCaseID,
 			Detail: fmt.Sprintf("scope-403 body shape drifted from the uniform refusal: %v", body),
 		})
 	}

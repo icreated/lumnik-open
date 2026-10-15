@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.runtime;
 
+import io.lumnik.hub.connector.runtime.OwnedRunScope;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
@@ -96,7 +97,7 @@ class RestEndpointReaderDeclaredTotalTest {
 
     private ConnectorContext ctx(Map<String, Object> config) {
         return new ConnectorContext(RUN, CONNECTOR, ENDPOINT, 1L, "erp", "rest-generic",
-            config, new SyncMode.FullRefresh(), null, null, null, null, null);
+            config, new SyncMode.FullRefresh(), null, null, null, null, null, new OwnedRunScope("test"));
     }
 
     private static Map<String, Object> offsetConfig() {

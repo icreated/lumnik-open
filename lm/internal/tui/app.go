@@ -47,6 +47,7 @@ type App struct {
 	migrationsPage   *resources.Migrations
 	scopesPage       *resources.Scopes
 	endpointsPage    *resources.Endpoints
+	ambiguousPage    *resources.Ambiguous
 	askPage          *resources.Ask
 	live             *LiveStatus
 	sseStop          context.CancelFunc
@@ -83,7 +84,7 @@ func newApp(c *client.Client) *App {
 			raise()
 		}
 	})
-	a.modulesPage = resources.NewModules(c)
+	a.modulesPage = resources.NewModules(a.tv, c)
 	a.pages.AddPage("modules", a.modulesPage.View(), true, false)
 	a.sourcesPage = resources.NewSources(a.tv, c, a.showError, func(m string) {
 		a.footer.SetToast(a.tv, m, 2*time.Second)
@@ -118,13 +119,13 @@ func newApp(c *client.Client) *App {
 		a.footer.SetToast(a.tv, m, 3*time.Second)
 	})
 	a.pages.AddPage("outputs", a.outputsPage.View(), true, false)
-	a.hooksPage = resources.NewHooks(c, a.showError)
+	a.hooksPage = resources.NewHooks(a.tv, c, a.showError)
 	a.pages.AddPage("hooks", a.hooksPage.View(), true, false)
-	a.migrationsPage = resources.NewMigrations(c)
+	a.migrationsPage = resources.NewMigrations(a.tv, c)
 	a.pages.AddPage("migrations", a.migrationsPage.View(), true, false)
 	a.scopesPage = resources.NewScopes(c)
 	a.pages.AddPage("scopes", a.scopesPage.View(), true, false)
-	a.inboxPage = resources.NewInbox(c, a.showError, func(m string) {
+	a.inboxPage = resources.NewInbox(a.tv, c, a.showError, func(m string) {
 		a.footer.SetToast(a.tv, m, 2*time.Second)
 	})
 	a.pages.AddPage("inbox", a.inboxPage.View(), true, false)
@@ -138,7 +139,7 @@ func newApp(c *client.Client) *App {
 		a.footer.SetHints(h)
 	})
 	a.pages.AddPage("new", a.newPage.View(), true, false)
-	a.processesPage = resources.NewProcesses(c, func(name string) {
+	a.processesPage = resources.NewProcesses(a.tv, c, func(name string) {
 		yaml, err := c.ProcessManifest(name)
 		if err != nil {
 			a.showError("manifest: " + err.Error())
@@ -162,6 +163,10 @@ func newApp(c *client.Client) *App {
 		a.footer.SetToast(a.tv, m, 2*time.Second)
 	})
 	a.pages.AddPage("ask", a.askPage.View(), true, false)
+	a.ambiguousPage = resources.NewAmbiguous(a.tv, c, a.showError, func(m string) {
+		a.footer.SetToast(a.tv, m, 3*time.Second)
+	})
+	a.pages.AddPage("ambiguous", a.ambiguousPage.View(), true, false)
 	a.scopesPage.SetOnEnter(func(tag string) {
 		a.setScope(tag)
 		a.refreshCurrent()
@@ -219,6 +224,12 @@ func newApp(c *client.Client) *App {
 			a.pages.SwitchToPage("conflicts")
 			a.header.SetResource(":conflicts")
 			a.footer.SetHints(a.conflictsPage.Hints())
+		case "ambiguous":
+			a.ambiguousPage.Refresh()
+			a.pages.SwitchToPage("ambiguous")
+			a.header.SetResource(":ambiguous")
+			a.footer.SetHints(a.ambiguousPage.Hints())
+			a.tv.SetFocus(a.ambiguousPage.FocusPrimitive())
 		case "observations":
 			a.observationsPage.Refresh()
 			a.pages.SwitchToPage("observations")
@@ -368,9 +379,14 @@ func (a *App) toggleDescribe() {
 	// exact deadlock that froze the rehearsal on Esc-from-describe (carnet #9,
 	// the real cause: the runs off-thread fetch only masked it).
 	d.OnSelectionChange(func() {
-		if t, b, ok := d.SelectedDescribe(); ok {
-			a.describe.SetContent(t, b)
+		t, b, ok := d.SelectedDescribe()
+		if !ok {
+			// The row is gone — a live refresh failed or emptied the list (#891): the panel
+			// stays open across ticks now, so it must not keep presenting it.
+			a.closeDescribe()
+			return
 		}
+		a.describe.SetContent(t, b)
 	})
 
 	split := tview.NewFlex().SetDirection(tview.FlexRow).
@@ -404,8 +420,8 @@ func (a *App) closeDescribe() {
 	a.describeOpen = false
 }
 
-// pageByName is the single name→page map — the palette, switchTo, and the d/y
-// resolvers all deal in these names; a page missing here silently loses its keys
+// pageByName is the single name→page map — the palette, switchTo, the d/y resolvers
+// and the live ticker all deal in these names; a page missing here silently loses its keys
 // (guarded by TestPageByNameCoversAllPaletteEntries).
 func (a *App) pageByName(name string) any {
 	switch name {
@@ -429,6 +445,8 @@ func (a *App) pageByName(name string) any {
 		return pageOrNil(a.dlqPage)
 	case "conflicts":
 		return pageOrNil(a.conflictsPage)
+	case "ambiguous":
+		return pageOrNil(a.ambiguousPage)
 	case "observations":
 		return pageOrNil(a.observationsPage)
 	case "outputs":
@@ -575,7 +593,11 @@ func (a *App) dispatchEvent(ev client.SSEEvent) {
 	resources.QueueUpdate(a.tv, func() {
 		switch {
 		case strings.HasPrefix(topic, "connector.run."):
-			a.runsPage.ApplyEvent(m)
+			// Only in front: switchTo("runs") refetches on arrival, so a hidden :runs has nothing to
+			// keep fresh — and each fetch is the RunList of #892, two per endpoint run (#891).
+			if front, _ := a.pages.GetFrontPage(); front == "runs" {
+				a.runsPage.ApplyEvent(m)
+			}
 		case strings.HasPrefix(topic, "connector.dlq."):
 			a.dlqPage.ApplyEvent(m)
 		}
@@ -615,17 +637,21 @@ func (a *App) liveTicker() {
 	}
 }
 
+// refreshIfActive is the live ticker's refresh of the page in front: the page's own Refresh, which
+// fetches off the loop (offLoop), never switchTo — that closes an open describe panel and rewrites
+// the footer (#891). The front page is read on the loop, where pages is written.
 func (a *App) refreshIfActive(name string) {
 	if resources.EditorSuspended.Load() {
 		return // never QueueUpdateDraw against a suspended screen
 	}
-	if current, _ := a.pages.GetFrontPage(); current == name {
-		resources.QueueUpdate(a.tv, func() {
-			if a.switchTo != nil {
-				a.switchTo(name)
-			}
-		})
-	}
+	resources.QueueUpdate(a.tv, func() {
+		if current, _ := a.pages.GetFrontPage(); current != name {
+			return
+		}
+		if p, ok := a.pageByName(name).(interface{ Refresh() }); ok {
+			p.Refresh()
+		}
+	})
 }
 
 // setScope is the one place the session scope changes: the value :ask sends, and what the

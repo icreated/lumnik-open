@@ -78,7 +78,7 @@ test('json(): 401 calls onAuthLost once and throws a plain object with kind auth
 
   await assert.rejects(
     () => api.json('/api/views/render', { json: {} }),
-    (err) => { assert.deepEqual(err, { kind: 'auth' }); return true; },
+    (err) => { assert.equal(err.kind, 'auth'); assert.equal(err.status, 401); return true; },
   );
   assert.equal(calls, 1);
 });
@@ -89,7 +89,7 @@ test('json(): 403 with {"error":"scope not granted"} throws kind scope with the 
 
   await assert.rejects(
     () => api.json('/api/views/render', { json: {} }),
-    (err) => { assert.deepEqual(err, { kind: 'scope', message: 'scope not granted' }); return true; },
+    (err) => { assert.equal(err.kind, 'scope'); assert.equal(err.message, 'scope not granted'); assert.equal(err.status, 403); return true; },
   );
 });
 
@@ -99,7 +99,7 @@ test('json(): 500 with no/invalid body throws kind error with a fallback message
 
   await assert.rejects(
     () => api.json('/api/views/render', { json: {} }),
-    (err) => { assert.deepEqual(err, { kind: 'error', message: 'erreur 500' }); return true; },
+    (err) => { assert.equal(err.kind, 'error'); assert.equal(err.message, 'erreur 500'); assert.equal(err.status, 500); return true; },
   );
 });
 
@@ -122,7 +122,7 @@ test('text(): 403 with a scope-not-granted body maps to kind scope, same as json
 
   await assert.rejects(
     () => api.text('/api/views/stock.yaml', 'application/yaml'),
-    (err) => { assert.deepEqual(err, { kind: 'scope', message: 'scope not granted' }); return true; },
+    (err) => { assert.equal(err.kind, 'scope'); assert.equal(err.message, 'scope not granted'); assert.equal(err.status, 403); return true; },
   );
 });
 
@@ -133,7 +133,7 @@ test('text(): 401 calls onAuthLost once and throws kind auth', async () => {
 
   await assert.rejects(
     () => api.text('/api/views/stock.yaml', 'application/yaml'),
-    (err) => { assert.deepEqual(err, { kind: 'auth' }); return true; },
+    (err) => { assert.equal(err.kind, 'auth'); assert.equal(err.status, 401); return true; },
   );
   assert.equal(calls, 1);
 });
@@ -142,4 +142,48 @@ test('a network failure (fetch throws) maps to a French message, not browser Eng
   const api = createApi({ token: () => 't', onAuthLost: () => {}, fetchFn: () => { throw new TypeError('Failed to fetch'); } });
   await assert.rejects(() => api.json('/api/views', { method: 'GET' }),
     err => err.kind === 'error' && err.message === 'réseau indisponible — vérifie ta connexion');
+});
+
+// Search needs more than a kind: the status (to pick the sentence), the reason a 503 carries in its
+// body, and the Retry-After the hub sent. They ride on every non-2xx, the 401 included.
+function refusedWithHeaders(status, body, headers) {
+  return { ...refused(status, body), headers: { get: (k) => (headers[k] ?? headers[k.toLowerCase()] ?? null) } };
+}
+
+test('a refusal also carries status, retryAfter (seconds) and the parsed body', async () => {
+  const fetchFn = fakeFetch(refusedWithHeaders(503, { error: 'search is degraded', reason: 'backend_down' }, { 'Retry-After': '60' }));
+  const api = createApi({ token: () => 't', onAuthLost: noAuthLost(), fetchFn });
+  await assert.rejects(() => api.json('/api/search?q=x', { method: 'GET' }), (e) => {
+    assert.equal(e.kind, 'error');
+    assert.equal(e.message, 'search is degraded');
+    assert.equal(e.status, 503);
+    assert.equal(e.retryAfter, 60);
+    assert.deepEqual(e.body, { error: 'search is degraded', reason: 'backend_down' });
+    return true;
+  });
+});
+
+test('without a Retry-After header, or a headers object, retryAfter is null', async () => {
+  for (const response of [refusedWithHeaders(429, { error: 'slow down' }, {}), refused(429, { error: 'slow down' })]) {
+    const api = createApi({ token: () => 't', onAuthLost: noAuthLost(), fetchFn: fakeFetch(response) });
+    await assert.rejects(() => api.json('/x', { method: 'GET' }), (e) => e.status === 429 && e.retryAfter === null);
+  }
+});
+
+test('a Retry-After that is not a number of seconds is null, never NaN', async () => {
+  const api = createApi({ token: () => 't', onAuthLost: noAuthLost(),
+    fetchFn: fakeFetch(refusedWithHeaders(503, {}, { 'Retry-After': 'Wed, 21 Oct 2026 07:28:00 GMT' })) });
+  await assert.rejects(() => api.json('/x', { method: 'GET' }), (e) => e.retryAfter === null);
+});
+
+test('the 401 still signals auth loss and now carries its status too', async () => {
+  let lost = 0;
+  const api = createApi({ token: () => 't', onAuthLost: () => { lost += 1; }, fetchFn: fakeFetch(refused(401, undefined)) });
+  await assert.rejects(() => api.json('/x', { method: 'GET' }), (e) => e.kind === 'auth' && e.status === 401);
+  assert.equal(lost, 1);
+});
+
+test('a scope refusal keeps its kind and gains the status', async () => {
+  const api = createApi({ token: () => 't', onAuthLost: noAuthLost(), fetchFn: fakeFetch(refused(403, { error: 'scope not granted' })) });
+  await assert.rejects(() => api.json('/x', { method: 'GET' }), (e) => e.kind === 'scope' && e.status === 403);
 });

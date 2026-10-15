@@ -39,12 +39,19 @@ func (c *Client) RunGet(id string) (types.Run, error) {
 	return out, nil
 }
 
-// RunCancel requests cancellation of an in-flight run via
-// POST /api/platform/runs/{id}/cancel. A 202 only means the request was
+// RunCancel asks the hub to cancel a run via POST /api/platform/runs/{id}/cancel and returns the hub's
+// status word: "cancelled" for a run that had not started (it is already ended), "cancellation
+// requested" for one in flight. For the latter a 202 only means the request was
 // recorded — the chunk loop reads the flag at the next chunk boundary, so
 // this never guarantees the run has stopped. A non-2xx (already ended, or no
 // chunk loop is watching it) surfaces the hub's own {"error": …} message via
 // APIError, unchanged.
-func (c *Client) RunCancel(id string) error {
-	return c.POST("/api/platform/runs/"+id+"/cancel", map[string]any{}, nil)
+func (c *Client) RunCancel(id string) (string, error) {
+	var out struct {
+		Status string `json:"status"`
+	}
+	if err := c.POST("/api/platform/runs/"+id+"/cancel", map[string]any{}, &out); err != nil {
+		return "", err
+	}
+	return out.Status, nil
 }

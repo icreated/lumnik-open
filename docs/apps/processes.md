@@ -270,6 +270,12 @@ processes, two decisions, the same `ENTITY_KEY` — each triaged on its own. `am
 column, as every CSV column is; `amount>1000` casts it for the comparison exactly as a view
 filter does.
 
+**How a number is compared.** A value that arrives as *text* (every CSV cell) must be a plain decimal to be
+compared: a cell holding `1e5` never matches `amount>100`, so a dirty cell cannot fire a process. A value
+that arrives as a *number* is compared by its value, however small or large: `0.00002` matches
+`x>1e-5`, and `x=5` matches `5`, `5.0` and `5.00`. `NaN` and the infinities never match. On a text value,
+`=` stays an exact text comparison.
+
 ### Turn a process off
 
 Two gestures, one reversible and one not.

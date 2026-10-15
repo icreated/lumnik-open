@@ -29,6 +29,14 @@ public record ViewFilter(String column, String op, String value) {
 
     /** Plain decimal — scientific notation is "dirty" in BOTH worlds. PG-~ and Java-Pattern compatible. */
     public static final String NUMERIC_SHAPE = "^\\s*-?[0-9]+(\\.[0-9]+)?\\s*$";
+    /**
+     * An ordering OPERAND: a plain decimal, optionally in scientific notation ({@code 1e-5},
+     * {@code 6.022e23}) — the natural way to write a bound on a float. The exponent is capped at four
+     * digits so nothing absurd reaches the parser. This is NOT {@link #NUMERIC_SHAPE}: the operand is
+     * parsed by {@code BigDecimal} and bound as a parameter, while the stored text a row holds must stay
+     * plain (a scientific STORED value remains "dirty" in both worlds, as that shape documents).
+     */
+    private static final String OPERAND_SHAPE = "^\\s*-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]{1,4})?\\s*$";
     /** ISO date, optionally followed by a T- or space-separated well-formed ISO time. */
     public static final String TEMPORAL_SHAPE =
         "^\\s*[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])"
@@ -150,19 +158,32 @@ public record ViewFilter(String column, String op, String value) {
         return ORDERING.contains(op);
     }
 
+    /** The operand as a number — null when the value is not one (plain decimal or scientific notation), whatever the operator. */
+    public BigDecimal numericOperand() {
+        if (!value.matches(OPERAND_SHAPE)) return null;
+        try {
+            return new BigDecimal(value.strip());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     /** The ordered operand's type — null when the value is neither (or the op is =/~). */
     public OperandType operandType() {
         if (!ordering()) return null;
-        if (value.matches(NUMERIC_SHAPE)) {
-            try {
-                new BigDecimal(value.strip());
-                return OperandType.NUMERIC;
-            } catch (NumberFormatException ignored) { /* fall through */ }
-        }
+        if (numericOperand() != null) return OperandType.NUMERIC;
         if (value.matches(TEMPORAL_SHAPE) && TemporalText.parse(value) != null) return OperandType.TEMPORAL;
         return null;
     }
 
+
+    /** A float column is compared natively ({@code ?::float8}); Postgres raises on a value it cannot hold
+     *  (overflow, or a non-zero value that underflows to zero) — refuse it here, spoken, never a 500. */
+    private static boolean fitsADouble(String operand) {
+        BigDecimal bd = new BigDecimal(operand.strip());
+        double d = bd.doubleValue();
+        return !Double.isInfinite(d) && (d != 0 || bd.signum() == 0);
+    }
 
     /** Parse + validate all filters against the resolved view and its card table. */
     public static List<ViewFilter> resolveAll(List<String> raw, ResolvedView rv, SchemaCard.Table table) {
@@ -170,10 +191,22 @@ public record ViewFilter(String column, String op, String value) {
         List<ViewFilter> out = new ArrayList<>();
         for (String r : raw) {
             ViewFilter f = parse(r);
-            boolean shown = rv.columns().stream().anyMatch(c -> c.name().equals(f.column()));
-            if (!shown)
+            ResolvedView.Column shown = rv.columns().stream()
+                    .filter(c -> c.name().equals(f.column())).findFirst().orElse(null);
+            if (shown == null)
                 throw new IllegalArgumentException("cannot filter on '" + f.column()
                     + "' — the view does not show it; declare it in spec.columns to filter on it");
+            if (f.operandType() == OperandType.NUMERIC && ColumnKind.ofType(shown.pgType()) == ColumnKind.FLOAT
+                    && !fitsADouble(f.value()))
+                throw new IllegalArgumentException("'" + f.value().strip() + "' is outside the range of a double precision number "
+                    + "(about 5e-324 to 1.8e308), which is how a " + shown.pgType() + " column is compared — use a value within it");
+            if (f.ordering() && !ColumnKind.orders(shown.pgType()))
+                throw new IllegalArgumentException("cannot order '" + f.column() + "' with " + f.op() + " — a "
+                    + shown.pgType() + " column cannot be compared that way; use = or ~ instead");
+            if (f.ordering() && !ColumnKind.ofType(shown.pgType()).accepts(f.operandType()))
+                throw new IllegalArgumentException("cannot compare '" + f.column() + "' (" + shown.pgType() + ") with '"
+                    + f.value().strip() + "' — a " + (f.operandType() == OperandType.NUMERIC ? "number" : "date")
+                    + " does not order a " + shown.pgType() + " column");
             if ("=".equals(f.op())) {
                 SchemaCard.Column card = table.columns().stream()
                         .filter(c -> c.name().equals(f.column())).findFirst().orElse(null);

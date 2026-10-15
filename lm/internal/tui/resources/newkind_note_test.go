@@ -23,3 +23,18 @@ func TestApplyNote(t *testing.T) {
 		t.Errorf("applyNote = %q, want %q", got, want)
 	}
 }
+
+// The :new page applies a kind:App and used to throw the answer away: a tab this hub does not offer
+// was kept and reported by the hub, and the toast said nothing.
+func TestAppApplyNote(t *testing.T) {
+	if got := appApplyNote([]byte(`{"name":"stock","scope":"stock","default":false}`)); got != "" {
+		t.Errorf("nothing to say = %q", got)
+	}
+	resp := []byte(`{"name":"stock","warnings":[{"path":"spec.tabs[1]","severity":"WARNING","message":"m"}]}`)
+	if got, want := appApplyNote(resp), "1 warning (spec.tabs[1])"; got != want {
+		t.Errorf("appApplyNote = %q, want %q", got, want)
+	}
+	if got := appApplyNote([]byte(`not json`)); got != "" {
+		t.Errorf("an unreadable answer must not invent a note: %q", got)
+	}
+}

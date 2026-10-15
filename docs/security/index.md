@@ -146,10 +146,16 @@ $ curl -s http://localhost:8080/api/platform/health -H "Authorization: Bearer $T
 ```
 
 - A lumnik Open build answers `core` and `identity` only. lumnik Pro adds `rag`
-  (the doors) and `llm` (the model provider), and **both must be there**.
-- The métier PWA reads this list and shows no chat input if either half is missing. Called
-  directly, a `rag`-without-`llm` build answers the door and fails at the model call.
-- The boot log prints the same list. **lumnik Pro** is the image the deploy scripts pull;
+  (the doors) and `llm` (the model provider), and they always come together: a hub built with
+  `rag` but without `llm` does not build at all, so you will never meet one running.
+- A hub built with a [Search provider](../search/search-indexes.md#choosing-a-provider) also lists
+  `search_pg` or `search_opensearch`.
+- The métier PWA learns what the hub offers from `GET /api/bff/v1/me` (field `tabs`): an Open
+  build has no Chat tab at all.
+- A module the operator has switched off (`LUMNIK_AI_ENABLED=false`) is still listed here, with
+  `status: inactive` and a `reason` (`disabled:lumnik.ai.enabled`): installed and switched off is
+  not the same as absent. [Switching the AI off](../rag/models.md#switching-the-ai-off)
+- The boot log lists the installed modules too. **lumnik Pro** is the image the deploy scripts pull;
   **lumnik Open** is built from the public repository. Which one you run decides the rows
   marked *edition* below. [Editions](../editions.md#feature-by-feature)
 

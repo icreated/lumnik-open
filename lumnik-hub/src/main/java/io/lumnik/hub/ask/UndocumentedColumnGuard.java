@@ -4,6 +4,7 @@ import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.extraction.spi.ask.SqlLexer;
 import jakarta.enterprise.context.ApplicationScoped;
 
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -18,7 +19,7 @@ import java.util.Set;
  *
  * <p><b>High-confidence + fail-open.</b> String literals become single tokens, so a column name inside a
  * literal can't trigger a refusal. Only a clean, unqualified identifier on the left of
- * {@code = / <> / !=} (vs a string literal) or {@code IN (<clean literal list>)} is inspected —
+ * {@code = / <> / !=} (vs a string literal), {@code [NOT] LIKE / ILIKE} (a pattern) or {@code IN (<clean literal list>)} is inspected —
  * QUOTED OR NOT, since the card renders every column quoted and a model copying what it sees would
  * otherwise walk straight past this guard; a qualified ({@code t.col}) or function-wrapped
  * ({@code lower(col)}) LHS, and a small set of non-column keywords, are never inspected — a miss,
@@ -30,15 +31,12 @@ public class UndocumentedColumnGuard {
 
     /** A filtered column that is not declared anywhere in the card. */
     public record Violation(String column, List<String> declaredColumns) {
-        private static final int MAX_SHOWN = 12; // cap the "known" list so a wide card can't bloat the message/logs
-
         public String message() {
-            String known = declaredColumns.size() <= MAX_SHOWN
-                ? String.join(", ", declaredColumns)
-                : String.join(", ", declaredColumns.subList(0, MAX_SHOWN))
-                    + ", … (+" + (declaredColumns.size() - MAX_SHOWN) + " more)";
-            return "I won't run this: '" + column + "' is not a declared column of this scope (known: "
-                + known + "). If it should exist, add it to the entity manifest.";
+            return message(null);
+        }
+
+        public String message(String lang) {
+            return AskSentences.undocumentedColumn(lang, column, declaredColumns);
         }
     }
 
@@ -60,7 +58,10 @@ public class UndocumentedColumnGuard {
         }
         if (declared.isEmpty()) return Optional.empty();
 
-        for (SqlFilters.Filter f : SqlFilters.columnLiteralFilters(SqlLexer.tokenize(sql))) {
+        var tokens = SqlLexer.tokenize(sql);
+        var filters = new ArrayList<>(SqlFilters.columnLiteralFilters(tokens));
+        filters.addAll(SqlFilters.columnPatternFilters(tokens)); // a LIKE / ILIKE search names a column too (#1047)
+        for (SqlFilters.Filter f : filters) {
             String col = f.column().toLowerCase(Locale.ROOT);
             // A keyword only when the query spelled it BARE: Postgres promotes no quoted token to a
             // keyword, so `"user" = '…'` filters a column named user — and the card hands the model

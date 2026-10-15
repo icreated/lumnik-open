@@ -120,6 +120,8 @@ func endpointStatusColor(status string) tcell.Color {
 		return tcell.NewRGBColor(0x22, 0xC5, 0x5E) // green
 	case KindFailed:
 		return tcell.NewRGBColor(0xEF, 0x44, 0x44) // red
+	case KindQueued:
+		return tcell.NewRGBColor(0x38, 0xBD, 0xF8) // sky — accepted, not started
 	case KindRunning:
 		return tcell.NewRGBColor(0xFF, 0x8C, 0x00) // amber
 	case KindPartial:

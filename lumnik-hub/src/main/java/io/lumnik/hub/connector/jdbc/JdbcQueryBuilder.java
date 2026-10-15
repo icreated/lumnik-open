@@ -1,9 +1,10 @@
 package io.lumnik.hub.connector.jdbc;
 
-import io.lumnik.hub.connector.jdbc.dialect.JdbcDialect;
+import io.lumnik.jdbc.spi.Comparison;
+import io.lumnik.jdbc.spi.JdbcDialect;
+import io.lumnik.jdbc.spi.KeyComparison;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -11,8 +12,10 @@ import java.util.stream.Collectors;
  * Pure builder of the SELECT used by JdbcChunkReader. Kept separate so it can be
  * unit-tested without any database.
  *
- * <p>Both modes page on a keyset: the rows are ordered by the key columns and a resume reads
- * {@code (keys) > (lastValues)}, a lexicographic row comparison. The key is the whole declared
+ * <p>Both modes page on a keyset: the rows are ordered by the key columns and a resume reads the
+ * rows after {@code (lastValues)}, a lexicographic comparison the DIALECT expresses (a row-value
+ * tuple where the database has one, an {@code OR/AND} expansion where it does not) together with
+ * the plan saying which key value each {@code ?} takes. The key is the whole declared
  * primary key — reading only its first column loses every row of the group that straddles a
  * chunk boundary. WATERMARK prepends the watermark column, which is what makes the primary key
  * its tiebreak. For a single key column the row form degenerates to a plain scalar comparison.
@@ -20,6 +23,13 @@ import java.util.stream.Collectors;
 public class JdbcQueryBuilder {
 
   public enum Mode { WATERMARK, FULL }
+
+  /**
+   * A SELECT with the bind plans of its two comparisons: {@code cursorPlan} for the {@code >} clause,
+   * {@code ceilingPlan} for the {@code <=} one, each empty when its clause is absent. The reader
+   * binds the cursor and ceiling values through them, in the key order of {@link #keyColumns}.
+   */
+  public record Select(String sql, List<Integer> cursorPlan, List<Integer> ceilingPlan) {}
 
   private final JdbcDialect dialect;
 
@@ -45,7 +55,7 @@ public class JdbcQueryBuilder {
    *               how this query read before runs had a target. Its VALUES are bound by the reader,
    *               after the cursor's, in this same key order.
    */
-  public String buildSelect(String schema, String table, String watermarkColumn,
+  public Select buildSelect(String schema, String table, String watermarkColumn,
                             List<String> pkColumns, JdbcCursor cursor, JdbcRunBound bound,
                             int chunkSize, Mode mode) {
     List<String> keys = keyColumns(watermarkColumn, pkColumns, mode);
@@ -54,9 +64,12 @@ public class JdbcQueryBuilder {
 
     List<String> quoted = keys.stream().map(dialect::quoteIdentifier).toList();
     List<String> clauses = new ArrayList<>(2);
+    List<Integer> cursorPlan = List.of();
+    List<Integer> ceilingPlan = List.of();
     if (cursor != null && !cursor.pk().isEmpty()) {
-      clauses.add("(" + String.join(", ", quoted) + ") > ("
-          + String.join(", ", Collections.nCopies(quoted.size(), "?")) + ")");
+      KeyComparison after = dialect.keyComparison(quoted, Comparison.GREATER_THAN).validateFor(quoted.size());
+      clauses.add(after.sql());
+      cursorPlan = after.parameterIndexes();
     }
     // The ceiling, as a second lexicographic row comparison over the SAME key list. In SQL, in the
     // source's own types: the one comparison the JVM must not attempt (see JdbcRunBound).
@@ -73,8 +86,9 @@ public class JdbcQueryBuilder {
     //
     // FULL mode needs none: its keys are primary-key columns, which cannot be null.
     if (bound != null) {
-      String ceiling = "(" + String.join(", ", quoted) + ") <= ("
-          + String.join(", ", Collections.nCopies(quoted.size(), "?")) + ")";
+      KeyComparison upTo = dialect.keyComparison(quoted, Comparison.LESS_OR_EQUAL).validateFor(quoted.size());
+      String ceiling = upTo.sql();
+      ceilingPlan = upTo.parameterIndexes();
       if (mode == Mode.WATERMARK && watermarkColumn != null) {
         ceiling = "(" + ceiling + " OR " + dialect.quoteIdentifier(watermarkColumn) + " IS NULL)";
       }
@@ -86,8 +100,8 @@ public class JdbcQueryBuilder {
 
     sb.append(" ORDER BY ")
       .append(quoted.stream().map(q -> q + " ASC").collect(Collectors.joining(", ")));
-    sb.append(" LIMIT ").append(chunkSize);
-    return sb.toString();
+    sb.append(" ").append(dialect.limitClause(chunkSize));
+    return new Select(sb.toString(), cursorPlan, ceilingPlan);
   }
 
   /**
@@ -115,7 +129,7 @@ public class JdbcQueryBuilder {
     }
     sb.append(" ORDER BY ")
       .append(quoted.stream().map(q -> q + " DESC").collect(Collectors.joining(", ")));
-    sb.append(" LIMIT 1");
+    sb.append(" ").append(dialect.limitClause(1));
     return sb.toString();
   }
 }

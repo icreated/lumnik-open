@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Deleting an integration must stop deliveries already in flight to it.
  *
- * <p>The FIRST delivery asks {@code WebhookEndpointRepository.findEnabledForEvent}, which filters
+ * <p>The FIRST delivery asks {@code WebhookEndpointRepository.findEnabled}, which filters
  * {@code archivedAt IS NULL AND deletedAt IS NULL}. The RETRY asked {@code findById}, which filters
  * nothing — and {@code softDelete()} stamps only {@code deletedAt}, leaving {@code enabled = true},
  * so {@code WebhookEndpoint.matches} (which reads only {@code enabled} and the event types) still

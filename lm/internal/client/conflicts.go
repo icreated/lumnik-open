@@ -2,8 +2,8 @@ package client
 
 import "fmt"
 
-// Conflict is one fused-entity row whose sources still disagree: which entity, which
-// record, which columns, and what each source said for them.
+// Conflict is one fused-entity row with a source conflict or a lookup ambiguity: which entity,
+// which record, which columns, and what each source (or each duplicate lookup row) said for them.
 type Conflict struct {
 	Entity    string                    `json:"entity"`
 	Key       string                    `json:"key"`
@@ -11,7 +11,7 @@ type Conflict struct {
 	Conflicts map[string][]DetailSource `json:"conflicts"`
 }
 
-// SourceNames lists the distinct sources involved in this row's disagreement, in the
+// SourceNames lists the distinct sources involved in this row's ledger, in the
 // order the ledger first mentions them — the table's SOURCES column.
 func (c Conflict) SourceNames() []string {
 	seen := make(map[string]bool, len(c.Columns))

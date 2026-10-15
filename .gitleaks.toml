@@ -16,4 +16,9 @@ regexes = [
   '''pgp_sym_encrypt\(:val, :key''',
   # Self-describing test passphrase used by the secret-store unit/IT fixtures.
   '''master-key-test-ok''',
+  # Manifest `*_env:` fields (secret_key_env, password_env, key_env, …) hold the NAME of an
+  # environment variable, never its value — the parsers refuse inline credentials. Anchored to the
+  # whole line and to an UPPER_SNAKE name with at least one underscore, so a real secret written
+  # there (an AKIA… key id is also upper-case) still gets flagged.
+  '''^\s*[a-z][a-z0-9_]*_env:\s*[A-Z][A-Z0-9]*(_[A-Z0-9]+)+\s*$''',
 ]

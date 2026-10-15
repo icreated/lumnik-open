@@ -29,8 +29,8 @@ public final class LogProbe {
 
     private LogProbe() {}
 
-    /** One captured line: the level it was written at, and its message with parameters applied. */
-    public record Line(Level level, String message) {}
+    /** One captured line: its level, its message with parameters applied, and what it carried (or null). */
+    public record Line(Level level, String message, Throwable thrown) {}
 
     /** Runs {@code action} with a probe on {@code source}'s logger; returns what it wrote, in order. */
     public static List<Line> capture(Class<?> source, Runnable action) {
@@ -39,7 +39,7 @@ public final class LogProbe {
         Handler probe = new Handler() {
             @Override public void publish(LogRecord r) {
                 lines.add(new Line(r.getLevel(),
-                    r instanceof ExtLogRecord ext ? ext.getFormattedMessage() : r.getMessage()));
+                    r instanceof ExtLogRecord ext ? ext.getFormattedMessage() : r.getMessage(), r.getThrown()));
             }
             @Override public void flush() {}
             @Override public void close() {}

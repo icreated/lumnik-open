@@ -1,5 +1,7 @@
 package io.lumnik.hub.connector.transport.sftp;
 
+import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
 
 /**
@@ -23,6 +25,20 @@ public final class SftpTestImage {
 
     public static final DockerImageName PINNED = DockerImageName.parse(
         "atmoz/sftp@sha256:dfa61ea26a339a46bda98accfa31f24d912b19812517ecaf3be49e6a15422b24");
+
+    /**
+     * A started-ready container of the pinned image: {@code commandLine} is atmoz/sftp's own
+     * ({@code user:password:uid:gid:dir}). It waits for sshd to LISTEN, not merely for the published port to accept: the
+     * docker-proxy binds that port at container start while the entrypoint is still generating host keys, and a
+     * connection landing in that window is accepted and then dropped. The log line is the one this class's javadoc warns
+     * about, so it lives here once.
+     */
+    public static GenericContainer<?> container(String commandLine) {
+        return new GenericContainer<>(PINNED)
+            .withCommand(commandLine)
+            .withExposedPorts(22)
+            .waitingFor(Wait.forLogMessage(".*Server listening on 0\\.0\\.0\\.0.*", 1));
+    }
 
     private SftpTestImage() {
     }

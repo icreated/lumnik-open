@@ -36,12 +36,13 @@ periodically *observes* a document's state and *alerts*
 (`decision.dormant.<workflow>`) when it has sat too long — but it never rewrites the
 manifest or the data.
 
-## Six kinds, two families
+## Seven kinds, two families
 
-Every manifest starts with `kind:` — six kinds, grouped into two families by what they
+Every manifest starts with `kind:` — seven kinds, grouped into two families by what they
 build, not by a shared envelope: `apiVersion` is required and validated for `Connector`,
-declared-but-not-yet-enforced for the four app kinds (accepted today for forward
-compatibility), and simply absent from `Entity`'s schema.
+strictly validated for `Export`, declared-but-not-yet-enforced for the other four app
+kinds (accepted today for forward compatibility), and simply absent from `Entity`'s
+schema.
 
 | `kind:` | `apiVersion:` | What it declares | Apply command | Owning page |
 |---|---|---|---|---|
@@ -51,12 +52,14 @@ compatibility), and simply absent from `Entity`'s schema.
 | `App` | `apps.lumnik.io/v1` — accepted, ignored | a métier app's own title, scope, icon and theme | `lm app apply -f` | [The métier PWA](apps/pwa.md) |
 | `Process` | `apps.lumnik.io/v1` — accepted, ignored | a declared reaction to a row landing | `lm process apply -f` | [Processes](apps/processes.md) |
 | `Workflow` | `apps.lumnik.io/v1` — accepted, ignored | a declared document lifecycle over a status column | `lm workflow apply -f` | [Workflows](apps/workflows.md) |
+| `Export` | `apps.lumnik.io/v1` — required, validated | a managed delivery of an entity's rows to a destination | `lm export apply -f` | [Exports](apps/exports.md) |
 
-`Connector` and `Entity` ingest and fuse; `View`, `App`, `Process` and `Workflow` build the
-[app ladder](apps/views.md) on top of what's been fused. Note the one CLI irregularity:
-`lm apply -f` (no prefix) is `Connector`'s own command — every other kind uses its own
-prefixed `apply` (`lm entity apply`, `lm view apply`, `lm app apply`, `lm process apply`,
-`lm workflow apply`), as the [CLI reference](cli/lm-reference.md) documents.
+`Connector` and `Entity` ingest and fuse; `View`, `App`, `Process`, `Workflow` and `Export`
+build the [app ladder](apps/views.md) on top of what's been fused. Note the one CLI
+irregularity: `lm apply -f` (no prefix) is `Connector`'s own command — every other kind
+uses its own prefixed `apply` (`lm entity apply`, `lm view apply`, `lm app apply`,
+`lm process apply`, `lm workflow apply`, `lm export apply`), as the
+[CLI reference](cli/lm-reference.md) documents.
 
 ### Living with your objects
 
@@ -69,14 +72,18 @@ by kind (verified against the `lm` CLI source, `lm/internal/cli/`):
 | `View` | yes | yes | no |
 | `Workflow` | yes | yes | no |
 | `Process` | yes | no | no |
-| `Entity` | no | no | yes |
+| `Export` | yes | yes | no |
+| `Entity` | no | yes | yes |
 | `App` | no | no | no |
 
-`Entity` has no `list`/`get` — `lm entity apply` and `lm entity delete NAME` are its CLI
-surface, and a fused entity is read back through
-[`GET /api/entities/{name}`](entities.md#read-api), not through `lm`. `App` has no
-`list`/`get`/`delete` at all — `lm app apply` is its only CLI surface, and the registry is
-read back through [`GET /api/apps`](cli/lm-reference.md) (`lm_user`, scope-bound), which is
+`Entity` has no `list` — `lm entity apply`, [`lm entity get NAME`](entities.md#read-api)
+and `lm entity delete NAME` are its CLI surface; `lm entity get` is a thin facade over
+[`GET /api/entities/{name}`](entities.md#read-api), the door to reach for only when the CLI
+cannot express what you need. `Export` has no `delete` — there is no door that removes a
+stored export manifest; `lm export apply` without `spec.schedule` lifts a previously
+declared schedule, the same upsert posture a `Connector`'s own `schedule` key has. `App`
+has no `list`/`get`/`delete` at all — `lm app apply` is its only CLI surface, and the
+registry is read back through [`GET /api/apps`](cli/lm-reference.md) (`lm_user`, scope-bound), which is
 how the PWA discovers its own identity at load.
 There is no single command that lists every kind at once — each shelf keeps its own
 `list`. See [CLI & TUI reference](cli/lm-reference.md) for the full command tables.

@@ -73,7 +73,7 @@ func TestEmitDetail_jsonHonorsOutputFlag(t *testing.T) {
 		Fields:         []client.DetailField{{Name: "name", Label: "Nom", Value: "Marie"}},
 		ConflictLedger: true,
 		Conflicts: []client.DetailConflict{{Column: "name", Label: "Nom",
-			Sources: []client.DetailSource{{Src: "cust_siebel", Value: "Marie"}, {Src: "t_cust_csv", Value: "MARIE A."}}}},
+			Sources: []client.DetailSource{{Src: "cust_siebel", Value: client.StrPtr("Marie")}, {Src: "t_cust_csv", Value: client.StrPtr("MARIE A.")}}}},
 	}
 	var b bytes.Buffer
 	require.NoError(t, emitDetail(&b, "json", res))
@@ -89,11 +89,11 @@ func TestEmitDetail_tableUsesHumanLayout(t *testing.T) {
 		Fields:         []client.DetailField{{Name: "name", Label: "Nom", Value: "Marie"}},
 		ConflictLedger: true,
 		Conflicts: []client.DetailConflict{{Column: "name", Label: "Nom",
-			Sources: []client.DetailSource{{Src: "a", Value: "x"}, {Src: "b", Value: "y"}}}},
+			Sources: []client.DetailSource{{Src: "a", Value: client.StrPtr("x")}, {Src: "b", Value: client.StrPtr("y")}}}},
 	}
 	var b bytes.Buffer
 	require.NoError(t, emitDetail(&b, "", res))
-	assert.Contains(t, b.String(), "Où les sources divergent")
+	assert.Contains(t, b.String(), "Ambiguïtés et divergences")
 }
 
 func TestEmitList_jsonHonorsOutputFlag(t *testing.T) {

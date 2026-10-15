@@ -6,6 +6,7 @@ import com.cronutils.model.time.ExecutionTime;
 import com.cronutils.parser.CronParser;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.api.types.RunTrigger;
+import io.lumnik.hub.connector.domain.ConnectorRunStatus;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -59,13 +60,17 @@ public class ConnectorScheduler {
       "FROM connector.connector c " +
       "WHERE c.enabled = true AND c.schedule IS NOT NULL AND c.deleted_at IS NULL " +
       "  AND NOT EXISTS (SELECT 1 FROM connector.connector_run r2 " +
-      "                  WHERE r2.connector_id = c.id AND r2.status = 'Running')";
+      "                  WHERE r2.connector_id = c.id AND r2.status IN ('" + ConnectorRunStatus.QUEUED.sqlValue() + "', '" + ConnectorRunStatus.RUNNING.sqlValue() + "'))";
 
   @Inject @DataSource("admin") AgroalDataSource adminDs;
   @Inject ConnectorEngine engine;
+  @Inject RunReaper reaper;
 
   @Scheduled(every = "1m", concurrentExecution = SKIP)
   void scheduledTick() {
+    // Reap first: a Running row whose owner died blocks its connector in SELECT_DUE below. With
+    // several replicas, a pod's crash is only noticed here, never by that pod's own restart.
+    reaper.reapOnTick();
     try {
       int n = tick();
       if (n > 0) LOG.infof("ConnectorScheduler: submitted %d runs", n);
@@ -85,6 +90,12 @@ public class ConnectorScheduler {
       // (the next in-window cron slot runs). Manual runs bypass this gate entirely.
       if (!RunWindow.contains(c.window(), now.toLocalTime())) {
         LOG.debugf("ConnectorScheduler: connector %s due but outside window %s — skipped", c.id(), c.window());
+        continue;
+      }
+      // #897: a fan-out still waiting for run permits has written no row for this slot yet, so the
+      // cron check above still reads the connector as due; another fan-out would run it twice.
+      if (engine.hasPendingFanOut(c.id())) {
+        LOG.debugf("ConnectorScheduler: connector %s due but its previous fan-out is still waiting for a run slot", c.id());
         continue;
       }
       try {

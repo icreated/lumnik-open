@@ -1,5 +1,6 @@
-Feature: entity-apply reserved-column [seed=1]
-  Scenario: apply manifest with reserved column _conflicts must be rejected with 400
-    Given an entity manifest for variant "reserved-column" [seed=1]
-    When I apply the entity manifest as lm_admin
-    Then the entity apply response status is 400
+Feature: entity-cli resolve-ambiguous-assert-same-assert-distinct-history [seed=1]
+  Scenario: lm entity resolve/ambiguous/assert-same/assert-distinct/history clear two genuine ambiguities end-to-end
+    Given the entity CLI fixture is seeded with two genuine ambiguities [seed=1]
+    When I drive the entity resolution CLI doors end-to-end
+    Then lm entity ambiguous no longer lists either fixture identity
+    And lm entity history shows both fixture identities were cleared by an assertion

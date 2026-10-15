@@ -560,8 +560,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         if (path == null || items.isEmpty()) return prior;
         String max = prior;
         for (Map<String, Object> item : items) {
-            JsonNode node = mapper.valueToTree(item);
-            Object v = JsonPathExtractor.read(node, path);
+            Object v = JsonPathExtractor.readParsed(item, path);
             if (v == null) continue;
             String s = String.valueOf(v);
             if (max == null || s.compareTo(max) > 0) max = s;

@@ -7,7 +7,6 @@ import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.inject.Inject;
-import jakarta.transaction.Transactional;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
@@ -66,7 +65,6 @@ public class SchemaCardAdminResource {
 
     @POST
     @Path("/rediscover")
-    @Transactional
     public Response rediscover(@QueryParam("scope") String raw) {
         long tenant = RequireTenant.current();
         String scope = normalized(raw);

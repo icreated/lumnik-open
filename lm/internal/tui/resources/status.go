@@ -4,7 +4,7 @@ import "strings"
 
 // RunStatusKind classifies a hub run/endpoint status string into the small,
 // closed set of buckets every presentation site renders. The hub emits
-// exactly five values — Running, Completed, Partial, Failed, Cancelled — and
+// six values — Queued, Running, Completed, Partial, Failed, Cancelled — and
 // this is the single place that vocabulary is decoded; per-site glyphs and
 // colors stay local to each page.
 //
@@ -16,6 +16,7 @@ type RunStatusKind int
 
 const (
 	KindUnknown RunStatusKind = iota
+	KindQueued
 	KindRunning
 	KindCompleted
 	KindPartial
@@ -32,6 +33,8 @@ const (
 // KindUnknown.
 func runStatusKind(s string) RunStatusKind {
 	switch strings.ToUpper(s) {
+	case "QUEUED":
+		return KindQueued
 	case "RUNNING":
 		return KindRunning
 	case "COMPLETED":

@@ -65,7 +65,7 @@ class EmailTemplateGuardIT {
         seedRule("event-notification", "ok@guardtest.local");      // safe
         seedEvent("guard.test.fire");
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("email", 100, consumer::process));
+        TenantContext.runAsSystem(() -> sweeper.sweep("email", 100, consumer.batchProcessor()));
 
         verify(qute, never()).getTemplate(contains("..")); // guard blocked the traversal
         verify(qute).getTemplate("email/event-notification.html"); // safe name passed through

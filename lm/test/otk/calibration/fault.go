@@ -62,6 +62,24 @@ func Capabilities() []Capability {
 	return []Capability{RequiresDBTruth, RequiresRealAuth, RequiresAdminDB}
 }
 
+// RebuildTarget is what phase 2 must rebuild before running the injected battery,
+// for a fault whose Kind needs a rebuild at all.
+//
+// It replaced a single NeedsRepackage bool the day a fault needed to rebuild the
+// `lm` CLI instead of the hub: "does anything need rebuilding" was never the
+// question otkcal's three-phase flow actually asks — WHICH artefact does is, and
+// only RebuildHub means the hub itself must be stopped and rebooted. RebuildCLI
+// leaves the hub running untouched; the next `lm` invocation just picks up the
+// freshly-built binary from disk, the same way a KindSQL fault leaves the hub
+// running untouched while the database changes underneath it.
+type RebuildTarget string
+
+const (
+	RebuildNone RebuildTarget = "" // lives entirely in the database — nothing to build
+	RebuildHub  RebuildTarget = "hub"
+	RebuildCLI  RebuildTarget = "cli"
+)
+
 // Fault is one declared way to break the hub on purpose, and what the harness must
 // then say about it.
 //
@@ -84,8 +102,8 @@ type Fault struct {
 	// construction.
 	Sample string
 
-	Capabilities   []Capability
-	NeedsRepackage bool
+	Capabilities []Capability
+	Rebuild      RebuildTarget
 
 	// re is Pattern, compiled when the table is loaded — not at match time, so an
 	// invalid expression is a hard error before any hub is packaged rather than a
@@ -102,10 +120,77 @@ var faultTable = []Fault{
 		Family:      oracle.Atomicity,
 		MinSeverity: oracle.High,
 		// checks.ReconcileLanded's own format, with its live numbers left open.
-		Pattern:        `hub reported \d+ row\(s\) written but the DB holds \d+`,
-		Sample:         "hub reported 0 row(s) written but the DB holds 1",
-		Capabilities:   []Capability{RequiresDBTruth},
-		NeedsRepackage: true,
+		Pattern:      `hub reported \d+ row\(s\) written but the DB holds \d+`,
+		Sample:       "hub reported 0 row(s) written but the DB holds 1",
+		Capabilities: []Capability{RequiresDBTruth},
+		Rebuild:      RebuildHub,
+	},
+	{
+		Name:        "auth-audience-not-verified",
+		Kind:        KindPatch,
+		Family:      oracle.Auth,
+		MinSeverity: oracle.Critical,
+		// checks.AuthOutcome's own format for a served rejection, with the defect name
+		// (the generator's "bad-audience" case) pinned so this pattern cannot also match
+		// a sibling defect's bypass (e.g. expired-token — see decoys).
+		Pattern:      `auth bypass landed \(bad-audience\): expected 401, hub returned \d+`,
+		Sample:       "auth bypass landed (bad-audience): expected 401, hub returned 200",
+		Capabilities: []Capability{RequiresRealAuth},
+		Rebuild:      RebuildHub,
+	},
+	{
+		Name:        "security-rls-isolation-dropped",
+		Kind:        KindSQL,
+		Family:      oracle.Security,
+		MinSeverity: oracle.Critical,
+		// checks.RLSIsolation's own format, with its live count left open.
+		Pattern: `RLS isolation crossed: \d+ foreign-tenant row\(s\) visible under a different tenant's DB session`,
+		Sample:  "RLS isolation crossed: 1 foreign-tenant row(s) visible under a different tenant's DB session",
+		// RequiresAdminDB applies the ALTER POLICY (DDL the app role cannot do);
+		// RequiresDBTruth observes it (the same OTK_DB_DSN app-role session
+		// checks.RLSIsolation's probe already runs through). Neither is new: both
+		// were already probed for other faults.
+		Capabilities: []Capability{RequiresAdminDB, RequiresDBTruth},
+		// The fault lives entirely in the database — no source changes, so no
+		// rebuild/reboot between phases.
+		Rebuild: RebuildNone,
+	},
+	{
+		Name:        "robustness-cli-manifest-label-panic",
+		Kind:        KindPatch,
+		Family:      oracle.Robustness,
+		MinSeverity: oracle.High,
+		// checks.Robustness's own Detail for a panic is a FIXED literal — it carries
+		// no live data from the actual panic message, only runner.Result.Panicked's
+		// bool (itself set by matching "panic:"/"goroutine "/"runtime error:" against
+		// combined stdout+stderr, a layer below what reaches the Finding). The exact
+		// string is what distinguishes this from the same family's HANG and
+		// leaked-stack findings, which carry their own distinct fixed Details.
+		Pattern:      `lm panicked / unhandled stack trace`,
+		Sample:       "lm panicked / unhandled stack trace",
+		Capabilities: nil, // a CLI-only fault: no DB, no auth, no admin role — it runs regardless
+		// The fault lives in lm's own Go source, not the hub: no Java rebuild, but the
+		// CLI binary itself must be rebuilt before phase 2's battery can exercise it.
+		Rebuild: RebuildCLI,
+	},
+	{
+		Name:        "security-terminal-run-hidden-from-api",
+		Kind:        KindPatch,
+		Family:      oracle.Security,
+		MinSeverity: oracle.Critical,
+		// checks.RunTerminalDivergence's own fixed-literal Detail.
+		//
+		// Named for the SYMPTOM, not a mechanism: the July 2026 otk-gold flakiness diary
+		// (docs/studies/2026-07-27-otk-gold-flakiness-carnet.md) established that a run can go
+		// terminal in DB truth before the API ever reports it, but never established WHY — the
+		// diary's own conclusion was that the case needed a live recurrence to diagnose further,
+		// and none came. This fault is a SYNTHETIC witness of that observed failure SHAPE, not a
+		// reproduction of its root cause. If a future recurrence identifies the real mechanism,
+		// the artefact can be replaced without touching this declaration or checks.RunTerminalDivergence.
+		Pattern:      `run terminal in DB truth but the API never reported it within the poll deadline`,
+		Sample:       "run terminal in DB truth but the API never reported it within the poll deadline",
+		Capabilities: []Capability{RequiresDBTruth},
+		Rebuild:      RebuildHub,
 	},
 }
 

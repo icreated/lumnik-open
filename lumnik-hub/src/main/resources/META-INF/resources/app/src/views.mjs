@@ -13,8 +13,13 @@ export function createViews(api, scope) {
     return api.text(`/api/views/${encodeURIComponent(name)}`, 'application/yaml');
   }
 
-  function render(yaml, filters = []) {
-    const qs = filters.length ? '?' + filters.map(f => 'filter=' + encodeURIComponent(f)).join('&') : '';
+  // `page` ({pageSize, cursor}) opts into the hub's paged read; the cursor is opaque and sent back
+  // exactly as issued. Without it the hub answers its unpaged, capped read.
+  function render(yaml, filters = [], { pageSize, cursor } = {}) {
+    const parts = filters.map(f => 'filter=' + encodeURIComponent(f));
+    if (pageSize != null) parts.push('pageSize=' + encodeURIComponent(pageSize));
+    if (cursor != null) parts.push('cursor=' + encodeURIComponent(cursor));
+    const qs = parts.length ? '?' + parts.join('&') : '';
     return api.json('/api/views/render' + qs, { yaml });
   }
 

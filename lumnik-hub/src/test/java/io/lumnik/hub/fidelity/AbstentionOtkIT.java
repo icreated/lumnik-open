@@ -63,8 +63,7 @@ class AbstentionOtkIT {
           .thenReturn("phrased answer");     // phrasing (reached only when a real query runs)
 
       AskResult r = agent.ask(TENANT, scope, "probe seed " + s);
-      boolean abstained = AbstentionGuard.NO_SCHEMA_MESSAGE.equals(r.answer())
-          || new AbstentionGuard().isCannotAnswer(r.answer());
+      boolean abstained = r.abstained();
 
       if (sc.expectAbstain() && !abstained) {
         findings.add(new Finding(Family.ABSTENTION, Severity.HIGH, s,

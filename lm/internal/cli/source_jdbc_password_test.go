@@ -12,11 +12,17 @@ import (
 // what actually left the machine rather than on what the reader returned.
 func jdbcEcho(t *testing.T) map[string]any {
 	t.Helper()
+	return jdbcEchoBody(t, `{"ok":true,"dialect":"postgres","tables":[]}`)
+}
+
+// jdbcEchoBody is jdbcEcho with the hub's canned answer chosen by the test.
+func jdbcEchoBody(t *testing.T, body string) map[string]any {
+	t.Helper()
 	got := map[string]any{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&got)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"dialect":"postgres","tables":[]}`))
+		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
 	setupCfg(t, srv.URL)

@@ -32,6 +32,199 @@ scan() {
     return 0
 }
 
+# Closed-implementation Search provider code (#702): io.lumnik.search.* is the reserved
+# namespace for #705/#672's own packages (io.lumnik.search.pg, io.lumnik.search.cluster, …).
+# The public contract, io.lumnik.extraction.spi.search.IndexedSearchPort, deliberately lives
+# outside this prefix and must never be caught here. Boundary is (\.|;): catches a class
+# reference (io.lumnik.search.Foo) and a root package declaration (package io.lumnik.search;)
+# without a false positive on io.lumnik.searchable.
+readonly SEARCH_PROVIDER_PATTERN='io\.lumnik\.search(\.|;)|org\.opensearch\.|co\.elastic\.'
+
+# Check 1b as a function: TEST code may couple to the closed side, but only under a location
+# or name that says so (see the inline comment at the call site below for the full rule).
+check_1b() {
+    local test_dir="$1"
+    local closed_coupled mistests
+    # `|| exit 1`, not left to set -e: this function is called as `check_1b … || fail=1` at the
+    # call site, and errexit is suspended for everything a function does while it is itself the
+    # left side of `||`. Without this, a scan() failure (rc>=2, e.g. a renamed/missing directory)
+    # would leave $closed_coupled empty and this check would print ✓ on a search that never ran —
+    # exactly the false "no violations" scan()'s own header comment says must never happen.
+    closed_coupled=$(scan "io\.lumnik\.rag\.|dev\.langchain4j\.|io\.lumnik\.llm\.langchain\.|io\.lumnik\.hub\.pro\.|io\.lumnik\.identity\.scim\.|${SEARCH_PROVIDER_PATTERN}" \
+        "$test_dir") || exit 1
+    mistests=$(printf '%s' "$closed_coupled" | grep -Ev 'ClosedIT\.java$|/hub/pro/' || true)
+    if [ -n "$mistests" ]; then
+        echo "❌ Test sources import closed-edition types but are not named *ClosedIT.java:"
+        echo "$mistests" | sed 's/^/    /'
+        echo "    Rename them to *ClosedIT.java (they travel with the closed side), or drop the import."
+        return 1
+    fi
+    echo "✓ Closed-coupled test sources are all named *ClosedIT (excluded from the open edition)"
+    return 0
+}
+
+# Check 1c as a function: MAIN code may live on the closed side, but only under a location
+# that says so (see the inline comment at the call site below for the full rule).
+check_1c() {
+    local main_dir="$1" identity_dir="$2"
+    local pro_refs open_pro_refs
+    # `|| exit 1` — same reasoning as check_1b above: errexit is suspended inside a function
+    # called as the left side of `||`, so a scan() failure here must be caught explicitly.
+    pro_refs=$(scan "io\.lumnik\.hub\.pro\.|io\.lumnik\.identity\.scim\.|${SEARCH_PROVIDER_PATTERN}" \
+        "$main_dir" "$identity_dir") || exit 1
+    open_pro_refs=$(printf '%s' "$pro_refs" | grep -Ev '/hub/pro/|/identity/scim/' || true)
+    if [ -n "$open_pro_refs" ]; then
+        echo "❌ Open main sources reference pro-only code (io.lumnik.hub.pro / io.lumnik.identity.scim):"
+        echo "$open_pro_refs" | sed 's/^/    /'
+        echo "    Route it through the ExternalIdentityResolver seam, or move the file under the pro tree."
+        return 1
+    fi
+    echo "✓ Pro-only main code is referenced only from within the pro trees (open edition excludes them)"
+    return 0
+}
+
+# Check 1d as a function (#857): hub MAIN code reaches a JDBC dialect provider only through the SPI —
+# exactly io.lumnik.jdbc.spi, never io.lumnik.jdbc.postgresql (or any other provider package). Two
+# readable stages instead of one clever pattern: list every io.lumnik.jdbc.<segment> that occurs,
+# then drop the exact SPI segment; whatever is left is a provider leaking into the hub. Hub TEST
+# code is not scanned: it legitimately constructs the embedded default provider.
+check_1d() {
+    local main_dir="$1" err found rc leaked
+    err=$(mktemp)
+    # Same grep exit-code discipline as scan(): 0 = match, 1 = none (healthy), >=2 = error.
+    if found=$(grep -rhoE 'io\.lumnik\.jdbc\.[A-Za-z0-9_]+' "$main_dir" 2>"$err"); then rc=0; else rc=$?; fi
+    if [ "$rc" -ge 2 ]; then
+        echo "❌ boundary scan FAILED (grep exit $rc) over: $main_dir" >&2
+        sed 's/^/    /' "$err" >&2
+        rm -f "$err"
+        exit 1
+    fi
+    rm -f "$err"
+    leaked=$(printf '%s\n' "$found" | sort -u | grep -vx 'io\.lumnik\.jdbc\.spi' | grep -v '^$' || true)
+    if [ -n "$leaked" ]; then
+        echo "❌ Hub main code references a JDBC provider package (only io.lumnik.jdbc.spi is allowed):"
+        echo "$leaked" | sed 's/^/    /'
+        echo "    Reach providers through JdbcDialectRegistry / Instance<JdbcDialect>, never by class."
+        return 1
+    fi
+    echo "✓ Hub main code reaches JDBC providers only through io.lumnik.jdbc.spi"
+    return 0
+}
+
+# --selftest (on demand, not a CI gate — mirrors check-fqn-hygiene.py --selftest): proves the
+# regex boundary catches a leak without needing a real Search provider module to exist yet.
+run_selftest() {
+    local tmp ok=1
+    tmp=$(mktemp -d)
+    trap "rm -rf '$tmp'" EXIT
+    mkdir -p "$tmp/empty-identity"
+
+    mkdir -p "$tmp/main-leak/src/main/java/io/lumnik/hub/search"
+    cat > "$tmp/main-leak/src/main/java/io/lumnik/hub/search/LeakyGate.java" <<'EOF'
+package io.lumnik.hub.search;
+import io.lumnik.search.pg.Fake;
+class LeakyGate {}
+EOF
+    if check_1c "$tmp/main-leak/src/main/java" "$tmp/empty-identity" >/dev/null 2>&1; then
+        echo "❌ selftest: check_1c did not fail on a main-tree leak"; ok=0
+    else
+        echo "✓ selftest: check_1c fails on a main-tree leak"
+    fi
+
+    mkdir -p "$tmp/test-leak/src/test/java/io/lumnik/hub/search"
+    cat > "$tmp/test-leak/src/test/java/io/lumnik/hub/search/LeakyGateTest.java" <<'EOF'
+package io.lumnik.hub.search;
+import io.lumnik.search.pg.Fake;
+class LeakyGateTest {}
+EOF
+    if check_1b "$tmp/test-leak/src/test/java" >/dev/null 2>&1; then
+        echo "❌ selftest: check_1b did not fail on a non-ClosedIT test-tree leak"; ok=0
+    else
+        echo "✓ selftest: check_1b fails on a non-ClosedIT test-tree leak"
+    fi
+
+    # A clean tree, including a legitimate io.lumnik.hub.search.* reference — textually close
+    # to io.lumnik.search.* but a different, allowed package — must pass both checks.
+    mkdir -p "$tmp/clean/src/main/java/io/lumnik/hub/search"
+    cat > "$tmp/clean/src/main/java/io/lumnik/hub/search/SearchGate.java" <<'EOF'
+package io.lumnik.hub.search;
+import io.lumnik.extraction.spi.search.IndexedSearchPort;
+class SearchGate {}
+EOF
+    mkdir -p "$tmp/clean/src/test/java/io/lumnik/hub/search"
+    cat > "$tmp/clean/src/test/java/io/lumnik/hub/search/SearchGateTest.java" <<'EOF'
+package io.lumnik.hub.search;
+class SearchGateTest {}
+EOF
+    if check_1c "$tmp/clean/src/main/java" "$tmp/empty-identity" >/dev/null 2>&1 \
+        && check_1b "$tmp/clean/src/test/java" >/dev/null 2>&1; then
+        echo "✓ selftest: a clean tree (including a legitimate io.lumnik.hub.search.* reference) passes"
+    else
+        echo "❌ selftest: a clean tree was wrongly flagged"; ok=0
+    fi
+
+    # A scan() error (e.g. a renamed/missing directory) must fail closed, never print a false ✓.
+    # Regression case: errexit is suspended inside a function called as the left side of `||`,
+    # so check_1b/check_1c must `exit 1` explicitly on a scan() failure rather than let an empty
+    # result silently read as "no violations". Run in a subshell — the fixed functions really do
+    # `exit`, which would otherwise end this selftest too.
+    if ( check_1b "$tmp/does-not-exist/src/test/java" ) >/dev/null 2>&1; then
+        echo "❌ selftest: check_1b did not fail closed on a scan error (missing directory)"; ok=0
+    else
+        echo "✓ selftest: check_1b fails closed on a scan error (missing directory)"
+    fi
+    if ( check_1c "$tmp/does-not-exist/src/main/java" "$tmp/empty-identity" ) >/dev/null 2>&1; then
+        echo "❌ selftest: check_1c did not fail closed on a scan error (missing directory)"; ok=0
+    else
+        echo "✓ selftest: check_1c fails closed on a scan error (missing directory)"
+    fi
+
+    # JDBC providers (#857): hub MAIN code may reference exactly io.lumnik.jdbc.spi. `spark` is the
+    # case a hand-rolled "not s…" pattern lets through (a package that starts with the SPI's letters).
+    for leaky in postgresql spark oracle; do
+        mkdir -p "$tmp/jdbc-$leaky/src/main/java/io/lumnik/hub/connector/jdbc"
+        cat > "$tmp/jdbc-$leaky/src/main/java/io/lumnik/hub/connector/jdbc/Leaky.java" <<EOF
+package io.lumnik.hub.connector.jdbc;
+import io.lumnik.jdbc.$leaky.SomeDialect;
+class Leaky {}
+EOF
+        if check_1d "$tmp/jdbc-$leaky/src/main/java" >/dev/null 2>&1; then
+            echo "❌ selftest: check_1d did not fail on io.lumnik.jdbc.$leaky"; ok=0
+        else
+            echo "✓ selftest: check_1d fails on io.lumnik.jdbc.$leaky"
+        fi
+    done
+    mkdir -p "$tmp/jdbc-spi/src/main/java/io/lumnik/hub/connector/jdbc"
+    cat > "$tmp/jdbc-spi/src/main/java/io/lumnik/hub/connector/jdbc/Clean.java" <<'EOF'
+package io.lumnik.hub.connector.jdbc;
+import io.lumnik.jdbc.spi.JdbcDialect;
+class Clean {}
+EOF
+    if check_1d "$tmp/jdbc-spi/src/main/java" >/dev/null 2>&1; then
+        echo "✓ selftest: check_1d passes on io.lumnik.jdbc.spi only"
+    else
+        echo "❌ selftest: check_1d wrongly flagged io.lumnik.jdbc.spi"; ok=0
+    fi
+    if ( check_1d "$tmp/does-not-exist/src/main/java" ) >/dev/null 2>&1; then
+        echo "❌ selftest: check_1d did not fail closed on a scan error (missing directory)"; ok=0
+    else
+        echo "✓ selftest: check_1d fails closed on a scan error (missing directory)"
+    fi
+
+    echo ""
+    if [ "$ok" -eq 1 ]; then
+        echo "check-bounded-contexts --selftest PASSED"
+        return 0
+    fi
+    echo "check-bounded-contexts --selftest FAILED"
+    return 1
+}
+
+if [ "${1:-}" = "--selftest" ]; then
+    run_selftest
+    exit $?
+fi
+
 echo "=== check-bounded-contexts ==="
 
 # Check 1: no platform main code imports lumnik-rag types
@@ -50,23 +243,7 @@ fi
 # named *ClosedIT. Anything else would break `mvn -DopenEdition test-compile` in the public
 # repo. Check 1 above only ever looked at src/main/java, which is how three such tests went
 # unnoticed until the boot witness (Act 1).
-# scan first, filter second — deliberately NOT `scan … | grep -v …`: inside a pipeline scan's
-# abort is swallowed (the pipeline reports grep -v's status), which would re-open the very hole
-# this helper closes. The `|| true` below is on grep -v, whose exit 1 just means "all filtered".
-closed_coupled=$(scan 'io\.lumnik\.rag\.|dev\.langchain4j\.|io\.lumnik\.llm\.langchain\.|io\.lumnik\.hub\.pro\.|io\.lumnik\.identity\.scim\.' \
-    lumnik-hub/src/test/java)
-# -E, not BRE \|: a mid-pattern $ before \| is implementation-defined in BRE (ugrep reads the
-# first alternative as literal text, GNU as an anchor) — ERE alternation behaves the same
-# everywhere this runs.
-mistests=$(printf '%s' "$closed_coupled" | grep -Ev 'ClosedIT\.java$|/hub/pro/' || true)
-if [ -n "$mistests" ]; then
-    echo "❌ Test sources import closed-edition types but are not named *ClosedIT.java:"
-    echo "$mistests" | sed 's/^/    /'
-    echo "    Rename them to *ClosedIT.java (they travel with the closed side), or drop the import."
-    fail=1
-else
-    echo "✓ Closed-coupled test sources are all named *ClosedIT (excluded from the open edition)"
-fi
+check_1b lumnik-hub/src/test/java || fail=1
 
 # Check 1c: MAIN code may live on the closed side, but only under a location that says so.
 # Pro-only hub code (enterprise auth: SCIM + JIT — Act 1, seam 2) lives under io.lumnik.hub.pro,
@@ -74,18 +251,10 @@ fi
 # profiles exclude exactly those trees. Open main code must reach them only through the seam
 # (ExternalIdentityResolver + the PRE_AUTHENTICATED property, declared in hub.tenant) — a direct
 # reference anywhere else would break `mvn -DopenEdition` in the public repo.
-# Same shape as 1b: scan into a variable, filter after (never pipe scan).
-pro_refs=$(scan 'io\.lumnik\.hub\.pro\.|io\.lumnik\.identity\.scim\.' \
-    lumnik-hub/src/main/java lumnik-identity/src/main/java)
-open_pro_refs=$(printf '%s' "$pro_refs" | grep -Ev '/hub/pro/|/identity/scim/' || true)
-if [ -n "$open_pro_refs" ]; then
-    echo "❌ Open main sources reference pro-only code (io.lumnik.hub.pro / io.lumnik.identity.scim):"
-    echo "$open_pro_refs" | sed 's/^/    /'
-    echo "    Route it through the ExternalIdentityResolver seam, or move the file under the pro tree."
-    fail=1
-else
-    echo "✓ Pro-only main code is referenced only from within the pro trees (open edition excludes them)"
-fi
+check_1c lumnik-hub/src/main/java lumnik-identity/src/main/java || fail=1
+
+# Check 1d: hub main code reaches JDBC dialect providers only through lumnik-jdbc-spi (#857).
+check_1d lumnik-hub/src/main/java || fail=1
 
 # Check 2: lumnik-rag Maven dep scope in platform pom
 # Since Chantier A2, platform main no longer compile-depends on lumnik-rag

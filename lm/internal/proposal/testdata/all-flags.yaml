@@ -1,0 +1,38 @@
+# DRAFT — lm proposal draft. Not an applicable manifest: it stays refused until every required
+# field and the states graph are present. lm never applies a draft and never contacted the hub.
+# Nothing here says the target below exists or is a lifecycle: that is what apply reports.
+# Evidence targets are what the dossier says the hub replayed; they are not compared with the flags below.
+#
+# From the dossier of 2026-10-03 (catalogue 2026.10.0), lead L1, rule stalled-documents@1.
+# In the prospect's words: Nos commandes restent bloquées sans que personne ne s'en aperçoive.
+#
+# Proposal: Surveiller les documents qui n'avancent plus
+#   lumnik peut déclarer le cycle de vie d'une colonne de statut et alerter quand un document reste dans le même état au-delà d'un seuil.
+#   Proposes a Workflow, using spec.on.table, spec.on.column, spec.on.key, spec.dormancy.after.
+#   Does not say:
+#   - L'immobilité est mesurée depuis la première observation par lumnik, jamais depuis la date d'entrée dans votre ERP.
+#   - Un document sans identifiant n'est pas suivi.
+#   - La surveillance porte sur les données d'une source telles qu'elles sont reçues, pas sur une fiche fusionnée de plusieurs sources.
+#
+# Still to settle (the dossier's own checks, those that need you first):
+#   C3 key-column-exists: missing — not backed by a prospect's yes (unanswered, unknown or not asked)
+#   C4 stable-document-identity: to establish yourself; no check verifies it. Also missing — not backed by a prospect's yes (unanswered, unknown or not asked)
+#      note: L'intégrateur doit établir que la clé identifie durablement chaque document suivi. Le contrôle actuel ne vérifie pas cette garantie.
+#   C5 dormancy-target-accepted: missing — not backed by a prospect's yes (unanswered, unknown or not asked)
+#   C1 status-column-exists: unverified — no hub confirmation in this dossier (not checked, or the hub abstained)
+#   C2 status-column-is-lifecycle: to establish yourself; no check verifies it
+apiVersion: apps.lumnik.io/v1
+kind: Workflow
+metadata:
+  name: "wf-orders"
+spec:
+  scope: "sales"
+  provenance: declared
+  on:
+    table: "connector.t_commandes"
+    column: "statut"
+    key: "n_commande"
+  dormancy:
+    after: "14d"
+  # states: and transitions: go here. Exactly one state is initial; a terminal state has no
+  # outgoing transition. See docs/apps/workflows.md#the-manifest

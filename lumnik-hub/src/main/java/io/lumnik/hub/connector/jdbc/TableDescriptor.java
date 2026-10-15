@@ -1,5 +1,7 @@
 package io.lumnik.hub.connector.jdbc;
 
+import io.lumnik.jdbc.spi.FkDescriptor;
+import io.lumnik.jdbc.spi.ColumnDescriptor;
 import java.util.List;
 import java.util.Optional;
 
@@ -11,5 +13,7 @@ public record TableDescriptor(
     List<ColumnDescriptor> columns,
     List<FkDescriptor> foreignKeys,
     Optional<String> suggestedWatermark,
-    long rowEstimate
+    long rowEstimate,
+    /** Columns the source's dialect cannot read, as {@code NAME TYPE}; empty when the table is clean. */
+    List<String> unsupportedColumns
 ) {}

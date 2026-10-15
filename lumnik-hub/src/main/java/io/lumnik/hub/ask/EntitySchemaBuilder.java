@@ -51,6 +51,9 @@ public class EntitySchemaBuilder {
                                 meta.description(), meta.example(), meta.values()));
                         }
                     }
+                    if (m.resolution() != null) {
+                        addResolutionColumns(cols);
+                    }
                     // The table's LABEL is the entity's `label:` when it declares one, and its
                     // name otherwise — the same ladder the per-column label above walks. A
                     // kind:View with no `title:` falls back to exactly this, so before the
@@ -73,5 +76,35 @@ public class EntitySchemaBuilder {
      */
     private static String or(String label, String fallback) {
         return (label != null && !label.isBlank()) ? label : fallback;
+    }
+
+    /**
+     * {@code _entity_id}/{@code _resolution} (#622) — {@link
+     * io.lumnik.hub.entity.EntityViewCompiler#appendResolvedSourceBranch} already computes both on
+     * the compiled view for every resolution-bearing entity, via a LEFT JOIN so an unresolved row
+     * is never dropped; only a card declaration was missing. Unlike {@code _conflicts} (a jsonb
+     * blob kept off the card on purpose — see {@code AbstentionGuard}), {@code _resolution} is a
+     * plain scalar enum, safe to declare with a domain so the model can honestly answer "how many
+     * could not be resolved" by grouping on a real, declared fact instead of inventing one.
+     *
+     * <p>The domain deliberately does NOT list {@code null} as an allowed value — {@code
+     * DomainGuard} checks literal filters, and {@code NULL} is never a literal one writes on the
+     * right of {@code =}. The caveat instead lives in the description text, where a model reads it
+     * before deciding how to phrase a count: the LEFT JOIN means a row with no resolution pass yet
+     * carries {@code _resolution IS NULL}, not one of the four states — a query that only branches
+     * on those four would silently omit exactly the rows the "how many were not resolved" question
+     * is asking about.
+     */
+    private static void addResolutionColumns(List<SchemaCard.Column> cols) {
+        cols.add(new SchemaCard.Column("_entity_id", "uuid", "Resolved entity",
+            "The canonical entity this row resolved to. NULL before the first resolution pass, "
+                + "or whenever _resolution is not 'resolved'.",
+            null, List.of()));
+        cols.add(new SchemaCard.Column("_resolution", "text", "Resolution state",
+            "How this row's identity resolution currently stands. NULL means no resolution pass "
+                + "has processed this row yet — treat NULL together with the non-resolved states "
+                + "when counting rows that are not resolved, or the count will silently omit rows "
+                + "still waiting for a pass.",
+            "resolved", List.of("resolved", "ambiguous", "unresolved_no_rule", "unresolved_provider")));
     }
 }

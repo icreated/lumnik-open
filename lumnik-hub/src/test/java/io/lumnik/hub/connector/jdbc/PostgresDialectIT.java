@@ -1,6 +1,8 @@
 package io.lumnik.hub.connector.jdbc;
 
-import io.lumnik.hub.connector.jdbc.dialect.PostgresDialect;
+import io.lumnik.jdbc.spi.FkDescriptor;
+import io.lumnik.jdbc.spi.ColumnDescriptor;
+import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;

@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.mapping.writer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget;
+import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
@@ -19,6 +20,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.function.Function;
 
 /**
  * Writes one RAG chunk per data row into {@code rag.chunk}.
@@ -35,7 +38,8 @@ import java.util.UUID;
  * </ul>
  *
  * <p>Dedup: if a chunk with the same {@code row_hash} in metadata already exists for this
- * source, the write is a no-op. The whole ingestion chunk is probed with ONE query, and the
+ * source, the write is a no-op. The probe finds it by {@code ref}, which rag V6 CHECKs equal to
+ * that {@code row_hash}. The whole ingestion chunk is probed with ONE query, and the
  * batch also dedups its own hashes (first occurrence wins) — the store probe cannot see a
  * duplicate that sits inside the same, not-yet-inserted batch.
  *
@@ -58,9 +62,21 @@ public class RagWriter {
       "INSERT INTO rag.chunk (id, tenant_id, connector_id, tags, source, type, module, ref, content, embedding, metadata) " +
       "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS vector), CAST(? AS jsonb))";
 
+  // On ref, which this writer binds to the row hash: ->> is not leakproof, so under RLS it never
+  // reaches an index (rag V6). The jsonb equality keeps a ref alone from counting as a row.
+  static final String PROBE_SQL =
+      "SELECT ref FROM rag.chunk WHERE source = ? AND ref = ANY(?) AND metadata->>'row_hash' = ref";
+
   @Inject ChunkTemplateRenderer renderer;
   @Inject EmbeddingService embeddings;
   @Inject EntityManager em;
+
+  /**
+   * Runs the {@link #prepare} probe in its own short transaction (the tenant GUC is set on
+   * acquire, inside one). A field so a unit test, which has no Arc, can run the callable inline.
+   */
+  Function<Callable<Set<String>>, Set<String>> probeTx =
+      probe -> QuarkusTransaction.requiringNew().call(probe);
 
   /** A chunk rendered and ready to dedup/embed/insert: one per surviving data row. */
   private record PendingChunk(String rowHash, String chunkText, String module, String metaJson) {}
@@ -133,13 +149,18 @@ public class RagWriter {
   }
 
   /**
-   * Prepare phase: render every chunk and embed the fresh ones — pure rendering + network, NO
-   * JDBC, NO tenant-scoped connection. Meant to be called OUTSIDE the write transaction (the
-   * {@code ItemWriter.prepare} hook). The dedup probe deliberately stays in {@link #writeAll} —
-   * it needs the caller's connection, and it is indexed and cheap since V4 — so this renders and
-   * embeds every row that survives blank/intra-batch dedup, including ones that later turn out
-   * to be store duplicates: accepted waste, per the design (duplicates are the exception,
-   * connections are the scarce resource).
+   * Prepare phase: render every chunk and embed the ones the store does not hold yet — network
+   * plus ONE short read-only probe, meant to be called OUTSIDE the write transaction (the
+   * {@code ItemWriter.prepare} hook). A run that re-reads rows the corpus already holds (a small
+   * CSV re-read every run, a REST endpoint without a cursor, a cursor restart) would otherwise
+   * pay one embedding call per row and then drop the vector (#953). The probe is the same
+   * indexed lookup {@link #writeAll} runs, in its own transaction so the tenant GUC applies.
+   *
+   * <p>The probe in {@link #writeAll} stays the authority: a row absent here but inserted by a
+   * concurrent run before the write is simply skipped there. A row present here but gone before
+   * the write is missing from the returned cache and skipped with a warn, like a failed
+   * embedding; the next run re-reads it. If the probe itself fails, every row is embedded, as
+   * before: the probe saves money, it is never a gate.
    *
    * <p>Returns a plain value, not a cache on {@code this}: {@code RagWriter} is
    * {@code @ApplicationScoped} and reused across chunks and tenants, so nothing computed here is
@@ -154,12 +175,26 @@ public class RagWriter {
     List<PendingChunk> pending = renderChunks(spec, rows, systemContexts, tenantId);
     if (pending.isEmpty()) return Map.of();
 
-    EmbeddedBatch batch = embedInSubBatches(pending, spec.corpus());
+    List<PendingChunk> fresh = withoutStored(pending, spec.corpus());
+    if (fresh.isEmpty()) return Map.of();
+
+    EmbeddedBatch batch = embedInSubBatches(fresh, spec.corpus());
     Map<String, float[]> vectors = new LinkedHashMap<>();
     for (int i = 0; i < batch.chunks().size(); i++) {
       vectors.put(batch.chunks().get(i).rowHash(), batch.vectors().get(i));
     }
     return vectors;
+  }
+
+  /** {@code pending} minus the rows the store holds; all of them if the probe cannot run. */
+  private List<PendingChunk> withoutStored(List<PendingChunk> pending, String source) {
+    try {
+      Set<String> existing = probeTx.apply(() -> probeExistingHashes(source, pending));
+      return pending.stream().filter(p -> !existing.contains(p.rowHash())).toList();
+    } catch (Exception e) {
+      LOG.warnf(e, "RagWriter: store probe failed before embedding (corpus=%s), embedding every row", source);
+      return pending;
+    }
   }
 
   /**
@@ -168,15 +203,16 @@ public class RagWriter {
    * per-row there) — skipped here with the same warn-and-skip resilience as a live failure,
    * never re-attempted synchronously inside the write transaction.
    *
-   * <p><b>Before you make the prepare pass work on copies, read this.</b> The cache is keyed by
-   * {@code _row_hash}, computed from the TRANSFORMED row in both phases, and two hooks are
+   * <p><b>Before you transform the rows again between the two phases, read this.</b> The cache is
+   * keyed by {@code _row_hash}, computed from the TRANSFORMED row in both phases, so a lookup hits
+   * only if the row written is the very row {@link #prepare} embedded. Two hooks are
    * content-nondeterministic — {@code to-uuid} with {@code generate: true} and
-   * {@code enrich-context} with {@code ${now}}. The two phases agree today only because
-   * {@code MappingEngine.prepareEmbeddings} transforms the caller's row maps IN PLACE, so the
-   * write pass finds the generated value already there and leaves it alone. Isolate the two
-   * passes and every such row's hash diverges, every lookup below misses, and this method
-   * silently drops the whole corpus — a warn line is all you would see. That was tried once and
-   * caught in review; the contract is asserted by {@code CellErrorDrainTest}'s shared-UUID guard.
+   * {@code enrich-context} with {@code ${now}} — and every cell hook that rewrites a value changes
+   * the row when it runs again. {@code MappingEngine.writePrepared} writes exactly the rows
+   * {@code MappingEngine.prepare} transformed (#888), which makes the hashes agree by construction;
+   * transform a second time and those rows miss here and are skipped — a warn line is all you
+   * would see. Pinned by {@code MappingEngineItemWriterPrepareClosedIT}'s rewriting-hook case and
+   * {@code CellErrorDrainTest}'s shared-UUID guard.
    */
   private EmbeddedBatch useCachedVectors(List<PendingChunk> fresh, Map<String, float[]> preparedVectors,
                                          String source) {
@@ -243,8 +279,7 @@ public class RagWriter {
   private Set<String> probeExistingHashes(String source, List<PendingChunk> pending) {
     Set<String> existing = new HashSet<>();
     em.runWithConnection((Connection conn) -> {
-      try (PreparedStatement ps = conn.prepareStatement(
-          "SELECT metadata->>'row_hash' FROM rag.chunk WHERE source = ? AND metadata->>'row_hash' = ANY(?)")) {
+      try (PreparedStatement ps = conn.prepareStatement(PROBE_SQL)) {
         ps.setString(1, source);
         ps.setArray(2, conn.createArrayOf("text",
             pending.stream().map(PendingChunk::rowHash).toArray(String[]::new)));

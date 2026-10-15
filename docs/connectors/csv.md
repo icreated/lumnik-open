@@ -57,12 +57,13 @@ Run it again on the unchanged file, then once more after a third line is appende
 $ lm run list --connector csv-local-simple
 ID        CONNECTOR         ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
 f550a8ef  csv-local-simple  default   Completed  3   3    0        0             2026-09-06 22:12  2026-09-06 22:12
-b469deba  csv-local-simple  default   Completed  2   2    0        0             2026-09-06 22:11  2026-09-06 22:11
+b469deba  csv-local-simple  default   Completed  0   0    0        0             2026-09-06 22:11  2026-09-06 22:11
 e9cd433e  csv-local-simple  default   Completed  2   2    0        0             2026-09-06 22:11  2026-09-06 22:11
 ```
 
-- **A small file is re-read every run** — `IN` counts what was read, not what was new.
-- **The table deduplicates** by `_row_hash`: after three runs it holds 3 rows, not 7. The
+- **A file already read is not read again** — the second run says `IN 0`. A file that
+  changed (replaced in place, or grown, as here) is read again in full: the third run says `IN 3`.
+- **The table deduplicates** by `_row_hash`: after three runs it holds 3 rows, not 5. The
   appended line is the only new one.
 - Where the run counters diverge — `SKIPPED`, `DEAD-LETTERS` — is
   [below](#malformed-rows-the-per-row-dlq).
@@ -105,18 +106,18 @@ transport:
 ```
 $ lm run list --connector orders-drop
 ID        CONNECTOR    ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
-c593f035  orders-drop  default   Completed  210   210   0        0             2026-09-06 22:14  2026-09-06 22:14
-972ef27a  orders-drop  default   Completed  210   210   0        0             2026-09-06 22:13  2026-09-06 22:13
-a13c89f4  orders-drop  default   Completed  200   200   0        0             2026-09-06 22:13  2026-09-06 22:13
+c593f035  orders-drop  default   Completed  0     0     0        0             2026-09-06 22:14  2026-09-06 22:14
+972ef27a  orders-drop  default   Completed  10    10    0        0             2026-09-06 22:13  2026-09-06 22:13
+a13c89f4  orders-drop  default   Completed  0     0     0        0             2026-09-06 22:13  2026-09-06 22:13
 c563f800  orders-drop  default   Completed  1200  1200  0        0             2026-09-06 22:13  2026-09-06 22:13
 ```
 
 | run | the folder holds | `IN` | why |
 |---|---|---|---|
 | 1 | `2026-09-01` (1 200 rows) | 1 200 | first read |
-| 2 | the same file | 200 | the cursor is saved after each chunk **that another chunk follows** — here at row 1 000; the run's last chunk saves nothing, so the tail is re-read, and deduplicated |
-| 3 | plus `2026-09-02` (10 rows) | 210 | the tail, then the new file — it sorts **after** the cursor's file |
-| 4 | plus `2026-08-31` (5 rows) | 210 | the new file sorts **before** the cursor's file — **never read** |
+| 2 | the same file | 0 | the run saved its end position: the file was read in full |
+| 3 | plus `2026-09-02` (10 rows) | 10 | only the new file — it sorts **after** the cursor's file |
+| 4 | plus `2026-08-31` (5 rows) | 0 | the new file sorts **before** the cursor's file — **never read** |
 
 !!! warning "Drop-directory contract: names must grow lexically"
     - The cursor is a position in the **lexically sorted** glob result: the file it is on,
@@ -125,13 +126,29 @@ c563f800  orders-drop  default   Completed  1200  1200  0        0             2
     - A file dropped later with a lexically **earlier** name sorts before the cursor and is
       treated as already ingested — run 4 above. Name incoming files monotonically
       (date-prefixed: `2026-07-25-orders.csv`).
-    - The cursor is saved after every 500-row chunk that another chunk follows; the run's
-      **last chunk saves nothing**. So a file that fits in one chunk leaves no cursor (the
-      quickstart's 2-row file) and a longer file's tail — whatever came after the last saved
-      position — is re-read each run. Both are harmless — the table deduplicates — but `IN`
-      is not "new rows".
+    - The cursor is saved after every 500-row chunk, and again at the end of every run that
+      read something: it then names the last file and its bytes as they were. A file read in
+      full is skipped while it is unchanged; one that changed (replaced in place, or grown) is
+      read again in full, and the table deduplicates it. Changes are detected by size and
+      modification time.
     - If your producer cannot guarantee monotonic names, use an sftp/s3 transport: their
       cursor tracks files by modification time instead.
+    - **The folder is listed once per run**, at the run's first chunk, and every chunk of that
+      run reads that list. A file dropped while the run is going waits for the next run, which
+      resumes from the cursor **where this run ended**: the file is read only if its name sorts
+      after that cursor's file. A file that lands between two files of the list (`part-02` while
+      the run is on `part-01` and the list holds `part-03`, `part-04`) is therefore not read
+      this run and, once the run has passed it, never. If a producer writes a set of files in
+      parallel, have it write them under a name the glob does not match and rename each one in
+      when complete.
+    - A file of the list that is removed or moved **before the run reaches it** fails the run
+      with an error naming it.
+    - **Once a run is `Completed`, the files it read may be archived**: the next run goes on
+      with the files that sort after the one the cursor names. Archive a file while its run is
+      still going, or after a run that failed midway, and the cursor may still name it while
+      later files wait: the next run then fails naming that file, because the hub cannot know
+      whether it was fully read. Run `lm endpoint reset-cursor <connector>/<endpoint>`; the next
+      run reads again from the first file, and the table deduplicates what it already holds.
 
 ### SFTP — a remote folder, a secret, a fingerprint
 
@@ -175,6 +192,14 @@ $ lm validate -f sftp-nocred.yaml
           SFTP transport requires key_env or password_env
           → Use `lm secret set <NAME> ...` then reference via key_env: <NAME>
 ```
+
+**One session per run.** A run opens one SFTP session and keeps it until the run ends; it used to open
+one for every 500 rows. Your server therefore sees one connection per running endpoint for as long as the
+run lasts, and its idle timeout and its limit on concurrent sessions apply to that connection. If the
+session is lost between two chunks, the next chunk opens a new one and carries on; a session that silently
+stops answering (a firewall dropping an idle connection, say) is noticed by a check of at most 15 seconds
+at the start of the next chunk. If the session is lost in the middle of a chunk, that chunk fails with the
+connection error, as before.
 
 **The host key is verified.** `strict_host_key` defaults to `true`, and then
 `host_key_fingerprint` must match what the server presents. The refusal is a run failure that
@@ -247,7 +272,8 @@ transport:
 - Same cursor as SFTP: modification time + the last batch (path, size, and the object's
   ETag), oldest first, zero-byte objects skipped.
 - `access_key_env` / `secret_key_env` are secret **names** (`lm secret set AWS_ACCESS_KEY_ID`),
-  resolved like the SFTP ones.
+  resolved like the SFTP ones. They are read when a run starts: a key you rotate takes effect at
+  the next run, not in the middle of the one in progress.
 
 **One export, archived after commit.** The manifest of the [S3 how-to](#ingest-a-headerless-export-under-an-s3-prefix-and-archive-it)
 reads `billing/`, then moves each file to `lumnik-archive/archive/` once a later committed
@@ -628,8 +654,9 @@ scope — inspect, then promote it into a manifest or `lm connector delete clien
 | `columns is required when has_header: false` | a headerless parser without names | `parser.columns: [a, b, …]` in file order |
 | `after_process: archive is not executed on local connector runs` | a relocation on a local transport | `after_process: none`, or an sftp/s3 transport |
 | `max_file_size runs only on one-shot lm csv ingest` | a one-shot key in a connector manifest | drop it, or ingest via `lm csv ingest` |
-| run completes with `IN 0` | nothing new: the cursor already covers every listed file (sftp/s3, or a local file after its last full chunk) — or the local path matches nothing on the **hub's** disk | `lm connector get NAME` shows the path; on local, check it exists inside the hub container |
+| run completes with `IN 0` | nothing new: the cursor already covers every listed file (a local file already read in full, or sftp/s3) — or the local path matches nothing on the **hub's** disk | `lm connector get NAME` shows the path; on local, check it exists inside the hub container |
 | a file dropped in a local folder is never read | the [lexical-cursor contract](#local-the-hubs-disk-not-yours) — its name sorts before the cursor's file | name incoming files monotonically (date-prefixed), or switch to sftp/s3 |
+| run `Failed`: `The cursor's file … is gone, but files sorting after it are waiting` | you archived or moved the file the cursor names before the run that read it completed, while later files were waiting | `lm endpoint reset-cursor <connector>/<endpoint>`: the next run re-reads from the first file, and the table deduplicates. Archive files only after the run that read them is `Completed` |
 | `DEAD-LETTERS` > 0, reason `MalformedSource` | rows whose value count differs from the declared columns — a trailing delimiter, an unclosed quote | `lm dlq get ID` shows the raw values, file and line; fix the export or the `parser:` block |
 | rows missing, DLQ empty | `filter-where` / `skip-empty-rows` excluded them by declared policy (counted in `SKIPPED`, never DLQ'd) | see [Transformers § Troubleshooting](transformers.md#troubleshooting) |
 | a mapped column is blank for some rows, but the row landed | a `parse-*` or `lookup` hook nulled a value it could not read | `cell_errors` on `lm run get <id>` — see [Transformers](transformers.md#reference-cell-hooks) |

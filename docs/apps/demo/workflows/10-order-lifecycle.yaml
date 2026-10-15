@@ -7,7 +7,7 @@
 # the declaration.
 #
 # Expect: 200, dataTruth.undeclared = EN LITIGE (2 rows) + Terminé (1), unobserved = [ANNULE],
-#         nullOrBlank = 1.
+#         nullOrBlank = 1, keyNullOrBlank = 0.
 apiVersion: apps.lumnik.io/v1
 kind: Workflow
 metadata:

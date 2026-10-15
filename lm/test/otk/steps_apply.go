@@ -117,20 +117,20 @@ func (s *scenarioState) whenValidate() error {
 }
 
 func (s *scenarioState) probeRobustness() error {
-	s.findings = append(s.findings, checks.Robustness(s.result, s.scen.Seed)...)
+	s.findings = append(s.findings, checks.Robustness(s.result, s.scen.CaseID, s.scen.Seed)...)
 	return nil
 }
 
 func (s *scenarioState) probeText() error {
 	s.findings = append(s.findings,
-		checks.TextGlitch(s.result.Stdout, s.result.Stderr, s.scen.Seed)...)
+		checks.TextGlitch(s.result.Stdout, s.result.Stderr, s.scen.CaseID, s.scen.Seed)...)
 	return nil
 }
 
 func (s *scenarioState) probeLeaks() error {
 	out := s.result.Stdout + s.result.Stderr
-	s.findings = append(s.findings, checks.SecretEcho(out, otkSentinel, s.scen.Seed)...)
-	s.findings = append(s.findings, checks.FileDisclosure(out, s.scen.Seed)...)
+	s.findings = append(s.findings, checks.SecretEcho(out, otkSentinel, s.scen.CaseID, s.scen.Seed)...)
+	s.findings = append(s.findings, checks.FileDisclosure(out, s.scen.CaseID, s.scen.Seed)...)
 	return nil
 }
 
@@ -138,11 +138,11 @@ func (s *scenarioState) probeLeaks() error {
 // the API/DB divergence check (only when the DB snapshot is live).
 func (s *scenarioState) probeApplyOutcome() error {
 	s.findings = append(s.findings,
-		checks.AtomicityApply(s.beforeAPI, s.afterAPI, s.result.Exit, s.scen.Seed)...)
+		checks.AtomicityApply(s.beforeAPI, s.afterAPI, s.result.Exit, s.scen.CaseID, s.scen.Seed)...)
 	if s.dbLive {
 		apiDelta := countNew(s.beforeAPI, s.afterAPI)
 		dbDelta := s.postRows - s.beforeDB.ConnectorRows
-		s.findings = append(s.findings, checks.Divergence(apiDelta, dbDelta, s.scen.Seed)...)
+		s.findings = append(s.findings, checks.Divergence(apiDelta, dbDelta, s.scen.CaseID, s.scen.Seed)...)
 	}
 	return nil
 }
@@ -151,7 +151,7 @@ func (s *scenarioState) probeApplyOutcome() error {
 // using the v1 set-differential (any new connector from a non-mutating call -> HIGH).
 func (s *scenarioState) probeNoNewConnector() error {
 	s.findings = append(s.findings,
-		checks.AtomicitySetDiff(s.beforeAPI, s.afterAPI, s.scen.Seed)...)
+		checks.AtomicitySetDiff(s.beforeAPI, s.afterAPI, s.scen.CaseID, s.scen.Seed)...)
 	return nil
 }
 
@@ -223,6 +223,6 @@ func (s *scenarioState) probeSchemaIntact() error {
 	if !live {
 		return fmt.Errorf("hub DB snapshot became unavailable before intactness check")
 	}
-	s.findings = append(s.findings, checks.SchemaDiff(s.beforeDB, after, s.scen.Seed)...)
+	s.findings = append(s.findings, checks.SchemaDiff(s.beforeDB, after, s.scen.CaseID, s.scen.Seed)...)
 	return nil
 }

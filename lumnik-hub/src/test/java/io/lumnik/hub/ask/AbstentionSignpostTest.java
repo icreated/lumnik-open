@@ -34,9 +34,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p><b>The frozen sentence stays the prefix.</b> {@code AbstentionOtkIT} graded abstentions with
  * {@code CANNOT_ANSWER_MESSAGE.equals(answer)}, so appending anything would have made every correct
- * abstention read as a non-abstention to the oracle. The equality moves to {@link
- * AbstentionGuard#isCannotAnswer} — the question asked of the class that owns the words, not of a
- * literal copied into a grader.
+ * abstention read as a non-abstention to the oracle. The question moved to {@code AskResult.abstained}
+ * (#915), which does not read the words at all: they follow the request's {@code lang}.
  */
 class AbstentionSignpostTest {
 
@@ -50,7 +49,7 @@ class AbstentionSignpostTest {
 
     @Test
     void a_scope_with_nothing_else_to_offer_gets_the_sentence_unchanged() {
-        String answer = guard.cannotAnswer(false, guard.hasAFusedEntity(cardOf("connector.t_orders"))).answer();
+        String answer = guard.cannotAnswer(null, false, guard.hasAFusedEntity(cardOf("connector.t_orders"))).answer();
 
         assertThat(answer)
             .as("no lifecycle, no fused entity: there is nowhere to point, so nothing is added")
@@ -59,7 +58,7 @@ class AbstentionSignpostTest {
 
     @Test
     void a_declared_lifecycle_is_named_as_something_the_scope_holds() {
-        String answer = guard.cannotAnswer(true, guard.hasAFusedEntity(cardOf("connector.t_orders"))).answer();
+        String answer = guard.cannotAnswer(null, true, guard.hasAFusedEntity(cardOf("connector.t_orders"))).answer();
 
         assertThat(answer).startsWith(AbstentionGuard.CANNOT_ANSWER_MESSAGE);
         assertThat(answer).endsWith(AbstentionGuard.LIFECYCLE_SIGNPOST);
@@ -67,7 +66,7 @@ class AbstentionSignpostTest {
 
     @Test
     void a_fused_entity_points_at_the_conflicts_ledger() {
-        String answer = guard.cannotAnswer(false, guard.hasAFusedEntity(cardOf("connector.t_orders", "connector.v_customer"))).answer();
+        String answer = guard.cannotAnswer(null, false, guard.hasAFusedEntity(cardOf("connector.t_orders", "connector.v_customer"))).answer();
 
         assertThat(answer).startsWith(AbstentionGuard.CANNOT_ANSWER_MESSAGE);
         assertThat(answer).endsWith(AbstentionGuard.CONFLICTS_SIGNPOST);
@@ -75,7 +74,7 @@ class AbstentionSignpostTest {
 
     @Test
     void both_conditions_give_both_signposts() {
-        String answer = guard.cannotAnswer(true, guard.hasAFusedEntity(cardOf("connector.v_customer"))).answer();
+        String answer = guard.cannotAnswer(null, true, guard.hasAFusedEntity(cardOf("connector.v_customer"))).answer();
 
         assertThat(answer).startsWith(AbstentionGuard.CANNOT_ANSWER_MESSAGE);
         assertThat(answer)
@@ -89,7 +88,7 @@ class AbstentionSignpostTest {
         // letter v: a connector table called t_v_customer fuses nothing and has no ledger. Telling
         // a métier a conflicts ledger exists for a table that has none is a signpost to a dead end
         // — worse than no signpost.
-        String answer = guard.cannotAnswer(false, guard.hasAFusedEntity(cardOf("connector.t_v_customer"))).answer();
+        String answer = guard.cannotAnswer(null, false, guard.hasAFusedEntity(cardOf("connector.t_v_customer"))).answer();
 
         assertThat(answer).isEqualTo(AbstentionGuard.CANNOT_ANSWER_MESSAGE);
     }
@@ -120,7 +119,7 @@ class AbstentionSignpostTest {
 
         for (boolean lifecycle : new boolean[] {false, true}) {
             for (boolean fused : new boolean[] {false, true}) {
-                AbstentionGuard.Abstention a = guard.cannotAnswer(lifecycle, fused);
+                AbstentionGuard.Abstention a = guard.cannotAnswer(null, lifecycle, fused);
                 long appended = signposts.stream().filter(sp -> a.answer().contains(sp)).count();
                 assertThat(a.otherDoors())
                     .as("lifecycle=%s fused=%s: a client is told in prose about %d door(s) "
@@ -138,7 +137,7 @@ class AbstentionSignpostTest {
         String base = "I couldn't translate that into a safe query.";
 
         AbstentionGuard.Abstention a =
-            guard.signpost(base, true, guard.hasAFusedEntity(cardOf("connector.v_customer")));
+            guard.signpost(base, null, true, guard.hasAFusedEntity(cardOf("connector.v_customer")));
 
         assertThat(a.answer()).startsWith(base);
         assertThat(a.answer())
@@ -148,20 +147,14 @@ class AbstentionSignpostTest {
     }
 
     @Test
-    void isCannotAnswer_recognises_the_abstention_with_and_without_its_signposts() {
-        assertThat(guard.isCannotAnswer(AbstentionGuard.CANNOT_ANSWER_MESSAGE)).isTrue();
-        assertThat(guard.isCannotAnswer(guard.cannotAnswer(true, guard.hasAFusedEntity(cardOf("connector.v_customer"))).answer()))
-            .as("a signposted abstention is still an abstention — the OTK oracle grades on this")
-            .isTrue();
-    }
+    void the_signposts_follow_the_language_and_keep_their_tokens() {
+        AbstentionGuard.Abstention a = guard.cannotAnswer("fr", true, true);
 
-    @Test
-    void isCannotAnswer_is_not_true_of_the_other_answers() {
-        assertThat(guard.isCannotAnswer(AbstentionGuard.NO_SCHEMA_MESSAGE))
-            .as("the empty-schema floor is a different refusal with different words")
-            .isFalse();
-        assertThat(guard.isCannotAnswer("There are 412 orders.")).isFalse();
-        assertThat(guard.isCannotAnswer(null)).isFalse();
+        assertThat(a.answer())
+            .startsWith(AskSentences.cannotAnswer("fr"))
+            .contains(AskSentences.lifecycleSignpost("fr"))
+            .endsWith(AskSentences.conflictsSignpost("fr"));
+        assertThat(a.otherDoors()).containsExactly(AskResult.DOOR_LIFECYCLE, AskResult.DOOR_CONFLICTS);
     }
 
     @Test

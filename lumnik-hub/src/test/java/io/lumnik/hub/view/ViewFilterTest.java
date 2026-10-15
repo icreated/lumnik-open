@@ -102,8 +102,6 @@ class ViewFilterTest {
         assertThatThrownBy(() -> ViewFilter.parse("segment>abc"))
             .isInstanceOf(IllegalArgumentException.class)
             .hasMessage("'abc' is not a number or ISO date — > needs an ordered value");
-        assertThatThrownBy(() -> ViewFilter.parse("montant>=1e5"))   // scientific notation is dirty
-            .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> ViewFilter.parse("d<2026-02-30"))   // shape ok, not a real date
             .isInstanceOf(IllegalArgumentException.class);
     }
@@ -209,5 +207,94 @@ class ViewFilterTest {
         assertThat(ViewFilter.parse("name='Acme")).isEqualTo(new ViewFilter("name", "=", "'Acme"));
         assertThat(ViewFilter.parse("name=\"Acme'")).isEqualTo(new ViewFilter("name", "=", "\"Acme'"));
         assertThat(ViewFilter.parse("name='")).isEqualTo(new ViewFilter("name", "=", "'"));
+    }
+
+    @Test
+    void refusesAnOrderingOnATypeTheEngineCannotCompare_insteadOfAZeroRowTable() {
+        var table = new SchemaCard.Table("connector.v_order", "Order", List.of(
+                new SchemaCard.Column("price", "money", "Price"),
+                new SchemaCard.Column("at", "time without time zone", "At"),
+                new SchemaCard.Column("amount", "numeric", "Amount"),
+                new SchemaCard.Column("note", "text", "Note")));
+        var view = new ResolvedView("Orders", "connector.v_order", List.of(
+                new ResolvedView.Column("price", "Price", "money"),
+                new ResolvedView.Column("at", "At", "time without time zone"),
+                new ResolvedView.Column("amount", "Amount", "numeric"),
+                new ResolvedView.Column("note", "Note", "text")));
+
+        assertThatThrownBy(() -> ViewFilter.resolveAll(List.of("price>10"), view, table))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("price").hasMessageContaining("money").hasMessageContaining("> ");
+        assertThatThrownBy(() -> ViewFilter.resolveAll(List.of("at>=2026-01-01"), view, table))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("time without time zone");
+        // equality and contains stay available on every type; number and text keep ordering
+        assertThat(ViewFilter.resolveAll(List.of("price=$10.00", "price~10", "amount>=10", "note>5"), view, table)).hasSize(4);
+    }
+
+    @Test
+    void acceptsScientificNotationAsAnOrderingOperand() {
+        for (String v : List.of("1e-5", "1E+3", "-2.5e-3", "6.022e23", "1e0", "0.5e1"))
+            assertThat(ViewFilter.parse("ratio>=" + v).operandType()).as(v).isEqualTo(ViewFilter.OperandType.NUMERIC);
+    }
+
+    @Test
+    void refusesMalformedScientificOperands() {
+        for (String v : List.of("1e", "e5", "1e5e5", "1e-", "1e+", ".5e1", "1e99999", "1e5.5", "1 e5"))
+            assertThatThrownBy(() -> ViewFilter.parse("ratio>=" + v)).as(v).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void scientificNotationIsOnlyAnOperand_equalityStaysAnExactTextComparison() {
+        // = and ~ never parse the value as a number: 1e-5 is just text there
+        assertThat(ViewFilter.parse("ratio=1e-5").operandType()).isNull();
+        // the stored-text shape the SQL guard and the evaluator share stays strict
+        assertThat("1e-5".matches(ViewFilter.NUMERIC_SHAPE)).isFalse();
+    }
+
+    @Test
+    void refusesAFloatOperandThePostgresFloatCannotHold_insteadOfA500() {
+        var table = new SchemaCard.Table("connector.t_m", "M", List.of(
+                new SchemaCard.Column("ratio", "double precision", "Ratio"),
+                new SchemaCard.Column("amount", "numeric", "Amount")));
+        var view = new ResolvedView("M", "connector.t_m", List.of(
+                new ResolvedView.Column("ratio", "Ratio", "double precision"),
+                new ResolvedView.Column("amount", "Amount", "numeric")));
+        String huge = "1" + "0".repeat(400);
+        for (String f : List.of("ratio>1e309", "ratio<-1e309", "ratio>" + huge, "ratio>1e-400"))
+            assertThatThrownBy(() -> ViewFilter.resolveAll(List.of(f), view, table))
+                .as(f).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("double precision");
+        // a real column is compared as a double too: the message names the range the operand is held to
+        var realTable = new SchemaCard.Table("connector.t_r", "R", List.of(new SchemaCard.Column("r", "real", "R")));
+        var realView = new ResolvedView("R", "connector.t_r", List.of(new ResolvedView.Column("r", "R", "real")));
+        assertThatThrownBy(() -> ViewFilter.resolveAll(List.of("r>1e309"), realView, realTable))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("double precision number").hasMessageContaining("real column");
+        // zero and in-range values are fine, and a numeric column has its own, far wider range
+        assertThat(ViewFilter.resolveAll(List.of("ratio>0", "ratio<1.7e308", "ratio>-1e-300", "amount>" + huge), view, table))
+            .hasSize(4);
+    }
+
+    @Test
+    void refusesAnOperandOfTheWrongFamilyForTheColumn_insteadOfAZeroRowTable() {
+        var table = new SchemaCard.Table("connector.t_m", "M", List.of(
+                new SchemaCard.Column("amount", "numeric", "Amount"),
+                new SchemaCard.Column("ratio", "double precision", "Ratio"),
+                new SchemaCard.Column("due", "date", "Due"),
+                new SchemaCard.Column("at", "timestamp with time zone", "At"),
+                new SchemaCard.Column("landed", "text", "Landed")));
+        var view = new ResolvedView("M", "connector.t_m", List.of(
+                new ResolvedView.Column("amount", "Amount", "numeric"),
+                new ResolvedView.Column("ratio", "Ratio", "double precision"),
+                new ResolvedView.Column("due", "Due", "date"),
+                new ResolvedView.Column("at", "At", "timestamp with time zone"),
+                new ResolvedView.Column("landed", "Landed", "text")));
+
+        // a date against a number column, a number against a date column: the shape guard would drop every row
+        for (String f : List.of("amount>2026-01-01", "ratio<2026-01-01T10:00:00Z", "due>5", "at>=1e3"))
+            assertThatThrownBy(() -> ViewFilter.resolveAll(List.of(f), view, table))
+                .as(f).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("cannot compare");
+        // each column with its own family; a text column may hold either
+        assertThat(ViewFilter.resolveAll(List.of("amount>5", "ratio<1e-5", "due>2026-01-01", "at>=2026-01-01T10:00:00Z",
+                "landed>5", "landed<2026-01-01"), view, table)).hasSize(6);
     }
 }

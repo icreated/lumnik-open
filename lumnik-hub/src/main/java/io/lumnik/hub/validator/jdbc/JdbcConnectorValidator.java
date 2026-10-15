@@ -1,6 +1,7 @@
 package io.lumnik.hub.validator.jdbc;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
 import io.lumnik.hub.connector.mapping.MapColumnsRules;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.validator.ConfigDef;
@@ -15,19 +16,21 @@ import io.lumnik.hub.validator.common.CronField;
 import io.lumnik.hub.validator.common.TargetBlockValidator;
 import io.lumnik.hub.validator.common.WindowField;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @ApplicationScoped
 @ConnectorTypeId("jdbc-generic")
 public class JdbcConnectorValidator implements ConnectorValidator {
 
-    private static final Set<String> SUPPORTED_DIALECTS = Set.of("postgres", "postgresql");
+    /** The installed dialect providers — the same door the runtime resolves through. */
+    @Inject JdbcDialectRegistry dialectRegistry;
+
     private static final Pattern URL_PATTERN = Pattern.compile("^jdbc:([a-z0-9]+):.*$");
 
     @Override public String kind() { return "jdbc-generic"; }
@@ -88,26 +91,23 @@ public class JdbcConnectorValidator implements ConnectorValidator {
                 "Keep it only in a manifest that is never committed — dev/test")));
     }
 
-    /** The URL scheme and the declared dialect must agree and name a dialect v1 supports. */
+    /**
+     * The declared dialect (or, absent one, the URL) must resolve through {@link JdbcDialectRegistry},
+     * and its message is surfaced verbatim. A declared dialect that is not installed or does not accept
+     * the URL is a {@code spec.connection.dialect} error; an inference that cannot be made — no
+     * provider accepts the URL, or several do — is a {@code spec.connection.url} one.
+     */
     private void validateDialect(JsonNode conn, List<ValidationError> errs) {
         String url = conn.path("url").asText();
         if (url.isEmpty()) return;
-        Matcher m = URL_PATTERN.matcher(url);
-        if (!m.matches()) return;
+        if (!URL_PATTERN.matcher(url).matches()) return;
 
-        String scheme = m.group(1);
-        String declared = conn.path("dialect").asText("").toLowerCase();
-        String effective = declared.isEmpty() ? scheme : declared;
-
-        if (!SUPPORTED_DIALECTS.contains(effective)) {
-            errs.add(new ValidationError("spec.connection.url", Severity.ERROR,
-                "unsupported JDBC dialect: " + effective,
-                List.of("v1 supports: postgres")));
-        } else if (!declared.isEmpty() && !declared.equals(scheme)
-                && !(SUPPORTED_DIALECTS.contains(declared) && SUPPORTED_DIALECTS.contains(scheme))) {
-            errs.add(new ValidationError("spec.connection.dialect", Severity.ERROR,
-                "dialect '" + declared + "' does not match URL scheme '" + scheme + "'",
-                List.of()));
+        String declared = conn.path("dialect").asText("").trim();
+        try {
+            dialectRegistry.resolveFor(url, declared.isEmpty() ? null : declared);
+        } catch (IllegalArgumentException e) {
+            String path = declared.isEmpty() ? "spec.connection.url" : "spec.connection.dialect";
+            errs.add(new ValidationError(path, Severity.ERROR, e.getMessage(), List.of()));
         }
     }
 

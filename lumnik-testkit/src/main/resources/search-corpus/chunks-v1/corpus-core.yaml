@@ -1,0 +1,251 @@
+# #675 chunk-oriented relevance corpus (core, hand-authored). All content is fictional.
+#
+# schemaVersion 3: the s1 leak query lost its common word ("du produit") so a BM25-only fault reaches the fused top 10 —
+# found by the final whole-branch review AFTER the first measurement, so v3 is re-baselined and every lane re-run.
+# schemaVersion 2: the isolation queries became short and specific (v1 used the full chunk sentence, which a
+# single faulty branch could not push into the fused top 10). schemaVersion bumps on ANY change to a text, an id, a tenant/scope/corpus or a judgment: the frozen vectors
+# (vectors.f32, manifest.json) are tied to these texts by checksum, and regenerating them is a new corpus version.
+# Tenants 91001 (main) / 91002 (other); corpora orders / support; scope tags ventes / compta.
+#
+# Judgment grades: 3 ideal, 2 relevant, 1 marginal (same entity, other aspect), 0 a notable confusion
+# (looks right to one branch, is wrong). recall@10 counts grade >= 2.
+schemaVersion: 3
+seed: 675
+
+chunks:
+  # ── exact-token: target (c-eNN) + near-identifier confounder (c-eNNx) ──
+  - {id: c-e01, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2024-00817 du client Marlowe Fournitures, montant 4 280,00 EUR, échéance 15/11/2024, statut payée."}
+  - {id: c-e01x, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2024-00871 du client Marlowe Fournitures, montant 1 120,00 EUR, échéance 30/11/2024, statut en retard."}
+  - {id: c-e02, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Product SKU HX-4410-B: hydraulic hose coupling, 3/4 inch, stainless steel, stock 212 units, supplier Brandt Industrial."}
+  - {id: c-e02x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Product SKU HX-4410-A: hydraulic hose coupling, 1/2 inch, brass, stock 40 units, supplier Brandt Industrial."}
+  - {id: c-e03, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Supportticket 88231: Fehlercode E-4072 beim Buchen der Lieferung, Lagerort nicht zugeordnet. Gelöst durch Zuordnung des Lagerorts."}
+  - {id: c-e03x, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Supportticket 88245: Fehlercode E-4027 beim Drucken des Lieferscheins, Drucker offline. Gelöst durch Neustart des Druckdienstes."}
+  - {id: c-e04, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Le DSO (Days Sales Outstanding) du segment PME est de 47 jours au T3, contre 52 jours au T2."}
+  - {id: c-e04x, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Le DPO (Days Payable Outstanding) du segment PME est de 61 jours au T3, contre 58 jours au T2."}
+  - {id: c-e05, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Customer record: Ottoline Wintergreen-Abara, account manager Ismail Brennecke, region Nordics, credit limit 25 000 EUR."}
+  - {id: c-e05x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Customer record: Ottoline Wintergarden, account manager Ismail Brandt, region Nordics, credit limit 5 000 EUR."}
+  - {id: c-e06, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Lieferant Kowalczyk-Meißner Metallbau GmbH, Lieferantennummer LF-30917, Zahlungsziel 30 Tage."}
+  - {id: c-e06x, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Lieferant Kowalski Metallbau GmbH, Lieferantennummer LF-30971, Zahlungsziel 14 Tage."}
+  - {id: c-e07, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Commande CMD-5521 du 03/10/2024 : 12 palettes de visserie inox, livraison prévue le 11/10/2024, transporteur Delmas."}
+  - {id: c-e07x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Commande CMD-5512 du 02/10/2024 : 8 palettes de visserie zinguée, livraison prévue le 09/10/2024, transporteur Delmas."}
+  - {id: c-e08, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Import error ERR_FK_VIOLATION on table t_invoice_line: reference to missing invoice header INV-2024-01203; 14 rows skipped."}
+  - {id: c-e08x, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Import error ERR_NULL_PK on table t_invoice_line: empty line number; 3 rows skipped."}
+  - {id: c-e09, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Client CLI-00342 Établissements Vasseur-Lemoigne, SIRET 552 081 317 00034, mode de règlement virement."}
+  - {id: c-e09x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Client CLI-00324 Établissements Vasseur, SIRET 552 081 317 00026, mode de règlement chèque."}
+  - {id: c-e10, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Artikel 7-100-2231: Dichtungsring 42x3 mm, FKM, Charge L2024-077, Mindestbestand 500 Stück."}
+  - {id: c-e10x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Artikel 7-100-2213: Dichtungsring 42x3 mm, NBR, Charge L2024-071, Mindestbestand 800 Stück."}
+  - {id: c-e11, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "RMA-7743 opened for defective pump controller PC-9, customer Halvorsen Marine, replacement shipped under advance exchange."}
+  - {id: c-e11x, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "RMA-7734 opened for defective pump controller PC-7, customer Halvorsen Marine, repair at depot."}
+  - {id: c-e12, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Compte 445710 TVA collectée 20 % : solde créditeur de 18 340,12 EUR au 30/09/2024."}
+  - {id: c-e12x, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Compte 445660 TVA déductible sur ASF : solde débiteur de 9 870,55 EUR au 30/09/2024."}
+  - {id: c-e13, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Contract CTR-2023-0098 with Northfield Logistics renews automatically on 01/01/2025 unless terminated 90 days before."}
+  - {id: c-e13x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Contract CTR-2023-0089 with Northfield Packaging renews on 01/06/2025 with 60 days notice."}
+  - {id: c-e14, tenantId: 91001, corpus: support, tags: [compta], type: connector, text: "Ticket 90412: Mahnlauf bricht mit SQLSTATE 23505 ab, doppelter Schlüssel in mahnung_historie; Duplikat entfernt, Lauf wiederholt."}
+  - {id: c-e14x, tenantId: 91001, corpus: support, tags: [compta], type: connector, text: "Ticket 90421: Mahnlauf bricht mit SQLSTATE 23503 ab, fehlender Fremdschlüssel in mahnung_historie; Referenz ergänzt."}
+  - {id: c-e15, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Machine MX-2200 numéro de série SN-8841-FR-17 installée chez Brasserie Colbert, contrat de maintenance niveau Or."}
+  - {id: c-e15x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Machine MX-2200 numéro de série SN-8814-FR-17 installée chez Brasserie Colbert Annexe, contrat de maintenance niveau Argent."}
+  - {id: c-e16, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Batch LOT-2024-Q3-114 of paint additive PA-31 failed viscosity check (measured 412 mPas, limit 380); quarantined."}
+  - {id: c-e16x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Batch LOT-2024-Q3-141 of paint additive PA-31 passed viscosity check (measured 371 mPas)."}
+  - {id: c-e17, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Le KPI OTIF (On Time In Full) du fournisseur Delmas est de 93,4 % sur septembre."}
+  - {id: c-e17x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Le KPI OTD (On Time Delivery) du fournisseur Delmas est de 96,1 % sur septembre."}
+  - {id: c-e18, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Rechnung RE-2024-10345 an Hartmann Elektrotechnik, Betrag 7 905,40 EUR, Skonto 2 % bis 20.10.2024."}
+  - {id: c-e18x, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Rechnung RE-2024-10354 an Hartmann Elektrik, Betrag 790,54 EUR, kein Skonto."}
+  - {id: c-e19, tenantId: 91001, corpus: support, tags: [compta], type: connector, text: "Ticket TCK-65210: customer cannot download credit note CN-2024-0332, PDF generation timed out; resolved after raising the worker timeout."}
+  - {id: c-e19x, tenantId: 91001, corpus: support, tags: [compta], type: connector, text: "Ticket TCK-65201: customer cannot download credit note CN-2024-0323, wrong email address on file; address corrected."}
+  - {id: c-e20, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Coordonnées bancaires fournisseur Delmas Transports : IBAN FR76 3000 6000 0112 3456 7890 189, BIC AGRIFRPP."}
+  - {id: c-e20x, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Coordonnées bancaires fournisseur Delmas Logistique : IBAN FR76 3000 6000 0112 3456 7890 198, BIC AGRIFRPP."}
+
+  # ── paraphrase: target (c-pNN) shares almost no vocabulary with its query; confounder (c-pNNx) does ──
+  - {id: c-p01, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Procédure de résiliation anticipée du contrat de service : demande écrite au gestionnaire de compte, préavis de trente jours, frais de sortie équivalents à deux mensualités."}
+  - {id: c-p01x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Un abonnement annuel à la revue professionnelle est facturé en début de terme ; aucun numéro ne peut être annulé en cours d'année."}
+  - {id: c-p02, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Overdue policy: an invoice unpaid 30 days after its due date triggers a reminder letter, then a dunning fee of 40 EUR after 45 days, and account suspension after 60 days."}
+  - {id: c-p02x, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Customers who pay by card late in the evening see the posting date move to the next business day."}
+  - {id: c-p03, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Gutschriftsprozess: Bei berechtigter Reklamation wird eine Gutschrift erstellt und der Betrag innerhalb von 14 Tagen auf das ursprüngliche Zahlungsmittel überwiesen."}
+  - {id: c-p03x, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Das Geld für Büromaterial wird aus dem Kundenbudget der Abteilung entnommen; eine Rückerstattung ist nicht vorgesehen."}
+  - {id: c-p04, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Règle d'approbation : tout achat supérieur à 10 000 EUR doit être autorisé par la direction financière avant l'émission du bon de commande."}
+  - {id: c-p04x, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Les dépenses importantes de la période précédente sont visibles dans le tableau de bord mensuel ; ce rapport ne permet aucune validation."}
+  - {id: c-p05, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Replenishment alert: SKU families with fewer than 5 days of cover at current sales velocity are flagged red in the weekly planning report and pushed to purchasing."}
+  - {id: c-p05x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "The stock photo library contains items from running campaigns and soon-to-expire licences."}
+  - {id: c-p06, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Rapprochement bancaire : les encaissements reçus sont lettrés avec les factures ouvertes sous 48 heures ouvrées ; un paiement sans référence reste en attente d'affectation."}
+  - {id: c-p06x, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Mon compte utilisateur n'apparaît plus dans l'annuaire après un changement de service ; contactez le support informatique."}
+  - {id: c-p07, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Claims handling: goods received with visible transit damage must be photographed, noted on the carrier's delivery slip, and reported to logistics within 48 hours to open an insurance claim."}
+  - {id: c-p07x, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Shipment tracking: the status page shows when a parcel arrived at the regional hub; damaged labels can be reprinted from the dispatch screen."}
+  - {id: c-p08, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Berechtigungskonzept: Änderungen an Verkaufskonditionen sind ausschließlich der Rolle Vertriebsleitung vorbehalten; jede Änderung wird protokolliert."}
+  - {id: c-p08x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Die Preise für Energie im Rechenzentrum ändern sich quartalsweise; das System zur Verbrauchserfassung ist im Wartungsvertrag enthalten."}
+  - {id: c-p09, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Politique de risque crédit : un compte client est classé douteux dès qu'une créance dépasse 90 jours de retard ou qu'une procédure collective est ouverte."}
+  - {id: c-p09x, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Un client est considéré comme prioritaire à partir de trois commandes par mois ; les mauvais retours sont traités à part."}
+  - {id: c-p10, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Volume pricing: orders above 500 units receive tiered rebates of 3, 5 or 8 percent depending on annual commitment; rebates are applied on the invoice."}
+  - {id: c-p10x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Bulk export of discount tables is available from the pricing admin screen; ordering of columns is configurable."}
+  - {id: c-p11, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Vertragsstrafe: Bei Lieferverzug von mehr als fünf Werktagen wird eine Konventionalstrafe von 0,5 % des Auftragswerts pro Woche einbehalten."}
+  - {id: c-p11x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Wenn ein Lieferant gesperrt wird, passiert nichts mit offenen Bestellungen; der Lieferant liefert weiter."}
+  - {id: c-p12, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Rémunération variable : la commission des vendeurs est de 2 % du chiffre d'affaires encaissé, majorée de 1 point au-delà de 120 % de l'objectif trimestriel."}
+  - {id: c-p12x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Le tableau des commerciaux affiche les primes d'assurance auto de la flotte ; il est calculé chaque mois par les services généraux."}
+  - {id: c-p13, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Master data stewardship: duplicate accounts are merged by the data steward; the surviving record keeps the oldest account number and the others are archived with a pointer."}
+  - {id: c-p13x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Two customers records show the same company name in the export; the records are sorted alphabetically."}
+  - {id: c-p14, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Aufbewahrungsfristen: Buchungsbelege und Rechnungen sind zehn Jahre, Geschäftsbriefe sechs Jahre aufzubewahren; die Frist beginnt mit dem Ende des Kalenderjahres."}
+  - {id: c-p14x, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Belege können im System als PDF abgelegt werden; wie lange der Upload dauert, hängt von der Dateigröße ab."}
+  - {id: c-p15, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Gestion des litiges : une contestation de facture suspend la relance, ouvre un dossier au service client et exige une réponse documentée sous dix jours ouvrés."}
+  - {id: c-p15x, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Le client signe la facture proforma ; que faire du double papier est précisé dans le guide d'archivage."}
+  - {id: c-p16, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Access policy: compensation data is restricted to the HR director and the payroll team; managers only see aggregated band information for their own department."}
+  - {id: c-p16x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "The information screen in reception shows who can be visited today; salary reviews take place in January."}
+  - {id: c-p17, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ersatzteilversorgung: Für Anlagen älter als zehn Jahre werden Teile über den Aftersales-Service beschafft; Anfrage mit Maschinentyp und Seriennummer, Lieferzeit auf Anfrage."}
+  - {id: c-p17x, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Wie bestelle ich eine Maschine neu? Neue Maschinen werden über das Verkaufsportal bestellt, alte Maschinen werden zurückgenommen."}
+  - {id: c-p18, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Encours de facturation : le rapport « livraisons non facturées » liste les bons de livraison expédiés sans facture rattachée, ventilés par client et par ancienneté."}
+  - {id: c-p18x, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Les livraisons de la semaine sont visibles dans le planning ; ce qui a été facturé figure dans le journal des ventes."}
+  - {id: c-p19, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "RMA workflow: returned goods are inspected at the warehouse, graded A, B or C, and then restocked, refurbished or scrapped; credit is issued after inspection."}
+  - {id: c-p19x, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Customers processed by the onboarding team receive a welcome pack; returns of the welcome survey are tracked weekly."}
+  - {id: c-p20, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Konditionen für Erstaufträge: Vorauskasse bis zur ersten Bonitätsprüfung, danach Zahlungsziel 14 Tage netto."}
+  - {id: c-p20x, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Welche Zahlungsarten Kunden im Webshop sehen, hängt vom Land ab; Neukunden erhalten einen Willkommensgutschein."}
+
+  # ── declared workflows (type workflow, the shape WorkflowChunkBuilder produces); used by q-p21 and q-m21 ──
+  - {id: c-wf-invoice, tenantId: 91001, corpus: orders, tags: [compta], type: workflow, text: "Workflow invoice_status — cycle de vie de la colonne status de la table t_invoice (declared by the integrator). États: draft, sent, paid (terminal), disputed, cancelled (terminal). Transitions autorisées: draft->sent, sent->paid, sent->disputed, disputed->paid, disputed->cancelled."}
+  - {id: c-wf-order, tenantId: 91001, corpus: orders, tags: [ventes], type: workflow, text: "Workflow order_status — cycle de vie de la colonne status de la table t_order (declared by the integrator). États: open, confirmed, shipped, delivered (terminal), cancelled (terminal). Transitions autorisées: open->confirmed, confirmed->shipped, shipped->delivered, open->cancelled, confirmed->cancelled."}
+
+  # ── mixed: target (c-mNN), same-token other-aspect (c-mNNa, grade 1), same-aspect other-token (c-mNNb, grade 0) ──
+  - {id: c-m01, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Client CLI-10458 : contestation du tarif de transport sur la dernière livraison, réclamation en cours d'instruction par le service client."}
+  - {id: c-m01a, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Client CLI-10458 Maison Aubrac : encours autorisé 40 000 EUR, règlement par virement à 30 jours."}
+  - {id: c-m01b, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Client CLI-10485 : contestation du tarif de transport sur la dernière livraison, réclamation clôturée en faveur du client."}
+  - {id: c-m02, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Supplier SUP-2207 was put on probation after three consecutive late deliveries in Q2; quarterly review scheduled for January."}
+  - {id: c-m02a, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Supplier SUP-2207 payment terms: 45 days end of month, bank transfer, currency EUR."}
+  - {id: c-m02b, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Supplier SUP-2270 was put on probation after three consecutive late deliveries in Q1; review closed in October."}
+  - {id: c-m03, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Maschine MX-3310: wiederkehrender Ausfall der Kühlung, Techniker empfiehlt Austausch des Kompressors, Angebot erstellt."}
+  - {id: c-m03a, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Maschine MX-3310 Standort Halle 4, Inbetriebnahme 2019, Wartungsvertrag Stufe Gold."}
+  - {id: c-m03b, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Maschine MX-3301: wiederkehrender Ausfall der Kühlung, Techniker empfiehlt Austausch des Kompressors, Auftrag erteilt."}
+  - {id: c-m04, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Contrat CTR-2024-0412 : tacite reconduction supprimée, le client peut partir à échéance sans pénalité grâce à l'avenant signé en juin."}
+  - {id: c-m04a, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Contrat CTR-2024-0412 conclu avec Atelier Brunel pour la maintenance des chariots élévateurs, durée trois ans."}
+  - {id: c-m04b, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Contrat CTR-2024-0421 : tacite reconduction supprimée, le client peut partir à échéance sans pénalité grâce à l'avenant signé en mai."}
+  - {id: c-m05, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-88120 is blocked on credit hold: the customer exceeded the approved exposure and release requires finance sign-off."}
+  - {id: c-m05a, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-88120 contains 40 pallets of fasteners for delivery on 18 October to the Rotterdam warehouse."}
+  - {id: c-m05b, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Order SO-88102 is blocked on credit hold: the customer exceeded the approved exposure and release requires finance sign-off."}
+  - {id: c-m06, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Rechnung RE-2024-20871 wurde storniert und durch Gutschrift GS-2024-0456 ausgeglichen, weil die Menge falsch erfasst war."}
+  - {id: c-m06a, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Rechnung RE-2024-20871 an Berger Haustechnik über 3 410,00 EUR, fällig am 02.11.2024."}
+  - {id: c-m06b, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Rechnung RE-2024-20817 wurde storniert und durch Gutschrift GS-2024-0451 ausgeglichen, weil der Preis falsch erfasst war."}
+  - {id: c-m07, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article ART-7781 : rupture de stock prolongée, réapprovisionnement attendu après le 20 novembre en raison d'un retard du fabricant."}
+  - {id: c-m07a, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article ART-7781 vis à bois inox 5x50, boîte de 200, prix de vente 12,90 EUR."}
+  - {id: c-m07b, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Article ART-7718 : rupture de stock prolongée, réapprovisionnement attendu après le 5 décembre en raison d'un retard du fabricant."}
+  - {id: c-m08, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket TCK-70331: user locked out after too many failed sign-in attempts; the account was unlocked by an administrator and a password reset was forced."}
+  - {id: c-m08a, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket TCK-70331 opened by the finance team on 3 October, priority medium, assigned to the service desk."}
+  - {id: c-m08b, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket TCK-70313: user locked out after too many failed sign-in attempts; the account unlocked automatically after 30 minutes."}
+  - {id: c-m09, tenantId: 91001, corpus: support, tags: [compta], type: connector, text: "Ticket 91205: Der Export nach DATEV schlägt fehl, weil Kontonummern mit führender Null abgeschnitten werden; Korrektur im Mapping eingespielt."}
+  - {id: c-m09a, tenantId: 91001, corpus: support, tags: [compta], type: connector, text: "Ticket 91205 gemeldet von der Buchhaltung am 7. Oktober, Priorität hoch, Bearbeiter M. Roth."}
+  - {id: c-m09b, tenantId: 91001, corpus: support, tags: [compta], type: connector, text: "Ticket 91250: Der Export nach DATEV schlägt fehl, weil das Datumsformat nicht passt; Korrektur im Mapping eingespielt."}
+  - {id: c-m10, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Fournisseur FRN-4410 : retard récurrent de livraison, pénalité de 0,5 % par semaine appliquée sur les trois dernières commandes."}
+  - {id: c-m10a, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Fournisseur FRN-4410 Delmas Transports : délai de paiement 45 jours fin de mois, devise EUR."}
+  - {id: c-m10b, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Fournisseur FRN-4401 : retard récurrent de livraison, pénalité de 0,5 % par semaine appliquée sur les deux dernières commandes."}
+  - {id: c-m11, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Employee expense report ER-3310 was rejected: the hotel receipt is missing and the amount exceeds the per-night limit."}
+  - {id: c-m11a, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Employee expense report ER-3310 submitted by the sales team on 29 September, total 1 240 EUR."}
+  - {id: c-m11b, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Employee expense report ER-3301 was rejected: the taxi receipt is missing and the amount exceeds the per-ride limit."}
+  - {id: c-m12, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Bestellung BE-55102: Teillieferung vereinbart, 60 % sofort, Rest in drei Wochen; Kunde hat zugestimmt."}
+  - {id: c-m12a, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Bestellung BE-55102 über 120 Stück Kugellager, Lieferadresse Werk Süd."}
+  - {id: c-m12b, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Bestellung BE-55120: Teillieferung vereinbart, 40 % sofort, Rest in vier Wochen; Kunde hat zugestimmt."}
+  - {id: c-m13, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Projet PRJ-2087 : dépassement budgétaire de 18 % dû à des heures supplémentaires non prévues ; avenant en cours de négociation."}
+  - {id: c-m13a, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Projet PRJ-2087 migration du hub logistique, chef de projet Camille Joubert, démarrage en janvier."}
+  - {id: c-m13b, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Projet PRJ-2078 : dépassement budgétaire de 11 % dû à des heures supplémentaires non prévues ; avenant refusé."}
+  - {id: c-m14, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Quality incident QI-2024-045: the coating thickness on lot LOT-2024-Q3-212 was below tolerance; the lot was reworked and re-inspected."}
+  - {id: c-m14a, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Quality incident QI-2024-045 was reported on 11 October by the night shift of plant 2."}
+  - {id: c-m14b, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Quality incident QI-2024-054: the coating thickness on lot LOT-2024-Q3-221 was below tolerance; the lot was scrapped."}
+  - {id: c-m15, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Mitarbeiter-ID MA-2210: Urlaubsantrag für 21. bis 25. Oktober genehmigt, Vertretung übernimmt die Teamleitung."}
+  - {id: c-m15a, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Mitarbeiter-ID MA-2210 Abteilung Einkauf, Eintritt 2017, Standort Köln."}
+  - {id: c-m15b, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Mitarbeiter-ID MA-2201: Urlaubsantrag für 14. bis 18. Oktober abgelehnt, Kapazitätsengpass im Team."}
+  - {id: c-m16, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Livraison BL-30918 : colis endommagé à la réception, réserve notée sur le bon du transporteur, déclaration d'assurance en cours."}
+  - {id: c-m16a, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Livraison BL-30918 de 6 cartons vers l'entrepôt de Lyon, départ le 14 octobre."}
+  - {id: c-m16b, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Livraison BL-30981 : colis endommagé à la réception, réserve notée sur le bon du transporteur, déclaration d'assurance clôturée."}
+  - {id: c-m17, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Price list PL-2024-EU: the 4 percent surcharge for raw-material costs applies from 1 November to all open quotes."}
+  - {id: c-m17a, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Price list PL-2024-EU covers the European market and replaces PL-2023-EU; owner: pricing team."}
+  - {id: c-m17b, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Price list PL-2024-US: the 6 percent surcharge for raw-material costs applies from 1 December to all open quotes."}
+  - {id: c-m18, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Kunde KD-70415: Bonitätsherabstufung auf Klasse D nach zwei Zahlungsausfällen, neue Aufträge nur gegen Vorkasse."}
+  - {id: c-m18a, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Kunde KD-70415 Bäckerei Reinhardt, Kundennummer seit 2012, Ansprechpartner Frau Lenz."}
+  - {id: c-m18b, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Kunde KD-70451: Bonitätsherabstufung auf Klasse C nach einem Zahlungsausfall, neue Aufträge mit reduziertem Kreditlimit."}
+  - {id: c-m19, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Salarié MAT-5532 : arrêt maladie du 7 au 18 octobre, remplacement assuré par l'équipe voisine."}
+  - {id: c-m19a, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Salarié MAT-5532 service paie, matricule attribué en 2019."}
+  - {id: c-m19b, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Salarié MAT-5523 : arrêt maladie du 14 au 25 octobre, remplacement assuré par un intérimaire."}
+  - {id: c-m20, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Warehouse bin WB-A-1147: inventory count differs by 12 units from the system; recount ordered and variance posted to the adjustment account."}
+  - {id: c-m20a, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Warehouse bin WB-A-1147 is located in aisle A, level 4, capacity 600 units."}
+  - {id: c-m20b, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Warehouse bin WB-A-1174: inventory count differs by 3 units from the system; variance accepted without recount."}
+
+  # ── isolation: the chunks a leak test forbids (each is dominant for its query if nothing filters it) ──
+  - {id: c-leak-t1, tenantId: 91002, corpus: orders, tags: [compta], type: connector, text: "Facture INV-2024-00817 du client Marlowe Fournitures, montant 4 280,00 EUR, échéance 15/11/2024, statut payée."}
+  - {id: c-leak-s1, tenantId: 91001, corpus: orders, tags: [compta], type: connector, text: "Marge brute du produit PRD-ZZ-9001 : 31,4 % sur l'exercice, hors remises de fin d'année."}
+  - {id: c-leak-s1-ok, tenantId: 91001, corpus: orders, tags: [ventes], type: connector, text: "Prix catalogue du produit PRD-ZZ-9001 : 120 EUR, disponible sous dix jours."}
+  - {id: c-leak-c1, tenantId: 91001, corpus: support, tags: [ventes], type: connector, text: "Ticket 99001: Fehlercode E-9911 beim Export, Ursache Zeitüberschreitung im Druckdienst."}
+  - {id: c-leak-t2, tenantId: 91002, corpus: orders, tags: [ventes], type: connector, text: "Procédure de résiliation anticipée du contrat de service : demande écrite au gestionnaire de compte, préavis de trente jours, frais de sortie équivalents à deux mensualités."}
+
+queries:
+  # ── exact-token ──
+  - {id: q-e01, class: exact-token, language: fr, tenantId: 91001, scopeTags: [compta], text: "montant de la facture INV-2024-00817", judgments: {c-e01: 3, c-e01x: 1}}
+  - {id: q-e02, class: exact-token, language: en, tenantId: 91001, text: "stock level for HX-4410-B", judgments: {c-e02: 3, c-e02x: 1}}
+  - {id: q-e03, class: exact-token, language: de, tenantId: 91001, text: "Fehlercode E-4072", judgments: {c-e03: 3, c-e03x: 0}}
+  - {id: q-e04, class: exact-token, language: fr, tenantId: 91001, text: "DSO segment PME T3", judgments: {c-e04: 3, c-e04x: 1}}
+  - {id: q-e05, class: exact-token, language: en, tenantId: 91001, text: "Wintergreen-Abara credit limit", judgments: {c-e05: 3, c-e05x: 1}}
+  - {id: q-e06, class: exact-token, language: de, tenantId: 91001, text: "LF-30917 Zahlungsziel", judgments: {c-e06: 3, c-e06x: 1}}
+  - {id: q-e07, class: exact-token, language: fr, tenantId: 91001, text: "CMD-5521 livraison", judgments: {c-e07: 3, c-e07x: 1}}
+  - {id: q-e08, class: exact-token, language: en, tenantId: 91001, text: "ERR_FK_VIOLATION invoice_line", judgments: {c-e08: 3, c-e08x: 1}}
+  - {id: q-e09, class: exact-token, language: fr, tenantId: 91001, text: "CLI-00342", judgments: {c-e09: 3, c-e09x: 1}}
+  - {id: q-e10, class: exact-token, language: de, tenantId: 91001, text: "Artikel 7-100-2231 Mindestbestand", judgments: {c-e10: 3, c-e10x: 1}}
+  - {id: q-e11, class: exact-token, language: en, tenantId: 91001, text: "RMA-7743", judgments: {c-e11: 3, c-e11x: 1}}
+  - {id: q-e12, class: exact-token, language: fr, tenantId: 91001, scopeTags: [compta], text: "solde du compte 445710", judgments: {c-e12: 3, c-e12x: 1}}
+  - {id: q-e13, class: exact-token, language: en, tenantId: 91001, text: "CTR-2023-0098 renewal", judgments: {c-e13: 3, c-e13x: 1}}
+  - {id: q-e14, class: exact-token, language: de, tenantId: 91001, text: "SQLSTATE 23505 Mahnlauf", judgments: {c-e14: 3, c-e14x: 1}}
+  - {id: q-e15, class: exact-token, language: fr, tenantId: 91001, text: "SN-8841-FR-17", judgments: {c-e15: 3, c-e15x: 1}}
+  - {id: q-e16, class: exact-token, language: en, tenantId: 91001, text: "LOT-2024-Q3-114 status", judgments: {c-e16: 3, c-e16x: 1}}
+  - {id: q-e17, class: exact-token, language: fr, tenantId: 91001, text: "OTIF Delmas septembre", judgments: {c-e17: 3, c-e17x: 1}}
+  - {id: q-e18, class: exact-token, language: de, tenantId: 91001, scopeTags: [compta], text: "RE-2024-10345 Skonto", judgments: {c-e18: 3, c-e18x: 1}}
+  - {id: q-e19, class: exact-token, language: en, tenantId: 91001, text: "credit note CN-2024-0332", judgments: {c-e19: 3, c-e19x: 1}}
+  - {id: q-e20, class: exact-token, language: fr, tenantId: 91001, text: "IBAN FR76 3000 6000 0112 3456 7890 189", judgments: {c-e20: 3, c-e20x: 1}}
+
+  # ── paraphrase ──
+  - {id: q-p01, class: paraphrase, language: fr, tenantId: 91001, text: "Comment annuler un abonnement avant son terme ?", judgments: {c-p01: 3, c-p01x: 0}}
+  - {id: q-p02, class: paraphrase, language: en, tenantId: 91001, text: "what happens when a customer pays late", judgments: {c-p02: 3, c-p02x: 0}}
+  - {id: q-p03, class: paraphrase, language: de, tenantId: 91001, text: "Wie erstatten wir einem Kunden das Geld zurück?", judgments: {c-p03: 3, c-p03x: 0}}
+  - {id: q-p04, class: paraphrase, language: fr, tenantId: 91001, text: "Qui valide les dépenses importantes ?", judgments: {c-p04: 3, c-p04x: 0}}
+  - {id: q-p05, class: paraphrase, language: en, tenantId: 91001, text: "which items are running out of stock soon", judgments: {c-p05: 3, c-p05x: 0}}
+  - {id: q-p06, class: paraphrase, language: fr, tenantId: 91001, text: "pourquoi mon virement n'apparaît pas dans mon compte", judgments: {c-p06: 3, c-p06x: 0}}
+  - {id: q-p07, class: paraphrase, language: en, tenantId: 91001, text: "how do we deal with a shipment that arrived damaged", judgments: {c-p07: 3, c-p07x: 0}}
+  - {id: q-p08, class: paraphrase, language: de, tenantId: 91001, text: "Wer darf Preise im System ändern?", judgments: {c-p08: 3, c-p08x: 0}}
+  - {id: q-p09, class: paraphrase, language: fr, tenantId: 91001, text: "à partir de quand un client est-il considéré comme un mauvais payeur", judgments: {c-p09: 3, c-p09x: 0}}
+  - {id: q-p10, class: paraphrase, language: en, tenantId: 91001, text: "can I get a discount for ordering in bulk", judgments: {c-p10: 3, c-p10x: 0}}
+  - {id: q-p11, class: paraphrase, language: de, tenantId: 91001, text: "Was passiert, wenn ein Lieferant zu spät liefert?", judgments: {c-p11: 3, c-p11x: 0}}
+  - {id: q-p12, class: paraphrase, language: fr, tenantId: 91001, text: "comment sont calculées les primes des commerciaux", judgments: {c-p12: 3, c-p12x: 0}}
+  - {id: q-p13, class: paraphrase, language: en, tenantId: 91001, text: "what do we do when two customer records are really the same company", judgments: {c-p13: 3, c-p13x: 0}}
+  - {id: q-p14, class: paraphrase, language: de, tenantId: 91001, scopeTags: [compta], text: "Wie lange müssen Belege aufbewahrt werden?", judgments: {c-p14: 3, c-p14x: 0}}
+  - {id: q-p15, class: paraphrase, language: fr, tenantId: 91001, text: "que faire si le client conteste une facture", judgments: {c-p15: 3, c-p15x: 0}}
+  - {id: q-p16, class: paraphrase, language: en, tenantId: 91001, text: "who can see salary information", judgments: {c-p16: 3, c-p16x: 0}}
+  - {id: q-p17, class: paraphrase, language: de, tenantId: 91001, text: "Wie bestelle ich ein Ersatzteil für eine alte Maschine?", judgments: {c-p17: 3, c-p17x: 0}}
+  - {id: q-p18, class: paraphrase, language: fr, tenantId: 91001, text: "où voir ce qui a été livré mais pas encore facturé", judgments: {c-p18: 3, c-p18x: 0}}
+  - {id: q-p19, class: paraphrase, language: en, tenantId: 91001, text: "how are returns from customers processed", judgments: {c-p19: 3, c-p19x: 0}}
+  - {id: q-p20, class: paraphrase, language: de, tenantId: 91001, text: "Welche Zahlungsbedingungen gelten für Neukunden?", judgments: {c-p20: 3, c-p20x: 0}}
+  - {id: q-p21, class: paraphrase, language: fr, tenantId: 91001, text: "Une facture envoyée peut-elle repasser en brouillon ?", judgments: {c-wf-invoice: 3, c-wf-order: 0}}
+
+  # ── mixed ──
+  - {id: q-m01, class: mixed, language: fr, tenantId: 91001, text: "le client CLI-10458 est-il mécontent du prix de la livraison ?", judgments: {c-m01: 3, c-m01a: 1, c-m01b: 0}}
+  - {id: q-m02, class: mixed, language: en, tenantId: 91001, text: "is SUP-2207 in trouble for missing delivery dates?", judgments: {c-m02: 3, c-m02a: 1, c-m02b: 0}}
+  - {id: q-m03, class: mixed, language: de, tenantId: 91001, text: "Muss bei MX-3310 etwas Teures repariert werden?", judgments: {c-m03: 3, c-m03a: 1, c-m03b: 0}}
+  - {id: q-m04, class: mixed, language: fr, tenantId: 91001, text: "peut-on quitter le contrat CTR-2024-0412 sans frais ?", judgments: {c-m04: 3, c-m04a: 1, c-m04b: 0}}
+  - {id: q-m05, class: mixed, language: en, tenantId: 91001, text: "why can't SO-88120 ship yet?", judgments: {c-m05: 3, c-m05a: 1, c-m05b: 0}}
+  - {id: q-m06, class: mixed, language: de, tenantId: 91001, scopeTags: [compta], text: "Ist RE-2024-20871 noch gültig oder rückgängig gemacht?", judgments: {c-m06: 3, c-m06a: 1, c-m06b: 0}}
+  - {id: q-m07, class: mixed, language: fr, tenantId: 91001, text: "quand aura-t-on de nouveau l'article ART-7781 ?", judgments: {c-m07: 3, c-m07a: 1, c-m07b: 0}}
+  - {id: q-m08, class: mixed, language: en, tenantId: 91001, text: "TCK-70331 cannot log in anymore, how was it fixed?", judgments: {c-m08: 3, c-m08a: 1, c-m08b: 0}}
+  - {id: q-m09, class: mixed, language: de, tenantId: 91001, text: "Wie wurde das Problem beim Buchhaltungsexport im Ticket 91205 gelöst?", judgments: {c-m09: 3, c-m09a: 1, c-m09b: 0}}
+  - {id: q-m10, class: mixed, language: fr, tenantId: 91001, text: "FRN-4410 doit-il payer quelque chose quand il livre tard ?", judgments: {c-m10: 3, c-m10a: 1, c-m10b: 0}}
+  - {id: q-m11, class: mixed, language: en, tenantId: 91001, text: "why did ER-3310 not get approved?", judgments: {c-m11: 3, c-m11a: 1, c-m11b: 0}}
+  - {id: q-m12, class: mixed, language: de, tenantId: 91001, text: "Kommt BE-55102 auf einmal oder in Etappen?", judgments: {c-m12: 3, c-m12a: 1, c-m12b: 0}}
+  - {id: q-m13, class: mixed, language: fr, tenantId: 91001, text: "PRJ-2087 coûte-t-il plus cher que prévu ?", judgments: {c-m13: 3, c-m13a: 1, c-m13b: 0}}
+  - {id: q-m14, class: mixed, language: en, tenantId: 91001, text: "was the defective lot in QI-2024-045 thrown away?", judgments: {c-m14: 3, c-m14a: 1, c-m14b: 0}}
+  - {id: q-m15, class: mixed, language: de, tenantId: 91001, text: "Hat MA-2210 Ferien bekommen?", judgments: {c-m15: 3, c-m15a: 1, c-m15b: 0}}
+  - {id: q-m16, class: mixed, language: fr, tenantId: 91001, text: "BL-30918 est-il arrivé en bon état ?", judgments: {c-m16: 3, c-m16a: 1, c-m16b: 0}}
+  - {id: q-m17, class: mixed, language: en, tenantId: 91001, text: "do prices go up on PL-2024-EU soon?", judgments: {c-m17: 3, c-m17a: 1, c-m17b: 0}}
+  - {id: q-m18, class: mixed, language: de, tenantId: 91001, text: "Muss KD-70415 im Voraus bezahlen?", judgments: {c-m18: 3, c-m18a: 1, c-m18b: 0}}
+  - {id: q-m19, class: mixed, language: fr, tenantId: 91001, text: "MAT-5532 est-il absent en ce moment ?", judgments: {c-m19: 3, c-m19a: 1, c-m19b: 0}}
+  - {id: q-m20, class: mixed, language: en, tenantId: 91001, text: "is the stock of WB-A-1147 correct?", judgments: {c-m20: 3, c-m20a: 1, c-m20b: 0}}
+  - {id: q-m21, class: mixed, language: en, tenantId: 91001, text: "t_invoice: can a disputed invoice still end up paid?", judgments: {c-wf-invoice: 3, c-wf-order: 0}}
+
+  # ── isolation: each denied query has a control (same text, the permitted viewer) that must rank the chunk first ──
+  - {id: q-leak-t1-denied, class: isolation, language: fr, tenantId: 91001, text: "00817 Marlowe", mustBeAbsent: [c-leak-t1]}
+  - {id: q-leak-t1-control, class: isolation, language: fr, tenantId: 91002, text: "00817 Marlowe", mustRankFirst: c-leak-t1}
+  - {id: q-leak-s1-denied, class: isolation, language: fr, tenantId: 91001, scopeTags: [ventes], text: "Marge brute PRD-ZZ-9001", mustBeAbsent: [c-leak-s1]}
+  - {id: q-leak-s1-control, class: isolation, language: fr, tenantId: 91001, scopeTags: [compta], text: "Marge brute PRD-ZZ-9001", mustRankFirst: c-leak-s1}
+  - {id: q-leak-s1-unscoped, class: isolation, language: fr, tenantId: 91001, text: "Marge brute PRD-ZZ-9001", mustRankFirst: c-leak-s1}
+  - {id: q-leak-c1-denied, class: isolation, language: de, tenantId: 91001, corpus: orders, text: "Fehlercode E-9911 Zeitüberschreitung Druckdienst", mustBeAbsent: [c-leak-c1]}
+  - {id: q-leak-c1-control, class: isolation, language: de, tenantId: 91001, corpus: support, text: "Fehlercode E-9911 Zeitüberschreitung Druckdienst", mustRankFirst: c-leak-c1}
+  - {id: q-leak-t2-denied, class: isolation, language: fr, tenantId: 91001, text: "résiliation anticipée gestionnaire", mustBeAbsent: [c-leak-t2]}
+  - {id: q-leak-t2-control, class: isolation, language: fr, tenantId: 91002, text: "résiliation anticipée gestionnaire", mustRankFirst: c-leak-t2}

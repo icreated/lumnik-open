@@ -35,6 +35,12 @@ func featureFor(base string) (text string, ok bool) {
 	if _, err := fmt.Sscanf(base, "view_%d.feature", &seed); err == nil {
 		return GenerateView(seed).Feature, true
 	}
+	if _, err := fmt.Sscanf(base, "entityres_%d.feature", &seed); err == nil {
+		return GenerateEntityResolution(seed).Feature, true
+	}
+	if _, err := fmt.Sscanf(base, "export_%d.feature", &seed); err == nil {
+		return GenerateExport(seed).Feature, true
+	}
 	return "", false
 }
 

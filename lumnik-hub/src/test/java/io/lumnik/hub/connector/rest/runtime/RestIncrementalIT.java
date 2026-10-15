@@ -4,6 +4,8 @@ import com.github.tomakehurst.wiremock.WireMockServer;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.api.types.RunStatus;
 import io.lumnik.hub.connector.api.types.RunTrigger;
+import io.lumnik.hub.connector.domain.ConnectorRun;
+import io.lumnik.hub.connector.repository.ConnectorRunRepository;
 import io.lumnik.hub.connector.runtime.ConnectorEngine;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -11,9 +13,11 @@ import jakarta.persistence.EntityManager;
 import jakarta.transaction.UserTransaction;
 import org.junit.jupiter.api.*;
 
+import java.util.List;
 import java.util.UUID;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
+import static io.lumnik.hub.testsupport.EventItSupport.runInTxAsSystem;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -32,6 +36,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class RestIncrementalIT {
 
     @Inject ConnectorEngine engine;
+    @Inject ConnectorRunRepository runs;
     @Inject EntityManager em;
     @Inject UserTransaction utx;
 
@@ -100,6 +105,22 @@ class RestIncrementalIT {
         });
     }
 
+    /** The tuple version (xmin) of every row, in external_id order. */
+    private List<String> xmins(String table) {
+        return runInTxAsSystem(utx, () -> {
+            @SuppressWarnings("unchecked")
+            List<String> rows = em.createNativeQuery(
+                "SELECT xmin::text FROM " + table + " ORDER BY external_id").getResultList();
+            return rows;
+        });
+    }
+
+    private ConnectorRun latestRun(UUID connectorId) {
+        return TenantContext.callAsSystem(() ->
+            runs.findLatestActiveByConnector(connectorId)
+                .orElseThrow(() -> new AssertionError("expected a run for connector " + connectorId)));
+    }
+
     private String persistedWatermark(UUID endpointId) {
         return TenantContext.callAsSystem(() -> {
             utx.begin();
@@ -137,11 +158,20 @@ class RestIncrementalIT {
         RunStatus s1 = TenantContext.callAsSystem(() -> engine.runSync(connId, new RunTrigger.Manual(1L)));
         assertInstanceOf(RunStatus.Completed.class, s1);
         assertEquals(3L, count(table), "first run should ingest 3");
+        List<String> firstXmins = xmins(table);
 
         // Re-run the SAME connector/endpoint. The latent {"phase":"done"} cursor would make this 0.
         RunStatus s2 = TenantContext.callAsSystem(() -> engine.runSync(connId, new RunTrigger.Manual(1L)));
         assertInstanceOf(RunStatus.Completed.class, s2);
         assertEquals(3L, count(table), "FULL re-run must re-read + upsert — count stays 3, not 0");
+
+        // #903: the payload came back identical, so no row is rewritten — yet the run still
+        // accounts every row it read as written: in = out + skipped, nothing dropped.
+        assertEquals(firstXmins, xmins(table), "an unchanged re-read must leave every tuple as it was");
+        ConnectorRun rerun = latestRun(connId);
+        assertEquals(3L, rerun.getRecordsIn(), "records_in");
+        assertEquals(3L, rerun.getRecordsOut(), "records_out: an unchanged row still counts as written");
+        assertEquals(0L, rerun.getRecordsSkipped(), "records_skipped");
     }
 
     /** B + C) WATERMARK incremental delta, then idempotent re-run with no new data. */

@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.runtime;
 
+import io.lumnik.hub.connector.runtime.OwnedRunScope;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -108,7 +109,7 @@ class RestEndpointReaderChunkingTest {
 
     private ConnectorContext ctx(UUID runId, Map<String, Object> config) {
         return new ConnectorContext(runId, CONNECTOR, ENDPOINT, 1L, "erp", "rest-generic",
-            config, new SyncMode.FullRefresh(), null, null, null, null, null);
+            config, new SyncMode.FullRefresh(), null, null, null, null, null, new OwnedRunScope("test"));
     }
 
     private ConnectorContext ctx(Map<String, Object> config) {

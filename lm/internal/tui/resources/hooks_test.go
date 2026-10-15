@@ -14,7 +14,7 @@ import (
 // left at all, so no server is stubbed here: an unreachable address is enough to prove nothing
 // could be sent even if a branch reappeared, without a real listener.
 func TestHooksHandleKey_ctrlLNeverTouchesTheHub(t *testing.T) {
-	h := NewHooks(client.New(config.Context{Server: "http://127.0.0.1:0"}), func(string) {})
+	h := NewHooks(nil, client.New(config.Context{Server: "http://127.0.0.1:0"}), func(string) {})
 
 	ev := tcell.NewEventKey(tcell.KeyCtrlL, 0, tcell.ModNone)
 	if got := h.handleKey(ev); got != ev {

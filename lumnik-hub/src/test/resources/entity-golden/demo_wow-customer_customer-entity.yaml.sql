@@ -1,0 +1,11 @@
+DROP VIEW IF EXISTS connector."v_customer"
+;;
+CREATE VIEW connector."v_customer" WITH (security_invoker = true) AS WITH unified AS (
+SELECT 0::int AS _ord, 'cust_siebel'::text AS _src, "customer_code"::text AS "customer_code", "name"::text AS "name", "segment"::text AS "segment", NULL::text AS "email", NULL::text AS "city" FROM connector."cust_siebel" WHERE "customer_code" IS NOT NULL
+UNION ALL
+SELECT 1::int AS _ord, 't_cust_csv'::text AS _src, "code"::text AS "customer_code", "cname"::text AS "name", NULL::text AS "segment", "email"::text AS "email", "ville"::text AS "city" FROM connector."t_cust_csv" WHERE "code" IS NOT NULL
+) SELECT "customer_code", (array_agg("name" ORDER BY _ord, "name") FILTER (WHERE "name" IS NOT NULL))[1] AS "name", (array_agg("segment" ORDER BY _ord, "segment") FILTER (WHERE "segment" IS NOT NULL))[1] AS "segment", (array_agg("email" ORDER BY _ord, "email") FILTER (WHERE "email" IS NOT NULL))[1] AS "email", (array_agg("city" ORDER BY _ord, "city") FILTER (WHERE "city" IS NOT NULL))[1] AS "city", (1::text || '|' || octet_length("customer_code"::text)::text || ':' || "customer_code"::text) AS "_canonical_key", jsonb_strip_nulls(jsonb_build_object('name', CASE WHEN count(DISTINCT "name") > 1 THEN jsonb_agg(jsonb_build_object('src', _src, 'value', "name") ORDER BY _ord, "name") FILTER (WHERE "name" IS NOT NULL) END, 'segment', CASE WHEN count(DISTINCT "segment") > 1 THEN jsonb_agg(jsonb_build_object('src', _src, 'value', "segment") ORDER BY _ord, "segment") FILTER (WHERE "segment" IS NOT NULL) END, 'email', CASE WHEN count(DISTINCT "email") > 1 THEN jsonb_agg(jsonb_build_object('src', _src, 'value', "email") ORDER BY _ord, "email") FILTER (WHERE "email" IS NOT NULL) END, 'city', CASE WHEN count(DISTINCT "city") > 1 THEN jsonb_agg(jsonb_build_object('src', _src, 'value', "city") ORDER BY _ord, "city") FILTER (WHERE "city" IS NOT NULL) END)) AS "_conflicts" FROM unified GROUP BY "customer_code"
+;;
+GRANT SELECT ON connector."v_customer" TO lumnik_app
+;;
+DO $lumnik_view$ BEGIN GRANT SELECT ON connector."v_customer" TO lumnik_readonly; EXCEPTION WHEN OTHERS THEN NULL; END $lumnik_view$

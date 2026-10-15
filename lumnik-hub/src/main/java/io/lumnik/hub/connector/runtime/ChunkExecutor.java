@@ -76,12 +76,23 @@ public class ChunkExecutor {
    * never advance past rows that were never written. {@code joiningExisting()} keeps a caller that
    * already holds a transaction (the ITs) on exactly the old single-transaction behaviour.
    */
-  @SuppressWarnings({"rawtypes", "unchecked"})
   public ChunkResult executeChunk(ConnectorRun run, ConnectorType type,
                                   ConnectorEndpoint endpoint, ConnectorCursor cursorIn,
                                   RunBound bound) {
+    // No run around this call (a caller outside the run loop): what a reader asks the scope for lives as long as
+    // the call, which is what a reader's resources always did.
+    try (OwnedRunScope oneChunk = new OwnedRunScope(run.getId())) {
+      return executeChunk(run, type, endpoint, cursorIn, bound, oneChunk);
+    }
+  }
+
+  /** As above, for a caller that owns the run's {@link RunScope} and closes it when the run ends. */
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  public ChunkResult executeChunk(ConnectorRun run, ConnectorType type,
+                                  ConnectorEndpoint endpoint, ConnectorCursor cursorIn,
+                                  RunBound bound, RunScope scope) {
     Preparation.Ready prepared;
-    switch (QuarkusTransaction.joiningExisting().call(() -> prepare(run, type, endpoint, bound))) {
+    switch (QuarkusTransaction.joiningExisting().call(() -> prepare(run, type, endpoint, bound, scope))) {
       case Preparation.Refused refused -> { return refused.failure(); }
       case Preparation.Ready ready     -> prepared = ready;
     }
@@ -130,8 +141,12 @@ public class ChunkExecutor {
             // dead-letter queue, and persistCursor below would advance the cursor past them —
             // contradicting this method's own javadoc.
             if (outcome instanceof WriteOutcome.AllFailed f) yield allFailed(c, f);
-            persistCursor(c.getId(), endpoint.getId(), c.getTenantId(), hm.nextCursor());
             account(r, c, reader, writer, hm.records().size(), outcome);
+            // After the accounting: a chunk whose accounting throws is a failure, and the transaction
+            // still commits what preceded the throw — the position must not be among it, or the next
+            // run resumes past rows this one never counted. Left alone, the replay is absorbed by the
+            // row-hash dedup.
+            persistCursor(c.getId(), endpoint.getId(), c.getTenantId(), hm.nextCursor());
             yield new ChunkResult.Success(hm.records().size(), hm.nextCursor(), false);
           }
           case ReadResult.EndOfStream eos -> {
@@ -140,7 +155,15 @@ public class ChunkExecutor {
             // but the counters must not move either.
             if (outcome instanceof WriteOutcome.AllFailed f) yield allFailed(c, f);
             account(r, c, reader, writer, eos.records().size(), outcome);
-            yield new ChunkResult.Success(eos.records().size(), cursorIn, true);
+            // A final cursor is the reader saying where the finished stream ended; like the
+            // EmptyButOpen position, only a real one is stored. After the accounting: a chunk whose
+            // accounting throws is a failure, and the transaction still commits what preceded the
+            // throw — the position must not be among it.
+            if (!eos.finalCursor().isEmpty()) {
+              persistCursor(c.getId(), endpoint.getId(), c.getTenantId(), eos.finalCursor());
+            }
+            yield new ChunkResult.Success(eos.records().size(),
+                eos.finalCursor().isEmpty() ? cursorIn : eos.finalCursor(), true);
           }
           case ReadResult.EmptyButOpen ep -> {
             // "Nothing usable this pass, the stream is still open" does not mean nothing was READ:
@@ -206,7 +229,7 @@ public class ChunkExecutor {
    * case exactly this way for a missing run row.
    */
   private Preparation prepare(ConnectorRun run, ConnectorType type,
-                              ConnectorEndpoint endpoint, RunBound bound) {
+                              ConnectorEndpoint endpoint, RunBound bound, RunScope scope) {
     Connector conn = null;
     try {
       conn = connectors.findById(run.getConnectorId());
@@ -214,7 +237,7 @@ public class ChunkExecutor {
         return new Preparation.Refused(new ChunkResult.Failure(
             "Connector not found: " + run.getConnectorId(), null, false));
       }
-      ConnectorContext context = buildContext(run, conn, endpoint, bound);
+      ConnectorContext context = buildContext(run, conn, endpoint, bound, scope);
       return new Preparation.Ready(conn, context, type.reader(context), type.writer(context));
     } catch (Throwable t) {
       return new Preparation.Refused(
@@ -306,7 +329,7 @@ public class ChunkExecutor {
 
   /** Builds the per-run context for a single endpoint; the config rule lives in {@link EffectiveConfig}. */
   private ConnectorContext buildContext(ConnectorRun run, Connector c, ConnectorEndpoint endpoint,
-                                        RunBound bound) {
+                                        RunBound bound, RunScope scope) {
     Map<String, Object> config = EffectiveConfig.of(c, endpoint);
 
     return new ConnectorContext(
@@ -317,7 +340,8 @@ public class ChunkExecutor {
         Logger.getLogger("connector." + c.getName()),
         credentials, mappings,
         Clock.systemUTC(),
-        bound);
+        bound,
+        scope);
   }
 
   /**
@@ -341,7 +365,16 @@ public class ChunkExecutor {
    */
   public RunStart runStart(ConnectorRun run, Connector c, ConnectorType type,
                            ConnectorEndpoint endpoint, ConnectorCursor cursor) {
-    return type.runStart(buildContext(run, c, endpoint, null), cursor);
+    // A caller outside the run loop: whatever the type opens here is closed when the call returns.
+    try (OwnedRunScope oneCall = new OwnedRunScope(run.getId())) {
+      return runStart(run, c, type, endpoint, cursor, oneCall);
+    }
+  }
+
+  /** As above, for the engine, which owns the run's {@link RunScope} and closes it when the run ends. */
+  public RunStart runStart(ConnectorRun run, Connector c, ConnectorType type,
+                           ConnectorEndpoint endpoint, ConnectorCursor cursor, RunScope scope) {
+    return type.runStart(buildContext(run, c, endpoint, null, scope), cursor);
   }
 
   private void persistCursor(UUID connectorId, UUID endpointId, Long tenantId, ConnectorCursor newCursor) {

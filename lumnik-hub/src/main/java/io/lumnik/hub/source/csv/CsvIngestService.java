@@ -32,6 +32,8 @@ import io.lumnik.hub.connector.transport.hook.HookSpec;
 import io.lumnik.hub.connector.transport.metrics.FileSourceMetrics;
 import io.lumnik.extraction.spi.ExtractedChunk;
 import io.lumnik.extraction.spi.ExtractionSink;
+import io.lumnik.llm.spi.Analytic;
+import io.lumnik.llm.spi.ChatPort;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
@@ -113,6 +115,7 @@ public class CsvIngestService {
     @Inject ConnectorEndpointRepository endpoints;
     @Inject DiscoveryService discovery;
     @Inject Instance<ExtractionSink> sinks;
+    @Inject @Analytic Instance<ChatPort> analyticChat;
     @Inject DynamicTableRegistry dynamicTables;
     @Inject TransactionSynchronizationRegistry txSync;
     @Inject MultiTargetWriter writer;
@@ -256,7 +259,7 @@ public class CsvIngestService {
             connectorId, endpointId, tableName,
             rowsRead, rowsWritten, 0,
             resultCols, List.of(),
-            connectorTags, sinks.isResolvable(), breath
+            connectorTags, chatAvailable(), breath
         );
     }
 
@@ -348,8 +351,11 @@ public class CsvIngestService {
         }
         for (String tag : move.rediscoverTags()) {
             try {
+                // Runs from afterCompletion: the thread's transaction has committed but is still
+                // associated with it, and the credential resolver cannot join that. Suspend it, so
+                // the resolver opens its own and the reads of the source's AD run with nothing open (#938).
                 TenantContext.callAsSystem(() ->
-                    QuarkusTransaction.requiringNew().call(() -> discovery.rediscover(tenantId, tag)));
+                    QuarkusTransaction.suspendingExisting().call(() -> discovery.rediscover(tenantId, tag)));
             } catch (Exception e) {
                 LOG.warnf("one-shot rediscover failed for scope '%s' — manual `lm source rediscover` remains available: %s",
                     tag, e.getMessage());
@@ -569,7 +575,7 @@ public class CsvIngestService {
 
         return new CsvIngestResult(lastConnectorId, lastEndpointId, tableName,
             totalRowsRead, totalRowsWritten, 0, promoteCols, List.of(),
-            allScopes, sinks.isResolvable(), anyRefreshed);
+            allScopes, chatAvailable(), anyRefreshed);
     }
 
     /**
@@ -865,5 +871,14 @@ public class CsvIngestService {
 
     private static String slugify(String s) {
         return Identifiers.slug(s, "table");
+    }
+
+    /**
+     * What {@code lm csv ingest} reads before it promises "askable … try: lm ask": a chat model is
+     * resolvable. Not "a sink is": with {@code lumnik.ai.enabled=false} the sink stays (it keeps the
+     * corpus consistent, D17) while the chat does not.
+     */
+    boolean chatAvailable() {
+        return analyticChat.isResolvable();
     }
 }

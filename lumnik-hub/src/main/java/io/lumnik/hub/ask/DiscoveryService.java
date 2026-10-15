@@ -1,9 +1,8 @@
 package io.lumnik.hub.ask;
 
 import io.agroal.api.AgroalDataSource;
-import io.lumnik.hub.connector.domain.ConnectorCredential;
-import io.lumnik.hub.connector.repository.ConnectorCredentialRepository;
-import io.lumnik.hub.webhook.SecretCipher;
+import io.lumnik.hub.connector.api.helpers.CredentialResolver;
+import io.lumnik.hub.connector.api.types.ResolvedCredential;
 import io.lumnik.extraction.spi.ask.DiscoveryPort;
 import io.lumnik.extraction.spi.ask.DiscoveryResult;
 import io.lumnik.extraction.spi.ask.SchemaCard;
@@ -30,8 +29,7 @@ public class DiscoveryService implements DiscoveryPort {
     @Inject RegistrySchemaBuilder registry;
     @Inject AdLabelProvider adLabels;
     @Inject SchemaCardStore store;
-    @Inject SecretCipher cipher;
-    @Inject ConnectorCredentialRepository credentialRepo;
+    @Inject CredentialResolver credentials;
     @Inject EntitySchemaBuilder entityViews;
 
     @Inject
@@ -133,24 +131,26 @@ public class DiscoveryService implements DiscoveryPort {
             "WHERE c.tenant_id = ? AND ? = ANY(c.tags) AND c.deleted_at IS NULL " +
             "  AND c.type_id LIKE 'jdbc%' AND (c.config->>'url') IS NOT NULL " +
             "  AND c.credential_id IS NOT NULL LIMIT 1";
-        try (Connection cx = adminDs.getConnection();
-             PreparedStatement ps = cx.prepareStatement(sql)) {
-            ps.setLong(1, tenantId);
-            ps.setString(2, scope);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) return null;
-                String url = rs.getString("url");
-                String usr = rs.getString("usr");
-                String cid = rs.getString("cid");
-                if (url == null || cid == null) return null;
-                ConnectorCredential cred = credentialRepo.findById(UUID.fromString(cid));
-                if (cred == null) return null;
-                String plain = cipher.decrypt(cred.getCiphertext()); // "user:password"
-                int colon = plain.indexOf(':');
-                String credUser = colon >= 0 ? plain.substring(0, colon) : (usr != null ? usr : "");
-                String credPass = colon >= 0 ? plain.substring(colon + 1) : "";
-                return new String[]{ url, usr != null ? usr : credUser, credPass };
+        try {
+            String url, usr, cid;
+            try (Connection cx = adminDs.getConnection();
+                 PreparedStatement ps = cx.prepareStatement(sql)) {
+                ps.setLong(1, tenantId);
+                ps.setString(2, scope);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) return null;
+                    url = rs.getString("url");
+                    usr = rs.getString("usr");
+                    cid = rs.getString("cid");
+                }
             }
+            if (url == null || cid == null) return null;
+            // Resolved after the admin connection is released: the resolver opens its own short
+            // transaction, so this works for a caller with none (entity apply) and leaves the AD reads
+            // that follow with nothing open (#938). Anything but a Basic secret — absent, malformed,
+            // another kind — is "no enrichment".
+            if (!(credentials.resolve(UUID.fromString(cid)) instanceof ResolvedCredential.Basic b)) return null;
+            return new String[]{ url, usr != null ? usr : b.username(), b.password() };
         } catch (Exception e) {
             LOG.warnf("DiscoveryService.sourceCreds failed for scope %s: %s", scope, e.getMessage());
             return null;

@@ -2,7 +2,9 @@ package io.lumnik.hub.workflow;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.jboss.logging.Logger;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -22,6 +24,8 @@ import java.util.Optional;
 @ApplicationScoped
 public class WorkflowRegistry {
 
+    private static final Logger LOG = Logger.getLogger(WorkflowRegistry.class);
+
     @Inject WorkflowManifestStore store;
 
     private final WorkflowManifestParser parser = new WorkflowManifestParser();
@@ -31,6 +35,38 @@ public class WorkflowRegistry {
             .filter(WorkflowManifestStore.StoredWorkflow::enabled)
             .map(w -> WorkflowGraph.from(parser.parse(w.yaml())))
             .toList();
+    }
+
+    /**
+     * What a background pass reads: the same re-parse as {@link #all}, but a stored row the parser
+     * refuses is stepped over and reported instead of ending the pass (#807). The sweep walks every
+     * tenant, so one manifest that stopped parsing — the parser tightened after it was applied —
+     * would otherwise stop the lifecycle of every other tenant too.
+     *
+     * <p>The report is the stored name and the failure's class and nothing else, and the exception
+     * is NOT handed to the logger: the parser's message quotes the YAML, and so does the stack.
+     * {@link #all} stays strict — a served list that quietly omitted a workflow would hide the
+     * very row an operator has to fix.
+     *
+     * <p>Only the parser's own refusal ({@code IllegalArgumentException}) is stepped over, and only
+     * around the parse: anything else — a defect in the parser or in {@code WorkflowGraph.from} —
+     * still fails the pass instead of passing for a refused manifest.
+     */
+    public List<WorkflowGraph> allParsable(long tenantId) {
+        List<WorkflowGraph> out = new ArrayList<>();
+        for (WorkflowManifestStore.StoredWorkflow w : store.listByTenant(tenantId)) {
+            if (!w.enabled()) continue;
+            WorkflowManifest manifest;
+            try {
+                manifest = parser.parse(w.yaml());
+            } catch (IllegalArgumentException e) {
+                LOG.warnf("workflow manifest skipped (tenant %d, workflow %s): stored YAML no longer"
+                    + " parses (%s) — re-apply it", tenantId, w.name(), e.getClass().getSimpleName());
+                continue;
+            }
+            out.add(WorkflowGraph.from(manifest));
+        }
+        return out;
     }
 
     public Optional<WorkflowGraph> findByName(long tenantId, String name) {

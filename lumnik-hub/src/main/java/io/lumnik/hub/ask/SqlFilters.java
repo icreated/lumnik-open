@@ -78,6 +78,27 @@ final class SqlFilters {
     }
 
     /**
+     * Every {@code col [NOT] LIKE|ILIKE 'pattern'} (#1047): the text-containment shape the SQL prompt asks for.
+     * The pattern is not a value of the column's domain, so {@link DomainGuard} never reads these; they exist so
+     * {@link UndocumentedColumnGuard} still sees which column was searched. The same fail-opens as the equality
+     * filters: a qualified or function-wrapped column, or a non-string pattern, yields nothing.
+     */
+    static List<Filter> columnPatternFilters(List<Token> tokens) {
+        List<Filter> filters = new ArrayList<>();
+        for (int i = 0; i < tokens.size(); i++) {
+            if (!isColumnRef(tokens, i)) continue;
+            int op = i + 1 < tokens.size() && isKeyword(tokens.get(i + 1), "not") ? i + 2 : i + 1;
+            if (op + 1 >= tokens.size()) continue;
+            if ((isKeyword(tokens.get(op), "like") || isKeyword(tokens.get(op), "ilike"))
+                    && tokens.get(op + 1).kind() == Kind.STRING) {
+                Token col = tokens.get(i);
+                filters.add(new Filter(col.text(), List.of(tokens.get(op + 1).text()), col.quoted()));
+            }
+        }
+        return filters;
+    }
+
+    /**
      * An identifier naming a column: quoted or not, but not qualified ({@code a.b}), not a cast target
      * ({@code ::type}), and not a BARE {@code NOT} — the logical operator lexes as an identifier, and
      * reading it as one made {@code segment NOT IN (…)} refuse a DECLARED column under the name "NOT".

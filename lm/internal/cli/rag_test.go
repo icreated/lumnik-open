@@ -73,33 +73,70 @@ func TestRagSearchNamesARowlessChunkByItsRef(t *testing.T) {
 	}
 }
 
-// -o is a persistent root flag, so cobra accepts it on `rag status` whether or not the command
-// reads it. Before this test, it didn't: -o json returned the same two summary lines, exit 0,
-// silently ignoring the flag (#532).
-func TestRagStatusHonoursJson(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"corpusSize": 42, "lastReindex": "2026-09-01T00:00:00Z"})
-	}))
-	defer srv.Close()
-	setupCfg(t, srv.URL)
-
+// The hub answers {indexed, chunks, indexedAt, provider, embeddingModel} (RagStatusDto). The client
+// used to decode two fields the hub never sends, so `lm rag status` printed zeros against any hub —
+// including one whose AI is switched off, where provider "none" and indexed false are the answer.
+func runRoot(t *testing.T, args ...string) string {
+	t.Helper()
 	cmd := NewRootCmd()
 	buf := new(bytes.Buffer)
 	cmd.SetOut(buf)
 	cmd.SetErr(buf)
-	cmd.SetArgs([]string{"rag", "status", "-o", "json"})
+	cmd.SetArgs(args)
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
+	return buf.String()
+}
+
+func ragStatusHub(t *testing.T, body map[string]any) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(body)
+	}))
+	t.Cleanup(srv.Close)
+	setupCfg(t, srv.URL)
+}
+
+func TestRagStatusPrintsWhatTheHubSends(t *testing.T) {
+	ragStatusHub(t, map[string]any{"indexed": true, "chunks": 42, "indexedAt": "2026-09-01T00:00:00Z",
+		"provider": "ollama", "embeddingModel": "nomic-embed-text"})
+	out := runRoot(t, "rag", "status")
+	for _, want := range []string{"indexed: true", "chunks: 42", "indexed_at: 2026-09-01T00:00:00Z",
+		"provider: ollama", "embedding_model: nomic-embed-text"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in %q", want, out)
+		}
+	}
+}
+
+func TestRagStatusSaysNothingIsIndexedWhenTheAiIsOff(t *testing.T) {
+	ragStatusHub(t, map[string]any{"indexed": false, "chunks": 0, "indexedAt": nil,
+		"provider": "none", "embeddingModel": "none"})
+	out := runRoot(t, "rag", "status")
+	for _, want := range []string{"indexed: false", "provider: none", "indexed_at: -"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in %q", want, out)
+		}
+	}
+}
+
+// -o is a persistent root flag, so cobra accepts it on `rag status` whether or not the command
+// reads it. Before #532 it silently ignored the flag; the JSON must carry the hub's fields.
+func TestRagStatusHonoursJson(t *testing.T) {
+	ragStatusHub(t, map[string]any{"indexed": true, "chunks": 42, "indexedAt": "2026-09-01T00:00:00Z",
+		"provider": "ollama", "embeddingModel": "nomic-embed-text"})
+	out := runRoot(t, "rag", "status", "-o", "json")
 
 	var st struct {
-		CorpusSize  int    `json:"corpusSize"`
-		LastReindex string `json:"lastReindex"`
+		Indexed  bool   `json:"indexed"`
+		Chunks   int    `json:"chunks"`
+		Provider string `json:"provider"`
 	}
-	if err := json.Unmarshal(buf.Bytes(), &st); err != nil {
-		t.Fatalf("-o json must emit parseable JSON, got %q: %v", buf.String(), err)
+	if err := json.Unmarshal([]byte(out), &st); err != nil {
+		t.Fatalf("-o json must emit parseable JSON, got %q: %v", out, err)
 	}
-	if st.CorpusSize != 42 || st.LastReindex != "2026-09-01T00:00:00Z" {
+	if !st.Indexed || st.Chunks != 42 || st.Provider != "ollama" {
 		t.Errorf("status lost its shape: %+v", st)
 	}
 }

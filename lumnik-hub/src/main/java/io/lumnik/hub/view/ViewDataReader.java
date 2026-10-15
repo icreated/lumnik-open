@@ -14,7 +14,6 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
@@ -51,10 +50,7 @@ public class ViewDataReader {
                 // Fetch one row beyond the cap: the only way to tell a full 1000-row result
                 // from a truncated one — a view never lies, so the cut must be spoken.
                 ps.setMaxRows(MAX_ROWS + 1);
-                for (int i = 0; i < filters.size(); i++) {
-                    ViewFilter f = filters.get(i);
-                    ps.setString(i + 1, "~".equals(f.op()) ? containsPattern(f.value()) : f.value());
-                }
+                bindFilters(ps, filters, 0);
                 // LIMIT's "?" is the last placeholder buildSql emits, after every filter's — so
                 // it binds at filters.size() + 1, one past the last filter index above.
                 ps.setInt(filters.size() + 1, MAX_ROWS + 1);
@@ -73,6 +69,170 @@ public class ViewDataReader {
         }
         boolean truncated = out.size() > MAX_ROWS;
         return new ReadResult(truncated ? out.subList(0, MAX_ROWS) : out, truncated);
+    }
+
+
+    /** One served page: the rows, whether more exist beyond them, and where the next page starts. */
+    public record PageResult(List<Map<String,Object>> rows, boolean hasMore, ViewCursor.Boundary next) {}
+
+    /** What to read: at most {@code size} rows, starting after {@code after} (null = the first page). */
+    public record Page(int size, ViewCursor.Boundary after) {}
+
+    /** A page's SQL, the boundary values it binds before the filters (in order), and its OFFSET if it ends in one. */
+    record PageSql(String sql, List<Object> boundaryParams, boolean offset, long offsetRows) {}
+
+    /**
+     * One page of a View in the contract's order ({@link ViewPageContract#orderKey}): fetches
+     * {@code size + 1} rows so {@code hasMore} is true without a COUNT. A boundary row that has
+     * since been deleted cannot be resumed from, and is the same refusal as any other stale cursor.
+     */
+    public PageResult readPage(long tenantId, ResolvedView rv, List<ViewFilter> filters,
+                               boolean relationHasId, Page page) {
+        PageSql q = buildPageSql(rv, filters, relationHasId, page.after());
+        int n = rv.columns().size();
+        List<Map<String,Object>> rows = new ArrayList<>();
+        List<Long> ids = new ArrayList<>();
+        try (Connection c = readonlyDs.getConnection()) {
+            TenantRlsScope.applyTo(c, tenantId);
+            if (relationHasId && page.after() != null && !boundaryRowExists(c, rv, q.boundaryParams().get(0)))
+                throw new IllegalArgumentException(ViewCursor.REFUSAL);
+            try (PreparedStatement ps = c.prepareStatement(q.sql())) {
+                ps.setQueryTimeout(TIMEOUT_S);
+                int at = 0;
+                for (Object p : q.boundaryParams()) ps.setObject(++at, p);
+                at = bindFilters(ps, filters, at);
+                ps.setInt(++at, page.size() + 1);
+                if (q.offset()) ps.setLong(++at, q.offsetRows());
+                try (ResultSet rs = ps.executeQuery()) {
+                    ResultSetMetaData md = rs.getMetaData();
+                    while (rs.next()) {
+                        Map<String,Object> row = new LinkedHashMap<>();
+                        for (int i = 1; i <= n; i++) row.put(md.getColumnLabel(i), rs.getObject(i));
+                        rows.add(row);
+                        if (relationHasId) ids.add(rs.getLong(n + 1));
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            throw mapSqlFailure(e);
+        }
+        boolean hasMore = rows.size() > page.size();
+        List<Map<String,Object>> served = hasMore ? new ArrayList<>(rows.subList(0, page.size())) : rows;
+        if (!hasMore || served.isEmpty()) return new PageResult(served, hasMore, null);
+        return new PageResult(served, true, nextBoundary(relationHasId, served, ids, page.after()));
+    }
+
+    /** Where the page after {@code served} starts. */
+    private static ViewCursor.Boundary nextBoundary(boolean relationHasId, List<Map<String,Object>> served,
+                                                    List<Long> ids, ViewCursor.Boundary previous) {
+        if (relationHasId) return new ViewCursor.Boundary(List.of(Long.toString(ids.get(served.size() - 1))));
+        long start = previous == null ? 0 : positionOf(previous);
+        return new ViewCursor.Boundary(List.of(Long.toString(start + served.size())));
+    }
+
+    private static boolean boundaryRowExists(Connection c, ResolvedView rv, Object id) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(
+                "SELECT 1 FROM " + quoteTable(rv.table()) + " WHERE " + quoteIdent("id") + " = ?")) {
+            ps.setQueryTimeout(TIMEOUT_S);
+            ps.setObject(1, id);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    /** Binds every filter value after index {@code last}; returns the last index used. */
+    private static int bindFilters(PreparedStatement ps, List<ViewFilter> filters, int last) throws SQLException {
+        for (ViewFilter f : filters) {
+            ps.setString(++last, "~".equals(f.op()) ? containsPattern(f.value()) : f.value());
+        }
+        return last;
+    }
+
+    /**
+     * The SQL of one page. The order is {@link ViewPageContract#orderKey}, nulls last; the boundary
+     * and the page size are bound, never concatenated. With an {@code id}, the boundary row's own
+     * first-column value is read in SQL (any column type, no value round-trip). Without one — an
+     * entity view, a fused SELECT recomputed whole on every read, so a keyset would save nothing —
+     * the order is total over every declared column and the page starts at a bound OFFSET: the
+     * cursor carries a position, never row text.
+     */
+    static PageSql buildPageSql(ResolvedView rv, List<ViewFilter> filters, boolean relationHasId,
+                                ViewCursor.Boundary after) {
+        List<ResolvedView.Column> cols = rv.columns();
+        List<String> key = ViewPageContract.orderKey(rv, relationHasId);
+        List<Object> params = new ArrayList<>();
+        StringBuilder sb = new StringBuilder("SELECT ");
+        for (int i = 0; i < cols.size(); i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(quoteIdent(cols.get(i).name()));
+        }
+        if (relationHasId) sb.append(", ").append(quoteIdent("id"));
+        sb.append(" FROM ").append(quoteTable(rv.table()));
+        // Placeholders are numbered by their position in the text: the boundary (its sub-select is in
+        // FROM, its predicate leads WHERE) comes before every filter, so it is bound first.
+        List<String> predicates = new ArrayList<>();
+        boolean offset = false;
+        long offsetRows = 0;
+        if (after != null) {
+            if (relationHasId) {
+                predicates.add(keysetAfterId(rv, key, idOf(after), sb, params));
+            } else {
+                offsetRows = positionOf(after);
+                offset = true;
+            }
+        }
+        for (ViewFilter f : filters) predicates.add(sqlFor(f, pgTypeOf(cols, f.column())));
+        StringBuilder where = new StringBuilder();
+        for (int i = 0; i < predicates.size(); i++) where.append(i == 0 ? " WHERE " : " AND ").append(predicates.get(i));
+        sb.append(where).append(" ORDER BY ");
+        for (int i = 0; i < key.size(); i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(quoteIdent(key.get(i)));
+            if (!(relationHasId && i == key.size() - 1)) sb.append(" NULLS LAST");
+        }
+        sb.append(" LIMIT ?");
+        if (offset) sb.append(" OFFSET ?");
+        return new PageSql(sb.toString(), params, offset, offsetRows);
+    }
+
+    private static long idOf(ViewCursor.Boundary after) {
+        return singleNumber(after);
+    }
+
+    /** The position an id-less relation's next page starts at. */
+    private static long positionOf(ViewCursor.Boundary after) {
+        return singleNumber(after);
+    }
+
+    private static long singleNumber(ViewCursor.Boundary after) {
+        if (after.values().size() != 1 || after.values().get(0) == null) throw new IllegalArgumentException(ViewCursor.REFUSAL);
+        try {
+            long n = Long.parseLong(after.values().get(0));
+            if (n < 0) throw new IllegalArgumentException(ViewCursor.REFUSAL);
+            return n;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(ViewCursor.REFUSAL);
+        }
+    }
+
+    /** Rows after the boundary row {@code id} in (first column nulls last, id) order, or after id alone. */
+    private static String keysetAfterId(ResolvedView rv, List<String> key, long id, StringBuilder from,
+                                        List<Object> params) {
+        String idCol = quoteIdent("id");
+        if (key.size() == 1) {
+            params.add(id);
+            return idCol + " > ?";
+        }
+        String first = quoteIdent(key.get(0));
+        // The boundary row's first-column value, read in SQL so its type never leaves the database.
+        from.append(", (SELECT ").append(first).append(" AS bc FROM ").append(quoteTable(rv.table()))
+            .append(" WHERE ").append(idCol).append(" = ?) b");
+        params.add(id);
+        params.add(id);
+        params.add(id);
+        return "CASE WHEN b.bc IS NULL THEN (" + first + " IS NULL AND " + idCol + " > ?) "
+             + "ELSE (" + first + " > b.bc OR " + first + " IS NULL OR (" + first + " = b.bc AND " + idCol + " > ?)) END";
     }
 
     /**
@@ -123,21 +283,10 @@ public class ViewDataReader {
         return null;
     }
 
-    /** Whether a column is already textual, so comparing it needs no cast at all. The vocabulary is
-     *  information_schema's ({@code data_type}), which spells the varchar family out in words. */
-    private static boolean isTextType(String pgType) {
-        if (pgType == null) return false;
-        return switch (pgType.toLowerCase(Locale.ROOT)) {
-            case "text", "varchar", "character varying", "char", "character", "bpchar" -> true;
-            default -> false;
-        };
-    }
-
-    /** The SQL fragment for one filter. Ordering comparisons ride a CASE guard: PG does not
-     *  guarantee WHERE predicate order, so a bare AND shape-check could cast a dirty row first
-     *  and 500 — CASE guarantees evaluation order; a dirty row falls to ELSE false (the
-     *  incomparable never matches). The operator and shape come from closed internal sets;
-     *  the value stays bound.
+    /** The SQL fragment for one filter. The operator and shape come from closed internal sets; the value
+     *  stays bound. Ordering is {@link ColumnKind}'s call: the kind of the column's TYPE (a declared
+     *  domain narrows what {@code =} accepts, not how the type orders) both gates the filter
+     *  ({@link ColumnKind#orders(String)}) and builds the SQL, so the two cannot drift.
      *
      *  <p>A cast on the LEFT-hand side makes any btree index on that column unusable, so equality
      *  drops it when the column is ALREADY text — same semantics, index preserved. The narrowing is
@@ -149,15 +298,10 @@ public class ViewDataReader {
     private static String sqlFor(ViewFilter f, String pgType) {
         String col = quoteIdent(f.column());
         if ("~".equals(f.op())) return col + "::text ILIKE ? ESCAPE '\\'";
-        if ("=".equals(f.op())) return isTextType(pgType) ? col + " = ?" : col + "::text = ?";
+        if ("=".equals(f.op())) return ColumnKind.isTextual(pgType) ? col + " = ?" : col + "::text = ?";
         if (!f.ordering() || f.operandType() == null)
             throw new IllegalStateException("not a valid ordering filter: " + f.op() + " " + f.value());
-        boolean numeric = f.operandType() == ViewFilter.OperandType.NUMERIC;
-        String shape = numeric ? ViewFilter.NUMERIC_SHAPE : ViewFilter.TEMPORAL_SHAPE;
-        String cast = numeric ? "numeric" : "timestamptz";
-        return "CASE WHEN " + col + "::text ~ '" + shape + "' "
-             + "THEN (" + col + "::text)::" + cast + " " + f.op() + " ?::" + cast + " "
-             + "ELSE false END";
+        return ColumnKind.ofType(pgType).orderingSql(col, f.op(), f.operandType());
     }
 
     /** %value% with user \, %, _ escaped so they match literally. */

@@ -14,7 +14,8 @@ public record BffMeResponse(
     TenantSummary tenant,
     Set<String> roles,
     List<ModuleSummary> modules,
-    String edition
+    String edition,
+    List<String> tabs
 ) {
     public record TenantSummary(Long id, String code, String name) {}
 

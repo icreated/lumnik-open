@@ -5,12 +5,14 @@ import io.lumnik.hub.connector.transport.FileDescriptor;
 import io.lumnik.hub.connector.transport.FileSource;
 import io.lumnik.hub.connector.transport.SeekableSource;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.model.S3Object;
 
 import java.io.InputStream;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 public class S3FileSource implements FileSource, SeekableSource {
@@ -31,11 +33,48 @@ public class S3FileSource implements FileSource, SeekableSource {
     public Stream<FileDescriptor> listSince(Instant cursor) {
         return s3.listObjectsV2Paginator(b -> b.bucket(bucket).prefix(prefix))
             .contents().stream()
-            .filter(o -> suffix.isEmpty() || o.key().endsWith(suffix))
+            .filter(this::listable)
             .filter(o -> !o.lastModified().isBefore(cursor))   // >= cursor: inclusive boundary (callers dedup via FileProcessingCursor)
-            .filter(o -> o.size() > 0)
             .sorted(Comparator.comparing(S3Object::lastModified))
-            .map(o -> new FileDescriptor(o.key(), o.size(), o.lastModified(), o.eTag()));
+            .map(S3FileSource::descriptor);
+    }
+
+    /**
+     * A listing narrowed to the key ({@code prefix=path}), not {@code HeadObject}: HEAD's
+     * {@code Last-Modified} is an HTTP date (whole seconds) while a listing can carry
+     * milliseconds (MinIO does), so a HEAD answer would never be {@code sameVersion} with the
+     * listing that started the file. The exact key is searched for, never assumed to sort first.
+     * A store that refuses the narrowed prefix — a policy pinning {@code s3:prefix} to the
+     * configured one (403), a directory bucket that only takes '/'-terminated prefixes (400) —
+     * is answered from the configured listing, as before #898.
+     */
+    @Override
+    public Optional<FileDescriptor> stat(String path) {
+        if (!path.startsWith(prefix)) return Optional.empty();
+        try {
+            return find(path, path);
+        } catch (S3Exception refused) {
+            if (refused.statusCode() != 400 && refused.statusCode() != 403) throw refused;
+            return find(prefix, path);
+        }
+    }
+
+    /** Lazy pages: the search stops at the first page holding {@code key}. */
+    private Optional<FileDescriptor> find(String listPrefix, String key) {
+        return s3.listObjectsV2Paginator(b -> b.bucket(bucket).prefix(listPrefix))
+            .contents().stream()
+            .filter(o -> o.key().equals(key) && listable(o))
+            .findFirst()
+            .map(S3FileSource::descriptor);
+    }
+
+    /** The listing's filters, shared with {@link #stat}: a non-empty object with the suffix. */
+    private boolean listable(S3Object o) {
+        return (suffix.isEmpty() || o.key().endsWith(suffix)) && o.size() > 0;
+    }
+
+    private static FileDescriptor descriptor(S3Object o) {
+        return new FileDescriptor(o.key(), o.size(), o.lastModified(), o.eTag());
     }
 
     @Override

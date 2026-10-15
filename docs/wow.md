@@ -40,7 +40,8 @@ Three parts of the flow are not in every build: the *ask* of §4 and the chat th
 lifecycle questions both go through `lumnik-rag`, a module the **open edition does not carry**
 — nor `lumnik-llm-langchain`, where the model providers live. §5 has a foot in the same place:
 `lm view generate` needs a chat model; with `lumnik-llm-langchain` pruned it **abstains** with
-a named refusal ("no chat model is wired in this edition") rather than generating. §5's other half — writing the view YAML and rendering it with `lm view -f` —
+a named refusal ("no chat model is available on this hub") rather than generating — the same
+answer a hub gives when the operator has switched the AI off. §5's other half — writing the view YAML and rendering it with `lm view -f` —
 does not touch a model at all. Every other step here ingests, fuses and serves on that build.
 See [which edition you installed](editions.md#which-edition-am-i-running).
 </div>

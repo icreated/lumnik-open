@@ -93,3 +93,24 @@ func TestJdbcListTablesUsesSourceName(t *testing.T) {
 		t.Fatalf("unexpected: %+v err=%v", resp, err)
 	}
 }
+
+func TestJdbcDiscoverDecodesTheUnsupportedColumns(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"tables":[
+		  {"schema":"ERP","name":"DOCS","primaryKey":[],"columns":[],"rowEstimate":1,"unsupportedColumns":["BODY BLOB"]},
+		  {"schema":"ERP","name":"ORDERS","primaryKey":[],"columns":[],"rowEstimate":2}]}`))
+	}))
+	defer srv.Close()
+
+	c := New(config.Context{Server: srv.URL})
+	resp, err := c.JdbcDiscover(JdbcDiscoverRequest{URL: "jdbc:oracle:thin:@//h/x", User: "u", Password: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resp.Tables[0].UnsupportedColumns; len(got) != 1 || got[0] != "BODY BLOB" {
+		t.Errorf("unsupported columns = %v, want [BODY BLOB]", got)
+	}
+	if len(resp.Tables[1].UnsupportedColumns) != 0 {
+		t.Errorf("a table without the field must decode to none, got %v", resp.Tables[1].UnsupportedColumns)
+	}
+}

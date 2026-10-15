@@ -1,7 +1,6 @@
 package io.lumnik.hub.connector.runtime;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.api.ConnectorType;
 import io.lumnik.hub.connector.exceptions.SourceUnreachableException;
@@ -14,23 +13,21 @@ import io.lumnik.hub.connector.api.types.RunStart;
 import io.lumnik.hub.connector.api.types.RunStatus;
 import io.lumnik.hub.connector.api.types.TriggerMode;
 import io.lumnik.hub.connector.api.types.WritePerformanceProfile;
-import io.lumnik.hub.connector.domain.Connector;
-import io.lumnik.hub.connector.domain.ConnectorEndpoint;
-import io.lumnik.hub.connector.domain.ConnectorRun;
 import io.lumnik.hub.connector.repository.ConnectorCursorEntityRepository;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.repository.ConnectorRunRepository;
+import io.lumnik.hub.connector.runtime.RunRowFixtures.Seeded;
 import io.lumnik.hub.testsupport.LogProbe;
 import io.quarkus.hibernate.orm.panache.PanacheRepositoryBase;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.net.ConnectException;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -38,6 +35,7 @@ import java.util.UUID;
 import java.util.function.IntFunction;
 import java.util.function.Supplier;
 
+import static io.lumnik.hub.connector.runtime.RunRowFixtures.cursorAt;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -68,6 +66,11 @@ class PartialRunIT {
     @Inject ConnectorCursorEntityRepository cursors;
     @Inject SchemaRefreshSpy refreshSpy;
 
+    private RunRowFixtures fixtures;
+
+    @BeforeEach
+    void fixtures() { fixtures = new RunRowFixtures(connectors, endpoints, runs); }
+
     private static final List<Map<String, Object>> ONE_ROW = List.of(Map.of("k", "v"));
 
     @Test
@@ -75,7 +78,7 @@ class PartialRunIT {
         ConnectorCursor reached = cursorAt(4200);
         ProbeType type = new ProbeType(n -> new ReadResult.EmptyButOpen<>(reached))
             .bounded("partition offsets [0: 9000]");
-        Seeded s = seed(type.id());
+        Seeded s = fixtures.seed(type.id(), "partial-run-");
 
         RunStatus status = TenantContext.callAsSystem(
             () -> engine.runChunks(s.connector(), s.endpoint(), s.runId(), type));
@@ -115,7 +118,7 @@ class PartialRunIT {
                 : new ReadResult.EndOfStream<>(List.of()))
             .losing(List.of("t: partition 0 was at offset 0 and the log now starts at 2000 — "
                 + "2000 records will never be read by this endpoint"));
-        Seeded s = seed(type.id());
+        Seeded s = fixtures.seed(type.id(), "partial-run-");
 
         RunStatus status = TenantContext.callAsSystem(
             () -> engine.runChunks(s.connector(), s.endpoint(), s.runId(), type));
@@ -137,7 +140,7 @@ class PartialRunIT {
         // Kafka used to make this call itself, choosing its result shape on whether its ceiling was
         // empty. That put one engine rule in two places, the second of them per-type.
         ProbeType type = new ProbeType(n -> new ReadResult.EmptyButOpen<>(cursorAt(9)));
-        Seeded s = seed(type.id());
+        Seeded s = fixtures.seed(type.id(), "partial-run-");
 
         RunStatus status = TenantContext.callAsSystem(
             () -> engine.runChunks(s.connector(), s.endpoint(), s.runId(), type));
@@ -161,7 +164,7 @@ class PartialRunIT {
                 ? new ReadResult.HasMore<>(ONE_ROW, cursorAt(17))
                 : new ReadResult.EndOfStream<>(List.of()))
             .bounded("partition offsets [0: 9000]");
-        Seeded s = seed(type.id());
+        Seeded s = fixtures.seed(type.id(), "partial-run-");
         refreshSpy.forget();
 
         RunStatus status = TenantContext.callAsSystem(
@@ -189,7 +192,7 @@ class PartialRunIT {
                 ? new ReadResult.HasMore<>(ONE_ROW, cursorAt(3000))
                 : new ReadResult.EndOfStream<>(List.of()))
             .losing(List.of("2000 records will never be read by this endpoint"));
-        Seeded s = seed(type.id());
+        Seeded s = fixtures.seed(type.id(), "partial-run-");
         refreshSpy.forget();
 
         RunStatus status = TenantContext.callAsSystem(
@@ -213,7 +216,7 @@ class PartialRunIT {
         // unbounded — null" told the operator nothing about which of the two had happened.
         ProbeType type = new ProbeType(n -> new ReadResult.EndOfStream<>(List.of()))
             .failingToMeasure(new NullPointerException());
-        Seeded s = seed(type.id());
+        Seeded s = fixtures.seed(type.id(), "partial-run-");
 
         List<String> warnings = LogProbe.warnings(ConnectorEngine.class, () -> {
             RunStatus status = TenantContext.callAsSystem(
@@ -245,7 +248,7 @@ class PartialRunIT {
             .failingToMeasure(new SourceUnreachableException(
                 "the kafka broker did not answer within the client's metadata timeout",
                 new ConnectException("connection refused")));
-        Seeded s = seed(type.id());
+        Seeded s = fixtures.seed(type.id(), "partial-run-");
 
         RunStatus status = TenantContext.callAsSystem(
             () -> engine.runChunks(s.connector(), s.endpoint(), s.runId(), type));
@@ -260,10 +263,6 @@ class PartialRunIT {
             .isZero();
     }
 
-    private static ConnectorCursor cursorAt(long offset) {
-        return new ConnectorCursor(new ObjectMapper().createObjectNode().put("offset", offset),
-            Instant.EPOCH);
-    }
 
     /**
      * Reads a value back the way another connection would see it: a fresh transaction, with the L1
@@ -328,43 +327,5 @@ class PartialRunIT {
         @Override public ItemReader<Map<String, Object>> reader(ConnectorContext ctx) {
             return (chunkSize, cursor, c) -> script.apply(++reads);
         }
-    }
-
-    private record Seeded(Connector connector, ConnectorEndpoint endpoint, UUID runId) {}
-
-    private Seeded seed(String typeId) {
-        return TenantContext.callAsSystem(() -> QuarkusTransaction.requiringNew().call(() -> {
-            Connector c = new Connector();
-            c.setTenantId(1L);
-            c.setName("partial-run-" + UUID.randomUUID());
-            c.setTypeId(typeId);
-            c.setConfig(Map.of());
-            connectors.persist(c);
-            connectors.flush();
-
-            ConnectorEndpoint ep = new ConnectorEndpoint();
-            ep.setTenantId(1L);
-            ep.setConnectorId(c.getId());
-            ep.setName("default");
-            ep.setMethod("GET");
-            ep.setPath("/default");
-            ep.setEnabled(true);
-            ep.setConfig(Map.of());
-            endpoints.persist(ep);
-            endpoints.flush();
-
-            ConnectorRun r = new ConnectorRun();
-            r.setTenantId(1L);
-            r.setConnectorId(c.getId());
-            r.setEndpointId(ep.getId());
-            r.setStatus("Running");
-            r.setSyncMode("Incremental");
-            r.setStartedAt(Instant.now());
-            r.setTriggeredBy("MANUAL");
-            runs.persist(r);
-            runs.flush();
-
-            return new Seeded(c, ep, r.getId());
-        }));
     }
 }

@@ -95,3 +95,23 @@ test('createViews exposes its scope — the honest-empty message builds from it'
   const views = createViews({ json: () => {}, text: () => {} }, 'stock');
   assert.equal(views.scope, 'stock');
 });
+
+test('render(): page option → pageSize and cursor ride after the filters, the cursor encoded', async () => {
+  const api = fakeApi({ rows: [] });
+  const views = createViews(api, 'stock');
+
+  await views.render('title: Stock\n', ['montant>1000'], { pageSize: 50, cursor: 'a-b_c' });
+  assert.equal(api.jsonCalls[0].path, '/api/views/render?filter=montant%3E1000&pageSize=50&cursor=a-b_c');
+
+  await views.render('title: Stock\n', [], { pageSize: 50 });
+  assert.equal(api.jsonCalls[1].path, '/api/views/render?pageSize=50');
+
+  await views.render('title: Stock\n', [], { pageSize: 50, cursor: 'x y&z' });
+  assert.equal(api.jsonCalls[2].path, '/api/views/render?pageSize=50&cursor=x%20y%26z');
+});
+
+test('render(): a null cursor is not sent (first page)', async () => {
+  const api = fakeApi({ rows: [] });
+  await createViews(api, 'stock').render('title: Stock\n', [], { pageSize: 50, cursor: null });
+  assert.equal(api.jsonCalls[0].path, '/api/views/render?pageSize=50');
+});

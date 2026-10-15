@@ -4,6 +4,7 @@ import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.event.EventOutboxRow;
+import io.lumnik.hub.event.consumer.EventConsumerPosition;
 import io.lumnik.hub.event.consumer.OutboxSweeper;
 import io.lumnik.hub.event.consumer.SchedulerPausedProfile;
 import io.quarkus.test.junit.QuarkusTest;
@@ -57,16 +58,22 @@ class WebhookConsumerIT {
 
     @Transactional
     void seedEndpoint(String name, String path) {
+        seedEndpoint(name, path, "whc.test.*");
+    }
+
+    @Transactional
+    void seedEndpoint(String name, String path, String eventPattern) {
         em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
         // auth_mode NONE: no secret needed, the HTTP POST fires unconditionally (the V5 'secret'
         // plaintext column was dropped; HMAC mode requires secret_encrypted which we don't seed).
         // Enum is @Enumerated(STRING) -> stored uppercase, must match AuthMode constant exactly.
         em.createNativeQuery("""
             INSERT INTO core.webhook_endpoint (tenant_id, name, target_url, platform, auth_mode, event_types, enabled)
-            VALUES (1, :name, :url, 'generic', 'NONE', '{whc.test.*}', TRUE)
+            VALUES (1, :name, :url, 'generic', 'NONE', ARRAY[CAST(:pattern AS text)], TRUE)
             """)
           .setParameter("name", name)
           .setParameter("url", wm.baseUrl() + path)
+          .setParameter("pattern", eventPattern)
           .executeUpdate();
     }
 
@@ -128,7 +135,7 @@ class WebhookConsumerIT {
         seedEndpoint("whc-broken", "/broken");
         seedEvent("whc.test.one");
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("webhook", 100, consumer::process));
+        TenantContext.runAsSystem(() -> sweeper.drain("webhook", 100, consumer::batchProcessor));
 
         // both endpoints got attempt #1
         wm.verify(1, postRequestedFor(urlEqualTo("/ok")));
@@ -150,7 +157,7 @@ class WebhookConsumerIT {
         seedEndpoint("whc-eventid", "/eventid");
         long eventId = seedEvent("whc.test.eventid");
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("webhook", 100, consumer::process));
+        TenantContext.runAsSystem(() -> sweeper.drain("webhook", 100, consumer::batchProcessor));
 
         // The header must carry the SAME id core.event_outbox assigned this event — the id the
         // inbox later echoes back as `decision_id` in the annotation.decision.acked event, so a
@@ -177,13 +184,81 @@ class WebhookConsumerIT {
         seedEndpoint("whc-dead", "/dead");
         seedEvent("whc.test.dead");
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("webhook", 100, consumer::process)); // attempt 1
+        TenantContext.runAsSystem(() -> sweeper.drain("webhook", 100, consumer::batchProcessor)); // attempt 1
         TenantContext.runAsSystem(consumer::retryBatch);                                   // attempt 2
         TenantContext.runAsSystem(consumer::retryBatch);                                   // attempt 3
         TenantContext.runAsSystem(consumer::retryBatch);                                   // no-op
 
         wm.verify(3, postRequestedFor(urlEqualTo("/dead")));
         assertEquals(0, countFailedRetryable());
+    }
+
+    /**
+     * #943: a NUL byte in a response body failed the webhook_delivery INSERT on the sweep's batch
+     * transaction, so every tick rolled the cursor back and re-POSTed the batch. Three sweeps, as
+     * in the issue's executed reproduction.
+     */
+    @Test
+    void aNulByteInAResponseBodyNeitherStallsTheCursorNorRepostsTheBatch() {
+        wm.stubFor(post("/nul-ok").willReturn(aResponse().withStatus(200).withBody("fine")));
+        wm.stubFor(post("/nul-bad").willReturn(aResponse().withStatus(200).withBody("x\u0000y")));
+        seedEndpoint("whc-nul-ok", "/nul-ok", "whc.test.nul.ok.*");
+        seedEndpoint("whc-nul-bad", "/nul-bad", "whc.test.nul.bad.*");
+        seedEvent("whc.test.nul.ok.first");
+        seedEvent("whc.test.nul.bad.one");
+        long last = seedEvent("whc.test.nul.ok.after");
+
+        for (int sweep = 0; sweep < 3; sweep++) {
+            TenantContext.runAsSystem(() -> sweeper.drain("webhook", 100, consumer::batchProcessor));
+        }
+
+        assertEquals(last, webhookCursor(), "the cursor must advance past the whole batch");
+        wm.verify(1, postRequestedFor(urlEqualTo("/nul-ok"))
+            .withHeader("X-Lumnik-Event", equalTo("whc.test.nul.ok.first")));
+        wm.verify(1, postRequestedFor(urlEqualTo("/nul-bad")));
+        wm.verify(1, postRequestedFor(urlEqualTo("/nul-ok"))
+            .withHeader("X-Lumnik-Event", equalTo("whc.test.nul.ok.after")));
+        assertEquals("x\uFFFDy", responseBodyFor("whc.test.nul.bad.one"));
+    }
+
+    /**
+     * #943 on the retry path: the outcome is written in its own short transaction, so a NUL there
+     * left the claim standing and the attempt uncounted — the row was re-POSTed after every lease
+     * expiry, forever. It must count and release like any failed attempt.
+     */
+    @Test
+    void aNulByteInARetryResponseIsRecordedLikeAnyFailedAttempt() {
+        wm.stubFor(post("/nul-retry").willReturn(aResponse().withStatus(500).withBody("x\u0000y")));
+        seedEndpoint("whc-nul-retry", "/nul-retry");
+        seedStaleFailedDelivery("whc-nul-retry", "whc.test.nul.retry", null);
+
+        TenantContext.runAsSystem(consumer::retryBatch);
+
+        Object[] row = retryOutcomeFor("whc.test.nul.retry");
+        assertEquals(2, ((Number) row[0]).intValue(), "attempts");
+        assertEquals("HTTP 500: x\uFFFDy", row[1]);
+        assertEquals(Boolean.TRUE, row[2], "claim released");
+    }
+
+    @Transactional
+    Object[] retryOutcomeFor(String eventType) {
+        em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
+        return (Object[]) em.createNativeQuery(
+            "SELECT attempts, error, claimed_until IS NULL FROM core.webhook_delivery WHERE event_type = :t")
+            .setParameter("t", eventType).getSingleResult();
+    }
+
+    @Transactional
+    long webhookCursor() {
+        return em.find(EventConsumerPosition.class, "webhook").getLastEventId();
+    }
+
+    @Transactional
+    String responseBodyFor(String eventType) {
+        em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
+        return (String) em.createNativeQuery(
+            "SELECT response_body FROM core.webhook_delivery WHERE event_type = :t")
+            .setParameter("t", eventType).getSingleResult();
     }
 
     @Transactional

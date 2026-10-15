@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,14 +21,10 @@ func TestSourcesDescribe_lastRunAtIsLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the sample timestamp must parse: %v", err)
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"id":"c1","tenantId":1,"name":"ad_user","typeId":"csv-file",
-			"enabled":true,"status":"Completed","lastRunAt":"2026-08-15T09:12:04Z"}`))
-	}))
-	defer srv.Close()
 
-	s := NewSources(nil, client.New(config.Context{Server: srv.URL}), nil, nil)
-	s.items = []types.Connector{{ID: "c1", Name: "ad_user"}}
+	s := NewSources(nil, client.New(config.Context{Server: "http://127.0.0.1:0"}), nil, nil)
+	s.items = []types.Connector{{ID: "c1", TenantID: 1, Name: "ad_user", TypeID: "csv-file",
+		Enabled: true, Status: "Completed", LastRunAt: &lastRun}}
 	s.table.Select(1, 0)
 	_, body, ok := s.SelectedDescribe()
 	if !ok {
@@ -39,5 +36,40 @@ func TestSourcesDescribe_lastRunAtIsLocal(t *testing.T) {
 	}
 	if strings.Contains(body, "2026-08-15T09:12:04Z") {
 		t.Errorf("describe body should render local-formatted, not the raw ISO string:\n%s", body)
+	}
+}
+
+// With the panel open, every arrow key re-describes the new row ON the event loop. The list and
+// the get serve the same ConnectorAdminDto.fromWithRun shape, so the row already holds the whole
+// detail: a GET per key re-fetched it and froze the keys for a round trip each time (#891).
+func TestSourcesDescribe_rendersTheListedRowWithoutAGet(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write([]byte(`{"id":"c1","tenantId":1,"name":"from-the-get","typeId":"csv-file","enabled":true}`))
+	}))
+	defer srv.Close()
+
+	s := NewSources(nil, client.New(config.Context{Server: srv.URL}), nil, nil)
+	s.items = []types.Connector{{ID: "c1", TenantID: 7, Name: "ad_user", TypeID: "jdbc-generic",
+		Schedule: "0 * * * *", Window: "01:00-05:00", Enabled: true, Status: "Running",
+		Config: map[string]any{"url": "jdbc:postgresql://legacy/erp"}}}
+	s.table.Select(1, 0)
+
+	title, body, ok := s.SelectedDescribe()
+	if !ok {
+		t.Fatal("describe !ok")
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("describe called the hub %d time(s); it must render the listed row", n)
+	}
+	if title != "ad_user" {
+		t.Errorf("title = %q, want the listed row's name", title)
+	}
+	for _, want := range []string{"tenant:    7", "type_id:   jdbc-generic", "schedule:  0 * * * *",
+		"window:    01:00-05:00", "Running", "jdbc:postgresql://legacy/erp"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("describe body missing %q:\n%s", want, body)
+		}
 	}
 }

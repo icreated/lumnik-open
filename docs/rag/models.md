@@ -32,6 +32,24 @@ The analytic model translates a question into one read-only SQL query
 a general conversational model is not one. It is ~4.7 GB (`ollama pull qwen2.5-coder:7b`).
 Override with `ASK_SQL_MODEL`.
 
+The answer is written from the first rows of a result, not all of them: a query returns up to 500 rows, and the
+summary is written from the first ones that fit a budget of **6000 characters** (about fifty catalogue rows). The
+answer says so in its first sentence, and the whole result stays in the API answer — see
+[A long result](../transparency/ask-honesty.md#a-long-result-what-the-answer-is-written-from). A wider sample on a
+strong host, or a narrower one on a small model:
+
+```
+LUMNIK_ASK_ANSWER_BUDGET_CHARS=12000
+```
+
+The hub declares the analytic model's context at **32768 tokens**, so a long prompt is never silently truncated;
+set `ASK_SQL_NUM_CTX` lower on a host short of memory.
+
+The analytic model is called **once** per step and writes **at most 1024 tokens** (`ASK_SQL_NUM_PREDICT`). A call
+that times out is reported once, not started again, so a slow model costs one wait instead of two. A reply that
+reaches the bound is treated as a failure and never run, because a cut SQL statement can be valid and broader than
+what was asked. Raise `ASK_SQL_NUM_PREDICT` if you generate views or ask over very wide tables and meet it.
+
 It runs at **temperature 0**: at the extension's inherited default (`0.8`), the same answerable
 question abstained (`NO_ANSWER`) 11 times out of 40 draws; at `0`, 0 times out of 30. Temperature 0
 buys greedy, low-variance decoding — not a guarantee of byte-identical SQL on every provider and
@@ -80,7 +98,7 @@ automated test covers the sequence above. Plan it as a migration, not a restart.
 
 All model choices are runtime environment variables. The self-host compose forwards them from
 the root `.env` (commented template lines sit in `.env.example`), and the Helm chart renders all
-six from the `llm:` values block (`deploy/helm/up.sh` derives those from `LUMNIK_`-prefixed
+seven from the `llm:` values block (`deploy/helm/up.sh` derives those from `LUMNIK_`-prefixed
 variables). Unset means the application defaults below apply.
 
 | Env var | Default | What it drives |
@@ -88,6 +106,9 @@ variables). Unset means the application defaults below apply.
 | `OLLAMA_BASE_URL` | `http://localhost:11434` | Where **all three** Ollama clients connect |
 | `RAG_CHAT_MODEL` | `llama3.2` | Conversational RAG chat |
 | `ASK_SQL_MODEL` | `qwen2.5-coder:7b` | Text-to-SQL ask + view generation |
+| `ASK_SQL_NUM_CTX` | `32768` | Context window of the analytic model, in tokens — see [Analytic](#analytic-text-to-sql-ask-qwen25-coder7b) |
+| `ASK_SQL_NUM_PREDICT` | `1024` | Most tokens the analytic model may write per call (a SQL statement, a rewrite, an answer, a generated view) |
+| `LUMNIK_ASK_ANSWER_BUDGET_CHARS` | `6000` | Characters of result rows the answer is written from; the rows beyond stay in the result |
 | `JUDGE_MODEL` | `gemma4` | Offline faithfulness eval |
 | `RAG_EMBEDDING_MODEL` | `nomic-embed-text` | Chunk + query embeddings |
 | `RAG_EMBEDDING_DIM` | `768` | Must match the model **and** the `VECTOR(768)` column — see [above](#embeddings-model-and-dimension-travel-together) |
@@ -103,6 +124,58 @@ reads the **live** provider/model from the active port, so it reflects a swap im
 unlike chat or analytic, which you verify by checking the container's environment (below). The
 exact Quarkus property each variable feeds, and how to override a timeout, live in
 [Advanced provider configuration → Property mapping](providers-advanced.md#property-mapping).
+
+## Switching the AI off
+
+One setting turns the whole AI family off — the chat, the ask, view generation and the
+embeddings — without touching the build: `LUMNIK_AI_ENABLED=false`. Put it in the root `.env`
+(self-host: a commented line sits in `.env.example`), or pass it to `deploy/helm/up.sh`
+(`LUMNIK_AI_ENABLED=false`, chart value `ai.enabled`). It must be exactly `true` or `false`:
+anything else (`FALSE`, `no`, `0`) stops the hub at startup with a message naming the setting.
+Recreate the hub for a change to apply (`docker compose -f docker-compose.selfhost.yml up -d hub`; on Kubernetes, `kubectl rollout restart deployment/<release>-hub`) — a plain `docker compose restart` keeps the old environment. Absent means on.
+
+What you see once it is off:
+
+- **The PWA has no Chat tab.** The other tabs are untouched.
+- **`lm module list`** still shows `rag` and `llm`, now `INACTIVE`, with the reason
+  `disabled:lumnik.ai.enabled`. They are switched off, not missing: that is what separates this
+  from the [Open edition](../editions.md), where they are not in the build at all.
+- **`lm chat`, `lm ask`, `lm rag search`, `lm rag corpora` and `lm scopes`** meet a `404`, as on a
+  hub that does not carry the chat. `lm view generate` answers that no chat model is available.
+- **`lm rag status`** says `provider: none` and `indexed: false`; a reindex has nothing to index
+  with. `lm csv ingest` loads the file and no longer tells you it is askable.
+- Nothing calls a model and no embedding is computed.
+
+To check it from the terminal, ask the hub for its status. With the AI off, `provider` reads
+`none` and nothing is indexed:
+
+```console
+$ lm rag status
+indexed: false
+chunks: 0
+indexed_at: -
+provider: none
+embedding_model: none
+
+$ lm module list
+NAME      VERSION  SCHEMA              STATUS    REASON
+core      0.1.0    Platform            ACTIVE
+identity  0.1.0    Identity & Tenancy  ACTIVE
+llm       0.1.0    Model provider      INACTIVE  disabled:lumnik.ai.enabled
+rag       0.1.0    Platform RAG        INACTIVE  disabled:lumnik.ai.enabled
+```
+
+What does not change: the images, the `rag` schema, the data already in it, and everything that
+keeps that data consistent with what you declare. A connector moved to another métier scope still
+has its chunks re-tagged (`lm connector scope sync`); a disabled or deleted workflow still leaves
+the corpus; a deleted connector's descriptor still goes. Direct Search does not depend on this
+setting, in either direction.
+
+**What switching it back on does and does not restore.** The data you had is there again. Content
+that needed indexing *while the AI was off* is not: a workflow you applied, a table you ingested,
+a connector you re-described. It is absent — never stale, so nothing a métier lost access to can
+come back (the platform's own description of the hub aside, which the next start rebuilds) — and you restore it by re-applying the workflow or re-ingesting the file.
+`lm rag reindex` rebuilds the platform's own description of the hub, nothing else.
 
 ## Swapping a model on Ollama
 

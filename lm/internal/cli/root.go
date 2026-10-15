@@ -9,6 +9,14 @@ import (
 )
 
 func NewRootCmd() *cobra.Command {
+	root := buildRootCmd()
+	rejectUnknownSubcommands(root)
+	return root
+}
+
+// buildRootCmd is the tree as each command declares itself, before the one walk that gives every grouping-only parent
+// its unknown-word check.
+func buildRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "lm",
 		Short:         "lumnik CLI",
@@ -37,7 +45,10 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newViewCmd())
 	root.AddCommand(newProcessCmd())
 	root.AddCommand(newWorkflowCmd())
+	root.AddCommand(newProposalCmd())
 	root.AddCommand(newAppCmd())
+	root.AddCommand(newExportCmd())
+	root.AddCommand(newSearchCmd())
 	root.AddCommand(newInboxCmd())
 	root.AddCommand(newScopeCmd())
 	root.AddCommand(newScopesCmd())
@@ -56,6 +67,9 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newConflictsCmd())
 	root.AddCommand(newObservationsCmd())
 	root.AddCommand(newOutputsCmd())
+	// cobra adds `completion` itself, but only at Execute; it is a parent without a Run like the others, so it is
+	// added now to be part of the tree the walk and the inventory see
+	root.InitDefaultCompletionCmd()
 	root.RunE = func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
 			return newUiCmd().RunE(cmd, args)
@@ -63,6 +77,21 @@ func NewRootCmd() *cobra.Command {
 		return cmd.Help()
 	}
 	return root
+}
+
+// rejectUnknownSubcommands makes every command that only groups subcommands refuse a word that is not one of them.
+// Cobra checks Args on runnable commands only, so a parent without a Run printed its help and exited 0 for ANY
+// argument: `lm connector lst` looked like a success to a script (#1064). Runnable + NoArgs keeps the bare parent as
+// its own help (exit 0) and turns `parent junk` into `unknown command "junk" for "lm parent"`. One walk over the whole
+// tree, nested parents and future ones included — a command that already has its own Run is left alone.
+func rejectUnknownSubcommands(c *cobra.Command) {
+	for _, sub := range c.Commands() {
+		if sub.HasSubCommands() && !sub.Runnable() {
+			sub.Args = cobra.NoArgs
+			sub.RunE = func(cmd *cobra.Command, _ []string) error { return cmd.Help() }
+		}
+		rejectUnknownSubcommands(sub)
+	}
 }
 
 // Run installs textsafe.Writer as the default stdout/stderr for the command

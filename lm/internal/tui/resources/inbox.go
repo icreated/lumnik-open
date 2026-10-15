@@ -2,6 +2,7 @@ package resources
 
 import (
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -47,17 +48,19 @@ func inboxCells(e client.InboxEntry, now time.Time) []string {
 // Inbox is the observation deck: the tenant's decision.* events, newest first.
 // `a` acks the selected decision (idempotent server-side); `A` toggles disposed entries.
 type Inbox struct {
+	app       *tview.Application
 	client    *client.Client
 	table     *tview.Table
 	items     []client.InboxEntry
-	showAll   bool
+	offLoop   offLoop
+	showAll   atomic.Bool // toggled on the loop, read by the off-loop fetch
 	showError func(string)
 	toast     func(string)
 	onSelect  func()
 }
 
-func NewInbox(c *client.Client, showError func(string), toast func(string)) *Inbox {
-	i := &Inbox{client: c, showError: showError, toast: toast,
+func NewInbox(app *tview.Application, c *client.Client, showError func(string), toast func(string)) *Inbox {
+	i := &Inbox{app: app, client: c, showError: showError, toast: toast,
 		table: tview.NewTable().SetBorders(false).SetSelectable(true, false)}
 	style.ApplyChrome(i.table.Box)
 	style.ApplyTableSelection(i.table)
@@ -75,20 +78,31 @@ func (i *Inbox) Hints() string {
 	return "a: ack · A: show disposed · d: describe · y: yank · r: refresh"
 }
 
-func (i *Inbox) toggleAll() { i.showAll = !i.showAll }
+func (i *Inbox) toggleAll() { i.showAll.Store(!i.showAll.Load()) }
 
+// Refresh lists off the event loop (offLoop): the live ticker calls it while the page is in front
+// (#891).
 func (i *Inbox) Refresh() {
-	items, err := i.client.InboxList(50, i.showAll)
+	i.offLoop.run(i.app, func() func() {
+		items, err := i.client.InboxList(50, i.showAll.Load())
+		return func() { i.renderList(items, err) }
+	})
+}
+
+func (i *Inbox) renderList(items []client.InboxEntry, err error) {
 	if err != nil {
 		// Keep internal state consistent with the rendered error: a stale selection
 		// must never let `a` ack an entry the user can no longer see.
 		i.items = nil
 		i.table.Clear()
 		i.table.SetCell(0, 0, dataCell("error: "+err.Error()))
-		return
+	} else {
+		i.items = items
+		i.render()
 	}
-	i.items = items
-	i.render()
+	if i.onSelect != nil { // an open describe panel follows the fresh row, or its absence
+		i.onSelect()
+	}
 }
 
 func (i *Inbox) render() {

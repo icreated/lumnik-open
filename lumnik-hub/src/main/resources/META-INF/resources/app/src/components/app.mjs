@@ -5,13 +5,10 @@ import {
 } from '../appRegistry.mjs';
 import { createAuth } from '../auth.mjs';
 import { createApi } from '../api.mjs';
-import { hasChat } from '../capabilities.mjs';
 import { createViews } from '../views.mjs';
+import { planTabs, applyProbes, landingTab, runBoots, has } from '../tabs.mjs';
 import { Login } from './login.mjs';
 import { TabBar } from './tabbar.mjs';
-import { Fiches } from './fiches.mjs';
-import { Inbox } from './inbox.mjs';
-import { Chat } from './chat.mjs';
 
 // The raw ?m= tag (or 'clients' when absent) — ALL the auth redirect needs, and stable for
 // the whole session regardless of what appRegistry later resolves it to (see config.mjs's
@@ -30,16 +27,18 @@ export function App() {
   const [metier, setMetier] = useState(() => resolveCached(location.search));
   const [screen, setScreen] = useState('boot'); // 'boot' | 'login' | 'offline' | 'refused' | 'tabs'
   const [note, setNote] = useState('');
-  const [tab, setTab] = useState('fiches'); // 'fiches' | 'inbox' | 'chat'
-  const [count, setCount] = useState(''); // header count slot — set per-tab in Tasks 6–7
-  const [badge, setBadge] = useState(0); // unacked-decisions badge — set in Task 7 (C3)
+  // The app's effective tabs (tabs.mjs: what the hub offers ∩ what the app declares), known once
+  // phase 2 has answered; `tab` is the id on screen, the first of them to begin with.
+  const [tabs, setTabs] = useState([]);
+  const [tab, setTab] = useState(null);
+  const [count, setCount] = useState(''); // header count slot — set by the tab on screen
+  const [badges, setBadges] = useState({}); // tab id -> the count it wears (the inbox's unacked)
   const [chatLog, setChatLog] = useState([]); // D5: session-scoped, lifted so tab switches keep it
-  // Whether THIS build carries the chat doors. Starts true so an unread answer never claims
-  // absence (capabilities.mjs); only a readable /me that lacks the rag module turns it off.
-  const [chatAvailable, setChatAvailable] = useState(true);
   // Moving to a tab is one gesture: clear the header count slot the previous tab filled, then
-  // switch. Both callers — the tab bar, and the door an abstention offers (#515) — go through it.
-  const goTab = t => { setCount(''); setTab(t); };
+  // switch. Both callers — the tab bar, and the door an abstention offers (#515) — go through it,
+  // and a tab that is not effective for this app is not a place to go.
+  const goTab = t => { if (!has(tabs, t)) return; setCount(''); setTab(t); };
+  const setBadge = (id, n) => setBadges(b => ({ ...b, [id]: n }));
 
   const authRef = useRef(null);
   const renewTimerRef = useRef(null);
@@ -103,10 +102,16 @@ export function App() {
         // is 'offline' — the app cannot know its own scope, so it must not guess its way
         // into tabs. A refusal (unknown tag, or out-of-scope — the server does not
         // distinguish the two) is 'refused', never a fallthrough to another métier.
+        let resolved, plan;
         try {
-          const entries = await apiRef.current.json('/api/apps', { method: 'GET' });
+          // Both doors in phase 2: the landing tab needs to know what the hub offers BEFORE the first
+          // tabs paint, and a failure of either is 'offline' — the app cannot know its own shape.
+          const [entries, me] = await Promise.all([
+            apiRef.current.json('/api/apps', { method: 'GET' }),
+            apiRef.current.json('/api/bff/v1/me', { method: 'GET' }),
+          ]);
           cacheRegistry(entries);
-          const resolved = resolveFromRegistry(entries, location.search);
+          resolved = resolveFromRegistry(entries, location.search);
           if (resolved.screen === 'refused') {
             // The phase-1 guess must not linger in the head under a body that says
             // "Application inconnue" — resolveFromRegistry hands back the same neutral
@@ -120,23 +125,25 @@ export function App() {
           applyIdentity(resolved.entry);
           applyTheme(resolved.entry);
           viewsRef.current = createViews(apiRef.current, resolved.entry.scope);
+          plan = planTabs(resolved.entry, me);
+          // A tab the hub offers may still be worthless for this caller (Search with no index to read):
+          // its probe asks before the first paint, so the landing tab is right and nothing flickers.
+          const tabs = await applyProbes(plan.tabs, { api: apiRef.current, scope: resolved.entry.scope });
+          plan = { tabs, landing: landingTab(tabs) };
         } catch (e) {
           if (e && e.kind === 'auth') return; // onAuthLost already set screen to 'login'
           setScreen('offline');
           return;
         }
+        setTabs(plan.tabs);
+        setTab(plan.landing);
         setScreen('tabs');
-        // C3: quiet badge refresh at boot — fire the inbox GET once on entering tabs, without
-        // visiting the tab, so the ⚡ badge shows what waits from the first frame.
-        apiRef.current.json('/api/inbox?limit=50&all=true', { method: 'GET' })
-          .then(entries => setBadge(entries.filter(e => !e.acked).length))
-          .catch(() => {});
-        // Same shape, same reason: read once at boot what this build carries, so the Chat tab can
-        // say so instead of letting the métier type into a door that is not there. /api/bff/v1/me
-        // is the lm_user door and already returns the module list — no new endpoint.
-        apiRef.current.json('/api/bff/v1/me', { method: 'GET' })
-          .then(me => setChatAvailable(hasChat(me)))
-          .catch(() => {});
+        // Quiet start-up work of the tabs this app shows (the inbox's badge from the first frame);
+        // a tab the app does not show never runs its own.
+        runBoots(plan.tabs, {
+          api: apiRef.current, views: viewsRef.current, scope: resolved.entry.scope,
+          can: id => has(plan.tabs, id), setBadge,
+        });
       } else {
         if (state === 'expired') setNote(EXPIRED_NOTE);
         setScreen('login');
@@ -155,6 +162,15 @@ export function App() {
   }
 
   const claims = screen === 'tabs' ? auth.claims() : null;
+  // What every tab's screen receives (tabs.mjs). The shell names no tab; a screen that needs shell
+  // state the shell does not hold yet adds a field here — the chat log is today's only case.
+  // Never a tab that is not effective: if `tab` somehow is not, the app is on its landing tab.
+  const shownTab = has(tabs, tab) ? tab : landingTab(tabs);
+  const current = tabs.find(t => t.id === shownTab);
+  const ctx = {
+    api: apiRef.current, views: viewsRef.current, scope: metier.scope,
+    can: id => has(tabs, id), openTab: goTab, setCount, setBadge, chatLog, setChatLog,
+  };
 
   return html`
     <header>
@@ -176,10 +192,12 @@ export function App() {
         <p>Application inconnue — vérifie le lien ou contacte ton intégrateur.</p>
       </div>` : null}
       ${screen === 'login' ? html`<${Login} note=${note} onLogin=${onLogin} />` : null}
-      ${screen === 'tabs' && tab === 'fiches' ? html`<${Fiches} views=${viewsRef.current} onCount=${setCount} />` : null}
-      ${screen === 'tabs' && tab === 'inbox' ? html`<${Inbox} api=${apiRef.current} onBadge=${setBadge} />` : null}
-      ${screen === 'tabs' && tab === 'chat' ? html`<${Chat} api=${apiRef.current} scope=${metier.scope} log=${chatLog} setLog=${setChatLog} available=${chatAvailable} onOpenFiches=${() => goTab('fiches')} />` : null}
+      ${screen === 'tabs' && tabs.length === 0 ? html`<div class="center">
+        <span class="glyph">▫</span>
+        <p>Aucune fonctionnalité n'est disponible pour cette application.</p>
+      </div>` : null}
+      ${screen === 'tabs' && current ? current.screen(ctx) : null}
     </main>
-    ${screen === 'tabs' ? html`<${TabBar} tab=${tab} onTab=${goTab} badge=${badge} />` : null}
+    ${screen === 'tabs' && tabs.length > 0 ? html`<${TabBar} items=${tabs} tab=${shownTab} onTab=${goTab} badges=${badges} />` : null}
   `;
 }

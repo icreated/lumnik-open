@@ -1,7 +1,7 @@
 # 10-customers.yaml — the desk's customer list, over the fused entity.
 #
 # Column headers are the labels the entity manifest declares; the detail of one record ends
-# with its _conflicts ledger when the sources disagree on it.
+# with its _conflicts ledger when the sources conflict on it.
 #
 #   lm view -f docs/apps/demo/views/10-customers.yaml
 #   lm view -f docs/apps/demo/views/10-customers.yaml --filter city=Lyon

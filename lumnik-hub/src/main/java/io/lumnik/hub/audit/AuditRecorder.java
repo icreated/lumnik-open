@@ -35,13 +35,25 @@ public class AuditRecorder {
     public void record(String entityType, String entityKey, String operation, Map<String, Object> snapshot) {
         Long tenantId = TenantContextFilter.current();
         if (tenantId == null) return; // no request tenant (scheduler/startup) — same guard as the listener
+        record(tenantId, TenantContextFilter.currentUser(), entityType, entityKey, operation, snapshot);
+    }
+
+    /**
+     * Explicit-identity variant for a caller that cannot rely on request ThreadLocals — a
+     * {@code StreamingOutput} callback (the container's response filter clears them before that
+     * callback runs; see {@code EntitySnapshotDownloadResource}) or a future scheduled run with no
+     * request context at all. Same insert, same fail-soft contract; the only difference is where
+     * tenant/actor come from.
+     */
+    public void record(long tenantId, Long actorId, String entityType, String entityKey,
+                        String operation, Map<String, Object> snapshot) {
+        if (tenantId <= 0) return; // no genuine tenant (e.g. an uninitialized 0) — same fail-soft posture as the null-tenant guard above
         try (Connection c = adminDs.getConnection();
              PreparedStatement ps = c.prepareStatement(
                  "INSERT INTO core.audit_outbox "
                + "(tenant_id, actor_id, entity_type, entity_key, operation, changes, created_at) "
                + "VALUES (?, ?, ?, ?, ?, cast(? as jsonb), now())")) {
             ps.setLong(1, tenantId);
-            Long actorId = TenantContextFilter.currentUser();
             if (actorId != null) ps.setLong(2, actorId); else ps.setNull(2, Types.BIGINT);
             ps.setString(3, entityType);
             ps.setString(4, entityKey);

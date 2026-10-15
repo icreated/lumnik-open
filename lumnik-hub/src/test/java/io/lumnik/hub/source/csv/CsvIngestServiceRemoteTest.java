@@ -3,6 +3,7 @@ package io.lumnik.hub.source.csv;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.api.sources.CsvIngestForm;
 import io.lumnik.hub.api.sources.CsvIngestResult;
+import io.lumnik.hub.testsupport.MinioTestImage;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.*;
@@ -45,7 +46,7 @@ class CsvIngestServiceRemoteTest {
 
     @BeforeAll
     static void start() {
-        minio = new GenericContainer<>("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
+        minio = new GenericContainer<>(MinioTestImage.PINNED)
             .withEnv("MINIO_ROOT_USER", ACCESS)
             .withEnv("MINIO_ROOT_PASSWORD", SECRET)
             .withCommand("server", "/data")

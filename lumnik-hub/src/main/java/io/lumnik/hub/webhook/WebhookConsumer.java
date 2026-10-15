@@ -7,6 +7,7 @@ import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.event.EntityFilters;
 import io.lumnik.hub.event.EventOutboxRow;
+import io.lumnik.hub.event.consumer.BatchProcessor;
 import io.lumnik.hub.event.consumer.OutboxSweeper;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.scheduler.Scheduled;
@@ -17,7 +18,11 @@ import org.jboss.logging.Logger;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 import static io.quarkus.scheduler.Scheduled.ConcurrentExecution.SKIP;
@@ -62,7 +67,7 @@ public class WebhookConsumer {
 
     @Scheduled(every = "5s", concurrentExecution = SKIP)
     void tick() {
-        TenantContext.runAsSystem(() -> sweeper.sweep(CONSUMER_NAME, 100, this::process));
+        TenantContext.runAsSystem(() -> sweeper.drain(CONSUMER_NAME, 100, this::batchProcessor));
     }
 
     @Scheduled(every = "30s", concurrentExecution = SKIP)
@@ -113,7 +118,7 @@ public class WebhookConsumer {
                   .executeUpdate();
                 CurrentTenantHolder.set(d.getTenantId());
                 WebhookEndpoint ep = endpointRepo.findLiveById(d.getEndpointId());
-                if (ep == null || !ep.matches(d.getEventType()) || !entityFilterPasses(ep, entityOf(d))) {
+                if (ep == null || !wants(ep, d.getEventType(), entityOf(d))) {
                     d.setAttempts(3); // endpoint gone, unsubscribed, or entity_filter no longer matches: stop retrying
                     markNoHttpResult(d, "endpoint gone, unsubscribed, or entity_filter no longer matches — retries stopped");
                     d.setClaimedUntil(null);
@@ -142,6 +147,10 @@ public class WebhookConsumer {
                 markNoHttpResult(d, "retry threw: " + e.getMessage());
             });
             return;
+        }
+        if (!r.ok()) {
+            LOG.warnf("Webhook delivery failed: delivery %d event %s — %s (retry sweep will pick it up)",
+                      c.deliveryId(), c.eventId(), r.error());
         }
         recordOutcome(c, d -> {
             d.setAttempts(d.getAttempts() + 1);
@@ -188,9 +197,13 @@ public class WebhookConsumer {
         d.setError(error);
     }
 
-    /** entity_filter narrows only events that carry an entity; entity-less events reach every subscribed endpoint. */
-    private static boolean entityFilterPasses(WebhookEndpoint ep, String entity) {
-        return EntityFilters.passes(ep.getEntityFilter(), entity);
+    /**
+     * Whether a live endpoint subscribes to this event — one rule for the first delivery and the
+     * retry alike. entity_filter narrows only events that carry an entity; entity-less events
+     * reach every endpoint subscribed to their type.
+     */
+    private static boolean wants(WebhookEndpoint ep, String eventType, String entity) {
+        return ep.matches(eventType) && EntityFilters.passes(ep.getEntityFilter(), entity);
     }
 
     /** Reads the entity from a stored delivery payload (data events carry {entity, ...}); null when absent. */
@@ -201,10 +214,38 @@ public class WebhookConsumer {
         return (e == null || e.isNull()) ? null : e.asText();
     }
 
-    public void process(EventOutboxRow row) {
+    /**
+     * The processor of one outbox batch. A tenant's live endpoints are read at its first event in
+     * the batch and reused for the rest of it, never for the next one: an endpoint created, changed
+     * or deleted is seen from the next batch on, so at most the rest of the current batch is late.
+     *
+     * <p>The batch only RECORDS (#944): one pending {@code webhook_delivery} row per (event,
+     * endpoint), leased. Each event commits its rows in its own transaction (#943) and the batch
+     * commits the cursor after them, so a failure of the batch's own commit can leave rows without
+     * the cursor: the replay records them again, and the first rows are delivered too, once their
+     * lease expires. {@link BatchProcessor#afterCommit} then POSTs each with nothing held and
+     * records its outcome in a short transaction — the retry path's claim / deliver / record. A
+     * crash between the two loses nothing: the leased rows are there, and the retry sweep delivers
+     * them once the lease expires.
+     */
+    public BatchProcessor batchProcessor() {
+        return new BatchProcessor() {
+            private final Map<Long, List<WebhookEndpoint>> liveByTenant = new HashMap<>();
+            private final List<Pending> pending = new ArrayList<>();
+
+            @Override public void accept(EventOutboxRow row) { record(row, liveByTenant, pending); }
+
+            @Override public void afterCommit() { deliverPending(pending); }
+        };
+    }
+
+    /** A first delivery recorded by a batch, and the lease the batch gave it. */
+    private record Pending(Claim claim, OffsetDateTime leasedUntil) {}
+
+    private void record(EventOutboxRow row, Map<Long, List<WebhookEndpoint>> liveByTenant, List<Pending> pending) {
         List<WebhookEndpoint> targets =
-            endpointRepo.findEnabledForEvent(row.getTenantId(), row.getEventType()).stream()
-                .filter(ep -> entityFilterPasses(ep, row.getEntity()))
+            liveByTenant.computeIfAbsent(row.getTenantId(), endpointRepo::findEnabled).stream()
+                .filter(ep -> wants(ep, row.getEventType(), row.getEntity()))
                 .toList();
         if (targets.isEmpty()) return;
 
@@ -217,30 +258,46 @@ public class WebhookConsumer {
         }
         JsonNode payloadNode = mapper.valueToTree(row.getPayload());
 
+        // Microseconds: the precision PostgreSQL stores, so extendClaim can compare it exactly.
+        OffsetDateTime leasedUntil =
+            OffsetDateTime.now(ZoneOffset.UTC).plusSeconds(CLAIM_LEASE_SECONDS).truncatedTo(ChronoUnit.MICROS);
         for (WebhookEndpoint ep : targets) {
-            var r = deliveryService.deliver(ep, row.getEventType(), row.getId(), body);
-            persistAttempt(row, ep.getId(), payloadNode, r);
-            if (!r.ok()) {
-                LOG.warnf("Webhook delivery failed: event %d endpoint %s — %s (retry sweep will pick it up)",
-                          row.getId(), ep.getName(), r.error());
+            WebhookDelivery d = new WebhookDelivery();
+            d.setTenantId(row.getTenantId());
+            d.setEndpointId(ep.getId());
+            d.setEventId(row.getId());
+            d.setEventType(row.getEventType());
+            d.setPayload(payloadNode);
+            d.setAttempts(0);          // pending: never attempted
+            d.setClaimedUntil(leasedUntil);
+            deliveryRepo.persist(d);
+            pending.add(new Pending(
+                new Claim(d.getId(), row.getTenantId(), ep, row.getEventType(), row.getId(), body), leasedUntil));
+        }
+    }
+
+    /**
+     * Delivers what the committed batch recorded, with no transaction open. A row whose event
+     * rolled back (a failed event costs only itself, #943) no longer exists, and one the retry
+     * sweep took over is no longer ours: both fail {@code extendClaim} and are skipped.
+     */
+    private void deliverPending(List<Pending> pending) {
+        for (Pending p : pending) {
+            try {
+                if (renewLease(p)) deliverClaimed(p.claim());
+                else LOG.debugf("First delivery %d no longer ours (event rolled back, or the retry sweep took it) — skipped",
+                                p.claim().deliveryId());
+            } catch (RuntimeException e) {
+                // Left leased and unattempted: the retry sweep delivers it when the lease expires.
+                LOG.errorf(e, "First delivery %d failed before its outcome was recorded", p.claim().deliveryId());
             }
         }
     }
 
-    private void persistAttempt(EventOutboxRow row, Long endpointId,
-                                JsonNode payload, WebhookDeliveryService.DeliveryResult r) {
-        WebhookDelivery d = new WebhookDelivery();
-        d.setTenantId(row.getTenantId());
-        d.setEndpointId(endpointId);
-        d.setEventId(row.getId());
-        d.setEventType(row.getEventType());
-        d.setPayload(payload);
-        d.setHttpStatus(r.httpStatus());
-        d.setResponseBody(r.responseBody());
-        d.setError(r.error());
-        d.setDurationMs(r.durationMs());
-        d.setAttempts(1);
-        d.setSucceeded(r.ok());
-        deliveryRepo.persist(d);
+    private boolean renewLease(Pending p) {
+        return QuarkusTransaction.requiringNew().call(() -> {
+            em.createNativeQuery(SET_SYSTEM_TENANT).executeUpdate();
+            return deliveryRepo.extendClaim(p.claim().deliveryId(), p.leasedUntil(), CLAIM_LEASE_SECONDS);
+        });
     }
 }

@@ -9,10 +9,12 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 
+import java.sql.Array;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -33,7 +35,8 @@ public class AppRegistrationStore {
      */
     public record Row(String name, String scope, String title, String icon,
                       String accentColor, String backgroundColor,
-                      @JsonProperty("default") boolean isDefault) {}
+                      @JsonProperty("default") boolean isDefault,
+                      List<String> tabs) {}
 
     /**
      * What {@link #upsert} was allowed to do. A sealed family rather than one record carrying a
@@ -109,7 +112,7 @@ public class AppRegistrationStore {
     }
 
     private static final String COLUMNS =
-        "name, scope, title, icon, accent_color, background_color, is_default";
+        "name, scope, title, icon, accent_color, background_color, is_default, tabs";
 
     @Inject
     @DataSource("admin")
@@ -148,7 +151,13 @@ public class AppRegistrationStore {
 
     private static Row read(ResultSet rs) throws SQLException {
         return new Row(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4),
-            rs.getString(5), rs.getString(6), rs.getBoolean(7));
+            rs.getString(5), rs.getString(6), rs.getBoolean(7), tabsOf(rs.getArray(8)));
+    }
+
+    /** NULL stays null (inherit); a list is read as written. */
+    private static List<String> tabsOf(Array a) throws SQLException {
+        return a == null ? null
+            : List.of((String[]) a.getArray());
     }
 
     /** Lowercased on read because {@link #upsert} lowercases on write — one row per name. */
@@ -299,12 +308,12 @@ public class AppRegistrationStore {
                 // the clause cannot fire, so it never interferes with the demote above.
                 try (PreparedStatement ps = c.prepareStatement(
                          "INSERT INTO connector.app_registration (" + COLUMNS + ", yaml_text) "
-                             + "VALUES (?,?,?,?,?,?,?,?) "
+                             + "VALUES (?,?,?,?,?,?,?,?,?) "
                              + "ON CONFLICT (name) DO UPDATE SET scope = EXCLUDED.scope, "
                              + "title = EXCLUDED.title, icon = EXCLUDED.icon, "
                              + "accent_color = EXCLUDED.accent_color, "
                              + "background_color = EXCLUDED.background_color, "
-                             + "is_default = EXCLUDED.is_default, "
+                             + "is_default = EXCLUDED.is_default, tabs = EXCLUDED.tabs, "
                              + "yaml_text = EXCLUDED.yaml_text, updated_at = now() "
                              + "WHERE (?::text[] IS NULL "
                              + "OR connector.app_registration.scope = ANY (?::text[])) "
@@ -317,8 +326,10 @@ public class AppRegistrationStore {
                     ps.setString(5, m.accentColor());
                     ps.setString(6, m.backgroundColor());
                     ps.setBoolean(7, m.isDefault());
-                    ps.setString(8, yaml);
-                    ScopeGuardedUpsert.bindGrants(ps, 9, callerScopes);
+                    if (m.tabs() == null) ps.setNull(8, Types.ARRAY);
+                    else ps.setArray(8, c.createArrayOf("text", m.tabs().toArray(new String[0])));
+                    ps.setString(9, yaml);
+                    ScopeGuardedUpsert.bindGrants(ps, 10, callerScopes);
                     // Zero rows used to be UNAMBIGUOUS here — one predicate, one reason — and the
                     // comment that stood in this place said so, and said no second read was needed.
                     // The floor clause made that false: zero rows now means the name was taken and

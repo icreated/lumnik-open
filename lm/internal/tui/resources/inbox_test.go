@@ -44,11 +44,11 @@ func TestInboxCells(t *testing.T) {
 
 func TestInboxToggleAllAndEmptyDescribe(t *testing.T) {
 	i := &Inbox{items: []client.InboxEntry{{ID: 1, Message: "x"}}}
-	if i.showAll {
+	if i.showAll.Load() {
 		t.Fatal("showAll must default to false (open decisions only)")
 	}
 	i.toggleAll()
-	if !i.showAll {
+	if !i.showAll.Load() {
 		t.Fatal("toggleAll must flip to true")
 	}
 	empty := &Inbox{}

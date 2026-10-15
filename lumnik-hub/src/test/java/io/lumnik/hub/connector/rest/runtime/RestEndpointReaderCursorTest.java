@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.runtime;
 
+import io.lumnik.hub.connector.runtime.OwnedRunScope;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
@@ -106,7 +107,7 @@ class RestEndpointReaderCursorTest {
 
     private ConnectorContext ctx(Map<String, Object> config) {
         return new ConnectorContext(RUN, CONNECTOR, ENDPOINT, 1L, "erp", "rest-generic",
-            config, new SyncMode.FullRefresh(), null, null, null, null, null);
+            config, new SyncMode.FullRefresh(), null, null, null, null, null, new OwnedRunScope("test"));
     }
 
     private ConnectorCursor cursorOf(String watermark, String emittedByRun) {

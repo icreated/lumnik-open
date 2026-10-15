@@ -2,7 +2,7 @@ package io.lumnik.hub.connector.jdbc;
 
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
-import io.lumnik.hub.connector.jdbc.dialect.PostgresDialect;
+import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.params.ParameterizedTest;

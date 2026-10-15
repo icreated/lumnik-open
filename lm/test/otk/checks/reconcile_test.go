@@ -8,21 +8,21 @@ import (
 )
 
 func TestReconcileCounts_balanced_isClean(t *testing.T) {
-	if f := ReconcileCounts(5, 3, 2, 2, 7); len(f) != 0 {
+	if f := ReconcileCounts(5, 3, 2, 2, testCaseID, 7); len(f) != 0 {
 		t.Fatalf("balanced should be clean, got %v", f)
 	}
 }
 
 func TestReconcileCounts_conservingWithSkips_isClean(t *testing.T) {
 	// 10 in, 7 out, 3 skipped (all benign — no dlq) -> conserves, no finding.
-	if f := ReconcileCounts(10, 7, 3, 0, 7); len(f) != 0 {
+	if f := ReconcileCounts(10, 7, 3, 0, testCaseID, 7); len(f) != 0 {
 		t.Fatalf("conserving with skips>0 should be clean, got %v", f)
 	}
 }
 
 func TestReconcileCounts_silentDrop_isHigh(t *testing.T) {
-	f := ReconcileCounts(5, 2, 2, 0, 7) // 5 in, only 2 out + 2 skipped = 4 accounted -> 1 vanished
-	if len(f) != 1 || f[0].Severity != oracle.High || f[0].Family != oracle.Atomicity || f[0].Seed != 7 {
+	f := ReconcileCounts(5, 2, 2, 0, testCaseID, 7) // 5 in, only 2 out + 2 skipped = 4 accounted -> 1 vanished
+	if len(f) != 1 || f[0].Severity != oracle.High || f[0].Family != oracle.Atomicity || f[0].Seed != 7 || f[0].CaseID != testCaseID {
 		t.Fatalf("want one HIGH atomicity finding (seed 7), got %v", f)
 	}
 	detail := f[0].Detail
@@ -34,7 +34,7 @@ func TestReconcileCounts_silentDrop_isHigh(t *testing.T) {
 }
 
 func TestReconcileCounts_phantom_isHigh(t *testing.T) {
-	f := ReconcileCounts(2, 3, 1, 0, 7) // 2 in, 3 out + 1 skipped = 4 accounted -> 2 phantom
+	f := ReconcileCounts(2, 3, 1, 0, testCaseID, 7) // 2 in, 3 out + 1 skipped = 4 accounted -> 2 phantom
 	if len(f) != 1 || f[0].Severity != oracle.High || f[0].Family != oracle.Atomicity || f[0].Seed != 7 {
 		t.Fatalf("want one HIGH atomicity finding (seed 7), got %v", f)
 	}
@@ -43,7 +43,7 @@ func TestReconcileCounts_phantom_isHigh(t *testing.T) {
 func TestReconcileCounts_dlqExceedsSkipped_isHigh1b(t *testing.T) {
 	// in==out+skipped holds (Law 1 clean), but dlq(3) > skipped(2): a DLQ row the
 	// skip counter never counted -> Law 1b violation.
-	f := ReconcileCounts(5, 3, 2, 3, 7)
+	f := ReconcileCounts(5, 3, 2, 3, testCaseID, 7)
 	if len(f) != 1 || f[0].Severity != oracle.High || f[0].Family != oracle.Atomicity || f[0].Seed != 7 {
 		t.Fatalf("want one HIGH atomicity finding (seed 7), got %v", f)
 	}
@@ -57,12 +57,12 @@ func TestReconcileCounts_bothLawsViolated_returnsBoth(t *testing.T) {
 	// dlq=3 > skipped=1 -> Law 1b also violated, independently.
 	// The two laws are independent invariants, not classification branches:
 	// both findings must be returned, not just the first one hit.
-	f := ReconcileCounts(5, 1, 1, 3, 7)
+	f := ReconcileCounts(5, 1, 1, 3, testCaseID, 7)
 	if len(f) != 2 {
 		t.Fatalf("want exactly 2 findings (Law 1 + Law 1b), got %d: %v", len(f), f)
 	}
 	for _, finding := range f {
-		if finding.Severity != oracle.High || finding.Family != oracle.Atomicity || finding.Seed != 7 {
+		if finding.Severity != oracle.High || finding.Family != oracle.Atomicity || finding.Seed != 7 || finding.CaseID != testCaseID {
 			t.Fatalf("want HIGH atomicity finding (seed 7), got %v", finding)
 		}
 	}
@@ -77,19 +77,19 @@ func TestReconcileCounts_bothLawsViolated_returnsBoth(t *testing.T) {
 
 func TestReconcileCounts_dlqEqualsSkipped_isClean(t *testing.T) {
 	// dlq==skipped is legal: every skip was DLQ'd, none benign.
-	if f := ReconcileCounts(5, 2, 3, 3, 7); len(f) != 0 {
+	if f := ReconcileCounts(5, 2, 3, 3, testCaseID, 7); len(f) != 0 {
 		t.Fatalf("dlq==skipped should be clean, got %v", f)
 	}
 }
 
 func TestReconcileLanded_match_isClean(t *testing.T) {
-	if f := ReconcileLanded(3, 3, 7); len(f) != 0 {
+	if f := ReconcileLanded(3, 3, testCaseID, 7); len(f) != 0 {
 		t.Fatalf("match should be clean, got %v", f)
 	}
 }
 
 func TestReconcileLanded_divergence_isHigh(t *testing.T) {
-	f := ReconcileLanded(3, 5, 7) // hub claims 3 written, DB holds 5
+	f := ReconcileLanded(3, 5, testCaseID, 7) // hub claims 3 written, DB holds 5
 	if len(f) != 1 || f[0].Severity != oracle.High || f[0].Family != oracle.Atomicity || f[0].Seed != 7 {
 		t.Fatalf("want one HIGH atomicity finding (seed 7), got %v", f)
 	}
@@ -108,13 +108,13 @@ func TestReconcile_authoritativeCountSurvivesTruncation(t *testing.T) {
 	const seed int64 = 42
 
 	// Run-record fields, all 250 dead-lettered, none benign — conservation holds.
-	if f := ReconcileCounts(250, 0, 250, 250, seed); len(f) != 0 {
+	if f := ReconcileCounts(250, 0, 250, 250, testCaseID, seed); len(f) != 0 {
 		t.Fatalf("authoritative path: 250 in / 0 out / 250 skipped / 250 dlq must be clean; got %v", f)
 	}
 
 	// An under-reported recordsSkipped (as if sourced from something other than
 	// the run record's own field) falsely signals 50 rows vanished → must be HIGH.
-	f := ReconcileCounts(250, 0, 200, 200, seed)
+	f := ReconcileCounts(250, 0, 200, 200, testCaseID, seed)
 	if len(f) != 1 {
 		t.Fatalf("truncated path: want exactly 1 finding; got %d: %v", len(f), f)
 	}

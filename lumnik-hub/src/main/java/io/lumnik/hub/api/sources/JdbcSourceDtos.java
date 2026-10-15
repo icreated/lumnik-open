@@ -25,6 +25,11 @@ public class JdbcSourceDtos {
     return schema == null || schema.isBlank() ? "public" : schema.strip();
   }
 
+  /**
+   * {@code skipPatterns}: <b>null</b> means the source dialect's own default exclusions; an <b>empty list</b>
+   * means exclude nothing; a non-empty list replaces the defaults. The CLI sends null unless
+   * {@code --skip-pattern} was given.
+   */
   public record DiscoverRequest(String url, String user, String password,
                                 String schema, List<String> skipPatterns, boolean includeViews) {
     public String schemaOrDefault() { return JdbcSourceDtos.schemaOrDefault(schema); }

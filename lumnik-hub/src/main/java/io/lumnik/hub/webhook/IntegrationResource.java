@@ -190,17 +190,22 @@ public class IntegrationResource {
     }
 
     @POST @Path("/{id}/deliveries/{did}/replay")
-    @Transactional
     public TestResponse replay(@PathParam("tid") Long tid, @PathParam("id") Long id,
                                @PathParam("did") Long did) {
         requireTenant(tid);
-        // A deleted integration receives nothing more, by any door.
-        WebhookEndpoint e = repo.findLiveForTenant(id, tid);
-        if (e == null) throw new NotFoundException("endpoint " + id + " not found");
-        WebhookDelivery d = deliveryRepo.findForTenant(did, tid);
-        if (d == null || !d.getEndpointId().equals(id)) throw new NotFoundException("delivery " + did + " not found");
+        // Read in a transaction of its own, for the same two reasons as /test above: the tenant's
+        // SET LOCAL binding needs one, and the send in replay() must not hold it.
+        record Found(WebhookEndpoint endpoint, WebhookDelivery delivery) {}
+        Found f = QuarkusTransaction.requiringNew().call(() -> {
+            // A deleted integration receives nothing more, by any door.
+            WebhookEndpoint e = repo.findLiveForTenant(id, tid);
+            if (e == null) throw new NotFoundException("endpoint " + id + " not found");
+            WebhookDelivery d = deliveryRepo.findForTenant(did, tid);
+            if (d == null || !d.getEndpointId().equals(id)) throw new NotFoundException("delivery " + did + " not found");
+            return new Found(e, d);
+        });
 
-        var r = replayService.replay(e, d);
+        var r = replayService.replay(f.endpoint(), f.delivery());
         return new TestResponse(r.ok(), r.httpStatus(), r.responseBody(), r.error(), r.durationMs());
     }
 

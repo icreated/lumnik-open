@@ -7,7 +7,6 @@ public final class ZeroRowGuard {
 
   private ZeroRowGuard() {}
 
-  public static final String CAVEAT =
-      "The query returned no rows. That can mean there are genuinely none, or that the query did not "
-      + "capture your question — verify the SQL before reporting that there are none.";
+  /** The English sentence; the one served follows the request's {@code lang} ({@link AskSentences#zeroRows}). */
+  public static final String CAVEAT = AskSentences.zeroRows(null);
 }

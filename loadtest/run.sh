@@ -50,4 +50,8 @@ docker run --rm -i \
   -e MAX_VUS="${MAX_VUS:-}" -e STAGE="${STAGE:-}" \
   -e P95_MS="${P95_MS:-}" -e THINK_MS="${THINK_MS:-}" \
   -e ONLY="${ONLY:-}" \
+  -e RATE="${RATE:-}" -e DURATION="${DURATION:-}" -e PHASE="${PHASE:-}" -e ENTITIES="${ENTITIES:-}" \
+  -e MIN_HIT_SHARE="${MIN_HIT_SHARE:-}" -e SUMMARY_OUT="${SUMMARY_OUT:-}" \
+  ${K6_DATA_DIR:+-v "$K6_DATA_DIR:/data:ro"} ${K6_OUT_DIR:+-v "$K6_OUT_DIR:/out"} \
+  ${K6_CONTAINER:+--name "$K6_CONTAINER"} \
   grafana/k6 run "/scripts/$SCRIPT"

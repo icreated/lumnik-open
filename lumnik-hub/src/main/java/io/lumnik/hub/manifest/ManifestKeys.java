@@ -82,4 +82,25 @@ public final class ManifestKeys {
             throw new IllegalArgumentException(path + " is required");
         return value;
     }
+
+    /**
+     * {@link #requiredText}, strict: a present node that is not a string ({@code name: 123},
+     * {@code mode: [snapshot]}) is refused instead of being coerced through Jackson's {@code asText()}.
+     * For the kinds that promise strict validation — kind:Export and kind:SearchIndex.
+     */
+    public static String strictRequiredText(JsonNode node, String field, String path) {
+        JsonNode v = node.path(field);
+        if (!v.isMissingNode() && !v.isNull() && !v.isTextual())
+            throw new IllegalArgumentException(path + " must be a string");
+        return requiredText(node, field, path);
+    }
+
+    /** {@link #strictRequiredText}, but {@code null} when the field is genuinely absent. */
+    public static String strictText(JsonNode node, String field, String path) {
+        JsonNode v = node.path(field);
+        if (v.isMissingNode() || v.isNull()) return null;
+        if (!v.isTextual())
+            throw new IllegalArgumentException(path + " must be a string");
+        return v.asText();
+    }
 }

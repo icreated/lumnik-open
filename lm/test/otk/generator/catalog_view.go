@@ -140,14 +140,16 @@ type ViewScenario struct {
 	SafeRows       bool
 }
 
-// ViewVariantByName returns the view variant fields for the given name.
-func ViewVariantByName(name string) (manifest, filter string, crossTenant, wrongRole bool, expectedStatus int, safeRows, found bool) {
+// ViewVariantByName returns the view variant fields for the given name, including
+// its catalogue CaseID (see ProcessApplyManifest for why this cannot be recovered
+// by the caller itself).
+func ViewVariantByName(name string) (manifest, filter string, crossTenant, wrongRole bool, expectedStatus int, safeRows bool, caseID CaseID, found bool) {
 	for _, v := range viewVariants() {
 		if v.name == name {
-			return v.manifestYAML, v.filter, v.crossTenant, v.wrongRole, v.expectedStatus, v.safeRows, true
+			return v.manifestYAML, v.filter, v.crossTenant, v.wrongRole, v.expectedStatus, v.safeRows, viewCaseID(v.name), true
 		}
 	}
-	return "", "", false, false, 0, false, false
+	return "", "", false, false, 0, false, "", false
 }
 
 // GenerateView generates an adversarial view-lane scenario for the given seed.

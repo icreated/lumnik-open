@@ -29,6 +29,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -218,6 +219,9 @@ class RagWriterBatchTest {
     rag.renderer = new ChunkTemplateRenderer();
     rag.embeddings = embeddings;
     rag.em = store.em;
+    rag.probeTx = probe -> {
+      try { return probe.call(); } catch (Exception e) { throw new RuntimeException(e); }
+    };
 
     MultiTargetWriter mtw = new MultiTargetWriter();
     mtw.ragWriter = rag;
@@ -324,6 +328,7 @@ class RagWriterBatchTest {
   void metadata_shape_module_and_tags_are_preserved() {
     // The metadata JSON keeps spec keys + row_hash + tenant_id (in that order — LinkedHashMap),
     // module comes from _mapping, tags stay a real text[] — byte-identical to the per-row path.
+    // ref and metadata.row_hash carry the same hash: the dedup probe matches on ref (rag V6).
     List<Map<String, Object>> rows = List.of(Map.of("name", "alice"));
     String hash = hasher.hash(rows.get(0));
 
@@ -414,5 +419,46 @@ class RagWriterBatchTest {
     writer.write(RAG_ONLY, chunk2Rows, 1L, UUID.randomUUID(), "m1", 1, "src", UUID.randomUUID(),
         List.of("t1"), Map.of(), prepared2);
     assertThat(store.insertedHashes()).containsExactly(hash2);
+  }
+
+  // ------------------------------------------------------- probe before embedding (#953)
+
+  /** A re-read row costs no embedding call: the store already holds it, so prepare skips it. */
+  @Test
+  void prepare_does_not_embed_rows_the_store_already_holds() {
+    List<Map<String, Object>> rows = distinctRows(5);
+    for (int i = 0; i < 3; i++) store.existingHashes.add(hasher.hash(rows.get(i)));
+
+    Map<String, float[]> prepared = writer.prepare(RAG_ONLY, rows, 1L, UUID.randomUUID(), "m1", 1, "src");
+
+    assertThat(port.totalTextsSeen()).isEqualTo(2);
+    assertThat(prepared).containsOnlyKeys(hasher.hash(rows.get(3)), hasher.hash(rows.get(4)));
+  }
+
+  /** The measurement from the ticket: a re-run over N unchanged rows makes no embedding call at all. */
+  @Test
+  void a_full_re_read_makes_no_embedding_call() {
+    List<Map<String, Object>> rows = distinctRows(10);
+    rows.forEach(r -> store.existingHashes.add(hasher.hash(r)));
+    UUID runId = UUID.randomUUID();
+
+    Map<String, float[]> prepared = writer.prepare(RAG_ONLY, rows, 1L, runId, "m1", 1, "src");
+    writer.write(RAG_ONLY, rows, 1L, runId, "m1", 1, "src", UUID.randomUUID(), List.of("t1"),
+        Map.of(), prepared);
+
+    assertThat(port.calls).isEmpty();
+    assertThat(store.insertedHashes()).isEmpty();
+  }
+
+  /** The probe in prepare is an optimisation, never a gate: if it fails, every row is embedded as before. */
+  @Test
+  void a_failing_probe_in_prepare_falls_back_to_embedding_every_row() {
+    List<Map<String, Object>> rows = distinctRows(4);
+    doThrow(new RuntimeException("db down")).when(store.em).runWithConnection(any());
+
+    Map<String, float[]> prepared = writer.prepare(RAG_ONLY, rows, 1L, UUID.randomUUID(), "m1", 1, "src");
+
+    assertThat(port.totalTextsSeen()).isEqualTo(4);
+    assertThat(prepared).hasSize(4);
   }
 }

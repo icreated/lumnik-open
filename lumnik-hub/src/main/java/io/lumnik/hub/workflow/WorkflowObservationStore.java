@@ -29,7 +29,21 @@ public class WorkflowObservationStore {
     AgroalDataSource adminDs;
 
     public record Observation(String docKey, String state, Instant since,
-                              Instant firstObservedAt, Instant alertedAt) {}
+                              Instant firstObservedAt, Instant alertedAt) {
+        /** The ledger columns {@link #fromRow} reads, each behind {@code prefix} (a table alias with its dot, or ""). */
+        static String columns(String prefix) {
+            return prefix + "doc_key, " + prefix + "state, " + prefix + "since, "
+                + prefix + "first_observed_at, " + prefix + "alerted_at";
+        }
+
+        /** Reads what {@link #columns} selected, in that order, starting at column {@code first}. */
+        static Observation fromRow(ResultSet rs, int first) throws SQLException {
+            Timestamp alerted = rs.getTimestamp(first + 4);
+            return new Observation(rs.getString(first), rs.getString(first + 1),
+                rs.getTimestamp(first + 2).toInstant(), rs.getTimestamp(first + 3).toInstant(),
+                alerted == null ? null : alerted.toInstant());
+        }
+    }
 
     /** One tape row for the read surface — the flattened, cross-workflow view. */
     public record ObservationRow(String workflow, String docKey, String state,
@@ -68,7 +82,7 @@ public class WorkflowObservationStore {
     }
 
     /** The tape, flattened across workflows: tenant-bound, stillest first, bounded in SQL.
-     *  {@code loadAll} keeps its per-workflow map shape for the sweep; this is the read path. */
+     *  This is the read path. */
     public List<ObservationRow> listAll(long tenantId, int limit) {
         String sql = "SELECT workflow_name, doc_key, state, since, first_observed_at, alerted_at "
             + "FROM core.workflow_observation WHERE tenant_id = ? "
@@ -90,18 +104,17 @@ public class WorkflowObservationStore {
         return out;
     }
 
+    /** The whole ledger of one workflow as a map: for tests and small reads — the sweep streams it (#905). */
     public Map<String, Observation> loadAll(long tenantId, String workflow) {
-        String sql = "SELECT doc_key, state, since, first_observed_at, alerted_at "
-            + "FROM core.workflow_observation WHERE tenant_id = ? AND workflow_name = ?";
+        String sql = "SELECT " + Observation.columns("")
+            + " FROM core.workflow_observation WHERE tenant_id = ? AND workflow_name = ?";
         Map<String, Observation> out = new HashMap<>();
         try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setLong(1, tenantId);
             ps.setString(2, workflow);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    out.put(rs.getString(1), new Observation(rs.getString(1), rs.getString(2),
-                        rs.getTimestamp(3).toInstant(), rs.getTimestamp(4).toInstant(),
-                        rs.getTimestamp(5) == null ? null : rs.getTimestamp(5).toInstant()));
+                    out.put(rs.getString(1), Observation.fromRow(rs, 1));
                 }
             }
         } catch (Exception e) {

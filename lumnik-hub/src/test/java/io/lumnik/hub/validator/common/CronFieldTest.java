@@ -45,4 +45,14 @@ class CronFieldTest {
         Optional<String> err = CronField.validCron("not a cron");
         assertTrue(err.isPresent());
     }
+
+    /** parse() and validCron() agree: DueRule executes exactly what the apply door accepted. */
+    @Test void parse_agreesWithValidCron() {
+        for (String expr : new String[] {"0 6 * * *", "*/15 * * * *", "0 4 1 1 *",
+                                         "not a cron", "61 * * * *", "0 25 * * *", "* * * * * *"}) {
+            boolean accepted = CronField.validCron(expr).isEmpty();
+            if (accepted) assertNotNull(CronField.parse(expr), expr);
+            else assertThrows(IllegalArgumentException.class, () -> CronField.parse(expr), expr);
+        }
+    }
 }

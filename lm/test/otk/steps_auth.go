@@ -41,12 +41,17 @@ var defectMap = map[string]struct {
 }
 
 func (s *scenarioState) authProbe(seed int64) (retErr error) {
+	sc := generator.GenerateAuth(seed)
+	// Recorded on its own field, not s.scen: the cross-tenant defect below seeds its
+	// baseline via givenRunForSeed/whenApply, which overwrite s.scen/s.runScen as a
+	// side effect of creating the baseline connector — that must never be mistaken
+	// for this scenario's own case identity.
+	s.authCaseID = sc.CaseID
 	if otkKey == nil {
 		// Dormant under dev-mode: the auth lane needs a real-auth hub (OTK_OIDC_ISSUER).
-		fmt.Printf("  OTK auth lane DORMANT (seed=%d): set OTK_OIDC_ISSUER + boot %%otkauth\n", seed)
+		recordDormant(sc.CaseID, fmt.Sprintf("set OTK_OIDC_ISSUER + boot %%otkauth (seed=%d)", seed))
 		return nil
 	}
-	sc := generator.GenerateAuth(seed)
 	m, ok := defectMap[sc.DefectName]
 	if !ok {
 		return fmt.Errorf("auth lane: unknown defect %q (seed=%d)", sc.DefectName, seed)
@@ -84,9 +89,20 @@ func (s *scenarioState) authProbe(seed int64) (retErr error) {
 		return fmt.Errorf("auth lane: hub unreachable: %s", body)
 	}
 
-	s.findings = append(s.findings, checks.AuthOutcome(status, body, m.expect, sc.DefectName, seed)...)
+	s.findings = append(s.findings, checks.AuthOutcome(status, body, m.expect, sc.DefectName, sc.CaseID, seed)...)
 	if m.expect == checks.EmptyResult {
-		s.findings = append(s.findings, checks.CrossTenantLeak(body, foreignName, seed)...)
+		s.findings = append(s.findings, checks.CrossTenantLeak(body, foreignName, sc.CaseID, seed)...)
+		// RLSIsolation is the DB-truth analog of CrossTenantLeak above: same posture as
+		// probeApplyOutcome's Divergence call in steps_apply.go — additive, gated
+		// silently on OTK_DB_DSN being live, no separate dormancy entry, because this
+		// scenario's base assertions already ran and were graded regardless.
+		n, live, perr := crossTenantVisibleRows(os.Getenv("OTK_DB_DSN"), auth.ForeignTenantID, otkTenant)
+		if perr != nil {
+			return fmt.Errorf("auth lane: cross-tenant RLS probe: %w", perr)
+		}
+		if live {
+			s.findings = append(s.findings, checks.RLSIsolation(n, sc.CaseID, seed)...)
+		}
 	}
 	return nil
 }

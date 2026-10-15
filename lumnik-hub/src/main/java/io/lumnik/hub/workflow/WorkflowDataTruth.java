@@ -50,6 +50,12 @@ public class WorkflowDataTruth {
      * @param nullOrBlank rows whose status value is NULL or blank — their own bucket, never
      *        folded into silence: a column that is NULL on 90% of its rows must not report an
      *        empty {@code undeclared} that reads as "the data agrees with the manifest".
+     * @param keyNullOrBlank rows whose {@code spec.on.key} is NULL or blank — the exact documents the
+     *        dormancy sweep skips, for good. Counted independently of the status: a row with neither
+     *        belongs to both diagnostics, so this and {@code nullOrBlank} are not buckets to add up.
+     *        {@code null} means "not measured" (no key declared, key column or table missing, probe
+     *        unavailable); {@code 0} only ever means a valid measure found no such row. Presence only:
+     *        a key that is there may still be neither unique nor stable.
      * @param tableMissing the trigger table does not exist (yet, or anymore) — declaring before
      *        ingesting is a valid order of operations.
      * @param keyColumnMissing {@code spec.on.key} names a column the table does not have. Same
@@ -63,7 +69,7 @@ public class WorkflowDataTruth {
      *        "the data agrees": the other fields of a degraded report are empty by ignorance.
      */
     public record Report(List<ValueCount> undeclared, List<String> unobserved, long nullOrBlank,
-                         boolean tableMissing, boolean keyColumnMissing,
+                         boolean tableMissing, boolean keyColumnMissing, Long keyNullOrBlank,
                          boolean checkUnavailable, String unavailableReason) {}
 
     /**
@@ -84,7 +90,8 @@ public class WorkflowDataTruth {
     }
 
     /** What the data said: value counts, blanks, and whether the declared key column is even there. */
-    private record Observed(Map<String, Long> seen, long nullOrBlank, boolean keyColumnMissing) {}
+    private record Observed(Map<String, Long> seen, long nullOrBlank, boolean keyColumnMissing,
+                            Long keyNullOrBlank) {}
 
     /** Every value the manifest accepts for this column — a state code or one of its aliases. */
     private static Set<String> declaredValues(WorkflowGraph g) {
@@ -112,7 +119,9 @@ public class WorkflowDataTruth {
                     else seen.put(v, rs.getLong(2));
                 }
             }
-            return new Observed(seen, nullOrBlank, g.key() != null && !hasColumn(c, g.table(), g.key()));
+            boolean keyMissing = g.key() != null && !hasColumn(c, g.table(), g.key());
+            Long keyNullOrBlank = g.key() == null || keyMissing ? null : countUnusableKeys(c, g);
+            return new Observed(seen, nullOrBlank, keyMissing, keyNullOrBlank);
         }
     }
 
@@ -124,11 +133,11 @@ public class WorkflowDataTruth {
      */
     private static Report degraded(long tenantId, WorkflowGraph g, SQLException e) {
         if (UNDEFINED_TABLE.equals(e.getSQLState())) {
-            return new Report(List.of(), List.of(), 0L, true, false, false, null);
+            return new Report(List.of(), List.of(), 0L, true, false, null, false, null);
         }
         LOG.warnf(e, "workflow data-truth check unavailable for tenant %d, workflow %s "
             + "(%s.%s, SQLSTATE %s)", tenantId, g.name(), g.table(), g.column(), e.getSQLState());
-        return new Report(List.of(), List.of(), 0L, false, false, true,
+        return new Report(List.of(), List.of(), 0L, false, false, null, true,
             "SQLSTATE " + e.getSQLState() + ": " + e.getMessage());
     }
 
@@ -148,7 +157,18 @@ public class WorkflowDataTruth {
             if (!seen) unobserved.add(s.code());
         }
         return new Report(List.copyOf(undeclared), List.copyOf(unobserved), observed.nullOrBlank(),
-            false, observed.keyColumnMissing(), false, null);
+            false, observed.keyColumnMissing(), observed.keyNullOrBlank(), false, null);
+    }
+
+    /** The sweep's own predicate, negated: its {@code key IS NOT NULL AND btrim(key::text) <> ''}. */
+    private static long countUnusableKeys(Connection c, WorkflowGraph g) throws SQLException {
+        String key = quoteIdent(g.key());
+        String sql = "SELECT COUNT(*) FROM " + quoteTable(g.table())
+            + " WHERE " + key + " IS NULL OR btrim(" + key + "::text) = ''";
+        try (PreparedStatement ps = c.prepareStatement(sql); ResultSet rs = ps.executeQuery()) {
+            rs.next();
+            return rs.getLong(1);
+        }
     }
 
     /**

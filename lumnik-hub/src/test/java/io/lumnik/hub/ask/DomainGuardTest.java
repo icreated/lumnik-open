@@ -31,6 +31,11 @@ class DomainGuardTest {
   }
 
   @Test
+  void a_pattern_match_is_not_an_equality_so_no_domain_applies() {
+    assertThat(guard.check("SELECT 1 FROM connector.v_customer WHERE segment ILIKE '%plat%'", cardWithSegment())).isEmpty();
+  }
+
+  @Test
   void message_escapes_a_quote_in_the_value() {
     DomainGuard.Violation v = new DomainGuard.Violation("segment", "O'X", List.of("GOLD"));
     assertThat(v.message()).contains("'O''X'"); // SQL-style escaped — unambiguous, copy-pasteable

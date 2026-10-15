@@ -284,6 +284,17 @@ public class CsvFileConnectorType implements ConnectorType {
 
   // -----------------------------------------------------------------------
 
+  /** What the run's scope keys the folder listing by: one pattern, one listing. */
+  record LocalListingKey(String pathPattern) {}
+
+  /** The folder as the run's first chunk found it. Holds no resource; the scope only keeps {@code AutoCloseable}s. */
+  record LocalListing(List<Path> files) implements AutoCloseable {
+    @Override
+    public void close() {
+      // nothing to release
+    }
+  }
+
   /**
    * Glob + row-based cursor reader.
    *
@@ -300,7 +311,8 @@ public class CsvFileConnectorType implements ConnectorType {
    *
    * <p>Algorithm per {@code read()} call:
    * <ol>
-   *   <li>Resolve glob → sorted file list (cached after first call).</li>
+   *   <li>Take the sorted file list from the run's scope: the glob is listed once, at the first chunk
+   *       of the run, and every later chunk reads that same list.</li>
    *   <li>Decode cursor → current file path + events already consumed.</li>
    *   <li>Locate current file index in the list (start at 0 if cursor empty).</li>
    *   <li>Stream the file from the already-consumed position, filling the chunk with good rows and
@@ -350,7 +362,7 @@ public class CsvFileConnectorType implements ConnectorType {
      */
     @Override
     public ReadResult<Map<String, Object>> read(int chunkSize, ConnectorCursor cursor, ConnectorContext ctx) {
-      ensureResolved();
+      resolveFiles(ctx);
       if (resolvedFiles.isEmpty()) return new ReadResult.EndOfStream<>(List.of());
 
       CsvCursor start = cursor.isEmpty()
@@ -358,21 +370,41 @@ public class CsvFileConnectorType implements ConnectorType {
           : decodeCursor(cursor);
 
       int fileIndex = indexOfFile(start.file());
-      // The cursor names a file this run no longer resolves — it was archived, moved or deleted
-      // between runs. Nothing left to read from here.
-      if (fileIndex < 0) return new ReadResult.EndOfStream<>(List.of());
+      if (fileIndex < 0) {
+        fileIndex = firstFileAfterGone(start);
+        if (fileIndex < 0) return new ReadResult.EndOfStream<>(List.of());
+        start = new CsvCursor(resolvedFiles.get(fileIndex).toString(), 0L);
+      } else if (start.fullyRead()) {
+        // The run that wrote this cursor read the file to its end. Unchanged bytes: nothing to
+        // read, go on with the next file. Anything else (replaced in place, grown, unreadable):
+        // read it again in full — the table deduplicates, and a replaced file must not be
+        // resumed at a row count that belonged to its previous content.
+        FileDescriptor now = describe(resolvedFiles.get(fileIndex));
+        if (start.version() != null && start.version().matches(now)) {
+          if (++fileIndex >= resolvedFiles.size()) return new ReadResult.EndOfStream<>(List.of());
+          start = new CsvCursor(resolvedFiles.get(fileIndex).toString(), 0L);
+        } else {
+          start = new CsvCursor(start.file(), 0L);
+        }
+      }
 
       List<Map<String, Object>> chunk = new ArrayList<>(chunkSize);
       Walk walk = fillChunk(chunk, chunkSize, fileIndex, start);
 
       if (walk.fileIndex() >= resolvedFiles.size()) {
-        return new ReadResult.EndOfStream<>(chunk);
+        // The list is read to its end. The run ends here, so it hands over the finished position
+        // itself: without it the stored cursor stays on the last file mid-way, and archiving that
+        // file would lose its place. A read that found nothing new leaves the stored one alone.
+        if (chunk.isEmpty() && malformedBuffer.isEmpty()) return new ReadResult.EndOfStream<>(chunk);
+        return new ReadResult.EndOfStream<>(chunk,
+            wrap(CsvCursor.finished(walk.file(), walk.consumed(),
+                walk.lastStat() == null ? null : CsvCursor.Version.of(walk.lastStat()))));
       }
       return new ReadResult.HasMore<>(chunk, encodeCursor(walk.file(), walk.consumed(), walk.last()));
     }
 
     /** Where the walk stopped: the file it is on, how much of it is consumed, and its last window. */
-    private record Walk(int fileIndex, String file, long consumed, WindowOutcome last) {}
+    private record Walk(int fileIndex, String file, long consumed, WindowOutcome last, FileDescriptor lastStat) {}
 
     /**
      * Walks files from {@code fileIndex}, one window at a time, until the chunk is full or the files
@@ -383,26 +415,37 @@ public class CsvFileConnectorType implements ConnectorType {
       String currentFile = start.file();
       long recordsConsumed = start.rowsProcessed();   // events consumed (good + malformed)
       WindowOutcome last = null;
+      FileDescriptor lastStat = null;   // taken BEFORE the file is read: a change during the read shows next run
 
       while (chunk.size() < chunkSize && fileIndex < resolvedFiles.size()) {
         Path file = resolvedFiles.get(fileIndex);
+        lastStat = describe(file);
         boolean isCursorFile = file.toString().equals(currentFile);
         long skip = isCursorFile ? recordsConsumed : 0L;
 
+        // The cursor's checkpoint belongs to the cursor's own file: a later file of the walk starts
+        // from byte 0 even when its size and modification time happen to equal the cursor file's.
+        boolean startsFromCursor = file.toString().equals(start.file());
         last = readOneWindow(file, skip, chunkSize - chunk.size(), chunk,
-            isCursorFile ? start : null);
+            startsFromCursor ? start : null);
 
         if (last.exhausted()) {
           fileIndex++;
-          currentFile = fileIndex < resolvedFiles.size() ? resolvedFiles.get(fileIndex).toString() : "";
-          recordsConsumed = 0;
+          if (fileIndex < resolvedFiles.size()) {
+            currentFile = resolvedFiles.get(fileIndex).toString();
+            recordsConsumed = 0;
+          } else {
+            // the list is done: the walk reports the last file and its row count
+            currentFile = file.toString();
+            recordsConsumed = skip + last.consumed();
+          }
         } else {
           currentFile = file.toString();
           recordsConsumed = skip + last.consumed();
           break;
         }
       }
-      return new Walk(fileIndex, currentFile, recordsConsumed, last);
+      return new Walk(fileIndex, currentFile, recordsConsumed, last, lastStat);
     }
 
     /**
@@ -548,14 +591,41 @@ public class CsvFileConnectorType implements ConnectorType {
       }
     }
 
-    /** Resolve the glob to a sorted file list on first use; cached for the reader's lifetime. */
-    private void ensureResolved() {
-      if (resolvedFiles != null) return;
+    /**
+     * The sorted file list of this run: listed on the first ask, then held by the run's scope. A file that
+     * appears afterwards waits for the next run; one that disappears fails the read that reaches it.
+     */
+    private void resolveFiles(ConnectorContext ctx) {
+      resolvedFiles = ctx.scope().resource(new LocalListingKey(pathPattern), () -> listing(pathPattern)).files();
+    }
+
+    /** A Supplier cannot throw a checked exception: the failure travels as it always has, unchecked. */
+    private static LocalListing listing(String pathPattern) {
       try {
-        resolvedFiles = CsvGlobResolver.resolve(pathPattern);
+        return new LocalListing(List.copyOf(CsvGlobResolver.resolve(pathPattern)));
       } catch (IOException e) {
         throw new RuntimeException("Failed to resolve path pattern: " + pathPattern, e);
       }
+    }
+
+    /**
+     * The cursor names a file this run no longer resolves: archived, moved or deleted between
+     * runs. Returns the index of the first file sorting after it, or -1 when none does (it was the
+     * last file, the run is done). A finished cursor knows its file was read in full, so the run
+     * goes on there. Any other cursor cannot tell whether the file was fully read, so with files
+     * waiting after it the reader refuses rather than guess: ending quietly would leave those
+     * files unread for ever, resuming would skip the unread rest of the gone file.
+     */
+    private int firstFileAfterGone(CsvCursor cursor) {
+      Path gone = Path.of(cursor.file());
+      int first = -1;
+      for (int i = 0; i < resolvedFiles.size() && first < 0; i++) {
+        if (resolvedFiles.get(i).compareTo(gone) > 0) first = i;
+      }
+      if (first < 0 || cursor.fullyRead()) return first;
+      throw new IllegalStateException("The cursor's file " + cursor.file() + " is gone, but files sorting after it"
+          + " are waiting. Reset the endpoint's cursor to read again from the first file"
+          + " (lm endpoint reset-cursor <connector>/<endpoint>).");
     }
 
     private int indexOfFile(String filePath) {
@@ -591,6 +661,10 @@ public class CsvFileConnectorType implements ConnectorType {
           ? new CsvCursor(file, rowsProcessed, last.anchorByte(), last.charDelta(),
               last.lineBase(), last.headers(), last.version())
           : new CsvCursor(file, rowsProcessed);
+      return wrap(out);
+    }
+
+    private ConnectorCursor wrap(CsvCursor out) {
       ObjectNode n = (ObjectNode) M.valueToTree(out);
       n.put("type", "CsvFile");
       return new ConnectorCursor(n, Instant.now());

@@ -2,6 +2,7 @@ package io.lumnik.hub.ask;
 
 import io.lumnik.hub.connector.jdbc.HikariPoolRegistry;
 import io.lumnik.hub.connector.jdbc.JdbcConnectionConfig;
+import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.extraction.spi.ask.SchemaLabelProvider;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -29,6 +30,7 @@ public class AdLabelProvider implements SchemaLabelProvider {
     private static final Logger LOG = Logger.getLogger(AdLabelProvider.class);
 
     @Inject HikariPoolRegistry poolRegistry;
+    @Inject JdbcDialectRegistry dialectRegistry;
 
     @Override public String sourceType() { return "jdbc-ad"; }
 
@@ -42,7 +44,7 @@ public class AdLabelProvider implements SchemaLabelProvider {
         Map<String,String> out = new LinkedHashMap<>();
         final JdbcConnectionConfig cc;
         try {
-            cc = JdbcConnectionConfig.parse(url, user, password);
+            cc = JdbcConnectionConfig.parse(url, user, password, dialectRegistry);
         } catch (RuntimeException e) {
             LOG.debugf("AdLabelProvider: bad JDBC config: %s", e.getMessage());
             return out;
@@ -55,7 +57,8 @@ public class AdLabelProvider implements SchemaLabelProvider {
             "LEFT JOIN ad_element e ON e.ad_element_id = c.ad_element_id " +
             "WHERE lower(t.tablename) = lower(?)";
         try {
-            DataSource ds = poolRegistry.acquire(cc.url(), cc.user(), cc.password(), -1L);
+            DataSource ds = poolRegistry.acquire(cc.url(), cc.user(), cc.password(), -1L,
+                dialectRegistry.resolve(cc.dialectId()));
             try (Connection conn = ds.getConnection();
                  PreparedStatement ps = conn.prepareStatement(sql)) {
                 ps.setQueryTimeout(5);

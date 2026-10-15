@@ -2,11 +2,13 @@ package io.lumnik.hub.api.run;
 
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.connector.domain.ConnectorRun;
+import io.lumnik.hub.connector.domain.ConnectorRunStatus;
 import io.lumnik.hub.connector.repository.ConnectorDeadLetterRepository;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.repository.ConnectorRunRepository;
 import io.lumnik.hub.connector.runtime.ConnectorEngine;
+import io.lumnik.hub.connector.runtime.ConnectorRunDispatcher;
 import io.lumnik.hub.tenant.TenantContextFilter;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -34,6 +36,7 @@ public class RunAdminResource {
   @Inject ConnectorRepository connectors;
   @Inject ConnectorEndpointRepository endpoints;
   @Inject ConnectorEngine engine;
+  @Inject ConnectorRunDispatcher dispatcher;
 
   @GET
   @Transactional
@@ -47,7 +50,7 @@ public class RunAdminResource {
     // a quiet connector came back as an empty table, read as "this connector never ran".
     // ?endpoint= is the finer half of the same address: a connector fans out and writes one row per
     // endpoint, so ?connector= cannot answer "this table's runs" — which is what a drill-down asks.
-    var page = repo.findRecent(filterId(connectorId), filterId(endpointId), capped);
+    var page = repo.findRecent(TenantContextFilter.current(), filterId(connectorId), filterId(endpointId), capped);
     var names = connectors.namesById(page.stream().map(ConnectorRun::getConnectorId).distinct().toList());
     // One more projection, one more query: without it a connector that fans out over several
     // endpoints writes rows this ledger cannot tell apart. A run with no endpoint contributes no
@@ -56,9 +59,10 @@ public class RunAdminResource {
     // rather than answering null.
     var endpointNames = endpoints.namesById(
         page.stream().map(ConnectorRun::getEndpointId).filter(Objects::nonNull).distinct().toList());
-    // deadLetterCount is a per-run COUNT (N+1, bounded by the capped page size) — fine at admin scale
+    // One grouped COUNT for the whole page: it used to be one per run, up to 200 on each refresh (#892).
+    var deadLetters = dlq.countByRuns(page.stream().map(ConnectorRun::getId).toList());
     return page.stream()
-        .map(r -> RunAdminDto.from(r, dlq.countByRun(r.getId()), names.get(r.getConnectorId()),
+        .map(r -> RunAdminDto.from(r, deadLetters.get(r.getId()), names.get(r.getConnectorId()),
             r.getEndpointId() == null ? null : endpointNames.get(r.getEndpointId())))
         .toList();
   }
@@ -109,7 +113,24 @@ public class RunAdminResource {
     var r = repo.findByIdForTenant(id, TenantContextFilter.current());
     if (r == null) return ApiErrors.notFound("run " + id + " not found");
 
-    if (!"Running".equals(r.getStatus())) {
+    // A queued run belongs to no worker: it is ended here, not cancelled cooperatively (#952).
+    if (ConnectorRunStatus.QUEUED.sqlValue().equals(r.getStatus())) {
+      var outcome = dispatcher.cancelQueued(id, TenantContextFilter.current());
+      if (outcome == ConnectorRunDispatcher.QueuedCancel.CANCELLED) {
+        return Response.status(202).type(MediaType.APPLICATION_JSON)
+            .entity(Map.of("status", "cancelled", "runId", id.toString())).build();
+      }
+      if (outcome == ConnectorRunDispatcher.QueuedCancel.BUSY) {
+        return Response.status(409).type(MediaType.APPLICATION_JSON)
+            .entity(ApiErrors.error("run " + id + " is being started; try again in a moment")).build();
+      }
+      // It started or ended while the cancel waited: read what it is now and go on as for any other run.
+      repo.getEntityManager().clear();
+      r = repo.findByIdForTenant(id, TenantContextFilter.current());
+      if (r == null) return ApiErrors.notFound("run " + id + " not found");
+    }
+
+    if (!ConnectorRunStatus.isRunning(r.getStatus())) {
       return Response.status(409).type(MediaType.APPLICATION_JSON)
           .entity(ApiErrors.error("run " + id + " already ended (" + r.getStatus() + ")")).build();
     }
@@ -127,7 +148,7 @@ public class RunAdminResource {
       // names the real cause instead of mislabeling it.
       repo.getEntityManager().clear();
       var after = repo.findByIdForTenant(id, TenantContextFilter.current());
-      if (after != null && !"Running".equals(after.getStatus())) {
+      if (after != null && !ConnectorRunStatus.isRunning(after.getStatus())) {
         return Response.status(409).type(MediaType.APPLICATION_JSON)
             .entity(ApiErrors.error("run " + id + " already ended (" + after.getStatus() + ")")).build();
       }

@@ -343,12 +343,14 @@ The promoted columns are the four in the middle — `name`, `city`, `credit_limi
 
 - `unique_key` from the manifest becomes `external_id`; `UNIQUE (tenant_id, external_id)` plus
   `ON CONFLICT DO UPDATE` is what makes a re-run idempotent.
-- **A re-run rewrites every row it reads.** `OUT` counts them and `SKIPPED` stays `0` — this
-  family has no skip-on-unchanged step, so the witness that nothing duplicated is the table's
-  row count, not the skip column.
+- **A re-run rewrites only the rows that changed.** A row whose `row_hash` and promoted values
+  came back identical is left as it is, and its `indexed_at` keeps the time it last changed. `OUT`
+  still counts every row read and `SKIPPED` stays `0`, so the witness that nothing duplicated is
+  the table's row count, not the skip column.
 - `data` holds the whole payload, indexed with a GIN index for JSONB path queries.
-- `row_hash` is lineage rather than a gate: the same hash keys the RAG side's chunk dedup, so a
-  row that came back unchanged is not embedded a second time.
+- `row_hash` is the payload's hash: it decides whether a row read again has changed, and the same
+  hash keys the RAG side's chunk dedup, so a row that came back unchanged is not embedded a
+  second time.
 - The row-level security policy is what keeps one tenant's rows invisible to another.
 
 Adding a `promote` entry later and re-applying makes the next run do `ALTER TABLE ADD COLUMN`;

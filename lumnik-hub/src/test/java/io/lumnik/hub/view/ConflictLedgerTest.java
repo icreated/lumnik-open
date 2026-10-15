@@ -1,7 +1,9 @@
 package io.lumnik.hub.view;
 
-import org.junit.jupiter.api.Test;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
+import org.junit.jupiter.api.Test;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ConflictLedgerTest {
@@ -38,5 +40,17 @@ class ConflictLedgerTest {
         List<ConflictLedger.Conflict> conflicts = ConflictLedger.parse(json, rv);
         assertThat(conflicts).hasSize(1);
         assertThat(conflicts.get(0).label()).isEqualTo("phone");  // fallback: its own name
+    }
+
+    @Test
+    void anExplicitNullValueSurvivesParsingAndSerializationAndIsNotTheEmptyString() throws Exception {
+        // #846: a lookup ambiguity lists one element per duplicate row, and a row may have no value.
+        String json = "{\"name\": [{\"src\":\"t_c\",\"value\":null},{\"src\":\"t_c\",\"value\":\"\"}]}";
+        List<ConflictLedger.Conflict> conflicts = ConflictLedger.parse(json, rv);
+
+        assertThat(conflicts.get(0).sources().get(0).value()).isNull();
+        assertThat(conflicts.get(0).sources().get(1).value()).isEmpty();   // "" is a value, not null
+        assertThat(new ObjectMapper().writeValueAsString(conflicts.get(0).sources().get(0)))
+                .isEqualTo("{\"src\":\"t_c\",\"value\":null}");
     }
 }

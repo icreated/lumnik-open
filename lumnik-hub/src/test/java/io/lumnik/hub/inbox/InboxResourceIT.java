@@ -1,5 +1,7 @@
 package io.lumnik.hub.inbox;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
@@ -7,17 +9,23 @@ import jakarta.inject.Inject;
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.List;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
 
 @QuarkusTest
 class InboxResourceIT {
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Inject
     @DataSource("admin")
@@ -231,5 +239,67 @@ class InboxResourceIT {
             .body("size()", is(2))
             .body("find { it.id == " + id + " }.acked", is(true))
             .body("findAll { it.acked == false }.size()", is(1));
+    }
+
+    /**
+     * #901: the inbox read is two index paths, in both its forms — the walk reads the tenant's
+     * decisions only, and the acked probe is one lookup on the key ack() writes. The plan is read
+     * on the admin datasource, the one the resource runs on. It is costed from statistics, so
+     * {@link #plan} first gives the tenant a history where row events dominate and each decision
+     * is acked, and analyzes it; disabling sequential scans, hash joins and merge joins then
+     * leaves the index paths only. This proves the paths EXIST: at test volume a scan or a hash
+     * anti-join may be cheaper, and which one the planner picks varies with the machine — the
+     * nightly picked the hash anti-join (which reads the acks by tenant, not by key) while a
+     * laptop picked the per-row probe.
+     */
+    @ParameterizedTest(name = "all={0}")
+    @ValueSource(booleans = {false, true})
+    void theInboxReadIsTwoIndexPaths(boolean all) throws Exception {
+        List<JsonNode> plan = plan(all);
+        // Only the walk's predicate implies the partial index's (a bitmap scan names it on an alias-less node).
+        Assertions.assertThat(plan).as("the walk reads no row event: %s", plan.get(0))
+            .anyMatch(n -> "idx_event_outbox_decisions".equals(n.path("Index Name").asText()));
+        Assertions.assertThat(plan).as("the acked probe is one uq_event_outbox_dedup lookup: %s", plan.get(0))
+            .anyMatch(n -> "a".equals(n.path("Alias").asText())
+                && "uq_event_outbox_dedup".equals(n.path("Index Name").asText())
+                && n.path("Index Cond").asText().contains("dedup_key"));
+    }
+
+    /**
+     * Every node of {@code EXPLAIN (FORMAT JSON)} of the inbox read for tenant 5100, planned over
+     * a seeded history that is rolled back with the plan's transaction.
+     */
+    private List<JsonNode> plan(boolean all) throws Exception {
+        try (Connection c = adminDs.getConnection()) {
+            c.setAutoCommit(false);
+            try (Statement st = c.createStatement();
+                 PreparedStatement ps = c.prepareStatement("EXPLAIN (FORMAT JSON) " + InboxResource.listSql(all))) {
+                st.execute("INSERT INTO core.event_outbox (tenant_id, event_type, source, payload, occurred_at, created_at) "
+                    + "SELECT 5100, CASE WHEN g % 10 = 0 THEN 'decision.history' ELSE 'data.row.changed' END, "
+                    + "'ingest', '{}'::jsonb, NOW(), NOW() FROM generate_series(1, 2000) g");
+                st.execute("INSERT INTO core.event_outbox (tenant_id, event_type, source, payload, dedup_key, occurred_at, created_at) "
+                    + "SELECT 5100, 'annotation.decision.acked', 'user:7', jsonb_build_object('decision_id', id), "
+                    + "'ack:' || id, NOW(), NOW() FROM core.event_outbox WHERE tenant_id = 5100 AND event_type = 'decision.history'");
+                st.execute("ANALYZE core.event_outbox");   // samples this transaction's own rows
+                st.execute("SET LOCAL enable_seqscan = off");
+                st.execute("SET LOCAL enable_hashjoin = off");    // a nested loop is the per-row probe on the key
+                st.execute("SET LOCAL enable_mergejoin = off");
+                ps.setLong(1, 5100);
+                ps.setInt(2, 50);
+                try (ResultSet rs = ps.executeQuery()) {
+                    rs.next();
+                    List<JsonNode> nodes = new ArrayList<>();
+                    collect(MAPPER.readTree(rs.getString(1)).get(0).path("Plan"), nodes);
+                    return nodes;
+                }
+            } finally {
+                c.rollback();
+            }
+        }
+    }
+
+    private static void collect(JsonNode node, List<JsonNode> out) {
+        out.add(node);
+        for (JsonNode child : node.path("Plans")) collect(child, out);
     }
 }

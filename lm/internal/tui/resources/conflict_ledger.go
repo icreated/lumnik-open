@@ -17,7 +17,7 @@ func ledgerLines(b *strings.Builder, conflicts []client.DetailConflict) {
 		fmt.Fprintf(b, "%s:\n", tview.Escape(c.Column))
 		for _, s := range c.Sources {
 			srcPad := strings.Repeat(" ", max(0, 14-utf8.RuneCountInString(s.Src)))
-			fmt.Fprintf(b, "    %s%s %s\n", tview.Escape(s.Src), srcPad, tview.Escape(s.Value))
+			fmt.Fprintf(b, "    %s%s %s\n", tview.Escape(s.Src), srcPad, tview.Escape(s.Display()))
 		}
 	}
 }

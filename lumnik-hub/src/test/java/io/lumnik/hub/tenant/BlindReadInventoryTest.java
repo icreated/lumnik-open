@@ -61,8 +61,22 @@ class BlindReadInventoryTest {
           "opens its own transaction for the read; the run rows must commit on their own"),
       Map.entry("JdbcSourceResource.test", "reads the customer's database, not the hub's"),
       Map.entry("JdbcSourceResource.discover", "reads the customer's database, not the hub's"),
+      Map.entry("JdbcSourceResource.add",
+          "opens its own transactions for the existence check and the writes; the introspection of "
+              + "the customer's database stays outside one"),
+      Map.entry("EndpointResource.test",
+          "opens its own transaction for the read; the pre-flight's HTTP call stays outside one"),
       Map.entry("IntegrationResource.test",
           "opens its own transaction for the read; the delivery's HTTP call stays outside one"),
+      Map.entry("IntegrationResource.replay",
+          "opens its own transaction for the read; the replay's HTTP call stays outside one and "
+              + "WebhookReplayService records it in another"),
+      Map.entry("PlatformDeliveryResource.replay",
+          "opens its own transaction for the read; the replay's HTTP call stays outside one and "
+              + "WebhookReplayService records it in another"),
+      Map.entry("EntityConflictsResource.list",
+          "opens its own transaction for each entity's read; one shared transaction let one entity's "
+              + "failed statement abort every later entity's read (#929)"),
       Map.entry("HookOverrideResource.upsert", "HookOverrideStore.setScript carries the transaction"),
       Map.entry("HookOverrideResource.delete", "HookOverrideStore.deleteOverride carries the transaction"),
       Map.entry("OrgResource.create",
@@ -72,7 +86,17 @@ class BlindReadInventoryTest {
       Map.entry("RestDiscoveryResource.probe",
           "opens its own transaction for the read; the probe's HTTP call stays outside one"),
       Map.entry("RestDiscoveryResource.fromOpenApi",
-          "reads a remote OpenAPI spec, not the hub's database"));
+          "reads a remote OpenAPI spec, not the hub's database"),
+      Map.entry("EntityResolutionReadResource.ambiguous",
+          "EntityIdentityRepository is the admin datasource, BYPASSRLS, tenant bound explicitly in "
+              + "every statement — no RLS policy to lose"),
+      Map.entry("EntityResolutionReadResource.history",
+          "EntityIdentityRepository is the admin datasource, BYPASSRLS, tenant bound explicitly in "
+              + "every statement — no RLS policy to lose"));
+      // EntityAssertionResource no longer injects EntityIdentityRepository (the /simplify pass
+      // moved its ref-existence check to a caught foreign-key violation instead of a pre-check
+      // query) — its own text no longer matches this sweep's *Repository heuristic at all, so it
+      // needs no entry here any more.
 
   private static final List<SourceTree> MODULES = List.of(
       SourceTree.of("lumnik-hub", "io/lumnik/hub"),

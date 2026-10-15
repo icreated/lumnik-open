@@ -8,8 +8,8 @@ import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.event.consumer.OutboxSweeper;
 import io.lumnik.hub.webhook.WebhookConsumer;
 import io.quarkus.test.InjectMock;
+import io.lumnik.hub.event.consumer.SchedulerPausedProfile;
 import io.quarkus.test.junit.QuarkusTest;
-import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
 import io.restassured.path.json.JsonPath;
 import jakarta.inject.Inject;
@@ -18,7 +18,6 @@ import org.mockito.Mockito;
 
 import java.math.BigDecimal;
 import java.net.InetSocketAddress;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -30,21 +29,11 @@ import static org.awaitility.Awaitility.await;
 import static java.time.Duration.ofSeconds;
 
 @QuarkusTest
-@TestProfile(OrgMasterRegistryE2EIT.Profile.class)
+// The test drives the webhook consumer manually via the sweeper. Pausing the scheduler means the manual sweep
+// is the only writer of the durable 'webhook' cursor — otherwise the live WebhookConsumer.tick() (5s) would
+// race the manual sweep on the SAME cursor row, making the durable cursor non-deterministic.
+@TestProfile(SchedulerPausedProfile.class)
 class OrgMasterRegistryE2EIT {
-
-    public static class Profile implements QuarkusTestProfile {
-        @Override
-        public Map<String, String> getConfigOverrides() {
-            // The test drives the webhook consumer manually via the sweeper. Pausing the
-            // scheduler means the manual sweep is the only writer of the durable 'webhook'
-            // cursor — otherwise the live WebhookConsumer.tick() (5s) would race the manual
-            // sweep on the SAME cursor row, making the durable cursor non-deterministic.
-            return Map.of(
-                "quarkus.scheduler.enabled", "false"
-            );
-        }
-    }
 
     static HttpServer receiver;
     static AtomicReference<String> lastPayload = new AtomicReference<>();
@@ -119,7 +108,7 @@ class OrgMasterRegistryE2EIT {
         // Drive the webhook consumer sweep manually (scheduler paused — this is the only cursor writer)
         await().atMost(ofSeconds(20)).pollInterval(ofSeconds(1)).until(() -> {
             try {
-                TenantContext.runAsSystem(() -> sweeper.sweep("webhook", 100, webhookConsumer::process));
+                TenantContext.runAsSystem(() -> sweeper.drain("webhook", 100, webhookConsumer::batchProcessor));
             } catch (Exception e) {
                 // Log but continue polling — the outbox table may not be ready yet
                 System.err.println("drainBatch error (will retry): " + e.getMessage());

@@ -126,7 +126,7 @@ test('resolveFromRegistry: ?m= absent, no default, exactly one entry — resolve
 // own copy of appRegistry.mjs's NEUTRAL/withDerived — one source, no divergence risk.
 const NEUTRAL_RESOLVED = {
   name: 'generic', title: 'lumnik', scope: null, icon: 'generic',
-  accentColor: '#8b7ff0', backgroundColor: '#14121f', default: false,
+  accentColor: '#8b7ff0', backgroundColor: '#14121f', default: false, tabs: null,
   manifest: 'manifest-generic.json', iconFile: 'icon-generic-192.png',
 };
 
@@ -181,3 +181,27 @@ test('applyTheme: sets --accent and the meta theme-color tint, leaves --bg untou
   assert.equal(doc._nodes['meta[name="theme-color"]'].content, '#14121f');
   assert.deepEqual(Object.keys(doc.documentElement.style.props), ['--accent']);
 });
+
+// kind:App spec.tabs (#1030): null/absent = inherit every tab the hub offers; a list is the app's
+// own choice. Whatever the registry holds travels to the shell untouched.
+test('tabs travel through resolveFromRegistry as declared', () => {
+  const entries = [{ name: 'stock', title: 'Stock', scope: 'stock', icon: 'stock',
+    accentColor: '#8b7ff0', backgroundColor: '#14121f', default: true, tabs: ['inbox', 'fiches'] }];
+  assert.deepEqual(resolveFromRegistry(entries, '').entry.tabs, ['inbox', 'fiches']);
+});
+
+test('a registry entry without tabs (an old cache, an old hub) inherits: tabs is null or absent', () => {
+  const entries = [{ name: 'stock', title: 'Stock', scope: 'stock', icon: 'stock',
+    accentColor: '#8b7ff0', backgroundColor: '#14121f', default: true }];
+  assert.equal(resolveFromRegistry(entries, '').entry.tabs == null, true);
+  const storage = fakeStorage();
+  cacheRegistry(entries, storage);
+  assert.equal(resolveCached('', storage).tabs == null, true);
+});
+
+test('the compiled-in fallbacks and the neutral identity inherit every tab', () => {
+  assert.equal(resolveCached('?m=clients', fakeStorage()).tabs, null);
+  assert.equal(resolveCached('?m=stock', fakeStorage()).tabs, null);
+  assert.equal(resolveCached('?m=whatever', fakeStorage()).tabs, null);
+});
+

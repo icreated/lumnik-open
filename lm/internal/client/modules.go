@@ -11,6 +11,8 @@ type moduleManifest struct {
 	Version     string `json:"version"`
 	DisplayName string `json:"displayName"`
 	Active      bool   `json:"active"`
+	// InactiveReason is absent from the wire while the module is active.
+	InactiveReason string `json:"inactiveReason"`
 }
 
 // ModuleList lists every installed hub module via GET /api/platform/modules,
@@ -31,6 +33,7 @@ func (c *Client) ModuleList() ([]types.Module, error) {
 			Version: m.Version,
 			Schema:  m.DisplayName,
 			Status:  status,
+			Reason:  m.InactiveReason,
 		})
 	}
 	return out, nil

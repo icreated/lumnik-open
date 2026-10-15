@@ -4,10 +4,11 @@
 #   lm apply -f docs/connectors/csv/10-local-simple.yaml
 #   lm connector run csv-local-simple
 #
-# Every run re-reads the whole file (after_process: none means the source is
-# never moved or deleted; a file that fits in one 500-row chunk leaves no cursor
-# behind) and the table deduplicates by _row_hash — suitable for small reference
-# files that are expected to be fully replaced on each load cycle.
+# A file that has not changed since its last run is skipped; one that has changed
+# (replaced in place, or grown) is read again in full, and the table deduplicates
+# by _row_hash — suitable for small reference files that are expected to be fully
+# replaced on each load cycle. after_process: none means the source is never moved
+# or deleted.
 
 apiVersion: connectors.lumnik.io/v1
 kind: Connector

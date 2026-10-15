@@ -22,8 +22,9 @@ import java.util.List;
  * Probe: connector.dynamic_table rows touched since the run started (the writer updates the registry
  * at table creation AND column evolution). The common incremental run costs one SELECT and returns.
  * Failures are logged and swallowed — the run is already terminal; {@code lm source rediscover} remains the
- * manual fallback. Runs on a CDI worker thread, so all DB access establishes system mode + a real tx
- * (the Agroal tenant interceptor only fires for JTA-enlisted connections).
+ * manual fallback. Runs on a CDI worker thread, so DB access establishes system mode; the connector
+ * lookup opens a real tx (the Agroal tenant interceptor only fires for JTA-enlisted connections),
+ * while rediscover holds none across its reads of the source (#938).
  */
 @ApplicationScoped
 public class SchemaCardRefresher {
@@ -50,8 +51,7 @@ public class SchemaCardRefresher {
             for (String tag : tags) {
                 LOG.infof("SchemaCardRefresher: schema changed during run %s — rediscovering scope '%s' (tenant %d)",
                     ev.runId(), tag, ev.tenantId());
-                TenantContext.callAsSystem(() ->
-                    QuarkusTransaction.requiringNew().call(() -> discovery.rediscover(ev.tenantId(), tag)));
+                TenantContext.callAsSystem(() -> discovery.rediscover(ev.tenantId(), tag));
             }
         } catch (Exception e) {
             LOG.warnf(e, "SchemaCardRefresher failed for run %s — manual `lm source rediscover` remains available",

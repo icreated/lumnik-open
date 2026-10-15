@@ -1,5 +1,6 @@
-Feature: entity-apply zero-width-name [seed=10]
-  Scenario: apply manifest with zero-width space in name must never cause a 500
-    Given an entity manifest for variant "zero-width-name" [seed=10]
-    When I apply the entity manifest as lm_admin
-    Then the entity apply response status is not 500
+Feature: entity-cli resolve-ambiguous-assert-same-assert-distinct-history [seed=10]
+  Scenario: lm entity resolve/ambiguous/assert-same/assert-distinct/history clear two genuine ambiguities end-to-end
+    Given the entity CLI fixture is seeded with two genuine ambiguities [seed=10]
+    When I drive the entity resolution CLI doors end-to-end
+    Then lm entity ambiguous no longer lists either fixture identity
+    And lm entity history shows both fixture identities were cleared by an assertion

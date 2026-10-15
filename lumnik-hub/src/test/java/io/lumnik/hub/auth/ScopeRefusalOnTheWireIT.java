@@ -4,6 +4,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.ApplyScopeBoundary;
+import io.lumnik.hub.testsupport.ExportManifestFixture;
 import io.lumnik.hub.testsupport.LogProbe;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.quarkus.agroal.DataSource;
@@ -21,6 +22,7 @@ import java.util.Set;
 
 import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 
 /**
  * The métier-scope refusal, measured ON THE WIRE, by a caller who is actually BOUND.
@@ -196,6 +198,73 @@ class ScopeRefusalOnTheWireIT {
         apply(unscoped(), contested, "clients").then().statusCode(200);
 
         assertRefused(apply(boundToMagasin(), contested, "magasin"));
+    }
+
+    /**
+     * A kind:Export manifest living in {@code clients}, for tenant 1, written straight to the
+     * store — the tenant every {@link NoBypassOidcProfile} token is minted for.
+     */
+    private String exportInClients() {
+        String name = name("wire-export");
+        String sql = "INSERT INTO connector.export_manifest "
+            + "(tenant_id, name, scope, entity_name, destination_kind, yaml_text) "
+            + "VALUES (1, ?, 'clients', 'ClientsEntity', 'sftp', ?)";
+        try (Connection c = adminDs.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, name);
+            ps.setString(2, "apiVersion: apps.lumnik.io/v1\nkind: Export\n");
+            ps.executeUpdate();
+        } catch (Exception e) {
+            throw new IllegalStateException("seeding the foreign-scope export failed", e);
+        }
+        return name;
+    }
+
+    /**
+     * The ORDER of the thrown refusal, not just its existence — the property
+     * {@link ApplyScopeBoundary}'s javadoc calls "the earlier moment is the one that keeps other
+     * refusals from talking", measured on the one door where the talking is worst.
+     *
+     * <p>{@code /api/exports/apply} cross-checks the manifest against a resolved entity, and the
+     * entity registry is deployment-global: its 400s name the entity's full declared-scopes list
+     * and its canonical columns. A caller bound to {@code magasin} who may not touch this NAME at
+     * all must not read any of that on the way out. So the manifest below names an entity that
+     * does not exist — before the fix the door answered {@code 400 "no entity named …"}, having
+     * consulted a registry it should never have reached for this caller; the stored-scope check
+     * now runs first and the answer is the uniform 403 instead.
+     *
+     * <p>It lives here rather than in {@code ExportApplyResourceIT} for the reason this whole file
+     * exists: only a real bound token can make the stored-scope check fire at all, and under
+     * dev-bypass every caller is unscoped.
+     */
+    @Test
+    void exportApply_refusesForTheNameBeforeItDisclosesAnEntityItResolved() {
+        String contested = exportInClients();
+
+        assertRefused(applyExport(contested));
+    }
+
+    /**
+     * The control, and without it the test above proves nothing: the SAME caller, the SAME
+     * manifest, under a name nobody holds, must get past the stored-scope check and be refused by
+     * the entity cross-check instead. A 403 everywhere would look identical from the outside and
+     * would mean only that {@code magasin} cannot apply exports at all.
+     */
+    @Test
+    void exportApply_underAFreeName_reachesTheEntityCheckAndSaysSo() {
+        applyExport(name("wire-export-free"))
+            .then().statusCode(400)
+            .body("error", containsString("NoSuchEntityOnPurpose676"));
+    }
+
+    private static Response applyExport(String name) {
+        String manifest = ExportManifestFixture.sftpManifest(
+            name, "magasin", "NoSuchEntityOnPurpose676", "code");
+        return given().config(YamlBody.CONFIG)
+            .header("Authorization", "Bearer " + boundToMagasin())
+            .contentType("application/yaml")
+            .body(manifest)
+        .when().post("/api/exports/apply");
     }
 
     /**

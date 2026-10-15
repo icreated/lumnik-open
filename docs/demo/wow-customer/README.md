@@ -339,7 +339,7 @@ between the declared graph and what's actually in the column. Captured from the 
 ```json
 {"name":"commande-lifecycle","scope":"demo","table":"connector.t_commandes_csv","column":"statut",
  "dataTruth":{"undeclared":[{"value":"EN LITIGE","rows":2}],"unobserved":[],"nullOrBlank":0,
-              "tableMissing":false,"keyColumnMissing":false,
+              "tableMissing":false,"keyColumnMissing":false,"keyNullOrBlank":0,
               "checkUnavailable":false,"unavailableReason":null}}
 ```
 

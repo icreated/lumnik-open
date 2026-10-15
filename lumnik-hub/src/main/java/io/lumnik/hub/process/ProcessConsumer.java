@@ -6,6 +6,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.event.EventOutboxRow;
 import io.lumnik.hub.event.RowEventGate;
+import io.lumnik.hub.event.consumer.BatchProcessor;
 import io.lumnik.hub.event.consumer.OutboxSweeper;
 import io.lumnik.hub.view.ViewFilter;
 import io.quarkus.agroal.DataSource;
@@ -19,6 +20,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -56,13 +58,27 @@ public class ProcessConsumer {
 
     @Scheduled(every = "5s", concurrentExecution = SKIP)
     void tick() {
-        TenantContext.runAsSystem(() -> sweeper.sweep(CONSUMER_NAME, 100, this::process));
+        TenantContext.runAsSystem(() -> sweeper.drain(CONSUMER_NAME, 100, this::batchProcessor));
     }
 
-    public void process(EventOutboxRow row) {
+    /** One tenant's table — what a batch looks its processes up by. */
+    private record TableOf(long tenantId, String table) {}
+
+    /**
+     * The processor of one outbox batch. The processes on a tenant's table are read (and their
+     * YAML parsed) at its first event in the batch and reused for the rest of it, never for the
+     * next one: a process applied, disabled or deleted is seen from the next batch on, so at most
+     * the rest of the current batch is late.
+     */
+    public BatchProcessor batchProcessor() {
+        Map<TableOf, List<ProcessManifestStore.StoredProcess>> enabledOn = new HashMap<>();
+        return row -> process(row, enabledOn);
+    }
+
+    private void process(EventOutboxRow row, Map<TableOf, List<ProcessManifestStore.StoredProcess>> enabledOn) {
         if (!RowEventGate.DATA_ROW_CHANGED.equals(row.getEventType())) return;
-        List<ProcessManifestStore.StoredProcess> procs =
-            store.findEnabledFor(row.getTenantId(), row.getEntity());
+        List<ProcessManifestStore.StoredProcess> procs = enabledOn.computeIfAbsent(
+            new TableOf(row.getTenantId(), row.getEntity()), on -> store.findEnabledFor(on.tenantId(), on.table()));
         if (procs.isEmpty()) return;
 
         Map<String, Object> content = fetchRow(row.getEntity(), row.getTenantId(), row.getEntityKey());

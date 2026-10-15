@@ -242,3 +242,28 @@ func TestViewRmCmd_e2e_deletesAndConfirms(t *testing.T) {
 	require.NoError(t, cmd.Execute())
 	assert.Contains(t, buf.String(), "gold-desk")
 }
+
+// #1050: a link whose target does not exist yet is applied with a warning; the integrator must see it
+// (stderr, exit 0 — a warning has never failed an apply), and stdout stays the one confirmation line.
+func TestViewApplyCmd_e2e_printsLinkWarningsOnStderrAndStillSucceeds(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"name":"categories","scope":"catalogue","warnings":[{"path":"spec.links[0].targetView",`+
+			`"severity":"WARNING","message":"targetView 'articles' is not a view of scope 'catalogue' (yet)","recommendations":[]}]}`)
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	f := filepath.Join(t.TempDir(), "categories.yaml")
+	require.NoError(t, os.WriteFile(f, []byte("kind: View\n"), 0o600))
+
+	cmd := NewRootCmd()
+	out, errOut := new(bytes.Buffer), new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(errOut)
+	cmd.SetArgs([]string{"view", "apply", "-f", f})
+	require.NoError(t, cmd.Execute())
+	assert.Equal(t, "applied: categories (scope catalogue)\n", out.String())
+	assert.Contains(t, errOut.String(), "spec.links[0].targetView")
+	assert.Contains(t, errOut.String(), "articles")
+}

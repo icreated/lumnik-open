@@ -87,6 +87,61 @@ class EntityApplyIT {
         .body("error", Matchers.containsString("run the source connectors"));
   }
 
+  /**
+   * #971: a mapped column the physical table lacks (a typo, or a column renamed upstream) is as
+   * ordinary a mistake as a missing table — a 400 naming the table and the column, never the
+   * bare 500 of a CREATE VIEW failing with 42703.
+   */
+  @Test
+  void a_map_key_naming_a_column_the_source_lacks_is_a_400_naming_table_and_column() {
+    given().config(YamlBody.CONFIG)
+        .headers(TestIdentity.tenantAndUser(1))
+        .contentType("application/yaml").body(MANIFEST.replace("NAME: name", "NMAE: name"))
+        .post("/api/entities/apply")
+        .then().statusCode(400)
+        .body("error", Matchers.containsString("t_cust_src"))
+        .body("error", Matchers.containsString("NMAE"));
+  }
+
+  /**
+   * #614 made resolution: a manifest-valid alternative to match:, refused with 501 until the
+   * engine that consumes it existed (#616-#620). #620 is the last of those — apply now compiles a
+   * resolution: manifest exactly like a match: one; the projection itself (_entity_id/_resolution,
+   * the LEFT JOIN over the crosswalk) is #618's concern, proved in EntityViewCompilerResolutionIT.
+   */
+  @Test
+  void apply_of_a_resolution_manifest_succeeds() throws Exception {
+    try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
+      st.execute("DELETE FROM connector.entity_manifest WHERE name = 'customerresolved'");
+      st.execute("DROP VIEW IF EXISTS connector.\"v_customerresolved\"");
+      st.execute("DROP TABLE IF EXISTS connector.t_erp_customers");
+      st.execute("CREATE TABLE connector.t_erp_customers ("
+          + "tenant_id bigint NOT NULL, \"CUSTOMER_ID\" text)");
+      st.execute("GRANT SELECT ON connector.t_erp_customers TO lumnik_app");
+    }
+    String resolutionManifest = """
+        kind: Entity
+        name: CustomerResolved
+        sources:
+          - table: t_erp_customers
+            map:
+              CUSTOMER_ID: customer_id
+        resolution:
+          identity:
+            t_erp_customers: customer_id
+          cascade:
+            - id: erp-key
+              exact: { fields: [customer_id] }
+        """;
+    given().config(YamlBody.CONFIG)
+        .headers(TestIdentity.tenantAndUser(1))
+        .contentType("application/yaml").body(resolutionManifest)
+        .post("/api/entities/apply")
+        .then().statusCode(200)
+        .body("name", Matchers.equalTo("CustomerResolved"))
+        .body("view", Matchers.equalTo("connector.\"v_customerresolved\""));
+  }
+
   @Test
   void apply_creates_the_view() throws Exception {
     given().config(YamlBody.CONFIG)
@@ -186,6 +241,9 @@ class EntityApplyIT {
             "sources must have at least one source"),
         Arguments.of("reserved canonical column",
             MANIFEST.replace("NAME: name", "NAME: _src"),
+            "is reserved"),
+        Arguments.of("reserved canonical column _canonical_key (#671's own system column)",
+            MANIFEST.replace("NAME: name", "NAME: _canonical_key"),
             "is reserved"),
         Arguments.of("duplicate canonical column in one source",
             MANIFEST.replace("OU_TYPE_CD: segment", "OU_TYPE_CD: name"),

@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -50,7 +51,7 @@ func TestRunsDescribe_startedAndFinishedAreLocal(t *testing.T) {
 
 	r := &Runs{table: tview.NewTable(),
 		sort: style.NewColumnSort(runSortColumns)}
-	r.items = []types.Run{{ID: "r1", StartedAt: started, EndedAt: &ended}}
+	r.items = []types.Run{{ID: "r1", StartedAt: &started, EndedAt: &ended}}
 	r.render()
 	r.table.Select(1, 0)
 	_, body, ok := r.SelectedDescribe()
@@ -80,7 +81,7 @@ func TestRunsRender_everyCellSitsUnderItsOwnHeader(t *testing.T) {
 	r := &Runs{table: tview.NewTable(), sort: style.NewColumnSort(runSortColumns)}
 	r.items = []types.Run{{
 		ID: "8953b0c8", ConnectorName: "demo-erp", EndpointName: "warehouses",
-		Status: "Completed", StartedAt: started, EndedAt: &ended,
+		Status: "Completed", StartedAt: &started, EndedAt: &ended,
 		RecordsIn: 10, RecordsOut: 7, RecordsSkipped: 3, TriggeredBy: "MANUAL",
 	}}
 	r.render()
@@ -113,8 +114,8 @@ func TestRunsRender_endpointColumnTellsSiblingRowsApart(t *testing.T) {
 	started := time.Date(2026, 9, 8, 1, 22, 0, 0, time.UTC)
 	r := &Runs{table: tview.NewTable(), sort: style.NewColumnSort(runSortColumns)}
 	r.items = []types.Run{
-		{ID: "41b06fa9", ConnectorName: "demo-erp", EndpointName: "warehouses", StartedAt: started},
-		{ID: "18c3897f", ConnectorName: "demo-erp", EndpointName: "price_list", StartedAt: started},
+		{ID: "41b06fa9", ConnectorName: "demo-erp", EndpointName: "warehouses", StartedAt: &started},
+		{ID: "18c3897f", ConnectorName: "demo-erp", EndpointName: "price_list", StartedAt: &started},
 	}
 	r.render()
 
@@ -332,5 +333,67 @@ func TestRunsFilters_eachDrillDownReplacesTheOther(t *testing.T) {
 	}
 	if r.FilterActive() {
 		t.Error("FilterActive must be false once both filters are cleared")
+	}
+}
+
+func TestRuns_aQueuedRunSortsFirstAndRendersWithoutAStart(t *testing.T) {
+	started := time.Date(2026, 9, 3, 13, 43, 24, 0, time.UTC)
+	r := &Runs{sort: style.NewColumnSort(runSortColumns), items: []types.Run{
+		{ID: "old", Status: "Completed", StartedAt: &started},
+		{ID: "queued", Status: "Queued"},
+	}}
+	r.applySort()
+	if r.items[0].ID != "queued" {
+		t.Fatalf("newest-first default must put the queued run on top, got %s first", r.items[0].ID)
+	}
+	if got := durationOf(r.items[0]); got != 0 {
+		t.Errorf("durationOf(queued) = %v, want 0", got)
+	}
+	if got := startedCellLabel(r.items[0], time.Now()); got != "queued" {
+		t.Errorf("STARTED label for a queued run = %q, want %q", got, "queued")
+	}
+}
+
+// cancelToast drives Runs.cancel against a hub that answers the cancel with the given status word.
+func cancelToast(t *testing.T, word string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = fmt.Fprintf(w, `{"status":%q,"runId":"x"}`, word)
+	}))
+	t.Cleanup(srv.Close)
+	var toasted string
+	r := &Runs{table: tview.NewTable(), sort: style.NewColumnSort(runSortColumns),
+		client: client.New(config.Context{Server: srv.URL}),
+		toast:  func(m string) { toasted = m }}
+	r.items = []types.Run{{ID: "11111111-0000-4000-8000-000000000000", ConnectorName: "demo-erp", Status: "Queued"}}
+	r.render()
+	r.table.Select(1, 0)
+	r.cancel()
+	return toasted
+}
+
+func TestRuns_cancelOfAQueuedRunToastsThatItHadNotStarted(t *testing.T) {
+	got := cancelToast(t, "cancelled")
+	if !strings.Contains(got, "it had not started") || strings.Contains(got, "current chunk") {
+		t.Errorf("toast = %q", got)
+	}
+}
+
+func TestRuns_cancelOfARunningRunToastsTheChunkBoundary(t *testing.T) {
+	got := cancelToast(t, "cancellation requested")
+	if !strings.Contains(got, "ends after the current chunk") {
+		t.Errorf("toast = %q", got)
+	}
+}
+
+func TestRuns_describeOfAQueuedRunSaysQueuedNotBlank(t *testing.T) {
+	r := &Runs{table: tview.NewTable(), sort: style.NewColumnSort(runSortColumns)}
+	r.items = []types.Run{{ID: "r1", Status: "Queued"}}
+	r.render()
+	r.table.Select(1, 0)
+	_, body, ok := r.SelectedDescribe()
+	if !ok || !strings.Contains(body, "started:         queued") {
+		t.Errorf("describe body = %q", body)
 	}
 }

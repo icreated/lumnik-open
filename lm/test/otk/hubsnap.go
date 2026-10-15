@@ -99,6 +99,117 @@ func splitNonEmpty(s string) []string {
 	return out
 }
 
+// tenantIDRe matches a bare non-negative integer tenant id: digits only, no
+// quotes, no operators, no whitespace. Tenant ids reaching this guard come from Go
+// constants (otkTenant, auth.ForeignTenantID), but they still pass through it
+// before joining a raw SQL string handed to psql -c — the same posture
+// validTableIdent already takes for identifiers: validate the shape server-side,
+// never trust the caller, however trusted the caller looks today.
+var tenantIDRe = regexp.MustCompile(`^[0-9]+$`)
+
+func validTenantID(s string) bool { return tenantIDRe.MatchString(s) }
+
+// crossTenantQuery builds a psql -c statement that pins the SESSION to asTenant and
+// counts rows in connector.connector belonging to wantTenant — the direct
+// RLS-policy analog of an HTTP request made under a different tenant's token. If
+// the tenant_isolation policy holds, the count is always 0 regardless of what data
+// exists: the policy admits only rows matching the SESSION's own tenant, never
+// wantTenant's.
+func crossTenantQuery(asTenant, wantTenant string) string {
+	return "SET app.current_tenant = '" + asTenant + "'; " +
+		"SELECT count(*) FROM connector.connector WHERE tenant_id = " + wantTenant
+}
+
+// crossTenantVisibleRows runs crossTenantQuery via the non-owner app-role psql
+// session (DB truth) — tri-state like hubSnapshot/tableRowCount:
+//   - (n, true, nil)    when dsn is set, psql is on PATH, and the query succeeds
+//   - (0, false, nil)   when dormant (no dsn, or psql not on PATH)
+//   - (0, false, err)   when psql ran but failed, or a tenant id fails validTenantID
+func crossTenantVisibleRows(dsn, asTenant, wantTenant string) (int, bool, error) {
+	if dsn == "" {
+		return 0, false, nil
+	}
+	psql, err := exec.LookPath("psql")
+	if err != nil {
+		return 0, false, nil
+	}
+	if !validTenantID(asTenant) || !validTenantID(wantTenant) {
+		return 0, false, fmt.Errorf("refusing an unsafe tenant id: as=%q want=%q", asTenant, wantTenant)
+	}
+	out, err := exec.Command(psql, "-X", "-At", "-w", "-d", dsn, "-c",
+		crossTenantQuery(asTenant, wantTenant)).Output()
+	if err != nil {
+		return 0, false, psqlErr("cross-tenant RLS probe", err)
+	}
+	n, err := psqlInt(out)
+	if err != nil {
+		return 0, false,
+			fmt.Errorf("psql cross-tenant RLS probe returned non-numeric output %q: %w", string(out), err)
+	}
+	return n, true, nil
+}
+
+// runIDRe matches a UUID shape. Run ids reaching this guard come from parseRunID (lm's own
+// JSON output), but they still pass through it before joining a raw SQL string handed to
+// psql -c — the same posture validTenantID/validTableIdent already take.
+var runIDRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+func validRunID(s string) bool { return runIDRe.MatchString(s) }
+
+// runTerminalQuery builds a psql -c statement that pins the SESSION to otkTenant and asks
+// whether run runID's row already carries a non-null ended_at — DB truth for "has this run
+// reached a terminal status", independent of whatever the API reports.
+func runTerminalQuery(runID string) string {
+	return "SET app.current_tenant = '" + otkTenant + "'; " +
+		"SELECT (ended_at IS NOT NULL) FROM connector.connector_run WHERE id = '" + runID + "'"
+}
+
+// psqlBool parses a single t/f boolean from psql -At output, tolerating a leading command tag —
+// the boolean counterpart to psqlInt, for the same psql-version reason.
+func psqlBool(out []byte) (bool, error) {
+	s := strings.TrimSpace(string(out))
+	if s == "" {
+		return false, fmt.Errorf("empty psql output")
+	}
+	lines := strings.Split(s, "\n")
+	switch last := strings.TrimSpace(lines[len(lines)-1]); last {
+	case "t":
+		return true, nil
+	case "f":
+		return false, nil
+	default:
+		return false, fmt.Errorf("psql output %q is not a boolean (t/f)", last)
+	}
+}
+
+// runTerminalInDB asks DB truth whether run runID has already reached a terminal status —
+// tri-state like tableRowCount/crossTenantVisibleRows:
+//   - (terminal, true, nil)  when dsn is set, psql is on PATH, and the query succeeds
+//   - (false, false, nil)    when dormant (no dsn, or psql not on PATH)
+//   - (false, false, err)    when psql ran but failed, the run id fails validRunID, or the row
+//     could not be read as a boolean (including: the run does not exist in DB truth at all)
+func runTerminalInDB(dsn, runID string) (bool, bool, error) {
+	if dsn == "" {
+		return false, false, nil
+	}
+	psql, err := exec.LookPath("psql")
+	if err != nil {
+		return false, false, nil
+	}
+	if !validRunID(runID) {
+		return false, false, fmt.Errorf("refusing an unsafe run id: %q", runID)
+	}
+	out, err := exec.Command(psql, "-X", "-At", "-w", "-d", dsn, "-c", runTerminalQuery(runID)).Output()
+	if err != nil {
+		return false, false, psqlErr("run-terminal DB-truth probe", err)
+	}
+	terminal, err := psqlBool(out)
+	if err != nil {
+		return false, false, fmt.Errorf("psql run-terminal probe for run %q: %w", runID, err)
+	}
+	return terminal, true, nil
+}
+
 // tableIdentRe matches a strict schema.table identifier: two dot-separated parts,
 // each a letter/underscore followed by word chars. Anything else (extra dots,
 // spaces, quotes, semicolons) is rejected before it reaches psql.

@@ -87,7 +87,7 @@ func TestRunRow_datesRenderHuman(t *testing.T) {
 	wantStarted := started.In(time.Local).Format("2006-01-02 15:04")
 	wantEnded := ended.In(time.Local).Format("2006-01-02 15:04")
 
-	row := runRow(types.Run{ID: "r1", ConnectorID: "c1", StartedAt: started, EndedAt: &ended})
+	row := runRow(types.Run{ID: "r1", ConnectorID: "c1", StartedAt: &started, EndedAt: &ended})
 	if row[8] != wantStarted {
 		t.Errorf("STARTED cell = %q, want %q (was RFC3339 before the fix)", row[8], wantStarted)
 	}
@@ -96,16 +96,15 @@ func TestRunRow_datesRenderHuman(t *testing.T) {
 	}
 }
 
-// A run still in flight has no EndedAt, and a run the hub never actually started (should not
-// happen, but the zero value is reachable) has no StartedAt either — both must render empty,
-// not "0001-01-01" or a nil-pointer panic.
-func TestRunRow_zeroAndNilDatesRenderEmpty(t *testing.T) {
-	row := runRow(types.Run{ID: "r1", ConnectorID: "c1"})
+// A queued run has no StartedAt and no EndedAt (the hub reports startedAt null until it leaves the
+// queue): both cells render empty, never "0001-01-01" and never a nil-pointer panic.
+func TestRunRow_aQueuedRunHasNoStartAndRendersEmpty(t *testing.T) {
+	row := runRow(types.Run{ID: "r1", ConnectorID: "c1", Status: "Queued"})
 	if row[8] != "" {
-		t.Errorf("STARTED cell for a zero time = %q, want empty", row[8])
+		t.Errorf("STARTED cell for a queued run = %q, want empty", row[8])
 	}
 	if row[9] != "" {
-		t.Errorf("ENDED cell for a still-running run (nil EndedAt) = %q, want empty", row[9])
+		t.Errorf("ENDED cell for a queued run = %q, want empty", row[9])
 	}
 }
 
@@ -334,6 +333,33 @@ func TestRunCancel_acceptedPrintsNoteOnStderr(t *testing.T) {
 	}
 	if outBuf.String() != "" {
 		t.Errorf("stdout must stay empty, got %q", outBuf.String())
+	}
+}
+
+// A queued run is ended at once by the hub: the note must say it never started, not that it "ends
+// after the current chunk".
+func TestRunCancel_aQueuedRunIsSaidToHaveNeverStarted(t *testing.T) {
+	id := "cccccccc-0000-4000-8000-00000000cccc"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "cancelled", "runId": id})
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	outBuf, errBuf := new(bytes.Buffer), new(bytes.Buffer)
+	cmd.SetOut(outBuf)
+	cmd.SetErr(errBuf)
+	cmd.SetArgs([]string{"run", "cancel", id})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errBuf.String(), "cancelled — the run never started; re-read with: lm run get "+id) {
+		t.Errorf("stderr note = %q", errBuf.String())
+	}
+	if strings.Contains(errBuf.String(), "current chunk") {
+		t.Errorf("a run that never started has no current chunk: %q", errBuf.String())
 	}
 }
 

@@ -7,12 +7,12 @@
 #
 # How the cursor works
 # --------------------
-# The reader commits a cursor { file, rowsProcessed } after every 500-row chunk that another
-# chunk follows; the run's LAST chunk (end of stream) saves nothing. The next run resumes from
-# the last saved position: the rest of that file, then every file that sorts AFTER it in the
-# lexically ordered glob result — so name incoming files monotonically (date-prefixed).
-# A file that fits in one chunk therefore leaves no cursor and is simply re-read; the table
-# deduplicates by _row_hash either way. Walk-through: docs/connectors/csv.md.
+# The reader commits a cursor { file, rowsProcessed } after every 500-row chunk, and again at the
+# end of every run that read something. The next run resumes from the saved position: the rest
+# of that file, then every file that sorts AFTER it in the lexically ordered glob result — so
+# name incoming files monotonically (date-prefixed). A file read in full is skipped while it is
+# unchanged and read again in full when it changes; the table deduplicates by _row_hash either
+# way. Walk-through: docs/connectors/csv.md.
 
 apiVersion: connectors.lumnik.io/v1
 kind: Connector

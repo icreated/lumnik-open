@@ -1,6 +1,6 @@
 package io.lumnik.hub.api.sources;
 
-import io.lumnik.hub.connector.jdbc.ColumnDescriptor;
+import io.lumnik.jdbc.spi.ColumnDescriptor;
 import io.lumnik.hub.sql.SqlIdentifiers;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
@@ -11,6 +11,7 @@ import io.lumnik.hub.connector.domain.ConnectorCredential;
 import io.lumnik.hub.connector.domain.ConnectorRun;
 import io.lumnik.hub.connector.jdbc.HikariPoolRegistry;
 import io.lumnik.hub.connector.jdbc.JdbcConnectionConfig;
+import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
 import io.lumnik.hub.connector.jdbc.JdbcConnectorType;
 import io.lumnik.hub.connector.jdbc.SchemaIntrospector;
 import io.lumnik.hub.connector.jdbc.TableDescriptor;
@@ -31,6 +32,7 @@ import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Path("/api/platform/sources/jdbc")
 @Produces(MediaType.APPLICATION_JSON)
@@ -46,6 +48,7 @@ public class JdbcSourceResource {
   @Inject ConnectorRunRepository runRepo;
   @Inject SecretCipher cipher;
   @Inject HikariPoolRegistry poolRegistry;
+  @Inject JdbcDialectRegistry dialectRegistry;
 
   // ── POST /test ──────────────────────────────────────────────────────────────
 
@@ -55,13 +58,14 @@ public class JdbcSourceResource {
     long start = System.currentTimeMillis();
     JdbcConnectionConfig cc;
     try {
-      cc = JdbcConnectionConfig.parse(req.url(), req.user(), req.password());
+      cc = JdbcConnectionConfig.parse(req.url(), req.user(), req.password(), dialectRegistry);
     } catch (IllegalArgumentException e) {
       return Response.status(400).entity(Map.of("ok", false, ApiErrors.KEY, e.getMessage())).build();
     }
 
     try {
-      DataSource ds = poolRegistry.acquire(cc.url(), cc.user(), cc.password(), -1L);
+      DataSource ds = poolRegistry.acquire(cc.url(), cc.user(), cc.password(), -1L,
+          dialectRegistry.resolve(cc.dialectId()));
       List<String> schemas = new ArrayList<>();
       String dbVersion;
       try (Connection conn = ds.getConnection()) {
@@ -89,7 +93,7 @@ public class JdbcSourceResource {
   public Response discover(DiscoverRequest req) {
     JdbcConnectionConfig cc;
     try {
-      cc = JdbcConnectionConfig.parse(req.url(), req.user(), req.password());
+      cc = JdbcConnectionConfig.parse(req.url(), req.user(), req.password(), dialectRegistry);
     } catch (IllegalArgumentException e) {
       return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
     }
@@ -108,26 +112,30 @@ public class JdbcSourceResource {
 
   @POST
   @Path("/add")
-  @Transactional
   public Response add(AddRequest req) {
-    Long tenantId = TenantContextFilter.current();
-    if (tenantId == null) tenantId = 0L;
+    Long tenantId = Objects.requireNonNullElse(TenantContextFilter.current(), 0L);
 
     JdbcConnectionConfig cc;
     try {
-      cc = JdbcConnectionConfig.parse(req.url(), req.user(), req.password());
+      cc = JdbcConnectionConfig.parse(req.url(), req.user(), req.password(), dialectRegistry);
     } catch (IllegalArgumentException e) {
       return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
     }
 
+    // No transaction spans this method: introspection is several round trips to the customer's
+    // catalog per table, and lm's interactive picker sends every picked table at once. The hub is
+    // read here and written at the end, each in a short transaction of its own (the tenant is
+    // bound with SET LOCAL, which is transaction-scoped), and the introspection runs between them
+    // holding no connection. Checked first so an existing connector's table is never introspected.
+    Map<String, Connector> existingByName =
+        QuarkusTransaction.requiringNew().call(() -> existingConnectors(req, tenantId));
+
     // Every table is introspected and checked BEFORE anything is persisted: a refusal names its
-    // table and leaves nothing behind (a normal return commits this transaction).
+    // table and leaves nothing behind.
     List<PreparedTable> prepared = new ArrayList<>();
     for (AddTableRequest tableReq : req.tables()) {
-      String connectorName = req.sourceName() + "--" + tableReq.table();
-      Connector existing = connectorRepo
-          .find("name = ?1 AND tenantId = ?2", connectorName, tenantId)
-          .firstResult();
+      String connectorName = connectorName(req, tableReq);
+      Connector existing = existingByName.get(connectorName);
       if (existing != null) {                      // idempotent on the connector name
         prepared.add(new PreparedTable(tableReq, connectorName, existing, null, null));
         continue;
@@ -144,6 +152,23 @@ public class JdbcSourceResource {
       }
     }
 
+    return QuarkusTransaction.requiringNew().call(() -> persistPrepared(prepared, req, tenantId));
+  }
+
+  /** The connectors this add's tables already have, by name — one query for the whole request. */
+  private Map<String, Connector> existingConnectors(AddRequest req, Long tenantId) {
+    List<String> names = req.tables().stream().map(t -> connectorName(req, t)).toList();
+    if (names.isEmpty()) return Map.of();
+    return connectorRepo.find("name IN ?1 AND tenantId = ?2", names, tenantId).list().stream()
+        .collect(Collectors.toMap(Connector::getName, c -> c));   // UNIQUE (tenant_id, name)
+  }
+
+  private static String connectorName(AddRequest req, AddTableRequest tableReq) {
+    return req.sourceName() + "--" + tableReq.table();
+  }
+
+  /** The credential and every new connector, written inside the caller's short transaction. */
+  private Response persistPrepared(List<PreparedTable> prepared, AddRequest req, Long tenantId) {
     UUID credentialId = findOrCreateCredential(req, tenantId);
     List<AddResultEntry> created = new ArrayList<>();
     List<AddResultEntry> skipped = new ArrayList<>();
@@ -156,12 +181,13 @@ public class JdbcSourceResource {
         created.add(persistTable(p, req, credentialId, tenantId));
       } catch (Exception e) {
         LOG.errorf(e, "Failed to add connector for table %s", p.tableReq().table());
-        QuarkusTransaction.setRollbackOnly();      // all or nothing: no half-added source
-        return Response.status(502).entity(ApiErrors.error(
-            "Failed processing table '" + p.tableReq().table() + "': " + e.getMessage())).build();
+        // Thrown, not returned: the throw rolls back (all or nothing, no half-added source), where
+        // setRollbackOnly + return would make QuarkusTransaction's commit fail as a 500.
+        throw new WebApplicationException(Response.status(502).type(MediaType.APPLICATION_JSON)
+            .entity(ApiErrors.error("Failed processing table '" + p.tableReq().table() + "': " + e.getMessage()))
+            .build());
       }
     }
-
     return Response.ok(new AddResponse(created, skipped)).build();
   }
 

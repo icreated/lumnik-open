@@ -1,15 +1,15 @@
 # JDBC
 
-> Read tables from a live PostgreSQL database into hub tables — the whole table once, then
-> only what changed, on a schedule.
+> Read tables from a live PostgreSQL or Oracle database into hub tables — the whole table
+> once, then only what changed, on a schedule.
 
 | | |
 |---|---|
 | **Type** | `jdbc-generic` |
-| **Dialect** | postgres |
+| **Dialect** | postgres — Open; [oracle](#oracle) — **Pro only** |
 | **Target** | `connector.t_<table>` |
 | **Schedulable** | cron |
-| **Edition** | Open |
+| **Edition** | Open for PostgreSQL. Oracle ships only in lumnik Pro — see [Oracle](#oracle) |
 
 The connection is read-only: every query this connector issues is a `SELECT`, and nothing in
 it inserts, updates, deletes or alters anything on the source.
@@ -170,8 +170,10 @@ connection:
   dialect: postgres                                # optional, inferred from the url
 ```
 
-- **Dialect**: `postgres` only in v1 (`postgresql` is accepted as an alias). A declared
-  `dialect` that disagrees with the URL scheme fails validation.
+- **Dialect**: the providers installed in your hub — PostgreSQL (`postgres`, alias `postgresql`)
+  ships with every edition; Oracle (`oracle`) ships only with lumnik Pro — see [Oracle](#oracle).
+  A declared `dialect` that is not installed, or that does not accept the URL, fails validation;
+  an absent one is inferred only when exactly one installed provider accepts the URL.
 - **Grants**: `USAGE` on the schema and `SELECT` on the tables. Nothing more — ingestion
   issues `SELECT * FROM <schema>.<table>`, and `test` / `discover` use the driver's read-only
   metadata calls.
@@ -310,6 +312,10 @@ The hub types each column from the source's declared JDBC type:
 | `boolean`, `bit` | `BOOLEAN` |
 | everything else | `TEXT` |
 
+- **`TEXT` is the generic fallback for a type this table does not name — it does not mean a
+  dialect accepts every type it does not recognize.** The Oracle dialect has its own type table
+  (see [Oracle → Types](#oracle)) and **refuses** a column outside it, at discovery and at
+  ingestion; such a column never silently lands as `TEXT`.
 - **`NUMERIC(18,4)` holds at most 14 digits before the point.** A source column wider than
   that — a 19-digit snowflake-style id declared `numeric(20,0)` — fails the run with `numeric
   field overflow`. Expose it as text through a view: `SELECT event_id::text AS event_id, ...`.
@@ -421,6 +427,10 @@ validation with its own error rather than being dropped.
 
 A cursor is stored per endpoint, after every chunk. An interrupted run resumes exactly where
 it stopped: no duplicates, no gaps.
+
+A primary-key column of a type JSON cannot carry — `DATE`, `TIMESTAMP`, `TIME` or `UUID` — is stored as text
+with its type recorded beside it (`pkTypes`) and read back as the same type, so it compares against its
+column on the next chunk. A cursor written before that record existed reads as it always did.
 
 - **`mode: watermark`** stores `{col, value, pk}` and resumes with
   `WHERE (col, pk...) > (value, last_pk...)` — one lexicographic comparison over the watermark
@@ -545,11 +555,11 @@ grant, before any manifest is written.
 
 ```
 $ printf '%s\n' "$DB_PASSWORD" | lm source jdbc discover --password-stdin --url jdbc:postgresql://postgres:5432/lumnik --user lumnik_readonly --schema demo
-SCHEMA     NAME                            ROWS  COLS PK                   WATERMARK
-demo       audit_log                          1     3                      -
-demo       invoices                           4     5 invoice_id           updated_at
-demo       price_list                         3     3 id                   id
-demo       warehouses                         2     4 warehouse_id         updated_at
+SCHEMA     NAME                            ROWS  COLS PK                   WATERMARK       UNSUPPORTED
+demo       audit_log                          1     3                      -               -
+demo       invoices                           4     5 invoice_id           updated_at      -
+demo       price_list                         3     3 id                   id              -
+demo       warehouses                         2     4 warehouse_id         updated_at      -
 ```
 
 - `--schema` defaults to `public`. An ERP in its own schema names it here.
@@ -559,8 +569,12 @@ demo       warehouses                         2     4 warehouse_id         updat
   `modified_at` or `last_modified`; else the first timestamp or date column; else a single
   numeric primary key. The last case is the trap named [above](#which-one-to-declare) —
   `price_list` suggests `id`.
-- `--include-views` adds views to the listing; `--skip-pattern` replaces the default
-  `pg_*,information_schema*,t_*`; `--output json` prints the whole descriptor.
+- `UNSUPPORTED` names, as `COLUMN TYPE`, the columns the source's dialect cannot read (`-` when there is
+  none). Such a table is listed, but `add` refuses it by name and the interactive picker marks it `[!]`
+  and will not select it. PostgreSQL reads every column type it reports, so the column stays `-` there.
+- `--include-views` adds views to the listing; `--skip-pattern` replaces the **source dialect's** default
+  exclusions (PostgreSQL: `pg_*,information_schema*,t_*`) — with no flag the CLI sends none and the hub
+  applies the dialect's own; `--output json` prints the whole descriptor, `unsupportedColumns` included.
 
 ### `add`
 
@@ -604,6 +618,67 @@ Error: API error 400: table demo.nope not found among the base tables of that sc
 
 A table whose connector already exists is reported as skipped, not re-created.
 
+## Oracle
+
+> **lumnik Pro.** The Oracle provider ships in lumnik Pro with its JDBC driver — you drop no jar. The open
+> edition has no Oracle provider: a manifest declaring `dialect: oracle` there is refused with
+> `JDBC dialect 'oracle' is not installed. Available: postgres`.
+
+```yaml
+spec:
+  connection:
+    url: jdbc:oracle:thin:@//erp-db.acme.io:1521/ERP   # by service name
+    user: ro_user
+    password_env: ACME_DB_PASSWORD
+    dialect: oracle                                    # optional, inferred from the url
+  defaults:
+    schema: ERP                                        # the OWNER, exactly as Oracle stores it
+  source:
+    tables:
+      - name: ORDERS                                   # exactly as `lm source jdbc discover` prints it
+        mode: watermark
+        watermark_column: UPDATED_AT
+        pk_columns: [ID]
+        rename:
+          ID: order_id                                 # optional: land a column under another name
+```
+
+- **Versions.** Oracle 12c and later (the paging uses `FETCH FIRST n ROWS ONLY`). It is tested on Oracle 23ai
+  Free only; other versions are untested. Oracle 11g is not supported.
+- **Connect by service name.** The URL goes to the driver untouched. `@//host:1521/SERVICE`,
+  `@host:1521/SERVICE` and a full `@(DESCRIPTION=…)` descriptor were each checked against a live Oracle 23ai;
+  quote a descriptor in YAML, it contains parentheses. The older **SID** form (`@host:1521:SID`) works on a
+  non-multitenant database, but on a multitenant one it reaches the container root, where a pluggable
+  database's user does not exist (`ORA-01017`) — use the service name there. TCPS and wallets are not tested.
+- **`lm` needs `--schema`.** `lm source jdbc discover` and `add` default to `--schema public`, which is
+  PostgreSQL's; for Oracle pass the owner, e.g. `--schema ERP`, or the listing is empty.
+- **Names are exact.** Oracle folds an unquoted name to upper case; this provider never folds. Write the
+  schema, table and column names exactly as `lm source jdbc discover` lists them (`ORDERS`, not `orders`);
+  they are quoted as given. A mixed-case name created with quotes is written in that case.
+- **On the hub side the labels keep that spelling.** The hub table's columns are the Oracle labels as the
+  driver returns them — quoted, upper-case (`"ID"`, `"UPDATED_AT"`) — next to the hub's own lower-case
+  system columns. Quote them in a view or a query, or use `rename:` to land a given column under another
+  (for instance lower-case) name.
+- **Types.** Supported: `NUMBER`, `FLOAT`, `BINARY_FLOAT`, `BINARY_DOUBLE`, `VARCHAR2`, `NVARCHAR2`,
+  `CHAR`, `NCHAR`, `DATE` (which carries a time part), `TIMESTAMP`, `TIMESTAMP WITH [LOCAL] TIME ZONE`,
+  `CLOB` and `NCLOB` — each lands in the hub column its own value decides, by the same
+  [Column types](#column-types) table every dialect uses. Only `CLOB` and `NCLOB` are read as text; a
+  `NUMBER`, a `DATE` or a `TIMESTAMP [WITH [LOCAL] TIME ZONE]` keeps its own typed JDBC value all the
+  way to the hub column. Any other column type — `BLOB`, `RAW`, `LONG`, `LONG RAW`, `XMLTYPE`, `BFILE`,
+  `ROWID`, object types — is **refused**: `discover` lists the table with the column and its type in
+  the `UNSUPPORTED` column, and `add` refuses it by name. Nothing is ingested wrongly.
+- **Zoned timestamps are read as instants** (`TIMESTAMP WITH [LOCAL] TIME ZONE` lands as `timestamptz`), as
+  PostgreSQL's driver does — which is what lets such a column serve as a watermark.
+- **Empty string is `NULL`.** Oracle stores `''` as `NULL`; the hub receives `NULL`.
+- **Index `(watermark, key)` on every Oracle table you page.** Without an index starting with the
+  watermark column, every page scans the whole table — the cost grows with the table and gets worse
+  on every later page. One shape stays slower even with the index: a very large group of rows
+  sharing one watermark value pages more slowly within that group than the rest of the table.
+  Measured on Oracle 23ai Free only; other versions and data shapes are not measured.
+- **Watermark ties and `NULL`s** behave exactly as on PostgreSQL: rows tied on the watermark are neither lost
+  nor repeated across chunks, and a row with no watermark is read by a first pass that fits in one chunk
+  (see [A run reads what the table held when it started](#a-run-reads-what-the-table-held-when-it-started)).
+
 ## Reading a view
 
 A view is how a table reaches the hub when the table itself cannot: no primary key, a
@@ -639,7 +714,7 @@ $ lm validate -f bad-chunk.yaml
 | Rule | Severity | Path |
 |---|---|---|
 | `connection.url` matches `jdbc:<dialect>:...` | ERROR | `spec.connection.url` |
-| Dialect is supported (postgres) | ERROR | `spec.connection.url` |
+| Dialect is installed and accepts the URL (PostgreSQL ships by default) | ERROR | `spec.connection.dialect` (declared) or `spec.connection.url` (inferred) |
 | A declared `dialect` matches the URL scheme | ERROR | `spec.connection.dialect` |
 | `connection.user` and `connection.password_env` present | ERROR | `spec.connection.*` |
 | `source.tables[]` non-empty | ERROR | `spec.source.tables` |

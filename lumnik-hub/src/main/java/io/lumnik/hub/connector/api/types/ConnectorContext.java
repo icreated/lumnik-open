@@ -26,7 +26,12 @@ public record ConnectorContext(
      * the type declares none, which is how csv, rest and hello-world read. A type's own reader is
      * the only thing that compares a position against it; see {@link RunBound}.
      */
-    RunBound bound
+    RunBound bound,
+    /**
+     * What this run keeps open between its chunks (a session, a client): the same instance for
+     * {@link ConnectorType#runStart} and every chunk, closed by the engine when the run ends. See {@link RunScope}.
+     */
+    RunScope scope
 ) {
   @SuppressWarnings("unchecked")
   public <T> T configValue(String key, Class<T> type) {

@@ -32,7 +32,7 @@ public class FaithfulnessJudge {
 
     public Result assess(String question, String sql, SchemaCard card) {
         if (judges.isUnsatisfied())
-            return new Result(Verdict.INCONCLUSIVE, "no judge model on the classpath");
+            return new Result(Verdict.INCONCLUSIVE, "no judge model available");
         ChatPort judge = judges.get();
         String prompt = """
             You are a strict SQL reviewer. Decide whether the SQL faithfully answers the question using

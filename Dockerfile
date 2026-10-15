@@ -4,7 +4,10 @@
 FROM maven:3.9-eclipse-temurin-21 AS build
 WORKDIR /src
 COPY . .
-RUN mvn -q -pl lumnik-hub -am package -DskipTests
+# Extra Maven profiles, e.g. -Psearch-cluster. Empty in every published image: a Search provider is
+# an explicit build choice, never something a standard image carries.
+ARG MVN_PROFILES=""
+RUN mvn -q -pl lumnik-hub -am package -DskipTests ${MVN_PROFILES}
 
 # ── run: Quarkus fast-jar on a slim JRE, as a non-root user ──
 FROM eclipse-temurin:21-jre

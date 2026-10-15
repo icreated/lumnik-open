@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:0.8.6-pg16
     container_name: lumnik-db
     environment:
       POSTGRES_DB: lumnik
@@ -42,7 +42,11 @@ services:
       - ollama_data:/root/.ollama
 
   minio:
-    image: quay.io/minio/minio:latest
+    # #708: quay.io/minio/minio (every tag, including this one) has required an authenticated
+    # account since 2026-09-24 — re-hosted at ghcr.io/icreated/minio (see MinioTestImage's javadoc
+    # for the bump procedure). Pinned by tag here, not by digest like the Java ITs: this is the dev
+    # convenience stack, not the gate.
+    image: ghcr.io/icreated/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: lumnik-minio
     command: server /data --console-address ":9001"
     environment:
@@ -60,7 +64,10 @@ services:
       retries: 5
 
   minio-init:
-    image: quay.io/minio/mc:latest
+    # #708/#725: same quay.io lockout as the minio service above — quay.io/minio/mc is gated too.
+    # ghcr.io/icreated/minio (see MinioTestImage's javadoc) bundles its own mc, built from source
+    # alongside minio itself, so it doubles as the mc image here instead of a separate mirror.
+    image: ghcr.io/icreated/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: lumnik-minio-init
     depends_on:
       minio:

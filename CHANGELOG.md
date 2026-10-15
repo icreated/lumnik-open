@@ -7,6 +7,141 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.8.0 — 2026-10-15
+
+The hub now sends data out as well as taking it in. Three capabilities land whole:
+- **Entity resolution** gives the same customer or product one identity across systems that never
+  shared a key, and lets a person correct it.
+- **Managed exports** deliver an entity as CSV to SFTP or S3, on a schedule or on demand, without
+  ever overwriting a file.
+- **Queued runs** let a busy endpoint wait for its turn instead of refusing.
+
+Views read past their old 1 000-row cut. And a long list of hot paths stopped holding a database
+connection or reading a whole table when they didn't need to.
+
+### Before you upgrade
+- **Set `LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET`.** The hub refuses to start without it: 16
+  characters or more, not the placeholder.
+  - `deploy/selfhost/up.sh` adds it to your existing `.env` for you.
+  - With Helm, set `secrets.entityResolutionHmacSecret`.
+  - Keep it with your other secrets: changing it later invalidates every resolution fingerprint and
+    every open page link in a view.
+- **Take a backup.** This release carries 21 migrations (V49–V69), and migrations are forward-only.
+  See `docs/operations/upgrade.md`.
+- **Delete any duplicate SearchIndex you don't want.** If two SearchIndex manifests target the same
+  entity, the upgrade keeps the earliest valid one and purges the other.
+- **Decide on webhook history.** Deliveries older than 90 days are purged at the first 05:00 run
+  after the upgrade, and can no longer be replayed. Set `LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS=0`
+  to keep everything.
+- **The database image is now `pgvector/pgvector:0.8.6-pg16`** in the compose and Helm files.
+- **Re-running `deploy/helm/up.sh` over a live cluster now refuses.** It used to regenerate every
+  secret, including database passwords the database never learned.
+  `LUMNIK_ALLOW_SECRET_REGENERATION=true` is the explicit way through.
+
+### After you upgrade
+- **Re-apply some entities with the same manifest** (`lm entity apply -f …`): every entity that
+  declares `resolution:` or `joins[]`, and any entity a SearchIndex observes. Their views changed
+  shape.
+- **Rename reserved columns.** `_entity_id`, `_resolution`, `_source_id` and `_handle` are now
+  reserved column names; a manifest that uses one is refused at its next apply.
+- **Check values landed by rewriting hooks.** Before this release, rewriting cell hooks ran twice on
+  every `csv-file` and `jdbc-generic` chunk: `regex-replace` could land `X-X-42`, and `split` came
+  out mangled. Check data such hooks wrote.
+- **Fix scripts that relied on `lm` exiting 0.** An unknown word after a command group (`lm
+  connector lst`) now exits 1 instead of printing help and exiting 0. `lm export run` now reports
+  `accepted`.
+
+### Added
+- **Entity resolution.** In a `kind:Entity` manifest, `resolution:` declares how rows from different
+  sources become one entity: an ordered cascade of exact rules over normalised fields.
+  - **What it never does**: an ambiguous match never merges, and a resolved link is never moved
+    silently.
+  - **Reviewing**: `lm entity ambiguous NAME` lists what needs a human, and `lm entity history NAME
+    SOURCE ID` explains a decision, including which entities were set aside and why.
+  - **Correcting**: `lm entity assert-same` / `assert-distinct` record a correction that survives
+    every replay. Retracting a `same` splits the identity back off.
+  - **Replaying**: `lm entity resolve NAME` replays the whole entity.
+  - **In the TUI**: `:ambiguous` shows the same list.
+  - **In the entity view**: rows carry `_entity_id` and `_resolution`, and unresolved rows carry a
+    `_handle`, so `lm conflicts list` can name every row.
+- **`kind:Export` — deliver an entity as CSV to SFTP or S3.**
+  - **The file**: deterministic bytes (UTF-8, CRLF, a stable order).
+  - **Publishing**: always atomic and never over an existing file. SFTP uses a `.part` file and a
+    rename, with the host key always verified; S3 uses a conditional multipart upload with
+    checksums.
+  - **Running**: on a cron schedule (latest slot only, no back-fill) or on demand, with a ledger of
+    every run.
+  - **Commands**: `lm export apply|list|get|run|retry|runs|status`, and `lm entity export NAME -o
+    FILE` for a one-shot download.
+  - **Docs**: `docs/apps/exports.md`.
+- **Queued runs** (`LUMNIK_RUN_QUEUE_ENABLED=true`, off by default).
+  - **What changes**: a manual connector run, or an on-demand export, that meets a run already in
+    progress waits as `Queued` and starts when the endpoint is free.
+  - **Cancelling**: `lm run cancel` ends a queued run.
+  - **Before turning it on**: upgrade every replica first; `docs/operations/upgrade.md` says why.
+- **Views read past 1 000 rows.** `POST /api/views/render` pages with `pageSize` and an opaque
+  `cursor`.
+  - **The app's Fiches tab**: it pages, with the pager above and below the results, and filters
+    through typed controls built from each column's kind.
+  - **Filters that can never match** on a column's type are refused with a 400, instead of
+    returning an empty table. Scientific notation (`1e-5`) is accepted.
+  - **`spec.links`**: a cell can lead to a filtered view or to an external page.
+- **`joins[]` on `kind:Entity`.** A many-to-one lookup table enriches an entity after fusion: no
+  match gives NULL, several matches give NULL plus a conflict entry. Keys compare by numeric value
+  (`1000021` joins `1000021.0000`).
+- **JDBC dialect providers.** PostgreSQL is now a provider behind `lumnik-jdbc-spi`, and a connector
+  resolves its dialect strictly: an explicit `dialect:` wins, otherwise exactly one provider must
+  accept the URL. `docs/connectors/jdbc/writing-a-provider.md` explains how to write one.
+- **Choosing what an app shows.**
+  - **`spec.tabs`**: on a `kind:App`, it lists the tabs that app shows. A tab this hub does not offer
+    comes back as a warning, never a refusal.
+  - **Seeing the result**: `lm app list` shows your apps, and `lm module list` shows each module
+    with the reason it is active or not.
+  - **Docs**: "Choosing what your hub offers".
+- **Proposal dossiers.** `POST /api/proposal/check` replays a prospect's dossier against your real
+  data, read-only. `lm proposal draft` turns it into a `kind:Workflow` draft, and never applies it.
+- **SearchIndex declarations.** `lm search apply|rm|query|status|rebuild` and the
+  `titleField`/`links` keys. This edition carries no Search provider, and
+  `GET /api/search/capability` says so.
+- **Webhook delivery retention.** `LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS` (default 90) bounds the
+  delivery journal, which used to keep every payload and response forever.
+
+### Changed
+- **Webhooks and email are sent after their batch commits**, with no database transaction held
+  across the remote call.
+  - **Webhooks**: delivery is at-least-once, and `X-Lumnik-Event-Id` is the idempotency key.
+    HMAC/Bearer retries that used to fail now deliver.
+  - **Email**: a crash between commit and send loses that batch's mails instead of sending them
+    twice.
+  - **Failures**: one failing event, or a NUL byte in a receiver's answer, no longer stalls the
+    consumer.
+- **The outbox drains far faster**: about 6 200 events per tick instead of 100.
+- **Local CSV says when something is wrong instead of ending quietly.**
+  - **A missing cursor file**: if the cursor's file is gone while later files wait, the run fails
+    and names the fix, `lm endpoint reset-cursor <connector>/<endpoint>`.
+  - **A file removed mid-run**: a listed file removed before the run reaches it fails the run.
+  - **Already-read files**: a fully read, unchanged file is not read again.
+  - **New files**: the folder is listed once per run, so a file dropped mid-run waits for the next
+    run.
+- **Remote CSV (SFTP/S3) keeps one connection per run** instead of one per chunk, and relists every
+  100 files. Your SFTP server's idle timeout and session cap now apply to a whole run.
+- **Scheduled runs and exports are bounded per instance**: 4 and 2, set with
+  `lumnik.connector.max-concurrent-scheduled-runs` and `lumnik.export.max-concurrent-scheduled-runs`.
+  Runs beyond the bound wait instead of failing on pool timeouts.
+- **Faster where it was slow**, each change measured in its PR: the runs list, the data freshness
+  indicator, the inbox, the delivery pages, JDBC chunk fetches, row hashing and date parsing, and
+  repeated REST reads of unchanged rows.
+- **Inbox acks**: only an ack written by `POST /api/inbox/{id}/ack` folds a decision; a hand-emitted
+  ack event no longer does.
+- **`lm source jdbc discover --skip-pattern`** defaults to empty; the dialect applies its own
+  defaults.
+- **The app no longer shows a Chat tab** in this edition, where it never worked.
+
+### Testing
+- **OTK silver**: 182 of 182 scenarios with 0 findings on this tree. The managed-export delivery case
+  needs a real SFTP destination and stays dormant without one.
+- **`lm` binaries**: this release ships `lm` **1.4.0** (archives and `checksums.txt` alongside).
+
 ## v1.7.3 — 2026-09-20
 
 A métier app no longer needs a hub rebuild. This release's headline is `kind:App`: declare a métier

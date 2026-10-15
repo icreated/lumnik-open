@@ -53,17 +53,19 @@ throughout. Check your crontab's hour before opening an incident.
 | Ollama (host) | yes | Linux: `systemctl restart ollama` · macOS/Windows: the Ollama app | The model unloads: the **first ask after restart is a cold load** (tens of seconds). `OLLAMA_KEEP_ALIVE=-1` keeps it resident ([the trap list](../quickstart/prerequisites.md)). |
 | `caddy` (façade) | yes | `docker compose -f docker-compose.selfhost.yml -f docker-compose.tls.yml restart caddy` | A blip on the HTTPS origin. Its state (ACME certs, the internal CA root your devices trust) survives on the `caddy_data` volume — which is exactly why the restart is a blip. |
 
-!!! note "After a hard kill: the zombie run reaps itself at the next start"
+!!! note "After a hard kill: the zombie run reaps itself"
     A run killed mid-flight leaves its row at `Running`, and the scheduler skips any
-    connector that has one. The hub's startup reaper fails those rows
-    (`error_message: reaped at startup…`) and warns with the count **and one line per run,
+    connector that has one. The hub's reaper runs at startup and on every scheduler tick.
+    It fails a `Running` row only when no live process holds that endpoint's run lock, so
+    another replica's live run is never touched (`error_message: reaped: …`). It warns with the count **and one line per run,
     naming the run id and the connector whose schedule was blocked** — so a crash costs at
-    most one restart, never a silenced schedule. The failed run's connector resumes on its
-    cursor at the next trigger.
+    most about a minute, never a silenced schedule: a run takes its lock before its row is
+    written, so the next scheduler tick (once a minute) reaps an abandoned row straight away.
+    The failed run's connector resumes on its cursor at the next trigger.
 
     **Read a reaped run's duration with that in mind.** `ended_at` is when the reaper
-    marked the run dead — at startup — not when the run actually stopped. A run that died
-    at 02:00 and was reaped at 09:00 shows seven hours in `lm run list`: that span is the
+    marked the run dead, not when the run actually stopped. A run that died
+    at 02:00 while the hub was down until 09:00 shows seven hours in `lm run list`: that span is the
     outage, not the ingestion. The run's own `error_message` says so, and `lm run get`
     prints it.
 

@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * The walker extracted from the three closed-inventory manifest parsers (View/Process/Workflow):
@@ -101,7 +102,7 @@ class ManifestKeysTest {
     @Test
     void requiredTextRefusesAMissingField() throws Exception {
         JsonNode root = MAPPER.readTree("metadata: {}\n");
-        IllegalArgumentException e = org.junit.jupiter.api.Assertions.assertThrows(
+        IllegalArgumentException e = assertThrows(
             IllegalArgumentException.class,
             () -> ManifestKeys.requiredText(root.path("metadata"), "name", "metadata.name"));
         assertEquals("metadata.name is required", e.getMessage());
@@ -110,7 +111,7 @@ class ManifestKeysTest {
     @Test
     void requiredTextRefusesABlankField() throws Exception {
         JsonNode root = MAPPER.readTree("metadata:\n  name: \"   \"\n");
-        IllegalArgumentException e = org.junit.jupiter.api.Assertions.assertThrows(
+        IllegalArgumentException e = assertThrows(
             IllegalArgumentException.class,
             () -> ManifestKeys.requiredText(root.path("metadata"), "name", "metadata.name"));
         assertEquals("metadata.name is required", e.getMessage());
@@ -119,7 +120,7 @@ class ManifestKeysTest {
     @Test
     void requiredTextRefusesAnExplicitNull() throws Exception {
         JsonNode root = MAPPER.readTree("metadata:\n  name: null\n");
-        IllegalArgumentException e = org.junit.jupiter.api.Assertions.assertThrows(
+        IllegalArgumentException e = assertThrows(
             IllegalArgumentException.class,
             () -> ManifestKeys.requiredText(root.path("metadata"), "name", "metadata.name"));
         assertEquals("metadata.name is required", e.getMessage());

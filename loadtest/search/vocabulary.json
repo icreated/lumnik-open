@@ -1,0 +1,27 @@
+{
+ "words": [
+  "Acme",
+  "Bauer",
+  "Dupont",
+  "GmbH",
+  "Générale",
+  "Industries",
+  "Ltd",
+  "Müller",
+  "Nord",
+  "Northwind",
+  "SARL",
+  "Schmidt",
+  "Société",
+  "Traders"
+ ],
+ "cities": [
+  "Berlin",
+  "Köln",
+  "London",
+  "Lyon",
+  "Manchester",
+  "Marseille",
+  "Paris"
+ ]
+}

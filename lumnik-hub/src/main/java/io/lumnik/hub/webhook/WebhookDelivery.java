@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.Mutability;
 import io.lumnik.hub.connector.persistence.converters.ImmutableJsonNodePlan;
+import io.lumnik.hub.sql.PgText;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -67,4 +68,10 @@ public class WebhookDelivery {
     /** Retry lease (V37): a sweep owns this row until this instant. NULL = unclaimed. */
     @Column(name = "claimed_until")
     private OffsetDateTime claimedUntil;
+
+    // Remote text (the endpoint's answer, or an error built from it): through PgText (#943).
+    // Hand-written rather than Lombok's so every write through this entity passes here; no
+    // native statement writes these two columns.
+    public void setResponseBody(String responseBody) { this.responseBody = PgText.storable(responseBody); }
+    public void setError(String error) { this.error = PgText.storable(error); }
 }

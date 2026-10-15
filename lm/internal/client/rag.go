@@ -1,10 +1,14 @@
 package client
 
-// RagStatus reports the RAG index's corpus size (chunk count) and when it was
-// last reindexed.
+// RagStatus is what GET /api/platform/rag/status answers (the hub's RagStatusDto): whether the platform
+// corpus was indexed, how many chunks, when, and through which embedding provider. A hub with no
+// embedding model (the Open edition, or the AI switched off) says Provider "none" and Indexed false.
 type RagStatus struct {
-	CorpusSize  int    `json:"corpusSize"`
-	LastReindex string `json:"lastReindex"`
+	Indexed        bool    `json:"indexed"`
+	Chunks         int     `json:"chunks"`
+	IndexedAt      *string `json:"indexedAt"`
+	Provider       string  `json:"provider"`
+	EmbeddingModel string  `json:"embeddingModel"`
 }
 
 // RagStatus fetches the RAG index status via GET /api/platform/rag/status.

@@ -460,13 +460,21 @@ Events are not delivered inline with the originating transaction. Instead, each 
 `WebhookConsumer` sweeps `core.event_outbox` from a cursor every 5 seconds. For each new event it:
 
 1. Matches the event type against all active integrations subscribed to it
-2. Fires one HTTP POST per matching integration
-3. Records the outcome in `core.webhook_delivery`
-4. Advances the cursor past the event
+2. Records one pending delivery per matching integration in `core.webhook_delivery`, then advances the cursor
+3. Fires the HTTP POSTs once that commit is done, holding no database transaction while it waits on your receiver
+4. Records each outcome in `core.webhook_delivery`
 
 The cursor advances whether or not the delivery succeeded — a failed delivery is retried
 from its own `core.webhook_delivery` row, never by re-reading the event, so an endpoint
 that is down cannot block the queue for the others.
+
+If the hub stops between steps 2 and 3, nothing is lost: the pending deliveries are still
+there, and the retry sweep sends them within about two minutes. The price is at-least-once
+rather than exactly-once: a stop right after a POST but before its outcome is recorded sends
+that one POST again. The same happens, more rarely, if the hub fails in the instant between
+recording the deliveries and advancing the cursor: the batch is then read again and its
+deliveries recorded a second time. A receiver should treat `X-Lumnik-Event-Id` as an idempotency key.
+A delivery that has not been attempted yet is not shown in the deliveries views.
 
 ### The HMAC signature
 

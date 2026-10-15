@@ -16,8 +16,9 @@ import java.util.Map;
  * ordering operators extend the same rule: an INCOMPARABLE row value (dirty text under a
  * numeric/temporal comparison — same conservative shapes as the SQL world) never matches.
  * `=` is exact text equality on String.valueOf; `~` is case-insensitive contains.
- * A native floating-point value whose text form is scientific notation is treated as
- * incomparable in both worlds (the shared NUMERIC_SHAPE), keeping the two worlds consistent.
+ * A native Number is compared by value (a Double whose text is 2.0E-5 is a legitimate 0.00002);
+ * only a STRING is held to the strict numeric text shape, as a dirty CSV cell must not match.
+ * {@code =} on a native Number against a numeric operand is equal by value too.
  */
 public final class ProcessRuleEvaluator {
 
@@ -32,7 +33,7 @@ public final class ProcessRuleEvaluator {
                 ok = String.valueOf(v).toLowerCase(Locale.ROOT)
                         .contains(f.value().toLowerCase(Locale.ROOT));
             } else if ("=".equals(f.op())) {
-                ok = String.valueOf(v).equals(f.value());
+                ok = equalsValue(v, f);
             } else {
                 ok = ordered(v, f);
             }
@@ -56,22 +57,40 @@ public final class ProcessRuleEvaluator {
         };
     }
 
+    /** {@code =}: a native Number against a numeric operand is equal by VALUE (Double 5.0 = 5, BigDecimal
+     *  5.00 = 5, 2.0E-5 = 0.00002); anything else is an exact text comparison, as before. */
+    private static boolean equalsValue(Object v, ViewFilter f) {
+        BigDecimal operand = v instanceof Number ? f.numericOperand() : null;
+        if (operand == null) return String.valueOf(v).equals(f.value());
+        BigDecimal left = nativeNumber((Number) v);
+        return left != null && left.compareTo(operand) == 0;
+    }
+
+    /** A native Number by value. It has no dirty form, so it is NOT held to the text shape the SQL guard
+     *  applies to stored text: Double.toString() is scientific for small and large magnitudes
+     *  (2.0E-5, 1.0E20), and those are legitimate values. NaN and ±Infinity are incomparable; null. */
+    private static BigDecimal nativeNumber(Number n) {
+        if ((n instanceof Double d && !Double.isFinite(d)) || (n instanceof Float f && !Float.isFinite(f))) return null;
+        try {
+            return new BigDecimal(n.toString());   // a Float's shortest text, not its binary expansion
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     private static Integer compareNumeric(Object v, String operand) {
         BigDecimal left;
-        try {
-            if (v instanceof Number n) {
-                if ((v instanceof Double d && !Double.isFinite(d))
-                        || (v instanceof Float f && !Float.isFinite(f))) return null;  // NaN/±Infinity: incomparable
-                String s = n.toString();
-                if (!s.matches(ViewFilter.NUMERIC_SHAPE)) return null;   // scientific-magnitude → incomparable, same as the SQL guard
-                left = new BigDecimal(s);
-            } else {
-                String s = String.valueOf(v);
-                if (!s.matches(ViewFilter.NUMERIC_SHAPE)) return null;   // same shape as the SQL guard
+        if (v instanceof Number n) {
+            left = nativeNumber(n);
+            if (left == null) return null;
+        } else {
+            String s = String.valueOf(v);
+            if (!s.matches(ViewFilter.NUMERIC_SHAPE)) return null;   // dirty text: the same shape as the SQL guard
+            try {
                 left = new BigDecimal(s.strip());
+            } catch (NumberFormatException e) {
+                return null;   // an unparseable number is incomparable, never a thrown error
             }
-        } catch (NumberFormatException e) {
-            return null;   // an unparseable number is incomparable, never a thrown error
         }
         return left.compareTo(new BigDecimal(operand.strip()));
     }

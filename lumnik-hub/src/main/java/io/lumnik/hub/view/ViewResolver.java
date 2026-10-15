@@ -24,7 +24,7 @@ public class ViewResolver {
                                     + "' schema for table " + table.name()
                                     + " — fix the column name or add it to the scope's entity"));
             String label = (c.label() != null && !c.label().isBlank()) ? c.label() : c.name();
-            cols.add(new ResolvedView.Column(c.name(), label, c.pgType()));
+            cols.add(new ResolvedView.Column(c.name(), label, c.pgType(), c.allowedValues()));
         }
         String title = (m.title() != null && !m.title().isBlank()) ? m.title()
                 : (table.label() != null && !table.label().isBlank()) ? table.label() : table.name();

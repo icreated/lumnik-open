@@ -56,7 +56,7 @@ func rowsToCSV(cols []string, rows [][]string) string {
 // friendlyAskError converts an ask failure into a calm, on-screen explanation.
 // Contract: 503 (engine unavailable) returns a specific message; 403 and 429
 // (scope refusal and rate limit) return the APIError message verbatim (Task 1
-// made those honest); every other APIError returns the error + a hint about
+// made those honest); 404 says the chat is not served here; every other APIError returns the error + a hint about
 // schema discovery (the dominant real-world cause for other 5xx errors);
 // non-APIError wraps generically.
 func friendlyAskError(err error, scope string) string {
@@ -64,6 +64,11 @@ func friendlyAskError(err error, scope string) string {
 	if errors.As(err, &apiErr) {
 		if apiErr.Status == 503 {
 			return "Analytic engine unavailable — the platform has no AskToSql agent on the classpath."
+		}
+		// 404: the chat door is not served by this hub (a build without it, or the operator
+		// switched the AI off). The hint below would name a cause the client cannot know.
+		if apiErr.Status == 404 {
+			return "The chat is not available on this hub."
 		}
 		// 403 and 429: return the honest error message as-is (no false cause).
 		if apiErr.Status == 403 || apiErr.Status == 429 {

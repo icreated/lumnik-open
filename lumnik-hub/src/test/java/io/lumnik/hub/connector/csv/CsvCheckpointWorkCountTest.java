@@ -49,7 +49,7 @@ class CsvCheckpointWorkCountTest {
     ConnectorCursor cursor = ConnectorCursor.empty();
     int reads = 0;
     while (true) {
-      ReadResult<Map<String, Object>> r = reader.read(chunkSize, cursor, null);
+      ReadResult<Map<String, Object>> r = reader.read(chunkSize, cursor, ReaderTestContexts.newRun());
       reads++;
       if (r instanceof ReadResult.HasMore<Map<String, Object>> hm) {
         all.addAll(hm.records());

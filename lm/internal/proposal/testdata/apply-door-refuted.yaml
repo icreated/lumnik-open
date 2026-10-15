@@ -1,0 +1,32 @@
+# DRAFT — lm proposal draft. Not an applicable manifest: it stays refused until every required
+# field and the states graph are present. lm never applies a draft and never contacted the hub.
+# Nothing here says the target below exists or is a lifecycle: that is what apply reports.
+# Evidence targets are what the dossier says the hub replayed; they are not compared with the flags below.
+#
+# From the dossier of 2026-10-03 (catalogue 2026.10.0), lead L1, rule stalled-documents@1.
+#
+# Proposal: T
+#   S
+#   Proposes a Workflow, using spec.on.table.
+#   Does not say:
+#   - D
+#
+# Still to settle (the dossier's own checks, those that need you first):
+#   C5 dormancy-target-accepted: REFUTED — the dossier carries a hub refutation; settle it before applying
+#      evidence the dossier carries (not necessarily from this run):
+#        via workflow-apply-door on connector.t_x: refused
+apiVersion: apps.lumnik.io/v1
+kind: Workflow
+metadata:
+  name: "wf-orders"
+spec:
+  scope: "sales"
+  provenance: declared
+  on:
+    table: "connector.t_commandes"
+    column: "statut"
+    key: "n_commande"
+  dormancy:
+    after: "14d"
+  # states: and transitions: go here. Exactly one state is initial; a terminal state has no
+  # outgoing transition. See docs/apps/workflows.md#the-manifest

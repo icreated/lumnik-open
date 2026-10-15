@@ -10,7 +10,9 @@ import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.audit.AuditRecorder;
+import io.lumnik.hub.manifest.LinkTemplate;
 import io.lumnik.hub.tenant.RequireTenant;
+import io.lumnik.hub.validator.ValidationError;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
@@ -19,6 +21,8 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -114,6 +118,83 @@ public class ViewApplyResource {
     audit.record("SavedView", name, "APPLY", Map.of(
         "scope", manifest.scope(),
         "manifest_sha256", AuditRecorder.sha256(body)));
-    return Response.ok(Map.of("name", name, "scope", manifest.scope())).build();
+    Map<String, Object> result = new LinkedHashMap<>();
+    result.put("name", name);
+    result.put("scope", manifest.scope());
+    // Absent rather than empty, like the App and Connector doors: applied, and worth saying something.
+    List<ValidationError> warnings = linkWarnings(manifest, rv);
+    if (!warnings.isEmpty()) result.put("warnings", warnings);
+    return Response.ok(result).build();
+  }
+
+  /**
+   * The value a filter carries is the cell's value read back from JSON, then matched as TEXT by the
+   * target (`col::text = ?`). That round-trips for text, integers, uuids and booleans — not for a
+   * numeric(18,4) (10.5000 comes back 10.5), a bigint past 2^53 or a timestamp (ISO is not PostgreSQL's
+   * text) — and a mismatch would show an honest-looking empty table, which is what this door exists
+   * to prevent. Said at apply, per placeholder column, never refused: a view might still be usable.
+   */
+  private static List<ValidationError> typeWarnings(ViewLink link, String path, ResolvedView rv) {
+    List<ValidationError> out = new ArrayList<>();
+    for (Map.Entry<String, String> f : link.filters().entrySet()) {
+      for (String column : LinkTemplate.placeholders(f.getValue())) {
+        rv.columns().stream().filter(c -> c.name().equals(column)).findFirst()
+            .filter(c -> !roundTripsAsText(c.pgType()))
+            .ifPresent(c -> out.add(new ValidationError(path + ".filters." + f.getKey(),
+                ValidationError.Severity.WARNING,
+                "column '" + column + "' is " + c.pgType() + ": its value may not match as text on the target,"
+                    + " and the link would then open an empty view; link from a text or integer column",
+                List.of())));
+      }
+    }
+    return out;
+  }
+
+  private static boolean roundTripsAsText(String pgType) {
+    String t = pgType == null ? "" : pgType.toLowerCase(Locale.ROOT).strip();
+    return t.startsWith("text") || t.startsWith("char") || t.startsWith("varchar") || t.startsWith("bpchar")
+        || t.startsWith("character") || t.equals("integer") || t.equals("int") || t.equals("int2")
+        || t.equals("int4") || t.equals("smallint") || t.equals("uuid") || t.equals("boolean")
+        || t.equals("bool");
+  }
+
+  /**
+   * #1050: a link's target is checked against what exists NOW, and never refused — views are applied in
+   * either order (A→B and B→A cannot both wait for the other), so an unresolved target is kept and the
+   * client fails closed when the link is followed. A target that is missing and a target that belongs to
+   * another scope get the same words: the door must not tell which scopes hold which view names.
+   */
+  private List<ValidationError> linkWarnings(ViewManifest manifest, ResolvedView rv) {
+    List<ValidationError> out = new ArrayList<>();
+    for (int i = 0; i < manifest.links().size(); i++) {
+      ViewLink link = manifest.links().get(i);
+      if (link.targetView() == null) continue;
+      String path = "spec.links[" + i + "]";
+      out.addAll(typeWarnings(link, path, rv));
+      Optional<SavedViewStore.Row> target = store.find(link.targetView())
+          .filter(r -> r.scope().equals(manifest.scope()));
+      if (target.isEmpty()) {
+        out.add(new ValidationError(path + ".targetView", ValidationError.Severity.WARNING,
+            "targetView '" + link.targetView() + "' is not a view of scope '" + manifest.scope() + "' (yet); the"
+                + " declaration is kept, and following the link is refused until that view is applied",
+            List.of()));
+        continue;
+      }
+      List<String> shown;
+      try {
+        shown = parser.parse(target.get().yaml()).columns();
+      } catch (IllegalArgumentException e) {
+        continue; // a stored view that no longer parses is the render door's refusal to speak
+      }
+      for (String column : link.filters().keySet()) {
+        if (!shown.contains(column)) {
+          out.add(new ValidationError(path + ".filters." + column, ValidationError.Severity.WARNING,
+              "view '" + link.targetView() + "' does not show column '" + column + "'; following the link will be"
+                  + " refused until it does",
+              List.of("shown there: " + shown)));
+        }
+      }
+    }
+    return out;
   }
 }

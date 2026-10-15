@@ -59,8 +59,9 @@ class RlsEnforcedSweepIT {
     seeder.seed(2L, "rls.sweep.t2");
 
     List<String> seen = new CopyOnWriteArrayList<>();
+    // drain, not sweep: the consumers' production path, a new transaction (and connection) per batch.
     TenantContext.runAsSystem(() ->
-        sweeper.sweep("rls-it", 100, r ->
+        sweeper.drain("rls-it", 100, () -> r ->
             seen.add(r.getEventType() + "@" + CurrentTenantHolder.get())));
 
     assertTrue(seen.contains("rls.sweep.t1@1"), "tenant 1 event under tenant-1 context: " + seen);

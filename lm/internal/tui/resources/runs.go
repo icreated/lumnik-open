@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -25,6 +24,7 @@ const (
 	runStatusUnknown  runStatus = iota
 	runStatusSuccess            // ● green
 	runStatusFailure            // ● red
+	runStatusQueued             // ◌ sky
 	runStatusRunning            // ▶ amber
 	runStatusPartial            // ◐ yellow
 	runStatusDisabled           // ─ grey
@@ -36,6 +36,8 @@ func (s runStatus) color() tcell.Color {
 		return tcell.NewRGBColor(0x22, 0xC5, 0x5E)
 	case runStatusFailure:
 		return tcell.NewRGBColor(0xEF, 0x44, 0x44)
+	case runStatusQueued:
+		return tcell.NewRGBColor(0x38, 0xBD, 0xF8) // sky — accepted, not started
 	case runStatusRunning:
 		return tcell.NewRGBColor(0xFF, 0x8C, 0x00)
 	case runStatusPartial:
@@ -52,6 +54,8 @@ func (s runStatus) glyph() string {
 		return "●"
 	case runStatusFailure:
 		return "●"
+	case runStatusQueued:
+		return "◌"
 	case runStatusRunning:
 		return "▶"
 	case runStatusPartial:
@@ -76,6 +80,8 @@ func statusFor(s string) runStatus {
 		return runStatusSuccess
 	case KindFailed:
 		return runStatusFailure
+	case KindQueued:
+		return runStatusQueued
 	case KindRunning:
 		return runStatusRunning
 	case KindPartial:
@@ -115,8 +121,7 @@ type Runs struct {
 	items    []types.Run
 	mu       sync.Mutex
 	app      *tview.Application
-	fetching atomic.Bool
-	dirty    atomic.Bool
+	offLoop  offLoop
 	sort     *style.ColumnSort
 	// The drill-downs, at most one of them set: :sources leads here by connector, :endpoints by
 	// endpoint. They are two questions, not two halves of one — an endpoint already names its
@@ -216,34 +221,16 @@ func (r *Runs) ClearFilter() { r.setFilters("", "", "") }
 
 // Refresh fetches OFF the UI thread — a blocking RunList on the main thread,
 // re-triggered by every live SSE event (ApplyEvent), starved input and froze
-// the TUI under an event burst (rehearsal carnet #9). The fetching guard
-// coalesces a burst into one in-flight request; the render lands via QueueUpdate.
+// the TUI under an event burst (rehearsal carnet #9). offLoop coalesces a burst
+// into one in-flight request; the render lands via QueueUpdate.
 func (r *Runs) Refresh() {
-	if r.app == nil { // tests construct a bare page
+	r.offLoop.run(r.app, func() func() {
+		// Re-read the drill-downs each round: one that lands mid-flight sets the dirty flag,
+		// and the extra pass it buys must ask the question the user is now asking.
 		connectorID, endpointID := r.filters()
 		list, err := r.client.RunList(connectorID, endpointID, client.RunsPageCap)
-		r.renderList(list, err)
-		return
-	}
-	if !r.fetching.CompareAndSwap(false, true) {
-		r.dirty.Store(true) // a refresh landed mid-flight — don't drop it
-		return
-	}
-	go func() {
-		defer r.fetching.Store(false)
-		for {
-			// Re-read the drill-downs each round: one that lands mid-flight sets the dirty flag,
-			// and the extra pass it buys must ask the question the user is now asking.
-			connectorID, endpointID := r.filters()
-			list, err := r.client.RunList(connectorID, endpointID, client.RunsPageCap)
-			QueueUpdate(r.app, func() { r.renderList(list, err) })
-			// If any refresh was requested during this fetch, do exactly one more
-			// so the last event's state is never left unrendered.
-			if !r.dirty.CompareAndSwap(true, false) {
-				return
-			}
-		}
-	}()
+		return func() { r.renderList(list, err) }
+	})
 }
 
 func (r *Runs) renderList(list []types.Run, err error) {
@@ -265,7 +252,7 @@ func (r *Runs) applySort() {
 	if !sorted {
 		// Default: newest run on top (rehearsal feedback #6).
 		sort.SliceStable(r.items, func(i, j int) bool {
-			return r.items[i].StartedAt.After(r.items[j].StartedAt)
+			return newestFirst(r.items[i], r.items[j])
 		})
 		return
 	}
@@ -283,7 +270,7 @@ func (r *Runs) applySort() {
 		case colStatus:
 			return a.Status < b.Status
 		case colStarted:
-			return a.StartedAt.Before(b.StartedAt)
+			return startedOf(a).Before(startedOf(b))
 		case colDuration:
 			return durationOf(a) < durationOf(b)
 		}
@@ -309,13 +296,13 @@ func (r *Runs) render() {
 	for i, run := range r.items {
 		row := i + 1
 		duration := "—"
-		if run.EndedAt != nil {
-			duration = run.EndedAt.Sub(run.StartedAt).Truncate(time.Millisecond).String()
+		if run.EndedAt != nil && run.StartedAt != nil {
+			duration = run.EndedAt.Sub(*run.StartedAt).Truncate(time.Millisecond).String()
 		}
 		r.table.SetCell(row, colConnector, dataCell(run.ConnectorLabel()).SetExpansion(1))
 		r.table.SetCell(row, colEndpoint, dataCell(run.EndpointLabel()).SetExpansion(1))
 		r.table.SetCell(row, colStatus, statusCell(run.Status, statusFor(run.Status)))
-		r.table.SetCell(row, colStarted, tview.NewTableCell(startedLabel(run.StartedAt, now)).SetExpansion(1))
+		r.table.SetCell(row, colStarted, tview.NewTableCell(startedCellLabel(run, now)).SetExpansion(1))
 		r.table.SetCell(row, colDuration, tview.NewTableCell(duration).SetExpansion(1))
 		r.table.SetCell(row, colRecords, tview.NewTableCell(fmt.Sprintf("%d/%d/%d", run.RecordsIn, run.RecordsOut, run.RecordsSkipped)).SetExpansion(1))
 		r.table.SetCell(row, colTrigger, dataCell(run.TriggeredBy).SetExpansion(1))
@@ -323,10 +310,34 @@ func (r *Runs) render() {
 }
 
 func durationOf(run types.Run) time.Duration {
-	if run.EndedAt == nil {
+	if run.EndedAt == nil || run.StartedAt == nil {
 		return 0
 	}
-	return run.EndedAt.Sub(run.StartedAt)
+	return run.EndedAt.Sub(*run.StartedAt)
+}
+
+// startedOf is a run's start as a time, zero while it is still queued (the hub reports it null).
+func startedOf(r types.Run) time.Time {
+	if r.StartedAt == nil {
+		return time.Time{}
+	}
+	return *r.StartedAt
+}
+
+// startedCellLabel is the STARTED cell: the start in local time, or "queued" for a run that has none.
+func startedCellLabel(r types.Run, now time.Time) string {
+	if r.StartedAt == nil {
+		return "queued"
+	}
+	return startedLabel(*r.StartedAt, now)
+}
+
+// newestFirst orders by start descending, a queued run (no start yet) before every started one.
+func newestFirst(a, b types.Run) bool {
+	if a.StartedAt == nil || b.StartedAt == nil {
+		return a.StartedAt == nil && b.StartedAt != nil
+	}
+	return a.StartedAt.After(*b.StartedAt)
 }
 
 func (r *Runs) selected() (types.Run, bool) {
@@ -365,13 +376,18 @@ func (r *Runs) cancel() {
 	if !ok {
 		return
 	}
-	if err := r.client.RunCancel(run.ID); err != nil {
+	status, err := r.client.RunCancel(run.ID)
+	if err != nil {
 		if r.toast != nil {
 			r.toast(err.Error())
 		}
 		return
 	}
 	if r.toast != nil {
+		if status == "cancelled" {
+			r.toast(fmt.Sprintf("cancelled: %s %s — it had not started", run.ConnectorLabel(), shortRunID(run.ID)))
+			return
+		}
 		r.toast(fmt.Sprintf("cancellation requested: %s %s — ends after the current chunk",
 			run.ConnectorLabel(), shortRunID(run.ID)))
 	}
@@ -395,10 +411,16 @@ func (r *Runs) SelectedDescribe() (string, string, bool) {
 	}
 	fmt.Fprintf(&b, "status:          %s %s\n", statusFor(run.Status).glyph(), esc(run.Status))
 	fmt.Fprintf(&b, "trigger:         %s\n", esc(run.TriggeredBy))
-	fmt.Fprintf(&b, "started:         %s\n", output.HumanTimeSeconds(&run.StartedAt))
+	if run.StartedAt == nil {
+		fmt.Fprintf(&b, "started:         queued\n")
+	} else {
+		fmt.Fprintf(&b, "started:         %s\n", output.HumanTimeSeconds(run.StartedAt))
+	}
 	if run.EndedAt != nil {
 		fmt.Fprintf(&b, "finished:        %s\n", output.HumanTimeSeconds(run.EndedAt))
-		fmt.Fprintf(&b, "duration:        %s\n", run.EndedAt.Sub(run.StartedAt).Truncate(time.Millisecond))
+		if run.StartedAt != nil {
+			fmt.Fprintf(&b, "duration:        %s\n", run.EndedAt.Sub(*run.StartedAt).Truncate(time.Millisecond))
+		}
 	}
 	fmt.Fprintf(&b, "records_in:      %d\n", run.RecordsIn)
 	fmt.Fprintf(&b, "records_out:     %d\n", run.RecordsOut)

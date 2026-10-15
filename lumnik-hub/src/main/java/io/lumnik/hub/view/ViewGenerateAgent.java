@@ -75,8 +75,7 @@ public class ViewGenerateAgent {
         // the open edition raised UnsatisfiedResolutionException here — the one endpoint that
         // half-worked (audit P11). Abstention is the honest refusal the surface already renders.
         if (chatPorts.isUnsatisfied()) {
-            return Outcome.abstained(
-                "no chat model is wired in this edition — view generation needs the closed extensions");
+            return Outcome.abstained("no chat model is available on this hub — view generation needs one");
         }
         return generate(card, scope, description, chatPorts.get());
     }

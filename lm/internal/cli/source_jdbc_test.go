@@ -58,8 +58,8 @@ func TestSourceJdbcAddHasSkipPatternFlag(t *testing.T) {
 	if f == nil {
 		t.Fatal("add has no --skip-pattern flag: the interactive picker cannot hide an ERP's catalog tables")
 	}
-	if f.DefValue != defaultSkipPatterns {
-		t.Errorf("default = %q, want %q", f.DefValue, defaultSkipPatterns)
+	if f.DefValue != "" {
+		t.Errorf("default = %q, want empty: the source dialect's own exclusions apply", f.DefValue)
 	}
 }
 

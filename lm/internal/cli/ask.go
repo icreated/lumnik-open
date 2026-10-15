@@ -2,9 +2,11 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/icreated/lumnik-open/lm/internal/ask"
+	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/spf13/cobra"
 )
 
@@ -20,24 +22,28 @@ func newAskCmd() *cobra.Command {
 			}
 			question := strings.Join(args, " ")
 			scope, _ := cmd.Flags().GetString("scope")
-			res, err := c.RagAsk(question, scope)
+			lang, _ := cmd.Flags().GetString("lang")
+			res, err := c.RagAsk(question, scope, client.AnswerLang(lang))
 			if err != nil {
 				return err
 			}
-			cmd.Println(res.Answer)
+			out := cmd.OutOrStdout()
+			fmt.Fprintln(out, res.Answer)
 			if res.DataAsOf != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "  data as of: %s (last completed run)\n", res.DataAsOf)
+				fmt.Fprintf(out, "  data as of: %s (last completed run)\n", res.DataAsOf)
 			}
+			printDisputed(out, res.Disputed, res.DisputedTruncated)
 			// Honesty: show the SQL that actually ran, so the answer is auditable.
 			if res.SQL != "" {
-				cmd.Println()
-				fmt.Fprintf(cmd.OutOrStdout(), "  SQL: %s\n", res.SQL)
+				fmt.Fprintln(out)
+				fmt.Fprintf(out, "  SQL: %s\n", res.SQL)
 			}
-			printOtherDoors(cmd, res.OtherDoors, scope)
+			printOtherDoors(out, res.OtherDoors, scope)
 			return nil
 		},
 	}
 	ask.Flags().String("scope", "", "The métier scope whose fused data to query")
+	ask.Flags().String("lang", "", "Two-letter answer language (default: from LC_ALL, LC_MESSAGES or LANG; none: the question's own)")
 	return ask
 }
 
@@ -53,13 +59,37 @@ func gestureFor(door, scope string) string {
 	case ask.Lifecycle:
 		return "lm chat" + suffix + "  — the declared lifecycle is retrieved there, not by SQL"
 	case ask.Conflicts:
-		return "lm conflicts list" + suffix + "  — where this scope's sources disagree, row by row"
+		return "lm conflicts list" + suffix + "  — where this scope has source conflicts or lookup ambiguities, row by row"
 	default:
 		return ""
 	}
 }
 
-func printOtherDoors(cmd *cobra.Command, doors []string, scope string) {
+// printDisputed names the records this answer filtered on while a source disagrees with another (#874),
+// before the SQL: it qualifies the answer itself.
+func printDisputed(out io.Writer, disputed []client.Disputed, truncated bool) {
+	if len(disputed) == 0 {
+		return
+	}
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "  disputed — a source disagrees on a value this answer filtered on:")
+	for _, d := range disputed {
+		verdict := "counted"
+		if !d.Counted {
+			verdict = "not counted"
+		}
+		var sources []string
+		for _, s := range d.Sources {
+			sources = append(sources, s.Src+": "+s.Display())
+		}
+		fmt.Fprintf(out, "    %s  %s = '%s'  %s  %s\n", d.Key, d.Column, d.Matched, verdict, strings.Join(sources, " · "))
+	}
+	if truncated {
+		fmt.Fprintln(out, "    … and more — lm conflicts list")
+	}
+}
+
+func printOtherDoors(out io.Writer, doors []string, scope string) {
 	var lines []string
 	for _, d := range doors {
 		if g := gestureFor(d, scope); g != "" {
@@ -69,8 +99,8 @@ func printOtherDoors(cmd *cobra.Command, doors []string, scope string) {
 	if len(lines) == 0 {
 		return
 	}
-	cmd.Println()
+	fmt.Fprintln(out)
 	for _, l := range lines {
-		fmt.Fprintf(cmd.OutOrStdout(), "  try: %s\n", l)
+		fmt.Fprintf(out, "  try: %s\n", l)
 	}
 }

@@ -9,7 +9,8 @@
     </parent>
     <artifactId>lumnik-testkit</artifactId>
     <name>lumnik :: TestKit</name>
-    <description>Shared test fixtures: CDI mock LLM ports and hand-rolled Instance&lt;T&gt; impls.</description>
+    <description>Shared test fixtures: CDI mock LLM ports, hand-rolled Instance&lt;T&gt; impls, and the
+        #704 labelled relevance corpus + metric harness for IndexedSearchPort providers.</description>
 
     <!-- Deliberately SPI-only. The testkit is consumed at test scope by lumnik-hub and
          lumnik-rag, so it must sit BELOW them in the reactor: a dependency on either would
@@ -32,6 +33,23 @@
             <artifactId>lumnik-common</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!-- IndexedSearchPort/IndexedSearchQuery/etc. for the #704 relevance corpus + harness.
+             No dependency back on lumnik-testkit, so the reactor edge stays one-way. -->
+        <dependency>
+            <groupId>io.lumnik</groupId>
+            <artifactId>lumnik-extraction-spi</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <!-- Corpus fixture is authored as YAML, same library as the hub's manifest parsers
+             (SearchIndexManifestParser); baseline snapshots are plain JSON via jackson-databind. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
         <!-- @ApplicationScoped / Instance<T>. `provided`: every consumer runs inside a CDI
              container that already supplies the API. -->
         <dependency>
@@ -47,11 +65,28 @@
             <artifactId>quarkus-test-common</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!-- @LookupIfProperty — the mock model ports carry the same lumnik.ai.enabled switch as the
+             real ones, so a hub-level test with the switch off sees what production sees. `provided`:
+             consumers run in a Quarkus app, which brings arc. -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-arc</artifactId>
+            <scope>provided</scope>
+        </dependency>
         <!-- compile scope, deliberately: this module IS a test library, so its assertion
              vocabulary is part of its API rather than its own test-time detail. -->
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
+            <scope>compile</scope>
+        </dependency>
+        <!-- compile scope, deliberately, same reason as assertj-core above: ProviderContractHarness
+             (io.lumnik.testkit.search.contract) returns DynamicNode/DynamicContainer/DynamicTest and
+             uses Assumptions directly — this module IS a test library, so JUnit's own vocabulary is
+             part of its API, not its own test-time detail. -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
             <scope>compile</scope>
         </dependency>
     </dependencies>

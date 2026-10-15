@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/icreated/lumnik-open/lm/test/otk/generator"
 	"github.com/icreated/lumnik-open/lm/test/otk/oracle"
 )
 
@@ -41,7 +42,7 @@ const (
 // A non-HTTP status (e.g. 0 from a transport error: connection refused, timeout)
 // yields no finding here — it means the boundary was never reached, not that it
 // held. The caller must enforce hub reachability as a precondition before grading.
-func AuthOutcome(status int, body string, expect Expectation, defect string, seed int64) []oracle.Finding {
+func AuthOutcome(status int, body string, expect Expectation, defect string, caseID generator.CaseID, seed int64) []oracle.Finding {
 	if status == 0 {
 		return nil // boundary never reached; the caller enforces reachability
 	}
@@ -54,19 +55,19 @@ func AuthOutcome(status int, body string, expect Expectation, defect string, see
 		switch {
 		case served(status):
 			return []oracle.Finding{{
-				Severity: oracle.Critical, Family: oracle.Auth, Seed: seed,
+				Severity: oracle.Critical, Family: oracle.Auth, CaseID: caseID, Seed: seed,
 				Detail: fmt.Sprintf("auth bypass landed (%s): expected %d, hub returned %d", defect, want, status),
 			}}
 		case status == want:
 			return nil // rejected with exactly the expected code
 		case status >= 500:
 			return []oracle.Finding{{
-				Severity: oracle.Medium, Family: oracle.Auth, Seed: seed,
+				Severity: oracle.Medium, Family: oracle.Auth, CaseID: caseID, Seed: seed,
 				Detail: fmt.Sprintf("forged token (%s) yielded an untyped error (status %d)", defect, status),
 			}}
 		default:
 			return []oracle.Finding{{
-				Severity: oracle.Medium, Family: oracle.Auth, Seed: seed,
+				Severity: oracle.Medium, Family: oracle.Auth, CaseID: caseID, Seed: seed,
 				Detail: fmt.Sprintf("wrong rejection code (%s): expected %d, hub returned %d", defect, want, status),
 			}}
 		}
@@ -80,12 +81,12 @@ func AuthOutcome(status int, body string, expect Expectation, defect string, see
 			return nil
 		case status >= 500:
 			return []oracle.Finding{{
-				Severity: oracle.Medium, Family: oracle.Auth, Seed: seed,
+				Severity: oracle.Medium, Family: oracle.Auth, CaseID: caseID, Seed: seed,
 				Detail: fmt.Sprintf("cross-tenant probe yielded an untyped error (status %d)", status),
 			}}
 		default:
 			return []oracle.Finding{{
-				Severity: oracle.Medium, Family: oracle.Auth, Seed: seed,
+				Severity: oracle.Medium, Family: oracle.Auth, CaseID: caseID, Seed: seed,
 				Detail: fmt.Sprintf("cross-tenant probe (%s): expected 200 (empty), hub returned %d", defect, status),
 			}}
 		}
@@ -94,7 +95,7 @@ func AuthOutcome(status int, body string, expect Expectation, defect string, see
 			return nil // the happy path did what it says
 		}
 		return []oracle.Finding{{
-			Severity: oracle.Medium, Family: oracle.Auth, Seed: seed,
+			Severity: oracle.Medium, Family: oracle.Auth, CaseID: caseID, Seed: seed,
 			Detail: fmt.Sprintf("refused a legitimate request (%s): expected 2xx, hub returned %d", defect, status),
 		}}
 	default:
@@ -103,7 +104,7 @@ func AuthOutcome(status int, body string, expect Expectation, defect string, see
 		// passed every probe that declared it. High, so it fails the declared tier: a
 		// lane whose whole job is refusing to miss things must not miss itself.
 		return []oracle.Finding{{
-			Severity: oracle.High, Family: oracle.Robustness, Seed: seed,
+			Severity: oracle.High, Family: oracle.Robustness, CaseID: caseID, Seed: seed,
 			Detail: fmt.Sprintf("OTK cannot grade expectation %d (%s): the auth severity switch has no arm for it", int(expect), defect),
 		}}
 	}
@@ -122,7 +123,7 @@ func served(status int) bool { return status >= 200 && status < 300 }
 // matching "otk-run-10"). It falls back to a substring scan only when the body is
 // not the expected JSON (so a malformed/HTML error page that echoes the name is
 // still caught).
-func CrossTenantLeak(body, foreignName string, seed int64) []oracle.Finding {
+func CrossTenantLeak(body, foreignName string, caseID generator.CaseID, seed int64) []oracle.Finding {
 	if foreignName == "" {
 		return nil
 	}
@@ -134,7 +135,7 @@ func CrossTenantLeak(body, foreignName string, seed int64) []oracle.Finding {
 	}
 	if visible {
 		return []oracle.Finding{{
-			Severity: oracle.Critical, Family: oracle.Auth, Seed: seed,
+			Severity: oracle.Critical, Family: oracle.Auth, CaseID: caseID, Seed: seed,
 			Detail: "tenant isolation crossed: foreign connector " + foreignName + " visible",
 		}}
 	}

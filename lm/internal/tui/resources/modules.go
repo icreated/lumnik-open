@@ -11,15 +11,17 @@ import (
 )
 
 type Modules struct {
-	table  *tview.Table
-	client *client.Client
-	mu     sync.Mutex
+	app     *tview.Application
+	table   *tview.Table
+	client  *client.Client
+	offLoop offLoop
+	mu      sync.Mutex
 }
 
-func NewModules(c *client.Client) *Modules {
+func NewModules(app *tview.Application, c *client.Client) *Modules {
 	t := tview.NewTable().SetBorders(false).SetSelectable(true, false)
 	t.SetTitle(" :modules ").SetBorder(true)
-	p := &Modules{table: t, client: c}
+	p := &Modules{app: app, table: t, client: c}
 	p.setHeader()
 	return p
 }
@@ -31,18 +33,26 @@ func (m *Modules) Hints() string {
 }
 
 func (m *Modules) setHeader() {
-	headers := []string{"NAME", "VERSION", "SCHEMA", "STATUS"}
+	headers := []string{"NAME", "VERSION", "SCHEMA", "STATUS", "REASON"}
 	for i, h := range headers {
 		cell := tview.NewTableCell(h).SetSelectable(false).SetExpansion(1).SetTextColor(tcell.ColorYellow)
 		m.table.SetCell(0, i, cell)
 	}
 }
 
+// Refresh lists off the event loop (offLoop): the live ticker calls it while the page is in front
+// (#891).
 func (m *Modules) Refresh() {
+	m.offLoop.run(m.app, func() func() {
+		modules, err := m.client.ModuleList()
+		return func() { m.renderList(modules, err) }
+	})
+}
+
+func (m *Modules) renderList(modules []types.Module, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	modules, err := m.client.ModuleList()
 	if err != nil {
 		m.table.Clear()
 		m.setHeader()
@@ -63,6 +73,6 @@ func (m *Modules) Refresh() {
 		m.table.SetCell(row, 1, dataCell(mod.Version).SetExpansion(1))
 		m.table.SetCell(row, 2, dataCell(mod.Schema).SetExpansion(1))
 		m.table.SetCell(row, 3, dataCell(mod.Status).SetExpansion(1))
+		m.table.SetCell(row, 4, dataCell(mod.Reason).SetExpansion(1))
 	}
-	_ = types.Module{}
 }

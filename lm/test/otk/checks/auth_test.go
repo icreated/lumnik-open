@@ -78,7 +78,7 @@ func TestAuthOutcomeMatrix(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := AuthOutcome(tc.status, `[{"name":"x"}]`, tc.expect, "some-defect", 7)
+			got := AuthOutcome(tc.status, `[{"name":"x"}]`, tc.expect, "some-defect", testCaseID, 7)
 
 			if tc.want == clean {
 				if len(got) != 0 {
@@ -95,6 +95,9 @@ func TestAuthOutcomeMatrix(t *testing.T) {
 			if got[0].Family != oracle.Auth {
 				t.Errorf("family: got %v, want %v", got[0].Family, oracle.Auth)
 			}
+			if got[0].CaseID != testCaseID {
+				t.Errorf("caseID: got %v, want %v", got[0].CaseID, testCaseID)
+			}
 			if tc.detail != "" && !strings.Contains(got[0].Detail, tc.detail) {
 				t.Errorf("detail %q must carry %q", got[0].Detail, tc.detail)
 			}
@@ -109,7 +112,7 @@ func TestAuthOutcomeMatrix(t *testing.T) {
 func TestAuthOutcome_AnUngradedExpectationIsNeverClean(t *testing.T) {
 	for _, status := range []int{200, 401, 403, 500} {
 		t.Run(fmt.Sprintf("status %d", status), func(t *testing.T) {
-			got := AuthOutcome(status, "", Expectation(99), "some-defect", 7)
+			got := AuthOutcome(status, "", Expectation(99), "some-defect", testCaseID, 7)
 			if len(got) == 0 {
 				t.Fatalf("an expectation the grader cannot read must never grade clean")
 			}
@@ -139,7 +142,7 @@ func TestCrossTenantLeak(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := CrossTenantLeak(tc.body, tc.foreignName, 7)
+			got := CrossTenantLeak(tc.body, tc.foreignName, testCaseID, 7)
 			if tc.wantFinding {
 				if len(got) != 1 || got[0].Severity != oracle.Critical {
 					t.Fatalf("expected one CRITICAL finding, got %v", got)

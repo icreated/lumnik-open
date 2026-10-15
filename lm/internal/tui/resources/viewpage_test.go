@@ -26,7 +26,7 @@ func TestDetailBody(t *testing.T) {
 		ConflictLedger: true,
 		Conflicts: []client.DetailConflict{
 			{Column: "name", Sources: []client.DetailSource{
-				{Src: "cust_siebel", Value: "Marie"}, {Src: "t_cust_csv", Value: "MARIE A."}}},
+				{Src: "cust_siebel", Value: client.StrPtr("Marie")}, {Src: "t_cust_csv", Value: client.StrPtr("MARIE A.")}}},
 		},
 	}
 	out := detailBody(d)

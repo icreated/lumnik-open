@@ -11,6 +11,7 @@ import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.MalformedRecord;
 import io.lumnik.hub.connector.api.types.ReadResult;
+import io.lumnik.hub.connector.api.types.RunScope;
 import io.lumnik.hub.connector.transport.AfterProcessAction;
 import io.lumnik.hub.connector.transport.FileDescriptor;
 import io.lumnik.hub.connector.transport.FileSource;
@@ -30,17 +31,19 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * Remote (sftp/s3) CSV reader. Per read(): first archive (after_process) the files the
  * PERSISTED cursor already carries — the committed cursor is the proof their rows landed —
- * then continue the in-progress file (if the cursor names one) or list files since the
- * watermark and start the next unprocessed one. Each read() delivers at most
+ * then continue the in-progress file (if the cursor names one) or take the next unprocessed
+ * file from the run's listing (one listing per {@link #REFRESH_EVERY} files; a file taken from an earlier listing is checked with one {@code stat}). Each read() delivers at most
  * {@code chunkSize} rows from ONE file (lot-5b B2 — the old one-file-one-chunk read
  * materialised the whole file in heap); a file spanning several chunks is carried in the
  * cursor's {@code inProgress} block until exhausted, and only then enters the
@@ -130,10 +133,11 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
 
     @Override
     public ReadResult<Map<String, Object>> read(int chunkSize, ConnectorCursor cursor, ConnectorContext ctx) {
-        // Build the FileSource (SFTP session / S3 client) per read() and close it via try-with-resources.
-        // The engine creates a fresh reader per chunk and never calls ItemReader.close(), so holding the
-        // session in a field would leak a connection per chunk (especially SFTP).
-        try (FileSource source = registry.build(transport)) {
+        // The source (SFTP session, S3 client) belongs to the run, not to this chunk: the engine builds a fresh
+        // reader per chunk but closes ctx.scope() once, when the run ends. Closing it here would rebuild a
+        // session every 500 rows.
+        try {
+            FileSource source = source(ctx);
             FileProcessingCursor fpc = cursor.isEmpty()
                 ? FileProcessingCursor.defaultCursor()
                 : FileProcessingCursor.fromJson(cursor.value().toString());
@@ -145,12 +149,7 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
 
             archiveCommitted(source, fpc);
 
-            FileDescriptor next;
-            try (var stream = source.listSince(fpc.watermark())) {
-                next = stream.filter(f -> !fpc.alreadyProcessed(f))
-                             .min(Comparator.comparing(FileDescriptor::lastModified))
-                             .orElse(null);
-            }
+            FileDescriptor next = nextFile(source, fpc, ctx.scope());
             if (next == null) return new ReadResult.EndOfStream<>(List.of());
 
             return startFile(source, fpc, next, chunkSize);
@@ -159,6 +158,88 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
         } catch (Exception e) {
             throw new ConnectorException("remote read failed: " + e.getMessage(), e);
         }
+    }
+
+    /** The key under which the run scope holds this endpoint's source (the scope is per endpoint run). */
+    private static final String SOURCE_KEY = "file-source";
+    private static final String LISTING_KEY = "file-listing";
+    /**
+     * How many files a listing is trusted for. A file that arrives while the run reads, with an mtime behind the
+     * watermark the run has reached, is passed by the watermark rule; the longer a list lives, the more such
+     * arrivals it hides from the listing that would have shown them in time. Bounding it keeps that window at this
+     * many files while a run over D files lists D / REFRESH_EVERY times instead of D (5 000 files: 50 listings, not
+     * 5 000).
+     */
+    static final int REFRESH_EVERY = 100;
+
+    /** The files a listing found that this run has not started yet, oldest first. Held by the run scope. */
+    private static final class Listing implements AutoCloseable {
+        final Deque<FileDescriptor> pending = new ArrayDeque<>();
+        /** Files handed out since the list was made. */
+        int served;
+
+        @Override public void close() { pending.clear(); }
+    }
+
+    /**
+     * The next file to start, or {@code null} when the source has none left. The source is LISTED once to find the
+     * files, not once per file (#1017: the listing is O(D), so a run over D small files was O(D²)); each file then
+     * taken from an EARLIER listing is re-checked with one {@code stat}, because that list was true when it was made
+     * and archiving or the outside world has acted since (the first file of a listing just made is not: the
+     * listing is its check):
+     * <ul>
+     *   <li>gone from the source → skipped, exactly as a fresh listing would not return it;</li>
+     *   <li>changed (size, mtime, etag) → the list is dropped and rebuilt, because the file now belongs somewhere
+     *       else in the mtime order and the watermark rule must see it there;</li>
+     *   <li>list used up, or {@link #REFRESH_EVERY} files served → listed again, which finds what arrived while
+     *       the run was reading (when its mtime is not behind the watermark yet) and is the answer to "nothing
+     *       left", as before.</li>
+     * </ul>
+     * The run's scope is per endpoint run and a failing chunk fails the run, so a file taken from the list and
+     * lost with its chunk is listed afresh by the next run; a chunk retried inside one run would not find it again.
+     */
+    private FileDescriptor nextFile(FileSource source, FileProcessingCursor fpc, RunScope scope) {
+        Listing listing = scope.resource(LISTING_KEY, Listing::new);
+        while (listing.served < REFRESH_EVERY) {
+            FileDescriptor queued = pollStartable(listing, fpc);
+            if (queued == null) break;
+            FileDescriptor now = source.stat(queued.path()).orElse(null);
+            if (now == null) continue;
+            if (queued.sameVersion(now)) {
+                listing.served++;
+                return now;
+            }
+            break;
+        }
+        listing.pending.clear();
+        try (var stream = source.listSince(fpc.watermark())) {
+            stream.forEach(listing.pending::add);   // already ascending by lastModified: the FileSource contract
+        }
+        listing.served = 0;
+        FileDescriptor first = pollStartable(listing, fpc);
+        if (first != null) listing.served++;
+        return first;
+    }
+
+    /** The first queued file the cursor has not already seen; the ones it has are dropped on the way. */
+    private static FileDescriptor pollStartable(Listing listing, FileProcessingCursor fpc) {
+        FileDescriptor f;
+        while ((f = listing.pending.poll()) != null) {
+            if (!f.lastModified().isBefore(fpc.watermark()) && !fpc.alreadyProcessed(f)) return f;
+        }
+        return null;
+    }
+
+    /**
+     * The run's source. If its session died while the previous chunk was being written, it is replaced HERE,
+     * at the start of the chunk, before anything was read or moved, and only once: a chunk that fails afterwards
+     * fails as it always did, because it may already have downloaded half a file or archived a processed one.
+     */
+    private FileSource source(ConnectorContext ctx) {
+        RunScope scope = ctx.scope();
+        Supplier<FileSource> build = () -> registry.build(transport);
+        if (!scope.resource(SOURCE_KEY, build).usable()) scope.invalidate(SOURCE_KEY);
+        return scope.resource(SOURCE_KEY, build);
     }
 
     // -----------------------------------------------------------------------
@@ -241,10 +322,11 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
 
     private ReadResult<Map<String, Object>> continueFile(FileSource source, FileProcessingCursor fpc,
                                                          InProgress ip, int chunkSize) {
-        FileDescriptor now;
-        try (var stream = source.listSince(fpc.watermark())) {
-            now = stream.filter(f -> f.path().equals(ip.path())).findFirst().orElse(null);
-        }
+        // One stat of this file, not a listing of the whole source (#898). The watermark filter is
+        // listSince's inclusive boundary, so the answer is still the one the listing would give.
+        FileDescriptor now = source.stat(ip.path())
+            .filter(f -> !f.lastModified().isBefore(fpc.watermark()))
+            .orElse(null);
         // A partially-ingested file that mutated or vanished is NOT resumable: skip-parse over
         // different bytes would silently misalign with the committed rows, and a silent restart
         // would double-ingest. Fail loudly, naming the file — the one exception to fallback-not-fail.
@@ -401,7 +483,7 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
      * forward-compatible the same way). Carries:
      * <ul>
      *   <li>the version token ({@code size}/{@code lastModified}/{@code etag}) of the bytes the
-     *       committed rows came from — verified against the fresh listing every window;</li>
+     *       committed rows came from — verified against a fresh {@code stat} every window;</li>
      *   <li>{@code rowsProcessed} (events consumed: good + isolated malformed) for the
      *       skip-parse fallback;</li>
      *   <li>the {@code encoding}/{@code delimiter} detected at the file's first window — resumed

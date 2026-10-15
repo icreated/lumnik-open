@@ -109,7 +109,7 @@ Four pages answer "what needs me":
   `^R` replays a failed delivery — a succeeded one has nothing to replay, and the TUI
   says so instead of no-op'ing.
 - **`:observations`** — the workflow tape: documents that have NOT moved, stillest first.
-- **`:conflicts`** — the fused rows where sources still disagree (read-only — resolving
+- **`:conflicts`** — the fused rows with a source conflict or a lookup ambiguity (read-only — resolving
   one is an upstream manifest change, never a keystroke here).
 
 ## Explore & ask
@@ -121,7 +121,7 @@ input for a new question. The scope it asks against is the session scope shown i
 header: seeded at startup from your default (`lm scope`), changed with `:scopes` →
 `Enter` or `:scope <tag>` for the rest of the session.
 
-`:view` opens a [`kind:View`](../how-it-works.md#six-kinds-two-families) manifest file
+`:view` opens a [`kind:View`](../how-it-works.md#seven-kinds-two-families) manifest file
 and renders it — `Enter` opens the suggested living example on an empty path, or type
 your own.
 
@@ -146,7 +146,7 @@ but never destroys it: your edits are written to a temp file first, so nothing i
 ever lost to a stray `Esc`.
 
 `:processes` lists declared
-[`kind:Process`](../how-it-works.md#six-kinds-two-families) rules; `e` re-opens a
+[`kind:Process`](../how-it-works.md#seven-kinds-two-families) rules; `e` re-opens a
 stored manifest through that same edit → validate → apply loop, so create and edit
 share one path.
 

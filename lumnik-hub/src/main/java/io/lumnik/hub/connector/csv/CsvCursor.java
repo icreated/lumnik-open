@@ -30,7 +30,7 @@ import java.util.List;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record CsvCursor(String file, long rowsProcessed,
                         Long anchorByte, Long charDelta, Long lineBase,
-                        List<String> headers, Version version) {
+                        List<String> headers, Version version, Boolean complete) {
 
   /**
    * The version token: identifies the bytes the checkpoint describes. {@code lastModified} is
@@ -62,6 +62,29 @@ public record CsvCursor(String file, long rowsProcessed,
   /** Legacy two-field cursor — the shape every fallback window keeps writing. */
   public CsvCursor(String file, long rowsProcessed) {
     this(file, rowsProcessed, null, null, null, null, null);
+  }
+
+  /** The shape every cursor had before {@code complete} existed: a position inside a file. */
+  public CsvCursor(String file, long rowsProcessed, Long anchorByte, Long charDelta, Long lineBase,
+                   List<String> headers, Version version) {
+    this(file, rowsProcessed, anchorByte, charDelta, lineBase, headers, version, null);
+  }
+
+  /**
+   * The end of a run that read every listed file: {@code file} is the last one, {@code
+   * rowsProcessed} its row count and {@code version} its bytes as they stood when it was read.
+   * The next run skips the file while those bytes are unchanged and reads it again in full when
+   * they are not (a file replaced in place, or one that grew), the table deduplicating what it
+   * holds. Naming a file that is gone, the next run goes on with the files sorting after it,
+   * because the file is known to have been read in full.
+   */
+  public static CsvCursor finished(String file, long rowsProcessed, Version version) {
+    return new CsvCursor(file, rowsProcessed, null, null, null, null, version, true);
+  }
+
+  /** True for a cursor written by {@link #finished}: its file was read to the end. */
+  public boolean fullyRead() {
+    return Boolean.TRUE.equals(complete);
   }
 
   /**

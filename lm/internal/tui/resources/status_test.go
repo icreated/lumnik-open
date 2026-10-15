@@ -13,6 +13,8 @@ func TestRunStatusKind(t *testing.T) {
 		want RunStatusKind
 	}{
 		{"Running", KindRunning},
+		{"Queued", KindQueued},
+		{"queued", KindQueued},
 		{"Completed", KindCompleted},
 		{"Failed", KindFailed},
 		{"Cancelled", KindCancelled},
@@ -66,6 +68,7 @@ func TestEndpointStatusColor_CompletedIsSuccess(t *testing.T) {
 // hubStatuses is the hub's whole run-status vocabulary. Every entry must decode
 // to its kind AND render at every site — see TestEveryHubStatusRendersEverywhere.
 var hubStatuses = map[string]RunStatusKind{
+	"Queued":    KindQueued,
 	"Running":   KindRunning,
 	"Completed": KindCompleted,
 	"Partial":   KindPartial,

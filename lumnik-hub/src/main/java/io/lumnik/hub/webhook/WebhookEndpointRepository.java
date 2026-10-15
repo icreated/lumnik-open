@@ -6,10 +6,10 @@ import java.util.List;
 
 @ApplicationScoped
 public class WebhookEndpointRepository implements PanacheRepository<WebhookEndpoint> {
-    public List<WebhookEndpoint> findEnabledForEvent(Long tenantId, String eventType) {
+    /** Every live, enabled endpoint of one tenant — the consumer matches event types against them. */
+    public List<WebhookEndpoint> findEnabled(Long tenantId) {
         return list("tenantId = ?1 AND enabled = true AND archivedAt IS NULL AND deletedAt IS NULL",
-                    tenantId)
-            .stream().filter(e -> e.matches(eventType)).toList();
+                    tenantId);
     }
 
     /**
@@ -51,7 +51,7 @@ public class WebhookEndpointRepository implements PanacheRepository<WebhookEndpo
     }
 
     /**
-     * The retry path's counterpart to {@link #findEnabledForEvent}: the same liveness rule, by id.
+     * The retry path's counterpart to {@link #findEnabled}: the same liveness rule, by id.
      *
      * <p>A plain {@code findById} filters nothing, and {@code softDelete()} stamps only
      * {@code deletedAt} — {@code enabled} stays true, so {@link WebhookEndpoint#matches} still

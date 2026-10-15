@@ -11,15 +11,17 @@ import (
 )
 
 type Migrations struct {
-	table  *tview.Table
-	client *client.Client
-	mu     sync.Mutex
+	app     *tview.Application
+	table   *tview.Table
+	client  *client.Client
+	offLoop offLoop
+	mu      sync.Mutex
 }
 
-func NewMigrations(c *client.Client) *Migrations {
+func NewMigrations(app *tview.Application, c *client.Client) *Migrations {
 	t := tview.NewTable().SetBorders(false).SetSelectable(true, false)
 	t.SetTitle(" :migrations ").SetBorder(true)
-	m := &Migrations{table: t, client: c}
+	m := &Migrations{app: app, table: t, client: c}
 	m.setHeader()
 	return m
 }
@@ -36,10 +38,18 @@ func (m *Migrations) setHeader() {
 	}
 }
 
+// Refresh lists off the event loop (offLoop): the live ticker calls it while the page is in front
+// (#891).
 func (m *Migrations) Refresh() {
+	m.offLoop.run(m.app, func() func() {
+		list, err := m.client.MigrationStatus()
+		return func() { m.renderList(list, err) }
+	})
+}
+
+func (m *Migrations) renderList(list []types.MigrationStatus, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	list, err := m.client.MigrationStatus()
 	if err != nil {
 		m.table.Clear()
 		m.setHeader()
@@ -55,5 +65,4 @@ func (m *Migrations) Refresh() {
 		m.table.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("%d", s.Pending)).SetExpansion(1))
 		m.table.SetCell(row, 3, tview.NewTableCell(output.HumanTime(&s.LastApplied)).SetExpansion(1))
 	}
-	_ = types.MigrationStatus{}
 }

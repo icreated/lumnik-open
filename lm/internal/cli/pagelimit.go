@@ -53,12 +53,20 @@ func pageLimit(cmd *cobra.Command) int {
 // why the wording says "may". The note goes to stderr, like every other human-facing note here,
 // so stdout stays parseable for -o json/yaml and the OTK.
 func printPage[T any](cmd *cobra.Command, headers []string, rows []T, toRow func(T) []string) error {
-	format, _ := cmd.Flags().GetString("output")
-	if err := output.Print(cmd.OutOrStdout(), format, headers, rows, toRow); err != nil {
+	if err := output.Print(cmd.OutOrStdout(), outputFormat(cmd), headers, rows, toRow); err != nil {
 		return err
 	}
 	if limit := pageLimit(cmd); len(rows) == limit {
 		fmt.Fprintf(cmd.ErrOrStderr(), "note: result hit the limit of %d — there may be more\n", limit)
 	}
 	return nil
+}
+
+// outputFormat is the global -o value.
+func outputFormat(cmd *cobra.Command) string {
+	format, _ := cmd.Flags().GetString("output")
+	if format == "" {
+		return "table"
+	}
+	return format
 }

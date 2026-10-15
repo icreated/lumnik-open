@@ -1,7 +1,9 @@
 package io.lumnik.hub.connector.jdbc;
 
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
+import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
 import io.lumnik.hub.connector.mapping.spec.MappingSpec;
+import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
@@ -128,7 +130,13 @@ class JdbcDumpSpecValidationTest {
 
     // ── validateConfig must refuse the same names dumpSpec refuses (finding 5: validator == runtime) ──
 
-    private final JdbcConnectorType type = new JdbcConnectorType();
+    private final JdbcConnectorType type = withRegistry();
+
+    private static JdbcConnectorType withRegistry() {
+        JdbcConnectorType t = new JdbcConnectorType();
+        t.dialectRegistry = JdbcDialectRegistry.of(List.of(new PostgresDialect()));
+        return t;
+    }
 
     private static Map<String, Object> baseConfig(String name) {
         Map<String, Object> cfg = new HashMap<>(Map.of(

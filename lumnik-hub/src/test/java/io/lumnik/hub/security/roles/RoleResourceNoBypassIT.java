@@ -1,25 +1,18 @@
 package io.lumnik.hub.security.roles;
 
+import io.lumnik.hub.auth.DevBypassOffProfile;
 import io.quarkus.test.junit.QuarkusTest;
-import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
 import org.junit.jupiter.api.Test;
 
-import java.util.Map;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.anyOf;
 import static org.hamcrest.Matchers.equalTo;
 
 @QuarkusTest
-@TestProfile(RoleResourceNoBypassIT.NoBypassProfile.class)
+@TestProfile(DevBypassOffProfile.class)
 class RoleResourceNoBypassIT {
-
-    public static class NoBypassProfile implements QuarkusTestProfile {
-        @Override public Map<String, String> getConfigOverrides() {
-            return Map.of("lumnik.security.dev-bypass", "false");
-        }
-    }
 
     @Test
     void getRoles_anonymous_returns401or403() {

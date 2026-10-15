@@ -58,7 +58,13 @@ class ManifestKeyInventoryTest {
           + "door is the gate; this is a read. Reporting them as a warning in the response would "
           + "change the PWA contract and wants its own change.",
       "ViewDetailResource.java",
-      "POST /api/views/detail — the same body, from the same store, for the same reason.");
+      "POST /api/views/detail — the same body, from the same store, for the same reason.",
+      "SearchOperationsResource.java",
+      "POST /api/platform/search/index/{name}/rebuild re-parses core.search_index.manifest_yaml — "
+          + "already stored and already validated by SearchIndexApplyResource's own apply door — "
+          + "solely to rebuild triggerRebuild's authorizedSnapshot for its stale-declaration equality "
+          + "check. The apply door is the gate; this is a read of an already-applied declaration, "
+          + "never an unvalidated write path.");
 
   @Test
   void everyManifestParserNamesTheKeysItDoesNotHonour() throws IOException {

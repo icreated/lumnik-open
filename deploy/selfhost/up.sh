@@ -33,13 +33,42 @@ fi
 
 COMPOSE=(docker compose -f docker-compose.selfhost.yml)
 BUILD=0
+SEARCH_CLUSTER=0
+SEARCH=0
 for arg in "$@"; do
   case "$arg" in
     --build) BUILD=1 ;;
-    -h|--help) echo "Usage: $(basename "$0") [--build]   (--build compiles the hub from source instead of pulling)"; exit 0 ;;
+    --search) SEARCH=1 ;;
+    --search-cluster) SEARCH_CLUSTER=1 ;;
+    -h|--help) echo "Usage: $(basename "$0") [--build] [--search | --search-cluster]   (--build compiles the hub from source instead of pulling; --search is closed-edition only and builds in the PostgreSQL Search provider; --search-cluster, also closed-edition only, builds in the OpenSearch one; both imply --build and exclude each other)"; exit 0 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
+
+if [[ "$SEARCH" -eq 1 && "$SEARCH_CLUSTER" -eq 1 ]]; then
+  echo "!! --search and --search-cluster are alternatives (two Search providers on one classpath is refused) — pick one" >&2
+  exit 2
+fi
+
+if [[ "$SEARCH" -eq 1 ]]; then
+  if [[ ! -f docker-compose.search.yml ]]; then
+    echo "!! --search is not available in this edition" >&2
+    exit 2
+  fi
+  # The published hub image never carries a Search provider: the module is built in, from source.
+  BUILD=1
+  COMPOSE+=(-f docker-compose.search.yml)
+fi
+
+if [[ "$SEARCH_CLUSTER" -eq 1 ]]; then
+  if [[ ! -f docker-compose.search-cluster.yml || ! -f deploy/selfhost/search-cluster.sh ]]; then
+    echo "!! --search-cluster is not available in this edition" >&2
+    exit 2
+  fi
+  # The published hub image never carries a Search provider: the module is built in, from source.
+  BUILD=1
+  COMPOSE+=(-f docker-compose.search-cluster.yml)
+fi
 
 # 1) ensure .env with secrets (never overwrite an existing one)
 if [[ ! -f .env ]]; then
@@ -47,7 +76,7 @@ if [[ ! -f .env ]]; then
   [[ -f .env.example ]] || { echo "!! .env.example not found — run this from the lumnik repo (the template is at the root)" >&2; exit 1; }
   umask 077  # any file created below (.env.tmp holding the real secrets) is owner-only from the start
   cp .env.example .env
-  for key in POSTGRES_PASSWORD KEYCLOAK_ADMIN_PASSWORD LUMNIK_SECRET_MASTER_KEY LUMNIK_CRYPTO_SECRET_KEY HUBADMIN_PASSWORD INTEGRATOR_PASSWORD LUMNIK_APP_DB_PASSWORD LUMNIK_ADMIN_DB_PASSWORD LUMNIK_READONLY_DB_PASSWORD; do
+  for key in POSTGRES_PASSWORD KEYCLOAK_ADMIN_PASSWORD LUMNIK_SECRET_MASTER_KEY LUMNIK_CRYPTO_SECRET_KEY LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET HUBADMIN_PASSWORD INTEGRATOR_PASSWORD LUMNIK_APP_DB_PASSWORD LUMNIK_ADMIN_DB_PASSWORD LUMNIK_READONLY_DB_PASSWORD; do
     secret="$(openssl rand -base64 32)"
     # fill the empty `KEY=` line; awk prints the secret literally (no shell/sed metachar issues)
     awk -v k="$key" -v v="$secret" 'BEGIN{FS=OFS="="} $1==k && $2=="" {print k"="v; next} {print}' .env > .env.tmp
@@ -61,8 +90,8 @@ if [[ ! -f .env ]]; then
 else
   echo "==> using existing .env"
   # Older .env files predate the per-install hubadmin/integrator passwords (C1, extended
-  # 2026-08-11 to integrator) — grow them in place.
-  for key in HUBADMIN_PASSWORD INTEGRATOR_PASSWORD LUMNIK_APP_DB_PASSWORD LUMNIK_ADMIN_DB_PASSWORD LUMNIK_READONLY_DB_PASSWORD; do
+  # 2026-08-11 to integrator) and the entity-resolution HMAC secret — grow them in place.
+  for key in LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET HUBADMIN_PASSWORD INTEGRATOR_PASSWORD LUMNIK_APP_DB_PASSWORD LUMNIK_ADMIN_DB_PASSWORD LUMNIK_READONLY_DB_PASSWORD; do
     if ! grep -q "^${key}=..*" .env; then
       umask 077
       grep -q "^${key}=" .env || printf '%s=\n' "$key" >> .env
@@ -72,6 +101,13 @@ else
       echo "    added $key to .env"
     fi
   done
+fi
+
+if [[ "$SEARCH_CLUSTER" -eq 1 ]]; then
+  echo "==> preparing the search cluster (secrets and per-install TLS)"
+  # shellcheck source=deploy/selfhost/search-cluster.sh
+  source deploy/selfhost/search-cluster.sh
+  search_cluster_prepare
 fi
 
 # 2) start the stack

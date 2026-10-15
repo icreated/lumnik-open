@@ -54,6 +54,9 @@ func TestInboxAckCmd_requiresOneIntArg(t *testing.T) {
 }
 
 func TestInboxCmd_limitFlagIsWired(t *testing.T) {
+	// An empty home: "no context configured" must not depend on the developer's own ~/.lm/config.yaml,
+	// or the command reaches their real hub and succeeds.
+	t.Setenv("HOME", t.TempDir())
 	cmd := newInboxCmd()
 	var out bytes.Buffer
 	cmd.SetOut(&out)

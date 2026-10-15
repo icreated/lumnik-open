@@ -1,24 +1,23 @@
 package io.lumnik.hub.sql;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.hub.ask.ReadonlyTransactionsProfile;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.test.junit.QuarkusTest;
-import io.quarkus.test.junit.QuarkusTestProfile;
 import io.quarkus.test.junit.TestProfile;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
 import java.sql.SQLException;
-import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The %test profile pins {@code readonly.jdbc.transactions=DISABLED}, so every other test
  * exercises {@link TenantRlsScope} on a NON-enlisted connection — a posture production never
- * has. This profile re-enables JTA enlistment for the readonly datasource, which is exactly
+ * has. {@link ReadonlyTransactionsProfile} re-enables JTA enlistment for the readonly datasource, which is exactly
  * how the four production callers (view render/detail, workflow data-truth, ask execution)
  * reach it.
  *
@@ -29,15 +28,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * discarded {@code SET LOCAL} is the cross-tenant failure this class exists to prevent).
  */
 @QuarkusTest
-@TestProfile(TenantRlsScopeEnlistedIT.EnlistedReadonlyProfile.class)
+@TestProfile(ReadonlyTransactionsProfile.class)
 class TenantRlsScopeEnlistedIT {
-
-    public static class EnlistedReadonlyProfile implements QuarkusTestProfile {
-        @Override
-        public Map<String, String> getConfigOverrides() {
-            return Map.of("quarkus.datasource.\"readonly\".jdbc.transactions", "enabled");
-        }
-    }
 
     @Inject
     @DataSource("readonly")

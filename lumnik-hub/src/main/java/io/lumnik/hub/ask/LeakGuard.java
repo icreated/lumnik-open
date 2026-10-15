@@ -47,14 +47,12 @@ public class LeakGuard {
 
     /** A qualified table read by the query that is not declared in the scope's card. */
     public record Violation(String table, List<String> declaredTables) {
-        private static final int MAX_SHOWN = 12;
         public String message() {
-            String declared = declaredTables.size() <= MAX_SHOWN
-                ? String.join(", ", declaredTables)
-                : String.join(", ", declaredTables.subList(0, MAX_SHOWN))
-                    + ", … (+" + (declaredTables.size() - MAX_SHOWN) + " more)";
-            return "I won't run this: '" + table + "' is not a table in this scope (declared: " + declared
-                + "). The query may not read data outside this métier's declared scope.";
+            return message(null);
+        }
+
+        public String message(String lang) {
+            return AskSentences.leak(lang, table, declaredTables);
         }
     }
 

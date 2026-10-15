@@ -47,3 +47,28 @@ func TestGenerateEntity_bothSubtypes(t *testing.T) {
 	assert.True(t, gotApply, "should generate apply scenarios")
 	assert.True(t, gotRead, "should generate read scenarios")
 }
+
+func TestEntityApplyManifest_ReturnsMatchingCaseID(t *testing.T) {
+	_, _, _, caseID, found := EntityApplyManifest("sqli-in-name")
+	require.True(t, found)
+	assert.Equal(t, entityCaseID("apply", "sqli-in-name"), caseID)
+}
+
+func TestEntityApplyManifest_UnknownVariant(t *testing.T) {
+	_, _, _, caseID, found := EntityApplyManifest("no-such-variant")
+	assert.False(t, found)
+	assert.Empty(t, caseID)
+}
+
+func TestEntityReadCaseID_ResolvesEveryDeclaredVariant(t *testing.T) {
+	for _, v := range entityReadVariants() {
+		caseID, found := EntityReadCaseID(v.readTarget, v.readQuery, v.crossTenant)
+		require.True(t, found, "variant %q must resolve", v.name)
+		assert.Equal(t, entityCaseID("read", v.name), caseID)
+	}
+}
+
+func TestEntityReadCaseID_UnknownTupleNotFound(t *testing.T) {
+	_, found := EntityReadCaseID("no_such_entity", "bogus=query", false)
+	assert.False(t, found)
+}

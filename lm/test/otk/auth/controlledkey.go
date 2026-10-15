@@ -24,9 +24,16 @@ const (
 	BadAudience               // valid sig, wrong aud               → expect 401
 	BadIssuer                 // valid sig, wrong iss               → expect 401
 	TamperedSig               // good claims, flipped signature     → expect 401
-	CrossTenant               // valid integrator, tenant_id=2      → expect empty
+	CrossTenant               // valid integrator, tenant_id=ForeignTenantID → expect empty
 	Garbage                   // not a JWT at all                   → expect 401
 )
+
+// ForeignTenantID is the tenant a CrossTenant token is forged for — a real,
+// otherwise-valid tenant distinct from the harness's own (see otkTenant in
+// hubsnap.go). Named rather than inlined so a DB-truth cross-tenant probe
+// (checks.RLSIsolation, wired in steps_auth.go) can pin the exact same tenant the
+// forged token carries instead of re-hardcoding "2" a second place.
+const ForeignTenantID = "2"
 
 // ControlledKey is a self-minting TokenSource backed by an in-process RSA keypair.
 // The hub is configured to trust PublicKeyPEM(), so any token ControlledKey signs
@@ -129,8 +136,8 @@ func (k *ControlledKey) Forge(d Defect, seed int64) (string, error) {
 		return k.sign(c)
 	case CrossTenant:
 		c := base()
-		c["tenant_id"] = "2"
-		c["user_id"] = "2"
+		c["tenant_id"] = ForeignTenantID
+		c["user_id"] = ForeignTenantID
 		return k.sign(c)
 	case TamperedSig:
 		tok, err := k.sign(base())

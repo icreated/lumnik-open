@@ -50,7 +50,9 @@ var (
 // and writes the adversarial source to the per-seed path the manifest points at.
 func (s *scenarioState) givenRunForSeed(seed int64) error {
 	s.runScen = generator.GenerateRun(seed)
-	s.scen = generator.Scenario{Seed: seed} // carry the seed for findings
+	// s.scen is the generic carrier the check calls below read; CaseID must be
+	// copied across explicitly, GenerateRun does not populate s.scen itself.
+	s.scen = generator.Scenario{Seed: seed, CaseID: s.runScen.CaseID}
 	f, err := os.CreateTemp("", fmt.Sprintf("otk-run-%d-*.yaml", seed))
 	if err != nil {
 		return err
@@ -93,7 +95,7 @@ func (s *scenarioState) whenApplyAndRun() error {
 	}
 	if !live {
 		s.runDormant = true
-		fmt.Printf("  OTK run scenario DORMANT (seed=%d): set OTK_DB_DSN + psql to exercise the ingestion data path\n", s.scen.Seed)
+		recordDormant(s.scen.CaseID, fmt.Sprintf("seed=%d: set OTK_DB_DSN + psql to exercise the ingestion data path", s.scen.Seed))
 		return nil
 	}
 	s.beforeDB, s.dbLive = db, true
@@ -169,6 +171,18 @@ func (s *scenarioState) thenRunTerminal() error {
 			diary.refused(r.Exit, r.Stderr)
 		}
 		if time.Now().After(deadline) {
+			// DB truth, one last time, before giving up: a run terminal in the database that the
+			// API never reported within the deadline is a graded finding (checks.RunTerminalDivergence),
+			// not just a stall — the shape the July 2026 otk-gold flakiness diary
+			// (docs/studies/2026-07-27-otk-gold-flakiness-carnet.md) left unresolved. Dormant
+			// without OTK_DB_DSN, like every other DB-truth probe; a probe failure does not
+			// replace the hard error below, it would only ever add to it.
+			switch dbTerminal, live, perr := runTerminalInDB(os.Getenv("OTK_DB_DSN"), s.runID); {
+			case perr != nil:
+				fmt.Printf("  OTK run-terminal DB-truth probe failed for run %q: %v\n", s.runID, perr)
+			case live:
+				s.findings = append(s.findings, checks.RunTerminalDivergence(dbTerminal, s.scen.CaseID, s.scen.Seed)...)
+			}
 			// The diary, not just the timeout: four otk-gold nights died here saying only THAT a
 			// run never finished, and the hub log later showed it had. Whichever side is wrong,
 			// the next occurrence names it.
@@ -187,7 +201,7 @@ func (s *scenarioState) thenRowsAccounted() error {
 		return nil
 	}
 	s.findings = append(s.findings,
-		checks.ReconcileCounts(int(s.runRec.RecordsIn), int(s.runRec.RecordsOut), int(s.runRec.RecordsSkipped), int(s.runRec.DeadLetterCount), s.scen.Seed)...)
+		checks.ReconcileCounts(int(s.runRec.RecordsIn), int(s.runRec.RecordsOut), int(s.runRec.RecordsSkipped), int(s.runRec.DeadLetterCount), s.scen.CaseID, s.scen.Seed)...)
 	return nil
 }
 
@@ -221,7 +235,7 @@ func (s *scenarioState) thenLandedMatches() error {
 		total += n
 	}
 	s.findings = append(s.findings,
-		checks.ReconcileLanded(int(s.runRec.RecordsOut), total, s.scen.Seed)...)
+		checks.ReconcileLanded(int(s.runRec.RecordsOut), total, s.scen.CaseID, s.scen.Seed)...)
 	return nil
 }
 
@@ -231,12 +245,12 @@ func (s *scenarioState) probeRunOutput() error {
 	if s.runDormant {
 		return nil
 	}
-	s.findings = append(s.findings, checks.Robustness(s.runResult, s.scen.Seed)...)
+	s.findings = append(s.findings, checks.Robustness(s.runResult, s.scen.CaseID, s.scen.Seed)...)
 	out := s.result.Stdout + s.result.Stderr + s.runResult.Stdout + s.runResult.Stderr
 	errOut := s.result.Stderr + s.runResult.Stderr
-	s.findings = append(s.findings, checks.TextGlitch(out, errOut, s.scen.Seed)...)
-	s.findings = append(s.findings, checks.SecretEcho(out, otkSentinel, s.scen.Seed)...)
-	s.findings = append(s.findings, checks.FileDisclosure(out, s.scen.Seed)...)
+	s.findings = append(s.findings, checks.TextGlitch(out, errOut, s.scen.CaseID, s.scen.Seed)...)
+	s.findings = append(s.findings, checks.SecretEcho(out, otkSentinel, s.scen.CaseID, s.scen.Seed)...)
+	s.findings = append(s.findings, checks.FileDisclosure(out, s.scen.CaseID, s.scen.Seed)...)
 	return nil
 }
 

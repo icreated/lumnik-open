@@ -1,17 +1,14 @@
 import { html, useEffect, useRef } from '../html.mjs';
 import { Refusal } from './refusal.mjs';
-import { dataAsOfLabel, doorGesture } from '../format.mjs';
+import { dataAsOfLabel, doorGesture, disputedBlock, analyticAsk } from '../format.mjs';
 
 // D1-D6: the Chat tab — ported from the spike's renderChat/sendQuestion/bubble (m/index.html
 // ~L518-565). Thread state (`log`/`setLog`) is LIFTED to app.mjs so it survives tab switches
 // (D5) — this component is pure rendering + the send flow over that state.
 const HINT = 'Pose une question sur tes données — je réponds avec le SQL montré, ou je refuse honnêtement.';
 const WAITING = '… je regarde tes données';
-// Shown INSTEAD of the input when this build carries no chat module: the métier never types a
-// question into a door that is not there. See capabilities.mjs — absence is proven, not assumed.
-const ABSENT = "Le chat n'est pas installé sur cette version de lumnik. Les fiches et les décisions fonctionnent normalement.";
 
-export function Chat({ api, scope, log, setLog, available = true, onOpenFiches }) {
+export function Chat({ api, scope, log, setLog, onOpenFiches }) {
   const inputRef = useRef(null);
 
   useEffect(() => {
@@ -28,13 +25,14 @@ export function Chat({ api, scope, log, setLog, available = true, onOpenFiches }
 
     let reply;
     try {
-      const a = await api.json('/api/rag/chat', { json: { question, mode: 'analytic', scope } }); // D1 — the lm_user door (#139)
+      const a = await api.json('/api/rag/chat', { json: analyticAsk(question, scope) }); // D1 — the lm_user door (#139)
       // D3: an answer that ran NO sql is an abstention — the honest refusal wears amber, not a SQL bubble
       reply = a.sql
-        ? { role: 'bot', text: a.answer || '(réponse vide)', sql: a.sql, rowCount: a.rowCount, dataAsOf: a.dataAsOf }
+        ? { role: 'bot', text: (a.answer || '').trim() || '(réponse vide)', sql: a.sql, rowCount: a.rowCount, dataAsOf: a.dataAsOf,
+            disputed: a.disputed || [], disputedTruncated: !!a.disputedTruncated, doors: a.otherDoors || [] }
         // #515: `otherDoors` is the abstention's own sentence as tokens, so this surface can
         // offer the door it has (format.mjs doorGesture) instead of parsing prose for it.
-        : { role: 'refusal', kind: 'abstention', text: a.answer || '(réponse vide)',
+        : { role: 'refusal', kind: 'abstention', text: (a.answer || '').trim() || '(réponse vide)',
             doors: a.otherDoors || [] };
     } catch (e) {
       if (e.kind === 'auth') { setLog(withMe); return; } // 401 already flips the screen — no spurious bubble
@@ -53,17 +51,13 @@ export function Chat({ api, scope, log, setLog, available = true, onOpenFiches }
   return html`
     <div class="chat-col">
       <div class="msgs">
-        ${log.length === 0 ? html`<div class="bubble bot">${available ? HINT : ABSENT}</div>` : null}
+        ${log.length === 0 ? html`<div class="bubble bot">${HINT}</div>` : null}
         ${log.map(m => html`<${Bubble} m=${m} onOpenFiches=${onOpenFiches} />`)}
       </div>
-      ${available
-        ? html`
-          <div id="ask">
-            <input ref=${inputRef} type="text" placeholder="Demande à tes données…" autocomplete="off" onKeyDown=${onKeyDown} />
-            <button onClick=${send} aria-label="Envoyer la question">→</button>
-          </div>
-        `
-        : html`<div id="ask" class="unavailable">${ABSENT}</div>`}
+      <div id="ask">
+        <input ref=${inputRef} type="text" placeholder="Demande à tes données…" autocomplete="off" onKeyDown=${onKeyDown} />
+        <button onClick=${send} aria-label="Envoyer la question">→</button>
+      </div>
     </div>
   `;
 }
@@ -75,24 +69,36 @@ function Bubble({ m, onOpenFiches }) {
     <div>
       <${Refusal} kind=${m.kind} message=${m.text} />
       ${(m.doors || []).map(doorGesture).filter(Boolean).map(label => html`
-        <button class="door" onClick=${() => onOpenFiches && onOpenFiches()}>${label}</button>
+        ${onOpenFiches ? html`<button class="door" onClick=${onOpenFiches}>${label}</button>` : null}
       `)}
     </div>
   `;
+  const block = disputedBlock(m.disputed, m.disputedTruncated);
   return html`
-    <div class="bubble bot">
-      ${m.text}
-      ${dataAsOfLabel(m.dataAsOf)
-        ? html`<div class="data-asof">${dataAsOfLabel(m.dataAsOf)}</div>`
-        : null}
-      ${m.sql
-        ? html`
-          <details>
-            <summary>${`le SQL exécuté · ${m.rowCount} ligne${m.rowCount > 1 ? 's' : ''}`}</summary>
-            <pre>${m.sql}</pre>
-          </details>
-        `
-        : null}
+    <div>
+      <div class="bubble bot">
+        <div class="answer">${m.text}</div>
+        ${dataAsOfLabel(m.dataAsOf)
+          ? html`<div class="data-asof">${dataAsOfLabel(m.dataAsOf)}</div>`
+          : null}
+        ${block ? html`
+          <div class="disputed">
+            <div class="disputed-title">${block.title}</div>
+            ${block.items.map(i => html`<div class="disputed-item"><div>${i.head}</div><div class="src">${i.sources}</div></div>`)}
+            ${block.more ? html`<div class="disputed-more">${block.more}</div>` : null}
+          </div>` : null}
+        ${m.sql
+          ? html`
+            <details>
+              <summary>${`le SQL exécuté · ${m.rowCount} ligne${m.rowCount > 1 ? 's' : ''}`}</summary>
+              <pre>${m.sql}</pre>
+            </details>
+          `
+          : null}
+      </div>
+      ${(m.doors || []).map(doorGesture).filter(Boolean).map(label => html`
+        ${onOpenFiches ? html`<button class="door" onClick=${onOpenFiches}>${label}</button>` : null}
+      `)}
     </div>
   `;
 }

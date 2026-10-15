@@ -79,7 +79,10 @@ INTEGRATION     EVENT                   STATUS       WHEN              ERROR
 ops-automation  decision.order-on-hold  no response  2026-09-05 05:40  ConnectException: null
 ```
 A delivery that exhausted its attempts stays in the journal and can be **replayed**:
-`POST /api/platform/deliveries/{id}/replay`. The outbox itself is purged daily (04:30,
+`POST /api/platform/deliveries/{id}/replay`. The journal keeps each delivery's payload and the
+receiver's response for 90 days (`LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS`, purged daily at 05:00,
+`0` = forever): a purged delivery can no longer be replayed. A delivery the retry sweep still owns is
+never purged. The outbox itself is purged daily (04:30,
 `LUMNIK_EVENTS_RETENTION_DAYS`, default 30) — never past what the slowest consumer has seen.
 
 ## Route events to email

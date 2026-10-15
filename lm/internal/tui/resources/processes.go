@@ -21,16 +21,18 @@ func processCells(p client.ProcessInfo) []string {
 // Processes lists the tenant's kind:Process rules. `e` re-opens the stored
 // manifest through the :new authoring loop — one loop for create and edit.
 type Processes struct {
+	app      *tview.Application
 	client   *client.Client
 	table    *tview.Table
 	items    []client.ProcessInfo
+	offLoop  offLoop
 	onEdit   func(name string) // app-level: fetch manifest → :new EditExisting
 	onError  func(string)
 	onSelect func()
 }
 
-func NewProcesses(c *client.Client, onEdit func(string), onError func(string)) *Processes {
-	p := &Processes{client: c, onEdit: onEdit, onError: onError,
+func NewProcesses(app *tview.Application, c *client.Client, onEdit func(string), onError func(string)) *Processes {
+	p := &Processes{app: app, client: c, onEdit: onEdit, onError: onError,
 		table: tview.NewTable().SetBorders(false).SetSelectable(true, false)}
 	style.ApplyChrome(p.table.Box)
 	style.ApplyTableSelection(p.table)
@@ -48,16 +50,27 @@ func (p *Processes) Hints() string {
 	return "e: edit the manifest (validate → apply loop) · ^P: enable/disable · Del: delete · d: describe · y: yank · r: refresh"
 }
 
+// Refresh lists off the event loop (offLoop): the live ticker calls it while the page is in front
+// (#891).
 func (p *Processes) Refresh() {
-	items, err := p.client.ProcessList()
+	p.offLoop.run(p.app, func() func() {
+		items, err := p.client.ProcessList()
+		return func() { p.renderList(items, err) }
+	})
+}
+
+func (p *Processes) renderList(items []client.ProcessInfo, err error) {
 	if err != nil {
 		p.items = nil
 		p.table.Clear()
 		p.table.SetCell(0, 0, dataCell("error: "+err.Error()))
-		return
+	} else {
+		p.items = items
+		p.render()
 	}
-	p.items = items
-	p.render()
+	if p.onSelect != nil { // an open describe panel follows the fresh row, or its absence
+		p.onSelect()
+	}
 }
 
 func (p *Processes) render() {

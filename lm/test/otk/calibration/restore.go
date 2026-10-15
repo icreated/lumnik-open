@@ -18,6 +18,16 @@ import (
 // rather than a path buried in the runner.
 const FaultedArtefacts = "lumnik-hub/target"
 
+// FaultedCLIBinary is the lm CLI's own build output, relative to the repository
+// root — gitignored, so TreeClean (which reports git's own view of the tree) never
+// sees a faulted one sitting there. Removed at restore time the same way
+// FaultedArtefacts is, and unconditionally: a RebuildCLI fault overwrote it with a
+// faulted binary, and packaging is not restoration — only absence is. Removing it
+// even for a fault that never touched it costs nothing (the next `make build`
+// regenerates it) and keeps the runner from needing to know which target a given
+// fault rebuilt.
+const FaultedCLIBinary = "lm/lm"
+
 // TreeClean reports whether the working tree has no changes at all — UNTRACKED
 // FILES INCLUDED — and what is dirty when it does.
 //

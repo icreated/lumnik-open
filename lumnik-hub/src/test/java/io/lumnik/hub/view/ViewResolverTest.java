@@ -1,5 +1,6 @@
 package io.lumnik.hub.view;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import org.junit.jupiter.api.Test;
 import java.util.List;
@@ -72,5 +73,44 @@ class ViewResolverTest {
         assertThatThrownBy(() -> new ViewResolver().resolve(m, twoTableCard))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("table:");   // must name one via table:
+    }
+
+    @Test
+    void exposesTheCardsAllowedValuesSoTheUiCanOfferASelection() {
+        var t = new SchemaCard.Table("connector.v_customer", "Customer", List.of(
+                new SchemaCard.Column("segment", "text", "Segment", null, null, List.of("GOLD", "SILVER")),
+                new SchemaCard.Column("name", "text", "Name")));
+        var m = new ViewManifest("clients-desk", "clients", "connector.v_customer", "Clients",
+                List.of("segment", "name"));
+        ResolvedView rv = new ViewResolver().resolve(m, new SchemaCard("clients", List.of(t)));
+
+        assertThat(rv.columns().get(0).allowedValues()).containsExactly("GOLD", "SILVER");
+        assertThat(rv.columns().get(1).allowedValues()).isEmpty();   // no domain → empty, never null
+    }
+
+    @Test
+    void theColumnWireShapeCarriesAllowedValues() throws Exception {
+        var mapper = new ObjectMapper();
+        var json = mapper.readTree(mapper.writeValueAsString(
+                new ResolvedView.Column("segment", "Segment", "text", List.of("GOLD"))));
+        assertThat(json.get("allowedValues").get(0).asText()).isEqualTo("GOLD");
+        assertThat(json.get("pgType").asText()).isEqualTo("text");
+        assertThat(json.get("kind").asText()).isEqualTo("choice");
+        assertThat(json.get("operators").toString()).isEqualTo("[\"=\"]");
+    }
+
+    @Test
+    void theColumnsCarryTheHubsKindAndOperators() {
+        var t = new SchemaCard.Table("connector.v_customer", "Customer", List.of(
+                new SchemaCard.Column("amount", "numeric", "Amount"),
+                new SchemaCard.Column("price", "money", "Price"),
+                new SchemaCard.Column("name", "text", "Name")));
+        var m = new ViewManifest("clients-desk", "clients", "connector.v_customer", "Clients",
+                List.of("amount", "price", "name"));
+        var cols = new ViewResolver().resolve(m, new SchemaCard("clients", List.of(t))).columns();
+
+        assertThat(cols).extracting(ResolvedView.Column::kind).containsExactly("number", "text", "text");
+        assertThat(cols.get(0).operators()).containsExactly("=", ">=", "<=", ">", "<");
+        assertThat(cols.get(1).operators()).as("money is never offered an ordering").containsExactly("~", "=");
     }
 }

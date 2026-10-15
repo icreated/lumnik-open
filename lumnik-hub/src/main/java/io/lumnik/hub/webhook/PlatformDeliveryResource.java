@@ -2,6 +2,7 @@ package io.lumnik.hub.webhook;
 
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.hub.tenant.RequireTenant;
+import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import jakarta.ws.rs.*;
@@ -67,15 +68,21 @@ public class PlatformDeliveryResource {
      *  integration id would be redundant. A delivery belonging to another tenant is a 404, not a
      *  403: existence is not something to confirm across a tenant boundary. */
     @POST @Path("/{id}/replay")
-    @Transactional
     public WebhookDeliveryService.DeliveryResult replay(@PathParam("id") Long id) {
-        // Scoped in the query: another tenant's delivery is never materialised to be refused.
-        WebhookDelivery d = deliveries.findForTenant(id, RequireTenant.current());
-        if (d == null) throw new NotFoundException("delivery " + id + " not found");
-        // The endpoint id comes from a delivery already proven ours, so it is not a request input;
-        // scoping it to the tenant anyway keeps the last by-id lookup on this path off findLiveById.
-        WebhookEndpoint e = endpoints.findLiveForTenant(d.getEndpointId(), RequireTenant.current());
-        if (e == null) throw new NotFoundException("endpoint for delivery " + id + " not found");
-        return replayService.replay(e, d);
+        long tenant = RequireTenant.current();
+        // Read in a transaction of its own, not the method's: same shape and reasons as
+        // IntegrationResource#replay.
+        record Found(WebhookEndpoint endpoint, WebhookDelivery delivery) {}
+        Found f = QuarkusTransaction.requiringNew().call(() -> {
+            // Scoped in the query: another tenant's delivery is never materialised to be refused.
+            WebhookDelivery d = deliveries.findForTenant(id, tenant);
+            if (d == null) throw new NotFoundException("delivery " + id + " not found");
+            // The endpoint id comes from a delivery already proven ours, so it is not a request input;
+            // scoping it to the tenant anyway keeps the last by-id lookup on this path off findLiveById.
+            WebhookEndpoint e = endpoints.findLiveForTenant(d.getEndpointId(), tenant);
+            if (e == null) throw new NotFoundException("endpoint for delivery " + id + " not found");
+            return new Found(e, d);
+        });
+        return replayService.replay(f.endpoint(), f.delivery());
     }
 }

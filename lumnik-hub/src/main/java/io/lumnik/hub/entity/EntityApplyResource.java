@@ -6,6 +6,7 @@ import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.ask.DiscoveryService;
+import io.lumnik.hub.search.SearchIndexRevalidator;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
@@ -29,6 +30,7 @@ public class EntityApplyResource {
   @Inject EntityViewCompiler compiler;
   @Inject EntityRegistry registry;
   @Inject DiscoveryService discovery;
+  @Inject SearchIndexRevalidator searchIndexes;
 
   public record ApplyResult(String name, String view) {}
 
@@ -94,8 +96,13 @@ public class EntityApplyResource {
               .type(MediaType.APPLICATION_JSON)
               .entity(ApiErrors.error(e.getMessage()))
               .build());
+    } catch (MissingSourceColumnException | MissingLookupColumnException e) {
+      throw new WebApplicationException(ApiErrors.badRequest(e.getMessage()));
     }
     registry.put(m);
+    // #669: a column this re-apply dropped turns every tenant's SearchIndex that used it invalid.
+    // Best-effort by contract — Search is optional and never refuses an Entity apply.
+    searchIndexes.afterEntityApplied(m, body);
     // Make the entity askable in its scopes immediately, for the tenant of this request — resolved by
     // TenantContextFilter (header in dev, JWT in prod), NOT a raw header. Best-effort: the view +
     // manifest are already committed, so a discovery failure must NOT fail the apply (the card can be

@@ -2,14 +2,18 @@ package io.lumnik.hub.connector.csv;
 
 import io.lumnik.hub.connector.secret.SecretRefs;
 import com.fasterxml.jackson.databind.JsonNode;
+import io.lumnik.hub.connector.api.types.ConnectorContext;
+import io.lumnik.hub.connector.runtime.OwnedRunScope;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.transport.FileSource;
+import io.lumnik.hub.testsupport.MinioTestImage;
 import io.lumnik.hub.connector.transport.FileSourceRegistry;
 import io.lumnik.hub.connector.transport.s3.S3FileSourceFactory;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
@@ -44,6 +48,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class FileSourceCursorReaderS3IT {
 
+    private OwnedRunScope scope = new OwnedRunScope("test");
+
+    @AfterEach
+    void closeRunScope() {
+        scope.close();
+    }
+
+    private ConnectorContext ctx() {
+        return ReaderTestContexts.of(scope);
+    }
+
     static GenericContainer<?> minio;
     static String endpoint;
     static final String ACCESS = "minio-test";
@@ -59,7 +74,7 @@ class FileSourceCursorReaderS3IT {
 
     @BeforeAll
     static void start() {
-        minio = new GenericContainer<>("quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z")
+        minio = new GenericContainer<>(MinioTestImage.PINNED)
             .withEnv("MINIO_ROOT_USER", ACCESS)
             .withEnv("MINIO_ROOT_PASSWORD", SECRET)
             .withCommand("server", "/data")
@@ -141,7 +156,7 @@ class FileSourceCursorReaderS3IT {
         ConnectorCursor cursor = ConnectorCursor.empty();
         while (true) {
             FileSourceCursorReader r = reader("chunk/");
-            ReadResult<Map<String, Object>> res = r.read(CHUNK, cursor, null);
+            ReadResult<Map<String, Object>> res = r.read(CHUNK, cursor, ctx());
             assertThat(r.drainMalformed()).isEmpty();
             if (res instanceof ReadResult.HasMore<Map<String, Object>> hm) {
                 all.addAll(hm.records());
@@ -197,7 +212,7 @@ class FileSourceCursorReaderS3IT {
 
     @Test
     void object_overwritten_between_chunks_fails_loudly_naming_the_key() {
-        ReadResult<Map<String, Object>> r1 = reader("mutant/").read(CHUNK, ConnectorCursor.empty(), null);
+        ReadResult<Map<String, Object>> r1 = reader("mutant/").read(CHUNK, ConnectorCursor.empty(), ctx());
         assertThat(r1).isInstanceOf(ReadResult.HasMore.class);
         ConnectorCursor c1 = ((ReadResult.HasMore<Map<String, Object>>) r1).nextCursor();
 
@@ -205,7 +220,7 @@ class FileSourceCursorReaderS3IT {
         admin.putObject(b -> b.bucket(BUCKET).key("mutant/big.csv"),
             RequestBody.fromString(csv(N + 5), StandardCharsets.UTF_8));
 
-        assertThatThrownBy(() -> reader("mutant/").read(CHUNK, c1, null))
+        assertThatThrownBy(() -> reader("mutant/").read(CHUNK, c1, ctx()))
             .isInstanceOf(ConnectorException.class)
             .hasMessageContaining("mutant/big.csv")
             .hasMessageContaining("changed mid-ingestion")

@@ -10,7 +10,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.lumnik.hub.connector.api.types.*;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.exceptions.SourceUnreachableException;
-import io.lumnik.hub.connector.jdbc.dialect.JdbcDialect;
+import io.lumnik.jdbc.spi.JdbcDialect;
 import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
 import io.lumnik.hub.connector.mapping.MappingEngine;
 import io.lumnik.hub.connector.mapping.spec.ErrorPolicy;
@@ -148,7 +148,7 @@ public class JdbcConnectorType implements ConnectorType {
     }
     String probe = new JdbcQueryBuilder(w.dialect())
         .buildCeilingProbe(w.schema(), w.table(), w.watermark(), w.pk(), w.mode().forQuery());
-    DataSource ds = poolRegistry.acquire(w.url(), w.user(), w.password(), ctx.tenantId());
+    DataSource ds = poolRegistry.acquire(w.url(), w.user(), w.password(), ctx.tenantId(), w.dialect());
     try (Connection conn = ds.getConnection();
          PreparedStatement ps = conn.prepareStatement(probe);
          ResultSet rs = ps.executeQuery()) {
@@ -355,21 +355,19 @@ public class JdbcConnectorType implements ConnectorType {
   }
 
   /**
-   * Resolves the SQL dialect id: the explicit {@code "dialect"} config key if present, otherwise
-   * inferred from the JDBC url. Keeps the declarative manifest's {@code connection} block minimal
-   * (it need only carry {@code url}). Only the dialect we actually support (postgres) is inferred;
-   * anything else must be declared explicitly.
+   * Resolves the SQL dialect id through the registry: the explicit {@code "dialect"} config key when
+   * present (any case, id or alias), otherwise inferred from the JDBC url — only when exactly one
+   * installed provider accepts it. Keeps the declarative manifest's {@code connection} block minimal
+   * (it need only carry {@code url}).
    */
-  static String resolveDialectId(Map<String, Object> config) {
+  String resolveDialectId(Map<String, Object> config) {
     Object d = config.get("dialect");
-    // Registry keys are lowercase; "postgresql" is a validator-accepted alias of "postgres".
-    if (d instanceof String s && !s.isBlank()) {
-      String v = s.trim().toLowerCase(Locale.ROOT);
-      return "postgresql".equals(v) ? "postgres" : v;
-    }
     Object url = config.get("url");
-    if (url instanceof String u && u.startsWith("jdbc:postgresql:")) return "postgres";
-    throw new ConfigValidationException(
-        "Missing 'dialect' and could not infer it from url: " + url);
+    try {
+      return dialectRegistry.resolveFor(url instanceof String u ? u : null,
+          d instanceof String s ? s : null).id();
+    } catch (IllegalArgumentException e) {
+      throw new ConfigValidationException(e.getMessage());
+    }
   }
 }

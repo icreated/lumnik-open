@@ -19,10 +19,9 @@ public class AbstentionGuard {
     /** The token the model emits when it cannot answer from the declared schema (the gen prompt names it). */
     public static final String SENTINEL = "NO_ANSWER";
 
-    public static final String NO_SCHEMA_MESSAGE =
-        "I have no data declared for this scope yet, so I can't answer that. Ingest a source for this scope first.";
-    public static final String CANNOT_ANSWER_MESSAGE =
-        "I can't answer that from the data available for this scope — the question doesn't map to the declared schema.";
+    /** The English sentences — what an absent or unsupported {@code lang} gets; {@link AskSentences} holds both languages (#915). */
+    public static final String NO_SCHEMA_MESSAGE = AskSentences.noSchema(null);
+    public static final String CANNOT_ANSWER_MESSAGE = AskSentences.cannotAnswer(null);
 
     /**
      * What the scope holds that this door structurally cannot read. Appended to
@@ -40,15 +39,10 @@ public class AbstentionGuard {
      * now rides beside the prose, as {@link Abstention#otherDoors()} (#515); this sentence stays
      * for every client that knows nothing about those tokens.
      */
-    static final String LIFECYCLE_SIGNPOST =
-        " This scope does declare a lifecycle for its documents, and a question about why one"
-        + " cannot move on is answered from that declaration rather than from the data — which is"
-        + " what this door reads.";
+    static final String LIFECYCLE_SIGNPOST = AskSentences.lifecycleSignpost(null);
 
     /** @see #LIFECYCLE_SIGNPOST */
-    static final String CONFLICTS_SIGNPOST =
-        " Where this scope's sources disagree is recorded row by row, on each fused record, in a"
-        + " conflicts ledger that is deliberately not part of the schema above.";
+    static final String CONFLICTS_SIGNPOST = AskSentences.conflictsSignpost(null);
 
     /**
      * The abstention, plus what else this scope holds.
@@ -64,31 +58,31 @@ public class AbstentionGuard {
      * model writing {@code _conflicts->>…} against a column declared as text — the confident-wrong
      * the five guards exist to prevent, once in each direction. What was missing was not an answer.
      *
-     * <p>{@link #CANNOT_ANSWER_MESSAGE} stays the PREFIX, verbatim: graders and tests recognise the
-     * abstention through {@link #isCannotAnswer}, and a scope with nothing to point at gets the bare
-     * sentence it always got.
+     * <p>A scope with nothing to point at gets the bare sentence it always got. The abstention is
+     * recognised by {@code AskResult.abstained}, not by these words, which follow {@code lang} (#915).
      *
      * <p>Both conditions are PASSED, neither derived here. One derived and one passed is the
      * signature saying it has not decided whose question this is; {@link #hasAFusedEntity} stays
      * public so the caller can ask it — and so it can be tested — but the rendering stays pure.
      */
-    public Abstention cannotAnswer(boolean scopeDeclaresALifecycle, boolean scopeHasAFusedEntity) {
-        return signpost(CANNOT_ANSWER_MESSAGE, scopeDeclaresALifecycle, scopeHasAFusedEntity);
+    public Abstention cannotAnswer(String lang, boolean scopeDeclaresALifecycle, boolean scopeHasAFusedEntity) {
+        return signpost(AskSentences.cannotAnswer(lang), lang, scopeDeclaresALifecycle, scopeHasAFusedEntity);
     }
 
     /**
      * {@link #cannotAnswer} generalised to any dead-end sentence: the SqlGuard-rejection and
      * {@code ZeroRowGuard.CAVEAT} refusals reach the same two structural reasons the model's own
      * {@link #SENTINEL} exit does — the schema has nothing to answer from, or nothing runnable came
-     * of it — and the doors are just as true there (#527). {@link #isCannotAnswer}'s prefix match
-     * stays bound to {@link #CANNOT_ANSWER_MESSAGE} only; gaining a door does not make the other two
-     * dead ends into that abstention.
+     * of it — and the doors are just as true there (#527). Gaining a door does not make the other two
+     * dead ends into an abstention. {@code lang} picks the language of the signposts, which the caller
+     * already chose for {@code baseMessage}.
      */
-    public Abstention signpost(String baseMessage, boolean scopeDeclaresALifecycle, boolean scopeHasAFusedEntity) {
+    public Abstention signpost(String baseMessage, String lang, boolean scopeDeclaresALifecycle,
+                               boolean scopeHasAFusedEntity) {
         StringBuilder answer = new StringBuilder(baseMessage);
         List<String> doors = new ArrayList<>(2);
-        if (scopeDeclaresALifecycle) { answer.append(LIFECYCLE_SIGNPOST); doors.add(DOOR_LIFECYCLE); }
-        if (scopeHasAFusedEntity)    { answer.append(CONFLICTS_SIGNPOST); doors.add(DOOR_CONFLICTS); }
+        if (scopeDeclaresALifecycle) { answer.append(AskSentences.lifecycleSignpost(lang)); doors.add(DOOR_LIFECYCLE); }
+        if (scopeHasAFusedEntity)    { answer.append(AskSentences.conflictsSignpost(lang)); doors.add(DOOR_CONFLICTS); }
         return new Abstention(answer.toString(), List.copyOf(doors));
     }
 
@@ -111,18 +105,6 @@ public class AbstentionGuard {
 
     /** {@link #CONFLICTS_SIGNPOST}'s token. */
     static final String DOOR_CONFLICTS = AskResult.DOOR_CONFLICTS;
-
-    /**
-     * Is this answer the abstention?
-     *
-     * <p>A {@code startsWith}, not an equality, and asked here rather than of a copied literal.
-     * {@code AbstentionOtkIT} graded with {@code CANNOT_ANSWER_MESSAGE.equals(answer)}: a signposted
-     * abstention would have read as a non-abstention to the oracle, and the fidelity gate would have
-     * failed a correct refusal. The words are this class's to own, so the question is too.
-     */
-    public boolean isCannotAnswer(String answer) {
-        return answer != null && answer.startsWith(CANNOT_ANSWER_MESSAGE);
-    }
 
     /**
      * Does this card advertise a fused entity view? The signal is the {@code connector.v_} prefix

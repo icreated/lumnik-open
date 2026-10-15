@@ -1,0 +1,24 @@
+# loadtest/search/compose.sizing.yml — layered over docker-compose.selfhost.yml for the throwaway Search sizing
+# project (#750). Other host ports than the real stack, the PostgreSQL Search provider built in, the search rate
+# limit off, and the generated CSVs mounted read-only into the hub.
+services:
+  keycloak:
+    ports: !override
+      - "127.0.0.1:18180:8180"
+  hub:
+    build:
+      args:
+        MVN_PROFILES: -Psearch
+    image: lumnik-hub:sizing
+    ports: !override
+      - "127.0.0.1:18080:8080"
+    environment:
+      QUARKUS_OIDC_TOKEN_ISSUER: http://localhost:18180/realms/lumnik
+      LUMNIK_RATELIMIT_SEARCH_RPM: "0"
+      # The self-host compose does not pass this secret, and a hub built from this tree refuses to boot without it.
+      LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET: ${LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET:?set by stack.sh}
+    volumes:
+      - ${SZ_DATA_DIR:?set by stack.sh}:/sizing-data:ro
+volumes:
+  selfhost_pg:
+  selfhost_kc:

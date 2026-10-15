@@ -13,8 +13,8 @@ import (
 	"github.com/rivo/tview"
 )
 
-// Conflicts is the aggregated fusion ledger: every fused-entity row whose sources still
-// disagree, across every entity the caller may read. Read-only — resolving a conflict is
+// Conflicts is the aggregated fusion ledger: every fused-entity row with a source conflict
+// or a lookup ambiguity, across every entity the caller may read. Read-only — resolving a conflict is
 // the integrator's job upstream, in the manifest, never a keystroke here.
 type Conflicts struct {
 	table    *tview.Table

@@ -104,7 +104,10 @@ public class DynamicTableWriter {
         ? createSchema(spec, rows, sourceTypeHints, tenantId, mappingId, connectorId)
         : evolveSchema(spec, rows, registered, sourceTypeHints, tenantId, mappingId, connectorId);
 
-    insertRows(spec, rows, systemContexts, tenantId, registered, connectorId);
+    Written w = insertRows(spec, rows, systemContexts, tenantId, registered, connectorId);
+    // Recorded here, once, whatever insert path ran: the incremental resolution pass reads only the
+    // tables a run recorded (#904), so a path stamping _run_id unrecorded would go unresolved.
+    stats.recordCounts(runIdOf(systemContexts), fqnUnquoted(spec), w.written(), w.skipped());
   }
 
   /**
@@ -495,22 +498,22 @@ public class DynamicTableWriter {
       + "(tenant_id, event_type, source, entity, entity_key, payload, occurred_at, created_at) "
       + "VALUES (?, ?, ?, ?, ?, ?::jsonb, NOW(), NOW())";
 
+  /** What one insert path wrote: rows inserted (or touched by DO UPDATE) and rows it skipped. */
+  private record Written(int written, int skipped) {}
+
   /** Dispatcher: gated path emits per-new-row events in the data tx; un-gated path is the plain batch. */
-  private void insertRows(MappingTarget.Table spec, List<Map<String, Object>> rows,
-                          List<Map<String, Object>> sys, Long tenantId,
-                          Map<String, String> schema, UUID connectorId) {
-    if (rows.isEmpty()) return;
-    if (gate.enabled(tenantId, fqnUnquoted(spec))) {
-      insertRowsEmitting(spec, rows, sys, tenantId, schema, connectorId);
-    } else {
-      insertRowsBatched(spec, rows, sys, tenantId, schema);
-    }
+  private Written insertRows(MappingTarget.Table spec, List<Map<String, Object>> rows,
+                             List<Map<String, Object>> sys, Long tenantId,
+                             Map<String, String> schema, UUID connectorId) {
+    return gate.enabled(tenantId, fqnUnquoted(spec))
+        ? insertRowsEmitting(spec, rows, sys, tenantId, schema, connectorId)
+        : insertRowsBatched(spec, rows, sys, tenantId, schema);
   }
 
   /** Un-gated path (default): pgjdbc batch + Task-1 written/skipped counts. Unchanged behavior. */
-  private void insertRowsBatched(MappingTarget.Table spec, List<Map<String, Object>> rows,
-                                 List<Map<String, Object>> sys, Long tenantId,
-                                 Map<String, String> schema) {
+  private Written insertRowsBatched(MappingTarget.Table spec, List<Map<String, Object>> rows,
+                                    List<Map<String, Object>> sys, Long tenantId,
+                                    Map<String, String> schema) {
     List<String> schemaCols = new ArrayList<>(schema.keySet());
     String sql = buildInsertSql(spec, schemaCols, conflictClause(spec), false, 1);
 
@@ -527,7 +530,7 @@ public class DynamicTableWriter {
         // pgjdbc returns 1 for a real insert, 0 for an ON CONFLICT DO NOTHING no-op, and -2 (SUCCESS_NO_INFO) when it can't report a per-row count; treat anything != 0 as written, 0 as skipped.
         if (n != 0) written++; else skipped++;
       }
-      stats.recordCounts(runIdOf(sys), fqnUnquoted(spec), written, skipped);
+      return new Written(written, skipped);
     } catch (Exception e) {
       throw new ConnectorException("DynamicTableWriter.insertRows failed: " + e.getMessage(), e);
     }
@@ -546,9 +549,9 @@ public class DynamicTableWriter {
   // setAutoCommit(true) so data rows and events commit atomically. Extracting it would hand a helper
   // ~11 parameters (a worse S107), so the nesting stays.
   @SuppressWarnings("java:S1141")
-  private void insertRowsEmitting(MappingTarget.Table spec, List<Map<String, Object>> rows,
-                                  List<Map<String, Object>> sys, Long tenantId,
-                                  Map<String, String> schema, UUID connectorId) {
+  private Written insertRowsEmitting(MappingTarget.Table spec, List<Map<String, Object>> rows,
+                                     List<Map<String, Object>> sys, Long tenantId,
+                                     Map<String, String> schema, UUID connectorId) {
     List<String> schemaCols = new ArrayList<>(schema.keySet());
     String fqn = fqnUnquoted(spec);
     String source = connectorId != null ? connectorId.toString() : "ingest";
@@ -600,7 +603,7 @@ public class DynamicTableWriter {
 
     // skipped = dropped intra-chunk dups + cross-run conflicts (uniques that didn't come back).
     int skipped = droppedDups + (idx.size() - returned);
-    stats.recordCounts(runIdOf(sys), fqn, written, skipped);
+    return new Written(written, skipped);
   }
 
   /** First-occurrence-wins ordered index list over the chunk, keyed by {@code _row_hash}. */

@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.manifest.ManifestKeys;
 import io.lumnik.hub.manifest.ManifestSurface;
+import io.lumnik.hub.manifest.ModuleManifest;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
@@ -44,7 +46,7 @@ public class AppManifestParser {
 
     private static final Set<String> ROOT_KEYS = Set.of("apiVersion", "kind", METADATA, SPEC);
     private static final Set<String> METADATA_KEYS = Set.of("name");
-    private static final Set<String> SPEC_KEYS = Set.of("title", "scope", "icon", "theme", "default");
+    private static final Set<String> SPEC_KEYS = Set.of("title", "scope", "icon", "theme", "default", "tabs");
     private static final Set<String> THEME_KEYS = Set.of("accentColor", "backgroundColor");
 
     private static final ManifestSurface SURFACE = ManifestSurface.builder()
@@ -138,7 +140,31 @@ public class AppManifestParser {
 
         return new AppManifest(name, tag, title, icon, accent,
             hexOrDefault(theme, "backgroundColor", DEFAULT_BACKGROUND),
-            spec.path("default").asBoolean(false));
+            spec.path("default").asBoolean(false), parseTabs(spec));
+    }
+
+    private static final int MAX_TABS = 16;
+
+    /** Null when the key is absent or null (inherit). Any well-formed id is accepted, offered here or not. */
+    private static List<String> parseTabs(JsonNode spec) {
+        JsonNode node = spec.path("tabs");
+        if (node.isMissingNode() || node.isNull()) return null;
+        if (!node.isArray())
+            throw new IllegalArgumentException("spec.tabs must be a list of tab ids — omit the key to inherit every tab the hub offers");
+        if (node.isEmpty())
+            throw new IllegalArgumentException("spec.tabs must not be empty — omit the key to inherit every tab the hub offers");
+        if (node.size() > MAX_TABS)
+            throw new IllegalArgumentException("spec.tabs lists " + node.size() + " tabs, at most " + MAX_TABS + " are accepted");
+        List<String> out = new ArrayList<>();
+        for (int i = 0; i < node.size(); i++) {
+            JsonNode t = node.get(i);
+            if (!t.isTextual() || !ModuleManifest.TAB_ID.matcher(t.asText()).matches())
+                throw new IllegalArgumentException("spec.tabs[" + i + "] must match " + ModuleManifest.TAB_ID.pattern() + ", got " + t);
+            if (out.contains(t.asText()))
+                throw new IllegalArgumentException("spec.tabs lists '" + t.asText() + "' twice — a tab appears once (duplicate)");
+            out.add(t.asText());
+        }
+        return List.copyOf(out);
     }
 
     private static String hexOrDefault(JsonNode theme, String field, String fallback) {

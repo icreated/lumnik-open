@@ -83,6 +83,30 @@ if you haven't set those up yet.
    `:runs` (history), `:dlq` (rejected rows — set aside instead of failing the run,
    inspected with `lm dlq list`).
 
+**Scheduled runs take turns**: a scheduled connector runs each of its endpoints as its own run,
+and a hub instance drives at most 4 of them at once (`lumnik.connector.max-concurrent-scheduled-runs`,
+environment variable `LUMNIK_CONNECTOR_MAX_CONCURRENT_SCHEDULED_RUNS`). The others wait and start as
+those finish; an endpoint still waiting has no run in `lm run list` yet. Each run uses up to two connections of
+the hub's `admin` pool (20 by default): raise the pool
+(`quarkus.datasource."admin".jdbc.max-size`) along with the bound. With the run queue off (the default),
+`lm connector run` does not count against it and never waits for it — so a manual run of a connector with
+many endpoints can still fill the pool on its own. A scheduled endpoint that waited does not start if,
+meanwhile, the connector was paused or deleted, its window closed, or the endpoint already ran (a manual run).
+
+**Manual runs can queue**: with `LUMNIK_RUN_QUEUE_ENABLED=true` (off by default; read
+[Turning on the run queue](../operations/upgrade.md#turning-on-the-run-queue) first), `lm connector run`
+and `POST /api/platform/connectors/{id}/run` answer 202 with one run per endpoint in status `Queued`, and the
+hub starts each as a slot frees — on the same `LUMNIK_CONNECTOR_MAX_CONCURRENT_SCHEDULED_RUNS` budget as scheduled
+runs, so a manual run of a 25-endpoint connector no longer fills the connection pool. `lm run list` shows the
+`Queued` runs (no start time yet) and `lm run cancel` ends one. An endpoint holds at most one queued-or-running
+run: a second request for it is answered with a run already `Cancelled` ("another run is already active").
+A run not started within `LUMNIK_RUN_QUEUE_MAX_AGE` (default `1h`) ends `Cancelled`, "expired in the queue";
+one whose endpoint was disabled or deleted, whose connector was paused or deleted, or whose definition was
+re-applied while it waited, ends `Cancelled` with that reason. A run left `Running` by a hub that died
+still blocks its endpoint until the hub's reaper fails it (within a minute), so a request in that window is
+answered with a run already `Cancelled` rather than started. `lm run cancel` on a run the hub is just then
+starting is refused with "is being started; try again in a moment". On-demand exports queue the same way ([Exports](../apps/exports.md#runs-can-queue)).
+
 **Freshness follows the schedule**: a change in the source appears at the next run *that
 reads it* — deletes never propagate, and watermark mode only re-reads rows whose
 watermark advanced. How the *user* perceives that age is an open question the

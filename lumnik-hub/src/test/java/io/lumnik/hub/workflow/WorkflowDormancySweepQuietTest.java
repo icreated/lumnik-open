@@ -60,10 +60,10 @@ class WorkflowDormancySweepQuietTest {
             """));
     }
 
-    /** The shape latestStatePerKey throws: a RuntimeException carrying the SQLException as cause. */
+    /** The shape sweepOne throws: a RuntimeException carrying the SQLException as cause. */
     private static RuntimeException wrapped(String sqlState, String message) {
         SQLException sql = new SQLException(message, sqlState);
-        return new RuntimeException("WorkflowDormancySweep.latestStatePerKey: " + message, sql);
+        return new RuntimeException("WorkflowDormancySweep.sweepOne: " + message, sql);
     }
 
     /**

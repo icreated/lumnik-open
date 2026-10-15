@@ -287,7 +287,7 @@ class WorkflowDormancySweepIT {
     }
 
     /**
-     * Every identifier in {@code latestStatePerKey} is interpolated — JDBC cannot bind one — so this
+     * Every identifier in the sweep's source query is interpolated — JDBC cannot bind one — so this
      * is where quoting has to hold: a capitalised table, a space in the watched column, a {@code °}
      * in the business key. Bare, {@code SELECT DISTINCT ON (N° Commande)} is not a miss but a SYNTAX
      * ERROR, and the per-workflow net swallows it as a logged skip — a declared dormancy that never
@@ -330,5 +330,48 @@ class WorkflowDormancySweepIT {
         sweep.sweepNow();
         assertThat(observations.loadAll(tenant, "wf-sweep-verbatim-it"))
             .containsOnlyKeys("CMD-1", "CMD-2");
+    }
+
+    /**
+     * One stored manifest the parser no longer accepts must cost the sweep that row and nothing else
+     * (#807). {@code listByTenant} orders by name, so {@code aaa-garbled} is read BEFORE the good
+     * workflow of the same tenant: with the strict read the exception left the registry before it
+     * returned anything, and the good one — and every tenant after it — was never swept.
+     *
+     * <p>Both manifests this test adds are deleted afterwards, ledger included: the table is shared, and a row left behind is how
+     * this showed up in #806 — it failed every other sweep test in the gate.
+     */
+    @Test
+    void a_manifest_that_no_longer_parses_costs_only_its_own_row_not_the_sweep() throws Exception {
+        long other = 7503L;
+        String table = "connector.t_wf_sweep_garbled_it";
+        String yaml = YAML.replace("wf-sweep-it", "wf-sweep-garbled-it")
+            .replace("connector.t_wf_sweep_it", table);
+        try (Connection c = adminDs.getConnection(); Statement s = c.createStatement()) {
+            s.execute("CREATE TABLE IF NOT EXISTS " + table + " (id BIGSERIAL PRIMARY KEY, "
+                + "tenant_id BIGINT NOT NULL, num TEXT, statut TEXT, "
+                + "_ingested_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+            s.execute("DELETE FROM " + table);
+            s.execute("DELETE FROM core.workflow_observation WHERE tenant_id = " + other);
+            s.execute("INSERT INTO " + table + " (tenant_id, num, statut) VALUES ("
+                + other + ", 'CMD-OTHER', 'en cours')");
+        }
+        manifests.upsert(other, new WorkflowManifestParser().parse(yaml), yaml, null);
+        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(
+                "INSERT INTO core.workflow_manifest (tenant_id, name, yaml_text, scope, on_table, on_column) "
+                    + "VALUES (?, 'aaa-garbled', 'spec: [', 'demo', 'connector.t_garbled', 'statut')")) {
+            ps.setLong(1, TENANT);
+            ps.executeUpdate();
+        }
+        try {
+            sweep.sweepNow();
+
+            assertThat(observations.loadAll(TENANT, WF)).containsKeys("CMD-ACTIF", "CMD-LITIGE", "CMD-FINI");
+            assertThat(observations.loadAll(other, "wf-sweep-garbled-it")).containsOnlyKeys("CMD-OTHER");
+        } finally {
+            // delete() takes the observation ledger and the tape with the manifest, for both rows
+            manifests.delete(TENANT, "aaa-garbled");
+            manifests.delete(other, "wf-sweep-garbled-it");
+        }
     }
 }

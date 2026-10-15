@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.*;
  * <p>The scheduler is paused for the whole test: the assertion compares the admin pool's
  * {@code activeCount()} across the skip path, and several scheduled jobs borrow admin
  * connections ({@code ConnectorScheduler} every minute, {@code AuditDispatcher} every two
- * seconds, the dormancy sweep one checkout per document). Any of them checked out at the
+ * seconds, the dormancy sweep one checkout per document, plus one for the workflow's stream). Any of them checked out at the
  * instant of a reading shifts it, so without this the assertion is a race — narrow, but this
  * suite's only automated gate is the nightly {@code mvn verify}, where a flaky IT rots for a
  * day before anyone sees it.

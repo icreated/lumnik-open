@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.mapping;
 
+import io.lumnik.hub.connector.runtime.OwnedRunScope;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.SkipReason;
 import io.lumnik.hub.connector.api.types.SyncMode;
@@ -236,7 +237,7 @@ class MappingDropAccountingTest {
     ConnectorContext ctx = new ConnectorContext(
         UUID.randomUUID(), null, null, 1L, "test", "test", Map.of(),
         new SyncMode.FullRefresh(),
-        null, null, null, Clock.systemUTC(), null);
+        null, null, null, Clock.systemUTC(), null, new OwnedRunScope("test"));
     WriteOutcome outcome = engine.itemWriter(spec).write(writerInput, ctx);
 
     assertThat(outcome).isInstanceOf(WriteOutcome.PartialWrite.class);

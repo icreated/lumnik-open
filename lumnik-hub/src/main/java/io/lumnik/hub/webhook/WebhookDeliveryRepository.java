@@ -4,24 +4,31 @@ import io.quarkus.hibernate.orm.panache.PanacheRepository;
 import io.quarkus.panache.common.Sort;
 import jakarta.enterprise.context.ApplicationScoped;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 
 @ApplicationScoped
 public class WebhookDeliveryRepository implements PanacheRepository<WebhookDelivery> {
 
 
+    /**
+     * The predicate of the three admin reads: a first delivery is recorded as a pending row
+     * ({@code attempts = 0}) before it is POSTed (#944), and a row never attempted is not an output yet.
+     */
+    private static final String WAS_ATTEMPTED = "attempts > 0";
+
     /** The delivery-ordering column every query here sorts on. */
     private static final String ATTEMPTED_AT = "attemptedAt";
 
     public List<WebhookDelivery> recentForEndpoint(Long endpointId, int limit) {
-        return find("endpointId = ?1", Sort.descending(ATTEMPTED_AT), endpointId)
+        return find("endpointId = ?1 AND " + WAS_ATTEMPTED, Sort.descending(ATTEMPTED_AT), endpointId)
             .page(0, Math.min(Math.max(limit, 1), 500)).list();
     }
 
     public List<WebhookDelivery> recentFailedForEndpoint(Long endpointId, int limit) {
         // Key off succeeded (authoritative since V24): deliver() treats anything outside 2xx
         // as failed, so a 3xx — status < 400 — is still a failure and must appear here.
-        return find("endpointId = ?1 AND succeeded = false",
+        return find("endpointId = ?1 AND succeeded = false AND " + WAS_ATTEMPTED,
             Sort.descending(ATTEMPTED_AT), endpointId)
             .page(0, Math.min(Math.max(limit, 1), 500)).list();
     }
@@ -41,7 +48,7 @@ public class WebhookDeliveryRepository implements PanacheRepository<WebhookDeliv
     /** Every integration's deliveries for one tenant, FAILURES FIRST then newest — the order is
      *  the server's promise to the :outputs screen, which renders it and never re-derives it. */
     public List<WebhookDelivery> recentForTenant(long tenantId, int limit) {
-        return find("tenantId = ?1",
+        return find("tenantId = ?1 AND " + WAS_ATTEMPTED,
                 Sort.ascending("succeeded").and(ATTEMPTED_AT, Sort.Direction.Descending), tenantId)
             .page(0, Math.min(Math.max(limit, 1), 500)).list();
     }
@@ -85,5 +92,26 @@ public class WebhookDeliveryRepository implements PanacheRepository<WebhookDeliv
             .setParameter("after", afterId)
             .getResultList();
         return claimed.isEmpty() ? null : findById(((Number) claimed.get(0)).longValue());
+    }
+
+    /**
+     * Renews the lease of a first delivery just before it is POSTed, if the row is still exactly
+     * as the batch left it: never attempted and leased until {@code leasedUntil}. The batch
+     * leases every pending row when it commits, but delivers them one after another, so a row
+     * late in the pass would otherwise be POSTed after its lease ran out and the retry sweep
+     * could take it meanwhile. A different {@code claimed_until} means that happened (or the row
+     * is gone, its event having rolled back): the caller skips it. Returns whether it still owns it.
+     */
+    public boolean extendClaim(long id, OffsetDateTime leasedUntil, int leaseSeconds) {
+        return !getEntityManager().createNativeQuery("""
+            UPDATE core.webhook_delivery
+               SET claimed_until = now() + (:lease * INTERVAL '1 second')
+             WHERE id = :id AND attempts = 0 AND claimed_until = :expected
+            RETURNING id
+            """)
+            .setParameter("lease", leaseSeconds)
+            .setParameter("id", id)
+            .setParameter("expected", leasedUntil)
+            .getResultList().isEmpty();
     }
 }

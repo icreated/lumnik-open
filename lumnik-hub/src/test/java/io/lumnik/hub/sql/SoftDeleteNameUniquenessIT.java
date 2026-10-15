@@ -54,6 +54,9 @@ class SoftDeleteNameUniquenessIT {
     private static final Map<String, String> BARE_ON_PURPOSE = Map.ofEntries(
         entry("connector.connector",
             "ConnectorAdminResource.delete is a real DELETE (repo.delete) — the row leaves and frees its name"),
+        entry("connector.connector_run",
+            "no door stamps deleted_at on a run (the ledger shows every run), and uq_connector_run_in_flight (#952) "
+          + "is keyed on status: a run leaves it by ending, not by being tombstoned"),
         entry("connector.connector_credential",
             "read-only: nothing in src/main persists or deletes one (CredentialResolverImpl and DiscoveryService only read)"),
         entry("connector.connector_mapping",

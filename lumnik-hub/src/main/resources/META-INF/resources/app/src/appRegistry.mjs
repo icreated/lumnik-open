@@ -31,7 +31,7 @@ const ICON_FILES = {
 // The neutral identity: anything the cache has never seen, before phase 2 ever answers.
 const NEUTRAL = {
   name: 'generic', title: 'lumnik', scope: null, icon: 'generic',
-  accentColor: '#8b7ff0', backgroundColor: '#14121f', default: false,
+  accentColor: '#8b7ff0', backgroundColor: '#14121f', default: false, tabs: null,
 };
 
 // clients/stock are compiled into the shipped shell (their manifests and icons ship with
@@ -39,9 +39,9 @@ const NEUTRAL = {
 // empty cache and no network yet.
 const BUILTIN = {
   clients: { name: 'clients', title: 'Clients', scope: 'clients', icon: 'clients',
-    accentColor: '#8b7ff0', backgroundColor: '#14121f', default: true },
+    accentColor: '#8b7ff0', backgroundColor: '#14121f', default: true, tabs: null },
   stock: { name: 'stock', title: 'Stock', scope: 'stock', icon: 'stock',
-    accentColor: '#8b7ff0', backgroundColor: '#14121f', default: false },
+    accentColor: '#8b7ff0', backgroundColor: '#14121f', default: false, tabs: null },
 };
 
 function withDerived(entry) {

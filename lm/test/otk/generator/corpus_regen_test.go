@@ -89,6 +89,53 @@ func TestRegenerateProcessCorpus(t *testing.T) {
 	t.Logf("regenerated process corpus seeds 1..%d", corpusProcessSeedMax)
 }
 
+const corpusEntityResSeedMax = 20
+
+// TestRegenerateEntityResolutionCorpus writes the committed entity-resolution corpus. It is a tool:
+//
+//	OTK_REGEN=1 go test -run TestRegenerateEntityResolutionCorpus ./lm/test/otk/generator/
+func TestRegenerateEntityResolutionCorpus(t *testing.T) {
+	if os.Getenv("OTK_REGEN") == "" {
+		t.Skip("set OTK_REGEN=1 to (re)write the committed entity-resolution corpus")
+	}
+	for seed := int64(1); seed <= corpusEntityResSeedMax; seed++ {
+		path := fmt.Sprintf("../corpus/entityres_%04d.feature", seed)
+		if err := os.WriteFile(path, []byte(GenerateEntityResolution(seed).Feature), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	t.Logf("regenerated entity-resolution corpus seeds 1..%d", corpusEntityResSeedMax)
+}
+
+// TestRegenerateExportCorpus writes the committed export corpus: one feature per catalogue
+// case, each named by that case's witness seed. Seventeen cases spread over a random seed
+// range would need 62 seeds before every one appeared — so the declared-tier battery, which
+// runs the committed corpus only, would miss cases a 1..20 range happens not to pick. The
+// lock in corpus_test.go still holds each file to GenerateExport(seed). It is a tool:
+//
+//	OTK_REGEN=1 go test -run TestRegenerateExportCorpus ./lm/test/otk/generator/
+func TestRegenerateExportCorpus(t *testing.T) {
+	if os.Getenv("OTK_REGEN") == "" {
+		t.Skip("set OTK_REGEN=1 to (re)write the committed export corpus")
+	}
+	ws, err := Witnesses()
+	if err != nil {
+		t.Fatalf("Witnesses(): %v", err)
+	}
+	n := 0
+	for _, w := range ws {
+		if w.ID.Lane() != "export" {
+			continue
+		}
+		path := fmt.Sprintf("../corpus/export_%04d.feature", w.Seed)
+		if err := os.WriteFile(path, []byte(GenerateExport(w.Seed).Feature), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+		n++
+	}
+	t.Logf("regenerated the export corpus: %d case(s), one witness seed each", n)
+}
+
 const corpusViewSeedMax = 20
 
 // TestRegenerateViewCorpus writes the committed view corpus. It is a tool:

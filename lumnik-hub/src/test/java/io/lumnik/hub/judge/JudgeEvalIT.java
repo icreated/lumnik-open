@@ -6,7 +6,7 @@ import io.lumnik.hub.ask.AskToSqlAgent;
 import io.lumnik.hub.ask.FaithfulnessJudge;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.quarkus.test.junit.QuarkusTest;
-import io.quarkus.test.junit.QuarkusTestProfile;
+import io.lumnik.hub.ask.RealAnalyticModelProfile;
 import io.quarkus.test.junit.TestProfile;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -15,7 +15,6 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
-import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -29,16 +28,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @QuarkusTest
 @Disabled("on-demand: needs Ollama with the analytic (qwen) + judge (gemma2) models")
-@TestProfile(JudgeEvalIT.RealModelsProfile.class)
+@TestProfile(RealAnalyticModelProfile.class)
 class JudgeEvalIT {
 
-    /** Turns OFF the global @Analytic mock so this eval uses the REAL qwen-backed AnalyticChatPort. */
-    public static class RealModelsProfile implements QuarkusTestProfile {
-        @Override
-        public Map<String, String> getConfigOverrides() {
-            return Map.of("lumnik.judgeeval.mock-analytic", "false");
-        }
-    }
 
     static final Logger LOG = Logger.getLogger(JudgeEvalIT.class);
     static final long TENANT = 13L;

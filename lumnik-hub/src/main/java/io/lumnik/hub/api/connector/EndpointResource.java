@@ -9,6 +9,7 @@ import io.lumnik.hub.connector.repository.ConnectorCursorEntityRepository;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.rest.runtime.RestPreflight;
+import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
 import jakarta.transaction.Transactional;
@@ -95,17 +96,26 @@ public class EndpointResource {
         return Response.status(204).build();
     }
 
-    /** Pre-flight: send the one request a run would send, write nothing, report what came back. */
+    /**
+     * Pre-flight: send the one request a run would send, write nothing, report what came back.
+     *
+     * <p>The two rows are read inside a transaction of their own — the tenant is bound with SET
+     * LOCAL, which is transaction-scoped — and not the method's, so the request to the source, up
+     * to the HTTP client's timeout, holds no connection. Same shape as RestDiscoveryResource#probe.
+     */
     @POST
     @Path("{eid}/test")
     @Consumes(MediaType.WILDCARD)
-    @Transactional
     public Response test(@PathParam("cid") UUID cid, @PathParam("eid") UUID eid) {
-        Connector conn = connRepo.findById(cid);
-        ConnectorEndpoint ep = endpointOf(conn, eid);
-        if (ep == null) return ApiErrors.notFound("endpoint " + eid + " not found under connector " + cid);
+        record Found(Connector conn, ConnectorEndpoint ep) {}
+        Found f = QuarkusTransaction.requiringNew().call(() -> {
+            Connector conn = connRepo.findById(cid);
+            ConnectorEndpoint ep = endpointOf(conn, eid);
+            return ep == null ? null : new Found(conn, ep);
+        });
+        if (f == null) return ApiErrors.notFound("endpoint " + eid + " not found under connector " + cid);
 
-        return Response.ok(preflight.check(conn, ep)).build();
+        return Response.ok(preflight.check(f.conn(), f.ep())).build();
     }
 
     /** Clear the stored cursor for this endpoint so the next run is a full re-sync. */

@@ -80,7 +80,7 @@ class AppDefaultDemoteScopeIT {
             // Restores from the ROW, so the theme AppRegistrationSeedIT pins travels back intact.
             store.upsert(
                 new AppManifest(previous.name(), previous.scope(), previous.title(),
-                    previous.icon(), previous.accentColor(), previous.backgroundColor(), true),
+                    previous.icon(), previous.accentColor(), previous.backgroundColor(), true, previous.tabs()),
                 manifest(previous.name(), previous.scope(), "  default: true\n"),
                 null);
         }

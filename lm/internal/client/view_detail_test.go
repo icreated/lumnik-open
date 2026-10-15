@@ -37,7 +37,7 @@ func TestViewDetail_parsesRecordAndConflicts(t *testing.T) {
 	assert.Equal(t, []DetailField{{"customer_code", "Code client", "C-200"}, {"name", "Nom", "Marie"}}, res.Fields)
 	assert.True(t, res.ConflictLedger)
 	assert.Equal(t, "Nom", res.Conflicts[0].Label)
-	assert.Equal(t, []DetailSource{{"cust_siebel", "Marie"}, {"t_cust_csv", "MARIE A."}}, res.Conflicts[0].Sources)
+	assert.Equal(t, []DetailSource{{"cust_siebel", StrPtr("Marie")}, {"t_cust_csv", StrPtr("MARIE A.")}}, res.Conflicts[0].Sources)
 }
 
 func TestViewDetail_coercesNonTextFieldValues(t *testing.T) {

@@ -10,3 +10,5 @@ docs
 # Never bake local secrets into a build layer (build stage does COPY . .).
 .env
 .env.*
+# Per-install TLS material of the opt-in search cluster (private keys), generated before the build.
+deploy/selfhost/search-cluster/

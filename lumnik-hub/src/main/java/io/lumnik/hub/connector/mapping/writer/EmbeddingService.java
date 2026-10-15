@@ -9,8 +9,8 @@ import java.util.List;
 
 /**
  * Thin façade over EmbeddingPort. Isolates the connector stack from the LLM SPI surface.
- * Throws IllegalStateException when no EmbeddingPort impl is on the classpath
- * (e.g. ELK-only deployment without lumnik-llm-langchain).
+ * Throws IllegalStateException when no embedding model is available: none on the classpath
+ * (e.g. ELK-only deployment without lumnik-llm-langchain) or switched off (lumnik.ai.enabled=false).
  */
 @ApplicationScoped
 public class EmbeddingService {
@@ -20,7 +20,7 @@ public class EmbeddingService {
     public float[] embed(String text) {
         if (embeddingPorts.isUnsatisfied()) {
             throw new IllegalStateException(
-                "No EmbeddingPort impl on classpath — add lumnik-llm-langchain to enable RAG indexing");
+                "no embedding model is available — RAG indexing needs one");
         }
         return embeddingPorts.get().embed(text);
     }
@@ -29,7 +29,7 @@ public class EmbeddingService {
     public List<float[]> embedAll(List<String> texts) {
         if (embeddingPorts.isUnsatisfied()) {
             throw new IllegalStateException(
-                "No EmbeddingPort impl on classpath — add lumnik-llm-langchain to enable RAG indexing");
+                "no embedding model is available — RAG indexing needs one");
         }
         return embeddingPorts.get().embedAll(texts);
     }

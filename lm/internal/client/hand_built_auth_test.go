@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,7 +14,7 @@ import (
 )
 
 // Every request method that bypasses do() — apply, entity, validate, describe and
-// rest-from-openapi (through doRaw), plus the still hand-built csv, csv-remote and sse —
+// rest-from-openapi (through doRaw), plus the still hand-built csv, csv-remote, snapshot and sse —
 // must send the token resolved by bearerToken — i.e. the fresh
 // `lm login` Access token when present — NOT the static ctx.Token. A stale/expired static
 // token alongside a fresh login token must not win. (Marie's real bug: after `lm login`,
@@ -26,6 +27,9 @@ func TestHandBuiltRequestsUseLoginAccessToken(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer FRESH-LOGIN" {
 			w.WriteHeader(http.StatusUnauthorized) // a method sent the stale/wrong token
 			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/download") {
+			w.Header().Set("Content-Type", "text/csv") // the snapshot door only answers CSV
 		}
 		_, _ = w.Write([]byte(`{}`))
 	}))
@@ -69,6 +73,11 @@ func TestHandBuiltRequestsUseLoginAccessToken(t *testing.T) {
 			return err
 		},
 		"openapi": func(c *Client) error { _, err := c.RestFromOpenApi("http://x/openapi.json", "n", nil); return err },
+		"snapshot": func(c *Client) error {
+			_, err := c.EntitySnapshotDownload(context.Background(), "e",
+				func() (io.Writer, error) { return io.Discard, nil })
+			return err
+		},
 		"sse": func(c *Client) error {
 			return c.SSEStream(context.Background(), "/events", nil, make(chan SSEEvent, 1))
 		},

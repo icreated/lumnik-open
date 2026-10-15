@@ -62,17 +62,19 @@ class RunAdminResourceTest {
         .body("deadLetterCount", equalTo(2));
   }
 
+  /** One grouped count for the page (#892): each run keeps its own, and a run with none reads 0. */
   @Test
   void list_exposes_deadLetterCount() throws Exception {
     UUID runId = seedRunWithDeadLetters(2);
-    String idStr = runId.toString();
+    UUID cleanRunId = seedRunWithDeadLetters(0);
 
     given()
       .headers(TestIdentity.tenantAndUser(1))
       .queryParam("limit", 50)
       .when().get("/api/platform/runs")
       .then().statusCode(200)
-        .body("findAll { it.id == '" + idStr + "' }.deadLetterCount", hasItem(equalTo(2)));
+        .body("findAll { it.id == '" + runId + "' }.deadLetterCount", hasItem(equalTo(2)))
+        .body("findAll { it.id == '" + cleanRunId + "' }.deadLetterCount", hasItem(equalTo(0)));
   }
 
   /**
@@ -148,6 +150,34 @@ class RunAdminResourceTest {
       .headers(TestIdentity.tenantAndUser(1))
       .when().get("/api/platform/runs/" + runId)
       .then().statusCode(404);
+  }
+
+  /**
+   * The page names its tenant itself, like the by-id read above (#892). Hibernate's tenantFilter is
+   * off on this @Transactional read (IntegrationTenantPredicateIT) — its SQL went out with no tenant
+   * predicate at all — so RLS alone kept the page to its tenant, and an index leading with
+   * tenant_id could not serve it. This plain harness owns the schema, so RLS never bites here: only
+   * the query's own predicate keeps tenant 2's run off tenant 1's page.
+   */
+  @Test
+  void list_shows_no_other_tenants_run() throws Exception {
+    String runId = seedRunForTenant(2L).toString();
+
+    List<String> asOwner = given()
+      .headers(TestIdentity.tenantAndUser(2))
+      .queryParam("limit", 200)
+      .when().get("/api/platform/runs")
+      .then().statusCode(200)
+      .extract().path("id");
+    assertThat(asOwner).as("the run is on its own tenant's page").contains(runId);
+
+    List<String> asOther = given()
+      .headers(TestIdentity.tenantAndUser(1))
+      .queryParam("limit", 200)
+      .when().get("/api/platform/runs")
+      .then().statusCode(200)
+      .extract().path("id");
+    assertThat(asOther).as("another tenant's run on tenant 1's page").doesNotContain(runId);
   }
 
   @Test

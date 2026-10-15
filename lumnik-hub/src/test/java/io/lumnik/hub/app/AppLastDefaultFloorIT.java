@@ -57,7 +57,7 @@ class AppLastDefaultFloorIT {
     private void restore(AppRegistrationStore.Row previous) {
         store.upsert(
             new AppManifest(previous.name(), previous.scope(), previous.title(), previous.icon(),
-                previous.accentColor(), previous.backgroundColor(), true),
+                previous.accentColor(), previous.backgroundColor(), true, previous.tabs()),
             manifest(previous.name(), previous.scope(), "  default: true\n"),
             null);
     }

@@ -15,4 +15,6 @@ const (
 	OutputsPageCap      = 500  // PlatformDeliveryResource
 	ConflictsPageCap    = 1000 // EntityConflictsResource
 	ObservationsPageCap = 1000 // WorkflowResource
+	AmbiguousPageCap    = 1000 // EntityResolutionReadResource.ambiguous
+	EntityRowsPageCap   = 1000 // EntityReadResource.read
 )

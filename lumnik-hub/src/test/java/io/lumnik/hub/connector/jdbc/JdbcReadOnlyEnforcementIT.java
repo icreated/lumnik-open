@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.jdbc;
 
+import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -22,6 +23,8 @@ import static org.junit.jupiter.api.Assertions.*;
 @Testcontainers
 class JdbcReadOnlyEnforcementIT {
 
+  private static final PostgresDialect PG_DIALECT = new PostgresDialect();
+
   @Container
   static PostgreSQLContainer<?> PG = new PostgreSQLContainer<>("postgres:16-alpine")
       .withDatabaseName("s").withUsername("u").withPassword("p");
@@ -37,7 +40,7 @@ class JdbcReadOnlyEnforcementIT {
   @Test
   void connection_acquired_via_registry_is_read_only() throws Exception {
     HikariPoolRegistry reg = new HikariPoolRegistry();
-    DataSource ds = reg.acquire(PG.getJdbcUrl(), "u", "p", 1L);
+    DataSource ds = reg.acquire(PG.getJdbcUrl(), "u", "p", 1L, PG_DIALECT);
 
     try (Connection c = ds.getConnection()) {
       assertTrue(c.isReadOnly(), "Connection must report isReadOnly() = true");
@@ -49,7 +52,7 @@ class JdbcReadOnlyEnforcementIT {
   @Test
   void read_only_transaction_rejects_writes() throws Exception {
     HikariPoolRegistry reg = new HikariPoolRegistry();
-    DataSource ds = reg.acquire(PG.getJdbcUrl(), "u", "p", 1L);
+    DataSource ds = reg.acquire(PG.getJdbcUrl(), "u", "p", 1L, PG_DIALECT);
 
     try (Connection c = ds.getConnection()) {
       // Disable autocommit to start an explicit transaction.

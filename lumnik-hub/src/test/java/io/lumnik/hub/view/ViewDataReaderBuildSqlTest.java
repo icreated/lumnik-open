@@ -101,4 +101,20 @@ class ViewDataReaderBuildSqlTest {
         assertTrue(sql.contains("\"mystery\"::text = ?"),
             () -> "an unknown type must fall back to the existing shape: " + sql);
     }
+
+    @Test void orderingOnAFloat_comparesNatively_noTextRoundTrip() {
+        for (String type : List.of("double precision", "real", "float8", "float4")) {
+            ResolvedView typed = new ResolvedView("Demo", "connector.t_view_demo", List.of(
+                    new ResolvedView.Column("ratio", "Ratio", type)));
+
+            String sql = ViewDataReader.buildSql(typed, List.of(new ViewFilter("ratio", ">=", "0.5")));
+
+            // A float's text form can be scientific (1e-05, 1e+20), which the numeric text shape
+            // rejects — a rejected row is silently dropped. The column is already a float and the
+            // operand is a validated number, so compare natively: no column cast, no shape guard.
+            assertTrue(sql.contains("\"ratio\" >= ?::float8"), () -> type + ": " + sql);
+            assertFalse(sql.contains("::text"), () -> type + " must not round-trip through text: " + sql);
+            assertFalse(sql.contains("CASE WHEN"), () -> type + " needs no shape guard: " + sql);
+        }
+    }
 }

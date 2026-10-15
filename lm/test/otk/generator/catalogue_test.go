@@ -12,7 +12,8 @@ import (
 func TestCatalogueCountsPerLane(t *testing.T) {
 	want := map[string]int{
 		"apply": 45, "run": 26, "rest": 24, "auth": 7,
-		"entity": 14, "process": 11, "view": 9,
+		"entity": 15, "process": 11, "view": 9, "entityres": 3,
+		"export": 17,
 	}
 	got := map[string]int{}
 	for _, id := range Catalogue() {
@@ -56,7 +57,7 @@ func TestCatalogueIsSortedAndUnique(t *testing.T) {
 // names the lane and count that moved, then paste the new fingerprint below. That
 // paste is the corpus-version bump, and it is the moment a human looks at what moved.
 func TestCatalogueFingerprintIsPinned(t *testing.T) {
-	const pinned = "04aa0cd3076a"
+	const pinned = "3fe6325f76d4"
 	got := CatalogueFingerprint()
 	if !regexp.MustCompile(`^[0-9a-f]{12}$`).MatchString(got) {
 		t.Fatalf("fingerprint %q is not 12 hex characters", got)

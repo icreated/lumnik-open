@@ -38,15 +38,22 @@ public final class EventItSupport {
     /** Insert an enabled webhook_endpoint (tenant 1) subscribed to the given event types. */
     public static void seedWebhookEndpoint(AgroalDataSource adminDs, UserTransaction utx,
                                            String name, String... eventTypes) {
+        seedWebhookEndpoint(adminDs, utx, 1L, name, eventTypes);
+    }
+
+    /** The same for {@code tenantId} — a test that must not switch the row-event gate on for tenant 1. */
+    public static void seedWebhookEndpoint(AgroalDataSource adminDs, UserTransaction utx, long tenantId,
+                                           String name, String... eventTypes) {
         String arr = "{" + String.join(",", eventTypes) + "}";
         runInTxAsSystem(utx, () -> {
             try (Connection c = adminDs.getConnection();
                  PreparedStatement ps = c.prepareStatement(
                      "INSERT INTO core.webhook_endpoint (tenant_id, name, target_url, platform, "
-                     + "auth_mode, event_types, enabled) VALUES (1, ?, 'http://it.test/x', 'generic', "
+                     + "auth_mode, event_types, enabled) VALUES (?, ?, 'http://it.test/x', 'generic', "
                      + "'NONE', CAST(? AS TEXT[]), TRUE)")) {
-                ps.setString(1, name);
-                ps.setString(2, arr);
+                ps.setLong(1, tenantId);
+                ps.setString(2, name);
+                ps.setString(3, arr);
                 ps.executeUpdate();
             }
         });

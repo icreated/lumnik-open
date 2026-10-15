@@ -13,11 +13,11 @@ func sampleConflicts() []client.Conflict {
 	return []client.Conflict{
 		{Entity: "FusedCustomer", Key: "C-200", Columns: []string{"name"},
 			Conflicts: map[string][]client.DetailSource{
-				"name": {{Src: "t_erp", Value: "Marie"}, {Src: "t_csv", Value: "MARIE A."}}}},
+				"name": {{Src: "t_erp", Value: client.StrPtr("Marie")}, {Src: "t_csv", Value: client.StrPtr("MARIE A.")}}}},
 		{Entity: "Article", Key: "A-1", Columns: []string{"label", "price"},
 			Conflicts: map[string][]client.DetailSource{
-				"label": {{Src: "t_erp", Value: "Vis"}, {Src: "t_csv", Value: "VIS"}},
-				"price": {{Src: "t_erp", Value: "1"}, {Src: "t_sap", Value: "2"}}}},
+				"label": {{Src: "t_erp", Value: client.StrPtr("Vis")}, {Src: "t_csv", Value: client.StrPtr("VIS")}},
+				"price": {{Src: "t_erp", Value: client.StrPtr("1")}, {Src: "t_sap", Value: client.StrPtr("2")}}}},
 	}
 }
 

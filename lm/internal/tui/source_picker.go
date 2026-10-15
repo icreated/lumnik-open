@@ -21,18 +21,11 @@ func PickTables(tables []client.JdbcTable) ([]client.JdbcTable, error) {
 	render = func() {
 		list.Clear()
 		for i, t := range tables {
-			mark := "[ ]"
-			if selected[i] {
-				mark = "[x]"
-			}
-			wm := "-"
-			if t.SuggestedWatermark != nil {
-				wm = *t.SuggestedWatermark
-			}
-			label := fmt.Sprintf("%s %-25s %10d rows  watermark: %s",
-				mark, t.Schema+"."+t.Name, t.RowEstimate, wm)
 			idx := i
-			list.AddItem(label, "", 0, func() {
+			list.AddItem(PickerLabel(t, selected[i]), "", 0, func() {
+				if !Selectable(tables[idx]) {
+					return
+				}
 				selected[idx] = !selected[idx]
 				render()
 			})
@@ -48,8 +41,10 @@ func PickTables(tables []client.JdbcTable) ([]client.JdbcTable, error) {
 		case tcell.KeyRune:
 			if event.Rune() == ' ' {
 				idx := list.GetCurrentItem()
-				selected[idx] = !selected[idx]
-				render()
+				if idx >= 0 && idx < len(tables) && Selectable(tables[idx]) {
+					selected[idx] = !selected[idx]
+					render()
+				}
 				return nil
 			}
 		}
@@ -67,6 +62,30 @@ func PickTables(tables []client.JdbcTable) ([]client.JdbcTable, error) {
 		}
 	}
 	return out, nil
+}
+
+// Selectable reports whether a discovered table can be added: one with a column the source's dialect
+// cannot read is shown, but never offered for selection (the hub would refuse it by name anyway).
+func Selectable(t client.JdbcTable) bool {
+	return len(t.UnsupportedColumns) == 0
+}
+
+// PickerLabel is the line the picker shows for a table: a selection mark and its figures, or — for a
+// table that cannot be added — a [!] and the columns and types that make it so.
+func PickerLabel(t client.JdbcTable, selected bool) string {
+	name := t.Schema + "." + t.Name
+	if !Selectable(t) {
+		return fmt.Sprintf("[!] %-25s UNSUPPORTED: %s", name, strings.Join(t.UnsupportedColumns, "; "))
+	}
+	mark := "[ ]"
+	if selected {
+		mark = "[x]"
+	}
+	wm := "-"
+	if t.SuggestedWatermark != nil {
+		wm = *t.SuggestedWatermark
+	}
+	return fmt.Sprintf("%s %-25s %10d rows  watermark: %s", mark, name, t.RowEstimate, wm)
 }
 
 // FormatSummary returns a comma-separated list of selected table names.

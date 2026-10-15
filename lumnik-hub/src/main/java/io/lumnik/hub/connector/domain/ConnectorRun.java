@@ -35,8 +35,17 @@ public class ConnectorRun extends TenantedEntity {
   @Column(name = "sync_mode", nullable = false, length = 20)
   private String syncMode;
 
-  @Column(name = "started_at", nullable = false)
+  // NULL while Queued (V68): set once, on leaving the queue.
+  @Column(name = "started_at")
   private Instant startedAt = Instant.now();
+
+  /** #952: when the run was accepted into the queue; NULL for a run that never queued. */
+  @Column(name = "queued_at")
+  private Instant queuedAt;
+
+  /** #952: witness of the definition accepted with a queued run (see DefinitionHash). */
+  @Column(name = "definition_sha256")
+  private String definitionSha256;
 
   @Column(name = "ended_at")
   private Instant endedAt;
@@ -52,6 +61,10 @@ public class ConnectorRun extends TenantedEntity {
 
   @Column(name = "cell_errors", nullable = false)
   private long cellErrors = 0;
+
+  /** #748: the run never executed (skipped for a held endpoint lock, or the lock failed) — nothing to resolve. */
+  @Column(name = "resolution_exempt", nullable = false)
+  private boolean resolutionExempt;
 
   @Column(name = "chunk_count", nullable = false)
   private int chunkCount = 0;

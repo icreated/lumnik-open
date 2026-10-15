@@ -34,12 +34,13 @@ func init() {
 }
 
 func viewGiven(st *scenarioState, variant, seedStr string) error {
-	manifest, filter, crossTenant, wrongRole, _, safeRows, found := generator.ViewVariantByName(variant)
+	manifest, filter, crossTenant, wrongRole, _, safeRows, caseID, found := generator.ViewVariantByName(variant)
 	if !found {
 		return fmt.Errorf("view lane: unknown variant %q", variant)
 	}
 	st.viewScen = generator.ViewScenario{
 		Seed:         parseSeed(seedStr),
+		CaseID:       caseID,
 		Variant:      variant,
 		ManifestYAML: manifest,
 		Filter:       filter,
@@ -63,7 +64,7 @@ func viewWhenRender(st *scenarioState, filter, suffix string) error {
 	switch strings.TrimSpace(suffix) {
 	case "as cross-tenant":
 		if otkKey == nil {
-			fmt.Printf("  OTK view lane DORMANT (cross-tenant): set OTK_OIDC_ISSUER + boot %%otkauth\n")
+			recordDormant(st.viewScen.CaseID, "cross-tenant: set OTK_OIDC_ISSUER + boot %otkauth")
 			st.viewStatus = -1
 			return nil
 		}
@@ -73,7 +74,7 @@ func viewWhenRender(st *scenarioState, filter, suffix string) error {
 		}
 	case "as viewer":
 		if otkKey == nil {
-			fmt.Printf("  OTK view lane DORMANT (wrong-role): set OTK_OIDC_ISSUER + boot %%otkauth\n")
+			recordDormant(st.viewScen.CaseID, "wrong-role: set OTK_OIDC_ISSUER + boot %otkauth")
 			st.viewStatus = -1
 			return nil
 		}
@@ -92,7 +93,7 @@ func viewWhenRender(st *scenarioState, filter, suffix string) error {
 	// without OTK_DB_DSN (like the entity read lane): unknown-scope/wrong-kind still
 	// resolve to their status without a card, but a card-backed variant would 404.
 	if needsCard(st.viewScen.Variant) && seedDSNAbsent() {
-		fmt.Printf("  OTK view lane DORMANT (variant=%q needs the seeded otk card): set OTK_DB_DSN\n", st.viewScen.Variant)
+		recordDormant(st.viewScen.CaseID, fmt.Sprintf("variant %q needs the seeded otk card: set OTK_DB_DSN", st.viewScen.Variant))
 		st.viewStatus = -1
 		return nil
 	}
@@ -133,7 +134,7 @@ func viewStatusStep(st *scenarioState, code int) error {
 	}
 	if st.viewStatus != code {
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.High, Family: oracle.Security, Seed: st.viewScen.Seed,
+			Severity: oracle.High, Family: oracle.Security, CaseID: st.viewScen.CaseID, Seed: st.viewScen.Seed,
 			Detail: fmt.Sprintf("view render status: got %d, want %d", st.viewStatus, code),
 		})
 	}
@@ -146,7 +147,7 @@ func viewSafe(st *scenarioState) error {
 	}
 	if strings.Contains(st.viewBody, "DROP TABLE") {
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.High, Family: oracle.Security, Seed: st.viewScen.Seed,
+			Severity: oracle.High, Family: oracle.Security, CaseID: st.viewScen.CaseID, Seed: st.viewScen.Seed,
 			Detail: "view render response reflects injected SQL content (DROP TABLE)",
 		})
 	}
@@ -159,7 +160,7 @@ func viewWrongRoleCleanup(st *scenarioState) error {
 	}
 	if st.viewStatus == 200 {
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.Critical, Family: oracle.Security, Seed: st.viewScen.Seed,
+			Severity: oracle.Critical, Family: oracle.Security, CaseID: st.viewScen.CaseID, Seed: st.viewScen.Seed,
 			Detail: "wrong-role view render returned 200 (role escalation — must be 403)",
 		})
 	}

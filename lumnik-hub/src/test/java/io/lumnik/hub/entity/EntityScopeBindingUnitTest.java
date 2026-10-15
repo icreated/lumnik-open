@@ -72,7 +72,7 @@ class EntityScopeBindingUnitTest {
   private static EntityManifest entity(String name, List<String> scopes) {
     return new EntityManifest("Entity", name, null, List.of("code"),
         List.of(new EntityManifest.Source("connector.t_src", Map.of("code", "code"))),
-        scopes, null, Map.of());
+        scopes, null, Map.of(), null);
   }
 
   private static EntityReadResource resourceServing(EntityManifest m) {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/icreated/lumnik-open/lm/internal/textsafe"
+	"github.com/icreated/lumnik-open/lm/test/otk/generator"
 	"github.com/icreated/lumnik-open/lm/test/otk/oracle"
 )
 
@@ -11,12 +12,12 @@ import (
 // bidi rune into its own output (a Trojan-source-style cosmetic defect — safe but
 // visually deceptive in a terminal). It matches the raw rune, NOT its escaped
 // form: a %q-quoted token like the ASCII sequence backslash-u-202e is safe.
-func TextGlitch(stdout, stderr string, seed int64) []oracle.Finding {
+func TextGlitch(stdout, stderr string, caseID generator.CaseID, seed int64) []oracle.Finding {
 	for _, s := range []string{stdout, stderr} {
 		for _, r := range s {
 			if dangerousRune(r) {
 				return []oracle.Finding{{
-					Severity: oracle.Low, Family: oracle.Text, Seed: seed,
+					Severity: oracle.Low, Family: oracle.Text, CaseID: caseID, Seed: seed,
 					Detail: fmt.Sprintf("raw control/bidi rune U+%04X reflected into lm output", r),
 				}}
 			}

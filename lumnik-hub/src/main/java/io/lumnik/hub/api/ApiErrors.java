@@ -82,6 +82,13 @@ public final class ApiErrors {
         return Response.status(409).type(MediaType.APPLICATION_JSON).entity(error(what)).build();
     }
 
+    /** {@link #conflict(String)}'s own twin for the few 409s that carry one extra field (a hint id)
+     *  alongside the message (code review finding) — same dress, via {@link #error(String, String,
+     *  Object)}, so a future change to it is never missed by a hand-built body. */
+    public static Response conflict(String what, String extraKey, Object extraValue) {
+        return Response.status(409).type(MediaType.APPLICATION_JSON).entity(error(what, extraKey, extraValue)).build();
+    }
+
     /**
      * A 400 that says what the caller got wrong, in the same dress — the last member of the family,
      * added for {@link ConfigValidationExceptionMapper}. Around the hub some forty 400s still build
@@ -112,5 +119,11 @@ public final class ApiErrors {
     /** The {@code {"error": message}} body. */
     public static Map<String, Object> error(String message) {
         return Map.of(KEY, message);
+    }
+
+    /** {@link #error(String)}'s own twin for a body carrying one extra field (a hint id, a reason)
+     *  alongside the message. */
+    public static Map<String, Object> error(String message, String extraKey, Object extraValue) {
+        return Map.of(KEY, message, extraKey, extraValue);
     }
 }

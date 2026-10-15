@@ -21,6 +21,7 @@ type Sources struct {
 	client      *client.Client
 	items       []types.Connector
 	app         *tview.Application
+	offLoop     offLoop
 	mu          sync.Mutex
 	onError     func(string)
 	toast       func(string)
@@ -81,17 +82,28 @@ func (c *Sources) setHeader() {
 	}
 }
 
+// Refresh lists off the event loop (offLoop): the live ticker calls it while the page is in front
+// (#891).
 func (c *Sources) Refresh() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	list, err := c.client.ConnectorList()
+	c.offLoop.run(c.app, func() func() {
+		list, err := c.client.ConnectorList()
+		return func() { c.renderList(list, err) }
+	})
+}
+
+func (c *Sources) renderList(list []types.Connector, err error) {
 	if err != nil {
 		c.signalError(fmt.Sprintf("list: %v", err))
 		return
 	}
+	c.mu.Lock()
 	c.items = list
 	c.applySort()
 	c.render()
+	c.mu.Unlock()
+	if c.onSelect != nil { // an open describe panel follows the fresh row
+		c.onSelect()
+	}
 }
 
 func (c *Sources) applySort() {
@@ -175,6 +187,8 @@ func connectorColor(ct types.Connector) tcell.Color {
 		return tcell.NewRGBColor(0x22, 0xC5, 0x5E) // green
 	case KindFailed:
 		return tcell.NewRGBColor(0xEF, 0x44, 0x44) // red
+	case KindQueued:
+		return tcell.NewRGBColor(0x38, 0xBD, 0xF8) // sky — accepted, not started
 	case KindRunning:
 		return tcell.NewRGBColor(0xFF, 0x8C, 0x00) // amber
 	case KindPartial:
@@ -193,6 +207,8 @@ func connectorGlyph(ct types.Connector) string {
 	switch runStatusKind(ct.Status) {
 	case KindCompleted, KindFailed:
 		return "●"
+	case KindQueued:
+		return "◌"
 	case KindRunning:
 		return "▶"
 	case KindPartial:
@@ -350,14 +366,14 @@ func (c *Sources) SelectedID() string {
 
 // Describable
 
+// SelectedDescribe renders the listed row as it is. It runs on the event loop, on every arrow key
+// while the panel is open, so it must never reach the network — and it has no need to: the list
+// and the get serve the same ConnectorAdminDto.fromWithRun shape, config and last run included
+// (#891).
 func (c *Sources) SelectedDescribe() (string, string, bool) {
-	sel, ok := c.selectedItem()
+	full, ok := c.selectedItem()
 	if !ok {
 		return "", "", false
-	}
-	full, err := c.client.ConnectorGet(sel.ID)
-	if err != nil {
-		return sel.Name, "error fetching detail: " + tview.Escape(err.Error()), true
 	}
 	esc := tview.Escape
 	var b strings.Builder
@@ -375,7 +391,7 @@ func (c *Sources) SelectedDescribe() (string, string, bool) {
 	fmt.Fprintf(&b, "enabled:   %s\n", enabled)
 	if full.Status != "" {
 		fmt.Fprintf(&b, "\n── last run ──\n")
-		fmt.Fprintf(&b, "status:    %s %s\n", connectorGlyph(*full), esc(full.Status))
+		fmt.Fprintf(&b, "status:    %s %s\n", connectorGlyph(full), esc(full.Status))
 		if full.LastRunAt != nil {
 			fmt.Fprintf(&b, "at:        %s\n", output.HumanTimeSeconds(full.LastRunAt))
 		}

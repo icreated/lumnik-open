@@ -33,7 +33,7 @@ func detailBody(d client.ViewDetailResult) string {
 	}
 	b.WriteString("\n[yellow]conflicts[white]\n")
 	if len(d.Conflicts) == 0 {
-		b.WriteString("no conflicts — every source agrees\n")
+		b.WriteString("no conflicts or ambiguities\n")
 		return b.String()
 	}
 	ledgerLines(&b, d.Conflicts)

@@ -50,6 +50,9 @@ type JdbcTable struct {
 	Columns            []JdbcColumn `json:"columns"`
 	SuggestedWatermark *string      `json:"suggestedWatermark"`
 	RowEstimate        int64        `json:"rowEstimate"`
+	// UnsupportedColumns lists, as "NAME TYPE", the columns the source's dialect cannot read. Such a
+	// table is listed but cannot be added: the hub refuses it by name.
+	UnsupportedColumns []string `json:"unsupportedColumns"`
 }
 
 // JdbcDiscoverResponse wraps the tables found by JdbcDiscover.

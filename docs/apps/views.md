@@ -16,8 +16,8 @@
 
 A view is the smallest app there is: a title, a table and the columns worth looking at. It reads
 through the same read-only, tenant-isolated boundary as the chat, it speaks the labels an
-[entity](../entities.md) declared, and it ends a record's detail with the sources that disagree
-about it. The file **is** the app — hand-written, or [drafted by the AI](#generate-a-view-with-the-ai)
+[entity](../entities.md) declared, and it ends a record's detail with the ledger of source conflicts and lookup
+ambiguities for it. The file **is** the app — hand-written, or [drafted by the AI](#generate-a-view-with-the-ai)
 and reviewed by you.
 
 ## Features
@@ -28,14 +28,15 @@ and reviewed by you.
   an unknown column, a column the view does not show, a malformed filter or a value outside a
   declared domain is refused, so a zero-row result is always meaningful.
 - **[One record's detail, disagreements included.](#quickstart)** `lm view KEY` prints a
-  record and, under *Où les sources divergent*, which source said what.
+  record and, under *Ambiguïtés et divergences*, which source said what.
 - **[A store the PWA discovers.](#the-saved-view-store)** `lm view apply` publishes a manifest to
   the hub; anyone holding the scope finds it on their phone, no file needed.
 - **[Drafted by the AI, gated like a render.](#generate-a-view-with-the-ai)** The model selects
   table, columns and filters; the same gate that guards every render validates them; the server
   writes the YAML.
-- **[Bounded, spoken.](#rendering)** A render cut at 1 000 rows says `truncated: true`; a query that
-  outlives 5 seconds is a spoken `400`, never a bare `500`.
+- **[Bounded, spoken, navigable.](#rendering)** A render cut at 1 000 rows says `truncated: true`; ask
+  for a page and a large table is read page by page, never sent whole. A query that outlives
+  5 seconds is a spoken `400`, never a bare `500`.
 
 ## Quickstart
 
@@ -94,11 +95,11 @@ Clients ACME / P-1008
   Segment            GOLD
   Encours autorisé   1596
 
-  (!) Où les sources divergent
+  (!) Ambiguïtés et divergences
   Ville   t_acme_desk_erp «Lyon» · t_acme_desk_crm «Villeurbanne»
 ```
 
-The block under *Où les sources divergent* ("where the sources diverge") is the entity's
+The block under *Ambiguïtés et divergences* ("ambiguities and divergences") is the entity's
 `_conflicts` ledger for that record: the ERP says Lyon, the CRM says Villeurbanne, the ERP won
 because it is listed first, and the CRM's value was kept. A record everyone agrees on ends
 differently:
@@ -113,7 +114,7 @@ Clients ACME / P-1005
   Segment            GOLD
   Encours autorisé   1185
 
-  ✓ toutes les sources concordent
+  ✓ aucune ambiguïté ni divergence
 ```
 
 ## The manifest
@@ -125,18 +126,66 @@ Clients ACME / P-1005
 | `spec.table` | no | defaults to the scope's single table; required when the scope has several. A card lists raw `connector.t_*` tables **and** the `connector.v_*` entity views over them |
 | `spec.title` | no | the display title — falls back to the table's label (a fused entity's `label:`, see [Entities](../entities.md)), then its name |
 | `spec.columns[]` | yes (≥ 1) | the columns to show, in order. **Every one must exist in the scope's card.** The first is the sort order and the detail key |
+| `spec.links[]` | no | cells that lead somewhere: another view, or an external page — see [Linking views](#linking-views) |
 
 That table is the whole surface, and the store refuses a key it does not honour:
 
 ```
 $ lm view apply -f docs/apps/demo/views/61-refused-unknown-key.yaml
-Error: API error 400: unknown key(s) in the manifest: spec.titel — kind:View honors root {apiVersion, kind, metadata, spec}, metadata {name}, spec {columns, scope, table, title}
+Error: API error 400: unknown key(s) in the manifest: spec.titel — kind:View honors root {apiVersion, kind, metadata, spec}, metadata {name}, spec {columns, links, scope, table, title}, spec.links[] {column, filters, targetView, url}
 ```
 
 A misspelled `titel:` costs a `400` at apply rather than a silently missing title. Rendering a
 file (`lm view -f`) is more lenient — the same manifest renders, under the table's name as its
 title — so a view already saved with an extra key still renders. The `apiVersion:` envelope is
 accepted and ignored.
+
+### Linking views
+
+A cell can lead somewhere. Declare it on the view the user starts from — the app does not hard-code anything
+about your catalogue:
+
+```yaml
+--8<-- "docs/apps/demo/views/30-categories-links.yaml"
+```
+
+- **To another view.** Tapping *Pompes* opens the `articles` view with `category_id=1000021` already applied,
+  on its first page. The filter shows in the filter bar like one the user typed, and removes the same way.
+- **To an external page.** Tapping a category id opens `https://erp.example.com/categories/1000021` in a new tab.
+- **`{column}` is the value of that column on the row tapped.** It must be one of this view's `spec.columns`.
+  Literal text around it is kept (`CAT-{category_id}`). Nothing else is ever substituted: no expression, no other field.
+- **One destination per link**: `targetView` (with at least one filter) or `url`, never both. One link per column,
+  at most 16 links.
+- Cards and tables behave the same, from the keyboard too. A view without `links` renders as before.
+
+What the filters of a view link mean is decided by the **target** view, as for any filter: an unknown column,
+a value outside a declared domain, or a malformed value is refused with the usual message. The target must be a
+view of the same scope; the app looks it up among its own métier's views and nowhere else.
+
+**A link that cannot be followed never opens anything wide.** If the target is missing, not in this métier,
+or refuses the filter, the user stays on the current view and reads why; the target is never shown unfiltered.
+A row whose value is empty simply has no link on that cell.
+
+**Order of apply.** Views can be applied in either order, so a target that does not exist yet is accepted, with a
+warning (stderr, exit 0), and the link works from the moment the target is applied:
+
+```
+$ lm view apply -f docs/apps/demo/views/30-categories-links.yaml
+applied: categories (scope catalogue)
+! 30-categories-links.yaml — 0 error(s), 1 warning(s)
+
+  WARN     spec.links[0].targetView
+          targetView 'articles' is not a view of scope 'catalogue' (yet); the declaration is kept, and following the link is refused until that view is applied
+```
+
+If the target exists but does not show a filtered column, the warning names the column.
+
+**External links.** The address is written out by you, once, in the manifest: `https://` only, the host spelled out
+(no `{column}` before the first `/`, no credentials). The value is percent-encoded before it is put in the address,
+so an id like `a/b?x` stays inside its segment. The page opens in a new tab without telling the other site where
+it came from. **The other system receives the value** — declare only systems you trust with it.
+
+The same rules apply to a [search result's link to your ERP](../search/search-indexes.md#linking-a-result-to-your-erp).
 
 ### A view over a raw table
 
@@ -179,6 +228,25 @@ same read-only, tenant-isolated boundary as ask. Rows come back ordered by the f
 column. Both bounds speak when hit: a render cut at the cap returns `"truncated": true` alongside
 the rows (narrow it with filters), and a query that outlives the timeout is refused with a spoken
 `400`, never a bare `500`.
+
+To read past the cap, ask for a page: `POST /api/views/render?pageSize=50` returns at most that many rows
+(1 to 200; default 50 when only a cursor is sent), plus `"hasMore": true` and an opaque `"nextCursor"` when
+more rows exist. Send it back as `&cursor=…`, with the same manifest, filters and `pageSize`, to get the next
+page. The cursor is bound to exactly that query: a different filter, page size, View, tenant or scope — or
+an altered token — is refused with `400` *this page link is no longer valid — reload the view from its first
+page*. No total is counted: the honest statement is "more results exist". Rows come back ordered by the first
+declared column, nulls last, then by the record's own `id` (or, for a fused entity, by the remaining declared
+columns). On a table no row is skipped or repeated between pages; a fused entity is paged by position, so a row
+ingested between two page reads can shift its boundary by one.
+
+On a large table the cost of a page is one ordered read of the rows that match, so keep the first declared
+column one you would sort by. Walking a 200 000-row table in pages of 200, with no index beyond the primary
+key, took about a tenth of a second per page when we measured it by hand, with not one page near the 5-second timeout
+(the automated paging lane now runs on 400 rows and does not repeat that measure). If a view over
+a much larger table gets slow, narrow it with filters first; an index that matches the paging order is the next step,
+and yours to add: the hub never creates one for you. A page is read in the order *first declared column, then the
+record's `id`*, inside your tenant, so on a table the matching index is `(tenant_id, first_column, id)` — an index
+on the first column alone does not carry that order. We have not measured the gain on a larger table.
 
 In the TUI, `:view` opens the same file interactively:
 
@@ -234,6 +302,13 @@ Error: API error 400: filter value 'Lyon' is quoted; a value here is a bare lite
 - a **filter on a column the view does not show** — filters run over the view's own columns, not
   the whole card;
 - a **malformed filter**;
+- an **ordering filter (`>`, `<`, `>=`, `<=`) on a column the hub cannot compare that way** — a `money`,
+  `time`, `interval`, `boolean`, `uuid` column. Its value never reads as a number or a date, so the filter
+  used to match nothing and say nothing; it is now refused, naming the column and its type. Use `=` or `~`
+  on those columns. Numbers (floating-point included, compared natively, so `1e-05` and `1e+20` are found), dates, timestamps
+  and text columns that hold numbers or dates keep their ordering; a bound may be written in scientific
+  notation (`1e-5`, `6.022e23`); for a floating-point column it must fit a double (about `5e-324` to `1.8e308`), otherwise it is refused; a number orders a number
+  or text column and a date orders a date or text column, never the other way round;
 - an `=` filter with a value **outside the column's declared domain** — the same contract as the
   chat's [domain guard](../transparency/ask-honesty.md), fed by the entity's `values`;
 - a **quoted value**. Quotes are ordinary characters here, so `city='Lyon'` used to be compared to
@@ -429,6 +504,9 @@ domain; add a workflow for what the status values mean.
 | filter refused: `cannot filter on '…' — the view does not show it` | filtering on a column not listed in `spec.columns` | add the column to `spec.columns` |
 | filter refused: `'…' is not an allowed value for …` | the entity declares a `values` domain for that column | one of the listed values — or fix the domain in the entity |
 | filter refused: `'…' is not a number or ISO date — > needs an ordered value` | an ordering filter with a value that is neither | a number, or `YYYY-MM-DD` |
+| apply answers with a warning on `spec.links[…].targetView` | the target view is not applied yet in that scope (or is another scope's) | apply the target; the link then works, nothing to redo here |
+| apply refused: `spec.links[…].url: an external link is https://…` | `http:`, a relative address, or a host that is not written out | write the full `https://host/path/{column}` |
+| following a link answers `Lien refusé : …` | the target refused the filter (unknown column, value outside its domain) | fix the filter in `links[].filters`, or the target's columns |
 | `403 {"error":"scope not granted"}` | you do not hold the `spec.scope` role | ask an integrator to grant that `scope:` role |
 | apply refused: `metadata.name must be a URL-safe slug …` | the name is not a lowercase slug, or is `apply`/`render`/`detail`/`generate` | rename `metadata.name` |
 | `429 {"error":"rate limit exceeded"}` on generate | over 10 `lm view generate` calls per minute for the tenant | wait for `Retry-After`, then retry |

@@ -9,6 +9,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.CompletableFuture;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 @QuarkusTest
@@ -59,5 +61,22 @@ class SecretCipherIT {
     @Test
     void decrypt_null_returns_null() {
         assertThat(cipher.decrypt(null)).isNull();
+    }
+
+    /**
+     * A delivery outside any transaction and any request (the retry sweep, and since #944 the
+     * first delivery) decrypts the endpoint's secret on a bare scheduler-like thread: the cipher
+     * must open its own short transaction there rather than fail for want of an EntityManager.
+     */
+    @Test
+    void decrypt_works_on_a_thread_with_no_transaction_and_no_request() throws Exception {
+        byte[] enc = cipher.encrypt("bare-thread-secret");
+        CompletableFuture<String> out = new CompletableFuture<>();
+        Thread t = new Thread(() -> {
+            try { out.complete(cipher.decrypt(enc)); } catch (Throwable e) { out.completeExceptionally(e); }
+        });
+        t.start();
+        t.join();
+        assertThat(out.get()).isEqualTo("bare-thread-secret");
     }
 }

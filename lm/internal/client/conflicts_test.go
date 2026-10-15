@@ -30,7 +30,7 @@ func TestConflictList_decodesLedgerAndHitsTheScopedPath(t *testing.T) {
 	vals := got[0].Conflicts["name"]
 	require.Len(t, vals, 2)
 	assert.Equal(t, "t_erp", vals[0].Src)
-	assert.Equal(t, "MARIE A.", vals[1].Value)
+	assert.Equal(t, "MARIE A.", vals[1].Display())
 }
 
 // The table's SOURCES column and the describe panel are both derived from the ledger:
@@ -41,8 +41,8 @@ func TestConflictDerivedHelpers(t *testing.T) {
 		Key:     "K",
 		Columns: []string{"name", "city"},
 		Conflicts: map[string][]DetailSource{
-			"name": {{Src: "erp", Value: "Marie"}, {Src: "csv", Value: "MARIE"}},
-			"city": {{Src: "csv", Value: "Lyon"}, {Src: "sap", Value: "Paris"}},
+			"name": {{Src: "erp", Value: StrPtr("Marie")}, {Src: "csv", Value: StrPtr("MARIE")}},
+			"city": {{Src: "csv", Value: StrPtr("Lyon")}, {Src: "sap", Value: StrPtr("Paris")}},
 		},
 	}
 	names := c.SourceNames()
@@ -54,5 +54,5 @@ func TestConflictDerivedHelpers(t *testing.T) {
 	assert.Equal(t, "name", led[0].Column)
 	assert.Equal(t, "city", led[1].Column)
 	require.Len(t, led[1].Sources, 2)
-	assert.Equal(t, "Paris", led[1].Sources[1].Value)
+	assert.Equal(t, "Paris", led[1].Sources[1].Display())
 }

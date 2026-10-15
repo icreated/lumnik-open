@@ -1,28 +1,22 @@
 package io.lumnik.hub.connector.transport.sftp;
 
-import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.transport.AfterProcessAction;
 import io.lumnik.hub.connector.transport.FileDescriptor;
 import io.lumnik.hub.connector.transport.FileSource;
 import io.lumnik.hub.connector.transport.SeekableSource;
-import org.bouncycastle.jce.provider.BouncyCastleProvider;
-import org.apache.sshd.client.SshClient;
-import org.apache.sshd.client.keyverifier.AcceptAllServerKeyVerifier;
-import org.apache.sshd.client.keyverifier.ServerKeyVerifier;
-import org.apache.sshd.client.session.ClientSession;
-import org.apache.sshd.common.NamedResource;
-import org.apache.sshd.common.config.keys.FilePasswordProvider;
-import org.apache.sshd.common.util.security.SecurityUtils;
 import org.apache.sshd.sftp.client.SftpClient;
-import org.apache.sshd.sftp.client.SftpClientFactory;
+import org.apache.sshd.sftp.common.SftpConstants;
+import org.apache.sshd.sftp.common.SftpException;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.security.KeyPair;
-import java.security.Security;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
@@ -36,8 +30,7 @@ public class SftpFileSource implements FileSource, SeekableSource {
     private final boolean strictHostKey;
     private final String hostKeyFingerprint;
 
-    private SshClient sshClient;
-    private ClientSession session;
+    private SftpConnection connection;
     private SftpClient sftp;
 
     /** Test-only password override. */
@@ -58,126 +51,143 @@ public class SftpFileSource implements FileSource, SeekableSource {
         this.passwordOverride = pwd;
     }
 
-    private synchronized void ensureConnected() {
-        if (sftp != null) return;
-        // Ensure the Bouncy Castle JCE provider is registered so MINA SSHD can handle
-        // Ed25519 key types (sshd's supported EdDSA provider since 2.15).
-        if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
-            Security.addProvider(new BouncyCastleProvider());
+    /**
+     * How long a probe waits for the server before the session is declared dead. Without a bound MINA waits for its
+     * idle timeout (10 minutes by default) on a connection that silently stopped answering (a firewall dropped an idle
+     * mapping while a chunk was being written): no reset, no reply.
+     */
+    private static final Duration PROBE_TIMEOUT = Duration.ofSeconds(15);
+
+    private volatile Duration probeTimeout = PROBE_TIMEOUT;
+
+    public void setProbeTimeoutForTest(Duration timeout) {
+        this.probeTimeout = timeout;
+    }
+
+    @Override
+    public boolean usable() {
+        SftpClient client;
+        SftpConnection conn;
+        synchronized (this) {                              // only to read the two fields, never across the round trip
+            if (sftp == null) return true;                 // never connected, or closed: connects lazily
+            client = sftp;
+            conn = connection;
         }
-        // Scoped to this one attempt on purpose. A field would outlive the connect that wrote
-        // it, and a later failure of another kind would then report itself as a host-key refusal
-        // — the same misattribution one variant further on.
-        var refused = new AtomicReference<String>();
+        if (!client.isOpen()) return false;
+        var answer = new CompletableFuture<Boolean>();
+        Thread.ofVirtual().start(() -> answer.complete(probe(client)));
         try {
-            sshClient = SshClient.setUpDefaultClient();
-            // ALWAYS set a verifier. Leaving MINA's own default in place is not "strict": its
-            // ClientBuilder.DEFAULT_SERVER_KEY_VERIFIER is AcceptAllServerKeyVerifier, so the
-            // branch that meant to verify was accepting every key just as widely as the branch
-            // that said so out loud.
-            sshClient.setServerKeyVerifier(serverKeyVerifier(refused));
-            sshClient.start();
-            session = sshClient.connect(user, host, port).verify(10_000).getSession();
-            authenticate();
-            session.auth().verify(10_000);
-            sftp = SftpClientFactory.instance().createSftpClient(session);
-        } catch (Exception e) {
-            // A refused host key is the DEFAULT path now, not a rare accident, so a scheduled
-            // connector walks this branch on every tick. Whatever got started must be stopped
-            // here: the next attempt reassigns sshClient, and a client left running would lose
-            // its last reference and could never be stopped again.
-            close();
-            if (refused.get() != null) {
-                throw new ConnectorException(hostKeyRefusal(refused.get()), e);
-            }
-            throw new RuntimeException("SFTP connect failed: " + e.getMessage(), e);
+            return answer.get(probeTimeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException | ExecutionException silent) {
+            conn.close();                                  // aborts the stuck request; the caller replaces the source
+            return false;
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();            // a cancel or a shutdown: keep it for the run, and an
+            return true;                                   // interrupt says nothing about the session
+        }
+    }
+
+    private boolean probe(SftpClient client) {
+        try {
+            client.lstat(parentDir(pathGlob));
+            return true;
+        } catch (IOException io) {
+            return answered(io);
+        } catch (RuntimeException unexpected) {
+            return false;
         }
     }
 
     /**
-     * Three cases, and the third one refuses. Falling back to "accept anything" when no
-     * fingerprint is declared would rewrite the same untruth in better syntax: the setting
-     * would still read as verification and still verify nothing.
+     * Did the SERVER answer? An {@code SftpException} carries the status of a reply, except {@code NO_CONNECTION} and
+     * {@code CONNECTION_LOST}, which say the session is gone. Anything else (closed channel, timeout, broken pipe) is a
+     * dead session too.
      */
-    private ServerKeyVerifier serverKeyVerifier(AtomicReference<String> refused) {
-        if (!strictHostKey) {
-            return AcceptAllServerKeyVerifier.INSTANCE;
-        }
-        return (clientSession, remoteAddress, serverKey) -> {
-            if (HostKeyFingerprint.matches(hostKeyFingerprint, serverKey)) {
-                return true;
-            }
-            refused.set(HostKeyFingerprint.of(serverKey));
-            return false;
-        };
+    static boolean answered(IOException failure) {
+        return failure instanceof SftpException e
+            && e.getStatus() != SftpConstants.SSH_FX_NO_CONNECTION
+            && e.getStatus() != SftpConstants.SSH_FX_CONNECTION_LOST;
     }
 
-    /** The refusal teaches: it carries the fingerprint to paste and how to check it first. */
-    private String hostKeyRefusal(String presented) {
-        String why = (hostKeyFingerprint == null || hostKeyFingerprint.isBlank())
-            ? "no host_key_fingerprint is declared for this transport"
-            : "it does not match the declared " + hostKeyFingerprint.trim();
-        return "SFTP host key refused for " + host + ":" + port + " — the server presented "
-            + presented + ", and " + why + ". Confirm that fingerprint out of band"
-            + " (ssh-keyscan -p " + port + " " + host + " | ssh-keygen -lf -), then set"
-            + " host_key_fingerprint: \"" + presented + "\" in the transport block."
-            + " Setting strict_host_key: false connects without checking at all — which accepts"
-            + " an impostor as readily as the real server.";
+    /** Test hook, like {@link #setPasswordOverrideForTest}: the session dies under the source, which still believes it is connected. */
+    public synchronized void dropConnectionForTest() {
+        if (connection != null) connection.close();
     }
 
-    /** Register a password or public-key identity on the live session before auth().verify(). */
-    private void authenticate() {
-        String pwd = passwordOverride != null ? passwordOverride
-            : (auth instanceof SftpAuthMethod.Password p ? p.value() : null);
-        if (pwd != null) {
-            session.addPasswordIdentity(pwd);
-        } else if (auth instanceof SftpAuthMethod.Key k) {
-            for (KeyPair kp : parseKeyPairs(k)) {
-                session.addPublicKeyIdentity(kp);
-            }
-        }
+    synchronized boolean isConnectedForTest() {
+        return sftp != null;
     }
 
-    private Collection<KeyPair> parseKeyPairs(SftpAuthMethod.Key k) {
-        Collection<KeyPair> pairs;
-        try {
-            pairs = SecurityUtils.getKeyPairResourceParser()
-                .loadKeyPairs(null, NamedResource.ofName("sftp-key"),
-                              FilePasswordProvider.EMPTY,
-                              k.pemContent());
-        } catch (Exception e) {
-            throw new ConnectorException(
-                "SFTP key auth: failed to parse private key: " + e.getMessage(), e);
-        }
-        if (pairs == null || pairs.isEmpty()) {
-            throw new ConnectorException("SFTP key auth: no key pair parsed from key_env PEM");
-        }
-        return pairs;
+    private synchronized void ensureConnected() {
+        if (sftp != null) return;
+        SftpAuthMethod effectiveAuth = passwordOverride != null
+            ? new SftpAuthMethod.Password(passwordOverride)
+            : auth;
+        connection = SftpConnectionFactory.connect(host, port, user, effectiveAuth, strictHostKey, hostKeyFingerprint);
+        sftp = connection.sftp();
     }
 
     @Override
     public Stream<FileDescriptor> listSince(Instant cursor) {
         ensureConnected();
         String parent = parentDir(pathGlob);
-        String pattern = pathGlob.substring(pathGlob.lastIndexOf('/') + 1);
-        Pattern regex = globToRegex(pattern);
+        Pattern regex = nameRegex();
         try {
             List<FileDescriptor> out = new ArrayList<>();
             for (SftpClient.DirEntry e : sftp.readDir(parent)) {
-                if (e.getFilename().equals(".") || e.getFilename().equals("..")) continue;
-                if (!regex.matcher(e.getFilename()).matches()) continue;
-                long size = e.getAttributes().getSize();
-                if (size <= 0) continue;
-                Instant mtime = Instant.ofEpochMilli(e.getAttributes().getModifyTime().toMillis());
-                if (mtime.isBefore(cursor)) continue;   // >= cursor: inclusive boundary (callers dedup via FileProcessingCursor)
-                String fullPath = parent.endsWith("/") ? parent + e.getFilename() : parent + "/" + e.getFilename();
-                out.add(new FileDescriptor(fullPath, size, mtime, null));
+                FileDescriptor d = listed(parent, regex, e.getFilename(), e.getAttributes());
+                if (d == null) continue;
+                if (d.lastModified().isBefore(cursor)) continue;   // >= cursor: inclusive boundary (callers dedup via FileProcessingCursor)
+                out.add(d);
             }
             out.sort(Comparator.comparing(FileDescriptor::lastModified));
             return out.stream();
         } catch (IOException e) {
             throw new RuntimeException("SFTP list failed for " + parent, e);
         }
+    }
+
+    /**
+     * {@code lstat}: for anything but a symlink it reports what READDIR does. A symlink's READDIR
+     * attributes are the server's choice (OpenSSH: the link's own; a server that follows links:
+     * the target's), so a symlink is looked up in the listing itself.
+     */
+    @Override
+    public Optional<FileDescriptor> stat(String path) {
+        ensureConnected();
+        String parent = parentDir(pathGlob);
+        String name = path.substring(path.lastIndexOf('/') + 1);
+        if (!path.equals(childPath(parent, name))) return Optional.empty();
+        try {
+            SftpClient.Attributes a = sftp.lstat(path);
+            if (a.isSymbolicLink()) {
+                return listSince(Instant.MIN).filter(d -> d.path().equals(path)).findFirst();
+            }
+            return Optional.ofNullable(listed(parent, nameRegex(), name, a));
+        } catch (IOException e) {
+            if (e instanceof SftpException s && (s.getStatus() == SftpConstants.SSH_FX_NO_SUCH_FILE
+                    || s.getStatus() == SftpConstants.SSH_FX_NO_SUCH_PATH)) return Optional.empty();
+            throw new RuntimeException("SFTP stat failed for " + path, e);
+        }
+    }
+
+    /** The glob's last segment as a file-name regex — the one pattern both listing and stat match. */
+    private Pattern nameRegex() {
+        return globToRegex(pathGlob.substring(pathGlob.lastIndexOf('/') + 1));
+    }
+
+    /** The listing's filters, shared with {@link #stat}; {@code null} when the entry is not listed. */
+    private static FileDescriptor listed(String parent, Pattern regex, String name, SftpClient.Attributes a) {
+        if (name.equals(".") || name.equals("..")) return null;
+        if (!regex.matcher(name).matches()) return null;
+        long size = a.getSize();
+        if (size <= 0) return null;
+        Instant mtime = Instant.ofEpochMilli(a.getModifyTime().toMillis());
+        return new FileDescriptor(childPath(parent, name), size, mtime, null);
+    }
+
+    private static String childPath(String parent, String name) {
+        return parent.endsWith("/") ? parent + name : parent + "/" + name;
     }
 
     @Override
@@ -313,14 +323,9 @@ public class SftpFileSource implements FileSource, SeekableSource {
 
     @Override
     public void close() {
-        try { if (sftp     != null) sftp.close();     } catch (Exception ignored) {}
-        try { if (session  != null) session.close();  } catch (Exception ignored) {}
-        try { if (sshClient != null) sshClient.stop(); } catch (Exception ignored) {}
-        // Clear the handles too, so close() is idempotent and ensureConnected() always starts
-        // from a known-empty state rather than overwriting a live client.
+        if (connection != null) connection.close();
+        connection = null;
         sftp = null;
-        session = null;
-        sshClient = null;
     }
 
 }

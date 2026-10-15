@@ -27,17 +27,36 @@ func TestEveryPagingCommandAnnouncesAFullPage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Exactly `page` items, shapeless: every one of these doors decodes a plain JSON array,
 		// and none of them reads a field to decide whether the page is full.
-		_ = json.NewEncoder(w).Encode(make([]map[string]any, page))
+		items := make([]map[string]any, page)
+		for i := range items {
+			items[i] = map[string]any{}
+		}
+		_ = json.NewEncoder(w).Encode(items)
 	}))
 	defer srv.Close()
 	setupCfg(t, srv.URL)
 
-	var paging, rowBudget [][]string
+	// A paging command scoped to one resource (`entity ambiguous NAME`) needs positional args
+	// this generic walk otherwise knows nothing about — placeholders is how many, read off the
+	// same place `--help` gets them from: the command's own Use string ("ambiguous NAME" ->
+	// one). Reading cmd.Use is data the command author already declares, unlike probing cobra's
+	// error text for its exact wording (which a cobra upgrade could rephrase out from under it).
+	type pagingCase struct {
+		path         []string
+		placeholders []string
+	}
+	var paging []pagingCase
+	var rowBudget [][]string
 	var walk func(c *cobra.Command, path []string)
 	walk = func(c *cobra.Command, path []string) {
 		if c.Runnable() && c.LocalFlags().Lookup("limit") != nil {
 			if _, isPage := c.Annotations[pageLimitCapAnnotation]; isPage {
-				paging = append(paging, path)
+				fields := strings.Fields(c.Use)
+				placeholders := make([]string, 0, len(fields)-1)
+				for range fields[1:] {
+					placeholders = append(placeholders, "x")
+				}
+				paging = append(paging, pagingCase{path: path, placeholders: placeholders})
 			} else {
 				rowBudget = append(rowBudget, path)
 			}
@@ -62,23 +81,35 @@ func TestEveryPagingCommandAnnouncesAFullPage(t *testing.T) {
 		"source csv ingest": "the same command, reachable under its source-first spelling",
 		"source rest run":   "--limit is how many sample items a dry-run displays",
 	}
+	// A third kind: a page the hub bounds with a CURSOR. It announces its boundary with the exact `more:`
+	// command that fetches the next page — authoritative, where the generic note below is a len == limit
+	// guess — so it is not driven by this generic walk; search_query_test.go asserts its own announcement.
+	cursorPaged := map[string]string{
+		"search query": "the hub names the next page (nextCursor) and the command prints the `more:` line for it",
+	}
 	for _, path := range rowBudget {
+		if _, ok := cursorPaged[strings.Join(path, " ")]; ok {
+			continue
+		}
 		if _, known := frozen[strings.Join(path, " ")]; !known {
 			t.Errorf("%q declares --limit without addPageLimitFlag: is it a page (register it) "+
 				"or a row budget (name it in this test, with why)?", strings.Join(path, " "))
 		}
 	}
-	if len(rowBudget) != len(frozen) {
-		t.Errorf("row-budget commands = %v, want the %d frozen ones", rowBudget, len(frozen))
+	if len(rowBudget) != len(frozen)+len(cursorPaged) {
+		t.Errorf("--limit commands outside addPageLimitFlag = %v, want the %d frozen row budgets and the %d cursor-paged ones",
+			rowBudget, len(frozen), len(cursorPaged))
 	}
 
-	for _, args := range paging {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
+	for _, pc := range paging {
+		t.Run(strings.Join(pc.path, " "), func(t *testing.T) {
 			cmd := NewRootCmd()
 			out, errBuf := new(bytes.Buffer), new(bytes.Buffer)
 			cmd.SetOut(out)
 			cmd.SetErr(errBuf)
-			cmd.SetArgs(append(append([]string{}, args...), "--limit", "3"))
+			args := append(append([]string{}, pc.path...), "--limit", "3")
+			args = append(args, pc.placeholders...)
+			cmd.SetArgs(args)
 			if err := cmd.Execute(); err != nil {
 				t.Fatalf("command failed: %v (stderr: %s)", err, errBuf.String())
 			}

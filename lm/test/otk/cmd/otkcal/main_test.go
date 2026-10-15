@@ -145,6 +145,33 @@ func TestApplyFaultRefusesAfterTeardown(t *testing.T) {
 	}
 }
 
+// The SQL-kind analog of TestApplyFaultRefusesAfterTeardown: restoration captures
+// sqlApplied and sets tornDown together, so a SQL fault applied after that read
+// would be one nothing ever undoes. Armed with a DSN and path that do not exist, so
+// the assertion stays sharp — if applySQLFault did not check tornDown it would
+// reach ApplySQL and fail trying to read a missing artefact file, a different
+// message than the refusal.
+func TestApplySQLFaultRefusesAfterTeardown(t *testing.T) {
+	s := &session{}
+	s.armSQL("dsn-does-not-matter", filepath.Join(t.TempDir(), "never-written.sql"))
+	_ = s.restore() // its own verdict is irrelevant here; it marks the session torn down
+
+	err := s.applySQLFault()
+	if err == nil {
+		t.Fatal("applySQLFault must refuse once the session is being torn down")
+	}
+	if !strings.Contains(err.Error(), "torn down") {
+		t.Fatalf("applySQLFault must refuse BEFORE reaching psql, got: %v", err)
+	}
+
+	s.mu.Lock()
+	sqlApplied := s.sqlApplied
+	s.mu.Unlock()
+	if sqlApplied {
+		t.Fatal("a refused applySQLFault must not record the fault as applied")
+	}
+}
+
 // A panic is the one exit that returns nowhere: it unwinds past main's
 // `runErr := calibrate(s)` without ever reaching the restore() on the next line. The
 // deferred recovery must therefore restore AND re-raise — restoring silently would

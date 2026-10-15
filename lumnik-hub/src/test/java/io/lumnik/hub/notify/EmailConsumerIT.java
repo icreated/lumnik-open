@@ -79,12 +79,19 @@ class EmailConsumerIT {
                 Map.of("detail", "frost"), null, Instant.now()));
     }
 
+    /** One batch, then what a tick does once it has committed: the mails go out. */
+    void sweepOneBatch() {
+        var processor = consumer.batchProcessor();
+        sweeper.sweep("email", 100, processor);
+        processor.afterCommit();
+    }
+
     @Test
     void matchingRuleSendsEmail() {
         seedRule("mail.test.*", "ops@mailtest.local");
         seedEvent("mail.test.fired");
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("email", 100, consumer::process));
+        TenantContext.runAsSystem(() -> sweepOneBatch());
 
         var sent = mailbox.getMailsSentTo("ops@mailtest.local");
         assertEquals(1, sent.size());
@@ -96,7 +103,7 @@ class EmailConsumerIT {
         seedRule("mail.test.*", "json@mailtest.local");
         seedEvent("mail.test.payload"); // payload = {detail: frost}
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("email", 100, consumer::process));
+        TenantContext.runAsSystem(() -> sweepOneBatch());
 
         var sent = mailbox.getMailsSentTo("json@mailtest.local");
         assertEquals(1, sent.size());
@@ -113,7 +120,7 @@ class EmailConsumerIT {
         seedRuleWithTemplate("mail.test.*", "nested@mailtest.local", "test-nested");
         seedEvent("mail.test.nested"); // payload = {detail: frost}
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("email", 100, consumer::process));
+        TenantContext.runAsSystem(() -> sweepOneBatch());
 
         var sent = mailbox.getMailsSentTo("nested@mailtest.local");
         assertEquals(1, sent.size(), "a navigable payload must not break the render");
@@ -126,7 +133,7 @@ class EmailConsumerIT {
         seedRuleWithTemplate("decision.*", "adv@mailtest.local", "decision-alert");
         seedDecisionEvent("decision.commande-bloquee");
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("email", 100, consumer::process));
+        TenantContext.runAsSystem(() -> sweepOneBatch());
 
         var sent = mailbox.getMailsSentTo("adv@mailtest.local");
         assertEquals(1, sent.size());
@@ -156,7 +163,7 @@ class EmailConsumerIT {
         seedRule("other.domain.*", "quiet@mailtest.local");
         seedEvent("mail.test.ignored");
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("email", 100, consumer::process));
+        TenantContext.runAsSystem(() -> sweepOneBatch());
 
         assertTrue(mailbox.getMailsSentTo("quiet@mailtest.local").isEmpty());
     }
@@ -167,7 +174,7 @@ class EmailConsumerIT {
         seedRule("mail.test.*", "b@mailtest.local");
         seedEvent("mail.test.multi");
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("email", 100, consumer::process));
+        TenantContext.runAsSystem(() -> sweepOneBatch());
 
         assertEquals(1, mailbox.getMailsSentTo("a@mailtest.local").size());
         assertEquals(1, mailbox.getMailsSentTo("b@mailtest.local").size());
@@ -178,7 +185,7 @@ class EmailConsumerIT {
         seedRuleWithEntityFilter("data.row.changed", "scoped@mailtest.local", "erp.fact");
         seedEventWithEntity("data.row.changed", "erp.other");
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("email", 100, consumer::process));
+        TenantContext.runAsSystem(() -> sweepOneBatch());
 
         assertTrue(mailbox.getMailsSentTo("scoped@mailtest.local").isEmpty(),
             "entity_filter excludes events for other tables");
@@ -189,7 +196,7 @@ class EmailConsumerIT {
         seedRuleWithEntityFilter("data.row.changed", "scoped@mailtest.local", "erp.fact");
         seedEventWithEntity("data.row.changed", "erp.fact");
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("email", 100, consumer::process));
+        TenantContext.runAsSystem(() -> sweepOneBatch());
 
         assertEquals(1, mailbox.getMailsSentTo("scoped@mailtest.local").size());
     }
@@ -199,7 +206,7 @@ class EmailConsumerIT {
         seedRuleWithEntityFilter("connector.run.*", "scoped@mailtest.local", "erp.fact");
         seedEvent("connector.run.completed"); // of() carries no entity
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("email", 100, consumer::process));
+        TenantContext.runAsSystem(() -> sweepOneBatch());
 
         assertEquals(1, mailbox.getMailsSentTo("scoped@mailtest.local").size(),
             "entity-less events reach scoped rules");
@@ -211,7 +218,7 @@ class EmailConsumerIT {
         seedRule("mail.test.*", "good@mailtest.local");
         seedEvent("mail.test.template-skip");
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("email", 100, consumer::process));
+        TenantContext.runAsSystem(() -> sweepOneBatch());
 
         assertTrue(mailbox.getMailsSentTo("bad@mailtest.local").isEmpty());
         assertEquals(1, mailbox.getMailsSentTo("good@mailtest.local").size());

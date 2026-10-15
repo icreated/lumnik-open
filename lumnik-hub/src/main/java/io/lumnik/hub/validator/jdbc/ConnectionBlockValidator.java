@@ -11,7 +11,7 @@ public final class ConnectionBlockValidator {
     public static ConfigDef configDef() {
         return new ConfigDef()
             .requireCustom("url", Type.STRING, Importance.HIGH,
-                "JDBC URL — jdbc:postgresql://... (only postgres in v1)",
+                "JDBC URL — jdbc:<dialect>://... (the dialect's provider must be installed)",
                 ConfigDefValidators.matchesRegex("^jdbc:[a-z0-9]+:.*$", "jdbc:<dialect>:..."))
             .require("user", Type.STRING, Importance.HIGH, "DB user")
             .require("password_env", Type.STRING, Importance.HIGH,

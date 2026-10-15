@@ -7,4 +7,13 @@ package io.lumnik.extraction.spi.ask;
  */
 public interface AskPort {
     AskResult ask(long tenantId, String scope, String question);
+
+    /**
+     * The same ask, with the answer language the calling surface names ({@code "fr"}), or
+     * {@code null} to let the question's own language decide (#879). An implementation that does
+     * not phrase answers itself may ignore it.
+     */
+    default AskResult ask(long tenantId, String scope, String question, String lang) {
+        return ask(tenantId, scope, question);
+    }
 }

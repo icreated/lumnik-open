@@ -4,7 +4,6 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.api.types.RunStatus;
-import io.lumnik.hub.connector.api.types.RunTrigger;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
@@ -56,7 +55,7 @@ class VanishedRunRowIT {
         UUID endpointId = seedEndpoint();
         UUID vanished = UUID.randomUUID();
 
-        RunStatus status = engine.runSyncEndpoint(endpointId, vanished, new RunTrigger.Manual(1L));
+        RunStatus status = engine.runSyncEndpoint(endpointId, vanished);
 
         assertThat(status)
             .as("a run row that is not there is a refusal the engine reports, not an exception"
@@ -72,7 +71,7 @@ class VanishedRunRowIT {
         UUID endpointId = seedEndpoint();
         UUID vanished = UUID.randomUUID();
 
-        engine.runSyncEndpoint(endpointId, vanished, new RunTrigger.Manual(1L));
+        engine.runSyncEndpoint(endpointId, vanished);
 
         assertThat(failedEventsFor(vanished))
             .as("every ending goes through failRun — the event is what lm, the TUI and every"

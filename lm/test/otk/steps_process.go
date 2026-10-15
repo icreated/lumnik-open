@@ -57,12 +57,13 @@ func init() {
 // ---- process apply ----
 
 func procGivenApply(st *scenarioState, variant, seedStr string) error {
-	yamlStr, useUserRole, _, found := generator.ProcessApplyManifest(variant)
+	yamlStr, useUserRole, _, caseID, found := generator.ProcessApplyManifest(variant)
 	if !found {
 		return fmt.Errorf("process lane: unknown apply variant %q", variant)
 	}
 	st.processScen = generator.ProcessScenario{
 		Seed:         parseSeed(seedStr),
+		CaseID:       caseID,
 		SubType:      "apply",
 		ManifestYAML: yamlStr,
 		Variant:      variant,
@@ -79,7 +80,7 @@ func procWhenApply(st *scenarioState, role string) error {
 	if role == "lm_user" {
 		// Wrong-role apply needs a real forged viewer token; dormant under dev-bypass.
 		if otkKey == nil {
-			fmt.Printf("  OTK process lane DORMANT (wrong-role-apply): set OTK_OIDC_ISSUER + boot %%otkauth\n")
+			recordDormant(st.processScen.CaseID, "wrong-role-apply: set OTK_OIDC_ISSUER + boot %otkauth")
 			st.processApplyStatus = -1
 			return nil
 		}
@@ -112,7 +113,7 @@ func procApplyStatus(st *scenarioState, code int) error {
 	if code == -500 {
 		if st.processApplyStatus == 500 {
 			st.findings = append(st.findings, oracle.Finding{
-				Severity: oracle.High, Family: oracle.Robustness, Seed: st.processScen.Seed,
+				Severity: oracle.High, Family: oracle.Robustness, CaseID: st.processScen.CaseID, Seed: st.processScen.Seed,
 				Detail: "process apply returned 500 (an adversarial manifest must be refused cleanly, never crash)",
 			})
 		}
@@ -120,7 +121,7 @@ func procApplyStatus(st *scenarioState, code int) error {
 	}
 	if st.processApplyStatus != code {
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.High, Family: oracle.Security, Seed: st.processScen.Seed,
+			Severity: oracle.High, Family: oracle.Security, CaseID: st.processScen.CaseID, Seed: st.processScen.Seed,
 			Detail: fmt.Sprintf("process apply status: got %d, want %d", st.processApplyStatus, code),
 		})
 	}
@@ -133,7 +134,7 @@ func procWrongRoleCleanup(st *scenarioState) error {
 	}
 	if st.processApplyStatus == 200 {
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.Critical, Family: oracle.Security, Seed: st.processScen.Seed,
+			Severity: oracle.Critical, Family: oracle.Security, CaseID: st.processScen.CaseID, Seed: st.processScen.Seed,
 			Detail: "wrong-role process apply returned 200 (role escalation — must be 403)",
 		})
 	}
@@ -143,12 +144,13 @@ func procWrongRoleCleanup(st *scenarioState) error {
 // ---- inbox read + ack ----
 
 func inboxGiven(st *scenarioState, variant, seedStr string) error {
-	op, crossTenant, wrongRole, found := generator.InboxVariantByName(variant)
+	op, crossTenant, wrongRole, caseID, found := generator.InboxVariantByName(variant)
 	if !found {
 		return fmt.Errorf("process lane: unknown inbox variant %q", variant)
 	}
 	st.processScen = generator.ProcessScenario{
 		Seed:        parseSeed(seedStr),
+		CaseID:      caseID,
 		SubType:     "inbox",
 		Variant:     variant,
 		InboxOp:     op,
@@ -165,12 +167,12 @@ func inboxToken(suffix string) (token string, dormant bool, err error) {
 	switch strings.TrimSpace(suffix) {
 	case "as cross-tenant":
 		if otkKey == nil {
-			return "", true, nil
+			return "", true, nil // caller logs dormancy once it has the scenario's CaseID
 		}
 		token, err = otkKey.Forge(otkauth.CrossTenant, 0)
 	case "as viewer":
 		if otkKey == nil {
-			return "", true, nil
+			return "", true, nil // caller logs dormancy once it has the scenario's CaseID
 		}
 		token, err = otkKey.Forge(otkauth.WrongRole, 0)
 	default:
@@ -188,7 +190,7 @@ func inboxWhenRead(st *scenarioState, query, suffix string) error {
 		return fmt.Errorf("process lane: inbox token: %w", err)
 	}
 	if dormant {
-		fmt.Printf("  OTK process inbox lane DORMANT (%s): set OTK_OIDC_ISSUER + boot %%otkauth\n", strings.TrimSpace(suffix))
+		recordDormant(st.processScen.CaseID, fmt.Sprintf("%s: set OTK_OIDC_ISSUER + boot %%otkauth", strings.TrimSpace(suffix)))
 		st.inboxStatus = -1
 		return nil
 	}
@@ -214,7 +216,7 @@ func inboxWhenAck(st *scenarioState, id, suffix string) error {
 		return fmt.Errorf("process lane: inbox token: %w", err)
 	}
 	if dormant {
-		fmt.Printf("  OTK process inbox lane DORMANT (ack %s): set OTK_OIDC_ISSUER + boot %%otkauth\n", strings.TrimSpace(suffix))
+		recordDormant(st.processScen.CaseID, fmt.Sprintf("ack %s: set OTK_OIDC_ISSUER + boot %%otkauth", strings.TrimSpace(suffix)))
 		st.inboxStatus = -1
 		return nil
 	}
@@ -240,7 +242,7 @@ func inboxStatusStep(st *scenarioState, code int, ack bool) error {
 			kind = "inbox ack"
 		}
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.High, Family: oracle.Security, Seed: st.processScen.Seed,
+			Severity: oracle.High, Family: oracle.Security, CaseID: st.processScen.CaseID, Seed: st.processScen.Seed,
 			Detail: fmt.Sprintf("%s status: got %d, want %d", kind, st.inboxStatus, code),
 		})
 	}
@@ -254,14 +256,14 @@ func inboxRows(st *scenarioState, max int) error {
 	var rows []json.RawMessage
 	if err := json.Unmarshal([]byte(st.inboxBody), &rows); err != nil {
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.High, Family: oracle.Robustness, Seed: st.processScen.Seed,
+			Severity: oracle.High, Family: oracle.Robustness, CaseID: st.processScen.CaseID, Seed: st.processScen.Seed,
 			Detail: fmt.Sprintf("inbox response is not a JSON array: %v", err),
 		})
 		return nil
 	}
 	if len(rows) > max {
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.High, Family: oracle.Security, Seed: st.processScen.Seed,
+			Severity: oracle.High, Family: oracle.Security, CaseID: st.processScen.CaseID, Seed: st.processScen.Seed,
 			Detail: fmt.Sprintf("inbox returned %d rows, exceeds the server clamp of %d (limit not enforced)", len(rows), max),
 		})
 	}
@@ -275,7 +277,7 @@ func inboxSafeArray(st *scenarioState) error {
 	var rows []json.RawMessage
 	if err := json.Unmarshal([]byte(st.inboxBody), &rows); err != nil {
 		st.findings = append(st.findings, oracle.Finding{
-			Severity: oracle.High, Family: oracle.Robustness, Seed: st.processScen.Seed,
+			Severity: oracle.High, Family: oracle.Robustness, CaseID: st.processScen.CaseID, Seed: st.processScen.Seed,
 			Detail: fmt.Sprintf("inbox response is not a JSON array: %v", err),
 		})
 	}

@@ -6,6 +6,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -13,7 +14,7 @@ import java.util.TreeMap;
 public class RowHasher {
 
   // parse-date is the one hook that puts a java.time value in the row — LocalDate or LocalDateTime
-  // depending on the declared format (ParseDateHook.java:40-42); its siblings produce types Jackson
+  // depending on the declared format (ParseDateHook#apply); its siblings produce types Jackson
   // already handles (parse-number → BigDecimal, the rest → String). Every row is hashed here on
   // write (MultiTargetWriter.java:104), and without JSR-310 registered Jackson refuses the type and
   // the chunk fails — so a date that parses SUCCESSFULLY used to kill the run. registerModule is
@@ -30,10 +31,9 @@ public class RowHasher {
       TreeMap<String, Object> sorted = new TreeMap<>(row);
       String canonical = M.writeValueAsString(sorted);
       MessageDigest md = MessageDigest.getInstance("SHA-256");
-      byte[] digest = md.digest(canonical.getBytes(StandardCharsets.UTF_8));
-      StringBuilder sb = new StringBuilder(64);
-      for (byte b : digest) sb.append(String.format("%02x", b));
-      return sb.toString();
+      // Lower-case, no delimiter: the exact text the per-byte String.format("%02x") loop built,
+      // without its 32 format-string parses per row — most of the hash's cost (#910).
+      return HexFormat.of().formatHex(md.digest(canonical.getBytes(StandardCharsets.UTF_8)));
     } catch (Exception e) {
       throw new RuntimeException("RowHasher: " + e.getMessage(), e);
     }

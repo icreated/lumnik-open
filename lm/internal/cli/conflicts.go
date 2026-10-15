@@ -14,10 +14,10 @@ func conflictRow(c client.Conflict) []string {
 }
 
 func newConflictsCmd() *cobra.Command {
-	root := &cobra.Command{Use: "conflicts", Short: "Inspect unresolved fusion conflicts"}
+	root := &cobra.Command{Use: "conflicts", Short: "Inspect entity conflicts and lookup ambiguities"}
 	list := &cobra.Command{
 		Use:   "list",
-		Short: "List fused-entity rows whose sources still disagree",
+		Short: "List fused-entity rows with source conflicts or lookup ambiguities",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {

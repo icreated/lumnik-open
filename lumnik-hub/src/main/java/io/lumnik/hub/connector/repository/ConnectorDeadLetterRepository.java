@@ -6,7 +6,10 @@ import jakarta.enterprise.context.ApplicationScoped;
 
 import io.lumnik.hub.connector.api.types.SkipReason;
 
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @ApplicationScoped
@@ -17,8 +20,15 @@ public class ConnectorDeadLetterRepository implements PanacheRepositoryBase<Conn
         .page(0, limit).list();
   }
 
+  /** Real-loss dead-letters for one run — {@link #countByRuns} of a single id. */
+  public long countByRun(UUID runId) {
+    return countByRuns(List.of(runId)).get(runId);
+  }
+
   /**
-   * Real-loss dead-letters for a run (excludes benign skips + soft-deleted).
+   * Real-loss dead-letters per run (excludes benign skips + soft-deleted), in ONE grouped query:
+   * the runs ledger used to ask once per run of its page, up to 200 times (#892). Every id asked
+   * is a key — 0 for a run with no real loss — so no caller has to read an absent key as zero.
    *
    * <p>The excluded set is {@link SkipReason#BENIGN_NAMES}, not a local copy: this query is
    * string-keyed against the persisted name while the runtime checks are type-keyed, and those
@@ -26,9 +36,18 @@ public class ConnectorDeadLetterRepository implements PanacheRepositoryBase<Conn
    * OTK coupling — Law 1's conservation denominator is this exclusion, and its fourth reader
    * is in Go.
    */
-  public long countByRun(UUID runId) {
-    return count("runId = ?1 and deletedAt is null and skipReason not in ?2",
-        runId, SkipReason.BENIGN_NAMES);
+  public Map<UUID, Long> countByRuns(Collection<UUID> runIds) {
+    var counts = new HashMap<UUID, Long>();
+    if (runIds.isEmpty()) return counts;
+    runIds.forEach(id -> counts.put(id, 0L));
+    getEntityManager()
+        .createQuery("select d.runId, count(d) from ConnectorDeadLetter d where d.runId in :runIds"
+            + " and d.deletedAt is null and d.skipReason not in :benign group by d.runId", Object[].class)
+        .setParameter("runIds", runIds)
+        .setParameter("benign", SkipReason.BENIGN_NAMES)
+        .getResultStream()
+        .forEach(row -> counts.put((UUID) row[0], (Long) row[1]));
+    return counts;
   }
 
   /** All dead-letters a run produced, newest first (full transparency).

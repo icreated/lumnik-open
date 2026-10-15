@@ -194,12 +194,15 @@ func GenerateRest(seed int64) Scenario {
 }
 
 // GenerateEntity generates an adversarial entity scenario for the given seed.
-// It alternates between apply and read sub-types based on the hashed seed parity.
+// It rotates between apply, read and cli sub-types on the hashed seed mod 3 (#647 added cli
+// as the third arm — a structural change to the split itself, not merely a new leaf, so it
+// moves which sub-type/variant many existing seeds land on; that is what the fingerprint
+// versioning exists to catch and pin deliberately).
 func GenerateEntity(seed int64) EntityScenario {
 	h := splitmix64(uint64(seed) ^ entitySalt)
 
-	if h%2 == 0 {
-		// apply sub-type
+	switch h % 3 {
+	case 0:
 		applyVariants := entityApplyVariants()
 		idx := int(splitmix64(h) % uint64(len(applyVariants)))
 		v := applyVariants[idx]
@@ -212,20 +215,31 @@ func GenerateEntity(seed int64) EntityScenario {
 			UseUserRole:  v.useUserRole,
 			Feature:      renderEntityApplyFeature(seed, v),
 		}
-	}
-	// read sub-type
-	readVariants := entityReadVariants()
-	idx := int(splitmix64(h) % uint64(len(readVariants)))
-	v := readVariants[idx]
-	return EntityScenario{
-		Seed:        seed,
-		CaseID:      entityCaseID("read", v.name),
-		SubType:     "read",
-		Variant:     v.name, // was left empty: the read branch had no name at all
-		ReadTarget:  v.readTarget,
-		ReadQuery:   v.readQuery,
-		CrossTenant: v.crossTenant,
-		Feature:     renderEntityReadFeature(seed, v),
+	case 1:
+		readVariants := entityReadVariants()
+		idx := int(splitmix64(h) % uint64(len(readVariants)))
+		v := readVariants[idx]
+		return EntityScenario{
+			Seed:        seed,
+			CaseID:      entityCaseID("read", v.name),
+			SubType:     "read",
+			Variant:     v.name, // was left empty: the read branch had no name at all
+			ReadTarget:  v.readTarget,
+			ReadQuery:   v.readQuery,
+			CrossTenant: v.crossTenant,
+			Feature:     renderEntityReadFeature(seed, v),
+		}
+	default:
+		cliVariants := entityCliVariants()
+		idx := int(splitmix64(h) % uint64(len(cliVariants)))
+		v := cliVariants[idx]
+		return EntityScenario{
+			Seed:    seed,
+			CaseID:  entityCaseID("cli", v.name),
+			SubType: "cli",
+			Variant: v.name,
+			Feature: renderEntityCliFeature(seed, v),
+		}
 	}
 }
 

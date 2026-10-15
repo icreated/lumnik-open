@@ -61,7 +61,8 @@ class ScopeFreshnessPartialIT {
         execSql("INSERT INTO connector.connector_run "
               + "(id, tenant_id, connector_id, status, sync_mode, started_at, ended_at, triggered_by) "
               + "VALUES ('" + UUID.randomUUID() + "', " + TENANT + ", '" + connectorId + "', '"
-              + status + "', 'Incremental', now(), '" + endedAt + "'::timestamptz, 'MANUAL')");
+              + status + "', 'Incremental', now(), "
+              + (endedAt == null ? "NULL" : "'" + endedAt + "'::timestamptz") + ", 'MANUAL')");
     }
 
     @Test
@@ -81,6 +82,18 @@ class ScopeFreshnessPartialIT {
         assertThat(freshness.lastCompletedRun(TENANT, SCOPE).orElseThrow().toString())
             .as("the partial run is the more recent landing, so it is the answer")
             .startsWith("2026-09-12T10:00");
+    }
+
+    @Test
+    void a_landed_run_with_no_end_time_does_not_hide_an_older_dated_one() {
+        // finalizeRun always stamps ended_at, but the schema does not demand it, and a newest-first
+        // walk meets a NULL first (#907).
+        seedRun("Completed", "2026-09-11 10:00:00+00");
+        seedRun("Completed", null);
+
+        assertThat(freshness.lastCompletedRun(TENANT, SCOPE).orElseThrow().toString())
+            .as("a run with no end time dates nothing, and does not shadow one that has it")
+            .startsWith("2026-09-11T10:00");
     }
 
     @Test

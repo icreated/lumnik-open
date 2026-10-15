@@ -7,7 +7,7 @@ import (
 
 // paletteEntries is the single source of truth for the command palette;
 // help_test.go asserts every entry has a row in helpBody.
-var paletteEntries = []string{"new", "ask", "inbox", "modules", "sources", "processes", "view", "runs", "dlq", "hooks", "migrations", "scopes", "endpoints", "conflicts", "observations", "outputs"}
+var paletteEntries = []string{"new", "ask", "inbox", "modules", "sources", "processes", "view", "runs", "dlq", "hooks", "migrations", "scopes", "endpoints", "conflicts", "ambiguous", "observations", "outputs"}
 
 // paletteAliases maps old mechanism spellings to their canonical usage name.
 var paletteAliases = map[string]string{"connectors": "sources"}
@@ -28,6 +28,7 @@ var mutatingKeyEntries = []struct{ page, key string }{
 	{"inbox", "a"},
 	{"inbox", "A"},
 	{"view", "a"},
+	{"ambiguous", "^R"},
 	{"runs", "c"},
 	{"processes", "e"},
 	{"processes", "^P"},
@@ -51,8 +52,13 @@ const helpBody = `[yellow]Global keys[white]
                      Del delete (no confirmation)
                      t   edit scope tags
                      Enter  REST → its :endpoints · others → its :runs
-  :conflicts      where your sources disagree — the fused rows still in dispute
+  :conflicts      the fused rows with a source conflict or a lookup ambiguity
                      d      the full ledger: which source said what
+                     s / y  cycle the sort column · yank the row as JSON
+  :ambiguous      identities one entity's resolution pass could not settle
+                     Enter  type an entity name to list · on a row, load its full history below
+                     ^R     re-run the resolution pass for the listed entity
+                     d      the row itself: identity ref, candidates, discarded, decided by
                      s / y  cycle the sort column · yank the row as JSON
   :observations   what has NOT moved — the workflow tape, stillest first
                      d      state, since, first observed, alert

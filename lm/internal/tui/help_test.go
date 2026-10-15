@@ -154,6 +154,7 @@ var resourceFile = map[string]string{
 	"inbox": "inbox.go", "view": "viewpage.go", "hooks": "hooks.go",
 	"runs": "runs.go", "conflicts": "conflicts.go", "observations": "observations.go",
 	"scopes": "scopes.go", "ask": "ask.go", "new": "newkind_page.go",
+	"ambiguous": "ambiguous.go",
 	"endpoints": "endpoints.go", "processes": "processes.go",
 	"migrations": "migrations.go", "modules": "modules.go",
 }

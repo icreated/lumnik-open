@@ -91,7 +91,7 @@ docker run -d --name "$PG_NAME" \
   -e POSTGRES_USER=adempiere -e POSTGRES_PASSWORD=adempiere -e POSTGRES_DB=lumnik \
   -p "$PG_PORT":5432 \
   -v "$PWD/infra/postgres/init:/docker-entrypoint-initdb.d:ro" \
-  pgvector/pgvector:pg16 >/dev/null
+  pgvector/pgvector:0.8.6-pg16 >/dev/null
 for _ in $(seq 1 60); do
   docker exec "$PG_NAME" pg_isready -U adempiere -d lumnik >/dev/null 2>&1 && break
   sleep 2
@@ -117,13 +117,15 @@ BOOT_CWD=$(mktemp -d -t open-edition-boot-cwd.XXXXXX)
 JAR="$PWD/lumnik-hub/target/quarkus-app/quarkus-run.jar"
 (
   cd "$BOOT_CWD"
-  # Throwaway: MasterKeyValidator only asks for non-blank, not-the-placeholder, >= 16 chars.
-  # It encrypts nothing here — the container and this key both die with the script.
+  # Throwaway: MasterKeyValidator and FingerprintHmacKey both only ask for non-blank,
+  # not-the-placeholder, >= 16 chars. Neither key protects anything here — the container and
+  # both keys die with the script.
   exec env \
     DB_URL="jdbc:postgresql://localhost:$PG_PORT/lumnik" \
     QUARKUS_HTTP_PORT="$HTTP_PORT" \
     LUMNIK_SECURITY_DEV_BYPASS=true \
     LUMNIK_SECRET_MASTER_KEY="open-edition-witness-throwaway-key" \
+    LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET="open-edition-witness-throwaway-hmac-secret" \
     "$JAVA" -jar "$JAR"
 ) > "$LOG" 2>&1 &
 APP_PID=$!

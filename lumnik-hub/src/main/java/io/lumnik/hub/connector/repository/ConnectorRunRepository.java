@@ -39,10 +39,18 @@ public class ConnectorRunRepository implements PanacheRepositoryBase<ConnectorRu
    * must RESTRICT it, never redefine it. Deliberately NOT {@link #findRecentActiveByConnector} —
    * wiring the filter to that predicate would make a run the reader sees unfiltered vanish the
    * moment they narrow to its connector, which is the silence these filters exist to end.
+   *
+   * <p>{@code tenantId} is the query's own predicate, as in {@link #findByIdForTenant}: the
+   * {@code @Filter} is off on a {@code @Transactional} session (see IntegrationTenantPredicateIT),
+   * so the page relied on RLS alone — whose policy no index can serve — and scanned and sorted the
+   * run history on every refresh (#892). With it, {@code idx_run_tenant_started} hands over the
+   * newest runs.
    */
-  public List<ConnectorRun> findRecent(UUID connectorId, UUID endpointId, int limit) {
+  public List<ConnectorRun> findRecent(Long tenantId, UUID connectorId, UUID endpointId, int limit) {
     var clauses = new ArrayList<String>();
     var params = new HashMap<String, Object>();
+    clauses.add("tenantId = :tenantId");
+    params.put("tenantId", tenantId);
     if (connectorId != null) {
       clauses.add("connectorId = :connectorId");
       params.put("connectorId", connectorId);
@@ -51,8 +59,7 @@ public class ConnectorRunRepository implements PanacheRepositoryBase<ConnectorRu
       clauses.add("endpointId = :endpointId");
       params.put("endpointId", endpointId);
     }
-    String where = clauses.isEmpty() ? "" : String.join(" and ", clauses) + " ";
-    return find(where + "order by startedAt desc", params).page(0, limit).list();
+    return find(String.join(" and ", clauses) + " order by startedAt desc", params).page(0, limit).list();
   }
 
   /**

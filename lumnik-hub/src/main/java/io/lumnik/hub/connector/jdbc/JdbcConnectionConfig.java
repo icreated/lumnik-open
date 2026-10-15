@@ -1,6 +1,8 @@
 package io.lumnik.hub.connector.jdbc;
 
-import java.util.Map;
+import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
+import io.lumnik.jdbc.spi.JdbcDialect;
+
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -10,21 +12,13 @@ public record JdbcConnectionConfig(
     String url,
     String user,
     String password,
-    String driverClass,
     String dialectId
 ) {
 
   private static final Pattern URL_PATTERN = Pattern.compile("^jdbc:([a-z0-9]+):.*$");
 
-  private static final Map<String, String> DIALECT_BY_SCHEME = Map.of(
-      "postgresql", "postgres"
-  );
-
-  private static final Map<String, String> DRIVER_BY_SCHEME = Map.of(
-      "postgresql", "org.postgresql.Driver"
-  );
-
-  public static JdbcConnectionConfig parse(String url, String user, String password) {
+  public static JdbcConnectionConfig parse(String url, String user, String password,
+                                           JdbcDialectRegistry registry) {
     if (url == null || !url.startsWith("jdbc:"))
       throw new IllegalArgumentException("Invalid JDBC URL — must start with jdbc:<scheme>://");
 
@@ -32,23 +26,17 @@ public record JdbcConnectionConfig(
     if (!m.matches())
       throw new IllegalArgumentException("Invalid JDBC URL format: " + url);
 
-    String scheme = m.group(1);
-    String dialect = DIALECT_BY_SCHEME.get(scheme);
-    if (dialect == null)
-      throw new IllegalArgumentException("Unsupported dialect '" + scheme
-          + "' — v1 supports: postgres");
-
-    String driver = DRIVER_BY_SCHEME.get(scheme);
+    JdbcDialect dialect = registry.resolveFor(url, null);
 
     if (user == null || user.isBlank())
       throw new IllegalArgumentException("Missing user");
 
-    return new JdbcConnectionConfig(url, user, password, driver, dialect);
+    return new JdbcConnectionConfig(url, user, password, dialect.id());
   }
 
   @Override
   public String toString() {
     return "JdbcConnectionConfig[url=" + url + ", user=" + user
-        + ", password=***, driverClass=" + driverClass + ", dialectId=" + dialectId + "]";
+        + ", password=***, dialectId=" + dialectId + "]";
   }
 }

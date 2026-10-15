@@ -1,0 +1,14 @@
+diff --git a/lm/internal/cli/manifest.go b/lm/internal/cli/manifest.go
+index 4172d181..efa9a388 100644
+--- a/lm/internal/cli/manifest.go
++++ b/lm/internal/cli/manifest.go
+@@ -47,7 +47,8 @@ func manifestLabel(path string) string {
+ 	if isStdinSentinel(path) {
+ 		return "stdin"
+ 	}
+-	return filepath.Base(path)
++	parts := strings.Split(path, "@")
++	return parts[1]
+ }
+ 
+ // rerunCommand is the command to suggest once a refused manifest is fixed — and nothing at all

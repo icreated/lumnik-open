@@ -24,14 +24,18 @@ import java.util.Map;
  */
 public class RlsEnforcedPgResource implements QuarkusTestResourceLifecycleManager {
 
+  /** The container's superuser, for a test that must act as the DBA (signal another backend). */
+  public static final String SUPERUSER = "postgres";
+  public static final String SUPERUSER_PASSWORD = "postgres";
+
   private GenericContainer<?> pg;
 
   @Override
   public Map<String, String> start() {
-    pg = new GenericContainer<>("pgvector/pgvector:pg16")
+    pg = new GenericContainer<>("pgvector/pgvector:0.8.6-pg16")
         .withEnv("POSTGRES_DB", "lumnik")
-        .withEnv("POSTGRES_USER", "postgres")
-        .withEnv("POSTGRES_PASSWORD", "postgres")
+        .withEnv("POSTGRES_USER", SUPERUSER)
+        .withEnv("POSTGRES_PASSWORD", SUPERUSER_PASSWORD)
         .withExposedPorts(5432)
         // NOT forListeningPort(): the Postgres entrypoint runs a TEMPORARY server for initdb and
         // then restarts it, so the port accepts connections during a window when the real server
@@ -44,7 +48,7 @@ public class RlsEnforcedPgResource implements QuarkusTestResourceLifecycleManage
     pg.start();
     String url = "jdbc:postgresql://" + pg.getHost() + ":" + pg.getMappedPort(5432) + "/lumnik";
 
-    try (Connection c = DriverManager.getConnection(url, "postgres", "postgres");
+    try (Connection c = DriverManager.getConnection(url, SUPERUSER, SUPERUSER_PASSWORD);
          Statement st = c.createStatement()) {
       // 01-roles.sql mirror
       st.execute("CREATE ROLE lumnik_admin WITH LOGIN PASSWORD 'admin'");

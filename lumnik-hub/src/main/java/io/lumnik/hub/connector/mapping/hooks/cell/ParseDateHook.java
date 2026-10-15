@@ -6,10 +6,10 @@ import io.lumnik.hub.connector.mapping.hooks.CellHook;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import jakarta.enterprise.context.ApplicationScoped;
 
+import java.text.ParsePosition;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -33,17 +33,22 @@ public class ParseDateHook implements CellHook {
     }
 
     for (String fmt : formats) {
-      try {
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern(fmt);
-        boolean hasTime = fmt.contains("H") || fmt.contains("h") || fmt.contains("m") || fmt.contains("s");
-        if (hasTime) {
-          row.put(col, LocalDateTime.parse(str, formatter));
-        } else {
-          row.put(col, LocalDate.parse(str, formatter));
-        }
+      boolean hasTime = fmt.contains("H") || fmt.contains("h") || fmt.contains("m") || fmt.contains("s");
+      // Not LocalDate.parse: it answers "this format does not fit" — the normal case once several
+      // are declared — by throwing, measured (#910) at ~7.3 µs per cell for two misses before the
+      // hit, ~0.8 µs without. The Format view runs the same parse and resolve but answers null — a
+      // text that does not fit costs no exception at all; one that fits but cannot resolve (day 45,
+      // month 23) still throws inside the JDK, which catches it, the rare case — and the end check
+      // refuses a prefix exactly as LocalDate.parse does, so the same formats fall through.
+      // (Compiling each format once was measured too: ~150 ns per three-format cell, about 2% of
+      // a mapped row — not worth a cache.)
+      ParsePosition pos = new ParsePosition(0);
+      Object parsed = DateTimeFormatter.ofPattern(fmt)
+          .toFormat(hasTime ? LocalDateTime::from : LocalDate::from)
+          .parseObject(str, pos);
+      if (parsed != null && pos.getIndex() == str.length()) {
+        row.put(col, parsed);
         return;
-      } catch (DateTimeParseException ignored) {
-        // try next format
       }
     }
 

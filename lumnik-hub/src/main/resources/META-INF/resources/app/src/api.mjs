@@ -6,10 +6,19 @@
 // with fakes — nothing here touches sessionStorage or fetch directly.
 
 export function createApi({ token, onAuthLost, fetchFn }) {
+  // Seconds the hub asked us to wait (Retry-After), or null: absent, no headers object (a fake), or an
+  // HTTP-date, which this app never needs and must not turn into NaN.
+  function retryAfterOf(r) {
+    const raw = r.headers && typeof r.headers.get === 'function' ? r.headers.get('Retry-After') : null;
+    return raw !== null && /^\d+$/.test(String(raw).trim()) ? Number(raw) : null;
+  }
+
+  // Every non-2xx also carries `status`, `retryAfter` and the parsed `body`, so a surface that needs
+  // more than a kind (search tells a 429 from a 503 and shows the reason) does not re-parse anything.
   async function handleResponse(r) {
     if (r.status === 401) {
       onAuthLost();
-      throw { kind: 'auth' };
+      throw { kind: 'auth', status: 401, retryAfter: retryAfterOf(r), body: {} };
     }
     if (!r.ok) {
       let body = {};
@@ -17,6 +26,9 @@ export function createApi({ token, onAuthLost, fetchFn }) {
       throw {
         kind: body.error === 'scope not granted' ? 'scope' : 'error',
         message: body.error || `erreur ${r.status}`,
+        status: r.status,
+        retryAfter: retryAfterOf(r),
+        body,
       };
     }
   }

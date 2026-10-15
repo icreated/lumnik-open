@@ -52,6 +52,12 @@ func TestFriendlyAskError(t *testing.T) {
 	if !strings.Contains(msg, "unavailable") {
 		t.Errorf("503 msg = %q, want 'unavailable'", msg)
 	}
+	// 404 — the hub does not answer on the chat door (Open edition, or lumnik.ai.enabled=false):
+	// say so; the "no discovered schema" hint would name a cause the client cannot know.
+	msg = friendlyAskError(&client.APIError{Status: 404, Body: ""}, "atelier")
+	if !strings.Contains(msg, "chat is not available on this hub") || strings.Contains(msg, "discovered") {
+		t.Errorf("404 msg = %q, want 'chat is not available on this hub' and no schema hint", msg)
+	}
 	// 500 — returns the real error + hint (the dominant cause: no discovered SchemaCard for REST/CSV scopes)
 	msg = friendlyAskError(&client.APIError{Status: 500, Body: "boom"}, "atelier")
 	if !strings.Contains(msg, "discovered") || !strings.Contains(msg, "Hint") {

@@ -32,18 +32,7 @@ public class SftpFileSourceFactory implements FileSourceFactory {
         boolean strictHostKey = (boolean) cfg.getOrDefault("strict_host_key", true);
         String hostKeyFingerprint = (String) cfg.get("host_key_fingerprint");
 
-        SftpAuthMethod auth;
-        String keyEnv = (String) cfg.get("key_env");
-        String pwdEnv = (String) cfg.get("password_env");
-        if (keyEnv != null) {
-            String pem = secrets.lookup(keyEnv);
-            auth = new SftpAuthMethod.Key(pem);
-        } else if (pwdEnv != null) {
-            String pwd = secrets.lookup(pwdEnv);
-            auth = new SftpAuthMethod.Password(pwd);
-        } else {
-            auth = new SftpAuthMethod.Password(null);
-        }
+        SftpAuthMethod auth = SftpAuthMethod.fromConfig(cfg, secrets);
 
         return new SftpFileSource(host, port, user, auth, pathGlob, strictHostKey, hostKeyFingerprint);
     }

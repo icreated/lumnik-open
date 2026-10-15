@@ -11,11 +11,18 @@ import org.junit.jupiter.api.Test;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 
 import static io.lumnik.hub.testsupport.AppManifestYaml.manifest;
 import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.hasKey;
+import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.not;
+import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.equalTo;
 
 /**
@@ -75,6 +82,71 @@ class AppApplyResourceIT {
         assertThat(row.icon()).isEqualTo("event");
         assertThat(row.accentColor()).isEqualTo("#4fd1a5");
         assertThat(row.backgroundColor()).as("the parser fills the theme in").isEqualTo("#14121f");
+    }
+
+    // --- spec.tabs (#1030): nullable, stored as written, portable between editions
+
+    @Test
+    void tabsRoundTripAndAreServedByTheRegistry() {
+        post().body(manifest("tabs-round-trip", "salon", "  tabs: [fiches, inbox]\n"))
+            .when().post("/api/apps/apply")
+            .then().statusCode(200)
+            .body("tabs", contains("fiches", "inbox"))
+            .body("$", not(hasKey("warnings")));
+
+        assertThat(store.find("tabs-round-trip").orElseThrow().tabs()).containsExactly("fiches", "inbox");
+        given().header("X-Tenant-ID", "1").when().get("/api/apps/tabs-round-trip")
+            .then().statusCode(200).body("tabs", contains("fiches", "inbox"));
+    }
+
+    @Test
+    void anAppWithoutTabsInheritsAndReApplyingWithoutThemClearsThem() {
+        post().body(manifest("tabs-inherit", "salon", "  tabs: [fiches]\n"))
+            .when().post("/api/apps/apply").then().statusCode(200);
+        assertThat(store.find("tabs-inherit").orElseThrow().tabs()).containsExactly("fiches");
+
+        post().body(manifest("tabs-inherit", "salon", ""))
+            .when().post("/api/apps/apply")
+            .then().statusCode(200).body("$", not(hasKey("tabs")));
+        assertThat(store.find("tabs-inherit").orElseThrow().tabs()).isNull();
+        given().header("X-Tenant-ID", "1").when().get("/api/apps/tabs-inherit")
+            .then().statusCode(200).body("$", hasKey("tabs")).body("tabs", nullValue());
+        given().header("X-Tenant-ID", "1").when().get("/api/apps/clients")
+            .then().statusCode(200).body("$", hasKey("tabs")).body("tabs", nullValue());
+    }
+
+    @Test
+    void aTabNoModuleOffersIsKeptVerbatimAndReportedAsAWarning() {
+        post().body(manifest("tabs-portable", "salon", "  tabs: [fiches, holodeck]\n"))
+            .when().post("/api/apps/apply")
+            .then().statusCode(200)
+            .body("tabs", contains("fiches", "holodeck"))
+            .body("warnings", hasSize(1))
+            .body("warnings[0].path", equalTo("spec.tabs[1]"))
+            .body("warnings[0].severity", equalTo("WARNING"))
+            .body("warnings[0].message", containsString("holodeck"));
+        assertThat(store.find("tabs-portable").orElseThrow().tabs()).containsExactly("fiches", "holodeck");
+    }
+
+    @Test
+    void anEmptyTabListIsRefusedByTheDoor() {
+        post().body(manifest("tabs-empty", "salon", "  tabs: []\n"))
+            .when().post("/api/apps/apply")
+            .then().statusCode(400).body("error", containsString("omit the key"));
+        assertThat(store.find("tabs-empty")).isEmpty();
+    }
+
+    @Test
+    void theDatabaseRefusesAnEmptyArrayOrANullElementEvenIfADoorWereBypassed() throws Exception {
+        post().body(manifest("tabs-check", "salon", "")).when().post("/api/apps/apply").then().statusCode(200);
+        for (String bad : new String[] {"'{}'", "ARRAY['fiches', NULL]::text[]"}) {
+            try (Connection c = adminDs.getConnection();
+                 PreparedStatement ps = c.prepareStatement(
+                     "UPDATE connector.app_registration SET tabs = " + bad + " WHERE name = 'tabs-check'")) {
+                SQLException e = assertThrows(SQLException.class, ps::executeUpdate);
+                assertThat(e.getSQLState()).as("check_violation for %s", bad).isEqualTo("23514");
+            }
+        }
     }
 
     @Test

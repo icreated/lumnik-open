@@ -1,6 +1,6 @@
-Feature: entity-read sqli-in-filter [seed=4]
-  Scenario: GET with SQL injection in canonical column filter must return 200 and safe rows (no injected content)
-    Given the seed entity "otk_customer" exists for entity read [seed=4]
-    When I read entity "otk_customer" with query "name=%27%3B+DROP+TABLE--"
-    Then the entity read response status is 200
-    And the entity read response is safe
+Feature: entity-cli resolve-ambiguous-assert-same-assert-distinct-history [seed=4]
+  Scenario: lm entity resolve/ambiguous/assert-same/assert-distinct/history clear two genuine ambiguities end-to-end
+    Given the entity CLI fixture is seeded with two genuine ambiguities [seed=4]
+    When I drive the entity resolution CLI doors end-to-end
+    Then lm entity ambiguous no longer lists either fixture identity
+    And lm entity history shows both fixture identities were cleared by an assertion

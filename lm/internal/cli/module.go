@@ -22,9 +22,9 @@ func newModuleCmd() *cobra.Command {
 			}
 			format, _ := cmd.Flags().GetString("output")
 			return output.Print(cmd.OutOrStdout(), format,
-				[]string{"NAME", "VERSION", "SCHEMA", "STATUS"}, ms,
+				[]string{"NAME", "VERSION", "SCHEMA", "STATUS", "REASON"}, ms,
 				func(m types.Module) []string {
-					return []string{m.Name, m.Version, m.Schema, m.Status}
+					return []string{m.Name, m.Version, m.Schema, m.Status, m.Reason}
 				})
 		},
 	})

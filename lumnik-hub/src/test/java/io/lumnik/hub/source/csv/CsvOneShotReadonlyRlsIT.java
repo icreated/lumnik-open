@@ -47,9 +47,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>Read on a hand-rolled transaction ({@code BEGIN} / {@code SET LOCAL} / {@code COMMIT}, the
  * {@code ConnectorRunRlsIT} idiom) rather than through {@code TenantRlsScope}: {@code SET LOCAL}
- * is transaction-scoped, and under {@code %test} the readonly datasource does not enlist in JTA,
- * so a JTA-shaped read would have its binding discarded and prove nothing. Here the transaction
- * is the test's own, and the binding bites.
+ * is transaction-scoped, so a read needs its own transaction for the binding to bite. That still
+ * holds under {@link RlsEnforcedProfile} specifically: its {@code getConfigOverrides()} re-enables
+ * JTA enlistment for the readonly datasource, but only for callers that actually open a JTA
+ * transaction — {@link #labelsAs} never does (it drives {@code BEGIN}/{@code COMMIT} on the raw
+ * connection itself), so that fix changes nothing here either way.
  */
 @QuarkusTest
 @TestProfile(RlsEnforcedProfile.class)

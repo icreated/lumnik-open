@@ -31,7 +31,9 @@ public class SecretCipher {
         return (byte[]) result;
     }
 
-    @Transactional(Transactional.TxType.SUPPORTS)
+    // REQUIRED, not SUPPORTS: deliveries run with no transaction and no request context (#944),
+    // where SUPPORTS leaves no EntityManager. Joins the caller's transaction when there is one.
+    @Transactional(Transactional.TxType.REQUIRED)
     public String decrypt(byte[] ciphertext) {
         if (ciphertext == null) return null;
         Object result = em.createNativeQuery("SELECT public.pgp_sym_decrypt(cast(? as bytea), cast(? as text))")

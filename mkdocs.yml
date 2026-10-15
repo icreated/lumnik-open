@@ -82,6 +82,7 @@ nav:
   - Home: index.md
   - Parcours — the guided path: parcours.md
   - The two editions: editions.md
+  - Choosing what your hub offers: choosing-what-your-hub-offers.md
   - Where lumnik stands: where-lumnik-stands.md
   - Deploy lumnik: deploy.md
   - Deploy on Windows: deploy-windows.md
@@ -97,7 +98,9 @@ nav:
   - Connectors:
     - Overview: connectors/index.md
     - CSV & files (SFTP/S3): connectors/csv.md
-    - JDBC: connectors/jdbc.md
+    - JDBC:
+      - JDBC: connectors/jdbc.md
+      - Writing a provider: connectors/jdbc/writing-a-provider.md
     - REST:
       - REST: connectors/rest.md
       - Pagination: connectors/rest/pagination.md
@@ -109,6 +112,9 @@ nav:
       - The demo broker: connectors/kafka/demo-broker.md
     - Transformers: connectors/transformers.md
   - Entities — fuse: entities.md
+  - Search:
+    - Declare an index: search/search-indexes.md
+    - Query it: search/querying.md
   - CLI & TUI:
     - CLI reference: cli/lm-reference.md
     - The TUI: cli/tui.md
@@ -124,6 +130,7 @@ nav:
     - Processes — react: apps/processes.md
     - Workflows — declare: apps/workflows.md
     - Inbox — decide: apps/inbox.md
+    - Exports — managed runs: apps/exports.md
     - The métier PWA: apps/pwa.md
     - The demo desk: apps/demo-desk.md
   - Honesty & transparency: transparency/ingestion-honesty.md
