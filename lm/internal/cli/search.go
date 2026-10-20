@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
@@ -57,14 +58,33 @@ func newSearchApplyCmd() *cobra.Command {
 }
 
 func newSearchRmCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+	cmd := &cobra.Command{
 		Use:   "rm NAME",
 		Short: "Delete a declared search index (the hub queues the purge of its projected documents)",
-		Args:  cobra.ExactArgs(1),
+		Long: "Delete a declared search index; the hub queues the purge of its projected documents.\n\n" +
+			"lm asks you to type 'delete' first; --force skips the question in a script.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
 				return err
+			}
+			if !force {
+				indexes, err := c.SearchIndexesDeclared()
+				if err != nil {
+					return err
+				}
+				what := "delete search index " + args[0]
+				for _, ix := range indexes {
+					if strings.EqualFold(ix.Name, args[0]) {
+						what += " over entity " + ix.Entity
+						break
+					}
+				}
+				if err := confirmTyped(cmd, "delete", what+" — its projected documents are purged"); err != nil {
+					return err
+				}
 			}
 			if err := c.SearchIndexDelete(args[0]); err != nil {
 				return err
@@ -73,6 +93,8 @@ func newSearchRmCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation")
+	return cmd
 }
 
 func newSearchStatusCmd() *cobra.Command {
@@ -99,11 +121,25 @@ func newSearchStatusCmd() *cobra.Command {
 			return output.Print(cmd.OutOrStdout(), outputFormat(cmd),
 				[]string{"NAME", "STATUS", "LAG(s)", "DOCUMENTS", "LAST REBUILD"}, list,
 				func(s client.SearchIndexStatus) []string {
-					return []string{s.Name, s.Status, fmt.Sprintf("%d", s.LagSeconds),
+					return []string{s.Name, shownStatus(s), fmt.Sprintf("%d", s.LagSeconds),
 						optInt(s.DocumentCount), lastRebuildOutcome(s.LastRebuild)}
 				})
 		},
 	}
+}
+
+// shownStatus is the STATUS an operator reads: an invalid declaration, or one withheld because its build
+// serves what a re-apply removed or changed, takes no part in Search whatever was built before, so it reads invalid
+// or withheld; the build state stays in LAST REBUILD. The hub sends them apart (status is the build, invalid
+// and withheld the declaration), and -o json/yaml keeps them apart.
+func shownStatus(s client.SearchIndexStatus) string {
+	switch {
+	case s.Invalid:
+		return "invalid"
+	case s.Withheld:
+		return "withheld"
+	}
+	return s.Status
 }
 
 func lastRebuildOutcome(r *client.SearchRunDone) string {
@@ -119,7 +155,7 @@ func printSearchStatus(cmd *cobra.Command, s *client.SearchIndexStatus) error {
 	}
 	p := newPadWriter()
 	p.line("Name", s.Name)
-	p.line("Status", s.Status)
+	p.line("Status", shownStatus(*s))
 	p.line("Live generation", optStr(s.LiveGeneration))
 	p.line("Documents", optInt(s.DocumentCount))
 	if s.DocumentCountStale {
@@ -137,6 +173,9 @@ func printSearchStatus(cmd *cobra.Command, s *client.SearchIndexStatus) error {
 	}
 	if s.Invalid {
 		p.line("Invalid", s.InvalidReason)
+	}
+	if s.Withheld {
+		p.line("Withheld", "a re-apply removed or changed what its build serves; it answers nothing until rebuilt: lm search rebuild "+s.Name+" --wait")
 	}
 	p.flush(cmd.OutOrStdout())
 	return nil
@@ -171,7 +210,7 @@ func newSearchRebuildCmd() *cobra.Command {
 			return waitForSearchRebuild(ctx, cmd, c, name, runID, w)
 		},
 	}
-	w.register(cmd)
+	w.register(cmd, "the rebuild ends ready, failed or cancelled (exit 1 unless ready)")
 	return cmd
 }
 

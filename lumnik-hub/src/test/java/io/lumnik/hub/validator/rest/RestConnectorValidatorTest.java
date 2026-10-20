@@ -294,6 +294,14 @@ class RestConnectorValidatorTest {
             () -> "expected a missing response_path error, got: " + r.errors());
     }
 
+    @Test void customPagination_isRefused() throws Exception {
+        // custom has no runtime: it passed validate, then the run failed on page 2 (#1245)
+        ValidationResult r = service.validate(load("rest-custom-pagination.yaml"));
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().endsWith("pagination.kind")
+                && e.message().contains("custom pagination is not supported")),
+            () -> "expected a refusal of kind: custom, got: " + r.errors());
+    }
+
     @Test void unknownConnectorKind_isError() throws Exception {
         ValidationResult r = service.validate(load("unknown-kind.yaml"));
         assertFalse(r.isValid());

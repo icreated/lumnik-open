@@ -1,22 +1,12 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/spf13/cobra"
 )
-
-// workflowInfo is one declared kind:Workflow, as listed by the hub.
-type workflowInfo struct {
-	Name    string `json:"name"`
-	Table   string `json:"table"`
-	Column  string `json:"column"`
-	Scope   string `json:"scope"`
-	Enabled bool   `json:"enabled"`
-}
 
 func newWorkflowCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -56,18 +46,14 @@ func newWorkflowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			data, err := c.ListWorkflows()
+			ws, err := c.ListWorkflows()
 			if err != nil {
-				return err
-			}
-			var ws []workflowInfo
-			if err := json.Unmarshal(data, &ws); err != nil {
 				return err
 			}
 			format, _ := cmd.Flags().GetString("output")
 			return output.Print(cmd.OutOrStdout(), format,
 				[]string{"NAME", "TABLE", "COLUMN", "SCOPE", "ENABLED"}, ws,
-				func(w workflowInfo) []string {
+				func(w client.WorkflowInfo) []string {
 					return []string{w.Name, w.Table, w.Column, w.Scope, fmt.Sprintf("%t", w.Enabled)}
 				})
 		},

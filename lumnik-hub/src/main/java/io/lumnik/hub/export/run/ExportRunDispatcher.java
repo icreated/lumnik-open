@@ -158,13 +158,8 @@ public class ExportRunDispatcher {
 
     private static Queued queued(ResultSet rs) throws SQLException {
         return new Queued(rs.getObject(1, UUID.class), rs.getLong(2), rs.getObject(3, UUID.class), rs.getString(4),
-            ExportTrigger.fromSql(rs.getString(5)), (Long) rs.getObject(6), instant(rs, 7), instant(rs, 8),
+            ExportTrigger.fromSql(rs.getString(5)), (Long) rs.getObject(6), Jdbc.instant(rs, 7), Jdbc.instant(rs, 8),
             rs.getInt(9), rs.getObject(10, UUID.class), rs.getString(11));
-    }
-
-    private static Instant instant(ResultSet rs, int i) throws SQLException {
-        OffsetDateTime t = rs.getObject(i, OffsetDateTime.class);
-        return t == null ? null : t.toInstant();
     }
 
     private boolean attempt(RunQueueClaim<Queued> claim, Semaphore permits) throws SQLException {

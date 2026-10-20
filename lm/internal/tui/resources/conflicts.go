@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/icreated/lumnik-open/lm/internal/client"
@@ -19,21 +18,23 @@ import (
 type Conflicts struct {
 	table    *tview.Table
 	client   *client.Client
+	app      *tview.Application
+	offLoop  offLoop
 	items    []client.Conflict
-	mu       sync.Mutex
 	onError  func(string)
 	sortCol  *style.ColumnSort
 	onSelect func()
 }
 
-func NewConflicts(c *client.Client, onError func(string)) *Conflicts {
-	t := tview.NewTable().SetBorders(false).SetSelectable(true, false)
+func NewConflicts(app *tview.Application, c *client.Client, onError func(string)) *Conflicts {
+	t := newListTable()
 	t.SetTitle(" :conflicts ").SetBorder(true)
 	style.ApplyChrome(t.Box)
 	style.ApplyTableSelection(t)
 	cf := &Conflicts{
 		table:   t,
 		client:  c,
+		app:     app,
 		onError: onError,
 		sortCol: style.NewColumnSort([]string{"ENTITY", "KEY"}),
 	}
@@ -60,20 +61,25 @@ func (c *Conflicts) setHeader() {
 	}
 }
 
+// Refresh lists off the event loop (offLoop): the ledger takes seconds on a real hub, and the
+// whole screen froze that long on arrival (#1171).
 func (c *Conflicts) Refresh() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	list, err := c.client.ConflictList(200)
+	c.offLoop.run(c.app, func() func() {
+		list, err := c.client.ConflictList(200)
+		return func() { c.renderList(list, err) }
+	})
+}
+
+func (c *Conflicts) renderList(list []client.Conflict, err error) {
 	if err != nil {
-		if c.onError != nil {
-			c.onError(fmt.Sprintf("conflicts: %v", err))
-		}
+		say(c.onError, fmt.Sprintf("conflicts: %v", err))
 		return
 	}
-	c.items = list
-	c.applySort()
-	c.render()
+	relist(c.table, &c.items, list, conflictKey, func() { c.applySort(); c.render() }, c.onSelect)
 }
+
+// conflictKey names a ledger row: one fused record of one entity.
+func conflictKey(it client.Conflict) string { return it.Entity + "\x00" + it.Key }
 
 // The server already orders by entity then key; this only re-orders on demand.
 func (c *Conflicts) applySort() {

@@ -55,14 +55,8 @@ public class ViewApplyResource {
   public Response apply(String body) {
     long tenant = RequireTenant.current();
 
-    JsonNode root;
-    ViewManifest manifest;
-    try {
-      root = parser.readTree(body);
-      manifest = parser.parse(root);
-    } catch (IllegalArgumentException e) {
-      return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
-    }
+    JsonNode root = ApiErrors.orBadRequest(() -> parser.readTree(body));
+    ViewManifest manifest = ApiErrors.orBadRequest(() -> parser.parse(root));
 
     // C3: a key the parser does not honor used to be accepted and saved, so a misspelled `titel:`
     // cost the integrator their title with no word said. Refused at the curated door only — the
@@ -100,12 +94,7 @@ public class ViewApplyResource {
           "no schema for scope '" + manifest.scope() + "' — run discovery first")).build();
     }
 
-    ResolvedView rv;
-    try {
-      rv = resolver.resolve(manifest, card.get());
-    } catch (IllegalArgumentException e) {
-      return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
-    }
+    ResolvedView rv = ApiErrors.orBadRequest(() -> resolver.resolve(manifest, card.get()));
 
     // granted().orElse(null) — empty Optional means unscoped, i.e. every scope, the same
     // expression the scope-filtered list reads its filter from. The write's own answer goes
@@ -131,7 +120,8 @@ public class ViewApplyResource {
    * The value a filter carries is the cell's value read back from JSON, then matched as TEXT by the
    * target (`col::text = ?`). That round-trips for text, integers, uuids and booleans — not for a
    * numeric(18,4) (10.5000 comes back 10.5), a bigint past 2^53 or a timestamp (ISO is not PostgreSQL's
-   * text) — and a mismatch would show an honest-looking empty table, which is what this door exists
+   * text; a date or timestamp TARGET column compares it as an instant since #1310, but JSON keeps
+   * milliseconds where the column may hold microseconds) — and a mismatch would show an honest-looking empty table, which is what this door exists
    * to prevent. Said at apply, per placeholder column, never refused: a view might still be usable.
    */
   private static List<ValidationError> typeWarnings(ViewLink link, String path, ResolvedView rv) {

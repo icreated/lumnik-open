@@ -659,3 +659,42 @@ func TestRenderHistoryShowsWhatWasSetAside(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// :ambiguous released ^R through plain QueueUpdate, which drops an update while $EDITOR holds the
+// terminal: a resolve answered under the editor left ^R "in progress" for the rest of the session
+// (#1156). The release now waits for the editor to close.
+func TestAmbiguous_aReleaseQueuedUnderAnOpenEditorLandsOnceItCloses(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet { // the refresh after the resolve
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	app := runningSimApp(t)
+	EditorSuspended.Store(true)
+	t.Cleanup(func() { EditorSuspended.Store(false) })
+
+	var a *Ambiguous
+	onLoopWithin(app, func() {
+		a = NewAmbiguous(app, client.New(config.Context{Server: srv.URL}), nil, nil)
+		a.active.entity = "Customer"
+		a.handleKey(tcell.NewEventKey(tcell.KeyCtrlR, 0, tcell.ModNone))
+	})
+	if !deferredHeld() {
+		t.Fatal("the release was dropped under the editor instead of held for its close")
+	}
+	// SuspendEditor drains in its defer, ON the event loop: drain there too.
+	onLoopWithin(app, func() { EditorSuspended.Store(false); drainDeferred() })
+	resolving := true
+	deadline := time.Now().Add(5 * time.Second)
+	for resolving && time.Now().Before(deadline) { // the drain re-queues from a goroutine: poll the loop
+		if !onLoopWithin(app, func() { resolving = a.resolving }) {
+			t.Fatal("the loop stopped answering after the drain")
+		}
+	}
+	if resolving {
+		t.Fatal("^R is still in progress after the editor closed")
+	}
+}

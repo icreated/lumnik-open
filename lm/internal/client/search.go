@@ -24,6 +24,7 @@ type SearchIndexStatus struct {
 	LastError          string          `json:"lastError,omitempty" yaml:"lastError,omitempty"`
 	Invalid            bool            `json:"invalid" yaml:"invalid"`
 	InvalidReason      string          `json:"invalidReason,omitempty" yaml:"invalidReason,omitempty"`
+	Withheld           bool            `json:"withheld" yaml:"withheld"`
 }
 
 // SearchRunPhase is one index's currently active run (design doc §4's activeRun object).
@@ -137,6 +138,8 @@ type SearchResult struct {
 type SearchQueryParams struct {
 	Text   string
 	Entity string
+	Scope  string // narrows to the entities carrying it, like the PWA's Search tab; "" sends none
+
 	Limit  *int
 	Cursor string
 	Facets [][2]string // field, value — sent as facet.<field>=<value>; the wire order is not part of the contract (url.Values sorts keys)
@@ -147,6 +150,9 @@ func (c *Client) SearchQuery(p SearchQueryParams) (*SearchResult, error) {
 	v := url.Values{"q": {p.Text}}
 	if p.Entity != "" {
 		v.Set("entity", p.Entity)
+	}
+	if p.Scope != "" {
+		v.Set("scope", p.Scope)
 	}
 	if p.Limit != nil {
 		v.Set("limit", strconv.Itoa(*p.Limit))
@@ -167,6 +173,25 @@ func (c *Client) SearchQuery(p SearchQueryParams) (*SearchResult, error) {
 	return &out, nil
 }
 
+// SearchCapability is GET /api/search/capability: whether direct Search is available, not installed
+// or degraded. State is available | unavailable | degraded; the hub sends every key, null when unset.
+// Zero providers ("unavailable", reason "not_installed") is the normal Open/Pro state.
+type SearchCapability struct {
+	State    string `json:"state" yaml:"state"`
+	Provider string `json:"provider" yaml:"provider"`
+	Reason   string `json:"reason" yaml:"reason"`
+	Version  string `json:"version" yaml:"version"`
+}
+
+// SearchCapability asks the hub whether it has a Search provider (lm_user; always 200).
+func (c *Client) SearchCapability() (*SearchCapability, error) {
+	var out SearchCapability
+	if err := c.GET("/api/search/capability", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // SearchIndexDeclared is one row of the scope-bound GET /api/search-indexes registry (lm_user).
 type SearchIndexDeclared struct {
 	Name          string  `json:"name" yaml:"name"`
@@ -174,6 +199,7 @@ type SearchIndexDeclared struct {
 	Language      string  `json:"language" yaml:"language"`
 	Status        string  `json:"status" yaml:"status"`
 	InvalidReason *string `json:"invalidReason" yaml:"invalidReason"`
+	Withheld      bool    `json:"withheld" yaml:"withheld"`
 }
 
 // SearchIndexesDeclared lists the declarations the caller's scopes can see.

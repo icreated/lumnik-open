@@ -350,6 +350,12 @@ func TestSearchQuery_zeroHitsOverAnInvalidIndexQuotesItsReason(t *testing.T) {
 	assertContainsAll(t, "diagnosis", errOut, "pool-products", "invalid", "'city' is not a canonical column", "lm search apply -f")
 }
 
+func TestSearchQuery_zeroHitsOverAWithheldIndexSaysItServesAgainOnceRebuilt(t *testing.T) {
+	h := &queryHub{search: okSearch(noHits), indexes: `[{"name":"pool-products","entity":"PoolProduct","language":"french","status":"valid","invalidReason":null,"withheld":true}]`}
+	_, errOut, _ := runLm(t, h.serve(t), "search", "query", "pompe", "--entity", "PoolProduct")
+	assertContainsAll(t, "diagnosis", errOut, "pool-products", "withheld", "removed", "lm search rebuild pool-products --wait")
+}
+
 func TestSearchQuery_zeroHitsOverAnIndexThatWasNeverBuiltSaysToRebuild(t *testing.T) {
 	h := &queryHub{
 		search:  okSearch(noHits),
@@ -487,4 +493,19 @@ func parseQuery(t *testing.T, raw string) url.Values {
 		t.Fatalf("hub received an unparseable query %q: %v", raw, err)
 	}
 	return v
+}
+
+func TestSearchQuery_theFooterCountsOneHitInTheSingular(t *testing.T) {
+	one := strings.Replace(hitsBody, `,
+    {"entity":"PoolProduct","key":{"product_id":"1035439"},"score":0.35,
+     "fields":{"reference":"Filtration","description":"","active":"Y"},
+     "highlights":{},"canonicalLink":"/api/entities/PoolProduct?product_id=1035439"}`, "", 1)
+	srv := (&queryHub{search: okSearch(one)}).serve(t)
+	out, _, err := runLm(t, srv, "search", "query", "pompe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "1 hit shown") {
+		t.Errorf("one hit should read \"1 hit shown\":\n%s", out)
+	}
 }

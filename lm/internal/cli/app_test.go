@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/icreated/lumnik-open/lm/internal/client"
+	"gopkg.in/yaml.v3"
 )
 
 func TestAppApplyCmd_postsToTheAppEndpoint(t *testing.T) {
@@ -408,12 +411,90 @@ func TestAppCmd_anUnknownSubcommandFailsInsteadOfPrintingHelp(t *testing.T) {
 	}
 }
 
+// --- lm app get (#1176) ----------------------------------------------------------------------
+
+// The hub keeps no app manifest text, but a kind:App is exactly the row's fields: what `lm app get`
+// prints, read the way AppManifestParser reads it, is the row again — so `get | apply` changes
+// nothing. tabs: null (inherit every tab) is no key at all; the hub refuses an empty list.
+func TestAppGetCmd_printsAManifestThatAppliesBackToTheSameRow(t *testing.T) {
+	for name, row := range map[string]string{
+		"tabs declared": `{"name":"desk","scope":"clients","title":"R&D: desk #1","icon":"clients",` +
+			`"accentColor":"#8b7ff0","backgroundColor":"#14121f","default":true,"tabs":["fiches","search"]}`,
+		"tabs inherited": `{"name":"stock","scope":"stock","title":"Stock","icon":"generic",` +
+			`"accentColor":"#f5b83d","backgroundColor":"#f4f1ea","default":false,"tabs":null}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var want client.AppInfo
+			if err := json.Unmarshal([]byte(row), &want); err != nil {
+				t.Fatal(err)
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/apps/"+want.Name {
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				_, _ = fmt.Fprint(w, row)
+			}))
+			t.Cleanup(srv.Close)
+			setupCfg(t, srv.URL)
+
+			out, err := runApp(t, "get", want.Name)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			// the fields AppManifestParser reads, by the paths it reads them at
+			var m struct {
+				APIVersion string `yaml:"apiVersion"`
+				Kind       string
+				Metadata   struct{ Name string }
+				Spec       struct {
+					Title, Scope, Icon string
+					Theme              struct {
+						AccentColor     string `yaml:"accentColor"`
+						BackgroundColor string `yaml:"backgroundColor"`
+					}
+					Default bool
+					Tabs    []string
+				}
+			}
+			if err := yaml.Unmarshal([]byte(out), &m); err != nil {
+				t.Fatalf("not YAML: %v\n%s", err, out)
+			}
+			if m.Kind != "App" || m.APIVersion != "apps.lumnik.io/v1" {
+				t.Errorf("envelope: kind %q apiVersion %q", m.Kind, m.APIVersion)
+			}
+			if want.Tabs == nil && strings.Contains(out, "tabs") {
+				t.Errorf("tabs: null must be no key at all (an empty list is refused):\n%s", out)
+			}
+			s := m.Spec
+			got := client.AppInfo{Name: m.Metadata.Name, Title: s.Title, Scope: s.Scope, Icon: s.Icon,
+				AccentColor: s.Theme.AccentColor, BackgroundColor: s.Theme.BackgroundColor, Default: s.Default, Tabs: s.Tabs}
+			if fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Errorf("round trip:\n got %+v\nwant %+v\n%s", got, want, out)
+			}
+		})
+	}
+}
+
+func TestAppGetCmd_theHubsRefusalIsTheError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprint(w, `{"error":"no app named 'ghost'"}`)
+	}))
+	t.Cleanup(srv.Close)
+	setupCfg(t, srv.URL)
+	out, err := runApp(t, "get", "ghost")
+	if err == nil || !strings.Contains(err.Error(), "no app named") || strings.Contains(out, "kind: App") {
+		t.Fatalf("want the hub's 404 and no manifest, got err=%v out=%q", err, out)
+	}
+}
+
 func TestAppCmd_bareStillPrintsTheHelp(t *testing.T) {
 	out, err := runApp(t)
 	if err != nil {
 		t.Fatalf("bare `lm app` is the help, not an error: %v", err)
 	}
-	for _, sub := range []string{"apply", "list", "rm"} {
+	for _, sub := range []string{"apply", "get", "list", "rm"} {
 		if !strings.Contains(out, sub) {
 			t.Errorf("help should list %q:\n%s", sub, out)
 		}

@@ -107,9 +107,9 @@ class SearchProjectionResolvedLookupMarksIT {
         assertThat(markedKeys(adminDs, f.tenant(), f.index(), REASON)).containsExactlyElementsOf(ids(E1, E2));
     }
 
-    // Re-ingesting a byte-identical row hits ON CONFLICT (_row_hash) and only moves _ingested_at: that touch is what this
-    // models. It is NOT a lookup duplicate: a genuine second row for the key (another _row_hash, even with equal joined
-    // values) is a NEW row and makes the key ambiguous (slice 1) — see the "one more row" test above.
+    // Re-ingesting a byte-identical row hits ON CONFLICT (tenant_id, _row_hash) and only moves _ingested_at: that touch
+    // is what this models. It is NOT a lookup duplicate: a genuine second row for the key (another _row_hash, even with
+    // equal joined values) is a NEW row and makes the key ambiguous (slice 1) — see the "one more row" test above.
     @Test
     void a_touch_by_a_row_hash_conflict_moves_the_timestamp_and_remarks_harmlessly() throws Exception {
         Fx f = fixture(850_303);
@@ -288,5 +288,39 @@ class SearchProjectionResolvedLookupMarksIT {
         paged.processTable(tenant, lookup, paged.targetsByTable(tenant).get(lookup));
 
         assertThat(markedKeys(adminDs, tenant, index, REASON)).containsExactlyElementsOf(ids(entities));
+    }
+
+    /**
+     * #1329, the resolution path: its reverse scan reads the source as {@code s}, and a calendar keyed by day must still
+     * meet a key that source holds as a time — at the UTC day, as the view joins it. The key column is named
+     * {@code source}, a column {@code core.entity_identity} has too: unqualified, the scan would be ambiguous (#967).
+     */
+    @Test
+    void a_day_keyed_lookup_marks_the_identity_whose_source_holds_a_time_that_day() throws Exception {
+        long tenant = 1_329_002L;
+        String n = String.valueOf(System.nanoTime());
+        String products = "t_rm_dt_" + n, lookup = "t_rm_cal_" + n, entity = "ResDay" + n;
+        createTable(adminDs, products, "pid text, source timestamptz, pname text");
+        createTable(adminDs, lookup, "day date, cname text");
+        yaml(tenant).body("kind: Entity\nname: " + entity + "\nscopes: [lk]\nsources:\n"
+                + "  - table: " + products + "\n    map: { pid: product_id, source: due, pname: product_name }\n"
+                + "resolution:\n  identity: { " + products + ": product_id }\n  cascade:\n"
+                + "    - id: by-name\n      exact: { fields: [product_name] }\n"
+                + "joins:\n  - table: " + lookup + "\n    from: due\n    to: day\n    map: { cname: day_label }\n")
+            .post("/api/entities/apply").then().statusCode(200);
+        String index = unique("res-day");
+        yaml(tenant).body(searchIndex(index, entity, "product_name")).post("/api/search-indexes/apply").then().statusCode(200);
+        exec(adminDs, "INSERT INTO connector." + products + " (tenant_id, pid, source, pname) VALUES (" + tenant
+            + ", 'P1', '2026-07-01 14:30+00', 'n1'), (" + tenant + ", 'P2', '2026-07-02 09:00+00', 'n2')");
+        insertIdentity(adminDs, tenant, entity, products, "P1", E1);
+        insertIdentity(adminDs, tenant, entity, products, "P2", E2);
+        fireRun(hook, tenant);
+        exec(adminDs, "UPDATE connector." + products + " SET _ingested_at = now() - interval '1 hour'");
+        drain(tenant);
+
+        exec(adminDs, "INSERT INTO connector." + lookup + " (tenant_id, day, cname) VALUES (" + tenant + ", '2026-07-01', 'Day A')");
+        fireRun(hook, tenant);
+
+        assertThat(markedKeys(adminDs, tenant, index, REASON)).containsExactlyElementsOf(ids(E1));
     }
 }

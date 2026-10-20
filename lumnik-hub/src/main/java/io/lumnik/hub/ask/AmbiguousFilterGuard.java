@@ -1,5 +1,6 @@
 package io.lumnik.hub.ask;
 
+import io.lumnik.common.error.Throwables;
 import io.lumnik.hub.sql.SqlFailureText;
 
 import java.sql.SQLException;
@@ -42,7 +43,7 @@ public final class AmbiguousFilterGuard {
 
     /** True when this failure is a scalar subquery that matched several rows. */
     public static boolean isAmbiguity(Throwable failure) {
-        return SqlFailureText.causeChain(failure).stream().anyMatch(
+        return Throwables.causeChain(failure).stream().anyMatch(
             t -> t instanceof SQLException sql && SQLSTATE_CARDINALITY.equals(sql.getSQLState()));
     }
 

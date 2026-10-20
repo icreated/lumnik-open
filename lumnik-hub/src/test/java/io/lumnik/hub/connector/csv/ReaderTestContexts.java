@@ -36,6 +36,6 @@ final class ReaderTestContexts {
 
     static ConnectorContext of(RunScope scope) {
         return new ConnectorContext(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1L, "erp", "csv-file",
-            Map.of(), new SyncMode.Incremental(), null, null, null, Clock.systemUTC(), null, scope);
+            Map.of(), new SyncMode.Incremental(), null, null, Clock.systemUTC(), null, scope);
     }
 }

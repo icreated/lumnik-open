@@ -147,4 +147,17 @@ class DisputedRowsPlanTest {
     void distinct_still_makes_a_plan() {
         assertThat(plan("SELECT DISTINCT code FROM " + V + " WHERE city = 'Lyon'")).isPresent();
     }
+
+    /** A filter on a date or timestamp column compares as an instant, with the database's own cast (#1326 review). */
+    @Test
+    void a_filter_on_a_date_column_compares_instants() {
+        SchemaCard card = new SchemaCard("dsp", List.of(new SchemaCard.Table("connector.v_dspcustomer", "Customer", List.of(
+            new SchemaCard.Column("code", "text", "Code"),
+            new SchemaCard.Column("due", "timestamp with time zone", "Due"),
+            new SchemaCard.Column("city", "text", "Ville")))));
+        String sql = "SELECT code FROM " + V + " WHERE due = '2026-07-05' AND city = 'Lyon'";
+        assertThat(DisputedRows.plan(sql, sql, card).orElseThrow().filters()).containsExactly(
+            new DisputedRows.Filter("due", List.of("2026-07-05"), true),
+            new DisputedRows.Filter("city", List.of("Lyon"), false));
+    }
 }

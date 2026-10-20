@@ -55,3 +55,40 @@ func TestOutputsList_printsDeliveriesInLocalTime(t *testing.T) {
 		t.Errorf("WHEN should render local-formatted, not the raw ISO string:\n%s", got)
 	}
 }
+
+// The CLI can replay a failed delivery, as :outputs ^R does (#1121); the list shows the ID it takes.
+func TestOutputsReplay_postsAndSaysANewAttemptIsRecorded(t *testing.T) {
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			path = r.URL.Path
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		_, _ = w.Write([]byte(`[{"id":91,"integration":"n8n-prod","attemptedAt":"2026-08-15T09:12:04Z"}]`))
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	run := func(args ...string) string {
+		cmd := NewRootCmd()
+		out := new(bytes.Buffer)
+		cmd.SetOut(out)
+		cmd.SetErr(new(bytes.Buffer))
+		cmd.SetArgs(args)
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		return out.String()
+	}
+	if got := run("outputs", "list"); !strings.Contains(got, "ID") || !strings.Contains(got, "91") {
+		t.Errorf("list does not show the ID replay takes:\n%s", got)
+	}
+	got := run("outputs", "replay", "91")
+	if path != "/api/platform/deliveries/91/replay" {
+		t.Errorf("POST went to %q", path)
+	}
+	if !strings.Contains(got, "new attempt") {
+		t.Errorf("replay output = %q", got)
+	}
+}

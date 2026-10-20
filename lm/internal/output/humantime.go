@@ -43,6 +43,15 @@ func HumanTimeStr(iso string) string {
 	return HumanTime(&t)
 }
 
+// HumanTimeStrOr is HumanTimeStr with a stand-in for an absent timestamp, for a column where
+// absence has a meaning of its own — a migration never applied reads "—" (#1149).
+func HumanTimeStrOr(iso, absent string) string {
+	if s := HumanTimeStr(iso); s != "" {
+		return s
+	}
+	return absent
+}
+
 // Truncate shortens s to n CHARACTERS, appending an ellipsis when anything was cut.
 //
 // Runes, not bytes: the strings that reach here are hub messages, and a hub message carries em

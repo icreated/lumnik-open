@@ -92,10 +92,8 @@ from Ubuntu is slow and mangles scripts.
    ```
 
 !!! info "Which edition you just cloned"
-    This is the **open edition**. It ingests, fuses, and serves views, workflows and the
-    métier app — every step on this page applies to it **except step 5**. It does not carry
-    the chat or the natural-language *ask*: the doors onto them and the model providers live
-    in modules (`lumnik-rag`, `lumnik-llm-langchain`) that are not in this tree. See also the
+    This is the **open edition**: every step on this page applies to it **except step 5**.
+    It has no chat and no natural-language *ask*. See also the
     [Deploy page](deploy.md#self-host-one-command).
 
 ## Step 4 — Start the stack (one command; ~10–20 min the first time)
@@ -131,9 +129,17 @@ passwords unique to your install (stored in a file named `.env`).
     `./deploy/selfhost/up.sh --build`; the passwords get set on the next pass.
 
 **See it live**: in your normal Windows browser, open
-`http://localhost:8080/q/health` — you should see `"status": "UP"`. (Windows
-automatically sees Ubuntu's services on its own `localhost` — nothing to
-configure.)
+`http://localhost:8080/q/health`. It starts like this (Windows sees Ubuntu's
+services on its own `localhost` — nothing to configure):
+
+```
+{
+    "status": "UP",
+    "checks": [
+        {
+            "name": "Database connections health check",
+            "status": "UP",
+```
 
 ## Step 5 — The AI, on the Windows side (~20 min, ~8 GB of downloads)
 
@@ -151,7 +157,6 @@ natural-language "ask"** need a local AI runtime:
     run** (GeForce Experience, or your PC maker's support page). Ollama uses
     the graphics card, and outdated drivers make the model silently fail to
     load — lumnik's ask then errors after ~20 seconds with no useful message.
-    This exact case cost our first Windows tester an hour.
 
 1. Download and run the **Ollama for Windows** installer from
    [ollama.com](https://ollama.com/download). No settings to change.
@@ -162,10 +167,7 @@ natural-language "ask"** need a local AI runtime:
    ollama pull llama3.2
    ollama pull qwen2.5-coder:7b
    ```
-   A fourth is configured — `gemma4`, the independent *judge* that scores whether a
-   generated SQL faithfully answers the question. It runs offline, in evaluation only,
-   never while you are asking, so you do not need it to chat or ask. Pull it
-   (`ollama pull gemma4`) only if you are running the faithfulness eval.
+   A fourth model, `gemma4`, is used only by an offline evaluation; skip it.
 3. Prove it:
    ```
    ollama run llama3.2 "say hello"
@@ -187,14 +189,14 @@ natural-language "ask"** need a local AI runtime:
 
 ## Step 6 — `lm`, the control room, on Windows
 
-`lm.exe` is lumnik's command-line and terminal UI for Windows.
-Pre-release, Windows builds are not on a public download page yet — **your
-lumnik contact provides the file**. Put it anywhere, e.g. your Downloads
-folder.
+`lm.exe` is lumnik's command-line and terminal UI for Windows. Download the
+Windows x86-64 `.zip` from the
+[Releases page](https://github.com/icreated/lumnik-open/releases/latest) and
+unpack `lm.exe` anywhere, e.g. your Downloads folder.
 
 !!! note "Windows protected your PC?"
-    The first launch may show a blue SmartScreen box — the file is not signed
-    yet (pre-release). Click **More info**, then **Run anyway**.
+    The first launch may show a blue SmartScreen box — the file is not signed.
+    Click **More info**, then **Run anyway**.
 
 In **PowerShell**, from the folder holding the file:
 
@@ -228,13 +230,10 @@ language. One habit to take along: after every `lm connector run …`, check
 `lm run list` — *"run scheduled" is not "run succeeded"*, and the list is where
 the truth lives.
 
-Putting the métier's **phone** on this stack is the one thing this page does not cover:
-`http://localhost:8080` is reachable from your PC only. That needs the TLS façade — one
-https origin and one token issuer for every device — on the
-[Deploy page](deploy.md#one-https-origin-the-tls-facade). The same page's
-[How to…](deploy.md#how-to) answers the other two questions a Windows install raises:
-changing the hub's port (you cannot — use the façade) and pointing at an external
-PostgreSQL (not a knob on this path).
+- **A phone on this stack:** `http://localhost:8080` is reachable from your PC only. Put the
+  [TLS façade](deploy.md#one-https-origin-the-tls-facade) in front.
+- **Another port, an external PostgreSQL:** see [How to…](deploy.md#how-to) — the port stays,
+  use the façade; an external database is not an option on this path.
 
 ## Troubleshooting, Windows edition
 
@@ -247,6 +246,6 @@ PostgreSQL (not a knob on this path).
 | `http://localhost:8080` suddenly unreachable (often after the PC slept) | WSL's plumbing went stale — in PowerShell `wsl --shutdown`, reopen Docker Desktop, wait a minute. |
 | Logins fail with 401 after the laptop slept | Ubuntu's clock drifted during sleep — same cure: `wsl --shutdown`, reopen Docker Desktop. |
 | The ask/chat errors after ~20 s | The model failed to load on the Windows side: update your **NVIDIA drivers** (the classic), then check the RAM note in step 5. |
-| SmartScreen blocks `lm.exe` | Expected pre-release — **More info → Run anyway** (step 6). |
+| SmartScreen blocks `lm.exe` | Expected: the file is not signed — **More info → Run anyway** (step 6). |
 
 For everything not Windows-specific: [Troubleshooting, by symptom](recipes/troubleshooting.md).

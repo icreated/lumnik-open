@@ -7,8 +7,6 @@ import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -131,35 +129,26 @@ public class WorkflowManifestStore {
      * a FK/cascade to {@code core.workflow_manifest} (V33's own comment on the schema), so a
      * manifest-only delete would strand them: a name reapplied later would inherit the deleted
      * lifecycle's stale {@code since}/{@code alerted_at} and transition tape (review round on
-     * #507). One connection, one transaction — {@link Jdbc} is deliberately not for this shape
-     * (its own javadoc): a partial purge (manifest gone, ledger stranded, or the reverse) would
-     * be worse than deleting nothing.
+     * #507). One connection, one transaction ({@link Jdbc#transaction}): a partial purge (manifest
+     * gone, ledger stranded, or the reverse) would be worse than deleting nothing.
+     *
+     * @return true when this call removed the manifest — two removals racing past findScope
+     *         would otherwise both be audited (#1237)
      */
-    public void delete(long tenantId, String name) {
-        try (Connection c = adminDs.getConnection()) {
-            c.setAutoCommit(false);
-            try {
-                deleteFrom(c, "core.workflow_manifest", "name", tenantId, name);
-                deleteFrom(c, "core.workflow_observation", "workflow_name", tenantId, name);
-                deleteFrom(c, "core.workflow_transition", "workflow_name", tenantId, name);
-                c.commit();
-            } catch (Exception e) {
-                c.rollback();
-                throw e;
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("WorkflowManifestStore.delete: " + e, e);
-        }
-    }
-
-    private static void deleteFrom(Connection c, String table, String nameColumn,
-                                   long tenantId, String name) throws Exception {
-        try (PreparedStatement ps = c.prepareStatement(
-                "DELETE FROM " + table + " WHERE tenant_id = ? AND " + nameColumn + " = ?")) {
+    public boolean delete(long tenantId, String name) {
+        Jdbc.Binder tenantAndName = ps -> {
             ps.setLong(1, tenantId);
             ps.setString(2, name);
-            ps.executeUpdate();
-        }
+        };
+        return Jdbc.transaction(adminDs, "WorkflowManifestStore.delete", c -> {
+            boolean removed = Jdbc.update(c, "WorkflowManifestStore.delete(manifest)",
+                "DELETE FROM core.workflow_manifest WHERE tenant_id = ? AND name = ?", tenantAndName) > 0;
+            Jdbc.update(c, "WorkflowManifestStore.delete(observations)",
+                "DELETE FROM core.workflow_observation WHERE tenant_id = ? AND workflow_name = ?", tenantAndName);
+            Jdbc.update(c, "WorkflowManifestStore.delete(transitions)",
+                "DELETE FROM core.workflow_transition WHERE tenant_id = ? AND workflow_name = ?", tenantAndName);
+            return removed;
+        });
     }
 
     /**

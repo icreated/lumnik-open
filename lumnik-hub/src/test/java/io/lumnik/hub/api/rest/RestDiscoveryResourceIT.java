@@ -1,9 +1,13 @@
 package io.lumnik.hub.api.rest;
 
+import io.lumnik.hub.connector.domain.Connector;
+import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.test.common.http.TestHTTPResource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.specification.RequestSpecification;
+import jakarta.inject.Inject;
+import jakarta.transaction.UserTransaction;
 import org.junit.jupiter.api.Test;
 
 import java.net.URL;
@@ -11,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static io.lumnik.hub.testsupport.EventItSupport.runInTxAsSystem;
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.*;
 
@@ -31,6 +36,9 @@ import static org.hamcrest.Matchers.*;
 @QuarkusTest
 class RestDiscoveryResourceIT {
 
+    @Inject ConnectorRepository connectors;
+    @Inject UserTransaction utx;
+
     @TestHTTPResource("/")
     URL hubRoot;
 
@@ -47,12 +55,20 @@ class RestDiscoveryResourceIT {
         return given().headers(TestIdentity.tenantAndUser(1)).contentType("application/json").body(body);
     }
 
-    /** A rest-generic connector written through the FLAT CRUD door, which validates nothing. */
+    /**
+     * A rest-generic connector written straight to its table, unvalidated: the probe's refusals are
+     * what is under test, so the fixture must be able to hold a config no door accepts.
+     */
     private String restConnector(Map<String, Object> config) {
-        return json(Map.of("tenantId", 1, "name", "probe-it-" + System.nanoTime(),
-                           "typeId", "rest-generic", "config", config))
-        .when().post("/api/platform/connectors")
-        .then().statusCode(201).extract().jsonPath().getString("id");
+        return runInTxAsSystem(utx, () -> {
+            var c = new Connector();
+            c.setTenantId(1L);
+            c.setName("probe-it-" + System.nanoTime());
+            c.setTypeId("rest-generic");
+            c.setConfig(config);
+            connectors.persist(c);
+            return c.getId().toString();
+        });
     }
 
     /** Its connection points back at the hub, so a probe has a live source. */
@@ -219,7 +235,8 @@ class RestDiscoveryResourceIT {
         json(Map.of("connectorId", cid, "endpointPath", "/partners"))
         .when().post("/api/platform/sources/rest/probe")
         .then().statusCode(502)
-            .body("error", containsString("could not reach"));
+            // the kind, never the JDK's message: that can quote the source URL (#1164)
+            .body("error", equalTo("could not reach the source: connection failed (ConnectException)"));
     }
 
     /**
@@ -234,5 +251,24 @@ class RestDiscoveryResourceIT {
         .when().post("/api/platform/sources/rest/probe")
         .then().statusCode(502)
             .body("error", containsString("HTTP 404"));
+    }
+
+    /**
+     * A redirect is relayed as the guard words it, and the guard never quotes the {@code Location}:
+     * it can carry a token or a signed query (#1166). The hub's own {@code /app} answers 301 with a
+     * relative {@code Location} that keeps the request's query — so the query below comes back in
+     * the header, and must not come back in the body.
+     */
+    @Test
+    void probe_reports_a_redirect_without_quoting_where_it_pointed() {
+        json(Map.of("connectorId", restConnectorPointingAtTheHub(), "endpointPath", "/app?SECRET=user:pw&k=v"))
+        .when().post("/api/platform/sources/rest/probe")
+        .then().statusCode(502)
+            .body("error", equalTo("upstream returned a redirect (301) to a relative location"
+                + " — refusing to follow it or ingest its body as data"))
+            .body("error", not(containsString("ECRET")))
+            .body("error", not(containsString("user")))
+            .body("error", not(containsString("pw")))
+            .body("error", not(containsString("k=v")));
     }
 }

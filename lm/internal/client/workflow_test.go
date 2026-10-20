@@ -27,7 +27,7 @@ func TestApplyWorkflow_postsYaml(t *testing.T) {
 	assert.Contains(t, string(raw), "commande-lifecycle")
 }
 
-func TestListWorkflows_returnsBody(t *testing.T) {
+func TestListWorkflows_decodesWorkflowInfo(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/workflows", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
@@ -35,9 +35,10 @@ func TestListWorkflows_returnsBody(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := New(config.Context{Server: srv.URL})
-	raw, err := c.ListWorkflows()
+	ws, err := c.ListWorkflows()
 	require.NoError(t, err)
-	assert.Contains(t, string(raw), "commande-lifecycle")
+	assert.Equal(t, []WorkflowInfo{{Name: "commande-lifecycle", Table: "connector.t_commandes_csv",
+		Column: "statut", Scope: "magasin", Enabled: true}}, ws)
 }
 
 func TestGetWorkflowManifest_urlEscapesName(t *testing.T) {

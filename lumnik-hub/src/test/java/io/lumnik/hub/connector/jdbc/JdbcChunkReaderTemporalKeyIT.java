@@ -20,6 +20,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.time.ZoneOffset;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -88,7 +89,7 @@ class JdbcChunkReaderTemporalKeyIT {
 
   private static JdbcChunkReader reader(String table, String watermark, JdbcChunkReader.Mode mode, String... pk) {
     return new JdbcChunkReader(PG.getJdbcUrl(), "u", "p", "postgres", "public", table, watermark, List.of(pk), mode,
-        new PostgresDialect(), REGISTRY);
+        new PostgresDialect(), REGISTRY, ZoneOffset.UTC);
   }
 
   /** Pages to exhaustion, storing the cursor as JSON TEXT between chunks exactly as the jsonb column would. */

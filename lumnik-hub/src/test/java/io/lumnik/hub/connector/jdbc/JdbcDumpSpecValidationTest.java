@@ -24,16 +24,40 @@ class JdbcDumpSpecValidationTest {
 
     @Test
     void rejects_a_table_name_containing_a_single_quote() {
-        assertThatThrownBy(() -> JdbcConnectorType.dumpSpec("o'r", List.of(), Map.of()))
+        assertThatThrownBy(() -> JdbcConnectorType.dumpSpec("o'r", List.of("id"), List.of(), Map.of()))
             .isInstanceOf(ConfigValidationException.class)
             .hasMessageContaining("name");
     }
 
     @Test
     void rejects_a_table_name_containing_a_dollar_quote_tag() {
-        assertThatThrownBy(() -> JdbcConnectorType.dumpSpec("orders$$evil", List.of(), Map.of()))
+        assertThatThrownBy(() -> JdbcConnectorType.dumpSpec("orders$$evil", List.of("id"), List.of(), Map.of()))
             .isInstanceOf(ConfigValidationException.class)
             .hasMessageContaining("name");
+    }
+
+    // ── target: names the hub table instead of the source table (#1199) ──
+
+    @Test
+    void target_namesTheHubTableAndItsMapping() {
+        MappingSpec spec = JdbcConnectorType.dumpSpec(
+            JdbcConnectorType.hubName(Map.of("name", "customers", "target", "customers_south")), List.of("id"), List.of(), Map.of());
+        assertThat(spec.targets().table().name()).isEqualTo("t_customers_south");
+        assertThat(spec.id()).isEqualTo("jdbc:customers_south");
+    }
+
+    @Test
+    void withoutTarget_theHubTableIsNamedAfterTheSourceTable() {
+        assertThat(JdbcConnectorType.hubName(Map.of("name", "customers"))).isEqualTo("customers");
+    }
+
+    @Test
+    void validateConfig_rejectsATargetThatIsNotAPlainIdentifier() {
+        Map<String, Object> cfg = baseConfig("customers");
+        cfg.put("target", "customers-south");
+        assertThatThrownBy(() -> type.validateConfig(cfg))
+            .isInstanceOf(ConfigValidationException.class)
+            .hasMessageContaining("target");
     }
 
     // ── rename: reaches the mapping spec (jdbc runtime side of the collision fix) ──
@@ -41,17 +65,34 @@ class JdbcDumpSpecValidationTest {
     @Test
     void dumpSpec_withoutRename_hasNoHooks() {
         MappingSpec spec =
-            JdbcConnectorType.dumpSpec("invoices", List.of(), Map.of());
+            JdbcConnectorType.dumpSpec("invoices", List.of("id"), List.of(), Map.of());
         assertThat(spec.row()).isEmpty();
     }
 
     @Test
     void dumpSpec_withRename_emitsOneMapColumnsHook() {
         MappingSpec spec =
-            JdbcConnectorType.dumpSpec("invoices", List.of(), Map.of("id", "source_id"));
+            JdbcConnectorType.dumpSpec("invoices", List.of("id"), List.of(), Map.of("id", "source_id"));
         assertThat(spec.row()).hasSize(1);
         assertThat(spec.row().get(0).name()).isEqualTo("map-columns");
         assertThat(spec.row().get(0).params().path("rename").path("id").asText()).isEqualTo("source_id");
+    }
+
+    // ── the declared key: one row per key in the hub table (#1196) ──
+
+    @Test
+    void dumpSpec_keysTheTableOnPkColumns_underTheirHubNames() {
+        MappingSpec spec = JdbcConnectorType.dumpSpec(
+            "invoices", List.of("id", "line"), List.of(), Map.of("id", "source_id"));
+        assertThat(spec.targets().table().key()).containsExactly("source_id", "line");
+    }
+
+    @Test
+    void dumpSpec_writesNoRagChunk_soAReplacedRowLeavesNoneBehind() {
+        // A keyed table replaces a row's previous version, whose _row_hash a rag chunk would name
+        // (ref = row hash). A rag target here needs the replaced versions' chunks removed too.
+        assertThat(JdbcConnectorType.dumpSpec("invoices", List.of("id"), List.of(), Map.of()).targets().rag())
+            .isNull();
     }
 
     // ── dumpSpec must refuse the same rename it would otherwise silently mis-write — it, not
@@ -60,7 +101,7 @@ class JdbcDumpSpecValidationTest {
 
     @Test
     void dumpSpec_rejectsRenameTargetThatIsASystemColumn() {
-        assertThatThrownBy(() -> JdbcConnectorType.dumpSpec("invoices", List.of(), Map.of("legacy", "tenant_id")))
+        assertThatThrownBy(() -> JdbcConnectorType.dumpSpec("invoices", List.of("id"), List.of(), Map.of("legacy", "tenant_id")))
             .isInstanceOf(ConfigValidationException.class)
             .hasMessageContaining("tenant_id");
     }
@@ -70,7 +111,7 @@ class JdbcDumpSpecValidationTest {
         Map<String, String> rename = new LinkedHashMap<>();
         rename.put("a", "same");
         rename.put("b", "same");
-        assertThatThrownBy(() -> JdbcConnectorType.dumpSpec("invoices", List.of(), rename))
+        assertThatThrownBy(() -> JdbcConnectorType.dumpSpec("invoices", List.of("id"), List.of(), rename))
             .isInstanceOf(ConfigValidationException.class)
             .hasMessageContaining("same");
     }

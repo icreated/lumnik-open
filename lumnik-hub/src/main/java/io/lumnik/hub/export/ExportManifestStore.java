@@ -1,5 +1,6 @@
 package io.lumnik.hub.export;
 
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.api.ScopeGuardedUpsert;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -7,11 +8,8 @@ import jakarta.persistence.EntityManager;
 import jakarta.transaction.Transactional;
 import org.hibernate.Session;
 
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.Types;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -80,27 +78,26 @@ public class ExportManifestStore {
                                       String destinationKind, String schedule, String yaml,
                                       Set<String> callerScopes) {
         String key = name.toLowerCase(Locale.ROOT);
-        return session().doReturningWork(conn -> {
-            try (PreparedStatement ps = conn.prepareStatement(
-                    "INSERT INTO connector.export_manifest "
-                  + "(tenant_id, name, scope, entity_name, destination_kind, schedule, yaml_text) "
-                  + "VALUES (?, ?, ?, ?, ?, ?, ?) "
-                  + "ON CONFLICT (tenant_id, name) DO UPDATE SET "
-                  + "scope = excluded.scope, entity_name = excluded.entity_name, "
-                  + "destination_kind = excluded.destination_kind, schedule = excluded.schedule, "
-                  + "yaml_text = excluded.yaml_text, updated_at = now() "
-                  + "WHERE (?::text[] IS NULL OR connector.export_manifest.scope = ANY (?::text[]))")) {
-                ps.setLong(1, tenantId);
-                ps.setString(2, key);
-                ps.setString(3, scope);
-                ps.setString(4, entityName);
-                ps.setString(5, destinationKind);
-                if (schedule == null) ps.setNull(6, Types.VARCHAR); else ps.setString(6, schedule);
-                ps.setString(7, yaml);
-                ScopeGuardedUpsert.bindGrants(ps, 8, callerScopes);
-                return ScopeGuardedUpsert.of(ps.executeUpdate());
-            }
-        });
+        return session().doReturningWork(conn -> ScopeGuardedUpsert.of(Jdbc.update(conn,
+                "ExportManifestStore.upsert",
+                "INSERT INTO connector.export_manifest "
+              + "(tenant_id, name, scope, entity_name, destination_kind, schedule, yaml_text) "
+              + "VALUES (?, ?, ?, ?, ?, ?, ?) "
+              + "ON CONFLICT (tenant_id, name) DO UPDATE SET "
+              + "scope = excluded.scope, entity_name = excluded.entity_name, "
+              + "destination_kind = excluded.destination_kind, schedule = excluded.schedule, "
+              + "yaml_text = excluded.yaml_text, updated_at = now() "
+              + "WHERE (?::text[] IS NULL OR connector.export_manifest.scope = ANY (?::text[]))",
+                ps -> {
+                    ps.setLong(1, tenantId);
+                    ps.setString(2, key);
+                    ps.setString(3, scope);
+                    ps.setString(4, entityName);
+                    ps.setString(5, destinationKind);
+                    if (schedule == null) ps.setNull(6, Types.VARCHAR); else ps.setString(6, schedule);
+                    ps.setString(7, yaml);
+                    ScopeGuardedUpsert.bindGrants(ps, 8, callerScopes);
+                })));
     }
 
     /** The scope of the row this (tenant, name) addresses, or empty when the name is free — the
@@ -110,16 +107,13 @@ public class ExportManifestStore {
     @Transactional(Transactional.TxType.MANDATORY)
     public Optional<String> findScope(long tenantId, String name) {
         String key = name.toLowerCase(Locale.ROOT);
-        return session().doReturningWork(conn -> {
-            try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT scope FROM connector.export_manifest WHERE tenant_id = ? AND name = ?")) {
-                ps.setLong(1, tenantId);
-                ps.setString(2, key);
-                try (ResultSet rs = ps.executeQuery()) {
-                    return rs.next() ? Optional.of(rs.getString(1)) : Optional.<String>empty();
-                }
-            }
-        });
+        return session().doReturningWork(conn -> Jdbc.queryOne(conn, "ExportManifestStore.findScope",
+                "SELECT scope FROM connector.export_manifest WHERE tenant_id = ? AND name = ?",
+                ps -> {
+                    ps.setLong(1, tenantId);
+                    ps.setString(2, key);
+                },
+                rs -> rs.getString(1)));
     }
 
     /** Lowercased like {@link #upsert} — the fix for GET /api/exports/{name} resolving
@@ -128,21 +122,17 @@ public class ExportManifestStore {
     @Transactional(Transactional.TxType.MANDATORY)
     public Optional<Row> find(long tenantId, String name) {
         String key = name.toLowerCase(Locale.ROOT);
-        return session().doReturningWork(conn -> {
-            try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT id, tenant_id, name, scope, entity_name, destination_kind, schedule, yaml_text, "
-                  + "created_at "
-                  + "FROM connector.export_manifest WHERE tenant_id = ? AND name = ?")) {
-                ps.setLong(1, tenantId);
-                ps.setString(2, key);
-                try (ResultSet rs = ps.executeQuery()) {
-                    if (!rs.next()) return Optional.<Row>empty();
-                    return Optional.of(new Row(rs.getObject(1, UUID.class), rs.getLong(2),
-                        rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6),
-                        rs.getString(7), rs.getString(8), rs.getTimestamp(9).toInstant()));
-                }
-            }
-        });
+        return session().doReturningWork(conn -> Jdbc.queryOne(conn, "ExportManifestStore.find",
+                "SELECT id, tenant_id, name, scope, entity_name, destination_kind, schedule, yaml_text, "
+              + "created_at "
+              + "FROM connector.export_manifest WHERE tenant_id = ? AND name = ?",
+                ps -> {
+                    ps.setLong(1, tenantId);
+                    ps.setString(2, key);
+                },
+                rs -> new Row(rs.getObject(1, UUID.class), rs.getLong(2),
+                    rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6),
+                    rs.getString(7), rs.getString(8), Jdbc.instant(rs, 9))));
     }
 
     /** scopes == null -> all (unscoped caller); empty set -> none (bound to nothing). Always
@@ -155,17 +145,13 @@ public class ExportManifestStore {
                 + "FROM connector.export_manifest WHERE tenant_id = ?"
                 + (scopes == null ? "" : " AND scope = ANY (?)")
                 + " ORDER BY name";
-            try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                ps.setLong(1, tenantId);
-                if (scopes != null) ps.setArray(2, conn.createArrayOf("text", scopes.toArray()));
-                try (ResultSet rs = ps.executeQuery()) {
-                    List<Summary> out = new ArrayList<>();
-                    while (rs.next())
-                        out.add(new Summary(rs.getString(1), rs.getString(2), rs.getString(3),
-                            rs.getString(4), rs.getString(5)));
-                    return out;
-                }
-            }
+            return Jdbc.query(conn, "ExportManifestStore.list", sql,
+                ps -> {
+                    ps.setLong(1, tenantId);
+                    if (scopes != null) ps.setArray(2, conn.createArrayOf("text", scopes.toArray()));
+                },
+                rs -> new Summary(rs.getString(1), rs.getString(2), rs.getString(3),
+                    rs.getString(4), rs.getString(5)));
         });
     }
 }

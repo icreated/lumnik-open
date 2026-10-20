@@ -1,9 +1,14 @@
 package io.lumnik.hub.connector.mapping.writer;
 
+import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializerProvider;
+import com.fasterxml.jackson.databind.module.SimpleModule;
+import com.fasterxml.jackson.databind.ser.std.StdSerializer;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import jakarta.enterprise.context.ApplicationScoped;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.HexFormat;
@@ -20,7 +25,16 @@ public class RowHasher {
   // the chunk fails — so a date that parses SUCCESSFULLY used to kill the run. registerModule is
   // explicit rather than findAndRegisterModules() so the behaviour is pinned, not classpath-order
   // dependent.
-  private static final ObjectMapper M = new ObjectMapper().registerModule(new JavaTimeModule());
+  //
+  // A jdbc time with no zone hashes as its WallClockTimestamp says (#1328) — here only, so the
+  // dead-letter payload and every other writer still get a plain Timestamp.
+  private static final ObjectMapper M = new ObjectMapper().registerModule(new JavaTimeModule())
+      .registerModule(new SimpleModule().addSerializer(WallClockTimestamp.class, new StdSerializer<>(WallClockTimestamp.class) {
+        @Override
+        public void serialize(WallClockTimestamp t, JsonGenerator gen, SerializerProvider provider) throws IOException {
+          provider.defaultSerializeValue(t.hashed(), gen);
+        }
+      }));
 
   /**
    * Compute a stable SHA-256 hex hash of the row.

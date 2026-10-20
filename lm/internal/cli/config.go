@@ -10,10 +10,11 @@ import (
 
 func newConfigCmd() *cobra.Command {
 	c := &cobra.Command{Use: "config", Short: "Manage ~/.lm/config.yaml"}
-	c.AddCommand(&cobra.Command{
+	view := &cobra.Command{
 		Use:   "view",
-		Short: "Print the current config as YAML",
+		Short: "Print the current config as YAML, credentials redacted",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			raw, _ := cmd.Flags().GetBool("raw")
 			path, err := config.DefaultPath()
 			if err != nil {
 				return err
@@ -22,6 +23,9 @@ func newConfigCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if !raw {
+				cfg = redacted(cfg)
+			}
 			data, err := yaml.Marshal(cfg)
 			if err != nil {
 				return err
@@ -29,7 +33,9 @@ func newConfigCmd() *cobra.Command {
 			cmd.Print(string(data))
 			return nil
 		},
-	})
+	}
+	view.Flags().Bool("raw", false, "Print the tokens in clear instead of REDACTED")
+	c.AddCommand(view)
 	c.AddCommand(&cobra.Command{
 		Use:   "use-context NAME",
 		Short: "Set the current context",
@@ -102,4 +108,20 @@ func newConfigCmd() *cobra.Command {
 	setCtx.Flags().String("oidc-client-id", "", "OIDC client id for device flow (default: lm-cli)")
 	c.AddCommand(setCtx)
 	return c
+}
+
+// redacted returns a copy of cfg whose set credentials read REDACTED (kubectl's
+// convention); empty ones stay empty. cfg itself is left untouched.
+func redacted(cfg *config.Config) *config.Config {
+	out := *cfg
+	out.Contexts = make(map[string]config.Context, len(cfg.Contexts))
+	for name, ctx := range cfg.Contexts {
+		for _, secret := range []*string{&ctx.Token, &ctx.Access, &ctx.Refresh} {
+			if *secret != "" {
+				*secret = "REDACTED"
+			}
+		}
+		out.Contexts[name] = ctx
+	}
+	return &out
 }

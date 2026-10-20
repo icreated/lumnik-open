@@ -157,7 +157,7 @@ class AskToSqlAgentIT {
         AskResult r = agent.ask(7L, "wide600", "List the values", "en");
 
         assertThat(r.rowCount()).isEqualTo(500);
-        var prompt = org.mockito.ArgumentCaptor.forClass(String.class);
+        var prompt = ArgumentCaptor.forClass(String.class);
         Mockito.verify(chatPort, Mockito.times(2)).chat(prompt.capture());
         assertThat(prompt.getAllValues().get(1))
             .contains("at least 500").doesNotContain("500 rows in all").doesNotContain("State that count");
@@ -249,12 +249,9 @@ class AskToSqlAgentIT {
         // reliable one), never a MAX over million-row mirror tables.
         agent.seedDdl("DELETE FROM connector.connector_run WHERE tenant_id = 7");
         agent.seedDdl("DELETE FROM connector.connector WHERE tenant_id = 7");
-        agent.seedDdl("INSERT INTO connector.connector_mapping (id, tenant_id, name, target_entity, spec_format, spec_content) "
-            + "VALUES ('00000000-0000-0000-0000-00000000a5f1', 7, 'm_asof', 'public.x', 'yaml', 'x') "
-            + "ON CONFLICT DO NOTHING");
-        agent.seedDdl("INSERT INTO connector.connector (id, tenant_id, name, type_id, config, mapping_id, enabled, tags, sync_mode, skip_policy) "
+        agent.seedDdl("INSERT INTO connector.connector (id, tenant_id, name, type_id, config, enabled, tags, sync_mode, skip_policy) "
             + "VALUES ('00000000-0000-0000-0000-00000000a5f2', 7, 'src-asof', 'csv-file', '{}'::jsonb, "
-            + "'00000000-0000-0000-0000-00000000a5f1', true, ARRAY['demo'], 'Incremental', '{\"type\":\"SkipUpTo\",\"maxSkips\":1}'::jsonb)");
+            + "true, ARRAY['demo'],'Incremental', '{\"type\":\"SkipUpTo\",\"maxSkips\":1}'::jsonb)");
         agent.seedDdl("INSERT INTO connector.connector_run (tenant_id, connector_id, status, sync_mode, triggered_by, started_at, ended_at) "
             + "VALUES (7, '00000000-0000-0000-0000-00000000a5f2', 'Completed', 'Incremental', 'test', "
             + "'2026-08-20T06:00:00Z', '2026-08-20T06:05:00Z')");
@@ -605,5 +602,40 @@ class AskToSqlAgentIT {
         AskResult search = agent.ask(7L, "fused", "find customer NOPE");
         assertThat(search.answer()).startsWith(ZeroRowGuard.CAVEAT).doesNotContain(AbstentionGuard.CONFLICTS_SIGNPOST);
         assertThat(search.otherDoors()).isEmpty();
+    }
+
+    /** A model port may yield no SQL at all: that is the guard's honest "couldn't translate", never an exception. */
+    @Test
+    void noSqlFromTheModelIsTheCouldNotTranslateAbstention() {
+        Mockito.when(chatPort.chat(Mockito.anyString())).thenReturn(null);
+
+        AskResult r = agent.ask(7L, "demo", "Combien de commandes au statut Validé ?", "fr");
+
+        assertThat(r.abstained()).isTrue();
+        assertThat(r.answer()).startsWith(AskSentences.couldNotTranslate("fr"));
+    }
+
+    /** #1098: the model wrote a pattern for the category the question names; what runs, and is shown, is an equality. */
+    @Test
+    void aNamedCategoryTheModelSearchedAsAPatternIsAnsweredAsAnEquality() {
+        agent.seedDdl("CREATE TABLE IF NOT EXISTS connector.t_named_article (reference text, category text, description text)");
+        agent.seedDdl("TRUNCATE connector.t_named_article");
+        agent.seedDdl("INSERT INTO connector.t_named_article VALUES ('2195.300.037', 'Pompes', 'Pompe Badu Resort'), "
+            + "('3000.000.001', 'Pompes à chaleur', 'Pompe à chaleur Badu 12kW')");
+        store.save(7L, "named", new SchemaCard("named", List.of(
+            new SchemaCard.Table("connector.t_named_article", "Article", List.of(
+                new SchemaCard.Column("reference", "text", "reference"),
+                new SchemaCard.Column("category", "text", "category"),
+                new SchemaCard.Column("description", "text", "description"))))));
+        Mockito.when(chatPort.chat(Mockito.anyString()))
+            .thenReturn("SELECT reference FROM connector.t_named_article "
+                + "WHERE category ILIKE '%Pompes%' AND description ILIKE '%Badu%'")
+            .thenReturn("Une référence : 2195.300.037.");
+
+        AskResult r = agent.ask(7L, "named",
+            "Donne-moi les références de la catégorie Pompes dont la description contient Badu.", "fr");
+
+        assertThat(r.sql()).contains("category = 'Pompes'").contains("description ILIKE '%Badu%'");
+        assertThat(r.rows()).extracting(row -> row.get("reference")).containsExactly("2195.300.037");
     }
 }

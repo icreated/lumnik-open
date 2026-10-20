@@ -148,12 +148,12 @@ class ExportRunLedgerIT {
                 "UPDATE connector.export_run SET status = ?, ended_at = now() WHERE id = ?",
                 ExportRunStatus.COMPLETED.sqlValue(), run))
             .isInstanceOf(RuntimeException.class).hasCauseInstanceOf(SQLException.class)
-            .hasMessageContaining("check constraint");
+            .hasMessageContaining("SQLSTATE 23514"); // check_violation
         assertThatThrownBy(() -> rawUpdate(
                 "UPDATE connector.export_run SET status = ?, ended_at = now() WHERE id = ?",
                 "Delivered", run))
             .isInstanceOf(RuntimeException.class).hasCauseInstanceOf(SQLException.class)
-            .hasMessageContaining("check constraint");
+            .hasMessageContaining("SQLSTATE 23514"); // check_violation
     }
 
     @Test

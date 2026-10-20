@@ -93,6 +93,36 @@ func TestConnectorPause_printsPaused(t *testing.T) {
 	}
 }
 
+// A multi-endpoint connector starts one run per endpoint; the installer follows each of them.
+func TestConnectorRun_printsEveryRunId(t *testing.T) {
+	connID := "cccccccc-1111-2222-3333-444444444444"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/platform/connectors":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": connID, "name": "acme"}})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/run"):
+			w.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(w).Encode(map[string]any{"runId": "run-1", "runIds": []string{"run-1", "run-2"}})
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"connector", "run", "acme"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if want := "run scheduled: run-1\nrun scheduled: run-2\n"; buf.String() != want {
+		t.Errorf("want %q, got %q", want, buf.String())
+	}
+}
+
 func TestConnectorResume_printsResumed(t *testing.T) {
 	connID := "dddddddd-1111-2222-3333-444444444444"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

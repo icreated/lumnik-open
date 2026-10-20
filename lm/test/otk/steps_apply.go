@@ -165,7 +165,7 @@ func (s *scenarioState) cleanup() error {
 		return nil
 	}
 	for _, name := range created {
-		r := runner.Run(lmEnv(), lmBinary(), "connector", "delete", name)
+		r := runner.Run(lmEnv(), lmBinary(), "connector", "delete", "--force", name)
 		if !r.Started {
 			return fmt.Errorf("could not launch lm to delete %q: %s", name, r.Stderr)
 		}
@@ -199,7 +199,7 @@ func (s *scenarioState) safeguardCleanup() {
 		return
 	}
 	for _, name := range newNames(s.beforeAPI, current) {
-		r := runner.Run(lmEnv(), lmBinary(), "connector", "delete", name)
+		r := runner.Run(lmEnv(), lmBinary(), "connector", "delete", "--force", name)
 		if !r.Started || r.Exit != 0 {
 			fmt.Printf("  OTK safeguard cleanup: failed to delete leaked connector %q (started=%v exit=%d): %s\n",
 				name, r.Started, r.Exit, r.Stderr)

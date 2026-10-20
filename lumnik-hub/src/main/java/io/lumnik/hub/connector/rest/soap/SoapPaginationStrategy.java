@@ -29,6 +29,7 @@ public class SoapPaginationStrategy implements PaginationStrategy {
 
     private static final UnaryOperator<String> ENV = EnvSecrets::lookup;
 
+    private final UnaryOperator<String> secrets;
     private final int pageSize;
     private final String lastPagePath;   // optional: TRUE => stop
     private final String hasMorePath;    // optional: FALSE => stop
@@ -38,7 +39,12 @@ public class SoapPaginationStrategy implements PaginationStrategy {
     private String baseUrl, path, soapAction, headerTemplate, bodyTemplate;
     private long offset;
 
-    public SoapPaginationStrategy(Map<String, String> c) {
+    /** {@code {{secret:}}} from the environment only — no registry behind it (unit tests). */
+    public SoapPaginationStrategy(Map<String, String> c) { this(c, ENV); }
+
+    /** @param secrets what {@code {{secret:NAME}}} resolves through; {@code {{env:}}} stays {@link EnvSecrets}. */
+    public SoapPaginationStrategy(Map<String, String> c, UnaryOperator<String> secrets) {
+        this.secrets = secrets;
         this.pageSize = parsePositive(c.get("page_size"));
         this.lastPagePath = blankToNull(c.get("last_page_path"));
         this.hasMorePath = blankToNull(c.get("has_more_path"));
@@ -80,7 +86,7 @@ public class SoapPaginationStrategy implements PaginationStrategy {
 
     private RestRequest render(long cursor) {
         return SoapRequestBuilder.render(baseUrl, path, soapAction, headerTemplate, bodyTemplate,
-            String.valueOf(pageSize), String.valueOf(cursor), ENV);
+            String.valueOf(pageSize), String.valueOf(cursor), secrets, ENV);
     }
 
     /** Stop signals, in priority order. A null/missing flag is treated as "stop" (never loops forever).

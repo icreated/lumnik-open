@@ -55,6 +55,7 @@ class JdbcConnectorValidatorTest {
          "metadata":{"name":"empty-key","connector_type":"jdbc-generic","scopes":["test"]},
          "spec":{"connection":{"url":"jdbc:postgresql://db.acme.io:5432/billing",
                                "user":"ro_user","password_env":"ACME_DB_PASSWORD"},
+                 "defaults":{"schema":"public"},
                  "source":{"tables":[%s]}}}""";
 
     /**
@@ -221,10 +222,37 @@ class JdbcConnectorValidatorTest {
             () -> "expected a 'not a knob' refusal on chunk_size, got: " + r.errors());
     }
 
+    // ── #1199: target names the hub table; two tables of one connector cannot land in one ──
+
+    @Test void target_thatIsNotAPlainIdentifier_isRefused() throws Exception {
+        ValidationResult r = service.validate(mapper.readTree(JDBC_HEAD.formatted(
+            "{\"name\":\"customers\",\"mode\":\"full\",\"pk_columns\":[\"id\"],\"target\":\"customers-south\"}")));
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.source.tables[0].target")),
+            () -> "the refusal must name target, got: " + r.errors());
+    }
+
+    @Test void target_thatIsAPlainIdentifier_isAccepted() throws Exception {
+        ValidationResult r = service.validate(mapper.readTree(JDBC_HEAD.formatted(
+            "{\"name\":\"customers\",\"mode\":\"full\",\"pk_columns\":[\"id\"],\"target\":\"customers_south\"}")));
+        assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
+        assertEquals(List.of(), ValidationWarnings.unknownKeyPaths(r));
+    }
+
+    @Test void twoTablesLandingInOneHubTable_isRefused() throws Exception {
+        ValidationResult r = service.validate(mapper.readTree(JDBC_HEAD.formatted(
+            "{\"name\":\"customers\",\"mode\":\"full\",\"pk_columns\":[\"id\"],\"target\":\"clients\"},"
+            + "{\"name\":\"clients\",\"mode\":\"full\",\"pk_columns\":[\"id\"]}")));
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.source.tables[1].name")
+                && e.message().contains("connector.t_clients")),
+            () -> "the second table landing in connector.t_clients must be refused, got: " + r.errors());
+    }
+
     @Test void duplicateTableNames_isError() throws Exception {
         ValidationResult r = service.validate(load("jdbc-duplicate-tables.yaml"));
         assertFalse(r.isValid());
         assertTrue(r.errors().stream().anyMatch(e -> e.message().contains("duplicate table name")));
+        assertEquals(1, r.errors().stream().filter(e -> e.path().endsWith(".name")).count(),
+            () -> "one mistake, one error — not a second one for the hub table (#1199): " + r.errors());
     }
 
     @Test void unsupportedDialect_isError() throws Exception {

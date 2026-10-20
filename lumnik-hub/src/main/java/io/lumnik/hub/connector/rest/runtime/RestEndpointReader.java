@@ -9,6 +9,7 @@ import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
+import io.lumnik.hub.connector.exceptions.SourceCallException;
 import io.lumnik.hub.connector.rest.RestHttpClient;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
@@ -332,12 +333,12 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * envelope/errors checks) is selected even for a malformed config that declares graphql but
      * lost its query; using only {@code query} would silently fall back to the Noop validator.
      */
-    static boolean isGraphQlEndpoint(Map<String, Object> cfg) {
+    public static boolean isGraphQlEndpoint(Map<String, Object> cfg) {
         return "graphql".equals(cfg.get("kind")) || cfg.get(QUERY) != null;
     }
 
     /** Whether an endpoint is a SOAP request-shape — authoritative flag {@code kind: soap}. */
-    static boolean isSoapEndpoint(Map<String, Object> cfg) {
+    public static boolean isSoapEndpoint(Map<String, Object> cfg) {
         return "soap".equals(cfg.get("kind"));
     }
 
@@ -363,8 +364,17 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             throw new ConnectorException("REST read interrupted", ie);
-        } catch (Exception e) {
-            throw (e instanceof RuntimeException re) ? re : new RuntimeException(e);
+        } catch (RuntimeException ours) {
+            // Unchecked keeps its type and its text: the status guard's refusal, a pagination or
+            // validator refusal, a hub defect.
+            throw ours;
+        } catch (Exception call) {
+            // Checked is a call to the source that threw, after the retry executor spent its
+            // attempts: named by its kind, never by its message, which can quote the source URL
+            // (#1166). Wrapped HERE, not in RestHttpClient: the retry executor retries on the
+            // IOException type, and the pre-flight and the probe tell an unreachable source from a
+            // refusal by the same types — a client throwing a described exception would change all three.
+            throw new SourceCallException(call);
         }
         return all;
     }
@@ -431,8 +441,10 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
             throw new ConnectorException("REST read interrupted", ie);
-        } catch (Exception e) {
-            throw (e instanceof RuntimeException re) ? re : new RuntimeException(e);
+        } catch (RuntimeException ours) {
+            throw ours;   // same split as fetchAllPages
+        } catch (Exception call) {
+            throw new SourceCallException(call);
         }
         return new PageWindow(items, pages >= MAX_PAGES ? null : req, pages, total);
     }

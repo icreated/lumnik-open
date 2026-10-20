@@ -1,8 +1,7 @@
 # Email notifications
 
-The webhook road is for tools; this one is for people who live in their mailbox. A rule
-routes matching events to a recipient — one mail per event, rendered through a template
-you choose. Wiring is `lm_admin` surface.
+A rule routes matching events to a recipient — one mail per event, rendered through a template
+you choose. Needs the `lm_admin` role. For tools rather than people, use a [webhook](outputs.md#wire-a-webhook).
 
 ## Route events to a mailbox
 
@@ -17,21 +16,32 @@ lm notify list
 lm notify rm <ID>
 ```
 
-`--events` takes an exact type or a prefix ending in `.*` — the vocabulary is the
-[event registry](outputs.md#the-event-registry). Over HTTP (`POST /api/notifications`)
-a rule can also carry an `entity_filter` narrowing it to one ingested table. It must be that
-table's **full name** — `connector.t_customers`, the name an event carries as its entity — and the
-door refuses anything else rather than storing a rule that can never match.
+```
+$ lm notify add --events 'connector.run.failed' --to integrator@example.com
+rule 1000: connector.run.failed → integrator@example.com
+$ lm notify list
+ID    EVENTS                RECIPIENT               TEMPLATE            ENABLED
+1000  connector.run.failed  integrator@example.com  event-notification  true
+```
+
+- `--events` takes an exact type or a prefix ending in `.*` — see the
+  [event registry](outputs.md#the-event-registry).
+- **One table only:** no `lm` flag narrows a rule to one table. Over HTTP
+  (`POST /api/notifications`) a rule takes an `entity_filter` with the table's full name
+  (`connector.t_customers`); any other form is refused.
 
 ## Templates
 
 Templates are [Qute](https://quarkus.io/guides/qute) HTML files at
-`templates/email/<name>.html` inside the hub. The rule picks one by name
-(`--template`); the name is restricted to kebab-case (`[a-z0-9-]+`) at the door and at
-send time, so a stored rule can never traverse out of the template root. An unknown
-name is logged and skipped, never a crash.
+`templates/email/<name>.html` inside the hub. The rule picks one by name (`--template`), in
+kebab-case only; an unknown name is logged and the mail skipped.
 
-Two ship today:
+```
+$ lm notify add --events 'decision.*' --to adv@example.com --template '../x'
+Error: API error 400: template must match [a-z0-9-]+ (a template name, not a path)
+```
+
+Two ship with the hub:
 
 | Template | Voice | Body |
 |---|---|---|
@@ -77,14 +87,13 @@ ship inside the hub image; there is no runtime upload. Rehearse against the
 
 ## Delivery — what to expect
 
-Rules are swept every 5 s with their own cursor (a webhook outage never starves email).
-Delivery is **mocked until the deploy sets the SMTP knobs**
-([turn on email delivery](deploy.md#turn-on-email-delivery)) — the boot log states the
-posture. Email is **best-effort**: a failed send is logged and skipped, no retry, no
-journal — per-rule, so one broken recipient never starves the others. Mails leave once the
-batch's position is saved, so a slow SMTP server never holds it; a crash in between loses that
-batch's mails rather than repeating them. When delivery
-must be provable, wire a [webhook](outputs.md#wire-a-webhook) as well.
+- **Sweep:** every 5 s, independent of webhooks.
+- **Mocked** until the deploy sets the SMTP knobs ([turn on email delivery](deploy.md#turn-on-email-delivery)); the boot log says which.
+- **Best-effort:** a failed send is logged and skipped — no retry, no journal. One broken
+  recipient does not block the others.
+- **A hub crash can lose a batch of mails**; it never sends one twice.
+
+When delivery must be provable, wire a [webhook](outputs.md#wire-a-webhook) as well.
 
 ## How to…
 
@@ -94,7 +103,7 @@ One rule declares the watch, one rule routes the mail — the French sentence yo
 the manifest is the headline the ADV reads:
 
 ```yaml
-# commande-bloquee.yaml — modeled on the WOW's proven lyon-process.yaml
+# commande-bloquee.yaml — same shape as the WOW's lyon-process.yaml
 apiVersion: apps.lumnik.io/v1
 kind: Process
 metadata:
@@ -125,7 +134,7 @@ table, because the message referenced them.
 ```bash
 docker compose --profile mailpit -f docker-compose.selfhost.yml up -d
 # .env: LUMNIK_SMTP_HOST=mailpit  LUMNIK_SMTP_PORT=1025  LUMNIK_SMTP_MOCK=false
-docker compose -f docker-compose.selfhost.yml up -d hub
+./deploy/selfhost/up.sh --build    # re-run with the flags you installed with
 # then browse to http://127.0.0.1:8025
 ```
 

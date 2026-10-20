@@ -26,12 +26,16 @@ public class AuditDispatcher {
     private static final Logger LOG = Logger.getLogger(AuditDispatcher.class);
     private static final int BATCH_SIZE = 200;
 
+    // SKIP LOCKED: a row another drain holds (a second replica, or a direct call next to the
+    // scheduled one) is left to it, never copied a second time (#1311). The lock lasts until
+    // drain()'s commit, so it needs autoCommit off, which drain() sets.
     private static final String SELECT_PENDING = """
             SELECT id, tenant_id, actor_id, entity_type, entity_key, operation, changes, created_at
               FROM core.audit_outbox
              WHERE dispatched = false
              ORDER BY created_at
              LIMIT %d
+             FOR UPDATE SKIP LOCKED
             """.formatted(BATCH_SIZE);
 
     private static final String INSERT_EVENT = """

@@ -4,18 +4,16 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.extraction.spi.entity.ProposedCandidate;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import java.time.ZoneOffset;
 import org.jboss.logging.Logger;
 
 import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -32,9 +30,8 @@ import java.util.function.Function;
  * io.lumnik.hub.process.ProcessManifestStore}: RLS on {@code default} exists for the app-facing
  * path, this internal engine enforces the tenant boundary itself. Multi-statement work
  * ({@link CascadeResolver}'s one decision per row) shares a single transaction via
- * {@link #inTransaction}, per {@code io.lumnik.common.sql.Jdbc}'s own note that a transaction
- * spanning several statements keeps its boundary visible at the call site rather than hiding it
- * behind the one-shot helper.
+ * {@link #inTransaction}, whose boundary stays visible at the call site; each statement is a
+ * {@code Jdbc} call on that transaction's connection.
  */
 @ApplicationScoped
 public class EntityIdentityRepository {
@@ -71,60 +68,22 @@ public class EntityIdentityRepository {
       List<UUID> candidates, List<ProposedCandidate> discardedCandidates, List<SetAside> setAside,
       EntityResolutionState outcome, String decidedBy, UUID runId, OffsetDateTime occurredAt) {}
 
-  @FunctionalInterface
-  private interface SqlOp<T> {
-    T apply(PreparedStatement ps) throws SQLException;
-  }
-
   /** Runs {@code work} in one transaction; committed on return, rolled back and rethrown on failure. */
   public <T> T inTransaction(Function<Connection, T> work) {
-    try (Connection c = adminDs.getConnection()) {
-      c.setAutoCommit(false);
-      try {
-        T result = work.apply(c);
-        c.commit();
-        return result;
-      } catch (RuntimeException e) {
-        rollbackQuietly(c);
-        throw e;
-      }
-    } catch (SQLException e) {
-      throw new RuntimeException("EntityIdentityRepository transaction failed: " + e.getMessage(), e);
-    }
-  }
-
-  private void rollbackQuietly(Connection c) {
-    try {
-      c.rollback();
-    } catch (SQLException ignored) {
-      // best effort — the connection may already be unusable.
-    }
-  }
-
-  /** One prepare-bind-execute-map statement on an already-open transaction; failures labelled by caller. */
-  private <T> T run(Connection c, String label, String sql, SqlOp<T> op) {
-    try (PreparedStatement ps = c.prepareStatement(sql)) {
-      return op.apply(ps);
-    } catch (SQLException e) {
-      throw new RuntimeException("EntityIdentityRepository." + label + ": " + e.getMessage(), e);
-    }
+    return Jdbc.transaction(adminDs, "EntityIdentityRepository.inTransaction", work::apply);
   }
 
   public Optional<ExistingIdentity> find(
       Connection c, long tenantId, String entityType, String source, String sourceId) {
     String sql = "SELECT identity_ref, state, entity_id FROM core.entity_identity "
         + "WHERE tenant_id = ? AND entity_type = ? AND source = ? AND source_id = ?";
-    return run(c, "find", sql, ps -> {
+    return Jdbc.queryOne(c, "EntityIdentityRepository.find", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
       ps.setString(3, source);
       ps.setString(4, sourceId);
-      try (ResultSet rs = ps.executeQuery()) {
-        if (!rs.next()) return Optional.empty();
-        return Optional.of(new ExistingIdentity(
-            (UUID) rs.getObject(1), rs.getString(2), (UUID) rs.getObject(3)));
-      }
-    });
+    }, rs -> new ExistingIdentity(
+        (UUID) rs.getObject(1), rs.getString(2), (UUID) rs.getObject(3)));
   }
 
   /**
@@ -137,12 +96,11 @@ public class EntityIdentityRepository {
    */
   public record LastResolvedEvidence(UUID entityId, String decidedBy, UUID assertedPartnerRef) {}
 
-  private static Optional<LastResolvedEvidence> readEvidence(ResultSet rs) throws SQLException {
-    if (!rs.next()) return Optional.empty();
+  private static LastResolvedEvidence evidenceRow(ResultSet rs) throws SQLException {
     String idText = rs.getString(1);
-    if (idText == null) return Optional.empty();
-    return Optional.of(new LastResolvedEvidence(
-        UUID.fromString(idText), rs.getString(2), (UUID) rs.getObject(3)));
+    if (idText == null) return null;
+    return new LastResolvedEvidence(
+        UUID.fromString(idText), rs.getString(2), (UUID) rs.getObject(3));
   }
 
   public Optional<LastResolvedEvidence> lastResolvedEvidence(
@@ -151,15 +109,12 @@ public class EntityIdentityRepository {
         + "FROM core.entity_resolution_evidence "
         + "WHERE tenant_id = ? AND entity_type = ? AND source = ? AND source_id = ? "
         + "AND outcome = 'resolved' ORDER BY occurred_at DESC, id DESC LIMIT 1";
-    return run(c, "lastResolvedEvidence", sql, ps -> {
+    return Jdbc.queryOne(c, "EntityIdentityRepository.lastResolvedEvidence", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
       ps.setString(3, source);
       ps.setString(4, sourceId);
-      try (ResultSet rs = ps.executeQuery()) {
-        return readEvidence(rs);
-      }
-    });
+    }, EntityIdentityRepository::evidenceRow);
   }
 
   /**
@@ -174,16 +129,13 @@ public class EntityIdentityRepository {
         + "(SELECT source, source_id FROM core.entity_identity WHERE tenant_id = ? AND entity_type = ? "
         + "AND identity_ref = ?) "
         + "AND outcome = 'resolved' ORDER BY occurred_at DESC, id DESC LIMIT 1";
-    return run(c, "lastResolvedEvidenceOfRef", sql, ps -> {
+    return Jdbc.queryOne(c, "EntityIdentityRepository.lastResolvedEvidenceOfRef", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
       ps.setLong(3, tenantId);
       ps.setString(4, entityType);
       ps.setObject(5, identityRef);
-      try (ResultSet rs = ps.executeQuery()) {
-        return readEvidence(rs);
-      }
-    });
+    }, EntityIdentityRepository::evidenceRow);
   }
 
   /**
@@ -216,7 +168,7 @@ public class EntityIdentityRepository {
         + "WHERE eik.tenant_id = ? AND eik.entity_type = ? AND eik.rule_declared_id = ? "
         + "  AND eik.rule_version = ? AND eik.key_fingerprint = ? "
         + "  AND ei.state = 'resolved' AND ei.entity_id IS NOT NULL";
-    return run(c, "candidateEntityIds", sql, ps -> {
+    List<KeyMatchRow> rows = Jdbc.query(c, "EntityIdentityRepository.candidateEntityIds", sql, ps -> {
       ps.setString(1, source);
       ps.setString(2, sourceId);
       ps.setLong(3, tenantId);
@@ -224,14 +176,14 @@ public class EntityIdentityRepository {
       ps.setString(5, ruleDeclaredId);
       ps.setString(6, ruleVersion);
       ps.setBytes(7, fingerprint);
-      try (ResultSet rs = ps.executeQuery()) {
-        List<UUID> joinable = new ArrayList<>();
-        List<UUID> setAside = new ArrayList<>();
-        while (rs.next()) (rs.getBoolean(2) ? setAside : joinable).add((UUID) rs.getObject(1));
-        return new KeyMatches(joinable, setAside);
-      }
-    });
+    }, rs -> new KeyMatchRow((UUID) rs.getObject(1), rs.getBoolean(2)));
+    List<UUID> joinable = new ArrayList<>();
+    List<UUID> setAside = new ArrayList<>();
+    for (KeyMatchRow row : rows) (row.setAside() ? setAside : joinable).add(row.entityId());
+    return new KeyMatches(joinable, setAside);
   }
+
+  private record KeyMatchRow(UUID entityId, boolean setAside) {}
 
   /**
    * Upserts the crosswalk row. {@code identity_ref} is deliberately absent from the {@code DO
@@ -248,7 +200,7 @@ public class EntityIdentityRepository {
         + "ON CONFLICT (tenant_id, entity_type, source, source_id) DO UPDATE SET "
         + "state = EXCLUDED.state, entity_id = EXCLUDED.entity_id, decided_by = EXCLUDED.decided_by, decided_at = now() "
         + "RETURNING identity_ref";
-    return run(c, "upsertIdentity", sql, ps -> {
+    return Jdbc.queryOne(c, "EntityIdentityRepository.upsertIdentity", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
       ps.setString(3, source);
@@ -256,11 +208,7 @@ public class EntityIdentityRepository {
       ps.setString(5, state.sqlValue());
       ps.setObject(6, entityId, Types.OTHER);
       ps.setString(7, decidedBy);
-      try (ResultSet rs = ps.executeQuery()) {
-        rs.next();
-        return (UUID) rs.getObject(1);
-      }
-    });
+    }, rs -> (UUID) rs.getObject(1)).orElseThrow();
   }
 
   /** Where an existing {@code identity_ref} sits: its source row and, when resolved, its entity. */
@@ -275,15 +223,11 @@ public class EntityIdentityRepository {
   public Optional<Seat> seatOf(Connection c, long tenantId, String entityType, UUID identityRef) {
     String sql = "SELECT source, source_id, entity_id FROM core.entity_identity "
         + "WHERE tenant_id = ? AND entity_type = ? AND identity_ref = ?";
-    return run(c, "seatOf", sql, ps -> {
+    return Jdbc.queryOne(c, "EntityIdentityRepository.seatOf", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
       ps.setObject(3, identityRef);
-      try (ResultSet rs = ps.executeQuery()) {
-        if (!rs.next()) return Optional.empty();
-        return Optional.of(new Seat(rs.getString(1), rs.getString(2), (UUID) rs.getObject(3)));
-      }
-    });
+    }, rs -> new Seat(rs.getString(1), rs.getString(2), (UUID) rs.getObject(3)));
   }
 
   /**
@@ -362,7 +306,7 @@ public class EntityIdentityRepository {
         + "  AND ei.identity_ref = CASE WHEN a.left_identity_ref = ? THEN a.right_identity_ref ELSE a.left_identity_ref END "
         + "WHERE a.tenant_id = ? AND a.entity_type = ? AND (a.left_identity_ref = ? OR a.right_identity_ref = ?) "
         + "  AND a.verdict = ? AND ei.state = 'resolved' AND ei.entity_id IS NOT NULL";
-    return run(c, "assertedPartnerRows", sql, ps -> {
+    return Jdbc.query(c, "EntityIdentityRepository.assertedPartnerRows", sql, ps -> {
       int i = 1;
       if ("same".equals(verdict)) ps.setObject(i++, myRef);
       ps.setObject(i++, myRef);
@@ -371,14 +315,7 @@ public class EntityIdentityRepository {
       ps.setObject(i++, myRef);
       ps.setObject(i++, myRef);
       ps.setString(i, verdict);
-      try (ResultSet rs = ps.executeQuery()) {
-        List<PartnerRow> out = new ArrayList<>();
-        while (rs.next()) {
-          out.add(new PartnerRow(new AssertedPartner((UUID) rs.getObject(1), (UUID) rs.getObject(2)), rs.getBoolean(3)));
-        }
-        return out;
-      }
-    });
+    }, rs -> new PartnerRow(new AssertedPartner((UUID) rs.getObject(1), (UUID) rs.getObject(2)), rs.getBoolean(3)));
   }
 
   /**
@@ -396,7 +333,7 @@ public class EntityIdentityRepository {
         + "VALUES (?, ?, LEAST(?::uuid, ?::uuid), GREATEST(?::uuid, ?::uuid), ?, ?, ?) "
         + "ON CONFLICT (tenant_id, entity_type, left_identity_ref, right_identity_ref) DO UPDATE SET "
         + "verdict = EXCLUDED.verdict, asserted_by = EXCLUDED.asserted_by, reason = EXCLUDED.reason, asserted_at = now()";
-    run(c, "upsertAssertion", sql, ps -> {
+    Jdbc.update(c, "EntityIdentityRepository.upsertAssertion", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
       ps.setObject(3, refA);
@@ -406,7 +343,6 @@ public class EntityIdentityRepository {
       ps.setString(7, verdict);
       ps.setString(8, assertedBy);
       ps.setString(9, reason);
-      return ps.executeUpdate();
     });
   }
 
@@ -421,18 +357,14 @@ public class EntityIdentityRepository {
   public Optional<String> verdictOf(Connection c, long tenantId, String entityType, UUID refA, UUID refB) {
     String sql = "SELECT verdict FROM core.entity_assertion WHERE tenant_id = ? AND entity_type = ? "
         + "AND left_identity_ref = LEAST(?::uuid, ?::uuid) AND right_identity_ref = GREATEST(?::uuid, ?::uuid)";
-    return run(c, "verdictOf", sql, ps -> {
+    return Jdbc.queryOne(c, "EntityIdentityRepository.verdictOf", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
       ps.setObject(3, refA);
       ps.setObject(4, refB);
       ps.setObject(5, refA);
       ps.setObject(6, refB);
-      try (ResultSet rs = ps.executeQuery()) {
-        if (!rs.next()) return Optional.empty();
-        return Optional.ofNullable(rs.getString(1));
-      }
-    });
+    }, rs -> rs.getString(1));
   }
 
   /** "These two source identities are the same" — the positive assertion (#619). */
@@ -460,13 +392,12 @@ public class EntityIdentityRepository {
       String ruleDeclaredId) {
     String sql = "DELETE FROM core.entity_identity_key WHERE tenant_id = ? AND entity_type = ? "
         + "AND source = ? AND source_id = ? AND rule_declared_id = ?";
-    run(c, "deleteKey", sql, ps -> {
+    Jdbc.update(c, "EntityIdentityRepository.deleteKey", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
       ps.setString(3, source);
       ps.setString(4, sourceId);
       ps.setString(5, ruleDeclaredId);
-      return ps.executeUpdate();
     });
   }
 
@@ -478,7 +409,7 @@ public class EntityIdentityRepository {
         + "VALUES (?, ?, ?, ?, ?, ?, ?) "
         + "ON CONFLICT (tenant_id, entity_type, source, source_id, rule_declared_id) DO UPDATE SET "
         + "rule_version = EXCLUDED.rule_version, key_fingerprint = EXCLUDED.key_fingerprint, updated_at = now()";
-    run(c, "upsertKey", sql, ps -> {
+    Jdbc.update(c, "EntityIdentityRepository.upsertKey", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
       ps.setString(3, source);
@@ -486,7 +417,6 @@ public class EntityIdentityRepository {
       ps.setString(5, ruleDeclaredId);
       ps.setString(6, ruleVersion);
       ps.setBytes(7, fingerprint);
-      return ps.executeUpdate();
     });
   }
 
@@ -506,7 +436,7 @@ public class EntityIdentityRepository {
         + "(tenant_id, entity_type, source, source_id, identity_ref, rule_declared_id, rule_version, "
         + "provider, candidates, discarded_candidates, set_aside, outcome, decided_by, run_id, "
         + "asserted_partner_ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?, ?, ?, ?)";
-    run(c, "insertEvidence", sql, ps -> {
+    Jdbc.update(c, "EntityIdentityRepository.insertEvidence", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
       ps.setString(3, source);
@@ -522,7 +452,6 @@ public class EntityIdentityRepository {
       ps.setString(13, decidedBy);
       ps.setObject(14, runId, Types.OTHER);
       ps.setObject(15, assertedPartnerRef, Types.OTHER);
-      return ps.executeUpdate();
     });
   }
 
@@ -539,16 +468,11 @@ public class EntityIdentityRepository {
     if (candidateIds.isEmpty()) return Set.of();
     String sql = "SELECT DISTINCT entity_id FROM core.entity_identity "
         + "WHERE tenant_id = ? AND entity_type = ? AND entity_id = ANY(?) AND state = 'resolved'";
-    return run(c, "existingEntityIds", sql, ps -> {
+    return new HashSet<>(Jdbc.query(c, "EntityIdentityRepository.existingEntityIds", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
       ps.setArray(3, c.createArrayOf("uuid", candidateIds.toArray()));
-      try (ResultSet rs = ps.executeQuery()) {
-        Set<UUID> out = new HashSet<>();
-        while (rs.next()) out.add((UUID) rs.getObject(1));
-        return out;
-      }
-    });
+    }, rs -> (UUID) rs.getObject(1)));
   }
 
   /**
@@ -565,18 +489,13 @@ public class EntityIdentityRepository {
     if (entityIds.isEmpty()) return Set.of();
     String sql = "SELECT DISTINCT entity_id FROM core.entity_identity "
         + "WHERE tenant_id = ? AND entity_type = ? AND source = ? AND source_id <> ? AND entity_id = ANY(?)";
-    return run(c, "holdingSourceElsewhere", sql, ps -> {
+    return new HashSet<>(Jdbc.query(c, "EntityIdentityRepository.holdingSourceElsewhere", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
       ps.setString(3, source);
       ps.setString(4, sourceId);
       ps.setArray(5, c.createArrayOf("uuid", entityIds.toArray()));
-      try (ResultSet rs = ps.executeQuery()) {
-        Set<UUID> out = new HashSet<>();
-        while (rs.next()) out.add((UUID) rs.getObject(1));
-        return out;
-      }
-    });
+    }, rs -> (UUID) rs.getObject(1)));
   }
 
   /**
@@ -599,22 +518,15 @@ public class EntityIdentityRepository {
         + ") ev ON true "
         + "WHERE ei.tenant_id = ? AND ei.entity_type = ? AND ei.state = 'ambiguous' "
         + "ORDER BY ei.source, ei.source_id LIMIT ? OFFSET ?";
-    return run(c, "listAmbiguous", sql, ps -> {
+    return Jdbc.query(c, "EntityIdentityRepository.listAmbiguous", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
       ps.setInt(3, limit);
       ps.setInt(4, offset);
-      try (ResultSet rs = ps.executeQuery()) {
-        List<AmbiguousIdentity> out = new ArrayList<>();
-        while (rs.next()) {
-          out.add(new AmbiguousIdentity(
-              (UUID) rs.getObject(1), rs.getString(2), rs.getString(3),
-              parseUuidList(rs.getString(4)), parseProposedCandidates(rs.getString(5)),
-              parseSetAside(rs.getString(6)), rs.getString(7), toOffsetDateTime(rs.getTimestamp(8))));
-        }
-        return out;
-      }
-    });
+    }, rs -> new AmbiguousIdentity(
+        (UUID) rs.getObject(1), rs.getString(2), rs.getString(3),
+        parseUuidList(rs.getString(4)), parseProposedCandidates(rs.getString(5)),
+        parseSetAside(rs.getString(6)), rs.getString(7), rs.getObject(8, OffsetDateTime.class)));
   }
 
   /**
@@ -634,27 +546,16 @@ public class EntityIdentityRepository {
         + "FROM core.entity_resolution_evidence "
         + "WHERE tenant_id = ? AND entity_type = ? AND source = ? AND source_id = ? "
         + "ORDER BY occurred_at, id";
-    return run(c, "evidenceHistory", sql, ps -> {
+    return Jdbc.query(c, "EntityIdentityRepository.evidenceHistory", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
       ps.setString(3, source);
       ps.setString(4, sourceId);
-      try (ResultSet rs = ps.executeQuery()) {
-        List<EvidenceEvent> out = new ArrayList<>();
-        while (rs.next()) {
-          out.add(new EvidenceEvent(
-              rs.getString(1), rs.getString(2), rs.getString(3),
-              parseUuidList(rs.getString(4)), parseProposedCandidates(rs.getString(5)),
-              parseSetAside(rs.getString(6)), EntityResolutionState.fromSql(rs.getString(7)), rs.getString(8),
-              (UUID) rs.getObject(9), toOffsetDateTime(rs.getTimestamp(10))));
-        }
-        return out;
-      }
-    });
-  }
-
-  private static OffsetDateTime toOffsetDateTime(Timestamp ts) {
-    return ts == null ? null : ts.toInstant().atOffset(ZoneOffset.UTC);
+    }, rs -> new EvidenceEvent(
+        rs.getString(1), rs.getString(2), rs.getString(3),
+        parseUuidList(rs.getString(4)), parseProposedCandidates(rs.getString(5)),
+        parseSetAside(rs.getString(6)), EntityResolutionState.fromSql(rs.getString(7)), rs.getString(8),
+        (UUID) rs.getObject(9), rs.getObject(10, OffsetDateTime.class)));
   }
 
   private static List<UUID> parseUuidList(String json) {

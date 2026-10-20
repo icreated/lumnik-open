@@ -72,15 +72,11 @@ class RunReaperIT {
     }
 
     private UUID seedConnectorWithRun(String name, String runStatus) {
-        UUID mappingId = UUID.randomUUID();
         UUID connId = UUID.randomUUID();
         UUID runId = UUID.randomUUID();
-        exec("INSERT INTO connector.connector_mapping (id, tenant_id, name, target_entity, spec_format, spec_content) "
-           + "VALUES ('" + mappingId + "', " + TENANT + ", 'm_" + name + "', 'public." + name + "', 'yaml', 'x') "
-           + "");
-        exec("INSERT INTO connector.connector (id, tenant_id, name, type_id, config, mapping_id, "
+        exec("INSERT INTO connector.connector (id, tenant_id, name, type_id, config, "
            + "enabled, tags, sync_mode, skip_policy) VALUES ('" + connId + "', " + TENANT
-           + ", '" + name + "', 'jdbc-generic', '{}'::jsonb, '" + mappingId + "', true, "
+           + ", '" + name + "', 'jdbc-generic', '{}'::jsonb, true, "
            + "ARRAY['reaper'], 'Incremental', '{\"type\":\"SkipUpTo\",\"maxSkips\":100}'::jsonb)");
         exec("INSERT INTO connector.connector_run (id, tenant_id, connector_id, status, sync_mode, triggered_by) "
            + "VALUES ('" + runId + "', " + TENANT + ", '" + connId + "', '" + runStatus + "', 'Incremental', 'manual')");

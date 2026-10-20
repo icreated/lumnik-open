@@ -53,7 +53,6 @@ func buildRootCmd() *cobra.Command {
 	root.AddCommand(newScopeCmd())
 	root.AddCommand(newScopesCmd())
 	root.AddCommand(newDlqCmd())
-	root.AddCommand(newMappingCmd())
 	root.AddCommand(newDataCmd())
 	root.AddCommand(newSourceCmd())
 	root.AddCommand(newApplyCmd())

@@ -5,13 +5,14 @@ import io.lumnik.hub.connector.api.ConnectorType;
 import io.lumnik.hub.connector.api.ItemReader;
 import io.lumnik.hub.connector.api.ItemWriter;
 import io.lumnik.hub.connector.api.helpers.CredentialResolver;
-import io.lumnik.hub.connector.api.helpers.MappingResolver;
 import io.lumnik.hub.connector.api.types.*;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorCursorEntity;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.domain.ConnectorRun;
 import io.lumnik.hub.connector.domain.EffectiveConfig;
+import io.lumnik.hub.connector.event.RunTableStats;
+import io.lumnik.hub.connector.exceptions.SourceCallException;
 import io.lumnik.hub.connector.exceptions.TransientFailureException;
 import io.lumnik.hub.connector.repository.ConnectorCursorEntityRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
@@ -37,9 +38,9 @@ public class ChunkExecutor {
   @Inject ConnectorRunRepository runs;
   @Inject ConnectorCursorEntityRepository cursors;
   @Inject CredentialResolver credentials;
-  @Inject MappingResolver mappings;
   @Inject DeadLetterCapture deadLetter;
   @Inject ObjectMapper mapper;
+  @Inject RunTableStats stats;
 
   /**
    * Runs one chunk: read from the source, then write + advance the cursor + update the run
@@ -135,7 +136,7 @@ public class ChunkExecutor {
 
         return switch (result) {
           case ReadResult.HasMore hm -> {
-            var outcome = writeOrPassThrough(writer, hm.records(), ctx);
+            var outcome = write(r, writer, hm.records(), ctx);
             // A batch the writer refused wholesale is a chunk FAILURE, not a success with odd
             // counters: the rows would leave the conservation identity, nothing would reach the
             // dead-letter queue, and persistCursor below would advance the cursor past them —
@@ -150,7 +151,7 @@ public class ChunkExecutor {
             yield new ChunkResult.Success(hm.records().size(), hm.nextCursor(), false);
           }
           case ReadResult.EndOfStream eos -> {
-            var outcome = writeOrPassThrough(writer, eos.records(), ctx);
+            var outcome = write(r, writer, eos.records(), ctx);
             // See the HasMore branch. There is no cursor to hold back here — the stream is done —
             // but the counters must not move either.
             if (outcome instanceof WriteOutcome.AllFailed f) yield allFailed(c, f);
@@ -161,6 +162,24 @@ public class ChunkExecutor {
             // throw — the position must not be among it.
             if (!eos.finalCursor().isEmpty()) {
               persistCursor(c.getId(), endpoint.getId(), c.getTenantId(), eos.finalCursor());
+            }
+            // The type's last word on the finished stream (#1195), LAST: its side effects (a csv full
+            // refresh deletes rows, committed on the admin datasource) must follow every step that can
+            // still fail this chunk. A refusal, or a throw, clears the position just stored, so the
+            // next run reads the source it was refused on again rather than skipping it.
+            StreamEnd end;
+            try {
+              end = type.endOfStream(ctx);
+            } catch (Exception e) {
+              clearCursor(endpoint.getId());
+              yield failure(c, e);
+            }
+            switch (end) {
+              case StreamEnd.Removed removed -> r.setRecordsRemoved(r.getRecordsRemoved() + removed.rows());
+              case StreamEnd.Refused refused -> {
+                clearCursor(endpoint.getId());
+                yield new ChunkResult.Failure(refused.reason(), null, false);
+              }
             }
             yield new ChunkResult.Success(eos.records().size(),
                 eos.finalCursor().isEmpty() ? cursorIn : eos.finalCursor(), true);
@@ -245,6 +264,20 @@ public class ChunkExecutor {
     }
   }
 
+  /**
+   * The chunk's write. Rows a writer removed while writing (#1196: a jdbc table's move to one row per
+   * key) are committed whatever this chunk becomes, so they reach the run's counter even when the
+   * write then throws.
+   */
+  @SuppressWarnings("rawtypes")
+  private WriteOutcome write(ConnectorRun r, ItemWriter writer, List records, ConnectorContext ctx) {
+    try {
+      return writeOrPassThrough(writer, records, ctx);
+    } finally {
+      r.setRecordsRemoved(r.getRecordsRemoved() + stats.takeRemoved(r.getId()));
+    }
+  }
+
   /** A writerless target writes nothing and everything counts as written — the pass-through case. */
   @SuppressWarnings({"rawtypes", "unchecked"})
   private static WriteOutcome writeOrPassThrough(ItemWriter writer, List records, ConnectorContext ctx) {
@@ -321,10 +354,22 @@ public class ChunkExecutor {
    * {@code findById} itself is what threw, the id is the only name there is.
    */
   private static ChunkResult.Failure failure(String connectorName, Throwable t) {
-    Logger.getLogger(ChunkExecutor.class)
-        .warnf(t, "Chunk failure for connector %s: %s", connectorName, t.getMessage());
-    return new ChunkResult.Failure(
-        SqlFailureText.withCause(t), t, t instanceof TransientFailureException);
+    Logger log = Logger.getLogger(ChunkExecutor.class);
+    String text = switch (t) {
+      // A call to the source that threw: its message is already the whole account, the failure's
+      // kind. Its cause is the JDK's, whose message can quote the source URL (#1166) — and both a
+      // stack and withCause's root message would print it. No stack: the source failed, not the
+      // hub, and the kind is what an operator acts on.
+      case SourceCallException described -> {
+        log.warnf("Chunk failure for connector %s: %s", connectorName, described.getMessage());
+        yield described.getMessage();
+      }
+      default -> {
+        log.warnf(t, "Chunk failure for connector %s: %s", connectorName, t.getMessage());
+        yield SqlFailureText.withCause(t);
+      }
+    };
+    return new ChunkResult.Failure(text, t, t instanceof TransientFailureException);
   }
 
   /** Builds the per-run context for a single endpoint; the config rule lives in {@link EffectiveConfig}. */
@@ -338,7 +383,7 @@ public class ChunkExecutor {
         config,
         c.getSyncMode(),
         Logger.getLogger("connector." + c.getName()),
-        credentials, mappings,
+        credentials,
         Clock.systemUTC(),
         bound,
         scope);
@@ -375,6 +420,12 @@ public class ChunkExecutor {
   public RunStart runStart(ConnectorRun run, Connector c, ConnectorType type,
                            ConnectorEndpoint endpoint, ConnectorCursor cursor, RunScope scope) {
     return type.runStart(buildContext(run, c, endpoint, null, scope), cursor);
+  }
+
+  /** No stored position: the next run reads the source from its start. */
+  private void clearCursor(UUID endpointId) {
+    var ent = cursors.findByEndpoint(endpointId);
+    if (ent != null) cursors.delete(ent);
   }
 
   private void persistCursor(UUID connectorId, UUID endpointId, Long tenantId, ConnectorCursor newCursor) {

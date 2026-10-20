@@ -97,11 +97,16 @@ public final class SftpConnectionFactory {
 
     /** Register a password or public-key identity on the live session before auth().verify(). */
     private static void authenticate(ClientSession session, SftpAuthMethod auth) {
-        if (auth instanceof SftpAuthMethod.Password p && p.value() != null) {
-            session.addPasswordIdentity(p.value());
-        } else if (auth instanceof SftpAuthMethod.Key k) {
-            for (KeyPair kp : parseKeyPairs(k)) {
-                session.addPublicKeyIdentity(kp);
+        // Exhaustive over the sealed type: a third auth method is a compile error here, not an
+        // identity silently never registered.
+        switch (auth) {
+            case SftpAuthMethod.Password p -> {
+                if (p.value() != null) session.addPasswordIdentity(p.value());
+            }
+            case SftpAuthMethod.Key k -> {
+                for (KeyPair kp : parseKeyPairs(k)) {
+                    session.addPublicKeyIdentity(kp);
+                }
             }
         }
     }

@@ -13,6 +13,8 @@ import java.util.Map;
  * {@code ConnectorAdminResource.update}'s handling of a {@code null} value there. It doubles as
  * the {@code scope:<tag>} read boundary, so treating an omitted field as "clear it" would silently
  * broaden a scoped connector to the whole tenant.
+ *
+ * <p>{@code tenantId} never chooses the tenant: absent, it is the caller's; present, it must be.
  */
 public record ConnectorCreateRequest(
     Long tenantId,

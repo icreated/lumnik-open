@@ -34,6 +34,44 @@ func TestConfigView(t *testing.T) {
 	}
 }
 
+const credentialConfig = "current-context: x\ncontexts:\n" +
+	"  x:\n    server: http://h\n    token: legacy-secret\n    access: access-secret\n    refresh: refresh-secret\n" +
+	"  y:\n    server: http://h2\n    token: \"\"\n"
+
+func TestConfigViewRedactsCredentials(t *testing.T) {
+	path := writeConfig(t, credentialConfig)
+	out := runRoot(t, "config", "view")
+	for _, secret := range []string{"legacy-secret", "access-secret", "refresh-secret"} {
+		if strings.Contains(out, secret) {
+			t.Errorf("config view leaked %q:\n%s", secret, out)
+		}
+	}
+	for _, field := range []string{"token: REDACTED", "access: REDACTED", "refresh: REDACTED"} {
+		if !strings.Contains(out, field) {
+			t.Errorf("config view missing %q:\n%s", field, out)
+		}
+	}
+	if n := strings.Count(out, "REDACTED"); n != 3 {
+		t.Errorf("an empty credential must not be marked REDACTED; got %d markers:\n%s", n, out)
+	}
+	if data, _ := os.ReadFile(path); !strings.Contains(string(data), "access-secret") {
+		t.Errorf("config view must not rewrite the file: %s", data)
+	}
+}
+
+func TestConfigViewRawPrintsCredentials(t *testing.T) {
+	writeConfig(t, credentialConfig)
+	out := runRoot(t, "config", "view", "--raw")
+	for _, secret := range []string{"legacy-secret", "access-secret", "refresh-secret"} {
+		if !strings.Contains(out, secret) {
+			t.Errorf("config view --raw must print %q:\n%s", secret, out)
+		}
+	}
+	if strings.Contains(out, "REDACTED") {
+		t.Errorf("config view --raw must not redact:\n%s", out)
+	}
+}
+
 func TestConfigUseContext(t *testing.T) {
 	path := writeConfig(t, "current-context: x\ncontexts:\n  x: {server: h}\n  y: {server: h2}\n")
 	cmd := NewRootCmd()

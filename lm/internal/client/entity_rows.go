@@ -23,7 +23,20 @@ type EntityFilter struct {
 // GET /api/entities/{name}. Name, column names and values are all encoded; the paging controls
 // are sent as given, so the caller decides what range it validates.
 func (c *Client) EntityRows(name string, filters []EntityFilter, limit, offset int) ([]EntityRow, error) {
+	return c.entityRows(name, filters, limit, offset, false)
+}
+
+// EntityRowsWithIdentity is EntityRows plus, on a resolution entity, each row's _entity_id,
+// _resolution and _handle (?identity=true) — the handle being the SOURCE:ID an assertion takes.
+func (c *Client) EntityRowsWithIdentity(name string, limit, offset int) ([]EntityRow, error) {
+	return c.entityRows(name, nil, limit, offset, true)
+}
+
+func (c *Client) entityRows(name string, filters []EntityFilter, limit, offset int, identity bool) ([]EntityRow, error) {
 	q := url.Values{}
+	if identity {
+		q.Set("identity", "true")
+	}
 	for _, f := range filters {
 		q.Add(f.Column, f.Value)
 	}
@@ -49,7 +62,7 @@ type EntityRow struct {
 func (r EntityRow) Columns() []string { return slices.Clone(r.cols) } // a copy: the order is the row's invariant
 
 // Cell renders one column for a table: null is empty, a string is itself, anything else its JSON
-// (a json.Number prints as the digits the hub sent).
+// (a json.Number prints as the digits the hub sent; & < > stay as written, not \u0026 escapes).
 func (r EntityRow) Cell(col string) string {
 	switch v := r.vals[col].(type) {
 	case nil:
@@ -57,9 +70,21 @@ func (r EntityRow) Cell(col string) string {
 	case string:
 		return v
 	default:
-		b, _ := json.Marshal(v) // a value that just decoded from JSON marshals
+		b, _ := jsonText(v) // a value that just decoded from JSON encodes
 		return string(b)
 	}
+}
+
+// jsonText encodes v as the hub sent it: & < > as written, not \u0026 escapes — those are for JSON embedded in an
+// HTML page, and lm's goes to a terminal or a script.
+func jsonText(v any) ([]byte, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }
 
 // UnmarshalJSON reads an object token by token to keep its key order.
@@ -99,11 +124,11 @@ func (r EntityRow) MarshalJSON() ([]byte, error) {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		k, err := json.Marshal(col)
+		k, err := jsonText(col)
 		if err != nil {
 			return nil, err
 		}
-		v, err := json.Marshal(r.vals[col])
+		v, err := jsonText(r.vals[col])
 		if err != nil {
 			return nil, err
 		}

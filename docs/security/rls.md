@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| **Roles** | `lumnik_app` (requests) · `lumnik_readonly` (LLM-generated SQL, views) · `lumnik_admin` (migrations, DDL, purge) |
+| **Roles** | `lumnik_app` (requests) · `lumnik_readonly` (LLM-generated SQL, views, exports) · `lumnik_admin` (migrations, DDL, purge) |
 | **Policy** | `tenant_id = current tenant`; no tenant set means **zero rows**, never an error, never every row |
 | **Coverage** | every tenanted table, including the `connector.t_*` tables ingestion creates |
 | **Encrypted at rest** | tenant secrets, connector and webhook credentials only; ingested data is plaintext |
@@ -14,7 +14,7 @@
 ```mermaid
 flowchart LR
   req["request path — JWT"] --> app["lumnik_app<br/>RLS enforced"]
-  llm["LLM-generated SQL —<br/>ask · view render"] --> ro["lumnik_readonly<br/>RLS · read-only ·<br/>empty search_path"]
+  llm["read-only paths —<br/>ask · views · exports ·<br/>search projection"] --> ro["lumnik_readonly<br/>RLS · read-only ·<br/>empty search_path"]
   ops["migrations · dynamic DDL ·<br/>purge · dormancy sweep"] --> adm["lumnik_admin<br/>BYPASSRLS · owns the tables"]
   app -->|"SET LOCAL tenant"| t[("tenant-stamped<br/>tables")]
   ro -->|"SET LOCAL tenant"| t
@@ -28,7 +28,7 @@ Created at install by the PostgreSQL init script, outside the migrations:
 | Role | Can | Cannot | Used for |
 |---|---|---|---|
 | `lumnik_app` | read and write rows, **under RLS** | bypass a policy; own a table | every request the hub serves |
-| `lumnik_readonly` | `SELECT`, **under RLS**; the session is read-only | write anything; resolve an unqualified table name | ask-to-SQL and `kind:View` render and detail |
+| `lumnik_readonly` | `SELECT`, **under RLS**; the session is read-only | write anything; resolve an unqualified table name | ask-to-SQL, `kind:View` render and detail, workflow data checks, the Search projection, export runs, `lm entity export` |
 | `lumnik_admin` | everything; **bypasses RLS**; owns every table | be enlisted in a request transaction by accident | migrations, dynamic table DDL, GDPR purge, secret resolution, the workflow dormancy sweep |
 
 - `lumnik_app` owns nothing. PostgreSQL lets a table's owner bypass its own policies; that rule
@@ -40,11 +40,11 @@ Created at install by the PostgreSQL init script, outside the migrations:
 - The hub resolves the tenant from the JWT's `tenant_id` claim, then issues
   `SET LOCAL app.current_tenant = '<id>'` once per transaction. `SET LOCAL` dies with the
   transaction; nothing leaks onto the pooled connection.
-- Background work runs as the system sentinel `'0'`. A **request** claiming a tenant of `0` or
-  below is rejected, so the sentinel cannot be spoofed from a token.
-- On the read-only datasource the same tenant is set, the session is marked read-only, and
-  `search_path` is emptied: a bare table name cannot resolve, so every query must say which
-  schema it reads.
+- Background work runs as the system sentinel `'0'`. A token claiming a tenant of `0` or below
+  is not refused: the hub sets no tenant on its connections, so the request runs and sees
+  **zero rows**. It is never elevated to the sentinel.
+- On the read-only datasource the same tenant is set, the session is read-only, and
+  `search_path` is empty: every query must name the schema it reads.
 
 ## The policy shape
 
@@ -65,15 +65,15 @@ USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::bigi
 
 - All three passwords are generated **per install** and injected as environment variables:
   `LUMNIK_APP_DB_PASSWORD`, `LUMNIK_ADMIN_DB_PASSWORD`, `LUMNIK_READONLY_DB_PASSWORD`.
-- **Self-host rotation is one gesture**: put the new value in `.env`, re-run `up.sh`. The script
-  realigns the live roles with `.env` on every run.
+- **Self-host rotation**: put the new value in `.env`, re-run `deploy/selfhost/up.sh`. Every run
+  sets the three roles' passwords to the `.env` values.
 - **Helm**: the release Secret carries the three values. On a cluster with an existing volume,
   rotate at the database (`ALTER ROLE … PASSWORD`) and upgrade with the matching values.
 
 ## What RLS does NOT protect against
 
-- **The admin datasource.** `lumnik_admin` bypasses RLS by design. Every code path using it
-  filters by tenant itself; a bug there is a cross-tenant bug RLS will not catch.
+- **The admin datasource.** `lumnik_admin` bypasses RLS. Code using it filters by tenant
+  itself; a bug there is a cross-tenant bug RLS will not catch.
 - **The database superuser**, or anyone holding the `lumnik_admin` credentials.
 - **A wrong tenant upstream.** RLS trusts `app.current_tenant`. The request filter that resolves
   it from the JWT is part of the trusted computing base.
@@ -95,9 +95,7 @@ USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::bigi
 | **Rotating the master key** | not supported |
 
 - A second key, `LUMNIK_CRYPTO_SECRET_KEY`, protects connector and webhook credentials with the
-  same algorithm and the same no-rotation posture.
-- Credentials written by older builds under AES-128 stay readable and move to AES-256 the next
-  time they are saved.
+  same algorithm. It cannot be rotated either.
 
 ```
 $ lm secret set SFTP_ERP_PASSWORD
@@ -115,8 +113,7 @@ SFTP_ERP_PASSWORD              -
 - **Encrypted**: tenant secrets and connector/webhook credentials, under the two keys above.
 - **Plaintext**: everything you ingest. `connector.t_*` mirror tables and the `rag.chunk` corpus
   are ordinary PostgreSQL columns, readable to anyone who can query the database directly.
-- Disk, volume and backup encryption are the operator's layer, as for any database. lumnik does
-  not do it for you and does not claim to.
+- Disk, volume and backup encryption are the operator's layer, as for any database.
 
 ## Data in transit: where TLS stops
 

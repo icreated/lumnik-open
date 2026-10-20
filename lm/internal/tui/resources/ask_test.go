@@ -2,11 +2,51 @@ package resources
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
+	"github.com/icreated/lumnik-open/lm/internal/config"
 )
+
+// An answer that came back while $EDITOR held the terminal was dropped by QueueUpdate: the question
+// was asked, the hub answered, and the page went on saying "…thinking" (#1158). It now lands once
+// the editor closes — drained on the loop, as SuspendEditor drains.
+func TestAsk_anAnswerUnderAnOpenEditorLandsOnceItCloses(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"answer":"42 late orders","sql":"SELECT 1","rowCount":0}`))
+	}))
+	t.Cleanup(srv.Close)
+	app := runningSimApp(t)
+	EditorSuspended.Store(true)
+	t.Cleanup(func() { EditorSuspended.Store(false) })
+
+	var a *Ask
+	onLoopWithin(app, func() {
+		a = NewAsk(app, client.New(config.Context{Server: srv.URL}), nil, nil, nil)
+		a.submit("how many late orders?")
+	})
+	if !deferredHeld() {
+		t.Fatal("the answer was dropped under the editor instead of held for its close")
+	}
+	onLoopWithin(app, func() { EditorSuspended.Store(false); drainDeferred() })
+	var answer string
+	deadline := time.Now().Add(5 * time.Second)
+	for answer == "" && time.Now().Before(deadline) {
+		onLoopWithin(app, func() {
+			if a.last != nil {
+				answer = a.last.Answer
+			}
+		})
+		time.Sleep(10 * time.Millisecond)
+	}
+	if answer != "42 late orders" {
+		t.Fatalf("the answer never landed after the editor closed (got %q)", answer)
+	}
+}
 
 func TestDeriveHeadline(t *testing.T) {
 	cases := []struct {

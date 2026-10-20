@@ -104,7 +104,7 @@ public class SearchOperationsResource {
                 .map(s -> executor.submit(() -> {
                     permits.acquire();
                     try {
-                        return body(tenant, s.name(), s.status(), s.invalidReason(),
+                        return body(tenant, s.name(), s.status(), s.invalidReason(), s.withheld(),
                             states.get(s.name()), oldestMarks.get(s.name()));
                     } finally {
                         permits.release();
@@ -133,7 +133,8 @@ public class SearchOperationsResource {
             long tenant = TenantContextFilter.current();
             SearchProjectionState state = stateStore.find(tenant, name).orElse(null);
             Instant oldestMark = markStore.oldestPendingMarkedAtForTenant(tenant).get(name);
-            Map<String, Object> body = body(tenant, name, decl.status(), decl.invalidReason(), state, oldestMark);
+            Map<String, Object> body = body(tenant, name, decl.status(), decl.invalidReason(), decl.withheld(),
+                state, oldestMark);
             body.put("lastError", state == null ? null : state.lastError());
             body.put("activeRun", activeRunBody(state));
             return Response.ok(body).build();
@@ -239,7 +240,7 @@ public class SearchOperationsResource {
      *  {@link TenantContextFilter#current()}, since {@link #list} dispatches this on a worker thread
      *  (code review finding) where that request-bound {@code ThreadLocal} is never set. */
     private Map<String, Object> body(long tenant, String name, String indexStatus, String invalidReason,
-                                     SearchProjectionState state, Instant oldestMark) {
+                                     boolean withheld, SearchProjectionState state, Instant oldestMark) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("name", name);
         // Review Focus: no row yet == awaiting first build. insertBuilding/transitionToBuilding always
@@ -260,6 +261,7 @@ public class SearchOperationsResource {
         body.put("lastRebuild", lastRebuildBody(state));
         body.put("invalid", "invalid".equals(indexStatus));
         body.put("invalidReason", invalidReason);
+        body.put("withheld", withheld);
         return body;
     }
 

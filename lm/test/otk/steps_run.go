@@ -262,7 +262,7 @@ func (s *scenarioState) cleanupRun() error {
 		s.cleaned = true
 		return nil
 	}
-	r := runner.Run(lmEnv(), lmBinary(), "connector", "delete", s.createdName)
+	r := runner.Run(lmEnv(), lmBinary(), "connector", "delete", "--force", s.createdName)
 	if !r.Started {
 		return fmt.Errorf("could not launch lm to delete %q: %s", s.createdName, r.Stderr)
 	}
@@ -296,7 +296,7 @@ func (s *scenarioState) safeguardCleanupTables() {
 	if s.cleaned || s.runDormant || s.createdName == "" {
 		return
 	}
-	r := runner.Run(lmEnv(), lmBinary(), "connector", "delete", s.createdName)
+	r := runner.Run(lmEnv(), lmBinary(), "connector", "delete", "--force", s.createdName)
 	if !r.Started || r.Exit != 0 {
 		fmt.Printf("  OTK safeguard cleanup: best-effort delete of %q failed: %s\n", s.createdName, r.Stderr)
 	}

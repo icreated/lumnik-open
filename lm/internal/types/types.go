@@ -32,6 +32,20 @@ type Connector struct {
 	LastRunAt *time.Time     `json:"lastRunAt,omitempty" yaml:"lastRunAt,omitempty"`
 }
 
+// TableRows is one table a connector delete would drop or empty, and the rows that would go with it:
+// the hub's dry run (#1218).
+type TableRows struct {
+	Table string `json:"table"`
+	Rows  int    `json:"rows"`
+}
+
+// DeleteTakes is what a connector delete would take, from the hub's dry run: its tables, and its
+// credential when it is the last connector authenticating with it (#1250).
+type DeleteTakes struct {
+	Tables     []TableRows `json:"tables"`
+	Credential string      `json:"credential,omitempty"`
+}
+
 // Run is one connector ingestion run: its lifecycle status, timing, and the
 // conservation-invariant record counts. recordsIn = recordsOut + recordsSkipped,
 // with deadLetterCount a subset of recordsSkipped (the DLQ holds the skips that
@@ -44,6 +58,10 @@ type Connector struct {
 // parse and nulled, letting the row through unchanged. The row WAS written — never
 // add or compare CellErrors against the records_* counts. A hub older than this
 // field's addition omits cellErrors from the JSON; it decodes as 0.
+//
+// RecordsRemoved is outside the identity too: rows a csv run that read its whole file removed
+// because the file no longer holds them (#1195), or the older versions of a key a jdbc table's
+// first keyed run removed (#1196). A hub older than this field omits it: 0.
 type Run struct {
 	ID              string     `json:"id"`
 	ConnectorID     string     `json:"connectorId"`
@@ -57,6 +75,7 @@ type Run struct {
 	RecordsOut      int64      `json:"recordsOut"`
 	RecordsSkipped  int64      `json:"recordsSkipped"`
 	CellErrors      int64      `json:"cellErrors"`
+	RecordsRemoved  int64      `json:"recordsRemoved"`
 	TriggeredBy     string     `json:"triggeredBy"`
 	ChunkCount      int        `json:"chunkCount"`
 	ErrorMessage    string     `json:"errorMessage"`
@@ -154,11 +173,15 @@ type HookDetail struct {
 
 // MigrationStatus reports one schema's Flyway migration state: current version,
 // pending count, and when the last migration was applied.
+//
+// LastApplied is the hub's RFC3339 string, kept as a string: a schema with no applied migration
+// comes as "" (#1149), which a time.Time refuses — and the whole reply with it. "" or absent means
+// never; render it with output.HumanTimeStrOr(s.LastApplied, "—").
 type MigrationStatus struct {
-	Schema         string    `json:"schema"`
-	CurrentVersion string    `json:"currentVersion"`
-	Pending        int       `json:"pending"`
-	LastApplied    time.Time `json:"lastApplied"`
+	Schema         string `json:"schema"`
+	CurrentVersion string `json:"currentVersion"`
+	Pending        int    `json:"pending"`
+	LastApplied    string `json:"lastApplied"`
 }
 
 // Endpoint is one connector endpoint: its HTTP method/path, schedule, enabled

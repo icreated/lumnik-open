@@ -4,10 +4,12 @@ import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.domain.EffectiveConfig;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
+import io.lumnik.hub.connector.rest.OutboundFailure;
 import io.lumnik.hub.connector.rest.RestHttpClient;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
 import io.lumnik.hub.connector.rest.Snippets;
+import io.lumnik.hub.connector.rest.Urls;
 import io.lumnik.hub.connector.rest.auth.AuthProvider;
 import io.lumnik.hub.connector.rest.auth.AuthProviderRegistry;
 import io.lumnik.hub.connector.rest.auth.AuthSpec;
@@ -50,9 +52,17 @@ public class RestPreflight {
      * {@code errors[]} is not ok). {@code items} is what the run's own pagination strategy would
      * have extracted from that page — a 2xx with zero items is precisely the shape that used to
      * land as a green empty sync, so a pre-flight owes the operator that number.
+     *
+     * <p>{@code url} is shown on purpose, through {@link Urls#forDisplay}: host and path, never the
+     * userinfo a {@code base_url} may carry nor the query an endpoint path may (#1166). Applied here,
+     * once, so no verdict can be built around it.
      */
     public record Verdict(String endpoint, String method, String url, int status,
-                          boolean ok, int items, String detail, String sample) {}
+                          boolean ok, int items, String detail, String sample) {
+        public Verdict {
+            url = Urls.forDisplay(url);
+        }
+    }
 
     public Verdict check(Connector c, ConnectorEndpoint ep) {
         Map<String, Object> cfg = EffectiveConfig.of(c, ep);
@@ -90,8 +100,10 @@ public class RestPreflight {
         } catch (InterruptedException cancelled) {
             throw interrupted(cancelled);
         } catch (Exception unreachable) {
+            // The kind, never the message: a JDK message can quote the URL, credential included
+            // (#1164). The other three catches keep describe(): their messages are ours.
             return new Verdict(ep.getName(), signed.method(), signed.url(), 0, false, 0,
-                describe(unreachable), "");
+                OutboundFailure.describe(unreachable), "");
         }
 
         String sample = Snippets.bound(resp.body());

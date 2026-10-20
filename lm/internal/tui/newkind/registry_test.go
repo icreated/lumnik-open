@@ -9,8 +9,8 @@ import (
 
 func TestRegistryComplete(t *testing.T) {
 	kinds := All()
-	if len(kinds) != 9 {
-		t.Fatalf("expected 9 kinds (Workflow joins in this rung), got %d", len(kinds))
+	if len(kinds) != 13 {
+		t.Fatalf("expected 13 kinds (App, View, Export, SearchIndex join in #1118), got %d", len(kinds))
 	}
 	for _, k := range kinds {
 		if k.Template == "" || k.Doc == "" || k.Observe == "" || k.Source == "" {

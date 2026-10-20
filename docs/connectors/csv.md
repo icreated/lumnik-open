@@ -17,38 +17,39 @@
 --8<-- "docs/connectors/csv/10-local-simple.yaml"
 ```
 
-From the repository root. The manifest's `path:` is read by the **hub**, so the sample file
-must be where the hub can see it — on the self-host stack, copy it into the container first
-(`docker cp docs/connectors/csv/data/customers.csv lumnik-hub-1:/tmp/exports/` and point
-`path:` there; in dev mode the repo-relative path works as is):
+The manifest's `path:` is read by the **hub**. On the self-host stack, copy the sample file into
+the container first (`docker cp docs/connectors/csv/data/customers.csv lumnik-hub-1:/tmp/exports/`)
+and point `path:` there; a hub in dev mode reads the repo-relative path as is. From the repository root:
 
 ```
 $ lm validate -f docs/connectors/csv/10-local-simple.yaml
-✓ docs/connectors/csv/10-local-simple.yaml — valid
+✓ 10-local-simple.yaml — valid
 $ lm apply -f docs/connectors/csv/10-local-simple.yaml
-{"name":"csv-local-simple","connectorId":"8e01c813-7f57-4222-8d7b-e637dfcc94c3","endpointsApplied":1}
+{"name":"csv-local-simple","connectorId":"f59d18ef-d308-4015-8e84-7fd8cb3a8250","endpointsApplied":1}
 $ lm connector run csv-local-simple
-run scheduled: e9cd433e-3a57-43ff-9ea7-737f2718be0a
+run scheduled: 2e37cb12-0a66-4c4c-a4c2-b796b2d40540
 ```
 
-"Scheduled" is not "done" — the run ledger is where the result lands, a second later:
+"Scheduled" is not "done" — the result lands in the run ledger a second later:
 
 ```
-$ lm run get e9cd433e
+$ lm run get 2e37cb12
 ID        CONNECTOR         ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-e9cd433e  csv-local-simple  default   Completed  2   2    0        0             2026-09-06 22:11  2026-09-06 22:11
+2e37cb12  csv-local-simple  default   Completed  2   2    0        0             2026-10-19 01:39  2026-10-19 01:39
 ```
 
-`STARTED` / `ENDED` are printed in **your terminal's time zone** (these screens: Paris, UTC+2);
-the hub stores UTC, and `schedule` is evaluated in UTC.
+`STARTED` / `ENDED` are in your terminal's time zone (these screens: Paris, UTC+2); `schedule`
+is evaluated in UTC.
 
 What landed in `connector.t_csv_local_simple` — the header row became the columns:
 
 ```
+lumnik=> select row_id, email, signup_date from connector.t_csv_local_simple;
  row_id |    email    | signup_date
 --------+-------------+-------------
  1      | alice@x.com | 02/06/2026
  2      | bob@x.com   | 15/01/2026
+(2 rows)
 ```
 
 Run it again on the unchanged file, then once more after a third line is appended:
@@ -56,28 +57,25 @@ Run it again on the unchanged file, then once more after a third line is appende
 ```
 $ lm run list --connector csv-local-simple
 ID        CONNECTOR         ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-f550a8ef  csv-local-simple  default   Completed  3   3    0        0             2026-09-06 22:12  2026-09-06 22:12
-b469deba  csv-local-simple  default   Completed  0   0    0        0             2026-09-06 22:11  2026-09-06 22:11
-e9cd433e  csv-local-simple  default   Completed  2   2    0        0             2026-09-06 22:11  2026-09-06 22:11
+2565ea5a  csv-local-simple  default   Completed  3   3    0        0             2026-10-19 01:39  2026-10-19 01:39
+52d1ac0b  csv-local-simple  default   Completed  0   0    0        0             2026-10-19 01:39  2026-10-19 01:39
+2e37cb12  csv-local-simple  default   Completed  2   2    0        0             2026-10-19 01:39  2026-10-19 01:39
 ```
 
-- **A file already read is not read again** — the second run says `IN 0`. A file that
-  changed (replaced in place, or grown, as here) is read again in full: the third run says `IN 3`.
-- **The table deduplicates** by `_row_hash`: after three runs it holds 3 rows, not 5. The
-  appended line is the only new one.
-- Where the run counters diverge — `SKIPPED`, `DEAD-LETTERS` — is
-  [below](#malformed-rows-the-per-row-dlq).
+- **A file already read is not read again** — the second run says `IN 0`. A file that changed
+  (replaced in place, or grown) is read again in full: the third run says `IN 3`.
+- **The table deduplicates**: after three runs it holds 3 rows, not 5.
+- `SKIPPED` and `DEAD-LETTERS` are explained [below](#malformed-rows-the-per-row-dlq).
 
 ## The three transports
 
-The manifest's `transport:` block picks one. What differs is **where the files are, how the
-cursor remembers them, and what may happen to a file once its rows are in**:
+The manifest's `transport:` block picks one:
 
 | | `local` | `sftp` | `s3` |
 |---|---|---|---|
 | files are on | the **hub's** filesystem | a remote server | a bucket |
 | selected by | path or glob | path or glob | `prefix` + `suffix` |
-| cursor | row position in the lexically sorted glob result | file modification time | file modification time |
+| a new run reads | files whose name sorts after the last one read | files modified since the last run | files modified since the last run |
 | `after_process` | `none` only | all four | all four |
 | credentials | — | `key_env` or `password_env` | `access_key_env` / `secret_key_env` |
 
@@ -89,66 +87,46 @@ transport:
   path: /imports/*.csv        # glob OK
 ```
 
-- **The path is the hub's filesystem.** The shipped self-host stack mounts nothing: a local
-  path needs a volume, or use `sftp`/`s3`, or upload one file with
-  [`lm csv ingest`](#connector-runs-vs-one-shot-lm-csv-ingest).
-- **Glob rules**: `*` and `?` only, and only in the **final filename segment** — the
-  directory part must be literal (`/imports/*/x.csv` never matches; there is no `**`).
-- **No name is excluded implicitly** — a `*.csv` glob is how you keep `.tmp` files out.
-- **A path that matches nothing is not an error**: the run completes with `IN 0`. A file that
-  vanished from the hub's disk looks exactly like an empty folder — check the path first.
-- Older pre-manifest configs with a bare top-level `path:` still work; manifests always
-  declare `transport:`.
+- **The path is on the hub's filesystem.** The self-host stack mounts nothing: mount a volume,
+  use `sftp`/`s3`, or upload one file with [`lm csv ingest`](#connector-runs-vs-one-shot-lm-csv-ingest).
+- **Glob**: `*` and `?` only, in the **final filename segment** — `/imports/*/x.csv` never
+  matches, and there is no `**`.
+- **No name is excluded implicitly** — use `*.csv` to keep `.tmp` files out.
+- **A path that matches nothing is not an error**: the run completes with `IN 0`.
+- **A path without `*` or `?` names one file**, and that file is the whole table — see
+  [full refresh](#one-file-is-the-table-full-refresh).
 
-**How a drop folder behaves, run by run.** A 1 200-row export dropped as
-`2026-09-01-orders.csv`, then two more files:
+**A drop folder, run by run.** A 1 200-row export `2026-09-01-orders.csv`, then two more files:
 
 ```
 $ lm run list --connector orders-drop
 ID        CONNECTOR    ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
-c593f035  orders-drop  default   Completed  0     0     0        0             2026-09-06 22:14  2026-09-06 22:14
-972ef27a  orders-drop  default   Completed  10    10    0        0             2026-09-06 22:13  2026-09-06 22:13
-a13c89f4  orders-drop  default   Completed  0     0     0        0             2026-09-06 22:13  2026-09-06 22:13
-c563f800  orders-drop  default   Completed  1200  1200  0        0             2026-09-06 22:13  2026-09-06 22:13
+b159e727  orders-drop  default   Completed  0     0     0        0             2026-10-19 01:39  2026-10-19 01:39
+393a2729  orders-drop  default   Completed  10    10    0        0             2026-10-19 01:39  2026-10-19 01:39
+165a4c6d  orders-drop  default   Completed  0     0     0        0             2026-10-19 01:39  2026-10-19 01:39
+ff5b8f80  orders-drop  default   Completed  1200  1200  0        0             2026-10-19 01:39  2026-10-19 01:39
 ```
 
 | run | the folder holds | `IN` | why |
 |---|---|---|---|
 | 1 | `2026-09-01` (1 200 rows) | 1 200 | first read |
-| 2 | the same file | 0 | the run saved its end position: the file was read in full |
-| 3 | plus `2026-09-02` (10 rows) | 10 | only the new file — it sorts **after** the cursor's file |
-| 4 | plus `2026-08-31` (5 rows) | 0 | the new file sorts **before** the cursor's file — **never read** |
+| 2 | the same file | 0 | already read in full |
+| 3 | plus `2026-09-02` (10 rows) | 10 | only the new file — it sorts **after** the last file read |
+| 4 | plus `2026-08-31` (5 rows) | 0 | it sorts **before** the last file read — **never read** |
 
-!!! warning "Drop-directory contract: names must grow lexically"
-    - The cursor is a position in the **lexically sorted** glob result: the file it is on,
-      and how many rows of it are consumed. The next run resumes there and continues with the
-      files that sort after it.
-    - A file dropped later with a lexically **earlier** name sorts before the cursor and is
-      treated as already ingested — run 4 above. Name incoming files monotonically
-      (date-prefixed: `2026-07-25-orders.csv`).
-    - The cursor is saved after every 500-row chunk, and again at the end of every run that
-      read something: it then names the last file and its bytes as they were. A file read in
-      full is skipped while it is unchanged; one that changed (replaced in place, or grown) is
-      read again in full, and the table deduplicates it. Changes are detected by size and
-      modification time.
-    - If your producer cannot guarantee monotonic names, use an sftp/s3 transport: their
-      cursor tracks files by modification time instead.
-    - **The folder is listed once per run**, at the run's first chunk, and every chunk of that
-      run reads that list. A file dropped while the run is going waits for the next run, which
-      resumes from the cursor **where this run ended**: the file is read only if its name sorts
-      after that cursor's file. A file that lands between two files of the list (`part-02` while
-      the run is on `part-01` and the list holds `part-03`, `part-04`) is therefore not read
-      this run and, once the run has passed it, never. If a producer writes a set of files in
-      parallel, have it write them under a name the glob does not match and rename each one in
-      when complete.
-    - A file of the list that is removed or moved **before the run reaches it** fails the run
-      with an error naming it.
-    - **Once a run is `Completed`, the files it read may be archived**: the next run goes on
-      with the files that sort after the one the cursor names. Archive a file while its run is
-      still going, or after a run that failed midway, and the cursor may still name it while
-      later files wait: the next run then fails naming that file, because the hub cannot know
-      whether it was fully read. Run `lm endpoint reset-cursor <connector>/<endpoint>`; the next
-      run reads again from the first file, and the table deduplicates what it already holds.
+!!! warning "Drop-folder contract: names must grow lexically"
+    A run resumes after the last file it read, in name order. Name incoming files
+    monotonically (date-prefixed: `2026-07-25-orders.csv`), or use sftp/s3, which track
+    modification time instead.
+
+    | situation | what happens | what to do |
+    |---|---|---|
+    | a file arrives with a name sorting **before** the last file read | never read | name files monotonically |
+    | a file arrives while a run is going | waits for the next run; read only if its name sorts after where that run ended | have the producer write under a name the glob does not match, then rename it in |
+    | a listed file is removed before the run reaches it | the run fails, naming the file | run again |
+    | a file is archived before its run is `Completed` (or after a run that failed midway) | if later files are waiting, the next run fails, naming that file | `lm endpoint reset-cursor <connector>/<endpoint>`: the next run reads from the first file, the table deduplicates |
+
+    Files read by a `Completed` run may be archived safely.
 
 ### SFTP — a remote folder, a secret, a fingerprint
 
@@ -160,29 +138,23 @@ transport:
   user: lumnik
   path: /erp-export/*.csv     # glob OK
   password_env: SFTP_ERP_PASSWORD           # OR key_env (the PEM private key) — one is required
-  host_key_fingerprint: "SHA256:M0Is0aG8ubOr0cLpQs6QcDwVSxMkvmlfuW4K9Q6CJuc"
+  host_key_fingerprint: "SHA256:M0Is0aG8ubOr0cLpQs6QcDwVSxMkvmlfuW4K9Q6CJuc"  # required unless strict_host_key: false
   # strict_host_key: true     # the default — refuses unless the fingerprint above matches
 # spec level, next to transport:
 after_process: archive
 archive_path: /archive/       # default /archive/; required when after_process: move
 ```
 
-**Credentials are never inline.** `key_env` / `password_env` name a secret the platform holds —
-[`lm secret`](../admin-console-guide.md) first, an OS env var of that name as fallback:
+**Credentials are never inline.** `key_env` / `password_env` name a secret stored with
+[`lm secret`](../cli/lm-reference.md#data-runs-answers); an OS env var of that name is the fallback:
 
 ```
 $ lm secret set SFTP_ERP_PASSWORD
-Value for SFTP_ERP_PASSWORD: 
+Value for SFTP_ERP_PASSWORD:
 Created secret "SFTP_ERP_PASSWORD"
-$ lm secret list
-NAME                           ROTATED_AT                     DESCRIPTION
-ACME_SFTP_KEY                  -                              SFTP key - erp-export test VPS
-AWS_ACCESS_KEY_ID              -                              S3 test key - lumnik-exports
-AWS_SECRET_ACCESS_KEY          -                              S3 test secret - lumnik-exports
-SFTP_ERP_PASSWORD              -
 ```
 
-A manifest with neither credential is refused before anything is applied:
+A manifest with neither credential is refused:
 
 ```
 $ lm validate -f sftp-nocred.yaml
@@ -191,19 +163,19 @@ $ lm validate -f sftp-nocred.yaml
   ERROR    spec.transport
           SFTP transport requires key_env or password_env
           → Use `lm secret set <NAME> ...` then reference via key_env: <NAME>
+
+Fix errors above before running 'lm apply -f sftp-nocred.yaml'.
+Error: validation failed: 1 error(s)
 ```
 
-**One session per run.** A run opens one SFTP session and keeps it until the run ends; it used to open
-one for every 500 rows. Your server therefore sees one connection per running endpoint for as long as the
-run lasts, and its idle timeout and its limit on concurrent sessions apply to that connection. If the
-session is lost between two chunks, the next chunk opens a new one and carries on; a session that silently
-stops answering (a firewall dropping an idle connection, say) is noticed by a check of at most 15 seconds
-at the start of the next chunk. If the session is lost in the middle of a chunk, that chunk fails with the
-connection error, as before.
+**One session per run.** Your server sees one connection per running endpoint, for the whole run:
 
-**The host key is verified.** `strict_host_key` defaults to `true`, and then
-`host_key_fingerprint` must match what the server presents. The refusal is a run failure that
-teaches — here with a wrong fingerprint declared (host renamed):
+- its idle timeout and its limit on concurrent sessions apply to that connection;
+- a session lost between two chunks is reopened, and a silent one is detected within 15 seconds;
+- a session lost in the middle of a chunk fails the run with the connection error.
+
+**The host key is verified.** With `strict_host_key: true` (the default), `host_key_fingerprint`
+must match what the server presents. Here a wrong fingerprint is declared:
 
 ```
 $ lm run get b31b1efe
@@ -212,22 +184,13 @@ b31b1efe  sftp-badkey  default   Failed  0   0    0        0             2026-09
 ✖ run failed: SFTP host key refused for sftp.example.com:22 — the server presented SHA256:M0Is0aG8ubOr0cLpQs6QcDwVSxMkvmlfuW4K9Q6CJuc, and it does not match the declared SHA256:0000000000000000000000000000000000000000000. Confirm that fingerprint out of band (ssh-keyscan -p 22 sftp.example.com | ssh-keygen -lf -), then set host_key_fingerprint: "SHA256:M0Is0aG8ubOr0cLpQs6QcDwVSxMkvmlfuW4K9Q6CJuc" in the transport block. Setting strict_host_key: false connects without checking at all — which accepts an impostor as readily as the real server.
 ```
 
-- The message carries the fingerprint the server presented. **Confirm it out of band**
-  (the `ssh-keyscan | ssh-keygen -lf -` line, run from a machine you trust), then paste it.
-- `strict_host_key: false` skips the check entirely — an impostor between the hub and your
-  server would then feed rows into ingestion and collect the password. Keep it for a
-  throwaway container whose key changes at every restart, never for a real server.
-- The docker-compose demo server is exactly that case: [`30-sftp-key.yaml`](#ingest-an-sftp-folder-nightly)
-  sets `strict_host_key: false` and says why.
+- **Confirm the presented fingerprint out of band** (the `ssh-keyscan | ssh-keygen -lf -` line,
+  from a machine you trust), then paste it.
+- `strict_host_key: false` skips the check: an impostor would receive the password and feed
+  rows. Use it only for a throwaway container whose key changes at every restart — as the demo
+  manifest [`30-sftp-key.yaml`](#ingest-an-sftp-folder-nightly) does.
 
-!!! warning "Existing connectors stopped when verification became real"
-    `strict_host_key` used to change nothing: set to `false` it installed an accept-anything
-    verifier; set to `true` — the default — it installed nothing, and the SSH library's own
-    default accepted any key. An SFTP connector that ran happily on the default **stops
-    connecting until you declare the fingerprint** — which is the point: it was never
-    verified, and the green said otherwise.
-
-A wrong password, or a user without read rights on the folder, fails the run the same way:
+A wrong password, or a user who cannot read the folder:
 
 ```
 $ lm run get 22957eeb
@@ -236,10 +199,9 @@ ID        CONNECTOR                    ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-
 ✖ run failed: SFTP error (SSH_FX_PERMISSION_DENIED): Permission denied
 ```
 
-**The cursor tracks files, not rows.** Each run lists the files matching `path`, keeps those
-modified at or after the watermark, skips the ones the last batch already ingested (same
-path and size), and reads them oldest first. A file is read once; a run that finds nothing
-new reads nothing:
+**A file is read once while it is unchanged**; one rewritten later (newer modification time) is
+read again. Oldest first; a run that finds nothing new reads nothing.
+Zero-byte files are never listed — never ingested, never archived:
 
 ```
 $ lm run list --connector sftp-c-bpartner-credentials
@@ -248,8 +210,6 @@ a9533cb5  sftp-c-bpartner-credentials  default   Completed  0      0      0     
 80032250  sftp-c-bpartner-credentials  default   Completed  6      5      1        1             2026-09-04 15:27  2026-09-04 15:27
 8358fb91  sftp-c-bpartner-credentials  default   Completed  19009  19009  0        0             2026-09-04 14:40  2026-09-04 14:41
 ```
-
-Zero-byte files are never listed — never ingested, never archived.
 
 ### S3 — a prefix in a bucket (AWS, MinIO, R2, GCS S3-compat)
 
@@ -267,17 +227,13 @@ transport:
   archive_prefix: archive/     # optional, default archive/
 ```
 
-- The listing is `prefix` then `suffix` — `billing/` + `.csv` reads `billing/2026-09-01.csv`
-  and ignores `billing/2026-09-01.csv.tmp`.
-- Same cursor as SFTP: modification time + the last batch (path, size, and the object's
-  ETag), oldest first, zero-byte objects skipped.
-- `access_key_env` / `secret_key_env` are secret **names** (`lm secret set AWS_ACCESS_KEY_ID`),
-  resolved like the SFTP ones. They are read when a run starts: a key you rotate takes effect at
-  the next run, not in the middle of the one in progress.
+- `billing/` + `.csv` reads `billing/2026-09-01.csv` and ignores `billing/2026-09-01.csv.tmp`.
+- Same rule as SFTP: an object is read when new or rewritten, oldest first; zero-byte objects are skipped.
+- `access_key_env` / `secret_key_env` are secret **names** (`lm secret set AWS_ACCESS_KEY_ID`).
+  A rotated key takes effect at the next run.
 
-**One export, archived after commit.** The manifest of the [S3 how-to](#ingest-a-headerless-export-under-an-s3-prefix-and-archive-it)
-reads `billing/`, then moves each file to `lumnik-archive/archive/` once a later committed
-cursor proves its rows landed:
+**One export, archived after commit** — the manifest of the
+[S3 how-to](#ingest-a-headerless-export-under-an-s3-prefix-and-archive-it):
 
 ```
 $ lm run list --connector s3-c-bpartner
@@ -289,8 +245,7 @@ dda81fcb  s3-c-bpartner  default   Completed  0      0      0        0          
 
 - **16:03** — the 19 009-row export, read and archived.
 - **16:21** — nothing new under `billing/` (the file is in the archive bucket now): `IN 0`.
-- **16:30** — a 10-record file dropped in the meantime, half of it malformed on purpose:
-  5 rows in, 5 dead-lettered ([below](#malformed-rows-the-per-row-dlq)).
+- **16:30** — a 10-record file, half malformed on purpose: 5 rows in, 5 dead-lettered.
 
 ## Parser
 
@@ -304,11 +259,9 @@ parser:
   columns: [code, name, email]  # REQUIRED when has_header: false; ignored otherwise
 ```
 
-- **Auto-detection is per file**, when the key is absent. `encoding`: detected, fallback
-  UTF-8. `delimiter`: the most frequent of `,` `;` TAB `|` over the first 8 KB, fallback `,`.
-  An explicit key overrides only that aspect.
-- **Headerless files need names.** With `has_header: false`, `columns` lists them in file
-  order (`"\t"` is how a tab delimiter is written in YAML):
+- **Auto-detection is per file.** `encoding`: detected, fallback UTF-8. `delimiter`: the most
+  frequent of `,` `;` TAB `|` over the first 8 KB, fallback `,`. An explicit key overrides it.
+- **Headerless files need names**, in file order (`"\t"` is a tab in YAML):
 
     ```yaml
     parser:
@@ -317,23 +270,28 @@ parser:
       columns: [c_bpartner_id, name, created, isactive]
     ```
 
-    Forget `columns` and the manifest is refused: `columns is required when has_header:
-    false — headerless rows need names`.
-- **An empty value is a present column, not a missing one.** `1,` against two columns is a row
-  with an empty second value — written, and read as `null` because `""` is in `null_values`
-  by default (override the list and the column keeps `""`).
+    Without `columns`:
 
-!!! note "Chunking is fixed, not a knob"
-    Every connector run, local or remote (sftp/s3), commits in fixed **500-row chunks**; a file
-    longer than that spans several chunks, and the cursor carries the in-progress file, so a run
-    resumes mid-file. Chunk and file boundaries differ by transport: a remote chunk holds rows
-    from one file only; a local glob run fills the chunk from the next file when the current one
-    runs out. A `chunk_size` key is ignored (the validator warns).
+    ```
+    $ lm validate -f hl.yaml
+    ✗ hl.yaml — 1 error(s), 0 warning(s)
+
+      ERROR    spec.parser.columns
+              columns is required when has_header: false — headerless rows need names
+              → Add parser.columns: [code, name, ...] in file order
+
+    Fix errors above before running 'lm apply -f hl.yaml'.
+    Error: validation failed: 1 error(s)
+    ```
+
+- **An empty value is a present column.** `1,` against two columns is written, the second value
+  `null` (because `""` is in `null_values`; override the list to keep `""`).
+- Runs commit in fixed **500-row chunks**; a `chunk_size` key is ignored (the validator warns).
 
 ## Malformed rows — the per-row DLQ
 
-A malformed row never fails the file. It is set aside in the dead-letter queue (**DLQ**),
-reason `MalformedSource`, and the run continues. A 6-line file with two bad rows:
+A malformed row never fails the file. It goes to the dead-letter queue (**DLQ**), reason
+`MalformedSource`, and the run continues. A 6-row file with two bad rows:
 
 ```csv
 "c_bpartner_id","name"
@@ -346,30 +304,31 @@ BADROW2
 ```
 
 ```
-$ lm run get c6fc75c9
-ID        CONNECTOR                 ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-c6fc75c9  sftp-malformed-after-fix  default   Completed  6   4    2        2             2026-09-04 15:58  2026-09-04 15:58
-⚠ 2 rows quarantined — see: lm dlq list --run c6fc75c9-4fde-4718-ba50-fe12d7d71598
-$ lm dlq list --run c6fc75c9-4fde-4718-ba50-fe12d7d71598
-ID        CONNECTOR                 RUN       REASON           ATTEMPTS  MESSAGE
-f1cd674e  sftp-malformed-after-fix  c6fc75c9  MalformedSource  1         /erp-export/c_bpartner_malformed.csv:6 — Index for header …
-5c6bee87  sftp-malformed-after-fix  c6fc75c9  MalformedSource  1         /erp-export/c_bpartner_malformed.csv:4 — Record has 3 valu…
+$ lm run get 0a4af97d
+ID        CONNECTOR      ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+0a4af97d  csv-malformed  default   Completed  6   4    2        2             2026-10-19 01:40  2026-10-19 01:40
+⚠ 2 rows quarantined — see: lm dlq list --run 0a4af97d-cac0-4de0-a299-1db4599b8b31
+$ lm dlq list --run 0a4af97d-cac0-4de0-a299-1db4599b8b31
+ID        CONNECTOR      RUN       REASON           ATTEMPTS  MESSAGE
+556c4da1  csv-malformed  0a4af97d  MalformedSource  1         /tmp/exports/erp-export/c_bpartner_malformed.csv:6 — Index f…
+a2867c28  csv-malformed  0a4af97d  MalformedSource  1         /tmp/exports/erp-export/c_bpartner_malformed.csv:4 — Record …
 ```
 
-**Malformed means the row does not match the column count its header declares — in either
-direction.** The dead-letter entry keeps every raw value, with the file and line:
+The entry keeps every raw value, with the file and line:
 
 ```
-$ lm dlq get 5c6bee87
-ID:        5c6bee87-beba-4dd7-9140-61de22c0cad4
-Connector: sftp-malformed-after-fix (f9152c65-202f-4ad4-b494-37972b22ef57)
-Run:       c6fc75c9-4fde-4718-ba50-fe12d7d71598
+$ lm dlq get a2867c28
+ID:        a2867c28-0424-44f7-86dd-77f3a0d86872
+Connector: csv-malformed (434507c6-df49-4a09-a59f-dfb5df0589e9)
+Run:       0a4af97d-cac0-4de0-a299-1db4599b8b31
 Reason:    MalformedSource
 Attempts:  1
-Message:   /erp-export/c_bpartner_malformed.csv:4 — Record has 3 values but only 2 columns are declared
-Detail:    {"file":"/erp-export/c_bpartner_malformed.csv","line":4,"message":"Record has 3 values but only 2 columns are declared"}
-Payload:   {"raw":["BADROW","trop de colonnes","erp legacy glitch"],"file":"/erp-export/c_bpartner_malformed.csv","line":4}
+Message:   /tmp/exports/erp-export/c_bpartner_malformed.csv:4 — Record has 3 values but only 2 columns are declared
+Detail:    {"file":"/tmp/exports/erp-export/c_bpartner_malformed.csv","line":4,"message":"Record has 3 values but only 2 columns are declared"}
+Payload:   {"raw":["BADROW","trop de colonnes","erp legacy glitch"],"file":"/tmp/exports/erp-export/c_bpartner_malformed.csv","line":4}
 ```
+
+**Malformed = the value count differs from the declared columns, in either direction:**
 
 | the row | against 2 declared columns | result |
 |---|---|---|
@@ -377,28 +336,131 @@ Payload:   {"raw":["BADROW","trop de colonnes","erp legacy glitch"],"file":"/erp
 | `BADROW2` | 1 value | DLQ — `Index for header 'name' is 1 but CSVRecord only has 1 values!` |
 | `1,` | 2 values, one empty | **written**, `name` is `null` |
 | `1,2,` | 3 values — a trailing delimiter is one column too many | DLQ |
+| `3,"open` (unclosed quote) | swallows the rest of the file | DLQ — one entry; the lines after it are never rows |
 
-- **The extra value is never dropped to make the row fit** — a value the hub silently
-  discards is a loss no count would show you.
-- **A trailing delimiter on every line lands the whole file in the DLQ.** Strip it
-  producer-side.
-- **`SKIPPED` and `DEAD-LETTERS` move together** for malformed rows; the cursor counts consumed
-  records, so a resume never re-emits a row already dead-lettered.
-- **An unclosed quote swallows the rest of the file** into one record, which is then
-  dead-lettered as an `IOException` — the lines after it are never seen as rows.
-- Inspect entries with [`lm dlq`](../cli/lm-reference.md) — `list`, `get`, then `discard`, or
-  `replayed` to record that you re-sent the row yourself (the hub never re-reads a dead letter;
-  fix the export and run again). Rows a `validate-row` hook drops land here too, reason
-  `ValidationFailed`.
-- **This is connector-run behaviour.** The one-shot `lm csv ingest` has no DLQ to route a row
-  to — its first malformed row aborts the whole ingest ([below](#what-one-shot-actually-does)).
+- **An extra value is never dropped to make the row fit.**
+- **A trailing delimiter on every line sends the whole file to the DLQ** — strip it producer-side.
+- **`SKIPPED` and `DEAD-LETTERS` move together** for malformed rows.
+- [`lm dlq`](../cli/lm-reference.md): `list`, `get`, then `discard`, or `replayed` once you
+  re-sent the row yourself. The hub never re-reads a dead letter — fix the export and run again.
+- Rows a `validate-row` hook drops land here too, reason `ValidationFailed`.
+- The one-shot `lm csv ingest` has no DLQ: its first malformed row refuses the whole ingest
+  with a `400` naming the line ([below](#what-one-shot-actually-does)).
+
+## One file is the table — full refresh
+
+A local `path` with no `*` or `?` names one file, and that file is the table's whole state. A
+run that reads it to the end and succeeds removes the rows the file no longer holds.
+
+```yaml
+transport:
+  kind: local
+  path: /imports/articles.csv    # one file: full refresh
+after_process: none
+refresh:
+  max_removed: 30%               # the default — off, or 100%, lifts the guard
+```
+
+Ten articles, then `A07` deleted from the file:
+
+```
+$ lm run get 2a1c346f
+ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+2a1c346f  articles   default   Completed  9   9    0        0             2026-10-19 01:41  2026-10-19 01:41
+• 1 row(s) removed — the source no longer holds them
+```
+
+The removed count sits outside `IN = OUT + SKIPPED`: the run never read those rows.
+
+**Four guards: the run fails and nothing is removed.** The next run reads the whole file again.
+
+- **The table would shrink by more than `refresh.max_removed`** (30% unless declared). A truncated
+  export looks exactly like a purge. Here the file is cut to 4 lines; the purge is real, so the
+  threshold is raised:
+
+```
+$ lm run get d4fa0d53
+ID        CONNECTOR  ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+d4fa0d53  articles   default   Failed  4   4    0        0             2026-10-19 01:41  2026-10-19 01:41
+✖ run failed: 5 of 9 rows would be removed: the file holds 4 where the table held 9, more than refresh.max_removed (30%) allows — nothing was removed. If the file really lost them, raise refresh.max_removed (or set it to off) and run again.
+$ tail -3 articles.yaml
+  after_process: none
+  refresh:
+    max_removed: 60%
+$ lm apply -f articles.yaml
+{"name":"articles","connectorId":"96636ab2-3a72-4f9e-a351-eb9d497de081","endpointsApplied":1}
+$ lm connector run articles
+run scheduled: 54de3ded-1939-449a-bd99-73eb36813a1d
+$ lm run get 54de3ded
+ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+54de3ded  articles   default   Completed  4   4    0        0             2026-10-19 01:41  2026-10-19 01:41
+• 5 row(s) removed — the source no longer holds them
+```
+
+- **A row of the file went to the dead letters** while rows would be removed: its last good
+  version stays. A row a `validate-row` hook drops counts the same way.
+
+```
+$ lm run get 08cb8fb5
+ID        CONNECTOR  ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+08cb8fb5  articles   default   Failed  4   3    1        1             2026-10-19 01:41  2026-10-19 01:41
+⚠ 1 rows quarantined — see: lm dlq list --run 08cb8fb5-286b-4fe0-84bd-eafec50d10f5
+✖ run failed: 1 row(s) of the file went to the dead letters this run (lm dlq list --run 08cb8fb5-286b-4fe0-84bd-eafec50d10f5): a full refresh removes nothing while a row of the file is in the dead letters, whatever its reason (unreadable, dropped by validate-row…) — nothing was removed. Fix the cause each dead letter reports (lm dlq get <id>) and run again.
+```
+
+- **An empty file** (a header and no rows) never empties the table:
+
+```
+$ lm run get 4f61dcf3
+ID        CONNECTOR  ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+4f61dcf3  articles   default   Failed  0   0    0        0             2026-10-19 01:41  2026-10-19 01:41
+✖ run failed: the file is empty: a full refresh never empties a table from an empty file — nothing was removed. If the source really is empty, delete the connector's data instead (lm connector delete).
+```
+
+- **The file changed while the run read it** (rewritten between two chunks): the run fails with
+  `the file changed while this run was reading it`.
+
+The guards speak only when rows would be removed. A dead letter on a new row, with nothing to
+remove, completes as usual (`IN 5  OUT 4  DEAD-LETTERS 1`).
+
+**New values are not a loss.** Every price of the 4-line file changed: the 4 old versions go,
+the table holds the 4 new rows, and the guard sees no shrink:
+
+```
+$ lm run get 16ad0bee
+ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+16ad0bee  articles   default   Completed  4   4    0        0             2026-10-19 01:41  2026-10-19 01:41
+• 4 row(s) removed — the source no longer holds them
+```
+
+**What never removes a row:**
+
+| the run | why |
+|---|---|
+| finds the file unchanged | it is not read again (size and modification time) |
+| resumes a file a failed run left half-read | it did not read the whole file |
+| reads a glob (`*.csv`) | a drop folder only adds |
+| reads an sftp or s3 transport | each file is read when new or rewritten; nothing is compared |
+
+A `refresh` block on a drop folder is flagged:
+
+```
+$ lm validate -f drop.yaml
+! drop.yaml — 0 error(s), 1 warning(s)
+
+  WARN     spec.refresh
+          refresh is read only for one local file (transport kind: local, a path without * or ?): this source is a drop folder and never removes rows, so the block does nothing here
+          → Remove the refresh block, or point transport.path at the one file that holds the table
+```
+
+Only this connector's rows are removed; a row another connector landed in the same table stays.
+A removed row also leaves the entities fused from it, `lm ask`, and any Search index over them.
 
 ## Scheduling & lifecycle
 
-- **`schedule`** — optional cron, 5 fields, evaluated in **UTC** (`0 6 * * *` = daily at
-  06:00 UTC). Validated at apply time. The hub's own scheduler fires it — no OS cron. A
-  re-apply without `schedule` unschedules the connector. Add `window: "22:00-06:00"` (UTC, end
-  exclusive) to fence scheduled runs into a time window.
+- **`schedule`** — optional cron, 5 fields, in **UTC** (`0 6 * * *` = daily at 06:00 UTC),
+  checked at apply. The hub fires it — no OS cron. A re-apply without `schedule` unschedules
+  the connector. `window: "22:00-06:00"` (UTC, end exclusive) fences scheduled runs.
 - **`after_process`** — required. What happens to a file once its rows are committed:
 
 | | `none` | `archive` | `move` | `delete` |
@@ -408,9 +470,6 @@ Payload:   {"raw":["BADROW","trop de colonnes","erp legacy glitch"],"file":"/erp
 | s3 | ✓ | → `archive_bucket`/`archive_prefix` (defaults: source bucket, `archive/`) | same | ✓ |
 | local | ✓ | **refused** | **refused** | **refused** |
 
-The local reader has no per-file completion tracking — a relocation would never execute,
-so the validator refuses it rather than let files silently stay in place:
-
 ```
 $ lm validate -f local-archive.yaml
 ✗ local-archive.yaml — 1 error(s), 0 warning(s)
@@ -418,27 +477,38 @@ $ lm validate -f local-archive.yaml
   ERROR    spec.after_process
           after_process: archive is not executed on local connector runs — files stay in place (honored by one-shot lm csv ingest and by sftp/s3)
           → Set after_process: none for a local connector, or move the files with an sftp/s3 transport
+
+Fix errors above before running 'lm apply -f local-archive.yaml'.
+Error: validation failed: 1 error(s)
 ```
 
-**At-least-once — the file and its rows are never lost together** (sftp/s3):
+`lm csv ingest` offers no `after_process`: the message's mention of it does not apply to `lm`.
 
-- a file is archived or deleted only **after a later chunk's committed cursor** proves its
-  rows landed — never inside the read that ingests it;
-- a crash in between leaves the file in place; the next run's dedup skips its rows and the
-  action runs then;
-- zero-byte files are never listed, so never archived.
+**A file and its rows are never lost together** (sftp/s3):
+
+- a file is archived or deleted only once a later commit proves its rows landed;
+- after a crash in between, the file stays; the next run skips its rows and archives it then.
+
+**A misspelled key is flagged** in every block except inside `mapping` — the manifest still applies:
+
+```
+$ lm validate -f typo.yaml
+! typo.yaml — 0 error(s), 1 warning(s)
+
+  WARN     spec.windo
+          unknown key — ignored by the runtime
+          → Remove it, or check the spelling
+```
 
 ## Target table
 
-- Tables are created in the `connector` schema as `connector.t_<name>`, one per connector,
-  columns from the header (or `parser.columns`).
+- One table per connector, `connector.t_<name>`, columns from the header (or `parser.columns`).
 - **Seven reserved columns** are always there: `id`, `_row_hash`, `_ingested_at`, `_source`,
-  `_run_id`, `_mapping_version`, `tenant_id`. A source column sharing one of those names is
-  refused — rename it with a [`map-columns`](transformers.md#map-columns-legacy-column-names-cust_nm)
-  hook.
-- **`target.indexes`** declares Postgres indexes — a list of `{ columns: [...], unique: <bool> }`
-  (`unique` defaults to false); a malformed entry fails validation by name instead of being
-  dropped:
+  `_run_id`, `_mapping_version`, `tenant_id`. A table fed by one local file adds `_seen_run`,
+  used by the [full refresh](#one-file-is-the-table-full-refresh). A source column with one of
+  these names is refused — rename it with a [`map-columns`](transformers.md#map-columns-legacy-column-names-cust_nm) hook.
+- **`target.indexes`** declares Postgres indexes — `{ columns: [...], unique: <bool> }`
+  (`unique` defaults to false); a malformed entry fails validation:
 
     ```yaml
     target:
@@ -447,10 +517,24 @@ $ lm validate -f local-archive.yaml
         - { columns: [bpartner_id, dateordered] }
     ```
 
-- **The métier scope is on the connector**, not the target: `metadata.scopes` (see
-  [Scopes](../rag/scopes.md)); the validator warns when none is declared.
-- **`lm connector delete` purges** the `connector.t_*` table, the registry rows and every RAG
-  chunk the connector produced — the data goes with it.
+- **The métier scope is on the connector**: `metadata.scopes` (see [Scopes](../rag/scopes.md));
+  the validator warns when none is declared.
+- **`lm connector delete` removes the connector's rows**, its run history and its RAG chunks
+  (the table goes with the last connector writing into it):
+
+    ```
+    $ lm connector delete csv-local-simple --dry-run
+    Would delete connector csv-local-simple (csv-file) — 3 rows of connector.t_csv_local_simple, its run history and RAG chunks (dry run, nothing deleted)
+    ```
+
+- **`lm endpoint purge` refuses a `csv-file` endpoint** — delete the connector instead (see
+  [Emptying one endpoint on its own](jdbc.md#emptying-one-endpoint-on-its-own)). The table of a
+  one-shot `lm csv ingest` is the exception: `lm endpoint purge quick_look/quick_look` empties it.
+
+    ```
+    $ lm endpoint purge csv-local-simple/default --force
+    Error: API error 400: This endpoint writes to a connector table whose rows are not tracked per endpoint, so it cannot be purged on its own. Deleting the connector removes its data, along with its run history.
+    ```
 
 ## Transform at ingestion
 
@@ -463,27 +547,51 @@ mapping:
     - fix-mojibake: { columns: [name, city] }      # "BÃ©nÃ©dict" → "Bénédict"
 ```
 
-Every hook, with an input → output example, and one real manifest that runs them all:
-[Transformers](transformers.md). Parse hooks fail **soft** — a value they cannot read becomes
-`null`, the row is still written, and the run's `cell_errors` counts it.
+Every hook, with an input → output example: [Transformers](transformers.md). Parse hooks fail
+**soft** — an unreadable value becomes `null`, the row is still written, and the run's
+`cell_errors` counts it.
 
 ## Connector runs vs one-shot `lm csv ingest`
 
-Two ingestion surfaces share the transports but not the features — the validator refuses
-what a scheduled run would silently ignore:
-
-| Capability | Connector manifest (scheduled runs) | One-shot `lm csv ingest` |
+| | Connector manifest (scheduled runs) | One-shot `lm csv ingest` |
 |---|---|---|
-| Transports | local, sftp, s3 | local upload, sftp, s3 |
-| `schedule` (cron) | yes | no (one shot, by definition) |
-| `mapping` hooks (dataset/row/cell) | yes (`aggregator` refused) | no — never applied |
-| Transport hooks (`file_filter`/`pre_process`/`post_process`) | **refused at validate/apply** | yes |
-| `max_file_size` | **refused at validate/apply** | yes (default 500 MB, over-limit aborts) |
-| `after_process` on sftp/s3 | yes (deferred until the cursor proves the commit) | yes (deferred until the ingest transaction commits) |
-| `after_process` on local | only `none` — archive/delete/move **refused** | yes |
-| Malformed rows | isolated per-row to the DLQ, run continues | **abort** on the first malformed row (whole ingest rolls back) |
-| Target table | `connector.t_<name>` (auto-schema) | `ext.<name>` (hybrid JSONB + promoted columns) |
-| Naming a multi-file source | that is what a manifest **is** — one connector over a glob | `name` + more than one matched file is **refused** (see below) |
+| Source | local, sftp, s3 | a file on your machine (uploaded), `sftp://…`, `s3://…` |
+| `schedule` (cron) | yes | no |
+| `mapping` hooks (dataset/row/cell) | yes (`aggregator` refused) | no |
+| `after_process` | sftp/s3: all four; local: `none` | not available — the source file stays in place |
+| File size limit | none | an uploaded file: 10 MB (larger: `Error: API error 413`); a remote file: 500 MB |
+| Malformed rows | per-row DLQ, run continues | the first one fails the whole ingest, nothing written |
+| Target table | `connector.t_<name>` | `ext.<name>` (JSONB + typed columns) |
+| Several files | one connector over a glob | one dataset per file; `--name` needs a single file |
+
+A connector manifest carrying `file_filter`, `pre_process`, `post_process` or `max_file_size`
+is refused:
+
+```
+$ lm validate -f oneshot-keys.yaml
+✗ oneshot-keys.yaml — 2 error(s), 2 warning(s)
+
+  ERROR    spec.transport.file_filter
+          file_filter runs only on one-shot lm csv ingest — scheduled connector runs ignore it
+          → Drop it from the connector manifest, or ingest this source via lm csv ingest
+
+  ERROR    spec.transport.max_file_size
+          max_file_size runs only on one-shot lm csv ingest — scheduled connector runs ignore it
+          → Drop it from the connector manifest, or ingest this source via lm csv ingest
+
+  WARN     spec.transport.max_file_size
+          unknown key — ignored by the runtime
+          → Remove it, or check the spelling
+
+  WARN     spec.transport.file_filter
+          unknown key — ignored by the runtime
+          → Remove it, or check the spelling
+
+Fix errors above before running 'lm apply -f oneshot-keys.yaml'.
+Error: validation failed: 2 error(s)
+```
+
+`lm csv ingest` has no flag for these keys either: drop them.
 
 ```
 $ lm csv ingest ./clients.csv --name quick-look --scope demo
@@ -498,95 +606,59 @@ Ingested ./clients.csv into ext.quick_look
 A dormant connector is registered — see `lm connector list`.
 ```
 
+With the AI switched off, the last lines read `A one-shot: no run recorded, nothing indexed for
+chat.` and `The rows are in ext.quick_look, and a dormant connector is registered`.
+
 ### What one-shot actually does
 
-One transaction: sample → infer → write. Then a **dormant** connector (`enabled: false`, no
-schedule) sits in `lm connector list` under the slugged name (`quick-look` → `quick_look`) —
-inspect, promote to a manifest, or `lm connector delete quick_look`.
+One transaction: sample → infer → write. A **dormant** connector (`enabled: false`, no schedule)
+then sits in `lm connector list` under the slugged name (`quick-look` → `quick_look`) — inspect
+it, promote it to a manifest, or `lm connector delete quick_look`.
 
-- **Type inference**, widest type across the sample (default 100 rows): integers → `BIGINT`,
-  decimals → `DECIMAL`, true/false → `BOOLEAN`, everything else `TEXT`. Whole and decimal
-  values mixed → `DECIMAL`; empty cells contribute nothing; any other mix → `TEXT`.
-  Date-looking values deliberately stay `TEXT` in v1 — `signup_date (text)` above.
-- **Reserved columns** are never promoted (every `ext.*` table already has them): `id`,
-  `tenant_id`, `external_id`, `data`, `indexed_at`, `connector_id`, `endpoint_id`. A source
-  column with one of these names survives inside the JSONB `data`, just not as a typed column.
-- **Askable immediately.** The scope you pass (`--scope`, default `system`) gets a schema card
-  listing the table and its typed columns, plus one descriptor chunk in its corpus — `lm ask`
-  and `lm chat` answer questions about the table with zero further configuration. Row-level
-  semantic indexing remains a connector-run feature.
-- **Re-ingesting the same name is a refresh, not an error**: rows deduplicate by key, new
-  columns are added, the card and descriptor follow. A different `--scope` re-publishes the
-  dataset under the new scope. Only a name belonging to a **configured** connector refuses
-  (409) — pass `--name` or delete that connector.
-- **Abort, not DLQ**: the first malformed row aborts the ingest, the transaction rolls back,
-  nothing is half-written and **no source file is archived** — re-run the whole batch.
-- **Remote (sftp/s3)**: each matching file is checked against `max_file_size` (default 500 MB,
-  over-limit aborts), buffered to a temp file and run through the same pipeline.
-  `after_process` (and `post_process`) run **after the transaction commits**, for every file
-  at once. If the archive step fails once the rows are committed, it is logged as a WARNING per
-  file and the run still succeeds — the file simply stays on the source.
-- Delimiter and encoding are auto-detected per file, with the connector path's detectors.
+- **Type inference**, widest type over the first 100 rows: integers → `BIGINT`, decimals →
+  `DECIMAL`, true/false → `BOOLEAN`, anything else `TEXT`. Dates stay `TEXT` — `signup_date (text)` above.
+- **Reserved columns** are never typed columns: `id`, `tenant_id`, `external_id`, `data`,
+  `indexed_at`, `connector_id`, `endpoint_id`. Their values stay in the JSONB `data`.
+- **Askable at once** in the scope you pass (`--scope`, default `system`), with the AI on.
+- **Re-ingesting the same name refreshes** the table: rows deduplicate by key, new columns are added:
+
+    ```
+    $ lm csv ingest ./clients.csv --name quick-look --scope demo
+    Re-ingested ./clients.csv into ext.quick_look — one more breath (rows dedup by key)
+      • rows written:    3
+      • promoted cols:   3
+          - row_id (bigint)
+          - email (text)
+          - signup_date (text)
+
+    A one-shot: no run recorded, nothing indexed for chat.
+    The rows are in ext.quick_look, and a dormant connector is registered — see `lm connector list`.
+    ```
+
+    (AI off.) A different `--scope` moves the dataset to that scope.
+
+- **A name held by a configured connector is refused:**
+
+    ```
+    $ lm csv ingest ./clients.csv --name articles
+    Error: API error 409: the name 'articles' belongs to a configured connector — pass a different --name, or delete that connector first (lm connector delete)
+    ```
+
+- **A malformed row fails the whole ingest** and nothing is written. `lm` names the line:
+  `Error: API error 400: malformed CSV row at line 3 — Record has 3 values but only 2 columns are declared`.
+- **An uploaded file over 10 MB is refused** before anything is read:
+  `Error: API error 413 (request too large): the hub accepts a request body up to 10 MB — put a larger CSV on sftp:// or s3://`.
+- **Remote files** (sftp/s3) are fetched one by one, each up to 500 MB, and left in place.
+- Delimiter and encoding are auto-detected per file.
 
 !!! warning "`--name` needs a single file"
-    Each matched file registers **its own** dormant connector under the name you give, so a
-    name over a glob matching more than one file is refused before anything is downloaded:
-
-    ```
-    API error 400: name 'clients' would ingest 3 files into one dataset, which the one-shot
-    path cannot register: each file creates its own dormant connector under that name. Point
-    at a single file, or drop the name to get one dataset per file. To fuse a folder into one
-    dataset, declare a connector manifest with a glob path.
-    ```
-
-    `sftp://host/dir/` globs `*.csv` by default (`--pattern`), so the plain folder gesture *is*
-    multi-file. Three ways forward:
+    `sftp://host/dir/` reads `*.csv` by default (`--pattern`), so a folder is several files.
+    With `--name`, the hub refuses before downloading anything: `name 'clients' would ingest 3
+    files into one dataset, which the one-shot path cannot register: …`. Three ways forward:
 
     - **one dataset per file** — drop `--name`; each file gets `ext.<filename>`.
     - **one specific file** — point the URL at it, or narrow `--pattern` / `--suffix`.
-    - **the whole folder as one dataset** — a connector manifest with a glob path: one
-      connector, one table, a schedule if you want it.
-
-### Transport hooks (one-shot only)
-
-```yaml
-transport:
-  file_filter:  { kind: kotlin, script_ref: reference/skip-if-too-small.kt }
-  pre_process:  { kind: kotlin, script_ref: reference/decompress-gzip.kt }
-  post_process: { kind: kotlin, script_ref: reference/notify-webhook.kt }
-```
-
-- Three reference hooks ship under `META-INF/hooks/connectors/csv-file/reference/`.
-- Signatures: `shouldProcess(file, source): Boolean` (file_filter),
-  `transform(file, input: InputStream): InputStream` (pre_process),
-  `postProcess(file, result)` (post_process). They run *in addition to* `after_process`.
-- A connector manifest carrying them, or `max_file_size`, is **refused at validate/apply** —
-  scheduled runs would silently ignore them:
-
-```
-$ lm validate -f oneshot-keys.yaml
-✗ oneshot-keys.yaml — 2 error(s), 2 warning(s)
-
-  ERROR    spec.archive_path
-          archive_path is required when after_process=move
-          → Set archive_path: /path/to/archive/
-
-  ERROR    spec.transport.max_file_size
-          max_file_size runs only on one-shot lm csv ingest — scheduled connector runs ignore it
-          → Drop it from the connector manifest, or ingest this source via lm csv ingest
-
-  WARN     spec.transport.max_file_size
-          unknown key — ignored by the runtime
-          → Remove it, or check the spelling
-
-  WARN     spec.transport.chunk_size
-          unknown key — ignored by the runtime
-          → Remove it, or check the spelling
-```
-
-That sweep covers the **root** of `spec` too, not only the blocks: `after_proces` or `windo`
-comes back named instead of being accepted and stored. It stays a warning — the manifest is still
-valid and still applies — but a key nothing reads is worth seeing before a run rather than after.
+    - **the whole folder as one dataset** — a connector manifest with a glob path.
 
 ### CLI
 
@@ -604,7 +676,7 @@ lm csv ingest s3://bucket/prefix --region eu-west-3 [--endpoint X] [--suffix .cs
 
     ```
     $ lm secret set CSV_SFTP_PASSWORD
-    Value for CSV_SFTP_PASSWORD: 
+    Value for CSV_SFTP_PASSWORD:
     Created secret "CSV_SFTP_PASSWORD"
     ```
 
@@ -615,12 +687,10 @@ lm csv ingest s3://bucket/prefix --region eu-west-3 [--endpoint X] [--suffix .cs
     ```
 
 3. `lm connector run csv-sftp` reads every file under `/upload/seed/*.csv`. Once it looks
-   right, add `schedule: "0 6 * * *"` and switch `after_process` to `archive` with an
-   `archive_path`, so processed files move out of the way between runs — each later run
-   picks up only files newer than the last one processed.
+   right, add `schedule: "0 6 * * *"`, and `after_process: archive` with an `archive_path`.
 
-Watch it land in the TUI ([CLI & TUI](../cli/lm-reference.md)): `:runs` for the run's
-status, `:dlq` for any rejected rows.
+Watch it in the TUI ([CLI & TUI](../cli/lm-reference.md)): `:runs` for the run's status, `:dlq`
+for rejected rows.
 
 ### Ingest a headerless export under an S3 prefix, and archive it
 
@@ -628,11 +698,10 @@ status, `:dlq` for any rejected rows.
 --8<-- "docs/connectors/csv/45-s3-headerless-archive.yaml"
 ```
 
-**Result:** the [run ledger above](#s3-a-prefix-in-a-bucket-aws-minio-r2-gcs-s3-compat) —
-19 009 rows on the first run, `IN 0` on the next because the file is in `lumnik-archive`
-now. Column 1 lands as `c_bpartner_id`, column 2 as `name`, and so on — no header row is
-read or expected. For MinIO or another S3-compatible store, add `endpoint:` — see
-`40-s3-prefix.yaml` in `docs/connectors/csv/`.
+**Result:** the [run ledger above](#s3-a-prefix-in-a-bucket-aws-minio-r2-gcs-s3-compat) — 19 009
+rows on the first run, `IN 0` on the next because the file is in `lumnik-archive` now. Column 1
+lands as `c_bpartner_id`, column 2 as `name`, and so on. For MinIO or another S3-compatible store,
+add `endpoint:` — see `40-s3-prefix.yaml` in `docs/connectors/csv/`.
 
 ### Load one file for a quick look
 
@@ -640,27 +709,34 @@ read or expected. For MinIO or another S3-compatible store, add `endpoint:` — 
 $ lm csv ingest ./clients.csv
 ```
 
-**Result:** a dormant connector plus a hybrid table `ext.clients`, askable in the `system`
-scope — inspect, then promote it into a manifest or `lm connector delete clients`.
+**Result:** a dormant connector plus a table `ext.clients`, askable in the `system` scope (AI on) —
+inspect, then promote it into a manifest or `lm connector delete clients`.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `SFTP host key refused for host:22 — the server presented SHA256:…` | `strict_host_key` is true (the default) and `host_key_fingerprint` is absent or does not match | confirm the presented fingerprint out of band (`ssh-keyscan -p 22 HOST \| ssh-keygen -lf -`), paste it into `host_key_fingerprint`. `strict_host_key: false` accepts an impostor as readily as the real server |
-| `SFTP error (SSH_FX_PERMISSION_DENIED): Permission denied` | wrong password/key, or the user cannot read `path` | `lm secret list`, then `lm secret set <NAME>` (a private key is many lines — pipe it with `<NAME> -`); check the folder's rights on the server |
-| `SFTP transport requires key_env or password_env` | neither credential declared | `lm secret set <NAME>` (or `<NAME> -` for a multi-line private key), then `password_env: <NAME>` or `key_env: <NAME>` |
+| `SFTP host key refused for host:22 — the server presented SHA256:…` | `host_key_fingerprint` absent or wrong, with `strict_host_key: true` (the default) | confirm the presented fingerprint out of band (`ssh-keyscan -p 22 HOST \| ssh-keygen -lf -`), paste it into `host_key_fingerprint` |
+| `SFTP error (SSH_FX_PERMISSION_DENIED): Permission denied` | wrong password/key, or the user cannot read `path` | `lm secret list`, then `lm secret set <NAME>` (a private key is many lines — pipe it with `<NAME> -`); check the folder's rights |
+| `SFTP transport requires key_env or password_env` | neither credential declared | `lm secret set <NAME>`, then `password_env: <NAME>` or `key_env: <NAME>` |
 | `S3 403 Forbidden` | invalid S3 credentials | check the secrets named by `access_key_env` / `secret_key_env` |
 | `columns is required when has_header: false` | a headerless parser without names | `parser.columns: [a, b, …]` in file order |
 | `after_process: archive is not executed on local connector runs` | a relocation on a local transport | `after_process: none`, or an sftp/s3 transport |
-| `max_file_size runs only on one-shot lm csv ingest` | a one-shot key in a connector manifest | drop it, or ingest via `lm csv ingest` |
-| run completes with `IN 0` | nothing new: the cursor already covers every listed file (a local file already read in full, or sftp/s3) — or the local path matches nothing on the **hub's** disk | `lm connector get NAME` shows the path; on local, check it exists inside the hub container |
-| a file dropped in a local folder is never read | the [lexical-cursor contract](#local-the-hubs-disk-not-yours) — its name sorts before the cursor's file | name incoming files monotonically (date-prefixed), or switch to sftp/s3 |
-| run `Failed`: `The cursor's file … is gone, but files sorting after it are waiting` | you archived or moved the file the cursor names before the run that read it completed, while later files were waiting | `lm endpoint reset-cursor <connector>/<endpoint>`: the next run re-reads from the first file, and the table deduplicates. Archive files only after the run that read them is `Completed` |
-| `DEAD-LETTERS` > 0, reason `MalformedSource` | rows whose value count differs from the declared columns — a trailing delimiter, an unclosed quote | `lm dlq get ID` shows the raw values, file and line; fix the export or the `parser:` block |
-| rows missing, DLQ empty | `filter-where` / `skip-empty-rows` excluded them by declared policy (counted in `SKIPPED`, never DLQ'd) | see [Transformers § Troubleshooting](transformers.md#troubleshooting) |
-| a mapped column is blank for some rows, but the row landed | a `parse-*` or `lookup` hook nulled a value it could not read | `cell_errors` on `lm run get <id>` — see [Transformers](transformers.md#reference-cell-hooks) |
-| ingestion refuses a column sharing a reserved hub-column name | one of the seven columns the hub adds — see [Target table](#target-table) | rename it with `map-columns` |
+| `… runs only on one-shot lm csv ingest` | `file_filter`, `pre_process`, `post_process` or `max_file_size` in a connector manifest | drop the key |
+| run `Failed`: `connector.t_… is already written by connector '…'` | another connector of the tenant already writes the table named after this one | apply it under another `metadata.name`, then `lm connector delete` the refused one — see [JDBC](jdbc.md#two-connectors-reading-a-table-of-the-same-name) |
+| run completes with `IN 0` | nothing new — or the local path matches nothing on the **hub's** disk | `lm connector get NAME` shows the path (`config.transport.path`); check it exists on the hub |
+| a file dropped in a local folder is never read | its name sorts before the last file read ([drop-folder contract](#local-the-hubs-disk-not-yours)) | name incoming files monotonically, or switch to sftp/s3 |
+| run `Failed`: `The cursor's file … is gone, but files sorting after it are waiting` | a file was archived before the run that read it completed | `lm endpoint reset-cursor <connector>/<endpoint>`; archive only after `Completed` |
+| `DEAD-LETTERS` > 0, reason `MalformedSource` | value count differs from the declared columns — trailing delimiter, unclosed quote | `lm dlq get ID` shows the raw values, file and line; fix the export or `parser:` |
+| rows missing, DLQ empty | `filter-where` / `skip-empty-rows` excluded them (counted in `SKIPPED`) | see [Transformers § Troubleshooting](transformers.md#troubleshooting) |
+| a mapped column is blank for some rows | a `parse-*` or `lookup` hook nulled a value it could not read | `cell_errors` on `lm run get <id>` — see [Transformers](transformers.md#reference-cell-hooks) |
+| run `Failed`: `N of M rows would be removed: the file holds …` | the one local file lost more rows than `refresh.max_removed` allows | check the file; for a real purge raise `refresh.max_removed` (or `off`), re-apply, run again — see [full refresh](#one-file-is-the-table-full-refresh) |
+| run `Failed`: `the file is empty: a full refresh never empties a table` | the one local file holds a header and no row | fix the export; to empty the table, `lm connector delete` |
+| run `Failed`: `N row(s) of the file went to the dead letters this run` | a line of the one local file could not be read | `lm dlq list --run <id>`, fix the export, run again |
+| run `Failed`: `the file changed while this run was reading it` | the producer rewrote the file mid-run | run again; have the producer write elsewhere and rename the file in |
+| rows gone from a local table after a run | the file no longer holds them | `lm run get <id>` says `N row(s) removed`; to keep history, ingest a folder (`*.csv`) |
+| a source column shares a reserved column name | one of the seven [reserved columns](#target-table) | rename it with `map-columns` |
+| `lm csv ingest` fails with `API error 400: malformed CSV row at line N — …` | line N does not have the header's column count | fix that line, ingest again |
 
 ## See also
 

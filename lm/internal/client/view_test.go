@@ -34,4 +34,17 @@ func TestViewRender_parsesTitleColumnsRows(t *testing.T) {
 	assert.Equal(t, "Clients", res.Title)
 	assert.Equal(t, []ViewColumn{{"customer_code", "Code", "text"}, {"name", "Name", "text"}}, res.Columns)
 	assert.Equal(t, [][]string{{"C-1", "Alice"}, {"C-2", "Bob"}}, res.Rows)
+	assert.False(t, res.Truncated)
+}
+
+func TestViewRender_carriesTruncated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"title":"Clients","columns":[],"rows":[],"truncated":true}`))
+	}))
+	defer srv.Close()
+
+	res, err := New(config.Context{Server: srv.URL}).ViewRender([]byte("kind: View\n"), nil)
+	require.NoError(t, err)
+	assert.True(t, res.Truncated)
 }

@@ -4,6 +4,8 @@ import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.exceptions.TransientFailureException;
 import io.lumnik.hub.connector.rest.reliability.RetryPolicy;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.Set;
 
 /**
@@ -21,7 +23,7 @@ import java.util.Set;
  * <p>The classification is not invented here — it is the one the SOAP lane already used, lifted to
  * where every request shape reaches it:
  * <ul>
- *   <li><b>3xx</b> — refused by name, with the {@code Location} it declined to follow.
+ *   <li><b>3xx</b> — refused by name, with the host of the {@code Location} it declined to follow.
  *       {@code followRedirects(NEVER)} makes a redirect an ordinary response; chasing it would be a
  *       second, unvetted path to an arbitrary host ({@code PaginationUrlGuard} only vets URLs read
  *       out of a body/header, never a {@code Location} the JDK client would follow on its own).</li>
@@ -53,9 +55,9 @@ public final class ResponseStatusGuard {
         if (status / 100 == 2) return;
 
         if (status >= 300 && status < 400) {
-            throw new ConnectorException("upstream returned a redirect (" + status + ") to '"
-                + resp.header("Location").orElse("<no Location header>")
-                + "' — refusing to follow it or ingest its body as data");
+            throw new ConnectorException("upstream returned a redirect (" + status + ") to "
+                + resp.header("Location").map(ResponseStatusGuard::hostOf).orElse("no Location header")
+                + " — refusing to follow it or ingest its body as data");
         }
 
         String detail = " — refusing to ingest its body as data: " + Snippets.bound(resp.body());
@@ -64,5 +66,24 @@ public final class ResponseStatusGuard {
                 "upstream returned HTTP " + status + " (transient)" + detail, null);
         }
         throw new ConnectorException("upstream returned HTTP " + status + " (permanent)" + detail);
+    }
+
+    /**
+     * Where a redirect pointed, said by its scheme and host only (#1166): a {@code Location} can
+     * carry a token or a signed query, and this text reaches the run's failure and the probe's 502
+     * body. Parsed rather than cut, because only a parser knows where the host ends — userinfo
+     * included. A relative or unparseable value is named as such, never quoted, and never thrown on:
+     * the refusal must still be raised.
+     */
+    static String hostOf(String location) {
+        try {
+            URI u = new URI(location.strip());
+            if (u.getHost() == null) return u.isAbsolute() ? "an unreadable location" : "a relative location";
+            String scheme = u.getScheme() == null ? "" : u.getScheme() + ":";
+            String port = u.getPort() == -1 ? "" : ":" + u.getPort();
+            return scheme + "//" + u.getHost() + port;
+        } catch (URISyntaxException unreadable) {
+            return "an unreadable location";
+        }
     }
 }

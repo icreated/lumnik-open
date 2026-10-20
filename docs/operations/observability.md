@@ -1,33 +1,36 @@
 # Observability
 
-> Health probes, Prometheus metrics and OpenTelemetry tracing are wired in and live on
-> every boot — no dashboards, alert rules, or RAG/chat metrics ship with it.
-
-The hub ships with health probes, Prometheus metrics and OpenTelemetry tracing wired
-in (`quarkus-smallrye-health`, `quarkus-micrometer-registry-prometheus`,
-`quarkus-opentelemetry`). Nothing to install — the endpoints are live on every boot.
+> Health probes and Prometheus metrics, live on every boot; OpenTelemetry tracing, off until
+> you point it at a collector. No dashboards, alert rules or RAG/chat metrics ship with them.
 
 ## What's exposed out of the box
 
 | Endpoint | What it answers | Auth |
 |---|---|---|
-| `GET /q/health` | overall UP/DOWN, all checks | none |
-| `GET /q/health/live` | "the process is alive" — restart me if not | none |
-| `GET /q/health/ready` | "I can serve traffic" (DB reachable, migrations done) — the Helm chart's readiness probe. The selfhost compose healthcheck (what `up.sh` waits on) watches `/q/health/live` instead; same boot window in practice, since the hub serves neither until Flyway finishes | none |
-| `GET /q/metrics` | Prometheus text format: JVM, HTTP server, DB pool + the domain metrics below | none |
-| `GET /api/platform/health` | application-level: `{"platform":"ok","modules":{...}}` — one entry per installed module with its version | `lm_integrator` |
+| `GET /q/health` | overall UP/DOWN, all checks (the database connections) | none |
+| `GET /q/health/live` | "the process is alive" — watched by the selfhost compose healthcheck | none |
+| `GET /q/health/ready` | "I can serve traffic" — the Helm chart's startup and readiness probe | none |
+| `GET /q/metrics` | Prometheus text format: JVM, HTTP server, and the [domain metrics](#domain-metrics) below | none |
+| `lm module list` | each installed module, its version and whether it is active | `lm_integrator` |
 
-The `/q/*` endpoints are standard Quarkus paths on the application port (8080) — the
-hub does not re-root them. They carry **no authentication**: liveness/readiness are
-harmless, but `/q/metrics` names your connectors in its labels. The TLS façade proxies
-everything except `/realms/*` to the hub, so on a public origin `/q/*` is reachable
-from the internet — block `/q/*` at the proxy or firewall if that bothers you (it
-should).
+```
+$ lm module list
+NAME      VERSION  SCHEMA              STATUS    REASON
+core      0.1.0    Platform            ACTIVE
+identity  0.1.0    Identity & Tenancy  ACTIVE
+llm       0.1.0    Model provider      INACTIVE  disabled:lumnik.ai.enabled
+rag       0.1.0    Platform RAG        INACTIVE  disabled:lumnik.ai.enabled
+```
 
-`/api/platform/health` is the one that knows about lumnik: it walks the module
-manifest registry and reports each module's version. It sits under `/api/platform/*`,
-so prod requires a token with the `lm_integrator` role (dev-bypass waves it through
-in `%dev`).
+The `/q/*` endpoints sit on the application port (8080):
+
+- **They carry no authentication**, and `/q/metrics` names your connectors in its labels.
+- **The TLS façade forwards them**: it sends everything except `/realms/*` and `/resources/*` to
+  the hub. On a public origin, block `/q/*` at your proxy or firewall.
+
+`GET /api/platform/health` returns the same module data plus the Search provider's state, for a
+monitoring probe. It needs an `lm_integrator` token, except under the Helm chart's default
+profile (`k8sdev`), where all of `/api/platform/*` answers without one.
 
 ## Scraping with Prometheus
 
@@ -41,127 +44,133 @@ scrape_configs:
       - targets: ["your-hub-host:8080"]
 ```
 
-That's the whole integration — no push gateway, no agent.
+No push gateway, no agent.
 
 ## Domain metrics
 
-Beyond the standard JVM/HTTP/pool meters, the hub emits:
+Besides the JVM and HTTP meters, the hub emits:
 
 | Metric | Tags | When it moves |
 |---|---|---|
 | `lumnik_runs_total` | `status` (`Completed`, `Partial`, `Failed`, `Cancelled`) | a connector run reaches a terminal status |
-| `lumnik_rate_limited_total` | `bucket` | a request was refused `429` by [rate limiting](rate-limits.md) — the tenant is in the WARN log line, deliberately not in a tag |
+| `lumnik_rate_limited_total` | `bucket` | a request is refused `429` by [rate limiting](rate-limits.md); the tenant is in the WARN log line |
 | `lumnik_dead_letters_total` | `reason` | a row is quarantined to the DLQ — real losses only; benign skips (duplicates, policy-excluded) do not count |
 | `csv_filesource_list_total` | `transport`, `connector` | files listed on a remote source |
 | `csv_filesource_list_duration_seconds` | `transport`, `connector` | time spent listing |
 | `csv_filesource_open_total` | `transport`, `connector`, `result` (`ok`/`error`) | a file open attempt |
 | `csv_filesource_bytes_read_total` | `transport`, `connector` | bytes downloaded from a remote file |
 | `csv_filesource_after_process_total` | `transport`, `action`, `result` | a post-ingest file action (move/delete/…) |
+| `lumnik_search_projection_lag_seconds` | — | age of the oldest change not yet in a search index |
+| `lumnik_search_projection_lagging_indexes` | — | how many search indexes have a pending change |
+| `lumnik_search_rebuild_total` | `outcome` | a search index rebuild ends |
+| `lumnik_search_rebuild_duration_seconds` | `outcome` | how long that rebuild took |
+| `lumnik_search_catchup_failures_total` | — | a search index catch-up attempt failed |
 
-Two caveats:
+```
+$ curl -s http://localhost:8080/q/metrics | grep '^lumnik_'
+lumnik_runs_total{status="Failed"} 1.0
+lumnik_runs_total{status="Completed"} 5.0
+lumnik_dead_letters_total{reason="MalformedSource"} 2.0
+```
 
-- **The run counters are best-effort, at-least-once.** They increment inside the
-  run's transaction, so a rolled-back run may still have counted. The authoritative
-  loss signal is the DB-derived `deadLetterCount` on the run itself, not the counter.
-- **The `csv_filesource_*` family fires only on the one-shot ingest path**
-  (`lm csv ingest` → `POST /api/platform/sources/csv/ingest`). Scheduled connector
-  runs read files through a different path and do not emit them. If your CSV
-  connector runs on a schedule, watch `lumnik_runs_total` and the DLQ, not
-  `csv_filesource_*`.
+- **A meter appears once its event has happened** on this process: absence means "not yet", not
+  "broken". The `lumnik_search_*` meters appear only on a hub built with a
+  [Search provider](../search/search-indexes.md#choosing-a-provider).
+- **The run counters may over-count slightly**; the run record (`lm run get`) is authoritative.
+- **`csv_filesource_*` moves only for `lm csv ingest`.** Scheduled CSV connector runs do not emit
+  it: watch `lumnik_runs_total` and the DLQ for them.
 
-Meters are registered lazily on first use — a fresh boot shows none of these until
-the corresponding thing has happened once. Absence means "hasn't happened", not
-"broken".
+## What to alert on
+
+- **`Partial` runs**, more than `Failed`: a failed run is loud and retried, a partial one wrote
+  what it read but did not read everything. Its `error_message` (`lm run get <id>`) says why.
+- **Per-connector history** is in the run ledger, not in Prometheus:
+
+```
+$ lm run list --connector orders
+ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+9c64afbf  orders     default   Completed  9   9    0        0             2026-10-19 01:40  2026-10-19 01:40
+8778809f  orders     default   Completed  10  10   0        0             2026-10-19 01:39  2026-10-19 01:39
+6e52921c  orders     default   Completed  10  8    2        2             2026-10-19 01:38  2026-10-19 01:38
+```
 
 ## Scheduled background work
 
-The hub breathes on **eight clocks** — every one a Quarkus `@Scheduled` tick with
-`concurrentExecution = SKIP` (a tick that finds the previous one still running skips
-its turn; the guarantee is per-JVM, i.e. per hub instance):
+Each hub process runs these jobs; a job still busy when its next turn comes skips that turn.
 
-| Clock | Cadence | What it does |
+| Job | Cadence | What it does |
 |---|---|---|
-| Connector scheduler | every 1 min | fires each connector whose `spec.schedule` cron is due — the ingestion breath itself |
-| Workflow dormancy sweep | every 15 min¹ | watches every declared lifecycle for a document sitting unmoved past its threshold |
-| Webhook delivery | every 5 s | sweeps the event outbox and delivers each event to the tenant's registered integrations (`lm integration`) |
-| Webhook retry | every 30 s | re-attempts failed deliveries with backoff — the failure journal (`lm outputs`) feeds from here |
-| Email delivery | every 5 s | sweeps the outbox and mails events matching notification rules (`lm notify`) — best-effort: a failed send is logged and skipped; mocked until the SMTP knobs are set |
-| Process reactions | every 5 s | evaluates `kind: Process` rules against fresh events |
-| Audit dispatch | every 2 s | flushes audit events to their sinks |
-| Event retention purge | daily 04:30 | trims the outbox — never past what the slowest consumer has seen |
-| Audit retention purge | daily 04:45 | trims `core.audit_event` past the retention window (default 365 d; `0` disables) |
+| Connector scheduler | every 1 min | starts each connector whose `spec.schedule` is due; marks runs left `Running` by a dead process as `Failed` |
+| Export scheduler | every 1 min | starts each export whose schedule is due |
+| Connector run queue | every 5 s² | starts queued manual connector runs ([run queue](upgrade.md#turning-on-the-run-queue)) |
+| Export run queue | every 5 s² | starts queued on-demand export runs |
+| Workflow dormancy sweep | every 15 min¹ | flags documents sitting unmoved past their [dormancy threshold](../apps/workflows.md#dormancy-the-memory-of-the-breathing) |
+| Webhook delivery | every 5 s | delivers new events to the tenant's integrations (`lm integration`) |
+| Webhook retry | every 30 s | re-attempts failed deliveries with backoff — the failure journal (`lm outputs`) |
+| Email delivery | every 5 s | mails events matching notification rules (`lm notify`); a failed send is logged and skipped; mocked until the SMTP settings are set |
+| Process reactions | every 5 s | evaluates `kind: Process` rules against new events |
+| Audit dispatch | every 2 s | writes pending audit events to the audit trail |
+| Search projection | every 1 min | brings search indexes up to date (Search provider builds only) |
+| Search reconciler | every 1 min | finds changed rows no event reported to Search (Search provider builds only) |
+| Event retention purge | daily 04:30 | trims the event outbox — never past what the slowest consumer has seen |
+| Audit retention purge | daily 04:45 | trims the audit trail past its window (default 365 d; `0` disables) |
+| Webhook journal purge | daily 05:00 | trims the webhook delivery journal (default 90 d) |
 
-Three outbox consumers (webhook, email, process) share one sweeping mechanism with a
-per-consumer cursor in `core.event_consumer`, so each advances independently and the
-retention purge never trims past the slowest of them. Audit dispatch is a **separate
-pipeline** (`core.audit_outbox` → `core.audit_event`, a `dispatched` flag, the admin
-datasource) — it has no cursor there, and the purge neither sees nor waits for it.
+The retention windows are in [sizing](sizing.md#storage-the-sizing-question-this-page-does-not-answer).
 
-¹ The dormancy sweep is the only cadence exposed as a config knob today — the
-[workflow dormancy sweep](../apps/workflows.md#dormancy-the-memory-of-the-breathing)
-watches every declared lifecycle for a document stuck past its threshold.
+¹ `lumnik.workflow.sweep.every` (env `LUMNIK_WORKFLOW_SWEEP_EVERY`). A shorter interval notices an
+overdue document sooner; the threshold itself is `spec.dormancy.after`, per workflow.
 
-```properties
-lumnik.workflow.sweep.every=15m
-```
+² `LUMNIK_RUN_QUEUE_POLL_INTERVAL`, passed through by both the selfhost compose file and the Helm
+chart (`runQueue.pollInterval`).
 
-```bash
-LUMNIK_WORKFLOW_SWEEP_EVERY=5m
-```
-
-A shorter interval means an overdue document is *noticed* sooner — it does not change the
-threshold itself (`spec.dormancy.after`, declared per workflow). Restart the hub after
-changing either form; like the rate-limit knobs, env vars only reach the process at boot.
+To change it: selfhost, set it in the root `.env` and recreate the hub; Helm, pass it through
+`hub.extraEnv`. Both gestures are in [rate limits](rate-limits.md#tuning).
 
 ## Traces to a collector
 
-OpenTelemetry is compiled in but effectively off in the shipped stacks:
+OpenTelemetry is off in the shipped stacks:
 
-- `%dev` and `%test` disable the SDK outright.
-- The self-host compose sets `QUARKUS_OTEL_SDK_DISABLED: "true"` because the stack
-  ships no collector — without it, every boot spams
-  `Connection refused: localhost:4317` retries.
+- The `dev` profile disables it.
+- The selfhost compose file defaults `QUARKUS_OTEL_SDK_DISABLED` to `true` (no collector ships).
+- The Helm chart sets `QUARKUS_OTEL_SDK_DISABLED: "true"` in the hub ConfigMap, for the same reason.
+  Check what your release renders:
 
-To wire tracing, run a collector (OTLP/gRPC), then on the hub container:
+  ```console
+  $ helm template lumnik deploy/helm/lumnik -f my-values.yaml -s templates/hub-configmap.yaml | grep OTEL
+    QUARKUS_OTEL_SDK_DISABLED: "true"
+  ```
+- Only traces are exported — no OTel metrics or logs.
+
+To send traces, run a collector (OTLP/gRPC) and set on the hub container:
 
 ```bash
 QUARKUS_OTEL_SDK_DISABLED=false
-OTEL_EXPORTER_ENDPOINT=http://your-collector:4317
+OTEL_EXPORTER_ENDPOINT=http://your-collector:4317   # default: http://localhost:4317
 ```
 
-and restart the hub (for selfhost: edit the `hub` environment in
-`docker-compose.selfhost.yml`, then `deploy/selfhost/up.sh`). The endpoint default is
-`http://localhost:4317`; only the traces exporter is configured — OTel metrics/logs
-export is not set up.
+Selfhost: set both in the root `.env` and recreate the hub. Helm: pass both through
+`hub.extraEnv` — an entry there wins over the ConfigMap's default. Both gestures are in [rate limits](rate-limits.md#tuning).
 
 ## Logs
 
-Console logs carry the tenant in every line (`%X{tenantId}` in the format); `%prod`
-switches to JSON console logging, ready for whatever log shipper you already run.
+Every console line carries the tenant id (blank outside a tenant's request). The `prod` profile writes JSON lines, ready for your log
+shipper. Recipes: [logs](../recipes/logs.md).
 
-## What does NOT exist yet
+## What does not exist { #what-does-not-exist }
 
-- **No dashboards or alert rules ship with lumnik** — the metrics above are a thin
-  floor, bring your own Grafana.
-- **No per-connector tag on `lumnik_runs_total`** — it counts runs by status only.
-- **`Partial` is the status worth alerting on**, more than `Failed`: a failed run is loud and
-  retried, while a partial one wrote everything it read and simply did not read everything there
-  was. It means the reader stopped on its own budget, or the run began past records the source had
-  already deleted under its stored position. The run's `error_message` names which.
-  For per-connector history, query the run ledger (`lm runs`, or the
-  `connector.connector_run` table).
-- **No row-count / duration metrics per run** — those live on the run record in the
-  DB, not in Prometheus.
-- **No RAG/chat metrics** — token usage, ask-to-SQL guard verdicts and abstentions
-  are not metered today.
+- **No dashboards or alert rules** — bring your own Grafana.
+- **No per-connector tag on `lumnik_runs_total`** — use `lm run list --connector`.
+- **No row-count or duration metric per run** — those are on the run record (`lm run get`).
+- **No RAG/chat metrics** — token usage, ask-to-SQL verdicts and abstentions are not metered.
 - **No OTel metrics or logs export** — traces only.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `lumnik_runs_total` / `lumnik_dead_letters_total` absent from `/q/metrics` on a fresh boot | Meters register lazily on first use | Absence means "hasn't happened yet on this process", not broken — trigger a run, or check `deadLetterCount` on the run record directly, which is authoritative regardless of the counter. |
-| A scheduled CSV connector shows nothing under `csv_filesource_*` even though it's clearly ingesting | That metric family only fires on the one-shot ingest path (`lm csv ingest` / `POST /api/platform/sources/csv/ingest`) — scheduled runs go through a different code path and don't emit it | Watch `lumnik_runs_total` and the DLQ for a scheduled CSV connector instead. |
-| No traces reach the collector, even with one running | `%dev`/`%test` disable the OTel SDK outright, and the self-host compose sets `QUARKUS_OTEL_SDK_DISABLED: "true"` by default (no collector ships with the stack) | Set `QUARKUS_OTEL_SDK_DISABLED=false` and `OTEL_EXPORTER_ENDPOINT` on the hub container, then restart it. |
-| `GET /api/platform/health` returns `401`/`403` | It sits under `/api/platform/*`, which requires a token with `lm_integrator` (dev-bypass only waves it through in `%dev`) | Use a token carrying `lm_integrator`, or query the unauthenticated `/q/health` instead if you only need up/down. |
-| Changed `lumnik.workflow.sweep.every` (or its env form) but the sweep still runs on the old cadence | Env vars, like the rate-limit knobs, are only read at process boot | Restart the hub after changing either form. |
+| `lumnik_runs_total` / `lumnik_dead_letters_total` absent from `/q/metrics` on a fresh boot | nothing has happened yet on this process | Trigger a run, or read the run record (`lm run get`). |
+| A scheduled CSV connector shows nothing under `csv_filesource_*` | those meters move only for `lm csv ingest` | Watch `lumnik_runs_total` and the DLQ instead. |
+| No traces reach the collector | OTel is disabled in the shipped stacks | See [Traces to a collector](#traces-to-a-collector). |
+| `GET /api/platform/health` returns `401`/`403` | it needs an `lm_integrator` token | Use an `lm_integrator` account (then `lm module list`), or `/q/health` for up/down only. |
+| Set `LUMNIK_WORKFLOW_SWEEP_EVERY` in `.env`, cadence unchanged | the hub reads it at startup only | Recreate the hub; see [Scheduled background work](#scheduled-background-work). |

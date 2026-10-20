@@ -232,7 +232,7 @@ func newSourceJdbcAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&jdbcSchema, "schema", "public", "Source schema the tables live in")
 	cmd.Flags().StringVar(&jdbcSkipPattern, "skip-pattern", defaultSkipPatterns, "Comma-separated glob patterns of tables to skip (--interactive; default: the source dialect's own)")
 	cmd.Flags().StringVar(&jdbcTables, "tables", "", "Comma-separated list of tables")
-	cmd.Flags().StringVar(&jdbcScheduleCron, "schedule-cron", "", "Quartz cron expression")
+	cmd.Flags().StringVar(&jdbcScheduleCron, "schedule-cron", "", "5-field cron expression (min hour day month weekday)")
 	cmd.Flags().BoolVar(&jdbcInteractive, "interactive", false, "Open TUI table picker")
 	_ = cmd.MarkFlagRequired("url")
 	_ = cmd.MarkFlagRequired("user")

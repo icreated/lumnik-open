@@ -63,9 +63,9 @@ core      0.1.0    Platform            ACTIVE
 identity  0.1.0    Identity & Tenancy  ACTIVE
 ```
 
-Search is the one feature you add on top. The published image never carries a provider: you build the hub
-with one (`deploy/selfhost/up.sh --search`, or `--search-cluster`, from the closed-edition sources — see
-[choosing a provider](search/search-indexes.md#choosing-a-provider)). The provider then appears in the list:
+Search is added when you build the hub: the published image never carries a provider. See
+[Deploy](deploy.md) (`up.sh --search` or `--search-cluster`, closed edition) and
+[choosing a provider](search/search-indexes.md#choosing-a-provider). The provider then appears in the list:
 
 ```
 $ lm module list
@@ -77,32 +77,24 @@ rag        0.1.0    Platform RAG        ACTIVE
 search_pg  0.1.0    PostgreSQL search   ACTIVE
 ```
 
-To see which tabs each module brings, ask the platform door (integrator token, as in
-[Which edition am I running?](editions.md#which-edition-am-i-running)); the hub offers the tabs of the
-modules that are active:
+No `lm` command prints which tabs each module brings; the platform API does (integrator token).
+The hub offers the tabs of the active modules — here a Pro hub with the AI switched off:
 
 ```
 $ curl -s "$LUMNIK_URL/api/platform/modules" -H "Authorization: Bearer $TOKEN" \
     | jq -c '.modules[] | select((.tabs|length)>0) | {id, active, tabs}'
 {"id":"core","active":true,"tabs":["fiches","inbox"]}
-{"id":"rag","active":true,"tabs":["chat"]}
-{"id":"search_pg","active":true,"tabs":["search"]}
+{"id":"rag","active":false,"tabs":["chat"]}
 ```
+
+A Search provider adds `{"id":"search_pg","active":true,"tabs":["search"]}`.
 
 ## 2. Is it switched on?
 
-A module that is in the build can be switched off without rebuilding anything. One setting does it for
-the whole AI family — the chat, the ask, the view generation and the embeddings:
-
-```
-LUMNIK_AI_ENABLED=false
-```
-
-Put it in the root `.env` (self-host) and recreate the hub with
-`docker compose -f docker-compose.selfhost.yml up -d hub`; on Kubernetes, pass it to `deploy/helm/up.sh`
-(chart value `ai.enabled`) and restart the hub pods (`kubectl rollout restart deployment/<release>-hub`).
-A plain `docker compose restart` keeps the old environment. It must be exactly `true` or `false`; anything else stops the hub at startup with a message
-naming the setting. The full list of what you see, and what stays running, is in
+One setting switches off the whole AI family — chat, ask, view generation, embeddings — without
+rebuilding: `LUMNIK_AI_ENABLED=false`. The gesture per install is in
+[Deploy — switch the AI off](deploy.md#switch-the-ai-off). It must be exactly `true` or `false`;
+anything else stops the hub at startup. What you see, and what keeps running:
 [Switching the AI off](rag/models.md#switching-the-ai-off).
 
 The module list tells the difference between *switched off* and *not there*:
@@ -110,8 +102,8 @@ The module list tells the difference between *switched off* and *not there*:
 ```
 $ lm module list
 NAME      VERSION  SCHEMA              STATUS    REASON
-core      0.1.0    Platform            ACTIVE
-identity  0.1.0    Identity & Tenancy  ACTIVE
+core      0.1.0    Platform            ACTIVE    
+identity  0.1.0    Identity & Tenancy  ACTIVE    
 llm       0.1.0    Model provider      INACTIVE  disabled:lumnik.ai.enabled
 rag       0.1.0    Platform RAG        INACTIVE  disabled:lumnik.ai.enabled
 ```
@@ -147,9 +139,8 @@ Applied app "stock" → scope stock
   tabs: fiches, inbox
 ```
 
-Asking for a tab the hub does not offer is fine — the manifest stays valid on an Open hub and on a Pro
-hub, and the tab shows up the day the hub has it. Here the same app on a hub that does not offer Chat (an Open hub, or the AI switched off), with
-`tabs: [fiches, inbox, chat]`; the apply tells you, without failing:
+A tab the hub does not offer is kept, and shows up the day the hub offers it. The apply warns
+without failing — here `tabs: [fiches, inbox, chat]` on a hub without Chat:
 
 ```
 $ lm app apply -f stock.yaml
@@ -162,31 +153,26 @@ Applied app "stock" → scope stock
           → offered here: [fiches, inbox]
 ```
 
-The last line is the hub's offer, spelled out — the quickest way to learn what an app can list. The rest of
-the rules (order, the opening tab, what is refused) are in
+The last line is the hub's offer. Order, the opening tab and what is refused:
 [Choosing the tabs](apps/pwa.md#choosing-the-tabs).
 
 Hiding a tab hides it, nothing more: who may read what is still decided by roles and scopes.
 
 ## 4. Is it ready to be used?
 
-Having the tab on offer does not make its screen useful. Fiches needs a saved view for the app's scope;
-Recherche needs a search index the user may read, and the PWA looks before showing it: with no index to
-read, the tab is simply not there. Recherche's whole checklist is in
-[Enabling Recherche for an app](apps/pwa.md#enabling-recherche-for-an-app).
+| Tab | Ready when | Check |
+|---|---|---|
+| Fiches | a saved view exists for the app's scope (otherwise the tab opens and says so) | `lm view list --scope <app scope>` |
+| Recherche | the user may read a search index (otherwise the tab is not shown) | `lm search status` |
 
-To ask the hub whether Search itself is installed and healthy:
+Recherche's full checklist: [Enabling Recherche for an app](apps/pwa.md#enabling-recherche-for-an-app).
 
-```
-$ curl -s -H "Authorization: Bearer $TOKEN" "$LUMNIK_URL/api/search/capability"
-{"state":"available","provider":"postgres","reason":null,"version":null}
-```
-
-On a hub with no provider the same question answers *not installed*, and a search is refused rather than
-answered with an empty list:
+Whether Search is installed: the TUI's `:search` page says so in its banner, and a query on a hub
+without a provider is refused, never answered with an empty list:
 
 ```
-{"state":"unavailable","provider":null,"reason":"not_installed","version":null}
+$ lm search query "Lyon"
+Error: search is not installed on this hub — no Search provider is built into it, so there is nothing to query (this is not an empty result). The published hub image never carries one: build it from source with deploy/selfhost/up.sh --search (PostgreSQL) or --search-cluster (OpenSearch), both closed edition
 ```
 
 ## Recipes
@@ -194,16 +180,22 @@ answered with an empty list:
 **A warehouse app with no Chat, on a Pro hub.** Question 3 only: `tabs: [fiches, inbox]` in the app's
 manifest, then `lm app apply -f`. The other apps keep their Chat.
 
-**A client who forbids a model on their hub.** Question 2: `LUMNIK_AI_ENABLED=false`, then recreate the hub. Every
+**A client who forbids a model on their hub.** Question 2: [switch the AI off](deploy.md#switch-the-ai-off). Every
 app loses its Chat tab at once, no manifest changes, and the rest of the hub (including Oracle, SCIM and
 Search) is untouched.
 
-**One métier searching, the others not.** Questions 3 and 4, per app: list `search` in that app's `tabs`,
-put `scopes: [stock]` (the app's scope, here `stock`) in the `kind: Entity` manifests to search and re-apply them with `lm entity apply -f`, then declare a search index over them (`lm search apply -f`). The key is `scopes`, a list, on the entity; it is not the app's `scope`, and not the `scope:<tag>` role the users hold in Keycloak. For every *other* app, give it
-a `tabs` list without `search` — an app that leaves `tabs` out takes everything the hub offers, Recherche
-included, for any user who may read some index. An app whose scope has nothing indexed shows the tab
-as long as its users can read an index of another scope, and answers *Aucun résultat*: the tab cannot tell, so
-check the index when a métier expects hits. If they can read no index at all, the tab is not there.
+**One métier searching, the others not** (questions 3 and 4, here for the `stock` app):
+
+1. In the `stock` app's manifest, list `search` in `tabs`; `lm app apply -f`.
+2. In each `kind: Entity` to search, set `scopes: [stock]` (the entity's `scopes` list — not the app's
+   `scope`, not the users' `scope:<tag>` role); `lm entity apply -f`.
+3. Declare a search index over those entities: `lm search apply -f`.
+4. Give every *other* app a `tabs` list without `search`. An app that leaves `tabs` out shows Recherche
+   to any user who may read some index.
+
+!!! warning "*Aucun résultat* on every search"
+    An app whose scope has nothing indexed still shows Recherche when its users can read another scope's
+    index — and every search answers *Aucun résultat*. Check `lm search status` when a métier expects hits.
 
 ## When a tab is missing
 
@@ -211,12 +203,15 @@ Go down the questions; stop at the first one that answers *no*.
 
 | What you see | Look at | Likely answer |
 |---|---|---|
-| No Chat tab on any app | `lm module list` | `llm` and `rag` missing: this is an Open build. Listed `INACTIVE` with `disabled:lumnik.ai.enabled`: remove `LUMNIK_AI_ENABLED=false` and recreate the hub. |
+| No Chat tab on any app | `lm module list` | `llm` and `rag` missing: this is an Open build. Listed `INACTIVE` with `disabled:lumnik.ai.enabled`: [switch the AI back on](deploy.md#switch-the-ai-off). |
 | No Recherche tab on any app | `lm module list` | no `search_pg` / `search_opensearch`: the hub was built without a Search provider. |
 | No Recherche tab, yet `search_pg` is `ACTIVE` | `lm search status` | no `kind: SearchIndex` is declared yet (the list is empty), or the users may read none of the entities the indexes cover. |
 | Recherche missing on one app only | that app's manifest | `tabs` leaves out `search`; or its users hold scopes that read none of the indexed entities (compare each entity's `scopes` with their `scope:<tag>` roles). |
-| Recherche there, but always *Aucun résultat* | `lm search status` | the index is not built yet (`STATUS`, `DOCUMENTS`), or no index covers the entities of the app's scope. |
-| A tab listed in `tabs` does not show | `lm app apply -f` again | the hub does not offer it (question 1 or 2): the apply says so. The warning reflects the offer at the moment you apply, so apply again after switching the AI on or off; the declaration is kept and takes effect when the hub offers the tab. |
+| Recherche there, but always *Aucun résultat* | `lm search status` | the index is not built yet (`STATUS`, `DOCUMENTS`). |
+| … and `STATUS` reads `invalid` | `lm search status` | an entity re-apply removed a column the index declares — [re-apply the index](search/search-indexes.md#when-the-entity-changes). |
+| … and `STATUS` reads `withheld` | `lm search status` | an index re-apply removed or changed a field — [it serves again once rebuilt](search/search-indexes.md#removing-a-field-from-an-index). |
+| … and the index is ready | `lm search status` | no index covers the entities of the app's scope. |
+| A tab listed in `tabs` does not show | `lm app apply -f` again | the hub does not offer it (question 1 or 2): the apply warns. The warning reflects the offer when you apply; the tab appears once the hub offers it. |
 | Chat tab present, answers fail | `lm rag status` | the tab shows whenever `rag` and `llm` are active; a model that is not reachable is a different problem ([models](rag/models.md)). |
 
 ## See also

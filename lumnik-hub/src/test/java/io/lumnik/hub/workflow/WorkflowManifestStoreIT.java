@@ -87,6 +87,19 @@ class WorkflowManifestStoreIT {
         assertThat(ledgerRowCount("core.workflow_transition", tenant, name)).isZero();
     }
 
+    /** #1237: two removals racing past findScope must audit once — the store says which one removed it. */
+    @Test
+    void delete_says_whether_it_removed_the_manifest() {
+        long tenant = 7004L;
+        String name = "wf-delete-once-it";
+        WorkflowManifest m = new WorkflowManifestParser().parse(YAML.replace("wf-store-it", name)
+            .replace("t_store_it", "t_delete_once_it"));
+        store.upsert(tenant, m, YAML, null);
+
+        assertThat(store.delete(tenant, name)).isTrue();
+        assertThat(store.delete(tenant, name)).isFalse();
+    }
+
     private long ledgerRowCount(String table, long tenant, String name) {
         return Jdbc.queryOne(adminDs, "test.ledgerRowCount",
             "SELECT COUNT(*) FROM " + table + " WHERE tenant_id = ? AND workflow_name = ?",

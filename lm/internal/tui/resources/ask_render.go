@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
+	"github.com/icreated/lumnik-open/lm/internal/output"
 )
 
 // moneyRe matches a currency-prefixed amount (€312,480 / $1 234.50) or a
@@ -21,10 +22,7 @@ func deriveHeadline(answer string, rowCount int) string {
 	if m := strings.TrimSpace(moneyRe.FindString(answer)); m != "" {
 		return m
 	}
-	if rowCount == 1 {
-		return "1 row"
-	}
-	return fmt.Sprintf("%d rows", rowCount)
+	return output.RowCount(rowCount)
 }
 
 // askRejected reports whether the agent declined to translate (SqlGuard reject).

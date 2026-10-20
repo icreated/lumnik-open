@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -60,7 +61,7 @@ class EntityCompilerGoldenTest {
 
   private String compile(String yaml) {
     try {
-      return String.join("\n;;\n", compiler.buildStatements(parser.parse(yaml)));
+      return String.join("\n;;\n", compiler.buildStatements(parser.parse(yaml), Set.of()));
     } catch (IllegalArgumentException refused) {
       return "REFUSED";
     }

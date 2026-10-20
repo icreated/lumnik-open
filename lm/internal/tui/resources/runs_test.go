@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -155,6 +156,32 @@ func TestRunsDescribe_namesTheEndpoint(t *testing.T) {
 	}
 }
 
+// d on a failed run must say WHY first: written last, after a dozen counters, the reason sat below
+// the fold of a 40% panel (#1173). And connector: names it as the list does — the id is on id:.
+func TestRunsDescribe_aFailedRunSaysWhyRightAfterItsStatus(t *testing.T) {
+	r := &Runs{table: tview.NewTable(), sort: style.NewColumnSort(runSortColumns)}
+	r.items = []types.Run{{ID: "r1", ConnectorID: "9f1c2d3e-0000-4000-8000-000000000001", ConnectorName: "acme-kafka",
+		Status: "Failed", ErrorMessage: "the broker did not answer\nwithin the metadata timeout", ChunkCount: 3}}
+	r.render()
+	r.table.Select(1, 0)
+	_, body, ok := r.SelectedDescribe()
+	if !ok {
+		t.Fatal("describe !ok")
+	}
+	lines := strings.Split(body, "\n")
+	status := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "status:") })
+	errAt := slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "error:") })
+	if status < 0 || errAt != status+1 {
+		t.Errorf("error: is line %d, status: line %d — the reason must follow the status:\n%s", errAt, status, body)
+	}
+	if !strings.Contains(body, "within the metadata timeout") {
+		t.Errorf("the whole multi-line error must be shown:\n%s", body)
+	}
+	if !strings.Contains(body, "connector:       acme-kafka\n") {
+		t.Errorf("connector: must name the connector, not its id:\n%s", body)
+	}
+}
+
 func TestRunsRender_recordsCellShowsInOutSkip(t *testing.T) {
 	r := &Runs{table: tview.NewTable(),
 		sort: style.NewColumnSort(runSortColumns)}
@@ -237,7 +264,7 @@ func TestRunsSetFilter_narrowsAtTheHubNotInTheRenderer(t *testing.T) {
 
 	r := &Runs{table: tview.NewTable(), sort: style.NewColumnSort(runSortColumns),
 		client: client.New(config.Context{Server: srv.URL})}
-	r.SetFilter("c-1")
+	r.SetFilter("c-1", "")
 
 	if len(asked) == 0 || asked[len(asked)-1] != "c-1" {
 		t.Errorf("the filter must ride the query, connector params seen: %v", asked)
@@ -262,7 +289,7 @@ func TestRunsClearFilter_asksTheLedgerAgain(t *testing.T) {
 
 	r := &Runs{table: tview.NewTable(), sort: style.NewColumnSort(runSortColumns),
 		client: client.New(config.Context{Server: srv.URL})}
-	r.SetFilter("c-1")
+	r.SetFilter("c-1", "")
 	r.ClearFilter()
 
 	if len(asked) < 2 || asked[len(asked)-1] != "" {
@@ -292,7 +319,7 @@ func TestRunsSetEndpointFilter_asksTheHubByEndpoint(t *testing.T) {
 
 	r := &Runs{table: tview.NewTable(), sort: style.NewColumnSort(runSortColumns),
 		client: client.New(config.Context{Server: srv.URL})}
-	r.SetEndpointFilter("e-7")
+	r.SetEndpointFilter("e-7", "")
 
 	if len(endpointParam) == 0 || endpointParam[len(endpointParam)-1] != "e-7" {
 		t.Errorf("the endpoint must ride the query, saw endpoint params %v", endpointParam)
@@ -317,9 +344,9 @@ func TestRunsFilters_eachDrillDownReplacesTheOther(t *testing.T) {
 
 	r := &Runs{table: tview.NewTable(), sort: style.NewColumnSort(runSortColumns),
 		client: client.New(config.Context{Server: srv.URL})}
-	r.SetFilter("c-1")
-	r.SetEndpointFilter("e-7")
-	r.SetFilter("c-2")
+	r.SetFilter("c-1", "")
+	r.SetEndpointFilter("e-7", "")
+	r.SetFilter("c-2", "")
 	r.ClearFilter()
 
 	want := []string{"c-1/", "/e-7", "c-2/", "/"}
@@ -395,5 +422,51 @@ func TestRuns_describeOfAQueuedRunSaysQueuedNotBlank(t *testing.T) {
 	_, body, ok := r.SelectedDescribe()
 	if !ok || !strings.Contains(body, "started:         queued") {
 		t.Errorf("describe body = %q", body)
+	}
+}
+
+// The run panel says how many rows the run quarantined, as lm run get does (#1111).
+func TestRunsDescribe_showsDeadLetters(t *testing.T) {
+	r := &Runs{table: tview.NewTable(), sort: style.NewColumnSort(runSortColumns)}
+	r.renderList([]types.Run{{ID: "r1", DeadLetterCount: 3}}, nil)
+	r.table.Select(1, 0)
+	_, body, _ := r.SelectedDescribe()
+	if !strings.Contains(body, "dead_letters:    3") {
+		t.Errorf("describe misses the dead-letter count:\n%s", body)
+	}
+}
+
+// A drill-down's title names what it is narrowed to — the connector or endpoint the user pressed
+// Enter on, by NAME, not by an 8-character id (#1175); an id with no name still shows short. And
+// :endpoints opened from the palette, with no connector, says how to fill it.
+func TestDrillDownTitles_nameWhatTheyAreNarrowedTo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+	c := client.New(config.Context{Server: srv.URL})
+
+	e := NewEndpoints(nil, c, nil, nil)
+	e.Refresh()
+	if got := e.table.GetCell(1, 0).Text; !strings.Contains(got, "Enter on a :sources row") {
+		t.Errorf("empty :endpoints says %q", got)
+	}
+	e.SetFilter("2d80d457-1111", "erp-orders")
+	if got := e.table.GetTitle(); got != " :endpoints › erp-orders " {
+		t.Errorf(":endpoints title = %q", got)
+	}
+	e.SetFilter("2d80d457-1111", "")
+	if got := e.table.GetTitle(); got != " :endpoints › 2d80d457 " {
+		t.Errorf(":endpoints title without a name = %q", got)
+	}
+
+	r := &Runs{table: tview.NewTable(), sort: style.NewColumnSort(runSortColumns), client: c}
+	r.SetFilter("2d80d457-1111", "erp-orders")
+	if got := r.table.GetTitle(); got != " :runs › connector erp-orders " {
+		t.Errorf(":runs connector title = %q", got)
+	}
+	r.SetEndpointFilter("edad9649-2222", "warehouses")
+	if got := r.table.GetTitle(); got != " :runs › endpoint warehouses " {
+		t.Errorf(":runs endpoint title = %q", got)
 	}
 }

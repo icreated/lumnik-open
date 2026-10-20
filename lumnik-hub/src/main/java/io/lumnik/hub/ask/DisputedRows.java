@@ -11,10 +11,15 @@ import io.lumnik.extraction.spi.ask.SqlLexer.Kind;
 import io.lumnik.extraction.spi.ask.SqlLexer.Token;
 import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityViewCompiler;
+import io.lumnik.hub.sql.TemporalText;
+import io.lumnik.hub.view.ColumnKind;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -29,7 +34,15 @@ final class DisputedRows {
 
     private DisputedRows() {}
 
-    record Filter(String column, List<String> values) {}
+    /**
+     * {@code column = any of values}. {@code instants}: the column holds a date or a timestamp, so it is
+     * equal as an instant, cast by the database as the question's own query casts it (#1326 review).
+     */
+    record Filter(String column, List<String> values, boolean instants) {
+        Filter(String column, List<String> values) {
+            this(column, values, false);
+        }
+    }
 
     /** When a COUNTED entry may be reported: never, once any row was read, or only while the read stayed under the cap. */
     enum Counted { NEVER, IF_ANY_ROW, IF_UNDER_CAP }
@@ -85,9 +98,11 @@ final class DisputedRows {
 
         Optional<List<Filter>> filters = conjunction(t.subList(where + 1, end), qualifier);
         if (filters.isEmpty()) return Optional.empty();
-        Set<String> declared = new HashSet<>();
-        for (SchemaCard.Column c : table.get().columns()) declared.add(c.name().toLowerCase(Locale.ROOT));
-        List<Filter> kept = filters.get().stream().filter(f -> declared.contains(f.column())).toList();
+        Map<String, String> declared = new HashMap<>();
+        for (SchemaCard.Column c : table.get().columns()) declared.put(c.name().toLowerCase(Locale.ROOT), c.pgType());
+        List<Filter> kept = filters.get().stream().filter(f -> declared.containsKey(f.column()))
+            .map(f -> new Filter(f.column(), f.values(), ColumnKind.ofType(declared.get(f.column())).temporal()))
+            .toList();
         if (kept.size() != filters.get().size() || kept.isEmpty()) return Optional.empty();
 
         return Optional.of(new Plan(table.get().name(), entity, kept,
@@ -246,13 +261,14 @@ final class DisputedRows {
         sql.append("\nWHERE ");
         for (Filter o : plan.filters()) {
             if (o.column().equals(f.column())) continue;
-            sql.append(quoteIdent(o.column())).append("::text = ANY(?) AND ");
+            sql.append(equal(quoteIdent(o.column()), o)).append(" AND ");
             params.add(o.values());
         }
         sql.append("jsonb_typeof(\"_conflicts\" -> ?) = 'array'");
         params.add(f.column());
-        String retainedMatches = "(" + quoteIdent(f.column()) + "::text = ANY(?))";
-        String sourceHolds = "EXISTS (SELECT 1 FROM jsonb_array_elements(\"_conflicts\" -> ?) e WHERE e ->> 'value' = ANY(?))";
+        String retainedMatches = "(" + equal(quoteIdent(f.column()), f) + ")";
+        String sourceHolds = "EXISTS (SELECT 1 FROM jsonb_array_elements(\"_conflicts\" -> ?) e WHERE "
+            + (f.instants() ? equal("(e ->> 'value')", f) : "e ->> 'value' = ANY(?)") + ")";
         // Counted entries that cannot be reported must not take LIMIT slots: the overflow flag then
         // counts admissible rows only, so truncation is never claimed over entries nobody will see.
         if (countedAdmissible) sql.append("\n  AND (").append(retainedMatches).append(" OR ").append(sourceHolds).append(")");
@@ -269,6 +285,22 @@ final class DisputedRows {
         return new Probe(sql.toString(), List.copyOf(params));
     }
 
+    /** {@code expr} against the filter's bound values: as instants on a date column, as the exact text otherwise. */
+    private static String equal(String expr, Filter f) {
+        return expr + (f.instants() ? "::timestamptz = ANY(?::timestamptz[])" : "::text = ANY(?)");
+    }
+
+    /**
+     * Whether {@code value} is one the filter names. A date is compared as an instant; a literal the platform's
+     * reader cannot place (PostgreSQL's {@code today}) matches nothing — a missed warning, never a false one.
+     */
+    private static boolean named(Filter f, String value) {
+        if (value == null) return false;
+        if (!f.instants()) return f.values().contains(value);
+        Instant at = TemporalText.parse(value);
+        return at != null && f.values().stream().map(TemporalText::parse).anyMatch(at::equals);
+    }
+
     static Optional<Disputed> classify(ProbeRow row, Filter f, String label) {
         List<Disputed.SourceValue> sources = new ArrayList<>();
         try {
@@ -282,11 +314,11 @@ final class DisputedRows {
         } catch (Exception ex) {
             return Optional.empty();
         }
-        if (row.retained() != null && f.values().contains(row.retained())) {
+        if (named(f, row.retained())) {
             return Optional.of(new Disputed(row.key(), f.column(), label, row.retained(), row.retained(), true, sources));
         }
         for (Disputed.SourceValue s : sources) {
-            if (s.value() != null && f.values().contains(s.value())) {
+            if (named(f, s.value())) {
                 return Optional.of(new Disputed(row.key(), f.column(), label, s.value(), row.retained(), false, sources));
             }
         }

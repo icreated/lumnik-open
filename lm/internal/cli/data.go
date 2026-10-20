@@ -51,9 +51,9 @@ func newDataCmd() *cobra.Command {
 			}
 			format, _ := cmd.Flags().GetString("output")
 			return output.Print(cmd.OutOrStdout(), format,
-				[]string{"MAPPING", "SCHEMA", "TABLE"}, ts,
+				[]string{"MAPPING", "SCHEMA", "TABLE", "ROWS"}, ts,
 				func(t client.DataTable) []string {
-					return []string{t.MappingID, t.TableSchema, t.TableName}
+					return []string{t.MappingID, t.TableSchema, t.TableName, t.Rows()}
 				})
 		},
 	})

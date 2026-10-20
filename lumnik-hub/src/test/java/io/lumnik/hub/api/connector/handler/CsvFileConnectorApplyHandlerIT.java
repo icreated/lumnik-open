@@ -27,6 +27,7 @@ class CsvFileConnectorApplyHandlerIT {
                 user: lumnik
                 path: /export/*.csv
                 key_env: ACME_SFTP_KEY
+                host_key_fingerprint: "SHA256:M0Is0aG8ubOr0cLpQs6QcDwVSxMkvmlfuW4K9Q6CJuc"
               parser:
                 has_header: true
               schedule: "0 6 * * *"

@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 
@@ -169,8 +171,8 @@ class ViewLinksParserTest {
     }
 
     @Test void the_documented_example_passes_the_apply_door_parser() throws Exception {
-        String yaml = java.nio.file.Files.readString(
-            java.nio.file.Path.of("..", "docs", "apps", "demo", "views", "30-categories-links.yaml"));
+        String yaml = Files.readString(
+            Path.of("..", "docs", "apps", "demo", "views", "30-categories-links.yaml"));
         assertThat(parser.unknownKeys(yaml)).isEmpty();
         assertThat(parser.parse(yaml).links()).extracting(ViewLink::column).containsExactly("name", "category_id");
     }

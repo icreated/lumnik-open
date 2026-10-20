@@ -10,56 +10,62 @@ import (
 	"github.com/icreated/lumnik-open/lm/internal/client"
 )
 
-// PickTables opens a tview multi-select list and returns the user's selection.
-// Space or Enter toggles; Enter on last item or Escape confirms and exits.
-func PickTables(tables []client.JdbcTable) ([]client.JdbcTable, error) {
-	selected := make(map[int]bool)
-	app := tview.NewApplication()
+// newTablePicker is the JDBC table picker, one for both its hosts — lm source jdbc add
+// --interactive (its own application) and lm ui's guided setup (#1117): Space toggles a table
+// that can be added, Enter confirms, Esc leaves with confirmed false. Labels are escaped: the
+// [ ]/[x]/[!] marks are text, not colour tags.
+func newTablePicker(tables []client.JdbcTable, title string, done func(picked []client.JdbcTable, confirmed bool)) *tview.List {
+	selected := map[int]bool{}
 	list := tview.NewList().ShowSecondaryText(false)
-
-	var render func()
-	render = func() {
-		list.Clear()
-		for i, t := range tables {
-			idx := i
-			list.AddItem(PickerLabel(t, selected[i]), "", 0, func() {
-				if !Selectable(tables[idx]) {
-					return
-				}
-				selected[idx] = !selected[idx]
-				render()
-			})
-		}
+	if title != "" {
+		list.SetBorder(true).SetTitle(title)
 	}
-	render()
-
-	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch event.Key() {
-		case tcell.KeyESC, tcell.KeyEnter:
-			app.Stop()
-			return nil
-		case tcell.KeyRune:
-			if event.Rune() == ' ' {
-				idx := list.GetCurrentItem()
-				if idx >= 0 && idx < len(tables) && Selectable(tables[idx]) {
-					selected[idx] = !selected[idx]
-					render()
-				}
-				return nil
+	for _, t := range tables {
+		list.AddItem(tview.Escape(PickerLabel(t, false)), "", 0, nil)
+	}
+	finish := func(confirmed bool) {
+		var out []client.JdbcTable
+		for i, t := range tables {
+			if selected[i] {
+				out = append(out, t)
 			}
 		}
-		return event
+		done(out, confirmed)
+	}
+	list.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
+		switch {
+		case ev.Key() == tcell.KeyEnter:
+			finish(true)
+			return nil
+		case ev.Key() == tcell.KeyEscape:
+			finish(false)
+			return nil
+		case ev.Rune() == ' ':
+			if i := list.GetCurrentItem(); i >= 0 && i < len(tables) && Selectable(tables[i]) {
+				selected[i] = !selected[i]
+				list.SetItemText(i, tview.Escape(PickerLabel(tables[i], selected[i])), "")
+			}
+			return nil
+		}
+		return ev
 	})
+	return list
+}
 
+// PickTables opens the table picker as its own application and returns the selection. Esc keeps
+// what was ticked, as Enter does — the CLI picker's behaviour since it shipped.
+func PickTables(tables []client.JdbcTable) ([]client.JdbcTable, error) {
+	app := tview.NewApplication()
+	var out []client.JdbcTable
+	list := newTablePicker(tables, "", func(picked []client.JdbcTable, _ bool) {
+		out = picked
+		app.Stop()
+	})
 	if err := app.SetRoot(list, true).Run(); err != nil {
 		return nil, err
 	}
-
-	out := make([]client.JdbcTable, 0)
-	for i, t := range tables {
-		if selected[i] {
-			out = append(out, t)
-		}
+	if out == nil {
+		out = []client.JdbcTable{}
 	}
 	return out, nil
 }

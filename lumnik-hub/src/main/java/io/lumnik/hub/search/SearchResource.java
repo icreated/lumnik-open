@@ -28,6 +28,7 @@ import org.jboss.logging.Logger;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -117,7 +118,14 @@ public class SearchResource {
         }
 
         long tenant = RequireTenant.current();
-        IndexedSearchQuery query = new IndexedSearchQuery(tenant, allowed, q, filters, effectiveLimit, cursor);
+        // An invalid declaration (#1187), or one withheld until rebuilt (#1219), takes no part in Search: its
+        // documents and facets still carry a column it no longer declares. Left out after the ?entity= check, so
+        // naming its entity is an empty answer the registry explains, never the 403 of an entity the caller
+        // cannot see.
+        Set<String> unserved = indexes.unservedEntities(tenant);
+        Set<String> servable = new TreeSet<>(allowed);
+        servable.removeIf(e -> unserved.contains(e.toLowerCase(Locale.ROOT)));
+        IndexedSearchQuery query = new IndexedSearchQuery(tenant, servable, q, filters, effectiveLimit, cursor);
 
         SearchOutcome outcome = gate.search(query);
         return switch (outcome) {

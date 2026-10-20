@@ -79,7 +79,7 @@ class AbstentionRetryIT {
 
         SchemaCard card = store.load(7L, "retry").orElseThrow();
         List<String> sent = prompts(3);
-        assertThat(sent.get(2)).isEqualTo(AskToSqlAgent.sqlPrompt(card, rewritten, true)).contains("Text containment");
+        assertThat(sent.get(2)).isEqualTo(AskToSqlAgent.sqlPrompt(card, rewritten, true, DateIntent.in(asked))).contains("Text containment");
         assertThat(AskToSqlAgent.sqlPrompt(card, rewritten)).as("on its own the paraphrase carries no rule")
             .doesNotContain("Text containment");
     }
@@ -99,7 +99,7 @@ class AbstentionRetryIT {
         SchemaCard card = store.load(7L, "retry").orElseThrow();
         List<String> sent = prompts(3);
         assertThat(ContainmentIntent.in(rewritten)).as("the paraphrase does read like a containment").isTrue();
-        assertThat(sent.get(2)).isEqualTo(AskToSqlAgent.sqlPrompt(card, rewritten, false)).doesNotContain("Text containment");
+        assertThat(sent.get(2)).isEqualTo(AskToSqlAgent.sqlPrompt(card, rewritten, false, DateIntent.in(asked))).doesNotContain("Text containment");
     }
 
     @Test

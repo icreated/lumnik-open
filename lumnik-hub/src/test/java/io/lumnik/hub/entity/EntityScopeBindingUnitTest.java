@@ -94,11 +94,26 @@ class EntityScopeBindingUnitTest {
     return String.valueOf(((Map<String, Object>) r.getEntity()).get("error"));
   }
 
+  /** #1114: the list follows the read's rule — a bound caller lists only what its scopes reach. */
+  @Test
+  void the_list_shows_a_bound_user_only_its_scopes_and_an_unbound_one_everything() {
+    EntityReadResource res = new EntityReadResource();
+    res.registry = new EntityRegistry() {
+      @Override public List<EntityManifest> all() {
+        return List.of(entity("customer", List.of("clients")), entity("stock", List.of("stock")));
+      }
+    };
+    CurrentRolesHolder.set(Set.of("lm_user", "scope:stock"));
+    assertThat(res.list()).extracting(EntityReadResource.EntitySummary::name).containsExactly("stock");
+    CurrentRolesHolder.set(Set.of("lm_user"));
+    assertThat(res.list()).extracting(EntityReadResource.EntitySummary::name).containsExactly("customer", "stock");
+  }
+
   @Test
   void bound_user_foreign_entity_is_403() {
     CurrentRolesHolder.set(Set.of("lm_user", "scope:stock"));
     Response r = resourceServing(entity("customer", List.of("clients")))
-        .read("customer", emptyUriInfo(), 100, 0);
+        .read("customer", emptyUriInfo(), 100, 0, false);
     assertThat(r.getStatus()).isEqualTo(403);
     assertThat(errorOf(r)).isEqualTo("scope not granted");
   }
@@ -117,7 +132,7 @@ class EntityScopeBindingUnitTest {
     PoisonedAdminDataSource poison = new PoisonedAdminDataSource();
     res.adminDs = poison;
 
-    Response r = res.read("customer", emptyUriInfo(), 100, 0);
+    Response r = res.read("customer", emptyUriInfo(), 100, 0, false);
 
     assertThat(r.getStatus()).isEqualTo(403);
     assertThat(poison.connectionRequested)
@@ -136,7 +151,7 @@ class EntityScopeBindingUnitTest {
     PoisonedAdminDataSource poison = new PoisonedAdminDataSource();
     res.adminDs = poison;
 
-    Response r = res.read("nope", emptyUriInfo(), 100, 0);
+    Response r = res.read("nope", emptyUriInfo(), 100, 0, false);
 
     assertThat(r.getStatus()).isEqualTo(404);
     assertThat(poison.connectionRequested)
@@ -186,7 +201,7 @@ class EntityScopeBindingUnitTest {
   void the_refusal_wire_contract_is_frozen() throws Exception {
     CurrentRolesHolder.set(Set.of("lm_user", "scope:stock"));
     Response r = resourceServing(entity("customer", List.of("clients")))
-        .read("customer", emptyUriInfo(), 100, 0);
+        .read("customer", emptyUriInfo(), 100, 0, false);
     assertThat(r.getStatus()).isEqualTo(403);
     assertThat(new ObjectMapper().writeValueAsString(r.getEntity()))
         .isEqualTo("{\"error\":\"scope not granted\"}");
@@ -196,7 +211,7 @@ class EntityScopeBindingUnitTest {
   void bound_user_scopeless_entity_is_403() {
     CurrentRolesHolder.set(Set.of("lm_user", "scope:stock"));
     Response r = resourceServing(entity("orphan", List.of()))
-        .read("orphan", emptyUriInfo(), 100, 0);
+        .read("orphan", emptyUriInfo(), 100, 0, false);
     assertThat(r.getStatus()).isEqualTo(403);
     assertThat(errorOf(r)).isEqualTo("scope not granted");
   }
@@ -208,7 +223,7 @@ class EntityScopeBindingUnitTest {
     // past the gate the resource needs its EntityManager, which this test leaves null on
     // purpose — the helpful-NPE naming this.em is the positive proof the gate opened
     // (a wrong 403 would return normally and fail this assertion).
-    assertThatThrownBy(() -> res.read("articles", emptyUriInfo(), 100, 0))
+    assertThatThrownBy(() -> res.read("articles", emptyUriInfo(), 100, 0, false))
         .isInstanceOf(NullPointerException.class)
         .hasMessageContaining("this.em");
   }
@@ -220,7 +235,7 @@ class EntityScopeBindingUnitTest {
     // past the gate the resource needs its EntityManager, which this test leaves null on
     // purpose — the helpful-NPE naming this.em is the positive proof the gate opened
     // (a wrong 403 would return normally and fail this assertion).
-    assertThatThrownBy(() -> res.read("customer", emptyUriInfo(), 100, 0))
+    assertThatThrownBy(() -> res.read("customer", emptyUriInfo(), 100, 0, false))
         .isInstanceOf(NullPointerException.class)
         .hasMessageContaining("this.em");
   }

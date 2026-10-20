@@ -17,20 +17,22 @@ import (
 // Observations is the workflow tape: what has NOT moved, stillest first. The order is the
 // server's promise (ORDER BY since ASC) — this page renders it, it never re-derives it.
 type Observations struct {
+	app      *tview.Application
 	table    *tview.Table
 	client   *client.Client
 	items    []client.Observation
+	offLoop  offLoop
 	mu       sync.Mutex
 	onError  func(string)
 	onSelect func()
 }
 
-func NewObservations(c *client.Client, onError func(string)) *Observations {
-	t := tview.NewTable().SetBorders(false).SetSelectable(true, false)
+func NewObservations(app *tview.Application, c *client.Client, onError func(string)) *Observations {
+	t := newListTable()
 	t.SetTitle(" :observations ").SetBorder(true)
 	style.ApplyChrome(t.Box)
 	style.ApplyTableSelection(t)
-	o := &Observations{table: t, client: c, onError: onError}
+	o := &Observations{app: app, table: t, client: c, onError: onError}
 	o.setHeader()
 	t.SetInputCapture(o.handleKey)
 	t.SetSelectionChangedFunc(func(row, col int) {
@@ -53,18 +55,44 @@ func (o *Observations) setHeader() {
 	}
 }
 
+// Refresh fetches the tape and its stats (`lm observations stats`, #1138) off the event loop. The
+// stats ride in the title: a refused stats call leaves the tape shown and says why.
 func (o *Observations) Refresh() {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	list, err := o.client.ObservationList(200)
-	if err != nil {
-		if o.onError != nil {
-			o.onError(fmt.Sprintf("observations: %v", err))
+	o.offLoop.run(o.app, func() func() {
+		list, err := o.client.ObservationList(200)
+		stats, statsErr := o.client.ObservationStats()
+		return func() {
+			o.mu.Lock()
+			defer o.mu.Unlock()
+			if err != nil {
+				say(o.onError, fmt.Sprintf("observations: %v", err))
+				return
+			}
+			o.items = list
+			o.render()
+			o.table.SetTitle(observationsTitle(stats))
+			if statsErr != nil {
+				say(o.onError, fmt.Sprintf("observations stats: %v", statsErr))
+			}
 		}
-		return
+	})
+}
+
+// observationsTitle is the page title with each workflow's numbers; the median detection is said
+// only when something is dormant — absent, not zero.
+func observationsTitle(stats []client.ObservationStatsRow) string {
+	parts := make([]string, 0, len(stats))
+	for _, s := range stats {
+		p := fmt.Sprintf("%s %d watched · %d dormant", tview.Escape(s.Workflow), s.Watched, s.Dormant)
+		if s.MedianDetectionSeconds != nil {
+			p += " · median detection " + humanizeSince(time.Duration(*s.MedianDetectionSeconds)*time.Second)
+		}
+		parts = append(parts, p)
 	}
-	o.items = list
-	o.render()
+	if len(parts) == 0 {
+		return " :observations "
+	}
+	return " :observations — " + strings.Join(parts, " | ") + " "
 }
 
 func (o *Observations) render() {

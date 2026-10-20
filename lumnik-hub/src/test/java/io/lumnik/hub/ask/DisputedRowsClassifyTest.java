@@ -149,4 +149,17 @@ class DisputedRowsClassifyTest {
         assertThrows(IllegalArgumentException.class,
             () -> DisputedRows.probe(plan, CITY_LYON, List.of(), true));
     }
+
+    /** A date filter matches the instant a source holds, whatever its text (#1326 review). */
+    @Test
+    void a_date_filter_matches_a_source_holding_that_instant() {
+        DisputedRows.Filter due = new DisputedRows.Filter("due", List.of("2026-07-05"), true);
+        String ledger = "[{\"src\": \"t_erp\", \"value\": \"2026-07-05 08:00:00+00\"},"
+            + " {\"src\": \"t_csv\", \"value\": \"2026-07-05 00:00:00+00\"}]";
+        Disputed d = DisputedRows.classify(new DisputedRows.ProbeRow("SO-2", "2026-07-05 08:00:00+00", ledger), due, "Due")
+            .orElseThrow();
+        assertThat(d.counted()).isFalse();
+        assertThat(d.matched()).isEqualTo("2026-07-05 00:00:00+00");
+        assertThat(d.retained()).isEqualTo("2026-07-05 08:00:00+00");
+    }
 }

@@ -20,6 +20,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.time.ZoneOffset;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -114,7 +115,7 @@ class JdbcChunkReaderCompositeKeyIT {
   private static JdbcChunkReader reader(String watermarkColumn, JdbcChunkReader.Mode mode) {
     return new JdbcChunkReader(PG.getJdbcUrl(), "u", "p", "postgres",
         "public", "order_lines", watermarkColumn, List.of("order_id", "line_no"),
-        mode, new PostgresDialect(), REGISTRY);
+        mode, new PostgresDialect(), REGISTRY, ZoneOffset.UTC);
   }
 
   /** Reads to exhaustion from {@code start}, returning every row the HasMore chunks carried. */

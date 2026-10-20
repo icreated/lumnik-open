@@ -11,10 +11,7 @@ import jakarta.transaction.UserTransaction;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
@@ -95,23 +92,18 @@ final class QueuedRunFixtures {
         return Jdbc.queryOne(adminDs, "run row", "SELECT status, started_at, ended_at, queued_at, error_message, "
             + "resolution_exempt, records_out FROM connector.connector_run WHERE id = ?",
             ps -> ps.setObject(1, runId),
-            rs -> new RunRow(rs.getString(1), instant(rs, 2), instant(rs, 3), instant(rs, 4), rs.getString(5),
+            rs -> new RunRow(rs.getString(1), Jdbc.instant(rs, 2), Jdbc.instant(rs, 3), Jdbc.instant(rs, 4), rs.getString(5),
                 rs.getBoolean(6), rs.getLong(7))).orElseThrow();
     }
 
     static Stamp stamp(AgroalDataSource adminDs, UUID endpointId) {
         return Jdbc.queryOne(adminDs, "endpoint stamp", "SELECT last_run_status, last_run_at "
             + "FROM connector.connector_endpoint WHERE id = ?",
-            ps -> ps.setObject(1, endpointId), rs -> new Stamp(rs.getString(1), instant(rs, 2))).orElseThrow();
+            ps -> ps.setObject(1, endpointId), rs -> new Stamp(rs.getString(1), Jdbc.instant(rs, 2))).orElseThrow();
     }
 
     /** Every Queued row, whoever wrote it: a dispatcher takes the oldest of ALL of them. */
     static void clearQueue(AgroalDataSource adminDs) {
         Jdbc.update(adminDs, "clear the queue", "DELETE FROM connector.connector_run WHERE status = 'Queued'", ps -> {});
-    }
-
-    private static Instant instant(ResultSet rs, int i) throws SQLException {
-        OffsetDateTime t = rs.getObject(i, OffsetDateTime.class);
-        return t == null ? null : t.toInstant();
     }
 }

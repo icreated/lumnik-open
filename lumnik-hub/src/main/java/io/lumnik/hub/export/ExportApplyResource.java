@@ -52,12 +52,7 @@ public class ExportApplyResource {
     public Response apply(String body) {
         long tenant = RequireTenant.current();
 
-        JsonNode root;
-        try {
-            root = parser.readTree(body);
-        } catch (IllegalArgumentException e) {
-            return ApiErrors.badRequest(e.getMessage());
-        }
+        JsonNode root = ApiErrors.orBadRequest(() -> parser.readTree(body));
 
         // Must run BEFORE unknownKeys(): these four names are never in the allowed-keys surface,
         // so the generic refusal below would otherwise reach spec.destination.password first and
@@ -70,12 +65,7 @@ public class ExportApplyResource {
             ApplyDoorSupport.refuseUnknownKeys("Export", unknown, ExportManifestParser.honoredSurface());
         if (unknownRefusal.isPresent()) return unknownRefusal.get();
 
-        ExportManifest manifest;
-        try {
-            manifest = parser.parse(root);
-        } catch (IllegalArgumentException e) {
-            return ApiErrors.badRequest(e.getMessage());
-        }
+        ExportManifest manifest = ApiErrors.orBadRequest(() -> parser.parse(root));
 
         String name = manifest.name().strip().toLowerCase(Locale.ROOT);
         Optional<Response> slugRefusal = ApplyDoorSupport.refuseReservedOrInvalidSlug(name, RESERVED_NAMES);

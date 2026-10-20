@@ -5,6 +5,7 @@ import io.quarkus.hibernate.orm.panache.PanacheRepositoryBase;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Optional;
@@ -45,8 +46,13 @@ public class ConnectorRunRepository implements PanacheRepositoryBase<ConnectorRu
    * so the page relied on RLS alone — whose policy no index can serve — and scanned and sorted the
    * run history on every refresh (#892). With it, {@code idx_run_tenant_started} hands over the
    * newest runs.
+   *
+   * <p>{@code heldConnectors} is the scope-bound caller's reach (#1212), null for an unbound one:
+   * it narrows the query like the two ids, so the page is the caller's newest runs. Empty holds
+   * nothing.
    */
-  public List<ConnectorRun> findRecent(Long tenantId, UUID connectorId, UUID endpointId, int limit) {
+  public List<ConnectorRun> findRecent(Long tenantId, UUID connectorId, UUID endpointId,
+                                       Collection<UUID> heldConnectors, int limit) {
     var clauses = new ArrayList<String>();
     var params = new HashMap<String, Object>();
     clauses.add("tenantId = :tenantId");
@@ -58,6 +64,11 @@ public class ConnectorRunRepository implements PanacheRepositoryBase<ConnectorRu
     if (endpointId != null) {
       clauses.add("endpointId = :endpointId");
       params.put("endpointId", endpointId);
+    }
+    if (heldConnectors != null && heldConnectors.isEmpty()) return List.of();
+    if (heldConnectors != null) {
+      clauses.add("connectorId in :held");
+      params.put("held", heldConnectors);
     }
     return find(String.join(" and ", clauses) + " order by startedAt desc", params).page(0, limit).list();
   }

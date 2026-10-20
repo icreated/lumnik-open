@@ -4,6 +4,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityManifestParser;
+import io.lumnik.hub.entity.EntityViewCompiler;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -13,12 +14,13 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Discovery source for fused ENTITY views. Entities live in connector.entity_manifest (global,
  * not per-connector) and declare which métier scopes can see them. For a scope, emit one
  * SchemaCard.Table per matching entity, pointing at its connector.v_&lt;name&gt; view with the
- * manifest's canonical columns. No catalog scan — columns come from the manifest.
+ * manifest's canonical columns. The columns come from the manifest, their types from the compiled view.
  */
 @ApplicationScoped
 public class EntitySchemaBuilder {
@@ -41,13 +43,17 @@ public class EntitySchemaBuilder {
                 while (rs.next()) {
                     String name = rs.getString("name"); // stored lower-cased
                     EntityManifest m = parser.parse(rs.getString("yaml_text"));
+                    // The compiled view's own types (#1325): a date the sources agree on is a date here,
+                    // so a view filters it and Ask writes SQL for it as on a table. Text before compiling.
+                    Map<String, String> types = EntityViewCompiler.viewColumnTypes(cx, name);
                     List<SchemaCard.Column> cols = new ArrayList<>();
                     for (String c : m.canonicalColumns()) {
                         EntityManifest.ColumnMeta meta = m.columns().get(c);
+                        String type = types.getOrDefault(c, "text");
                         if (meta == null) {
-                            cols.add(new SchemaCard.Column(c, "text", c));
+                            cols.add(new SchemaCard.Column(c, type, c));
                         } else {
-                            cols.add(new SchemaCard.Column(c, "text", or(meta.label(), c),
+                            cols.add(new SchemaCard.Column(c, type, or(meta.label(), c),
                                 meta.description(), meta.example(), meta.values()));
                         }
                     }

@@ -27,6 +27,7 @@ public class CsvFileConnectorApplyHandler implements ConnectorApplyHandler {
     private static final String MAPPING = "mapping";
     private static final String INDEXES = "indexes";
     private static final String AFTER_PROCESS = "after_process";
+    private static final String REFRESH = "refresh";
     private static final String ARCHIVE_PATH = "archive_path";
 
     @Inject ConnectorRepository connRepo;
@@ -42,12 +43,23 @@ public class CsvFileConnectorApplyHandler implements ConnectorApplyHandler {
 
         Connector conn = ApplyUpsert.connector(connRepo, tenant, name, KIND_CSV_FILE, meta, spec,
             c -> buildConnectorConfig(c, spec));
-
-        String path = spec.path(TRANSPORT).path("path").asText();
-        String table = Identifiers.slug(name, "table");
-        ApplyUpsert.endpoint(epRepo, conn, tenant, "default", "GET", path, Map.of("name", table));
+        defaultEndpoint(epRepo, conn);
 
         return new ApplyResult(name, conn.getId(), 1);
+    }
+
+    /**
+     * The one endpoint a csv-file connector runs: {@code default}, writing the table named after the
+     * connector. Both connector doors write it — this one and the flat {@code POST
+     * /api/platform/connectors} — so a connector created either way runs the same (#1189). The
+     * endpoint carries the table name in its config and {@code transport.path} as its path; parser,
+     * mapping and the rest are read from the connector's config.
+     */
+    public static void defaultEndpoint(ConnectorEndpointRepository epRepo, Connector conn) {
+        String path = conn.getConfig() != null && conn.getConfig().get(TRANSPORT) instanceof Map<?, ?> t
+            && t.get("path") != null ? String.valueOf(t.get("path")) : "";
+        String table = Identifiers.slug(conn.getName(), "table");
+        ApplyUpsert.endpoint(epRepo, conn, conn.getTenantId(), "default", "GET", path, Map.of("name", table));
     }
 
     @SuppressWarnings("unchecked") // JSON.convertValue(..., Map.class) — raw Map is the Jackson contract here
@@ -61,6 +73,7 @@ public class CsvFileConnectorApplyHandler implements ConnectorApplyHandler {
         ApplyUpsert.putOrRemove(connCfg, PARSER, spec.path(PARSER), Map.class);
         ApplyUpsert.putOrRemove(connCfg, MAPPING, spec.path(MAPPING), Map.class);
         ApplyUpsert.putOrRemove(connCfg, INDEXES, spec.path("target").path(INDEXES), List.class);
+        ApplyUpsert.putOrRemove(connCfg, REFRESH, spec.path(REFRESH), Map.class);
         if (!spec.path(AFTER_PROCESS).isMissingNode()) {
             connCfg.put(AFTER_PROCESS, spec.path(AFTER_PROCESS).asText());
         }

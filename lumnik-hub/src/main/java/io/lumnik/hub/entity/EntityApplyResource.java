@@ -6,9 +6,9 @@ import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.ask.DiscoveryService;
+import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.search.SearchIndexRevalidator;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -19,6 +19,7 @@ import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
 import java.util.List;
+import java.util.Map;
 
 @Path("/api/entities/apply")
 @RequiresPermission("lm_admin")
@@ -31,6 +32,7 @@ public class EntityApplyResource {
   @Inject EntityRegistry registry;
   @Inject DiscoveryService discovery;
   @Inject SearchIndexRevalidator searchIndexes;
+  @Inject AuditRecorder audit;
 
   public record ApplyResult(String name, String view) {}
 
@@ -38,17 +40,9 @@ public class EntityApplyResource {
   @Consumes("application/yaml")
   @Produces(MediaType.APPLICATION_JSON)
   public ApplyResult apply(String body) {
-    EntityManifest m;
-    try {
-      m = parser.parse(body);
-    } catch (IllegalArgumentException e) {
-      // The message IS the refusal: the twelve docs/entities.md tables promise the exact problem
-      // quoted back. This site used to hand-build the Response, because the plain constructor sets
-      // the JAVA exception's message and leaves the RESPONSE bodyless — every parser refusal reached
-      // lm as "400 (no details from the server)". BadRequestExceptionMapper closes that channel for
-      // the whole deployment now, so the plain form carries the text; EntityApplyIT asserts it.
-      throw new BadRequestException(e.getMessage());
-    }
+    // The message IS the refusal: the twelve docs/entities.md tables promise the exact problem
+    // quoted back, and EntityApplyIT asserts it.
+    EntityManifest m = ApiErrors.orBadRequest(() -> parser.parse(body));
     // C3, for the kind that never got it. Jackson deserializes this manifest with
     // FAIL_ON_UNKNOWN_PROPERTIES=false, so a key the record does not declare is dropped in silence:
     // `scope:` for `scopes:` empties the scope list and the entity becomes invisible to every bound
@@ -100,6 +94,8 @@ public class EntityApplyResource {
       throw new WebApplicationException(ApiErrors.badRequest(e.getMessage()));
     }
     registry.put(m);
+    audit.record("Entity", m.name(), "APPLY", Map.of(
+        "scopes", m.scopes(), "manifest_sha256", AuditRecorder.sha256(body)));
     // #669: a column this re-apply dropped turns every tenant's SearchIndex that used it invalid.
     // Best-effort by contract — Search is optional and never refuses an Entity apply.
     searchIndexes.afterEntityApplied(m, body);

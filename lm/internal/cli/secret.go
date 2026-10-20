@@ -43,18 +43,19 @@ func newSecretSetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := c.SecretCreate(name, value, description); err != nil {
-				// Fall back to update on conflict (409)
-				if strings.Contains(err.Error(), "409") || strings.Contains(err.Error(), "already exists") {
-					if err := c.SecretUpdate(name, value, description); err != nil {
-						return err
-					}
-					fmt.Fprintf(cmd.OutOrStdout(), "Updated secret %q\n", name)
-					return nil
-				}
+			var label *string // absent flag: a rotation keeps the stored label (#1249)
+			if cmd.Flags().Changed("description") {
+				label = &description
+			}
+			created, err := c.SecretSet(name, value, label)
+			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Created secret %q\n", name)
+			if created {
+				fmt.Fprintf(cmd.OutOrStdout(), "Created secret %q\n", name)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "Updated secret %q\n", name)
+			}
 			return nil
 		},
 	}

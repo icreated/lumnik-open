@@ -3,6 +3,7 @@ package io.lumnik.hub.view;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.audit.AuditRecorder;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
@@ -13,6 +14,8 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -30,6 +33,7 @@ import java.util.Set;
 public class SavedViewsResource {
 
   @Inject SavedViewStore store;
+  @Inject AuditRecorder audit;
 
   @GET
   @Produces(MediaType.APPLICATION_JSON)
@@ -78,7 +82,11 @@ public class SavedViewsResource {
     if (!ScopeGrants.allows(scope.get())) {
       return ApiErrors.scopeNotGranted();
     }
-    store.delete(name);
+    // Recorded only when this call removed the row: the store writes raw JDBC on the admin
+    // datasource, nothing else records it (#1232).
+    if (store.delete(name)) {
+      audit.record("SavedView", name.toLowerCase(Locale.ROOT), "DELETE", Map.of("scope", scope.get()));
+    }
     return Response.noContent().build();
   }
 }

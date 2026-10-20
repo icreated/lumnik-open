@@ -27,7 +27,7 @@ class BffMeTabsIT {
         List<String> tabs = me.getList("tabs");
         List<String> modules = me.getList("modules.id");
 
-        // A Search build (-Psearch, -Psearch-cluster; the nightly runs the first) adds its provider
+        // A Search build (-Psearch, -Psearch-cluster; the release lanes run the first) adds its provider
         // module and the `search` tab, and nothing else: the extras are pinned, not tolerated.
         List<String> searchModules = modules.stream().filter(id -> id.startsWith("search_")).toList();
         assertThat(searchModules).hasSizeLessThanOrEqualTo(1);

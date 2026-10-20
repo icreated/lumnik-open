@@ -1,10 +1,13 @@
 package io.lumnik.hub.connector.runtime;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.common.error.Throwables;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.api.ConnectorType;
 import io.lumnik.hub.connector.api.types.*;
 import io.lumnik.hub.connector.domain.Connector;
+import io.lumnik.hub.connector.exceptions.SourceCallException;
 import io.lumnik.hub.connector.exceptions.SourceUnreachableException;
 import io.lumnik.hub.connector.domain.ConnectorCursorEntity;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
@@ -21,7 +24,6 @@ import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.repository.ConnectorRunRepository;
 import io.lumnik.hub.run.RunLock;
 import io.lumnik.hub.run.RunQueueSettings;
-import io.lumnik.hub.sql.SqlFailureText;
 import io.agroal.api.AgroalDataSource;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.arc.Arc;
@@ -459,7 +461,16 @@ public class ConnectorEngine {
             // read that follows it) and restored right after: scoped to those calls, not swallowed
             // for the rest of the thread's life, so this holds for a pooled executor too.
             boolean interrupted = Thread.interrupted();
-            LOG.errorf(e, "Connector run %s (endpoint %s) failed unexpectedly", runId, endpointId);
+            switch (e) {
+                // A call to the source that threw. ChunkExecutor turns every one into a chunk failure
+                // before it gets here; should one escape, its stack would print the JDK message,
+                // which can quote the source URL (#1166). Its message is the whole account.
+                case SourceCallException described -> LOG.errorf("Connector run %s (endpoint %s) failed: %s",
+                        runId, endpointId, described.getMessage());
+                // Anything else escaped every chunk-level catch: a hub defect (an NPE) or a database
+                // failure, not a source's answer. Its stack is the diagnosis, so it stays.
+                default -> LOG.errorf(e, "Connector run %s (endpoint %s) failed unexpectedly", runId, endpointId);
+            }
             Instant endedAt = Instant.now();   // one instant for the row and the returned status
             boolean ended = TenantContext.callAsSystem(() -> finalizeRun(runId, FAILED, e.getMessage(), e, endedAt));
             // Lost the race (a cancel or a normal ending committed first): report what the row says,
@@ -625,7 +636,7 @@ public class ConnectorEngine {
 
     /** V68's index refused a second Queued|Running row for the endpoint. */
     private static boolean isInFlightConflict(Throwable e) {
-        return "23505".equals(SqlFailureText.sqlStateOf(e)) && SqlFailureText.causeChain(e).stream()
+        return "23505".equals(Jdbc.sqlStateOf(e)) && Throwables.causeChain(e).stream()
                 .anyMatch(t -> t.getMessage() != null && t.getMessage().contains("uq_connector_run_in_flight"));
     }
 

@@ -5,16 +5,19 @@ import io.lumnik.hub.connector.exceptions.TransientFailureException;
 import io.lumnik.hub.connector.rest.reliability.RetryPolicy;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 /**
  * The one rule that says whether an HTTP response may be READ AS DATA.
@@ -36,14 +39,37 @@ class ResponseStatusGuardTest {
             .doesNotThrowAnyException();
     }
 
-    @Test
-    void a_redirect_is_refused_and_names_its_location() {
-        RestResponse r = new RestResponse(302, Map.of("Location", List.of("https://elsewhere.example/login")),
-            "<html>Moved</html>", null);
+    /**
+     * A redirect is refused by name, and names where it pointed by its HOST only: a {@code Location}
+     * can carry a token or a signed query, and this text reaches the run's failure and the probe's
+     * 502 body (#1166). A relative or unreadable one is said as such — never quoted, never thrown on.
+     */
+    @ParameterizedTest
+    @MethodSource("quotingLocations")
+    void a_redirect_is_refused_and_names_its_host_only(Map<String, List<String>> headers, String target) {
+        RestResponse r = new RestResponse(302, headers, "<html>Moved</html>", null);
         assertThatThrownBy(() -> ResponseStatusGuard.refuseNonSuccess(r))
             .isInstanceOf(ConnectorException.class)
-            .hasMessageContaining("302")
-            .hasMessageContaining("https://elsewhere.example/login");
+            .isNotInstanceOf(TransientFailureException.class)
+            .hasMessage("upstream returned a redirect (302) to " + target
+                + " — refusing to follow it or ingest its body as data")
+            .satisfies(e -> assertThat(e.getMessage()).doesNotContain("user", "pw", "ECRET", "k=v", "k%3Dv"));
+    }
+
+    private static final String SOURCE = "https://user:pw@api.example/p/SECRET?k=v";
+
+    static Stream<Arguments> quotingLocations() {
+        return Stream.of(
+            arguments(location(SOURCE), "https://api.example"),
+            arguments(location("https://api.example:8443/p/%53ECRET?k%3Dv#frag"), "https://api.example:8443"),
+            arguments(location("//user:pw@api.example/p/SECRET?k=v"), "//api.example"),
+            arguments(location("/p/SECRET?k=v"), "a relative location"),
+            arguments(location(SOURCE + " w"), "an unreadable location"),
+            arguments(Map.of(), "no Location header"));
+    }
+
+    private static Map<String, List<String>> location(String value) {
+        return Map.of("Location", List.of(value));
     }
 
     /**

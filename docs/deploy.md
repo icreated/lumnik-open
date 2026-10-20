@@ -2,7 +2,7 @@
 
 <section class="lm-hero" markdown>
 <p class="lm-eyebrow">Installation</p>
-<p class="lm-lead" markdown="span">Get the hub running. The self-host path is one command; the Kubernetes path is the cloud track. Start here when you want a healthy stack before connectors, chat, or apps.</p>
+<p class="lm-lead" markdown="span">Get the hub running: one command on a single host, or the Helm chart on Kubernetes.</p>
 <div class="lm-meta" markdown>
 <div class="lm-meta-item" markdown>
 <strong>Fastest path</strong>
@@ -27,8 +27,7 @@ Back up the generated `.env`. Losing `LUMNIK_SECRET_MASTER_KEY` makes stored sec
 </div>
 </section>
 
-Before anything: the [prerequisites checklist](quickstart/prerequisites.md) — what to
-prepare so no half-day is lost to a missing model or port.
+Before anything: the [prerequisites checklist](quickstart/prerequisites.md).
 
 ## Choose the path
 
@@ -72,20 +71,10 @@ git clone https://github.com/icreated/lumnik-open.git && cd lumnik-open
 ./deploy/selfhost/up.sh --build
 ```
 
-!!! info "Which edition this is — and what it does not include"
-    `icreated/lumnik-open` is the **open edition**. After cloning, list the tree: there is no
-    `lumnik-rag/` and no `lumnik-llm-langchain/` module. That build **ingests, fuses, and
-    serves views, processes, workflows, outputs and the métier PWA**, and this page deploys it
-    — with one exception, the Ollama item under [How to…](#how-to), which an open-edition
-    install has nothing to point at. What it does **not** carry is the way into the *Ask*
-    rung: both chat doors
-    (`POST /api/platform/rag/chat`, behind `lm ask` and TUI `:ask`; `POST /api/rag/chat`,
-    behind the PWA chat), the semantic search over ingested chunks, and every
-    `ChatPort`/`EmbeddingPort` implementation. The ask *pipeline itself* — the SQL translation
-    and its five honesty guards — is native to the hub and stays; there is simply no door onto
-    it and no model behind it. The hub degrades gracefully rather than failing at boot: a hub
-    without those extensions still ingests, fuses and serves. They are closed extensions, not
-    part of this repository — the full map is [The two editions](editions.md).
+!!! info "This is the open edition"
+    `icreated/lumnik-open` ingests, fuses, and serves views, processes, workflows, outputs and
+    the métier PWA. It has no chat and no `lm ask`, and needs no Ollama.
+    See [The two editions](editions.md).
 
 The stack you get:
 
@@ -105,8 +94,8 @@ flowchart LR
   end
 ```
 
-**Run it with `--build`** — it works for everyone; the plain pull path needs access to the
-(pre-launch, private) published image. What the launcher does:
+**Run it with `--build`**: it compiles the hub inside Docker. The published image is private: the plain
+pull path works only if your GitHub account was granted access to it. What the launcher does:
 
 <div class="lm-rail" markdown>
 <article class="lm-step" markdown>
@@ -114,7 +103,7 @@ flowchart LR
 <div markdown>
 <h3>Generate secrets safely</h3>
 
-It creates a gitignored, owner-only (mode 600) `.env` with fresh random secrets — Postgres, Keycloak admin, both crypto keys, and `HUBADMIN_PASSWORD` / `INTEGRATOR_PASSWORD` — and never overwrites an existing one. **Back it up.**
+It creates an owner-only (mode 600) `.env` with fresh random secrets — Postgres, Keycloak admin, both crypto keys, the entity-resolution secret, the three database-role passwords, `HUBADMIN_PASSWORD` and `INTEGRATOR_PASSWORD`. It never overwrites an existing `.env`. **Back it up.**
 </div>
 </article>
 <article class="lm-step" markdown>
@@ -122,7 +111,7 @@ It creates a gitignored, owner-only (mode 600) `.env` with fresh random secrets 
 <div markdown>
 <h3>Build and start the stack</h3>
 
-It builds the hub image from source (`--build`) or pulls the published one, starts hub + Postgres + Keycloak, and waits for the hub health check. Flyway migrations run at boot — the first boot can take a minute.
+It builds the hub image (`--build`) or pulls it, starts hub + Postgres + Keycloak, and waits for the hub to be healthy. The first boot can take a minute.
 </div>
 </article>
 <article class="lm-step" markdown>
@@ -130,9 +119,19 @@ It builds the hub image from source (`--build`) or pulls the published one, star
 <div markdown>
 <h3>Mint per-install passwords</h3>
 
-It sets the `hubadmin` and `integrator` passwords through the Keycloak admin API — a known credential must never survive an install — and prints the hub and Keycloak URLs.
+It sets the `hubadmin` and `integrator` passwords in Keycloak and prints the URLs.
 
-<p class="lm-check" markdown="span">**You know it worked when:** the launcher reports the stack healthy and prints both URLs.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** the launcher ends like this:</p>
+
+```
+==> hub is healthy
+  hubadmin: per-install password set (HUBADMIN_PASSWORD in .env)
+  integrator: per-install password set (INTEGRATOR_PASSWORD in .env)
+
+  Hub:       http://localhost:8080   (health: /q/health)
+  Keycloak:  http://localhost:8180/realms/lumnik
+  Next:      point lm at the hub — server http://localhost:8080, OIDC http://localhost:8180/realms/lumnik
+```
 </div>
 </article>
 </div>
@@ -151,13 +150,11 @@ It sets the `hubadmin` and `integrator` passwords through the Keycloak admin API
 
 Stop / tail logs: `deploy/selfhost/down.sh`, `deploy/selfhost/logs.sh`.
 
-!!! note "What the bundled Keycloak is — and is not"
-    "Real OIDC" means real: JWTs are verified, dev-bypass is off. But the Keycloak this stack
-    ships runs `start-dev` on a file-H2 store — made for a single-host install you operate
-    yourself, not an enterprise identity deployment. For your own directory (Keycloak, Okta,
-    Entra ID), see [Bring your own IdP](security/byo-idp.md) — JIT provisioning for an external
-    issuer is not in the open edition. The H2 store's backup quirks are covered in
-    [Backup & restore](operations/backup-restore.md).
+!!! note "The bundled Keycloak"
+    - Tokens are verified for real; the Keycloak runs `start-dev` on a file-H2 store, for a
+      single-host install. Its backup: [Backup & restore](operations/backup-restore.md).
+    - For your own directory (Keycloak, Okta, Entra ID): [Bring your own IdP](security/byo-idp.md).
+      JIT provisioning for an external issuer is not in the open edition.
 
 ## One HTTPS origin — the TLS façade
 
@@ -173,16 +170,13 @@ LUMNIK_TLS_HOST=erp.example.com \
 
 - A public `LUMNIK_TLS_HOST` gets a Let's Encrypt certificate automatically.
 - A LAN IP or `localhost` gets Caddy's internal CA for local testing.
-- Deliberate posture change: unlike the base compose, the overlay binds 443/80 on **all
-  interfaces** by default — serving phones on the LAN is its reason to exist — and
-  `LUMNIK_TLS_BIND` restricts it.
+- Unlike the base compose, the overlay binds 443/80 on **all interfaces** by default, for
+  phones on the LAN. `LUMNIK_TLS_BIND` restricts it.
 - Re-running `up.sh` later composes the base file **alone** and un-stacks the overlay
   (the hub reverts to the localhost issuer) — on a façade install, always follow an
   `up.sh` run with the overlay command above.
 
-Certificates, trusting the internal CA on a phone, and the change-of-issuer caveat are
-covered in the façade's own README — reproduced here, so the answer never depends on the
-repository being reachable:
+Certificates, trusting the internal CA on a phone, and the change-of-issuer caveat:
 
 ??? note "The full TLS façade README"
 
@@ -192,36 +186,28 @@ repository being reachable:
 
 ## Point `lm` at the hub
 
-Once the stack is healthy, wire the CLI to it. A context needs only the **server** and the
-**OIDC issuer** — `lm login` discovers the device/token endpoints from the issuer's
-`.well-known` document, so nothing else is hand-copied:
+[Install `lm`](quickstart/installer.md#install-lm), then give it the **server** and the
+**OIDC issuer** — nothing else:
 
 ```bash
-cd lm && go build -o lm ./cmd/lm          # build the CLI (Go 1.26+ — the floor is lm/go.mod)
-
-./lm config set-context local \
+lm config set-context local \
      --server http://localhost:8080 \
      --oidc-issuer http://localhost:8180/realms/lumnik
-./lm config use-context local
-./lm login                                 # prints a URL + device code — open it, sign in as integrator (password: INTEGRATOR_PASSWORD in .env)
+lm config use-context local
+lm login        # prints a URL + device code — open it, sign in as integrator
 ```
 
-The bundled realm ships two demo users, both with **no password baked in**: `up.sh` mints a
-per-install password for each through the Keycloak admin API once the stack is healthy.
-Re-running `up.sh` heals older installs that still carry a historical default.
+| User | Tenant | Password in `.env` |
+|---|---|---|
+| `integrator` | 1 | `INTEGRATOR_PASSWORD` — change it before anything real |
+| `hubadmin` (superadmin) | 11 | `HUBADMIN_PASSWORD` |
 
-- `integrator` — tenant 1, password in `.env` as `INTEGRATOR_PASSWORD`; change it before anything real.
-- `hubadmin` — superadmin, tenant 11 (the tenant the bundled realm has always given it),
-  password in `.env` as `HUBADMIN_PASSWORD`.
+`--oidc-client-id` defaults to `lm-cli`, the bundled realm's client; set it only for your own IdP.
+Check the login — on a fresh hub, headers only:
 
-Both accounts and both tenants are seeded by the hub at install.
-
-(`--oidc-client-id` defaults to `lm-cli`, the bundled realm's client — set it only against
-your own IdP.) After `lm login`, every `lm` call is Bearer-authenticated; verify with the
-first authenticated smoke test:
-
-```bash
-./lm connector list
+```
+$ lm connector list
+NAME  TYPE  TENANT  SCHED  WINDOW  STATUS  LAST RUN
 ```
 
 ## How to…
@@ -242,19 +228,23 @@ re-run.
 
 ### Point the hub at an Ollama that is not on this machine
 
-Uncomment the `OLLAMA_BASE_URL=…` line in `.env` (the template ships it commented) and re-run
-`up.sh`. Left unset, the hub looks for Ollama on the machine running Docker
-(`http://host.docker.internal:11434`) — the default that makes chat and the analytic ask
-work on a laptop. **On the open edition this knob has nothing to reach:** the extensions
-that call Ollama are not in that build (see the edition note above), so an open-edition
-install needs no Ollama at all.
+Uncomment the `OLLAMA_BASE_URL=…` line in `.env` and re-run `up.sh`. Left unset, the hub
+looks for Ollama on the machine running Docker (`http://host.docker.internal:11434`).
+The open edition does not use Ollama.
 
 ### Switch the AI off
 
-Set `LUMNIK_AI_ENABLED=false` in `.env` and re-run `up.sh` (on Helm: `LUMNIK_AI_ENABLED=false` for
-`deploy/helm/up.sh`). The chat, the ask and the embeddings stop; the modules stay installed, the
-data is kept, and the PWA drops its Chat tab. Exactly `true` or `false`. What you see, and what a
-switch back on does and does not bring back: [Switching the AI off](rag/models.md#switching-the-ai-off).
+The chat, the ask and the embeddings stop; the data is kept, and the PWA drops its Chat tab.
+The value is exactly `true` or `false`.
+
+| Install | Gesture |
+|---|---|
+| Self-host | `LUMNIK_AI_ENABLED=false` in `.env`, then re-run `up.sh` with the flags you installed with (`--build`, `--search`…). Re-apply the [TLS overlay](#one-https-origin-the-tls-facade) after it if you use one. A plain `docker compose restart` keeps the old setting. |
+| Helm, first install | `LUMNIK_AI_ENABLED=false ./deploy/helm/up.sh` (chart value `ai.enabled`) |
+| Helm, running cluster | `helm upgrade <release> deploy/helm/lumnik --reuse-values --set-string ai.enabled=false`, then `kubectl rollout restart deployment/<release>-hub`. `up.sh` refuses to run on a running cluster — see [Kubernetes / Helm](#kubernetes-helm) |
+
+Check it with `lm module list`: `rag` and `llm` read `INACTIVE  disabled:lumnik.ai.enabled`.
+What a switch back on restores: [Switching the AI off](rag/models.md#switching-the-ai-off).
 
 ### Turn on email delivery
 
@@ -268,11 +258,20 @@ LUMNIK_SMTP_MOCK=false
 #           LUMNIK_SMTP_FROM=lumnik@example.com  LUMNIK_SMTP_STARTTLS=REQUIRED
 ```
 
-Re-run `up.sh` and the boot log answers with the posture (`email delivery live via …`).
-Set only one of the two and the boot log **WARNs** instead of going half-live — a host
-without `LUMNIK_SMTP_MOCK=false` delivers nothing; `MOCK=false` without a host loops
-against `localhost`.
-To rehearse without a provider, the stack bundles a dev mailer behind a compose profile:
+Re-run `up.sh`, then check the boot log:
+
+```bash
+docker compose -f docker-compose.selfhost.yml logs hub | grep -E 'email delivery|LUMNIK_SMTP'
+# email delivery live via smtp.example.com
+```
+
+| Set | Result |
+|---|---|
+| host + `LUMNIK_SMTP_MOCK=false` | live delivery |
+| host only | nothing delivered; the boot log warns |
+| `LUMNIK_SMTP_MOCK=false` only | sends to `localhost`; the boot log warns |
+
+To rehearse without a provider, start the bundled dev mailer:
 
 ```bash
 docker compose --profile mailpit -f docker-compose.selfhost.yml up -d
@@ -280,18 +279,14 @@ docker compose --profile mailpit -f docker-compose.selfhost.yml up -d
 ```
 
 **Result:** rule-matched events land as mail — visible at `http://127.0.0.1:8025` on the
-Mailpit drill, or in the recipient's real inbox once pointed at your provider. On the Helm
-path the same knobs live under `values.smtp.*` (`up.sh` derives them from the same
-`LUMNIK_SMTP_*` variables). A failed send is logged and skipped — best-effort by design;
-the webhook channel is the one with retries and a delivery journal.
+Mailpit drill, or in the recipient's inbox. On Helm the same knobs are `values.smtp.*`
+(`up.sh` reads the same `LUMNIK_SMTP_*` variables). A failed send is not retried — see
+[Email notifications](email.md).
 
 ### Reach the hub from another machine
 
-Not by changing a port: the hub (`8080`) and Keycloak (`8180`) are pinned to `127.0.0.1` in
-`docker-compose.selfhost.yml`, deliberately — so that a remote host never exposes the
-Keycloak admin console on all interfaces. Two ways out, both supported: an SSH tunnel, or
-the [TLS façade](#one-https-origin-the-tls-facade) above — which is also the one that lets a
-phone install the PWA.
+The hub (`8080`) and Keycloak (`8180`) listen on `127.0.0.1` only. Two ways in: an SSH
+tunnel, or the [TLS façade](#one-https-origin-the-tls-facade) — the one a phone needs to install the PWA.
 
 ### Run against a managed or external PostgreSQL
 

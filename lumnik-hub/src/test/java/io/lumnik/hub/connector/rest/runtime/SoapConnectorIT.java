@@ -6,6 +6,7 @@ import io.lumnik.hub.connector.api.types.RunStatus;
 import io.lumnik.hub.connector.api.types.RunTrigger;
 import io.lumnik.hub.connector.runtime.ConnectorEngine;
 import io.quarkus.test.junit.QuarkusTest;
+import io.restassured.RestAssured;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
 import jakarta.transaction.UserTransaction;
@@ -76,9 +77,12 @@ class SoapConnectorIT {
             + "\"default_rate_limit\":\"100/s\"}";
     }
 
-    private String epJson(String table) {
+    private String epJson(String table) { return epJson(table, ""); }
+
+    /** {@code extra} is spliced in as more endpoint keys, each ending with a comma. */
+    private String epJson(String table, String extra) {
         String body = "<In><PageSize>{{page_size}}</PageSize><StartRowNum>{{cursor}}</StartRowNum></In>";
-        return "{\"kind\":\"soap\",\"soap_action\":\"CustomerQueryPage\","
+        return "{\"kind\":\"soap\",\"soap_action\":\"CustomerQueryPage\"," + extra
             + "\"body\":\"" + body.replace("\"", "\\\"") + "\","
             + "\"pagination\":{\"kind\":\"soap\",\"page_size\":2,"
             + "\"last_page_path\":\"$.Body.Out.LastPage\","
@@ -123,6 +127,28 @@ class SoapConnectorIT {
             .withHeader("Content-Type", containing("text/xml"))
             .withHeader("SOAPAction", equalTo("\"CustomerQueryPage\""))
             .withRequestBody(containing("<soap:Envelope")));
+    }
+
+    /** {@code {{secret:NAME}}} reads the lm secret registry, like every other credential (#1246). */
+    @Test
+    void a_secret_placeholder_reads_the_secret_registry() {
+        String table = "ext.soap_sec_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+        String name = "SOAP_PWD_" + System.nanoTime();
+        RestAssured.given().header("X-Tenant-Id", "1").contentType("application/json")
+            .body("{\"name\":\"" + name + "\",\"value\":\"from-registry\"}")
+            .post("/api/platform/secrets").then().statusCode(201);
+        stubFor(post(urlPathEqualTo("/eai")).willReturn(aResponse()
+            .withHeader("Content-Type", "text/xml").withBody(envelope(
+                "<Out><ListOfCustomer><Customer><Id>a</Id><Name>X</Name></Customer></ListOfCustomer>"
+                + "<LastPage>true</LastPage></Out>"))));
+
+        UUID id = seed(connJson(), "/eai",
+            epJson(table, "\"header\":\"<Password>{{secret:" + name + "}}</Password>\","));
+
+        RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(id, new RunTrigger.Manual(1L)));
+        assertInstanceOf(RunStatus.Completed.class, s, () -> "run was: " + s);
+        verify(postRequestedFor(urlPathEqualTo("/eai"))
+            .withRequestBody(containing("<Password>from-registry</Password>")));
     }
 
     @Test

@@ -46,7 +46,7 @@ public final class ApplyUpsert {
                                       JsonNode meta, JsonNode spec,
                                       Function<Connector, Map<String, Object>> config) {
         // Held for the rest of the transaction, like the door's guard read a few lines earlier —
-        // this is the second call, so the row is already ours and the lock costs nothing (#585).
+        // this is the second call, so the address and the row are already ours: it never waits (#585, #1231).
         var existing = repo.byAddressForUpdate(tenant, name);
         final Connector conn = existing.orElseGet(() -> {
             var c = new Connector();

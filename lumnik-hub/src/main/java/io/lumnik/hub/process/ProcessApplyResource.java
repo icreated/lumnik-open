@@ -8,6 +8,7 @@ import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.ApplyDoorSupport;
 import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
 import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityRegistry;
@@ -27,6 +28,7 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -44,6 +46,7 @@ public class ProcessApplyResource {
 
     @Inject SchemaCardStore cards;
     @Inject ProcessManifestStore store;
+    @Inject AuditRecorder audit;
     @Inject EntityRegistry entities;
     @Inject DynamicTableRegistry tables;
 
@@ -59,14 +62,8 @@ public class ProcessApplyResource {
     public Response apply(String body) {
         long tenant = RequireTenant.current();
 
-        JsonNode root;
-        ProcessManifest m;
-        try {
-            root = parser.readTree(body);
-            m = parser.parse(root);
-        } catch (IllegalArgumentException e) {
-            return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
-        }
+        JsonNode root = ApiErrors.orBadRequest(() -> parser.readTree(body));
+        ProcessManifest m = ApiErrors.orBadRequest(() -> parser.parse(root));
 
         // C3: a key the parser does not honor used to be accepted and stored in silence — a
         // misspelled `mesage:` would have cost the decision its text with no word said.
@@ -107,17 +104,18 @@ public class ProcessApplyResource {
         if (!tables.emitsRowEvents(tenant, m.onTable())) {
             return Response.status(400).entity(ApiErrors.error(cannotFireOn(m.onTable()))).build();
         }
-        try {
+        ApiErrors.checkOrBadRequest(() -> {
             ProcessConditionResolver.resolve(m.when(), table);
             ProcessConditionResolver.validateMessage(m.emitMessage(), table);
-        } catch (IllegalArgumentException e) {
-            return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
-        }
+        });
 
         // granted().orElse(null) — empty Optional means unscoped, i.e. every scope. The write's own
         // answer goes straight into the void guard, so it cannot be had and dropped.
         ApplyScopeBoundary.refuseUnlessApplied(
             store.upsert(tenant, m, body, ScopeGrants.granted().orElse(null)));
+        // The store writes raw JDBC, so nothing else records the apply (#1234).
+        audit.record("Process", m.name(), "APPLY", Map.of(
+            "scope", m.scope(), "table", m.onTable(), "manifest_sha256", AuditRecorder.sha256(body)));
         return Response.ok(new ApplyResult(m.name(), m.onTable(), m.emitType())).build();
     }
 
@@ -154,7 +152,7 @@ public class ProcessApplyResource {
     @Transactional
     public Response manifest(@PathParam("name") String name) {
         long tenant = RequireTenant.current();
-        Response refusal = refuseUnlessHeld(tenant, name);
+        Response refusal = refuseUnlessHeld(name, store.findScope(tenant, name));
         if (refusal != null) return refusal;
         return store.findYaml(tenant, name)
                 .map(yaml -> Response.ok(yaml).type("application/yaml").build())
@@ -179,9 +177,13 @@ public class ProcessApplyResource {
     @Transactional
     public Response delete(@PathParam("name") String name) {
         long tenant = RequireTenant.current();
-        Response refusal = refuseUnlessHeld(tenant, name);
+        Optional<String> scope = store.findScope(tenant, name);
+        Response refusal = refuseUnlessHeld(name, scope);
         if (refusal != null) return refusal;
-        store.delete(tenant, name);
+        // Recorded only when this call removed the row: two racing removals write one DELETE.
+        if (store.delete(tenant, name)) {
+            audit.record("Process", name, "DELETE", Map.of("scope", scope.get()));
+        }
         return Response.noContent().build();
     }
 
@@ -200,17 +202,20 @@ public class ProcessApplyResource {
             return Response.status(400).entity(ApiErrors.error(
                 "body must carry {\"enabled\": true|false}")).build();
         }
-        Response refusal = refuseUnlessHeld(tenant, name);
+        Optional<String> scope = store.findScope(tenant, name);
+        Response refusal = refuseUnlessHeld(name, scope);
         if (refusal != null) return refusal;
         store.setEnabled(tenant, name, body.enabled());
+        // Turning a process off silences what it sends: who did it is recorded (#1234).
+        audit.record("Process", name, "UPDATE", Map.of("scope", scope.get(), "enabled", body.enabled()));
         return Response.ok(new EnabledResult(name, body.enabled())).build();
     }
 
     public record EnabledResult(String name, boolean enabled) {}
 
-    /** 404 when this tenant has no such process, 403 when the caller's scopes exclude it, else null. */
-    private Response refuseUnlessHeld(long tenant, String name) {
-        Optional<String> scope = store.findScope(tenant, name);
+    /** 404 when this tenant has no such process ({@code scope} empty), 403 when the caller's scopes
+     *  exclude it, else null. The caller reads the scope, so a write can record it afterwards. */
+    private Response refuseUnlessHeld(String name, Optional<String> scope) {
         if (scope.isEmpty()) {
             return Response.status(404).entity(ApiErrors.error("unknown process: " + name)).build();
         }

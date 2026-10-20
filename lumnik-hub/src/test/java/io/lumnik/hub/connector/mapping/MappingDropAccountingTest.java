@@ -237,7 +237,7 @@ class MappingDropAccountingTest {
     ConnectorContext ctx = new ConnectorContext(
         UUID.randomUUID(), null, null, 1L, "test", "test", Map.of(),
         new SyncMode.FullRefresh(),
-        null, null, null, Clock.systemUTC(), null, new OwnedRunScope("test"));
+        null, null, Clock.systemUTC(), null, new OwnedRunScope("test"));
     WriteOutcome outcome = engine.itemWriter(spec).write(writerInput, ctx);
 
     assertThat(outcome).isInstanceOf(WriteOutcome.PartialWrite.class);

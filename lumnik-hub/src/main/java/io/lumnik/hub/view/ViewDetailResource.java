@@ -5,6 +5,7 @@ import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.sql.TemporalText;
 import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
@@ -51,12 +52,7 @@ public class ViewDetailResource {
             return Response.status(400).entity(ApiErrors.error("the 'key' query param is required")).build();
         }
 
-        ViewManifest manifest;
-        try {
-            manifest = parser.parse(body);
-        } catch (IllegalArgumentException e) {
-            return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
-        }
+        ViewManifest manifest = ApiErrors.orBadRequest(() -> parser.parse(body));
 
         if (!ScopeGrants.allows(manifest.scope())) {
             return ApiErrors.scopeNotGranted();
@@ -68,12 +64,7 @@ public class ViewDetailResource {
                 "no schema for scope '" + manifest.scope() + "' — run discovery first")).build();
         }
 
-        ResolvedView rv;
-        try {
-            rv = resolver.resolve(manifest, card.get());
-        } catch (IllegalArgumentException e) {
-            return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
-        }
+        ResolvedView rv = ApiErrors.orBadRequest(() -> resolver.resolve(manifest, card.get()));
 
         String firstCol = rv.columns().get(0).name();
         ViewDetailReader.DetailRead read = reader.read(tenant, rv, key);
@@ -90,7 +81,7 @@ public class ViewDetailResource {
         List<Field> fields = new ArrayList<>();
         for (int i = 0; i < rv.columns().size(); i++) {
             ResolvedView.Column col = rv.columns().get(i);
-            fields.add(new Field(col.name(), col.label(), row.values().get(i)));
+            fields.add(new Field(col.name(), col.label(), TemporalText.wire(row.values().get(i))));
         }
         List<ConflictLedger.Conflict> conflicts = read.ledgerPresent()
             ? ConflictLedger.parse(row.conflictsJson(), rv) : List.of();

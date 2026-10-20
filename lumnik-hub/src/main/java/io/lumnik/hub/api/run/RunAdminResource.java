@@ -1,6 +1,7 @@
 package io.lumnik.hub.api.run;
 
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.api.connector.ConnectorScope;
 import io.lumnik.hub.connector.domain.ConnectorRun;
 import io.lumnik.hub.connector.domain.ConnectorRunStatus;
 import io.lumnik.hub.connector.repository.ConnectorDeadLetterRepository;
@@ -50,7 +51,12 @@ public class RunAdminResource {
     // a quiet connector came back as an empty table, read as "this connector never ran".
     // ?endpoint= is the finer half of the same address: a connector fans out and writes one row per
     // endpoint, so ?connector= cannot answer "this table's runs" — which is what a drill-down asks.
-    var page = repo.findRecent(TenantContextFilter.current(), filterId(connectorId), filterId(endpointId), capped);
+    // A scope-bound caller sees the runs of the connectors they hold (#1212): a named connector of
+    // another métier is the uniform 403, and the query itself is narrowed to their reach.
+    UUID cid = filterId(connectorId);
+    if (cid != null) ConnectorScope.held(connectors, cid);
+    var page = repo.findRecent(TenantContextFilter.current(), cid, filterId(endpointId),
+        ConnectorScope.heldIds(connectors), capped);
     var names = connectors.namesById(page.stream().map(ConnectorRun::getConnectorId).distinct().toList());
     // One more projection, one more query: without it a connector that fans out over several
     // endpoints writes rows this ledger cannot tell apart. A run with no endpoint contributes no
@@ -71,7 +77,7 @@ public class RunAdminResource {
   @Path("{id}")
   @Transactional
   public Response get(@PathParam("id") UUID id) {
-    var r = repo.findByIdForTenant(id, TenantContextFilter.current());
+    var r = held(id);
     if (r == null) return ApiErrors.notFound("run " + id + " not found");
     var names = connectors.namesById(List.of(r.getConnectorId()));
     // null when the run has no endpoint: a row predating endpoints, or one whose endpoint was
@@ -80,6 +86,16 @@ public class RunAdminResource {
         : endpoints.namesById(List.of(r.getEndpointId())).get(r.getEndpointId());
     return Response.ok(RunAdminDto.from(r, dlq.countByRun(r.getId()),
         names.get(r.getConnectorId()), endpointName)).build();
+  }
+
+  /**
+   * The tenant's run under {@code id}, null when it has none; 403 thrown when the caller does not
+   * hold its connector (#1212) — a run carries counts, table names and the error message.
+   */
+  private ConnectorRun held(UUID id) {
+    var r = repo.findByIdForTenant(id, TenantContextFilter.current());
+    if (r != null) ConnectorScope.held(connectors, r.getConnectorId());
+    return r;
   }
 
   /** A filter id, or null when the caller gave none — never ignored when it cannot be read. */
@@ -108,9 +124,9 @@ public class RunAdminResource {
   @Consumes(MediaType.WILDCARD)
   @Transactional
   public Response cancel(@PathParam("id") UUID id) {
-    // Same tenant-scoped lookup as get(): engine.cancel(UUID) is blind to the tenant, so this
-    // read is the tenant boundary.
-    var r = repo.findByIdForTenant(id, TenantContextFilter.current());
+    // Same tenant-scoped lookup as get(): engine.cancel(UUID) is blind to the tenant and to the
+    // scope, so this read is both boundaries.
+    var r = held(id);
     if (r == null) return ApiErrors.notFound("run " + id + " not found");
 
     // A queued run belongs to no worker: it is ended here, not cancelled cooperatively (#952).

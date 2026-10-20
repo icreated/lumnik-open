@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.rest.pagination;
 
 import io.lumnik.hub.connector.exceptions.ConnectorException;
+import io.lumnik.hub.connector.rest.Urls;
 
 import java.net.URI;
 import java.util.Locale;
@@ -114,7 +115,11 @@ public final class PaginationUrlGuard {
         return h.endsWith(".") ? h.substring(0, h.length() - 1) : h;
     }
 
+    /**
+     * The link through {@link Urls#forDisplay}: it was read out of the source's body, a signed one
+     * carries its token in the query, and this text becomes the run's failure (#1166).
+     */
     private static ConnectorException refuse(String url, String reason) {
-        return new ConnectorException("Refusing to follow pagination URL '" + url + "': " + reason);
+        return new ConnectorException("Refusing to follow pagination URL '" + Urls.forDisplay(url) + "': " + reason);
     }
 }

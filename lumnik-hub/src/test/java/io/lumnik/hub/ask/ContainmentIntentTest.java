@@ -56,4 +56,25 @@ class ContainmentIntentTest {
         assertThat(ContainmentIntent.in(null)).isFalse();
         assertThat(ContainmentIntent.in("  ")).isFalse();
     }
+
+    // --- the one text searched (#1099) ------------------------------------------------------------------------
+
+    @Test void the_one_text_a_question_searches_comes_back_folded() {
+        assertThat(ContainmentIntent.searched("Donne-moi les références dont la description contient Badu.")).contains("badu");
+        assertThat(ContainmentIntent.searched("dont la description contient \"Badu Resort\" ?")).contains("badu resort");
+        assertThat(ContainmentIntent.searched("Quels articles ont badu dans leur description ?")).contains("badu");
+        assertThat(ContainmentIntent.searched("Which articles have Badu in the product description?")).contains("badu");
+        assertThat(ContainmentIntent.searched("List the references whose description contains SO-000004")).contains("so-000004");
+        assertThat(ContainmentIntent.searched("dont le LIBELLÉ contient Été, triés par prix")).contains("ete");
+    }
+
+    @Test void no_text_or_more_than_one_is_none() {
+        for (String q : new String[] {
+                "dont la description contient badu ou pentair", "dont la description ne contient pas badu",
+                "dont la description contient badu dans la catégorie Pompes", "Combien d'articles de la catégorie Pompes ?",
+                "dont la description contient badu et dont le nom contient pentair", "Quels articles mentionnent Badu ?",
+                "Combien d'articles contient la catégorie Pompes ?"})
+            assertThat(ContainmentIntent.searched(q)).as(q).isEmpty();
+        assertThat(ContainmentIntent.searched(null)).isEmpty();
+    }
 }

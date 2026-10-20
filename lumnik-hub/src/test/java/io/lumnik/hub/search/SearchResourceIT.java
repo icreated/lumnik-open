@@ -137,6 +137,118 @@ class SearchResourceIT {
         assertThat(rows).isEqualTo(1);
     }
 
+    // -- an invalid index takes no part (#1187) -------------------------------------------------------
+
+    /** A provider that keeps its contract: hits only from the entities the query allows, none when none is. */
+    private static SearchGate gateServing(IndexedSearchHit hit) {
+        SearchGate g = mock(SearchGate.class);
+        when(g.search(any())).thenAnswer(inv -> {
+            IndexedSearchQuery q = inv.getArgument(0);
+            return new SearchOutcome.Hits(q.allowedEntities().contains(hit.entity())
+                ? new IndexedSearchResult(List.of(hit), Map.of("city", List.of(new FacetCount("Lyon", 1))), null, null)
+                : IndexedSearchResult.empty());
+        });
+        QuarkusMock.installMockForType(g, SearchGate.class);
+        return g;
+    }
+
+    private static void applyIndexOver(long tenant, String index, String entity, String... fields) {
+        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(tenant)).contentType("application/yaml")
+            .body(SearchIndexItSupport.searchIndex(index, entity, fields))
+            .post("/api/search-indexes/apply").then().statusCode(200).body("status", equalTo("valid"));
+    }
+
+    @Test
+    void anInvalidIndexServesNoHitAndNoFacetUntilItIsReAppliedValid() throws Exception {
+        long tenant = 16;
+        String entity = unique("invalidated");
+        String table = "t_" + entity;
+        String index = unique("idx-invalidated");
+        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(tenant)).contentType("application/yaml")
+            .body(SearchIndexItSupport.entity(adminDs, entity, table, List.of(), "code", "label", "city"))
+            .post("/api/entities/apply").then().statusCode(200);
+        applyIndexOver(tenant, index, entity, "code", "label", "city");
+        gateServing(hitOf(index, entity, Map.of("code", "A1", "city", "Lyon")));
+        as(tenant).get("/api/search?q=pompe&entity=" + entity).then().statusCode(200)
+            .body("hits.size()", equalTo(1));
+
+        // The entity drops `city`: the index turns invalid, and stops serving — hits and facets alike.
+        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(tenant)).contentType("application/yaml")
+            .body(SearchIndexItSupport.entityManifest(entity, table, List.of(), "code", "label"))
+            .post("/api/entities/apply").then().statusCode(200);
+        as(tenant).get("/api/search?q=pompe&entity=" + entity).then().statusCode(200)
+            .body("hits.size()", equalTo(0)).body("facets.size()", equalTo(0));
+        as(tenant).get("/api/search?q=pompe").then().statusCode(200).body("hits.size()", equalTo(0));
+        // ... and the registry the empty answer is explained from says why.
+        as(tenant).get("/api/search-indexes").then().statusCode(200)
+            .body("find { it.name == '" + index + "' }.status", equalTo("invalid"));
+
+        // Re-applied without the column, it is valid again — but its build still carries `city`, so it is
+        // withheld until a rebuild replaces it (#1219).
+        applyIndexOver(tenant, index, entity, "code", "label");
+        as(tenant).get("/api/search?q=pompe&entity=" + entity).then().statusCode(200)
+            .body("hits.size()", equalTo(0)).body("facets.size()", equalTo(0));
+        as(tenant).get("/api/search-indexes").then().statusCode(200)
+            .body("find { it.name == '" + index + "' }.status", equalTo("valid"))
+            .body("find { it.name == '" + index + "' }.withheld", equalTo(true));
+    }
+
+    // -- a re-apply that removes a field is withheld until rebuilt (#1219) ---------------------------
+
+    @Test
+    void aReApplyThatRemovesAFieldIsWithheldOneThatAddsAFieldIsNot() throws Exception {
+        long tenant = 17;
+        String entity = unique("narrowed");
+        String table = "t_" + entity;
+        String index = unique("idx-narrowed");
+        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(tenant)).contentType("application/yaml")
+            .body(SearchIndexItSupport.entity(adminDs, entity, table, List.of(), "code", "label", "city"))
+            .post("/api/entities/apply").then().statusCode(200);
+        applyIndexOver(tenant, index, entity, "code", "label");
+        gateServing(hitOf(index, entity, Map.of("code", "A1")));
+
+        // Adding a field narrows nothing: the previous build keeps answering.
+        applyIndexOver(tenant, index, entity, "code", "label", "city");
+        as(tenant).get("/api/search?q=pompe&entity=" + entity).then().statusCode(200)
+            .body("hits.size()", equalTo(1));
+        as(tenant).get("/api/search-indexes").then().statusCode(200)
+            .body("find { it.name == '" + index + "' }.withheld", equalTo(false));
+
+        // Removing it again: the build may carry `city`, so the index answers nothing until rebuilt.
+        applyIndexOver(tenant, index, entity, "code", "label");
+        as(tenant).get("/api/search?q=pompe&entity=" + entity).then().statusCode(200)
+            .body("hits.size()", equalTo(0));
+        as(tenant).get("/api/search-indexes").then().statusCode(200)
+            .body("find { it.name == '" + index + "' }.withheld", equalTo(true));
+
+        // A widening re-apply does not release it: the build it would serve is still the old one.
+        applyIndexOver(tenant, index, entity, "code", "label", "city");
+        as(tenant).get("/api/search?q=pompe&entity=" + entity).then().statusCode(200)
+            .body("hits.size()", equalTo(0));
+    }
+
+    @Test
+    void deletingThenReApplyingNarrowerIsWithheldWhileThePurgeIsPending() throws Exception {
+        long tenant = 18;
+        String entity = unique("redeclared");
+        String table = "t_" + entity;
+        String index = unique("idx-redeclared");
+        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(tenant)).contentType("application/yaml")
+            .body(SearchIndexItSupport.entity(adminDs, entity, table, List.of(), "code", "label", "city"))
+            .post("/api/entities/apply").then().statusCode(200);
+        applyIndexOver(tenant, index, entity, "code", "label", "city");
+        gateServing(hitOf(index, entity, Map.of("code", "A1", "city", "Lyon")));
+
+        // Until its purge has run, the deleted index's build can still answer under that name: a declaration
+        // re-applied under it is not a fresh index, and must not serve that build's `city`.
+        as(tenant).delete("/api/search-indexes/" + index).then().statusCode(204);
+        applyIndexOver(tenant, index, entity, "code", "label");
+        as(tenant).get("/api/search?q=pompe&entity=" + entity).then().statusCode(200)
+            .body("hits.size()", equalTo(0));
+        as(tenant).get("/api/search-indexes").then().statusCode(200)
+            .body("find { it.name == '" + index + "' }.withheld", equalTo(true));
+    }
+
     // -- outcome mapping ------------------------------------------------------------------------------
 
     @Test

@@ -101,6 +101,44 @@ class UrlsTest {
     }
 
     /**
+     * An unescaped {@code @} inside the userinfo (a password holding one): everything up to the LAST
+     * {@code @} of the authority goes — stopping at the first left the rest of the password in the
+     * message (#1167 review). An {@code @} in the path is not userinfo and stays.
+     */
+    @Test
+    void forDisplayStripsTheWholeUserinfoUpToItsLastAt() {
+        assertThat(Urls.forDisplay("https://user:p@ss@host/x")).isEqualTo("https://…@host/x");
+        assertThat(Urls.forDisplay("https://a@b@c@host:8443/p?q=1")).isEqualTo("https://…@host:8443/p");
+        assertThat(Urls.forDisplay("https://host/users/a@b")).isEqualTo("https://host/users/a@b");
+        assertThat(Urls.forDisplay("/users/me@example.com")).isEqualTo("/users/me@example.com");
+    }
+
+    /**
+     * A protocol-relative (network-path) reference, {@code //host/path}, has an authority too: its
+     * userinfo goes like an absolute URL's — the rule used to look only for {@code ://} (#1167 review).
+     * A bare path whose segments hold {@code //} later on is not a network reference and stays.
+     */
+    @Test
+    void forDisplayStripsTheUserinfoOfAProtocolRelativeReference() {
+        assertThat(Urls.forDisplay("//user:pw@evil.example/p/SECRET?k=v")).isEqualTo("//…@evil.example/p/SECRET");
+        assertThat(Urls.forDisplay("//a@b@evil.example/p")).isEqualTo("//…@evil.example/p");
+        assertThat(Urls.forDisplay("//evil.example/p")).isEqualTo("//evil.example/p");
+        assertThat(Urls.forDisplay("/a//b@c")).isEqualTo("/a//b@c");
+    }
+
+    /**
+     * Any {@code ://} still opens an authority, wherever it sits — a compound scheme
+     * ({@code jdbc:postgresql://}) or text before the URL. Anchoring the rule on a single-word scheme
+     * at the start dropped these back to clear text (#1167 review, a regression of the previous fix).
+     */
+    @Test
+    void forDisplayStillStripsTheUserinfoAfterAnyColonSlashSlash() {
+        assertThat(Urls.forDisplay("jdbc:postgresql://user:pw@db.example/erp")).isEqualTo("jdbc:postgresql://…@db.example/erp");
+        assertThat(Urls.forDisplay("source https://user:p@ss@host/x")).isEqualTo("source https://…@host/x");
+        assertThat(Urls.forDisplay("HTTPS://user:pw@host/x")).isEqualTo("HTTPS://…@host/x");
+    }
+
+    /**
      * The same treatment for a bare endpoint path, which is caller input and legitimately carries a
      * query. The userinfo rule is anchored on {@code ://}, so a path without a scheme is untouched
      * by it — and a full URL handed in where a path was expected is still redacted.

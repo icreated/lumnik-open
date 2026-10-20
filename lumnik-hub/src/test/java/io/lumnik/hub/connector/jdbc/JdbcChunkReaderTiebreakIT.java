@@ -11,6 +11,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.util.*;
+import java.time.ZoneOffset;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -45,7 +46,7 @@ class JdbcChunkReaderTiebreakIT {
     HikariPoolRegistry registry = new HikariPoolRegistry();
     JdbcChunkReader reader = new JdbcChunkReader(PG.getJdbcUrl(), "u", "p", "postgres",
         "public", "t", "updated", List.of("id"),
-        JdbcChunkReader.Mode.WATERMARK, new PostgresDialect(), registry);
+        JdbcChunkReader.Mode.WATERMARK, new PostgresDialect(), registry, ZoneOffset.UTC);
 
     ConnectorCursor cursor = ConnectorCursor.empty();
     Set<Long> seen = new HashSet<>();

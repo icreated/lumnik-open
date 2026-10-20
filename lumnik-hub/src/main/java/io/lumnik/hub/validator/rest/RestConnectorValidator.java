@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.lumnik.hub.connector.rest.reliability.RateLimiterRegistry;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.connector.rest.DottedPath;
+import io.lumnik.hub.connector.rest.pagination.CustomPaginationStrategy;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
 import io.lumnik.hub.connector.rest.pagination.preset.PaginationPresetRegistry;
 import io.lumnik.hub.validator.*;
@@ -337,9 +338,12 @@ public class RestConnectorValidator implements ConnectorValidator {
                     requireKeys(pag, p, errs, "cursor_param");
                 }
             }
-            // link-header/custom still read response_path in items() — without it they read the wrong
-            // shape (link-header defaults to "$") or nothing (custom), silently.
-            case "link-header", "custom" -> requireKeys(pag, p, errs, RESPONSE_PATH);
+            // link-header still reads response_path in items() — without it, it defaults to "$" and
+            // reads the wrong shape, silently.
+            case "link-header" -> requireKeys(pag, p, errs, RESPONSE_PATH);
+            // custom has no runtime: it would pass here and fail the run on page 2 (#1245).
+            case "custom" -> errs.add(new ValidationError(p + ".kind", Severity.ERROR,
+                CustomPaginationStrategy.NOT_SUPPORTED, List.of()));
             case "body-link" -> requireKeys(pag, p, errs, "link_path", RESPONSE_PATH);
             // SOAP advances by offset arithmetic; page_size and response_path are required.
             // page_size must be explicit — the default of 100 may silently mismatch the service's

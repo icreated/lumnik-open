@@ -6,10 +6,8 @@
 > [Entities](../entities.md), [Views](views.md), [Processes](processes.md) and
 > [Workflows](workflows.md) pages reads.
 
-It ships with the repo, under `docs/apps/demo/`. Nothing is generated: the three files are small
-enough that every fused row, every disagreement and every undeclared status was **counted by
-hand** before a single manifest was applied — which is the only way an expectation on this page
-can be honest.
+It ships with the repo, under `docs/apps/demo/`. Nothing is generated: every fused row, every
+disagreement and every undeclared status below was **counted by hand**.
 
 | File | Rows | What it is for |
 |---|---|---|
@@ -35,41 +33,56 @@ for n in erp crm orders; do lm connector run acme-desk-$n; done
 ```
 
 ```
-$ lm run list --connector acme-desk-erp
-ID        CONNECTOR      ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-89f873b3  acme-desk-erp  default   Completed  12  12   0        0             2026-09-13 02:38  2026-09-13 02:38
+$ lm run list
+ID        CONNECTOR         ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+7b972d2b  acme-desk-orders  default   Completed  12  12   0        0             2026-10-19 01:38  2026-10-19 01:38
+8869459c  acme-desk-crm     default   Completed  8   8    0        0             2026-10-19 01:38  2026-10-19 01:38
+bfb8a55e  acme-desk-erp     default   Completed  12  12   0        0             2026-10-19 01:38  2026-10-19 01:38
 ```
 
-Three tables in the `connector` schema — `t_acme_desk_erp`, `t_acme_desk_crm`,
-`t_acme_desk_orders` — every column `text`, an empty CSV cell landed as SQL `NULL`, and one scope
-card, `desk`, that lists all three:
+Three tables in the `connector` schema, every column `text` (an empty CSV cell lands as SQL
+`NULL`), and one scope card, `desk`, that lists all three:
 
 ```
 $ lm source schema --scope desk
 scope: desk
 
+connector.t_acme_desk_crm
+  customer                 TEXT
+  company                  TEXT
+  town                     TEXT
+  email                    TEXT
+
 connector.t_acme_desk_erp
-  city                     TEXT
   code                     TEXT
   name                     TEXT
+  city                     TEXT
   segment                  TEXT
   credit_limit             TEXT
 
-connector.t_acme_desk_crm
-  town                     TEXT
-  email                    TEXT
-  company                  TEXT
-  customer                 TEXT
-
 connector.t_acme_desk_orders
-  code                     TEXT
-  amount                   TEXT
-  status                   TEXT
   order_no                 TEXT
+  code                     TEXT
+  status                   TEXT
+  amount                   TEXT
   ordered_on               TEXT
 ```
 
-Everything on the four pages is applied on top of this: one scope, three raw tables.
+The fused customer comes next — `lm entity apply -f docs/apps/demo/entities/10-customer.yaml`,
+see [Entities](../entities.md). Everything on the four pages is applied on top of this.
+
+### Day 2 and day 3
+
+Two pages need the next mornings' exports. Load one over the day-1 file, then re-run the source:
+
+```bash
+docker cp docs/apps/demo/data/acme-orders-day2.csv lumnik-hub-1:/tmp/acme-desk/acme-orders.csv   # or -day3
+lm connector run acme-desk-orders
+```
+
+Each page says which day a capture needs. Copying `acme-orders.csv` back returns to day 1: the
+next run removes the newer orders, and `lm run get <id>` says so (from day 3:
+`• 2 row(s) removed — the source no longer holds them`).
 
 ## The manifests
 
@@ -77,11 +90,11 @@ Everything on the four pages is applied on top of this: one scope, three raw tab
 |---|---|---|
 | `entities/` | `10-customer` fuses the ERP and the CRM; `20-crm-first` is the same fusion with the priority flipped; `60`–`65` must each be refused | [Entities](../entities.md) |
 | `views/` | `10-customers` over the fused entity, `20-orders` straight over the raw order book; `60`–`62` must be refused | [Views](views.md) |
-| `processes/` | `10-litige` emits a decision when an order lands in dispute, `20-grosse-commande` when it is above 1 000 €; `60`–`63` must be refused — and one of them is not, see the page | [Processes](processes.md) |
+| `processes/` | `10-litige` emits a decision when an order lands in dispute, `20-grosse-commande` when it is above 1 000 €; `60`–`64` must each be refused | [Processes](processes.md) |
 | `workflows/` | `10-order-lifecycle` declares what the status column means, with a dormancy threshold; `60`–`67` must be refused | [Workflows](workflows.md) |
 
-The `6x` files are **not** broken files to fix. Each pins one refusal the hub produces, and a
-clean apply on any of them is the defect.
+The `6x` files are **not** broken files to fix: each one is meant to be refused, with the
+message its page shows.
 
 ## What the fusion must give
 
@@ -121,13 +134,16 @@ For `workflows/10-order-lifecycle.yaml`, which declares `BROUILLON`, `EN_COURS` 
 The desk is small enough to rebuild in a minute:
 
 ```bash
-lm entity delete AcmeCustomer; lm entity delete AcmeCustomerCrmFirst
-for n in erp crm orders; do lm connector delete acme-desk-$n; done   # refused while an entity still fuses the table
+lm view rm acme-customers; lm view rm acme-orders
+lm process rm litige-ouvert; lm process rm grosse-commande
+lm workflow rm acme-order-lifecycle
+lm entity delete AcmeCustomer --force; lm entity delete AcmeCustomerCrmFirst --force
+for n in erp crm orders; do lm connector delete acme-desk-$n --force; done
 ```
 
-Entities first: a connector whose table feeds an entity is refused with a `409` naming the entity.
-Saved views, processes and workflows stay where they are — a process cannot be deleted from `lm`
-today, and a workflow is updated by re-applying under its name.
+`--force` skips the `delete` confirmation both commands ask for. Entities go before connectors:
+a connector whose table feeds an entity is refused with a `409` naming the entity. An `rm` of
+something you never applied answers `404`; the next command still runs.
 
 !!! note "One scope for the whole desk"
     Every source connector carries `scopes: [desk]`, and so does the entity. That is what lets a

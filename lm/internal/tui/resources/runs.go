@@ -119,9 +119,12 @@ type Runs struct {
 	table    *tview.Table
 	client   *client.Client
 	items    []types.Run
+	all      []types.Run // every run the hub listed; items is what the / filter shows
+	textFilter
 	mu       sync.Mutex
 	app      *tview.Application
 	offLoop  offLoop
+	inFlight inFlight // the guard on c (#1147)
 	sort     *style.ColumnSort
 	// The drill-downs, at most one of them set: :sources leads here by connector, :endpoints by
 	// endpoint. They are two questions, not two halves of one — an endpoint already names its
@@ -130,10 +133,11 @@ type Runs struct {
 	filterEndpointID string // endpoint_id filter, empty = no filter
 	onSelect func()
 	toast    func(string)
+	onDead   func(runID string) // wired by App: D → :dlq filtered on the run
 }
 
 func NewRuns(app *tview.Application, c *client.Client, toast func(string)) *Runs {
-	t := tview.NewTable().SetBorders(false).SetSelectable(true, false)
+	t := newListTable()
 	t.SetTitle(" :runs ").SetBorder(true)
 	style.ApplyChrome(t.Box)
 	style.ApplyTableSelection(t)
@@ -156,8 +160,11 @@ func NewRuns(app *tview.Application, c *client.Client, toast func(string)) *Runs
 
 func (r *Runs) View() tview.Primitive { return r.table }
 
+// SetOnDeadLetters is wired by the App so D opens the selected run's dead letters (#1111).
+func (r *Runs) SetOnDeadLetters(fn func(runID string)) { r.onDead = fn }
+
 func (r *Runs) Hints() string {
-	base := "d: describe  y: yank  s: sort  c: cancel  r: refresh"
+	base := "d: describe  D: dead letters  y: yank  s: sort  c: cancel  r: refresh"
 	if r.FilterActive() {
 		base = "Esc: clear filter  " + base
 	}
@@ -175,30 +182,21 @@ func (r *Runs) setHeader() {
 	}
 }
 
-func (r *Runs) ApplyEvent(_ map[string]any) { r.Refresh() }
-
-// SetFilter restricts the listing to runs of a single connector. Empty = all.
-func (r *Runs) SetFilter(connectorID string) { r.setFilters(connectorID, "", "conn") }
+// SetFilter restricts the listing to runs of a single connector, titled by name when known. Empty = all.
+func (r *Runs) SetFilter(connectorID, name string) { r.setFilters(connectorID, "", "connector", name) }
 
 // SetEndpointFilter restricts the listing to runs of a single ENDPOINT — the question the
 // :endpoints drill-down asks. A connector fans out over its endpoints and writes one run row per
 // endpoint, so the connector filter cannot answer it: this page used to receive an endpoint id
 // through SetFilter and compare it against each run's connector id, which nothing satisfies.
-func (r *Runs) SetEndpointFilter(endpointID string) { r.setFilters("", endpointID, "endpoint") }
+func (r *Runs) SetEndpointFilter(endpointID, name string) { r.setFilters("", endpointID, "endpoint", name) }
 
-func (r *Runs) setFilters(connectorID, endpointID, label string) {
+func (r *Runs) setFilters(connectorID, endpointID, label, name string) {
 	r.mu.Lock()
 	r.filterID = connectorID
 	r.filterEndpointID = endpointID
 	r.mu.Unlock()
-	if id := connectorID + endpointID; id != "" {
-		if len(id) > 8 {
-			id = id[:8]
-		}
-		r.table.SetTitle(fmt.Sprintf(" :runs [%s=%s] ", label, id))
-	} else {
-		r.table.SetTitle(" :runs ")
-	}
+	r.table.SetTitle(drillTitle(":runs", label, connectorID+endpointID, name))
 	r.Refresh()
 }
 
@@ -217,10 +215,10 @@ func (r *Runs) filters() (connectorID, endpointID string) {
 }
 
 // ClearFilter wipes both drill-downs and refreshes.
-func (r *Runs) ClearFilter() { r.setFilters("", "", "") }
+func (r *Runs) ClearFilter() { r.setFilters("", "", "", "") }
 
 // Refresh fetches OFF the UI thread — a blocking RunList on the main thread,
-// re-triggered by every live SSE event (ApplyEvent), starved input and froze
+// re-triggered by every live SSE event, starved input and froze
 // the TUI under an event burst (rehearsal carnet #9). offLoop coalesces a burst
 // into one in-flight request; the render lands via QueueUpdate.
 func (r *Runs) Refresh() {
@@ -242,10 +240,26 @@ func (r *Runs) renderList(list []types.Run, err error) {
 		r.table.SetCell(1, 0, dataCell(fmt.Sprintf("ERROR: %v", err)))
 		return
 	}
-	r.items = list
+	prev := selectedKey(r.table, r.items, runKey)
+	r.all = list
+	r.items = filterRows(list, r.q, func(run types.Run) []string {
+		return []string{run.ID, run.ConnectorLabel(), run.EndpointLabel(), run.Status, run.TriggeredBy}
+	})
 	r.applySort()
 	r.render()
+	reselect(r.table, r.items, runKey, prev)
 }
+
+// SetTextFilter narrows the table to the runs holding q (#1120); "" shows them all.
+func (r *Runs) SetTextFilter(q string) {
+	r.mu.Lock()
+	all := r.all
+	r.q = q
+	r.mu.Unlock()
+	r.renderList(all, nil)
+}
+
+func runKey(run types.Run) string { return run.ID }
 
 func (r *Runs) applySort() {
 	idx, desc, sorted := r.sort.Active()
@@ -362,6 +376,12 @@ func (r *Runs) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 		r.cancel()
 		return nil
 	}
+	if ev.Rune() == 'D' {
+		if run, ok := r.selected(); ok && r.onDead != nil {
+			r.onDead(run.ID)
+		}
+		return nil
+	}
 	return ev
 }
 
@@ -376,21 +396,20 @@ func (r *Runs) cancel() {
 	if !ok {
 		return
 	}
-	status, err := r.client.RunCancel(run.ID)
-	if err != nil {
-		if r.toast != nil {
-			r.toast(err.Error())
+	r.inFlight.background(r.app, "c", r.toast, func() func() {
+		status, err := r.client.RunCancel(run.ID)
+		return func() {
+			switch {
+			case err != nil:
+				say(r.toast, err.Error())
+			case status == "cancelled":
+				say(r.toast, fmt.Sprintf("cancelled: %s %s — it had not started", run.ConnectorLabel(), shortRunID(run.ID)))
+			default:
+				say(r.toast, fmt.Sprintf("cancellation requested: %s %s — ends after the current chunk",
+					run.ConnectorLabel(), shortRunID(run.ID)))
+			}
 		}
-		return
-	}
-	if r.toast != nil {
-		if status == "cancelled" {
-			r.toast(fmt.Sprintf("cancelled: %s %s — it had not started", run.ConnectorLabel(), shortRunID(run.ID)))
-			return
-		}
-		r.toast(fmt.Sprintf("cancellation requested: %s %s — ends after the current chunk",
-			run.ConnectorLabel(), shortRunID(run.ID)))
-	}
+	})
 }
 
 // Describable
@@ -403,13 +422,18 @@ func (r *Runs) SelectedDescribe() (string, string, bool) {
 	esc := tview.Escape
 	var b strings.Builder
 	fmt.Fprintf(&b, "id:              %s\n", esc(run.ID))
-	fmt.Fprintf(&b, "connector:       %s\n", esc(run.ConnectorID))
+	fmt.Fprintf(&b, "connector:       %s\n", esc(run.ConnectorLabel())) // the list's name for it (#1173)
 	// The run read ONE endpoint of that connector; the counters below are that endpoint's, so
 	// naming it is what makes them readable. Omitted, not blanked, for a run that has none.
 	if label := run.EndpointLabel(); label != "" {
 		fmt.Fprintf(&b, "endpoint:        %s\n", esc(label))
 	}
 	fmt.Fprintf(&b, "status:          %s %s\n", statusFor(run.Status).glyph(), esc(run.Status))
+	if run.ErrorMessage != "" {
+		// Why, right under the status and above the fold, as `lm run get` says it (#1173); a block
+		// of its own, so a multi-line error cannot run into the lines below.
+		fmt.Fprintf(&b, "error:\n%s\n\n", esc(run.ErrorMessage))
+	}
 	fmt.Fprintf(&b, "trigger:         %s\n", esc(run.TriggeredBy))
 	if run.StartedAt == nil {
 		fmt.Fprintf(&b, "started:         queued\n")
@@ -425,13 +449,9 @@ func (r *Runs) SelectedDescribe() (string, string, bool) {
 	fmt.Fprintf(&b, "records_in:      %d\n", run.RecordsIn)
 	fmt.Fprintf(&b, "records_out:     %d\n", run.RecordsOut)
 	fmt.Fprintf(&b, "records_skipped: %d\n", run.RecordsSkipped)
+	fmt.Fprintf(&b, "dead_letters:    %d\n", run.DeadLetterCount)
 	fmt.Fprintf(&b, "cell_errors:     %d\n", run.CellErrors)
 	fmt.Fprintf(&b, "chunks:          %d\n", run.ChunkCount)
-	if run.ErrorMessage != "" {
-		// Last, and unmissable: a multi-line error must not sandwich the counters
-		// above it (rehearsal — the cause was hiding below the fold).
-		fmt.Fprintf(&b, "\nerror:\n%s\n", esc(run.ErrorMessage))
-	}
 	return shortRunID(run.ID), b.String(), true
 }
 

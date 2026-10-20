@@ -2,6 +2,7 @@ package io.lumnik.hub.search.projection;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.extraction.spi.search.ProjectionDefinition;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -38,17 +39,11 @@ public class SearchProjectionStateStore {
     private static SearchProjectionState mapRow(ResultSet rs) throws SQLException {
         return new SearchProjectionState(rs.getLong(1), rs.getString(2), rs.getString(3),
             rs.getString(4), rs.getLong(5), rs.getString(6), rs.getInt(7), rs.getString(8),
-            rs.getObject(9, UUID.class), rs.getString(10), instant(rs.getTimestamp(11)),
+            rs.getObject(9, UUID.class), rs.getString(10), Jdbc.instant(rs, 11),
             rs.getString(12), rs.getString(13),
             rs.getObject(14, UUID.class),
-            rs.getObject(15, UUID.class), rs.getString(16), instant(rs.getTimestamp(17)),
-            (Long) rs.getObject(18), instant(rs.getTimestamp(19)));
-    }
-
-    /** {@code ExportRunLedger}'s own null-safe timestamp-to-Instant helper, copied rather than shared —
-     *  this store has no existing dependency on the export package. */
-    private static Instant instant(Timestamp t) {
-        return t == null ? null : t.toInstant();
+            rs.getObject(15, UUID.class), rs.getString(16), Jdbc.instant(rs, 17),
+            (Long) rs.getObject(18), Jdbc.instant(rs, 19));
     }
 
     @Inject @DataSource("admin") AgroalDataSource ds;
@@ -223,6 +218,31 @@ public class SearchProjectionStateStore {
             ps.setObject(4, runId);
             ps.setLong(5, tenantId);
             ps.setString(6, searchIndex);
+            ps.executeUpdate();
+        }
+    }
+
+    /** #1219: releases a withheld index once {@code built}, the definition just published, narrows nothing the
+     *  stored declaration holds. FOR UPDATE, as the apply door reads it: no re-apply lands between the two. */
+    public void releaseIfServingTheDeclaration(Connection c, long tenantId, String index,
+                                               ProjectionDefinition built) throws SQLException {
+        String yaml;
+        try (PreparedStatement ps = c.prepareStatement("SELECT manifest_yaml FROM core.search_index "
+                + "WHERE tenant_id = ? AND name = ? AND withheld FOR UPDATE")) {
+            ps.setLong(1, tenantId);
+            ps.setString(2, index);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) return;
+                yaml = rs.getString(1);
+            }
+        }
+        boolean served = ProjectionDefinitions.fromStored(yaml)
+            .map(declared -> !ProjectionDefinitions.narrows(built, declared)).orElse(false);
+        if (!served) return;
+        try (PreparedStatement ps = c.prepareStatement(
+                "UPDATE core.search_index SET withheld = false WHERE tenant_id = ? AND name = ?")) {
+            ps.setLong(1, tenantId);
+            ps.setString(2, index);
             ps.executeUpdate();
         }
     }

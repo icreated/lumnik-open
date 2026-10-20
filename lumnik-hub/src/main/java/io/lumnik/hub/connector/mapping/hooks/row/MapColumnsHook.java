@@ -28,12 +28,6 @@ import java.util.Map;
  * flat-field {@code connector apply} drives it. A csv connector written that way reaches the run
  * having passed no validator, and this hook is the only thing between it and a lost column.
  *
- * <p>Do NOT read the template mapping path as the reason: it is dormant — no
- * {@code META-INF/mapping} ships, {@code MappingTemplateRegistry.register} has no main-code
- * caller, and {@code ChunkExecutor} resolves through {@code MappingResolverStub}. An earlier
- * draft of this comment named it, which would have sent the next cleanup to delete a
- * load-bearing guard after correctly finding that path dead.
- *
  * <p>Renaming a source column that IS a system column is never refused — that is precisely what
  * this knob exists for. Only a rename INTO one is.
  */

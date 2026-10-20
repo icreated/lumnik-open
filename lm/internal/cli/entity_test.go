@@ -81,7 +81,7 @@ func TestEntityDeleteCmd_printsDeleted(t *testing.T) {
 	buf := new(bytes.Buffer)
 	cmd.SetOut(buf)
 	cmd.SetErr(buf)
-	cmd.SetArgs([]string{"entity", "delete", "Customer"})
+	cmd.SetArgs([]string{"entity", "delete", "Customer", "--force"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestEntityDeleteCmd_serverError_returnsError(t *testing.T) {
 	buf := new(bytes.Buffer)
 	cmd.SetOut(buf)
 	cmd.SetErr(buf)
-	cmd.SetArgs([]string{"entity", "delete", "nope"})
+	cmd.SetArgs([]string{"entity", "delete", "nope", "--force"})
 	if err := cmd.Execute(); err == nil {
 		t.Fatal("expected error on 404, got nil")
 	}

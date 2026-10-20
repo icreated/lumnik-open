@@ -287,15 +287,15 @@ func TestDlqReplayed_sendsNewRunId(t *testing.T) {
 	buf := new(bytes.Buffer)
 	cmd.SetOut(buf)
 	cmd.SetErr(buf)
-	cmd.SetArgs([]string{"dlq", "replayed", "d4200000-0000-0000-0000-000000000042", "--new-run-id", "r-99"})
+	cmd.SetArgs([]string{"dlq", "replayed", "d4200000-0000-0000-0000-000000000042", "--new-run-id", "99999999-0000-0000-0000-000000000099"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
 	if gotPath != "/api/platform/dlq/d4200000-0000-0000-0000-000000000042/replayed" {
 		t.Errorf("path = %q", gotPath)
 	}
-	if gotNewRunID != "r-99" {
-		t.Errorf("newRunId sent = %q, want r-99", gotNewRunID)
+	if gotNewRunID != "99999999-0000-0000-0000-000000000099" {
+		t.Errorf("newRunId sent = %q, want the full id", gotNewRunID)
 	}
 }
 
@@ -354,5 +354,58 @@ func TestDlqList_connectorFilter_resolves36CharName(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "d1") {
 		t.Errorf("unexpected: %s", buf.String())
+	}
+}
+
+// #1252: --new-run-id takes the 8 characters `lm run list` shows, like --run does.
+func TestDlqReplayed_newRunId_resolvesAbbreviatedId(t *testing.T) {
+	full := "8778809f-1111-2222-3333-444444444444"
+	var gotNewRunID string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasPrefix(r.URL.Path, "/api/platform/runs"):
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"id": full}})
+		default:
+			gotNewRunID = r.URL.Query().Get("newRunId")
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"dlq", "replayed", "d4200000-0000-0000-0000-000000000042", "--new-run-id", "8778809f"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if gotNewRunID != full {
+		t.Errorf("newRunId sent = %q, want the resolved full id %q", gotNewRunID, full)
+	}
+}
+
+// #1252: a handled entry stays listed; the RESOLUTION column says so (empty while open).
+func TestDlqList_showsResolution(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"id": "d1", "runId": "r1", "skipReason": "BAD_RECORD", "resolution": "REPLAYED"},
+			{"id": "d2", "runId": "r1", "skipReason": "BAD_RECORD"},
+		})
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	buf := new(bytes.Buffer)
+	cmd.SetOut(buf)
+	cmd.SetErr(buf)
+	cmd.SetArgs([]string{"dlq", "list"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "RESOLUTION") || !strings.Contains(out, "REPLAYED") {
+		t.Errorf("the list must show what was done with an entry: %s", out)
 	}
 }

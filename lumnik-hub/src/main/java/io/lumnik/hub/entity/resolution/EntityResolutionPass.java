@@ -59,8 +59,8 @@ import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
  * every resolution-bearing entity. {@link io.lumnik.hub.connector.event.ConnectorRunCompleted} now
  * names the tables the run wrote; every other source is skipped, and its entity still covered.
  * Ownership is deliberately NOT asked of {@code connector.dynamic_table}: a hub table is named after
- * the source table, so two connectors can write one {@code connector.t_<name>}, and the registry
- * keeps one row per mapping naming whichever registered it.
+ * the source table, so two connectors can write one {@code connector.t_<name>}, and a writer that
+ * has not run since an upgrade may not be registered yet; the run's own record is exact.
  */
 @Startup
 @ApplicationScoped

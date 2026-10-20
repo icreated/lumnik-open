@@ -59,8 +59,6 @@ class SoftDeleteNameUniquenessIT {
           + "is keyed on status: a run leaves it by ending, not by being tombstoned"),
         entry("connector.connector_credential",
             "read-only: nothing in src/main persists or deletes one (CredentialResolverImpl and DiscoveryService only read)"),
-        entry("connector.connector_mapping",
-            "V43 removed the only writer; the per-tenant template overrides that remain are never deleted"),
         entry("identity.app_role", "no door stamps deleted_at on a role"),
         entry("identity.org", "no door stamps deleted_at on an org"),
         entry("identity.tenant", "no door stamps deleted_at on a tenant"),

@@ -1,0 +1,22 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: custom-pagination
+  connector_type: rest-generic
+  scopes: [x]
+spec:
+  base_url: https://api.x.io
+  auth:
+    kind: bearer
+    token_env: X_API_KEY
+  endpoints:
+    - id: items
+      path: /items
+      method: GET
+      pagination:
+        kind: custom
+        response_path: $.items
+      target:
+        kind: hybrid
+        table: x_items
+        unique_key: $.id

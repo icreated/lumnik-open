@@ -12,8 +12,10 @@ spec:
   source:
     tables:
       - name: invoices
+        schema: public
         mode: full
         pk_columns: [id]
       - name: invoices
+        schema: public
         mode: full
         pk_columns: [id]

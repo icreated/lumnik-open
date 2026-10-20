@@ -51,6 +51,15 @@ func (c *Client) ConnectorDelete(id string) error {
 	return c.DELETE("/api/platform/connectors/" + id)
 }
 
+// ConnectorDeleteDryRun asks the same door with ?dryRun=true: the hub runs the same refusals and
+// answers the tables the delete would drop or empty, with the rows that would go, and the
+// credential that would go with them, deleting none.
+func (c *Client) ConnectorDeleteDryRun(id string) (types.DeleteTakes, error) {
+	var out types.DeleteTakes
+	err := c.do("DELETE", "/api/platform/connectors/"+id+"?dryRun=true", nil, &out)
+	return out, err
+}
+
 // ConnectorRun triggers an ingestion run for a connector via
 // POST /api/platform/connectors/{id}/run.
 func (c *Client) ConnectorRun(id string) (map[string]any, error) {

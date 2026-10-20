@@ -2,7 +2,7 @@ import { html, Fragment, useState, useEffect } from '../html.mjs';
 import { since } from '../format.mjs';
 import { Refusal } from './refusal.mjs';
 
-// C1-C5: the Décisions tab — ported from the spike's renderInbox (m/index.html ~L480-515).
+// C1-C4: the Décisions tab — ported from the spike's renderInbox (m/index.html ~L480-515).
 // Open decisions are shown prominent with an ack button; acked ones dim with a "traité" label.
 // `onBadge` feeds the unacked count up to app.mjs after every successful load (C3) so the tab
 // badge (and the boot-time quiet refresh) both stay in sync with one source of truth: this list.
@@ -53,7 +53,6 @@ export function Inbox({ api, onBadge }) {
             </div>
           </div>
         `)}
-      <div class="footer-note">⚠ décisions du tenant entier — bornage par métier à venir</div>
     <//>
   `;
 }

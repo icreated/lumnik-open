@@ -54,3 +54,20 @@ func TestIntegrationCreateListDelete_platformPaths(t *testing.T) {
 	assert.Contains(t, paths, "POST /api/platform/integrations/7/test")
 	assert.Contains(t, paths, "DELETE /api/platform/integrations/7")
 }
+
+// The per-target history behind :integrations' health column: newest first, as the hub sends it.
+func TestIntegrationDeliveries_perTargetPath(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Method + " " + r.URL.RequestURI()
+		_, _ = w.Write([]byte(`[{"id":3,"eventType":"org.created","httpStatus":502,"error":"bad gateway","durationMs":40,"attemptedAt":"2026-10-16T10:00:00Z"}]`))
+	}))
+	defer srv.Close()
+
+	rows, err := New(config.Context{Server: srv.URL, Token: "static"}).IntegrationDeliveries(7, 10)
+	require.NoError(t, err)
+	assert.Equal(t, "GET /api/platform/integrations/7/deliveries?limit=10", got)
+	require.Len(t, rows, 1)
+	assert.Equal(t, 502, *rows[0].HTTPStatus)
+	assert.False(t, rows[0].Succeeded())
+}

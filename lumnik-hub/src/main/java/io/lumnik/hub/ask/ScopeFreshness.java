@@ -4,6 +4,7 @@ import static io.lumnik.hub.connector.domain.ConnectorRunStatus.COMPLETED;
 import static io.lumnik.hub.connector.domain.ConnectorRunStatus.PARTIAL;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -11,7 +12,6 @@ import jakarta.inject.Inject;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Optional;
 
@@ -55,8 +55,7 @@ public class ScopeFreshness {
             ps.setString(3, scope);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) return Optional.empty();
-                Timestamp ts = rs.getTimestamp(1);
-                return ts == null ? Optional.empty() : Optional.of(ts.toInstant());
+                return Optional.ofNullable(Jdbc.instant(rs, 1));
             }
         } catch (Exception e) {
             // Freshness must never fail an answer — absent beats broken.

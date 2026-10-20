@@ -80,6 +80,9 @@ class ConnectorExceptionReachInventoryTest {
       // RetryExecutor replays it inside a run; the one door that can surface it, RestDiscoveryResource,
       // deliberately answers 502 — a transient upstream failure is not the caller's 400
       "TransientFailureException", Verdict.NO_GLOBAL_MAPPER,
+      // RestEndpointReader raises it inside a run, where ChunkExecutor turns it into the run's failure
+      // text (#1166); the pre-flight and the probe call the client themselves and never see it
+      "SourceCallException", Verdict.NO_GLOBAL_MAPPER,
       // a complete-looking vestige: declared, never raised. Not dead weight this guard may remove on
       // its own, but weight a reader should be told about
       "MappingException", Verdict.NEVER_THROWN);

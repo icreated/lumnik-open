@@ -22,26 +22,21 @@ sequenceDiagram
 
 ## Why
 
-- Arrival is automatic: a user who logs in through your IdP is created at first login
-  ([BYO IdP](byo-idp.md)). Departure is not: the IdP keeps issuing tokens until the account is
-  disabled there, and the hub would keep honouring them.
-- SCIM closes the loop. Arrival and departure address the **same row**: JIT keys it
-  `(idp_issuer, idp_subject)`, SCIM reaches it through `(issuer, externalId)`.
-- JIT is passive: it creates, never reactivates. Once archived, only SCIM (or an admin) brings
-  a user back.
+- JIT creates a user at first login ([BYO IdP](byo-idp.md)); SCIM archives the same row when
+  your IdP deprovisions them. JIT never reactivates an archived user.
 - The integrator's departure is a different checklist: [Offboarding](offboarding.md).
 
 ## The auth model
 
 - SCIM requests carry **no user JWT**. Each tenant mints opaque bearer tokens
   (`lmscim_` + 32 random bytes, base64url: 256 bits); your IdP presents one on every call. The
-  surface is not rate-limited; the entropy is the defence.
+  surface is not rate-limited.
 - **Minting needs `lm_admin`**, for your own tenant only. The plaintext is returned **once**;
   only its SHA-256 hash is stored, never logged, never shown again.
 - A token is scoped to one **tenant** and one **issuer**: it cannot see local users, another
   IdP's users, or another tenant's. Such lookups answer a SCIM `404`, not a leak.
 - Missing, unknown, revoked, or a user JWT instead of a SCIM token: `401`, same body in every
-  case by design. The application log tells them apart:
+  case. The application log tells them apart:
   `SCIM auth refused: GET /scim/v2/… reason=missing` or `reason=unknown-or-revoked`.
 
 ```
@@ -50,6 +45,8 @@ $ curl -s https://<hub>/scim/v2/Users -H "Authorization: Bearer <a user JWT>"
 ```
 
 ## Wiring your IdP
+
+`lm` has no command for SCIM or its tokens: the gestures below are HTTP calls.
 
 1. **Mint a token**, as an `lm_admin` of the tenant. `issuer` must be the *exact* `iss` your IdP
    puts in its JWTs, byte for byte, or SCIM manages a parallel set of users logins never hit:
@@ -70,30 +67,27 @@ $ curl -s https://<hub>/scim/v2/Users -H "Authorization: Bearer <a user JWT>"
 4. **Verify**: most IdPs test `GET /scim/v2/ServiceProviderConfig`, then a dedup lookup
    `GET /scim/v2/Users?filter=userName eq "jdoe"` before creating.
 
-The end-to-end loop, provision → login 200 → `active:false` → login 403, is exercised by the
-Helm smoke test on every `oidc-external` rehearsal.
-
 ## The `/scim/v2/Users` contract
 
 | Verb | Path | Does |
 |---|---|---|
-| `POST` | `/Users` | find-or-create by `(issuer, externalId)`, then apply `active` + profile. `201`. Authoritative: a re-POST **revives** a soft-deleted user and may re-activate an archived one. `externalId` required |
+| `POST` | `/Users` | find-or-create by `(issuer, externalId)`, then apply `active` + profile. `201`. `externalId` required. Revives a soft-deleted user (see below); with `active: true` it also re-activates a user archived through the users API |
 | `GET` | `/Users/{id}` | one user by lumnik id. `404` if absent, deleted, or keyed to another issuer |
 | `GET` | `/Users?filter=…` | **only** `externalId eq "x"` and `userName eq "x"`; 0 or 1 result. Any other filter answers an **empty list**. Soft-deleted excluded, deactivated included |
 | `PUT` | `/Users/{id}` | full replace: `active`, display name, primary email |
-| `PATCH` | `/Users/{id}` | **the deprovisioning operation**: `replace` of top-level `active` only. A non-boolean `active`, or another op on it, is `400`; a malformed value is never coerced into a deactivation. Other paths are silently ignored |
+| `PATCH` | `/Users/{id}` | **the deprovisioning operation**: `replace` of top-level `active` only. A non-boolean `active`, or another op on it, is `400`. Other paths are ignored |
 | `DELETE` | `/Users/{id}` | **soft**-delete, `204`. The row stays, keeping the key occupied so a later login resolves to it and is refused |
 
 **Deactivate vs erase**
 
-- **`active: false` archives.** The row and its history stay; `archived_at` is stamped. Denial
-  is immediate for both token shapes, `user_id`-claim or external identity. Only SCIM, being
-  authoritative, pushes the user back with `active: true`.
-- **`DELETE` soft-deletes.** Reversible by a re-POST of the same `(issuer, externalId)`.
+- **`active: false` archives.** The row and its history stay; `archived_at` is stamped. The
+  next request is refused, with or without a `user_id` claim. SCIM `active: true` brings the
+  user back.
+- **`DELETE` soft-deletes.** A re-POST of the same `(issuer, externalId)` revives the user.
 - **Neither is a GDPR erasure.** The row remains until an operator removes it:
   [GDPR & personal data](gdpr.md#the-rights-in-practice).
-- **A SCIM write leaves no audit row.** Deprovisioning, the event an access reviewer most
-  wants, is not recorded. [The audit trail](index.md#the-audit-trail)
+- **A SCIM write leaves no audit row**, deprovisioning included.
+  [The audit trail](index.md#not-recorded)
 
 ## Not supported
 

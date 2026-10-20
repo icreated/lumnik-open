@@ -11,9 +11,3 @@ func (c *Client) MigrationStatus() ([]types.MigrationStatus, error) {
 	}
 	return out, nil
 }
-
-// MigrationApply runs the pending migrations for one schema via
-// POST /api/platform/migrations/{schema}/apply.
-func (c *Client) MigrationApply(schema string) error {
-	return c.POST("/api/platform/migrations/"+schema+"/apply", map[string]any{}, nil)
-}

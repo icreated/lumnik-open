@@ -1,11 +1,14 @@
 package resources
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
+	"github.com/icreated/lumnik-open/lm/internal/config"
 	"github.com/rivo/tview"
 )
 
@@ -105,6 +108,60 @@ func TestObservationsDescribe_timestampsAreLocal(t *testing.T) {
 	}
 	if strings.Contains(body, "2026-08-01T10:00:00Z") {
 		t.Errorf("describe body should render local-formatted, not the raw ISO string:\n%s", body)
+	}
+}
+
+// The page's title carries `lm observations stats`: per workflow, how many documents are watched,
+// how many dormant and the median detection — absent, not zero, when nothing is dormant (#1138).
+func TestObservationsRefresh_titleCarriesTheStats(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		stats string
+		want  []string
+		not   []string
+	}{
+		{"stats", `[{"workflow":"commande","watched":12,"dormant":3,"medianDetectionSeconds":7200},
+			{"workflow":"facture","watched":4,"dormant":0,"medianDetectionSeconds":null}]`,
+			[]string{"commande 12 watched · 3 dormant · median detection 2h", "facture 4 watched · 0 dormant"},
+			[]string{"facture 4 watched · 0 dormant · median"}},
+		{"stats refused", ``, []string{":observations"}, []string{"watched"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/platform/workflows/observations":
+					_, _ = w.Write([]byte(`[{"workflow":"commande","docKey":"CMD-1","state":"draft",
+						"since":"2026-10-01T10:00:00Z","firstObservedAt":"2026-10-01T10:00:00Z"}]`))
+				case "/api/platform/workflows/observations/stats":
+					if c.stats == "" {
+						w.WriteHeader(http.StatusInternalServerError)
+						return
+					}
+					_, _ = w.Write([]byte(c.stats))
+				}
+			}))
+			defer srv.Close()
+			var errs []string
+			o := NewObservations(nil, client.New(config.Context{Server: srv.URL}), func(m string) { errs = append(errs, m) })
+			o.Refresh()
+			if got := o.table.GetCell(1, 1).Text; got != "CMD-1" {
+				t.Errorf("the tape must render whatever the stats say, first DOC = %q", got)
+			}
+			title := o.table.GetTitle()
+			for _, w := range c.want {
+				if !strings.Contains(title, w) {
+					t.Errorf("title = %q, want %q", title, w)
+				}
+			}
+			for _, n := range c.not {
+				if strings.Contains(title, n) {
+					t.Errorf("title = %q, must not hold %q", title, n)
+				}
+			}
+			if c.stats == "" && len(errs) == 0 {
+				t.Error("a refused stats call must be said, not swallowed")
+			}
+		})
 	}
 }
 

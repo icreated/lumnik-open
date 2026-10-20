@@ -17,6 +17,7 @@ import java.sql.DriverManager;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.time.ZoneOffset;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -103,7 +104,7 @@ class JdbcChunkReaderModeSwitchIT {
 
   private static JdbcChunkReader reader(String watermarkColumn, JdbcChunkReader.Mode mode) {
     return new JdbcChunkReader(PG.getJdbcUrl(), "u", "p", "postgres",
-        "public", "t", watermarkColumn, List.of("id"), mode, new PostgresDialect(), REGISTRY);
+        "public", "t", watermarkColumn, List.of("id"), mode, new PostgresDialect(), REGISTRY, ZoneOffset.UTC);
   }
 
   private static int count(ReadResult<Map<String, Object>> r) {

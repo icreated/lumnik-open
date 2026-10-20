@@ -3,6 +3,7 @@ package io.lumnik.hub.ask;
 import com.fasterxml.jackson.core.JacksonException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.error.Throwables;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.extraction.spi.ask.NoSchemaException;
 import io.lumnik.extraction.spi.ask.SchemaCard;
@@ -34,6 +35,15 @@ public class SchemaCardStore {
             ps.setString(3, sourceType);
             ps.setString(4, M.writeValueAsString(card));
         });
+    }
+
+    /** The scope has nothing left to describe: no card, rather than one naming nothing (#1188). */
+    public void delete(long tenantId, String scope) {
+        Jdbc.update(adminDs, "SchemaCardStore.delete",
+            "DELETE FROM connector.schema_card WHERE tenant_id = ? AND scope = ?", ps -> {
+                ps.setLong(1, tenantId);
+                ps.setString(2, scope);
+            });
     }
 
     public Optional<SchemaCard> load(long tenantId, String scope) {
@@ -86,9 +96,7 @@ public class SchemaCardStore {
     }
 
     /** Jackson wraps a constructor refusal; the asker needs the sentence that named the problem. */
-    private static String rootCauseMessage(Throwable t) {
-        Throwable root = t;
-        while (root.getCause() != null) root = root.getCause();
-        return root.getMessage();
+    static String rootCauseMessage(Throwable t) {
+        return Throwables.causeChain(t).getLast().getMessage();
     }
 }

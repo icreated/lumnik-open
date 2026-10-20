@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 /** #965: the disputed-rows probe relation — what it reads, when it declines, and that it shares the view's fusion rule. */
@@ -26,7 +27,7 @@ class EntityViewCompilerProbeTest {
       """;
 
   private Optional<EntityViewCompiler.ProbeRelation> relation(String yaml, String probed, String... others) {
-    return compiler.probeRelation(parser.parse(yaml), probed, List.of(others));
+    return compiler.probeRelation(parser.parse(yaml), EntityViewCompiler.Sources.of(Set.of()), probed, List.of(others));
   }
 
   @Test
@@ -59,7 +60,7 @@ class EntityViewCompilerProbeTest {
   @Test
   void the_fusion_rule_is_the_views_own_not_a_second_copy() {
     // The two renderings must contain the SAME text for a column's representative and ledger entry.
-    String view = compiler.buildStatements(parser.parse(TWO_SOURCES)).get(1);
+    String view = compiler.buildStatements(parser.parse(TWO_SOURCES), Set.of()).get(1);
     String probe = relation(TWO_SOURCES, "city").orElseThrow().sql();
     String representative = "(array_agg(\"city\" ORDER BY _ord, \"city\") FILTER (WHERE \"city\" IS NOT NULL))[1]";
     String ledger = "CASE WHEN count(DISTINCT \"city\") > 1 THEN jsonb_agg(jsonb_build_object('src', _src, 'value', \"city\")"
@@ -109,7 +110,7 @@ class EntityViewCompilerProbeTest {
     var sources = List.of(new EntityManifest.Source("t_erp", new LinkedHashMap<>(Map.of("code", "code", "city", "city"))));
     var m = new EntityManifest("Entity", "Cust", null, List.of(), sources, List.of(), null, Map.of(),
         new EntityManifest.Resolution(Map.of("t_erp", "code"), List.of()), List.of());
-    assertThat(compiler.probeRelation(m, "city", List.of())).isEmpty();
+    assertThat(compiler.probeRelation(m, EntityViewCompiler.Sources.of(Set.of()), "city", List.of())).isEmpty();
   }
 
   @Test

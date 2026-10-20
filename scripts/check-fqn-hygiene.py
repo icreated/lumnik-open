@@ -7,9 +7,9 @@ qualified, and this script must never report it — a guard that cries about a d
 language forces teaches people to ignore it:
 
   · A genuine clash — the file already binds that simple name to a DIFFERENT type. Java has
-    no import aliasing, so one of the two must be written long. Three occurrences in the repo,
-    all of io.lumnik.llm.spi.ChatMessage in LangChainChatPort, where dev.langchain4j's
-    ChatMessage is imported.
+    no import aliasing, so one of the two must be written long: io.lumnik.llm.spi.ChatMessage in
+    LangChainChatPort, where dev.langchain4j's ChatMessage is imported, and java.sql.Date in
+    ProcessRuleEvaluator and its test, where java.util.Date is. The run counts them.
 
 This replaced a wider set of exceptions on 2026-08-27. PR #181 had also kept single-use types
 long ("an import costs a line to save a few characters") and claimed the Agroal @DataSource

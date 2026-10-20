@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.extraction.spi.ExtractionSink;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -16,9 +17,11 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import org.jboss.logging.Logger;
@@ -96,14 +99,51 @@ public class DynamicTableRegistry {
     }
   }
 
-  /** Returns the inferred schema {column: pg_type} or null if not registered. */
-  public Map<String, String> findSchema(Long tenantId, String mappingId) {
+  /**
+   * The scopes of every connector writing one of the tables {@code connectorId} writes, its own
+   * included: the cards a change in those tables' writers changes (#1186). A table holds the rows of
+   * each of its writers, and a card shows it only while every one of them carries the card's scope.
+   */
+  public List<String> scopesOfTablesWrittenBy(long tenantId, UUID connectorId) {
+    return Jdbc.query(adminDs, "DynamicTableRegistry.scopesOfTablesWrittenBy",
+        "SELECT DISTINCT unnest(c.tags) FROM connector.dynamic_table o "
+            + "JOIN connector.connector c ON c.id = o.connector_id AND c.tenant_id = o.tenant_id "
+            + "WHERE o.tenant_id = ? AND (o.table_schema, o.table_name) IN "
+            + "(SELECT table_schema, table_name FROM connector.dynamic_table WHERE tenant_id = ? AND connector_id = ?)",
+        ps -> { ps.setLong(1, tenantId); ps.setLong(2, tenantId); ps.setObject(3, connectorId); },
+        rs -> rs.getString(1));
+  }
+
+  /**
+   * The name of another connector of the tenant already writing {@code schema.table}, or null (#1199).
+   * Read on the connection holding {@link DynamicTableWriter#firstWriteLock}, so two first writes
+   * cannot both find the table free.
+   */
+  String otherWriter(Connection c, long tenantId, String schema, String table, UUID connectorId) throws SQLException {
+    try (PreparedStatement ps = c.prepareStatement(
+        "SELECT o.name FROM connector.dynamic_table d "
+            + "JOIN connector.connector o ON o.id = d.connector_id AND o.tenant_id = d.tenant_id "
+            + "WHERE d.tenant_id = ? AND d.table_schema = ? AND d.table_name = ? AND d.connector_id <> ? "
+            + "ORDER BY d.created_at LIMIT 1")) {
+      ps.setLong(1, tenantId);
+      ps.setString(2, schema);
+      ps.setString(3, table);
+      ps.setObject(4, connectorId);
+      try (ResultSet rs = ps.executeQuery()) {
+        return rs.next() ? rs.getString(1) : null;
+      }
+    }
+  }
+
+  /** Returns the inferred schema {column: pg_type} the connector registered, or null if it has not. */
+  public Map<String, String> findSchema(Long tenantId, String mappingId, UUID connectorId) {
     String sql = "SELECT schema_inferred::text FROM connector.dynamic_table " +
-                 "WHERE tenant_id = ? AND mapping_id = ?";
+                 "WHERE tenant_id = ? AND mapping_id = ? AND connector_id IS NOT DISTINCT FROM ?";
     try (Connection c = adminDs.getConnection();
          PreparedStatement ps = c.prepareStatement(sql)) {
       ps.setLong(1, tenantId);
       ps.setString(2, mappingId);
+      ps.setObject(3, connectorId);
       try (ResultSet rs = ps.executeQuery()) {
         if (rs.next()) {
           return M.readValue(rs.getString(1), new TypeReference<Map<String, String>>() {});
@@ -167,8 +207,9 @@ public class DynamicTableRegistry {
   }
 
   /**
-   * Drops every dynamic table owned by the connector and deletes its registry rows,
-   * atomically. Admin datasource (BYPASSRLS); connector_id is a globally-unique UUID
+   * Removes what the connector wrote and deletes its registry rows, atomically: each of its
+   * dynamic tables is dropped, or — while another writer shares it — only emptied of this
+   * connector's rows ({@link #dropIfLastWriter}). Admin datasource (BYPASSRLS); connector_id is a globally-unique UUID
    * so filtering by it alone is tenant-safe.
    *
    * <p>The whole purge runs in ONE transaction (Postgres DDL is transactional): a
@@ -196,6 +237,7 @@ public class DynamicTableRegistry {
             while (rs.next()) tables.add(new String[]{rs.getString(1), rs.getString(2), rs.getString(3)});
           }
         }
+        List<String[]> dropped = new ArrayList<>();
         for (String[] t : tables) {
           if (!isHubDynamicTable(t[0], t[1])) {
             LOG.warnf("purgeForConnector(%s): skipping unexpected registry table %s.%s "
@@ -203,9 +245,8 @@ public class DynamicTableRegistry {
                 DYNAMIC_SCHEMA, DYNAMIC_PREFIX, HYBRID_SCHEMA);
             continue;
           }
-          try (Statement st = c.createStatement()) {
-            st.execute("DROP TABLE IF EXISTS " + quoteIdent(t[0]) + "." + quoteIdent(t[1]));
-          }
+          if (dropIfLastWriter(c, connectorId, t[0], t[1])) dropped.add(t);
+          forgetWatermark(c, Long.parseLong(t[2]), t[0], t[1]);
         }
         c.commit();
         // The DROP above ran on the admin datasource with its own commit (JTA enlistment disabled),
@@ -219,7 +260,7 @@ public class DynamicTableRegistry {
         // forget() runs FIRST, before the corpus clear's try/catch, so a corpus-clear failure can
         // never skip the cache invalidation. connector.t_* tables need neither (DynamicTableWriter
         // keeps no in-memory cache), so the HYBRID_SCHEMA filter covers both.
-        for (String[] t : tables) {
+        for (String[] t : dropped) {
           if (!HYBRID_SCHEMA.equals(t[0])) continue;
           hybridWriter.forget(t[0] + "." + t[1]);
           for (ExtractionSink sink : sinks) {
@@ -240,6 +281,137 @@ public class DynamicTableRegistry {
     } catch (Exception e) {
       throw new RuntimeException("DynamicTableRegistry.purgeForConnector: " + e.getMessage(), e);
     }
+  }
+
+  /**
+   * What {@link #purgeForConnector} would take, read without taking it (#1218): {@code "schema.table"
+   * -> rows}, by the purge's own {@link #plan}. No lock: a count, not a promise.
+   */
+  public Map<String, Long> rowsGoingWith(UUID connectorId) {
+    return Jdbc.transaction(adminDs, "DynamicTableRegistry.rowsGoingWith", c -> {
+      Map<String, Long> rows = new LinkedHashMap<>();
+      try (PreparedStatement ps = c.prepareStatement("SELECT table_schema, table_name FROM connector.dynamic_table "
+          + "WHERE connector_id = ? ORDER BY table_schema, table_name")) {
+        ps.setObject(1, connectorId);
+        try (ResultSet rs = ps.executeQuery()) {
+          while (rs.next()) {
+            String schema = rs.getString(1);
+            String table = rs.getString(2);
+            if (isHubDynamicTable(schema, table)) rows.put(schema + "." + table, rowsGoing(c, connectorId, schema, table));
+          }
+        }
+      }
+      return rows;
+    });
+  }
+
+  private static long rowsGoing(Connection c, UUID connectorId, String schema, String table) throws SQLException {
+    String rel = quoteIdent(schema) + "." + quoteIdent(table);
+    if (!UnseenRowSweeper.exists(c, rel)) return 0;
+    Plan plan = plan(c, connectorId, schema, table);
+    if (!plan.drop() && plan.mine() == null) return 0;
+    try (PreparedStatement ps = c.prepareStatement(
+        "SELECT count(*) FROM " + rel + (plan.drop() ? "" : " WHERE " + plan.mine()))) {
+      if (!plan.drop()) ps.setObject(1, connectorId);
+      try (ResultSet rs = ps.executeQuery()) {
+        rs.next();
+        return rs.getLong(1);
+      }
+    }
+  }
+
+  /**
+   * A table's name carries neither its tenant nor its connector ({@code t_<name>}), so two
+   * connectors — of one tenant or of two — can write into the same table (#1186). The table goes
+   * only with its last writer: while another registration names it, or it holds a row this
+   * connector did not write, only this connector's rows are deleted. A row is this connector's by
+   * its lineage column: {@code _run_id} (a run of the connector) on a {@code t_*} table,
+   * {@code connector_id} on a hybrid one. A table with neither is dropped once no registration
+   * names it, as before.
+   *
+   * <p>Runs under {@link DynamicTableWriter}'s first-write lock on {@code schema.table}, taken
+   * exclusively: a {@code t_*} table's first write holds it too, and a hybrid write holds it shared
+   * for the whole write ({@link DynamicTableWriter#writeLock}), so no other connector registers or
+   * writes the table between the check and the drop.
+   *
+   * @return whether the table was dropped
+   */
+  private static boolean dropIfLastWriter(Connection c, UUID connectorId, String schema, String table)
+      throws SQLException {
+    String rel = quoteIdent(schema) + "." + quoteIdent(table);
+    DynamicTableWriter.firstWriteLock(c, schema, table);
+    Plan plan = plan(c, connectorId, schema, table);
+    if (plan.drop()) {
+      try (Statement st = c.createStatement()) {
+        st.execute("DROP TABLE IF EXISTS " + rel);
+      }
+    } else if (plan.mine() != null) {
+      try (PreparedStatement del = c.prepareStatement("DELETE FROM " + rel + " WHERE " + plan.mine())) {
+        del.setObject(1, connectorId);
+        del.executeUpdate();
+      }
+    }
+    return plan.drop();
+  }
+
+  /**
+   * What a delete of {@code connectorId} does to one of its tables — the rule {@link #dropIfLastWriter}
+   * applies and {@link #rowsGoingWith} counts: drop it, or keep it and delete the rows {@code mine}
+   * picks (null: none). Kept while another connector's registration names it, or it holds a row this
+   * connector did not write.
+   */
+  private record Plan(boolean drop, String mine) {}
+
+  private static Plan plan(Connection c, UUID connectorId, String schema, String table) throws SQLException {
+    String rel = quoteIdent(schema) + "." + quoteIdent(table);
+    String mine = lineage(c, rel);
+    try (PreparedStatement ps = c.prepareStatement(
+        "SELECT EXISTS (SELECT 1 FROM connector.dynamic_table WHERE table_schema = ? AND table_name = ? "
+            + "AND connector_id IS DISTINCT FROM ?)"
+            + (mine == null ? "" : " OR EXISTS (SELECT 1 FROM " + rel + " WHERE (" + mine + ") IS NOT TRUE)"))) {
+      ps.setString(1, schema);
+      ps.setString(2, table);
+      ps.setObject(3, connectorId);
+      if (mine != null) ps.setObject(4, connectorId);
+      try (ResultSet rs = ps.executeQuery()) {
+        rs.next();
+        return new Plan(!rs.getBoolean(1), mine);
+      }
+    }
+  }
+
+  /**
+   * The Search watermark of a table this tenant no longer writes goes in the same purge (#1188). Per
+   * tenant: a {@code t_*} table is shared between tenants, and so is its name in this ledger.
+   */
+  private static void forgetWatermark(Connection c, long tenantId, String schema, String table) throws SQLException {
+    try (PreparedStatement ps = c.prepareStatement(
+        "DELETE FROM core.search_projection_mark_watermark WHERE tenant_id = ? AND table_name = ? "
+            + "AND NOT EXISTS (SELECT 1 FROM connector.dynamic_table "
+            + "WHERE tenant_id = ? AND table_schema = ? AND table_name = ?)")) {
+      ps.setLong(1, tenantId);
+      ps.setString(2, schema + "." + table);
+      ps.setLong(3, tenantId);
+      ps.setString(4, schema);
+      ps.setString(5, table);
+      ps.executeUpdate();
+    }
+  }
+
+  /** The predicate (one {@code ?}: the connector id) that picks a connector's rows in {@code rel}, or null. */
+  private static String lineage(Connection c, String rel) throws SQLException {
+    Set<String> columns = new HashSet<>();
+    try (PreparedStatement ps = c.prepareStatement("SELECT attname FROM pg_catalog.pg_attribute "
+        + "WHERE attrelid = to_regclass(?) AND attname IN ('_run_id', 'connector_id') AND NOT attisdropped")) {
+      ps.setString(1, rel);
+      try (ResultSet rs = ps.executeQuery()) {
+        while (rs.next()) columns.add(rs.getString(1));
+      }
+    }
+    if (columns.contains("_run_id")) {
+      return "_run_id IN (SELECT id FROM connector.connector_run WHERE connector_id = ?)";
+    }
+    return columns.contains("connector_id") ? "connector_id = ?" : null;
   }
 
   /** Upsert the schema registry entry, linking it to its owning connector (for scope discovery). */
@@ -264,11 +436,10 @@ public class DynamicTableRegistry {
     String sql = "INSERT INTO connector.dynamic_table " +
                  "(tenant_id, mapping_id, table_schema, table_name, schema_inferred, connector_id) " +
                  "VALUES (?, ?, ?, ?, ?::jsonb, ?) " +
-                 "ON CONFLICT (tenant_id, mapping_id) DO UPDATE SET " +
+                 "ON CONFLICT (tenant_id, mapping_id, connector_id) DO UPDATE SET " +
                  "  schema_inferred = EXCLUDED.schema_inferred, " +
                  "  table_schema = EXCLUDED.table_schema, " +
                  "  table_name = EXCLUDED.table_name, " +
-                 "  connector_id = EXCLUDED.connector_id, " +
                  "  updated_at = now()";
     try (PreparedStatement ps = c.prepareStatement(sql)) {
       ps.setLong(1, tenantId);

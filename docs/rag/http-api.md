@@ -3,33 +3,29 @@
 > The JSON contract behind `lm ask`, the TUI and the PWA — chat, search, scopes, corpora and the
 > admin schema endpoints, with every guard refusal and every HTTP error shape a caller can hit.
 
-Everything `lm ask`, the TUI `:ask` and the métier PWA do rides a small set of JSON-over-HTTP
-endpoints on the hub. This page is the contract for calling them yourself — from a script, an
-integration, or an app you build on the substrate. The PWA at `/app/` is the living example: its
-chat panel is one `POST /api/rag/chat` with `mode: "analytic"`
-(`lumnik-hub/src/main/resources/META-INF/resources/app/src/components/chat.mjs`), nothing more.
+`lm ask`, the TUI's `:ask` and the métier PWA call a few JSON endpoints on the hub. This page is the
+contract for calling them yourself, from a script or an app. The PWA's chat is one
+`POST /api/rag/chat` with `mode: "analytic"`.
 
-All requests and responses are `application/json` unless noted. All example payloads below are
-**illustrative** — field names and shapes are exact, values are made up.
+Requests and responses are `application/json` unless noted. Example payloads are illustrative:
+field names and shapes are exact, values are made up. Where an `lm` command does the same, it is
+named.
 
 ## The two doors
 
 The same chat lives behind two paths with different audiences:
 
-| Door | Path | Who | Guarded by |
-|---|---|---|---|
-| **User** | `POST /api/rag/chat` | end users (`lm_user` role) — the PWA's door | `@RequiresPermission("lm_user")` |
-| **Platform** | `POST /api/platform/rag/chat` + everything else under `/api/platform/rag/*` | integrators (`lm_integrator` role) — `lm`, scripts, tooling | `PlatformApiAuthFilter` on the whole `/api/platform/*` prefix |
+| Door | Path | Role |
+|---|---|---|
+| **User** | `POST /api/rag/chat` | `lm_user` — the PWA's door |
+| **Platform** | `POST /api/platform/rag/chat` + everything else under `/api/platform/rag/*` | `lm_integrator` — `lm`, scripts, tooling |
 
-Behavior is identical — the user door delegates to the platform one, so tenant validation, the
-[métier-scope binding](scopes.md#binding-users-to-scopes-opt-in) and the
-[honesty guards](../transparency/ask-honesty.md) ride through unchanged. Only the required role
-and the rate-limit bucket differ. If you are building an app for end users, use `/api/rag/chat`;
-`/api/platform/*` stays the integrator surface.
+Both answer the same way, with the same [scope binding](scopes.md#binding-users-to-scopes-opt-in)
+and [guards](../transparency/ask-honesty.md); only the role and the rate-limit bucket differ. An app
+for end users uses `/api/rag/chat`.
 
-Two admin-only endpoints (`status`, `reindex`, `schema`, `rediscover`) additionally require
-`lm_admin` — and, living under `/api/platform/*`, they pass through the integrator filter too,
-so the token must carry both roles.
+Four admin endpoints (`status`, `reindex`, `schema`, `rediscover`) also require `lm_admin`: the
+token must carry both `lm_integrator` and `lm_admin`.
 
 ## Authentication
 
@@ -39,17 +35,13 @@ Every call carries a Bearer JWT:
 Authorization: Bearer <access-token>
 ```
 
-The token comes from your OIDC issuer — the same one `lm login` uses (see
-[Point `lm` at the hub](../deploy.md#point-lm-at-the-hub)). After `lm login`, the short-lived
-access token sits in `~/.lm/config.yaml` under `access:` (auto-refreshed by `lm`; if a curl call
-starts answering 401, run any `lm` command or `lm login` again). Scripts driving `lm` itself can
-instead set a static token via the `LUMNIK_TOKEN` environment variable (see the
-[`lm` reference](../cli/lm-reference.md)).
+The token comes from your OIDC issuer, the one `lm login` uses (see
+[Point `lm` at the hub](../deploy.md#point-lm-at-the-hub)). After `lm login`, `lm config view --raw`
+shows the short-lived access token under your context's `access:` (it prints every token of every
+context in clear — not on a shared screen). `lm` refreshes it: if a curl call
+starts answering `401`, run any `lm` command (or `lm login`) and copy it again.
 
-The **tenant is resolved from the token**, never from a client-supplied header — an
-authenticated caller cannot point a request at another tenant's data. (In dev with
-`lumnik.security.dev-bypass=true`, auth is bypassed and tenant/user come from the
-`X-Tenant-ID` / `X-User-ID` headers instead.)
+The **tenant comes from the token**, never from a header.
 
 ## Chat
 
@@ -68,9 +60,11 @@ One endpoint, two modes, selected by the `mode` field:
 | `corpus` | string | **semantic only**: restrict retrieval to one corpus (usually a connector source, see [corpora](#corpora)) | all corpora |
 | `topK` | integer | **semantic only**: how many chunks to retrieve as context, 1 to 50. Outside → `400 {"error":"topK must be between 1 and 50"}` | 10 |
 | `lang` | string | the answer language, a two-letter code (`"fr"`). The answer is written in it whatever the question's language — a terse question such as `SO-000004 statut ?` carries none. Absent = the question's own language. Any other value → `400 {"error":"lang must be a two-letter language code"}`, in either mode. The métier PWA sends `fr`; `lm ask` sends `--lang`, else the language of `LC_ALL`, `LC_MESSAGES` or `LANG`, in that order. | the question's |
+| `previous` | string | **analytic only**: the question the last answer was given for, so that this one may continue it (*« Et HAWARD ? »*). See [follow-up questions](#follow-up-questions). Blank or absent = a standalone question. Over 1000 characters → `400 {"error":"previous must be at most 1000 characters"}`. Sent in semantic mode → `400 {"error":"previous is only read in analytic mode"}`. | — |
 
 `corpus` and `topK` are silently ignored in analytic mode. Fixed sentences
-(abstentions, guard refusals) stay in English whatever `lang` says.
+(abstentions, guard refusals) follow `lang` too, in French or English — see
+[how refusals surface](#how-refusals-surface-in-the-payload).
 
 ### Semantic response
 
@@ -85,11 +79,11 @@ corpus-filtered), and the LLM answers **from that context only**, citing chunks 
 }
 ```
 
-`citations` lists the row hashes of **every retrieved chunk that is a row** — the context the
-model saw. Not every chunk is one: a `kind:Workflow` lifecycle is indexed with no row hash, so it
-grounds the answer and cites nothing (an answer drawn only from lifecycles comes back with
-`"citations": []`). The `[row:hash]` tags inside `answer` are the ones the model says it used. The model is instructed to say so
-explicitly when the context cannot answer the question.
+- `citations` lists the row hashes of every retrieved chunk that is a row — the context the model
+  saw. `lm data row HASH` shows the row behind one.
+- A `kind: Workflow` lifecycle chunk has no row hash: an answer drawn only from lifecycles has
+  `"citations": []`.
+- The `[row:hash]` tags inside `answer` are the ones the model says it used.
 
 ### Analytic response (`mode: "analytic"`)
 
@@ -107,17 +101,22 @@ guarded, executed, and phrased back:
 }
 ```
 
-- `sql` is **always** the query that ran (or was refused) — verification is one glance away.
-- `disputed` (array, **always present**, `[]` when empty) names the fused records the answer
-  filtered on while their sources disagree, and `disputedTruncated` (boolean) says more exist
-  than the ten listed. Each entry: `key` (the record's match key), `column` and `label`,
-  `matched` (the filter value at stake), `retained` (the value the fused record kept),
-  `counted` (`true` = counted on a disputed value, `false` = left out while a source holds
-  `matched`) and `sources` (the `_conflicts` entries, `src` + `value`, in ledger order). When
-  `disputed` is non-empty, `otherDoors` carries `conflicts`. When and why it is empty:
+- `sql` is **always** the query that ran (or was refused).
+- `disputed` (always present, `[]` when empty) names the fused records the answer filtered on while
+  their sources disagree; `disputedTruncated` says more exist than the ten listed. When it is
+  non-empty, `otherDoors` carries `conflicts`. When it appears:
   [Disputed rows](../transparency/ask-honesty.md#disputed-rows-a-disclosure-not-a-veto).
 
-An illustrative shape with invented values, not a captured run:
+| `disputed[]` field | Meaning |
+|---|---|
+| `key` | the record's match key |
+| `column`, `label` | the filtered column and its label |
+| `matched` | the filter value at stake |
+| `retained` | the value the fused record kept |
+| `counted` | `true`: counted on a disputed value; `false`: left out while a source holds `matched` |
+| `sources` | the `_conflicts` entries (`src`, `value`), in ledger order |
+
+`lm ask -o json` prints the same fields, plus `columns`. An illustrative shape:
 
 ```json
 {
@@ -144,17 +143,15 @@ An illustrative shape with invented values, not a captured run:
   "disputedTruncated": false
 }
 ```
-- `rows` is the raw result, one `{column: value}` map per row, capped at 500 rows
-  (a larger `LIMIT` in the generated SQL is lowered).
-- Execution is read-only, tenant-scoped by Row-Level Security, with a statement timeout.
+
+- `rows` is the raw result, one `{column: value}` map per row, at most 500 rows.
+- Execution is read-only, limited to your tenant, with a statement timeout.
 
 ### How refusals surface in the payload
 
-The [five deterministic guards](../transparency/ask-honesty.md) apply to every analytic call —
-this page won't re-explain them, but you need to know **how a refusal arrives**: as a normal
-`200` analytic response, with the guard's refusal message as the `answer`, `rowCount: 0` and
-`rows: []`. The `sql` field carries the refused query (so you can see *what* was refused), or
-`""` when the model abstained before any SQL existed. A **guard refusal** looks like this:
+A [guard](../transparency/ask-honesty.md) refusal arrives as a normal `200` analytic response: the
+refusal message as `answer`, `rowCount: 0`, `rows: []`, and `sql` holding the refused query (`""`
+when the model abstained before writing any):
 
 ```json
 {
@@ -165,17 +162,18 @@ this page won't re-explain them, but you need to know **how a refusal arrives**:
 }
 ```
 
-`dataAsOf` is the end of the scope's **last completed ingestion run** — how fresh the
-answer's ground is. It is absent when the scope has no completed run (fresh install, a
-one-shot demo): absence is stated, never a fabricated timestamp. Refusals carry no
-`dataAsOf`.
+`dataAsOf` is the end of the scope's **last completed ingestion run**. It is absent when the scope
+has no completed run, and on refusals.
 
-`otherDoors` names, as tokens, the doors that *can* answer when this one abstains and the scope
-holds the answer somewhere text-to-SQL structurally cannot read. It is `[]` on every other
-response, and the two tokens today are `"lifecycle"` (the scope declares a
-[kind:Workflow](../apps/workflows.md), retrieved by the semantic door, not by SQL) and
-`"conflicts"` (the scope fuses an entity, so the row-by-row disagreements live in a ledger the
-schema card does not advertise):
+`otherDoors` names the doors that *can* answer when this one abstains, as tokens; `[]` otherwise:
+
+| Token | The scope… | Where to go next |
+|---|---|---|
+| `lifecycle` | declares a [`kind: Workflow`](../apps/workflows.md), read by the semantic chat | `lm chat` |
+| `conflicts` | fuses an entity whose disagreements are in its ledger | `lm conflicts list` |
+
+`lm ask` prints the command as a `try:` line — see
+[Abstention exit](../transparency/ask-honesty.md#2-abstention-exit-the-models-honest-i-cant).
 
 ```json
 {
@@ -187,48 +185,85 @@ schema card does not advertise):
 }
 ```
 
-**The `answer` already states the fact, and names no command on purpose** — the same string is
-served to `lm ask`, to the PWA and to your client, and a CLI command in it would send a user on a
-phone to a terminal they do not have. `otherDoors` is that same fact in a form you can branch on:
-map a token to whatever gesture *your* surface has, and ignore the ones you have none for. `lm ask`
-prints `lm chat` and `lm conflicts list`; the PWA offers its fiches for `conflicts` and stays
-silent on `lifecycle`, having no lifecycle surface. A token you do not recognise — a newer hub —
-must be passed over, never rendered raw.
+- The `answer` names no command: map each token to the gesture your surface has, and skip a token
+  you do not recognise.
+- A token is offered only when the question is about what that door holds (sources that disagree; a
+  lifecycle, its stages, a blocked document); an unrelated refusal carries none.
 
-When the question could not be turned into a query, a token is offered when the question's wording is about what that
-door holds (sources that disagree; a lifecycle, its stages and transitions, a blocked document — in French or English; a plain status lookup does not count); an unrelated refusal, such as a
-text search that could not be translated, carries none. The same holds for a question that ran and returned
-no rows: the doors are named only when the question's wording is about them.
+**Branch on `abstained`, never on the words.** The fixed sentences (abstentions, refusals, the
+zero-row caveat) follow `lang`, in English or French; anything else gets English. `abstained` is
+`true` when the door declined to answer:
 
-**Fixed sentences follow `lang`.** The abstentions, the guard refusals and the zero-row caveat are
-fixed sentences, served in English or French by the request's `lang`; an absent or unsupported
-`lang` gets English. `abstained` is how to tell a refusal without reading them: `true` whenever the
-door declined to answer instead of answering — the model's own "cannot answer" exit, a scope with no
-schema, rejected SQL, a table, column or value the scope does not declare, a filter that matches
-several rows, a query the database refused, a query that returned no rows, a phrased answer
-withheld because it stated a figure the rows do not back, or a model that could not write the answer
-(the query ran: `rows` and `sql` are the result) — and `false` on an answer. Branch on it,
-never on the words.
+- the model's own "cannot answer", or a scope with no schema;
+- rejected SQL, or a table, column or value the scope does not declare;
+- a filter that matches several rows, or a query the database refused;
+- a query that returned no rows;
+- a phrased answer withheld for a figure the rows do not back;
+- a model that could not write the answer (the query ran: `rows` and `sql` are the result).
 
-An app consuming this door should treat a `rowCount: 0` answer as *"read the answer text"*, not
-as *"there are none"* — that asymmetry is the whole point. In the PWA, the **abstentions**
-(the two refusals that return `sql: ""`) get a distinct amber "refusal" bubble; a guard
-refusal that carries the refused SQL — like the example above — currently renders as an
-ordinary answer bubble whose summary line shows SQL that was never executed. Read the
-answer text either way; the distinct bubble for guard refusals is a tracked follow-up.
+Treat `rowCount: 0` as *"read the answer text"*, never as *"there are none"*.
 
 Refusals that happen **before** the ask — a scope-bound user naming a scope they don't hold —
 are HTTP errors instead: `403 {"error":"scope not granted"}` (see
 [scopes](scopes.md#binding-users-to-scopes-opt-in)).
 
+### Follow-up questions
+
+Send the previous question in `previous`; `lm ask` has no equivalent. The hub keeps nothing between
+calls: your client holds the thread, one sentence long. Send the response's `understoodAs` back as the
+next `previous`; when it is absent (a first question), send the question as asked.
+
+Played on a hub whose scope `catalogue` holds eight articles (`lm csv ingest ./articles.csv --scope catalogue`). Only
+four fields of each response are shown:
+
+```console
+$ curl -s https://your-hub.example.com/api/rag/chat -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -d '{"question": "Et HAWARD ?", "previous": "Donne-moi les références dont la description contient Badu.",
+         "mode": "analytic", "scope": "catalogue", "lang": "fr"}' | jq '{answer, sql, understoodAs, abstained}'
+{
+  "answer": "Il y a 2 références dont la description contient HAWARD :\n\n1. 4100.000.001\n2. 4100.000.002\n\nTotal de références : 2",
+  "sql": "SELECT reference FROM \"ext\".\"articles\" WHERE description ILIKE '%HAWARD%'\nLIMIT 500",
+  "understoodAs": "Donne-moi les références dont la description contient HAWARD.",
+  "abstained": false
+}
+$ curl -s https://your-hub.example.com/api/rag/chat -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -d '{"question": "Et seulement celles de la catégorie Pompes ?", "previous": "Donne-moi les références dont la description contient HAWARD.",
+         "mode": "analytic", "scope": "catalogue", "lang": "fr"}' | jq '{answer, sql, understoodAs, abstained}'
+{
+  "answer": "Les références de la catégorie Pompes dont la description contient HAWARD sont : 4100.000.001.",
+  "sql": "SELECT reference \nFROM \"ext\".\"articles\" \nWHERE categorie = 'Pompes' AND description ILIKE '%HAWARD%'\nLIMIT 500",
+  "understoodAs": "Donne-moi les références de la catégorie Pompes dont la description contient HAWARD.",
+  "abstained": false
+}
+$ curl -s https://your-hub.example.com/api/rag/chat -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -d '{"question": "Et le deuxième, il coûte combien ?", "previous": "Donne-moi les références dont la description contient HAWARD.",
+         "mode": "analytic", "scope": "catalogue", "lang": "fr"}' | jq '{answer, sql, understoodAs, abstained}'
+{
+  "answer": "Je n'ai pas pu rattacher cette question à la précédente. Posez-la en entier, avec la valeur ou le nom auquel elle renvoie.",
+  "sql": "",
+  "understoodAs": null,
+  "abstained": true
+}
+```
+
+- `understoodAs` is present only when the question was resolved against `previous`. It is `null` for a standalone
+  question and on that refusal. After a refusal, keep the `previous` you had: the user usually asks again in other
+  words.
+- The answer is phrased for `understoodAs`, not for the follow-up alone. Every guard reads `understoodAs`.
+- `understoodAs` is never longer than 1000 characters, so it always fits the next `previous`.
+- A follow-up costs one more model call, except a bare *« Et X ? »* over a question holding one value, which the hub
+  resolves itself. What a resolution may and may not do, and when it is refused:
+  [ask honesty](../transparency/ask-honesty.md#a-question-that-follows-the-previous-one).
+- A question may open by addressing the chat by name, *« lumnik, combien d'articles… ? »*. The address is removed
+  before anything reads the question. A question that is nothing but the address (*« lumnik, »*) is kept as written.
+
 ## Search
 
 ```
-POST /api/platform/rag/search     (lm_integrator)
+POST /api/platform/rag/search     (lm_integrator)        lm rag search QUERY --top-k N
 ```
 
-The raw retrieval layer under the semantic chat — embed a query, get the nearest chunks, no LLM
-answer:
+The retrieval layer under the semantic chat: the nearest chunks, no model answer.
 
 | Field | Type | Meaning | Default |
 |---|---|---|---|
@@ -257,12 +292,11 @@ scope outside a bound user's grants → `403 {"error":"scope not granted"}`.
 ## Scopes
 
 ```
-GET /api/platform/rag/scopes      (lm_integrator)
+GET /api/platform/rag/scopes      (lm_integrator)        lm scopes
 ```
 
-Lists the scopes that exist in this tenant — remember, [a scope is declared on the
-connector](scopes.md#a-scope-is-declared-on-the-connector), so this is derived from the
-ingested chunks:
+The scopes with indexed chunks in this tenant ([a scope is declared on the
+connector](scopes.md#a-scope-is-declared-on-the-connector)):
 
 ```json
 [
@@ -276,8 +310,8 @@ granted métiers** in this list.
 
 ### Your default scope
 
-`GET` / `PUT /api/platform/users/me/scope` read and set the default the chat doors use when a
-request names no scope (`{"defaultScope": "compta"}`; empty string clears it). Both answer
+`GET` / `PUT /api/platform/users/me/scope` (`lm scope` / `lm scope set TAG`) read and set the default
+the chat doors use when a request names no scope (`{"defaultScope": "compta"}`; empty string clears it). Both answer
 `404 {"error":"no user record on this hub for user_id N"}` when your token names a hub user id
 that has no row on this hub ([BYO IdP](../security/byo-idp.md#troubleshooting)).
 
@@ -287,7 +321,7 @@ that has no row on this hub ([BYO IdP](../security/byo-idp.md#troubleshooting)).
 GET /api/platform/rag/corpora     (lm_integrator)
 ```
 
-Lists the corpora with indexed chunks. A corpus is usually a connector source, but not
+Lists the corpora with indexed chunks (no `lm` command; `:corpus` in `lm chat` picks one). A corpus is usually a connector source, but not
 always: applying a [`kind: Workflow`](../apps/workflows.md) indexes its declared lifecycle
 under `workflow:<name>`, which is backed by a manifest rather than an ingest run.
 
@@ -305,8 +339,8 @@ bound user.
 ## Schema (admin)
 
 ```
-GET  /api/platform/rag/schema?scope=<tag>        (lm_admin)
-POST /api/platform/rag/rediscover?scope=<tag>    (lm_admin)
+GET  /api/platform/rag/schema?scope=<tag>        (lm_admin)    lm source schema --scope TAG
+POST /api/platform/rag/rediscover?scope=<tag>    (lm_admin)    lm source rediscover --scope TAG
 ```
 
 `schema` returns the scope's **schema card** — the exact tables/columns (with business labels,
@@ -314,43 +348,35 @@ descriptions, examples and declared value-domains) the analytic mode is allowed 
 `404` if no card exists for the scope; run discovery first. `rediscover` rebuilds the card from
 the ingested tables and returns a summary:
 
-!!! note "These two are served by the hub, not by RAG"
-
-    The `rag` in the path is history. The schema card is built, stored and served by the hub
-    itself, so `schema` and `rediscover` — and the `lm source schema` / `lm source rediscover`
-    the app-ladder pages send you to — are in the **open edition**. The paths did not change; only
-    the module behind them did.
-
 ```json
 { "scope": "clients", "tableCount": 3, "columnCount": 41, "enriched": true, "sourceType": "connector" }
 ```
 
+Both are served by the hub itself, so they exist in the Open edition and with the AI switched off.
+
 ## Status and reindex (admin)
 
 ```
-GET  /api/platform/rag/status     (lm_admin)
-POST /api/platform/rag/reindex    (lm_admin)
+GET  /api/platform/rag/status     (lm_admin)    lm rag status
+POST /api/platform/rag/reindex    (lm_admin)    lm rag reindex
 ```
 
 ```json
 { "indexed": true, "chunks": 1550, "indexedAt": "2026-07-20T09:14:03Z", "provider": "ollama-nomic", "embeddingModel": "nomic-embed-text" }
 ```
 
-`provider` and `embeddingModel` are read from the **live embedding port** at each call —
-the port's SPI `name()` and the model id its client is actually built from, never
-constants. An edition shipping no embedding port answers `"none"` for both.
-
-`reindex` rebuilds the **platform corpus** — the chunks derived from manifests, the
-OpenAPI surface and hooks (`source: system`, tenant `0`) — and returns immediately:
-`202 {"status": "reindex_started"}` — poll `status` to watch it land. It does **not**
-touch chunks derived from ingested rows: those are written during ingestion itself and
-erased by deleting their connector ([GDPR → erasure](../security/gdpr.md#the-rights-in-practice)).
+- `provider` and `embeddingModel` are the live embedding model's; `"none"` when there is none.
+- `reindex` rebuilds the **platform corpus** (manifests, API, hooks) and returns
+  `202 {"status": "reindex_started"}` at once; poll `status`. Chunks of ingested rows are not
+  touched: they are written at ingestion and erased with their connector
+  ([GDPR → erasure](../security/gdpr.md#the-rights-in-practice)).
 
 ## Errors
 
 | Status | Body | When |
 |---|---|---|
 | `400` | `{"error": "question is required"}` (chat), `{"error": "query is required"}` (search), `{"error": "scope is required"}` (schema) | missing/blank required field |
+| `400` | `{"error": "previous must be at most 1000 characters"}`, `{"error": "previous is only read in analytic mode"}` | a [follow-up](#follow-up-questions) `previous` over the bound, or sent without `mode: analytic` |
 | `401` | plain text `authentication required` + `WWW-Authenticate: Bearer` header | no/invalid token on `/api/platform/*` — note: **not** JSON |
 | `401` | `{"error": "no tenant in security context"}` | analytic ask/schema call whose token resolves no usable tenant |
 | `403` | plain text `missing role lm_integrator` | authenticated but not an integrator, on `/api/platform/*` |
@@ -358,7 +384,7 @@ erased by deleting their connector ([GDPR → erasure](../security/gdpr.md#the-r
 | `404` | `{"error": "No schema card found for scope: ..."}` | `GET .../schema` on a scope with no discovered schema card yet |
 | `409` | `{"error": "no schema discovered for scope '...' — apply an entity or run discovery first", "hint": "lm entity apply registers a schema for the scope; ask again after it lands"}` | analytic ask on a scope with no schema card at all — a fresh install, or a scope with no `kind: Entity` applied yet |
 | `429` | `{"error": "rate limit exceeded"}` + `Retry-After: <seconds>` header | bucket exhausted — honor `Retry-After` before retrying |
-| `503` | `{"error": "...", "hint": "..."}` | the needed port (chat/embedding/analytic) is not on the classpath, or the LLM/embedding backend is unreachable — a deployment problem, not a caller problem. (An analytic ask whose SQL already ran is not a `503` when only the answer could not be written: it is a `200` with `abstained: true`, the rows and the SQL.) |
+| `503` | `{"error": "...", "hint": "..."}` | the model or embedding service is missing or unreachable — a deployment problem, not a caller problem. (An analytic ask whose SQL already ran is not a `503` when only the answer could not be written: it is a `200` with `abstained: true`, the rows and the SQL.) |
 
 Rate limits are per **(bucket, tenant)** in a fixed 60-second window. The chat and search
 endpoints ride three buckets — `user-chat`, `platform-chat`, `platform-search` — each
@@ -371,8 +397,10 @@ code default 60; `0` disables). See [rate limits](../operations/rate-limits.md).
 # 1. Log in once (device flow against your OIDC issuer — see the deploy guide)
 lm login
 
-# 2. Grab the access token lm stored (single-context config; re-run after it expires)
-TOKEN=$(awk '/^ *access:/ {print $2; exit}' ~/.lm/config.yaml)
+# 2. Copy the access token from your context's `access:` line (re-copy after it expires);
+#    --raw prints every credential of every context in clear — not on a shared screen
+lm config view --raw
+TOKEN=<access token>
 
 # 3. Ask your data — the same call the PWA makes
 curl -s https://your-hub.example.com/api/rag/chat \

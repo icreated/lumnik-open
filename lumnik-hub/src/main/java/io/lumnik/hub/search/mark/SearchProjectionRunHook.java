@@ -6,9 +6,10 @@ import io.lumnik.hub.connector.event.ConnectorRunCompleted;
 import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityManifestParser;
 import io.lumnik.hub.entity.EntityRegistry;
+import io.lumnik.hub.entity.EntityViewCompiler;
 import io.lumnik.hub.search.ProjectionSinkGate;
-import io.lumnik.hub.sql.JoinKeys;
 import io.lumnik.hub.sql.SqlIdentifiers;
+import io.lumnik.hub.sql.TemporalText;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.ObservesAsync;
@@ -104,6 +105,30 @@ public class SearchProjectionRunHook {
     }
 
     /**
+     * A source table lost rows (#1195: a csv full refresh removed what its file no longer holds). The
+     * run path marks the KEY of a row it finds, and a removed row is not there to be found, so every
+     * valid SearchIndex over an entity observing the table is marked ALL instead: it rebuilds, and the
+     * documents of the rows that left go with it. Best-effort, as the run path is: a failure is logged,
+     * and the documents stay until the index's next rebuild. Nothing to do without a Search provider —
+     * its first build reads the table as it then stands.
+     *
+     * @param table the bare {@code t_*} name, as an entity's sources spell it
+     */
+    public void tableLostRows(long tenantId, String table) {
+        try {
+            if (sinkGate.resolve().isEmpty()) return;
+            for (TableTarget target : targetsByTable(tenantId).getOrDefault(table, List.of())) {
+                for (String index : target.indexNames()) {
+                    markStore.markAll(tenantId, index, target.entity(), "source-rows-removed");
+                }
+            }
+        } catch (Exception e) {
+            LOG.warnf(e, "SearchProjectionRunHook: rows removed from %s.%s for tenant %s could not be marked "
+                + "— the indexes over it keep their documents until their next rebuild", SCHEMA, table, tenantId);
+        }
+    }
+
+    /**
      * A source table, and everything one entity needs to mark rows scanned from it: its own physical
      * match columns (a source's physical&harr;canonical map is the entity's own, not shared across
      * entities even when two entities happen to source the SAME table) and the SearchIndex names to
@@ -121,7 +146,8 @@ public class SearchProjectionRunHook {
     }
 
     /** The scanned table is a source of {@code entity}: its own match tuples are marked (trigger row 1). */
-    record SourceTarget(String entity, List<String> physicalMatchCols, List<String> indexNames) implements TableTarget {
+    record SourceTarget(String entity, List<String> physicalMatchCols, List<String> indexNames,
+                        List<String> matchKeyExprs) implements TableTarget {
         @Override public String reason() { return REASON; }
     }
 
@@ -131,7 +157,8 @@ public class SearchProjectionRunHook {
      * {@code physicalFromCol} holds that key are marked. One per (join, source that maps {@code from}).
      */
     record LookupTarget(String entity, List<String> physicalMatchCols, List<String> indexNames,
-                        String sourceTable, String physicalFromCol, String lookupToCol) implements TableTarget {
+                        String sourceTable, String physicalFromCol, String lookupToCol,
+                        List<String> matchKeyExprs, String fromKey, String toKey) implements TableTarget {
         @Override public String reason() { return LOOKUP_REASON; }
     }
 
@@ -143,8 +170,8 @@ public class SearchProjectionRunHook {
      * marked by {@code entity_id}. One per (join, source that maps {@code from}).
      */
     record ResolvedLookupTarget(String entity, String entityType, List<String> indexNames, String sourceTable,
-                                String physicalFromCol, String physicalIdentityCol, String lookupToCol)
-            implements TableTarget {
+                                String physicalFromCol, String physicalIdentityCol, String lookupToCol,
+                                String fromKey, String toKey) implements TableTarget {
         @Override public String reason() { return LOOKUP_REASON; }
     }
 
@@ -178,19 +205,29 @@ public class SearchProjectionRunHook {
 
             EntityManifest m = stored.get();
             Observed observed = observed(m);
+            // A mark says a key as the view groups it: a date beside a timestamp is one value (#1325), and it meets a
+            // lookup key as the view joins it: a day-keyed lookup at the UTC day (#1329).
+            boolean scans = !observed.sources().isEmpty() || !observed.resolvedLookups().isEmpty();   // lookups come with sources
+            EntityViewCompiler.Sources sources = scans ? catalog(m) : null;
             for (ScannedSource source : observed.sources()) {
                 targetsByTable.computeIfAbsent(source.table(), k -> new ArrayList<>())
-                    .add(new SourceTarget(m.name(), source.physicalMatchCols(), indexNames));
+                    .add(new SourceTarget(m.name(), source.physicalMatchCols(), indexNames,
+                        EntityViewCompiler.matchKeyExpressions(m, sources, source.table())));
             }
             for (LookupScan l : observed.lookups()) {
                 targetsByTable.computeIfAbsent(l.lookupTable(), k -> new ArrayList<>())
                     .add(new LookupTarget(m.name(), l.physicalMatchCols(), indexNames, l.sourceTable(),
-                        l.physicalFromCol(), l.lookupToCol()));
+                        l.physicalFromCol(), l.lookupToCol(),
+                        EntityViewCompiler.matchKeyExpressions(m, sources, l.sourceTable()),
+                        EntityViewCompiler.lookupFromKey(m, sources, l.join(), l.sourceTable(), l.physicalFromCol(), ""),
+                        EntityViewCompiler.lookupToKey(m, sources, l.join())));
             }
             for (ResolvedLookupScan l : observed.resolvedLookups()) {
                 targetsByTable.computeIfAbsent(l.lookupTable(), k -> new ArrayList<>())
                     .add(new ResolvedLookupTarget(m.name(), m.name().toLowerCase(Locale.ROOT), indexNames, l.sourceTable(),
-                        l.physicalFromCol(), l.physicalIdentityCol(), l.lookupToCol()));
+                        l.physicalFromCol(), l.physicalIdentityCol(), l.lookupToCol(),
+                        EntityViewCompiler.lookupFromKey(m, sources, l.join(), l.sourceTable(), l.physicalFromCol(), "s."),
+                        EntityViewCompiler.lookupToKey(m, sources, l.join())));
             }
         }
         return targetsByTable;
@@ -238,6 +275,8 @@ public class SearchProjectionRunHook {
             boolean autoCommit = c.getAutoCommit();
             c.setAutoCommit(false);
             try {
+                // A key's text in UTC, as the projection reads the view's _canonical_key (#1325).
+                TemporalText.utcSession(c);
                 Optional<Instant> watermark = watermarkStore.watermark(c, tenantId, qualifiedTableName);
                 Instant maxIngested = maxIngestedAt(c, table, tenantId, watermark);
                 if (maxIngested != null) {
@@ -279,7 +318,7 @@ public class SearchProjectionRunHook {
     /**
      * Pure: the source's physical column for each of the entity's declared {@code match} columns, in
      * match order — the same physical&harr;canonical mapping convention
-     * {@code EntityViewCompiler#validatedCanonToSrc}/{@code appendMatchNotNull} use, mirrored here
+     * {@code EntityViewCompiler#validatedCanonToSrc}/{@code matchKey} use, mirrored here
      * rather than reinvented. {@code null} when this source does not map every match column (should
      * never happen for a manifest {@code EntityManifestParser} already validated, but a defensive skip
      * beats an NPE in a catch-and-log hook).
@@ -321,8 +360,15 @@ public class SearchProjectionRunHook {
               + "FROM pg_stat_activity WHERE xact_start IS NOT NULL "
               + "AND pid <> pg_backend_pid() AND datname = current_database()",
                 ps -> ps.setDouble(1, COMMIT_ORDER_SAFETY_MARGIN.toMillis() / 1000.0),
-                rs -> rs.getTimestamp(1).toInstant())
+                rs -> Jdbc.instant(rs, 1))
             .orElseThrow(() -> new IllegalStateException("safeBound query returned no row"));
+    }
+
+    /** What the catalog says of {@code m}'s tables: the types its match key is aligned by (#1325). */
+    private EntityViewCompiler.Sources catalog(EntityManifest m) throws SQLException {
+        try (Connection c = ds.getConnection()) {
+            return EntityViewCompiler.sources(c, m);
+        }
     }
 
     /** One scanned source of a {@code match:} entity: its table and the physical columns its match key is read from. */
@@ -359,10 +405,10 @@ public class SearchProjectionRunHook {
     }
 
     private record LookupScan(String lookupTable, String sourceTable, String physicalFromCol,
-                              List<String> physicalMatchCols, String lookupToCol) {}
+                              List<String> physicalMatchCols, String lookupToCol, EntityManifest.Join join) {}
 
     private record ResolvedLookupScan(String lookupTable, String sourceTable, String physicalFromCol,
-                                      String physicalIdentityCol, String lookupToCol) {}
+                                      String physicalIdentityCol, String lookupToCol, EntityManifest.Join join) {}
 
     /** The ONE rule for "which physical tables does an entity observe": marking and the asOf bound both read it. */
     private static Observed observed(EntityManifest m) {
@@ -376,7 +422,7 @@ public class SearchProjectionRunHook {
             for (EntityManifest.Join join : m.joins()) {
                 String fromCol = physicalColumnFor(source, join.from());
                 if (fromCol != null) {
-                    lookups.add(new LookupScan(join.table(), source.table(), fromCol, matchCols, join.to()));
+                    lookups.add(new LookupScan(join.table(), source.table(), fromCol, matchCols, join.to(), join));
                 }
             }
         }
@@ -393,7 +439,7 @@ public class SearchProjectionRunHook {
             for (EntityManifest.Join join : m.joins()) {
                 String fromCol = physicalColumnFor(source, join.from());
                 if (fromCol != null) {
-                    resolved.add(new ResolvedLookupScan(join.table(), source.table(), fromCol, identityCol, join.to()));
+                    resolved.add(new ResolvedLookupScan(join.table(), source.table(), fromCol, identityCol, join.to(), join));
                 }
             }
         }
@@ -455,8 +501,7 @@ public class SearchProjectionRunHook {
             if (watermark.isPresent()) ps.setTimestamp(2, Timestamp.from(watermark.get()));
             try (ResultSet rs = ps.executeQuery()) {
                 rs.next();
-                Timestamp ts = rs.getTimestamp(1);
-                return ts == null ? null : ts.toInstant();
+                return Jdbc.instant(rs, 1);
             }
         }
     }
@@ -464,7 +509,7 @@ public class SearchProjectionRunHook {
     private void markMatchKeys(Connection c, SourceTarget target, String table, long tenantId,
                                Optional<Instant> watermark) throws SQLException {
         String fromWhere = " FROM " + table + " WHERE tenant_id = ?" + watermarkPredicate(watermark);
-        markKeys(c, tenantId, target, quoted(target.physicalMatchCols()), fromWhere, leadingBinds(watermark, tenantId),
+        markKeys(c, tenantId, target, target.matchKeyExprs(), fromWhere, leadingBinds(watermark, tenantId),
             MatchKeyEncoding::encode);
     }
 
@@ -478,10 +523,9 @@ public class SearchProjectionRunHook {
     private void markLookupKeys(Connection c, LookupTarget target, String lookupTable, long tenantId,
                                 Optional<Instant> watermark) throws SQLException {
         String fromWhere = " FROM " + SCHEMA + "." + quoteIdent(target.sourceTable())
-            + " WHERE tenant_id = ? AND " + JoinKeys.normalised(quoteIdent(target.physicalFromCol())) + " IN (SELECT "
-            + JoinKeys.normalised(quoteIdent(target.lookupToCol())) + " FROM " + lookupTable
+            + " WHERE tenant_id = ? AND " + target.fromKey() + " IN (SELECT " + target.toKey() + " FROM " + lookupTable
             + " WHERE tenant_id = ?" + watermarkPredicate(watermark) + ")";
-        markKeys(c, tenantId, target, quoted(target.physicalMatchCols()), fromWhere,
+        markKeys(c, tenantId, target, target.matchKeyExprs(), fromWhere,
             leadingBinds(watermark, tenantId, tenantId), MatchKeyEncoding::encode);
     }
 
@@ -496,16 +540,11 @@ public class SearchProjectionRunHook {
         String fromWhere = " FROM " + SCHEMA + "." + quoteIdent(target.sourceTable()) + " s"
             + " JOIN core.entity_identity ei ON ei.tenant_id = s.tenant_id AND ei.entity_type = ? AND ei.source = ?"
             + " AND ei.source_id = s." + quoteIdent(target.physicalIdentityCol()) + "::text AND ei.state = 'resolved'"
-            + " WHERE s.tenant_id = ? AND " + JoinKeys.normalised("s." + quoteIdent(target.physicalFromCol())) + " IN (SELECT "
-            + JoinKeys.normalised(quoteIdent(target.lookupToCol())) + " FROM " + lookupTable
+            + " WHERE s.tenant_id = ? AND " + target.fromKey() + " IN (SELECT " + target.toKey() + " FROM " + lookupTable
             + " WHERE tenant_id = ?" + watermarkPredicate(watermark) + ")";
         List<Object> binds = new ArrayList<>(List.of(target.entityType(), target.sourceTable(), tenantId, tenantId));
         watermark.ifPresent(w -> binds.add(Timestamp.from(w)));
         markKeys(c, tenantId, target, List.of("ei.entity_id"), fromWhere, binds, row -> row.get(0));
-    }
-
-    private static List<String> quoted(List<String> physicalCols) {
-        return physicalCols.stream().map(SqlIdentifiers::quoteIdent).toList();
     }
 
     private static String watermarkPredicate(Optional<Instant> watermark) {

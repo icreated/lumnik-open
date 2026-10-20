@@ -35,7 +35,7 @@ class ConnectorRetagResourceTest {
         Connector c = new Connector();
         c.setTags(List.of("achat", "stock"));
         ConnectorRepository repo = mock(ConnectorRepository.class);
-        when(repo.findById(id)).thenReturn(c);
+        when(repo.findByIdForTenantForUpdate(eq(id), any())).thenReturn(c);
 
         Response resp = resource(repo, null).retag(id);
 
@@ -49,7 +49,7 @@ class ConnectorRetagResourceTest {
         Connector c = new Connector();
         c.setTags(List.of("achat"));
         ConnectorRepository repo = mock(ConnectorRepository.class);
-        when(repo.findById(id)).thenReturn(c);
+        when(repo.findByIdForTenantForUpdate(eq(id), any())).thenReturn(c);
         ChunkRetagger retagger = mock(ChunkRetagger.class);
         when(retagger.retagByConnector(id, List.of("achat"))).thenReturn(7);
 

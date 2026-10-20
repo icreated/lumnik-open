@@ -69,8 +69,7 @@ type JdbcAddTable struct {
 }
 
 // JdbcAddRequest onboards one or more discovered JDBC tables as connectors:
-// connection details, the tables to add, and the mapping template mode/schedule
-// to apply to each.
+// connection details, the tables to add, and the schedule to apply to each.
 type JdbcAddRequest struct {
 	SourceName   string         `json:"sourceName"`
 	URL          string         `json:"url"`

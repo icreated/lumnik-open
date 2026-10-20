@@ -10,7 +10,6 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -383,19 +382,19 @@ public class SearchProjectionMarkStore {
     /** Every (tenant, index) pair's oldest undrained mark's own marked_at, deployment-wide — #703's own
      *  lag computation (design doc §1: "lag is computed live from the oldest undrained mark's marked_at,
      *  zero when none remain"). A pair absent here has zero lag. */
-    private record OldestMarkRow(long tenantId, String searchIndex, Timestamp oldest) {}
+    private record OldestMarkRow(long tenantId, String searchIndex, Instant oldest) {}
 
     public Map<Long, Map<String, Instant>> oldestPendingMarkedAtAdmin() {
         List<OldestMarkRow> rows = Jdbc.query(ds, "SearchProjectionMarkStore.oldestPendingMarkedAtAdmin",
             "SELECT tenant_id, search_index, MIN(marked_at) FROM core.search_projection_mark "
           + "GROUP BY tenant_id, search_index",
             ps -> {},
-            rs -> new OldestMarkRow(rs.getLong(1), rs.getString(2), rs.getTimestamp(3)));
+            rs -> new OldestMarkRow(rs.getLong(1), rs.getString(2), Jdbc.instant(rs, 3)));
 
         Map<Long, Map<String, Instant>> byTenant = new LinkedHashMap<>();
         for (OldestMarkRow row : rows) {
             byTenant.computeIfAbsent(row.tenantId(), k -> new LinkedHashMap<>())
-                .put(row.searchIndex(), row.oldest().toInstant());
+                .put(row.searchIndex(), row.oldest());
         }
         return byTenant;
     }
@@ -408,9 +407,9 @@ public class SearchProjectionMarkStore {
             "SELECT tenant_id, search_index, MIN(marked_at) FROM core.search_projection_mark "
           + "WHERE tenant_id = ? GROUP BY tenant_id, search_index",
             ps -> ps.setLong(1, tenantId),
-            rs -> new OldestMarkRow(rs.getLong(1), rs.getString(2), rs.getTimestamp(3)));
+            rs -> new OldestMarkRow(rs.getLong(1), rs.getString(2), Jdbc.instant(rs, 3)));
         Map<String, Instant> byIndex = new LinkedHashMap<>();
-        for (OldestMarkRow row : rows) byIndex.put(row.searchIndex(), row.oldest().toInstant());
+        for (OldestMarkRow row : rows) byIndex.put(row.searchIndex(), row.oldest());
         return byIndex;
     }
 

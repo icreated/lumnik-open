@@ -139,6 +139,27 @@ class SearchOperationsResourceIT {
             .body("documentCountAsOf", nullValue())
             .body("lastError", nullValue())
             .body("activeRun", nullValue())
+            .body("invalid", equalTo(false))
+            .body("withheld", equalTo(false));
+    }
+
+    // -- 3b: a withheld index says so on both doors (#1219) ----------------------------------------
+
+    @Test
+    void listAndStatusSayAnIndexIsWithheldUntilRebuilt() throws Exception {
+        long tenant = 970_019L;
+        String name = applyIndex(tenant, unique("withheld"));
+        assertThat(Jdbc.update(adminDs, "withhold",
+            "UPDATE core.search_index SET withheld = true WHERE tenant_id = ? AND name = ?",
+            ps -> { ps.setLong(1, tenant); ps.setString(2, name); }))
+            .isEqualTo(1);
+
+        as(tenant).get("/api/platform/search/index")
+            .then().statusCode(200)
+            .body("find { it.name == '" + name + "' }.withheld", equalTo(true));
+        as(tenant).get("/api/platform/search/index/" + name + "/status")
+            .then().statusCode(200)
+            .body("withheld", equalTo(true))
             .body("invalid", equalTo(false));
     }
 

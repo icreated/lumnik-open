@@ -1,8 +1,10 @@
 package io.lumnik.hub.connector.mapping.writer;
 
+import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.PromotedColumn;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.SqlType;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
@@ -10,14 +12,21 @@ import jakarta.transaction.UserTransaction;
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static io.lumnik.hub.testsupport.EventItSupport.runInTxAsSystem;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @QuarkusTest
 class HybridJsonbWriterIT {
@@ -25,6 +34,8 @@ class HybridJsonbWriterIT {
     @Inject HybridJsonbWriter writer;
     @Inject EntityManager em;
     @Inject UserTransaction utx;
+    @Inject @DataSource("admin") AgroalDataSource adminDs;
+    @Inject DynamicTableRegistry registry;
 
     // Registry case: same V21-guard pin as DynamicTableWriterIT — ext.* policies must be
     // born with NULLIF (empty GUC → zero rows, never 22P02).
@@ -266,6 +277,83 @@ class HybridJsonbWriterIT {
                 utx.commit();
             } catch (Exception e) { throw new RuntimeException(e); }
         });
+    }
+
+    @Test
+    void a_second_connector_writing_the_same_table_registers_it_too() {
+        // #1186: each writer's registration is what its delete and its scope check read
+        String table = "ext.test_two_writers_" + System.nanoTime();
+        HybridJsonbSpec spec = new HybridJsonbSpec(table, "$.id", List.of());
+        UUID first = UUID.randomUUID(), second = UUID.randomUUID();
+        runInTxAsSystem(utx, () -> {
+            for (UUID id : List.of(first, second)) {
+                em.createNativeQuery("INSERT INTO connector.connector (id, tenant_id, name, type_id, config, enabled) "
+                        + "VALUES (?1, 1, ?2, 'rest-generic', '{}'::jsonb, true)")
+                    .setParameter(1, id).setParameter(2, "two-writers-" + id).executeUpdate();
+            }
+        });
+
+        writeAsSystem(spec, Map.of("id", "a"), null, first, UUID.randomUUID());
+        writeAsSystem(spec, Map.of("id", "b"), null, second, UUID.randomUUID());
+
+        Number registrations = (Number) em.createNativeQuery(
+                "SELECT count(*) FROM connector.dynamic_table WHERE table_schema = 'ext' AND table_name = ?1")
+            .setParameter(1, table.substring("ext.".length()))
+            .getSingleResult();
+        assertEquals(2, registrations.intValue());
+    }
+
+    @Test
+    void a_write_waits_while_a_delete_decides_whether_to_drop_its_table() throws Exception {
+        // #1200 review: a delete checks "no other writer" then drops; a write landing in between was lost
+        String bare = "test_drop_race_" + System.nanoTime();
+        HybridJsonbSpec spec = new HybridJsonbSpec("ext." + bare, "$.id", List.of());
+        writeAsSystem(spec, Map.of("id", "first"), null, UUID.randomUUID(), UUID.randomUUID());
+
+        try (Connection delete = adminDs.getConnection()) {
+            delete.setAutoCommit(false);
+            DynamicTableWriter.firstWriteLock(delete, "ext", bare);   // what the purge holds while it decides
+            CompletableFuture<Void> write = CompletableFuture.runAsync(() ->
+                writeAsSystem(spec, Map.of("id", "second"), null, UUID.randomUUID(), UUID.randomUUID()));
+            Thread.sleep(1000);
+            assertFalse(write.isDone(), "the write must wait for the delete's decision");
+            delete.commit();
+            write.get(10, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
+    void a_delete_of_the_connector_writing_resolves_instead_of_hanging() throws Exception {
+        // #1200 review: the delete holds the connector's registry rows, then waits for the write's lock;
+        // the write, holding that lock, upserts the same registry row. Postgres must see the cycle.
+        String bare = "test_drop_cycle_" + System.nanoTime();
+        HybridJsonbSpec spec = new HybridJsonbSpec("ext." + bare, "$.id", List.of());
+        UUID writer = UUID.randomUUID();
+        runInTxAsSystem(utx, () -> em.createNativeQuery("INSERT INTO connector.connector "
+                + "(id, tenant_id, name, type_id, config, enabled) VALUES (?1, 1, ?2, 'rest-generic', '{}'::jsonb, true)")
+            .setParameter(1, writer).setParameter(2, "cycle-" + writer).executeUpdate());
+        registry.register(1L, "hybrid:ext." + bare, "ext", bare, Map.of("data", "JSONB"), writer);
+
+        try (Connection delete = adminDs.getConnection()) {
+            delete.setAutoCommit(false);
+            try (var st = delete.createStatement()) {
+                st.execute("SET LOCAL lock_timeout = '8s'");   // without the fix the cycle would never end
+                st.execute("DELETE FROM connector.dynamic_table WHERE connector_id = '" + writer + "'");
+            }
+            CompletableFuture<Void> write = CompletableFuture.runAsync(() ->
+                writeAsSystem(spec, Map.of("id", "a"), null, writer, UUID.randomUUID()));
+            Thread.sleep(1000);   // the write now holds the lock and waits on the deleted registry row
+            long start = System.nanoTime();
+            try {
+                DynamicTableWriter.firstWriteLock(delete, "ext", bare);
+                delete.commit();
+            } catch (SQLException deadlockOrTimeout) {
+                delete.rollback();
+            }
+            write.get(15, TimeUnit.SECONDS);
+            assertTrue(Duration.ofNanos(System.nanoTime() - start).toSeconds() < 5,
+                "Postgres resolved the cycle (deadlock_timeout), rather than the 8s lock_timeout");
+        }
     }
 
     /** One write in its own transaction; a null {@code rowHash} takes the overload without contexts. */

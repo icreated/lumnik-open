@@ -3,37 +3,48 @@
 > If you stop using lumnik in two years, what do you get back, in what format — and what
 > was never at risk in the first place?
 
-Every purchasing committee asks this. The answer deserves a page instead of a scavenger
-hunt.
-
 ## What was never at risk
 
-**Your source system.** lumnik is a read-only mirror of your source *databases*: the connection
-account needs `SELECT` and nothing more, and there is no write path back to them — not
-behind a flag, not for administrators ([Architecture → Read-only first](architecture.md)).
-The one deliberate exception is file sources: a CSV connector's `after_process:
-move|archive|delete` does move or delete files **on the drop zone you declared** — never
-in a database ([CSV & files](connectors/csv.md)). Stopping lumnik changes nothing about
-the system of record, because lumnik never was one.
+**Your source system.** Stopping lumnik changes nothing in it:
 
-**And there is no vendor copy to reclaim.** Self-hosted means the data never left your
-infrastructure: there is nothing at a provider's to demand restitution or destruction of.
-The exit below is entirely an operation on your own machines.
+- **databases** — the connection account needs `SELECT` only, and there is no write path back
+  ([Architecture → Read-only first](architecture.md#read-only-first));
+- **file sources** — a CSV connector's `after_process: move|archive|delete` moves or deletes files
+  **on the drop zone you declared**, nothing else ([CSV & files](connectors/csv.md)).
+
+**No vendor copy to reclaim.** Self-hosted, the data never left your infrastructure; the exit
+below runs on your own machines.
 
 ## What you get back
 
 | Asset | Format | How you take it |
 |---|---|---|
 | The ingested mirror | **Plain PostgreSQL 16 tables** in schema `connector` — ordinary columns, no application-layer encryption ([what is and isn't encrypted](security/rls.md#data-at-rest-what-is-encrypted-and-what-is-not)) | Any PostgreSQL client, or the dump below |
-| Fused entities | SQL views over those tables, also served as JSON (`GET /api/entities/{name}`) | Query the views, or call the API while the hub still runs |
+| Fused entities | SQL views over those tables (`connector.v_*`) | Query the views, or `lm entity export NAME -o FILE` (CSV) while the hub runs |
 | The whole database | A **standard `pg_dump -Fc`** — the same artifact the [backup script](operations/backup-restore.md) produces (nightly once you install the documented cron; nothing schedules it for you) | `pg_restore` into any PostgreSQL 16+ **with the pgvector extension available** (the `rag` schema needs it — or exclude that schema on restore), with or without lumnik |
-| Your configuration | The YAML manifests (connectors, entities, views, processes, workflows) | Manifests you applied from files stay in **your** repository; config created through the guided flows (`lm source jdbc add`, the TUI editor, applied views/workflows) lives in the hub's database — and is therefore inside the dump above, and fetchable back as YAML while the hub runs (`lm workflow get NAME`, `lm view get NAME -o FILE` — see the [CLI reference](cli/lm-reference.md)) |
+| Your configuration | The YAML manifests | In **your** repository for the files you applied; everything else is in the dump, and fetchable as YAML while the hub runs — see below |
 | The RAG corpus | `rag.chunk` rows: chunk text in clear + pgvector embeddings | The text is portable; see the embeddings caveat below |
 
-User accounts and the audit journal live in the same database — the same dump carries
-them. Ask/chat history is not stored server-side at all ([the trace is in each
-response](transparency/ask-honesty.md)). No proprietary formats, no export tooling to
-buy, no data hostage: the exit artifact is the backup you should already be taking.
+Fetch the configuration back as YAML while the hub runs:
+
+| Kind | Command |
+|---|---|
+| Connector | `lm connector get NAME` — its stored definition, in the hub's own field names |
+| Entity | no `lm` command returns the manifest; it is in the dump |
+| View | `lm view get NAME -o FILE` |
+| Workflow | `lm workflow get NAME` |
+| App | `lm app get NAME` |
+| Export | `lm export get NAME` |
+| Process | no `lm process get` — the TUI's `:processes`, `e` on the row, opens the stored manifest |
+
+```
+$ lm entity export AcmeCustomer -o customers.csv
+AcmeCustomer: 1099 bytes written to customers.csv (sha256 afa5c455ceaf9a2c6e0fae54b2fbc9b671893f22220c2c2c6a685969c0deceb5)
+```
+
+User accounts and the audit journal are in the same database, so the same dump carries them.
+Ask/chat history is not stored server-side ([the trace is in each response](transparency/ask-honesty.md)).
+The exit artifact is the backup you already take.
 
 ## Two caveats to plan around
 
@@ -57,5 +68,3 @@ buy, no data hostage: the exit artifact is the backup you should already be taki
    the archived, queryable record of what the mirror held.
 4. Decommission the stack. Your source system never noticed lumnik arriving; it will not notice it
    leaving.
-
-There is no lock-in mechanism to negotiate around. That is by design.

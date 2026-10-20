@@ -38,7 +38,7 @@ class SearchProjectionIngestionIT {
     @Inject @DataSource("admin") AgroalDataSource adminDs;
 
     /** Simulates a second ingestion run touching the same rows: bumps {@code _ingested_at}, like the
-     *  writer's {@code ON CONFLICT (_row_hash) DO UPDATE SET _ingested_at = now()} path would. */
+     *  writer's {@code ON CONFLICT (tenant_id, _row_hash) DO UPDATE SET _ingested_at = now()} path would. */
     private void bumpIngestedAt(String table, long tenant) throws Exception {
         try (Connection c = adminDs.getConnection();
              PreparedStatement ps = c.prepareStatement(

@@ -2,6 +2,7 @@ package resources
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -17,22 +18,29 @@ import (
 )
 
 type Sources struct {
-	table       *tview.Table
-	client      *client.Client
-	items       []types.Connector
+	table  *tview.Table
+	client *client.Client
+	items  []types.Connector
+	all    []types.Connector // every connector the hub listed; items is what the / filter shows
+	textFilter
 	app         *tview.Application
 	offLoop     offLoop
+	inFlight    inFlight // the guard on e, y, ^R, ^P, Del and t's scope sync (#1147, #1156, #1158)
 	mu          sync.Mutex
 	onError     func(string)
 	toast       func(string)
 	sortCol     *style.ColumnSort
 	onSelect    func()
-	onEnter     func(connectorID, kind string) // wired by App: REST → :endpoints, others → :runs
+	onEnter     func(connectorID, name, kind string) // wired by App: REST → :endpoints, others → :runs
 	onScopeEdit func(id string, current []string)
+	confirm     ConfirmAs                // wired by App: Del, and the scope sync offered after t (#1138)
+	onDead      func(connectorID string) // wired by App: D → :dlq filtered on the connector
+	suspend     func(func())             // seam: SuspendEditor in prod, a stub in tests
+	isFront     func() bool              // true while :sources is in front of a live app; gates Del's question (#1218)
 }
 
 func NewSources(app *tview.Application, c *client.Client, onError, toast func(string)) *Sources {
-	t := tview.NewTable().SetBorders(false).SetSelectable(true, false)
+	t := newListTable()
 	t.SetTitle(" :sources ").SetBorder(true)
 	style.ApplyChrome(t.Box)
 	style.ApplyTableSelection(t)
@@ -44,6 +52,7 @@ func NewSources(app *tview.Application, c *client.Client, onError, toast func(st
 		onError: onError,
 		sortCol: style.NewColumnSort([]string{"NAME", "TYPE", "SCHED", "ENABLED"}),
 	}
+	cn.suspend = func(f func()) { SuspendEditor(cn.app, cn.signalError, f) }
 	cn.setHeader()
 	cn.table.SetInputCapture(cn.handleKey)
 	cn.table.SetSelectionChangedFunc(func(row, col int) {
@@ -55,16 +64,55 @@ func NewSources(app *tview.Application, c *client.Client, onError, toast func(st
 }
 
 // SetOnEnter is called by the App to wire Enter → :endpoints (rest) or :runs (others).
-func (c *Sources) SetOnEnter(fn func(connectorID, kind string)) { c.onEnter = fn }
+func (c *Sources) SetOnEnter(fn func(connectorID, name, kind string)) { c.onEnter = fn }
 
 // SetOnScopeEdit is wired by the App so pressing `t` opens the scope-edit modal (the key
 // predates the rename; `s` is sort).
 func (c *Sources) SetOnScopeEdit(fn func(string, []string)) { c.onScopeEdit = fn }
 
+// SetConfirm is wired by the App: Del asks through it, and deletes nothing without one; the scope
+// sync is offered through it too.
+func (c *Sources) SetConfirm(fn ConfirmAs) { c.confirm = fn }
+
+// SetFront is wired by the App: Del's dry run answers off the loop, and its question opens only
+// while :sources is still in front.
+func (c *Sources) SetFront(fn func() bool) { c.isFront = fn }
+
+// SetSuspend is wired by the App to its own way to $EDITOR, which a :context switch closes on the
+// app it retires (#1151): e reads off the loop, so its editor can open after the switch.
+func (c *Sources) SetSuspend(fn func(func())) { c.suspend = fn }
+
+// ScopesSet is told each time t set a connector's scopes. When they changed, its already-indexed
+// chunks still carry the old ones: it offers to re-stamp them, `lm connector scope sync` (#1138).
+func (c *Sources) ScopesSet(id string, before, after []string) {
+	if c.confirm == nil || slices.Equal(before, after) || c.inFlight.busy("t", c.toast) { // no question for a press that would be dropped
+		return
+	}
+	name := id
+	if i := slices.IndexFunc(c.all, func(ct types.Connector) bool { return ct.ID == id }); i >= 0 {
+		name = c.all[i].Name
+	}
+	c.confirm(fmt.Sprintf("Re-stamp connector %q's indexed RAG chunks with its new scopes?", name), "Re-stamp", func() {
+		c.inFlight.background(c.app, "t", c.toast, func() func() {
+			out, err := c.client.ConnectorRetag(id)
+			return func() {
+				if err != nil {
+					c.signalError(fmt.Sprintf("scope sync: %v", err))
+					return
+				}
+				say(c.toast, fmt.Sprintf("✓ %v chunk(s) re-stamped: %s", out["chunksUpdated"], name))
+			}
+		})
+	})
+}
+
+// SetOnDeadLetters is wired by the App so D opens the selected connector's dead letters (#1111).
+func (c *Sources) SetOnDeadLetters(fn func(connectorID string)) { c.onDead = fn }
+
 func (c *Sources) View() tview.Primitive { return c.table }
 
 func (c *Sources) Hints() string {
-	return "e: edit  t: scopes  d: describe  ^R: run  ^P: pause  Del: delete  y: yank  s: sort  Enter: → endpoints/runs  r: refresh"
+	return "e: edit  t: scopes  d: describe  D: dead letters  ^R: run  ^P: pause  Del: delete  y: yank  s: sort  Enter: → endpoints/runs  r: refresh"
 }
 
 func (c *Sources) setHeader() {
@@ -97,9 +145,14 @@ func (c *Sources) renderList(list []types.Connector, err error) {
 		return
 	}
 	c.mu.Lock()
-	c.items = list
+	prev := selectedKey(c.table, c.items, connectorKey)
+	c.all = list
+	c.items = filterRows(list, c.q, func(ct types.Connector) []string {
+		return []string{ct.Name, ct.TypeID, kindFor(ct.TypeID), ct.Schedule, ct.Status, strings.Join(ct.Tags, ",")}
+	})
 	c.applySort()
 	c.render()
+	reselect(c.table, c.items, connectorKey, prev)
 	c.mu.Unlock()
 	if c.onSelect != nil { // an open describe panel follows the fresh row
 		c.onSelect()
@@ -162,6 +215,11 @@ func (c *Sources) render() {
 		c.table.SetCell(row, 6, dataCell(strings.Join(it.Tags, ",")).SetExpansion(1))
 	}
 }
+
+// SetTextFilter narrows the table to the connectors holding q (#1120); "" shows them all.
+func (c *Sources) SetTextFilter(q string) { c.q = q; c.renderList(c.all, nil) }
+
+func connectorKey(ct types.Connector) string { return ct.ID }
 
 // kindFor derives the short connector kind from typeId.
 func kindFor(typeID string) string {
@@ -238,7 +296,7 @@ func (c *Sources) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 	case tcell.KeyEnter:
 		if c.onEnter != nil {
 			if sel, ok := c.selectedItem(); ok {
-				c.onEnter(sel.ID, kindFor(sel.TypeID))
+				c.onEnter(sel.ID, sel.Name, kindFor(sel.TypeID))
 			}
 		}
 		return nil
@@ -252,6 +310,11 @@ func (c *Sources) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 		return nil
 	case 'r':
 		c.Refresh()
+		return nil
+	case 'D':
+		if sel, ok := c.selectedItem(); ok && c.onDead != nil {
+			c.onDead(sel.ID)
+		}
 		return nil
 	case 'R': // modifier-free alias of ^R — Ctrl chords are awkward on some mac keyboards (carnet #5)
 		c.runNow()
@@ -279,18 +342,29 @@ func (c *Sources) editYAML() {
 	if !ok {
 		return
 	}
-	current, err := c.client.ConnectorGet(sel.ID)
-	if err != nil {
-		c.signalError(fmt.Sprintf("get: %v", err))
-		return
-	}
+	// The GET runs off the loop: a hub that held it held every key (#1156). The editor opens in the
+	// follow-up, on the loop.
+	c.inFlight.background(c.app, "e", c.toast, func() func() {
+		current, err := c.client.ConnectorGet(sel.ID)
+		return func() {
+			if err != nil {
+				c.signalError(fmt.Sprintf("get: %v", err))
+				return
+			}
+			c.edit(sel, current)
+		}
+	})
+}
+
+// edit opens $EDITOR on the connector e fetched, then applies what the editor changed.
+func (c *Sources) edit(sel types.Connector, current *types.Connector) {
 	data, err := yaml.Marshal(current)
 	if err != nil {
 		c.signalError(fmt.Sprintf("marshal: %v", err))
 		return
 	}
 	original := string(data)
-	SuspendEditor(c.app, c.signalError, func() {
+	c.suspend(func() {
 		updated, changed, err := editor.EditYAML(sel.Name+".yaml", original)
 		if err != nil {
 			c.signalError(fmt.Sprintf("editor: %v", err))
@@ -314,41 +388,77 @@ func (c *Sources) editYAML() {
 
 func (c *Sources) runNow() {
 	if sel, ok := c.selectedItem(); ok {
-		if _, err := c.client.ConnectorRun(sel.ID); err != nil {
-			c.signalError(fmt.Sprintf("run: %v", err))
-			return
-		}
-		// Silence on success cost the rehearsal a freeze-by-retry (carnet #4):
-		// the human MUST see that ^R landed.
-		if c.toast != nil {
-			c.toast("run scheduled: " + sel.Name)
-		}
+		c.inFlight.background(c.app, "^R", c.toast, func() func() {
+			_, err := c.client.ConnectorRun(sel.ID)
+			return func() {
+				if err != nil {
+					c.signalError(fmt.Sprintf("run: %v", err))
+					return
+				}
+				// Silence on success cost the rehearsal a freeze-by-retry (carnet #4):
+				// the human MUST see that ^R landed.
+				say(c.toast, "run scheduled: "+sel.Name)
+			}
+		})
 	}
 }
 
 func (c *Sources) pause() {
 	if sel, ok := c.selectedItem(); ok {
-		var err error
-		if sel.Enabled {
-			err = c.client.ConnectorPause(sel.ID)
-		} else {
-			err = c.client.ConnectorResume(sel.ID)
-		}
-		if err != nil {
-			c.signalError(fmt.Sprintf("pause/resume: %v", err))
-		}
-		c.Refresh()
+		c.inFlight.background(c.app, "^P", c.toast, func() func() {
+			var err error
+			if sel.Enabled {
+				err = c.client.ConnectorPause(sel.ID)
+			} else {
+				err = c.client.ConnectorResume(sel.ID)
+			}
+			return func() {
+				if err != nil {
+					c.signalError(fmt.Sprintf("pause/resume: %v", err))
+				}
+				c.Refresh()
+			}
+		})
 	}
 }
 
 func (c *Sources) delete() {
-	if sel, ok := c.selectedItem(); ok {
-		if err := c.client.ConnectorDelete(sel.ID); err != nil {
-			c.signalError(fmt.Sprintf("delete: %v", err))
-			return
-		}
-		c.Refresh()
+	sel, ok := c.selectedItem()
+	if !ok || c.confirm == nil {
+		return
 	}
+	// The dry run first, as lm connector delete (#1218): the entity that blocks the delete is named
+	// before any question, and the question can say what goes. sel is captured now: the answer
+	// deletes the connector the question named, whatever a live refresh did to the table meanwhile.
+	c.inFlight.background(c.app, "Del", c.toast, func() func() {
+		takes, err := c.client.ConnectorDeleteDryRun(sel.ID)
+		return func() {
+			switch {
+			case c.isFront != nil && !c.isFront(): // left — or the whole hub left (:context)
+				say(c.toast, "Del: :sources was left before the hub answered — nothing deleted")
+			case err != nil:
+				c.signalError(fmt.Sprintf("delete: %v", err))
+			default:
+				c.confirmDelete(sel, takes)
+			}
+		}
+	})
+}
+
+func (c *Sources) confirmDelete(sel types.Connector, takes types.DeleteTakes) {
+	q := fmt.Sprintf("Delete connector %q? Goes with it: %s.", sel.Name, output.ConnectorDeleteTakes(takes))
+	c.confirm(q, "Delete", func() {
+		c.inFlight.background(c.app, "Del", c.toast, func() func() {
+			err := c.client.ConnectorDelete(sel.ID)
+			return func() {
+				if err != nil {
+					c.signalError(fmt.Sprintf("delete: %v", err))
+					return
+				}
+				c.Refresh()
+			}
+		})
+	})
 }
 
 func (c *Sources) signalError(msg string) {
@@ -408,20 +518,26 @@ func (c *Sources) SelectedDescribe() (string, string, bool) {
 
 func (c *Sources) OnSelectionChange(cb func()) { c.onSelect = cb }
 
-// Yankable: full YAML of the connector — symmetric with `e` editor input.
-
-func (c *Sources) SelectedYank() (string, bool) {
+// YankLater: y copies the connector's full YAML — symmetric with e's editor input. The GET runs off
+// the loop under y's inFlight key, as e's does (#1156): a hub that held it held every key (#1158). The
+// yank happens in the follow-up, on the loop.
+func (c *Sources) YankLater(yank func(text string)) {
 	sel, ok := c.selectedItem()
 	if !ok {
-		return "", false
+		return
 	}
-	full, err := c.client.ConnectorGet(sel.ID)
-	if err != nil {
-		return "", false
-	}
-	data, err := yaml.Marshal(full)
-	if err != nil {
-		return "", false
-	}
-	return string(data), true
+	c.inFlight.background(c.app, "y", c.toast, func() func() {
+		full, err := c.client.ConnectorGet(sel.ID)
+		var data []byte
+		if err == nil {
+			data, err = yaml.Marshal(full)
+		}
+		return func() {
+			if err != nil {
+				c.signalError(fmt.Sprintf("y: %v", err))
+				return
+			}
+			yank(string(data))
+		}
+	})
 }

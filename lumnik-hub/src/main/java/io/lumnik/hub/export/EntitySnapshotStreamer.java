@@ -3,6 +3,8 @@ package io.lumnik.hub.export;
 import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityViewCompiler;
 import io.lumnik.hub.export.format.ColumnFormatter;
+import io.lumnik.hub.view.ColumnKind;
+import io.lumnik.hub.view.ViewFilter;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVPrinter;
@@ -83,7 +85,8 @@ public class EntitySnapshotStreamer {
                                 OutputStream sink) throws SQLException, IOException {
         List<String> columns = shape.columns();
         validate(columns, orderColumns, shape.filter(), entity);
-        String sql = buildSql(entity, columns, orderColumns, shape.filter());
+        Set<String> temporal = temporalColumns(c, entity);
+        String sql = buildSql(entity, columns, orderColumns, shape.filter(), temporal);
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             for (int i = 0; i < shape.filter().size(); i++)
                 ps.setArray(i + 1, c.createArrayOf("text", shape.filter().get(i).values().toArray()));
@@ -96,15 +99,24 @@ public class EntitySnapshotStreamer {
         }
     }
 
+    /** The view's date and timestamp columns: the sources agreed on one (#1325). */
+    private static Set<String> temporalColumns(Connection c, EntityManifest entity) throws SQLException {
+        Set<String> temporal = new HashSet<>();
+        EntityViewCompiler.viewColumnTypes(c, entity.name()).forEach((column, type) -> {
+            if (ColumnKind.ofType(type).temporal()) temporal.add(column);
+        });
+        return temporal;
+    }
+
     /**
      * {@code SELECT} the projected columns from {@code connector.v_<entity>}, ordered by
-     * {@code orderColumns} then the remaining {@code columns} as tiebreak — one
-     * {@code COLLATE "C" NULLS LAST} term per column, no cast (every canonical column is already
-     * SQL {@code text} in the view). See the design doc's "Column projection & the deterministic
-     * ORDER BY" section for why a single term per column is correct here.
+     * {@code orderColumns} then the remaining {@code columns} as tiebreak — one {@code NULLS LAST}
+     * term per column, a text one {@code COLLATE "C"}; a date or a timestamp column (#1325) orders by
+     * its value, a collation being text's alone. See the design doc's "Column projection & the
+     * deterministic ORDER BY" section for why a single term per column is correct here.
      */
     private String buildSql(EntityManifest entity, List<String> columns, List<String> orderColumns,
-                            List<ExportManifest.Filter> filter) {
+                            List<ExportManifest.Filter> filter, Set<String> temporal) {
         StringBuilder sql = new StringBuilder("SELECT ");
         for (int i = 0; i < columns.size(); i++) {
             if (i > 0) sql.append(", ");
@@ -113,10 +125,13 @@ public class EntitySnapshotStreamer {
         sql.append(" FROM ").append(EntityViewCompiler.viewName(entity.name()));
 
         // spec.filter (#1090): one bound text[] per entry, AND-ed; an equals is a one-value list.
-        // A NULL never matches, as in the manifest's own wording.
+        // A NULL never matches, as in the manifest's own wording. Dates against a date or timestamp
+        // column are equal as instants, as in a view (#1310, #1325); anything else is the exact text.
         for (int i = 0; i < filter.size(); i++) {
-            sql.append(i == 0 ? " WHERE " : " AND ")
-                .append(quoteIdent(filter.get(i).column())).append(" = ANY(?::text[])");
+            ExportManifest.Filter f = filter.get(i);
+            boolean instants = temporal.contains(f.column()) && f.values().stream().allMatch(ViewFilter::isTemporal);
+            sql.append(i == 0 ? " WHERE " : " AND ").append(quoteIdent(f.column()))
+                .append(instants ? "::timestamptz = ANY(?::timestamptz[])" : "::text = ANY(?::text[])");
         }
 
         List<String> orderAll = new ArrayList<>(orderColumns);
@@ -125,7 +140,8 @@ public class EntitySnapshotStreamer {
         sql.append(" ORDER BY ");
         for (int i = 0; i < orderAll.size(); i++) {
             if (i > 0) sql.append(", ");
-            sql.append(quoteIdent(orderAll.get(i))).append(" COLLATE \"C\" NULLS LAST");
+            String col = orderAll.get(i);
+            sql.append(quoteIdent(col)).append(temporal.contains(col) ? "" : " COLLATE \"C\"").append(" NULLS LAST");
         }
         return sql.toString();
     }

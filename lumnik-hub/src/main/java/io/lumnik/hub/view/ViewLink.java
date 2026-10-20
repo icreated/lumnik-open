@@ -2,6 +2,8 @@ package io.lumnik.hub.view;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -17,6 +19,6 @@ public record ViewLink(String column, String targetView, Map<String, String> fil
 
     public ViewLink {
         // order is the manifest's: it is the order of the filter chips and of the apply warnings
-        filters = filters == null ? Map.of() : java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(filters));
+        filters = filters == null ? Map.of() : Collections.unmodifiableMap(new LinkedHashMap<>(filters));
     }
 }

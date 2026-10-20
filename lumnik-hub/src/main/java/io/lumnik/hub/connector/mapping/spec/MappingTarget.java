@@ -26,13 +26,39 @@ public record MappingTarget(
       String embeddingModel       // optional override
   ) {}
 
+  /**
+   * @param marksSeen stamp {@code _seen_run} on every row a run writes or meets again, so a run that
+   *                  read its whole source can remove the rows it did not see (#1195). Set by the
+   *                  connector type, never by a manifest: only a type knows its source is a state.
+   * @param key       the columns that identify one source row (#1196): the table then holds one row per
+   *                  key, and a changed row replaces its previous version. {@code null}: one row per
+   *                  content, every version kept. Set by the connector type from the source's declared key.
+   */
   public record Table(
       String schema,
       String name,
       boolean autoSchema,
       OnConflict onConflict,
-      List<Index> indexes
-  ) {}
+      List<Index> indexes,
+      boolean marksSeen,
+      List<String> key
+  ) {
+    public Table {
+      // A key upserts on it: no other conflict rule applies, and none may be read as one.
+      if (key != null && onConflict != OnConflict.SKIP) {
+        throw new IllegalArgumentException("a keyed table upserts on its key; on-conflict " + onConflict + " does not apply");
+      }
+    }
+
+    public Table(String schema, String name, boolean autoSchema, OnConflict onConflict, List<Index> indexes) {
+      this(schema, name, autoSchema, onConflict, indexes, false, null);
+    }
+
+    public Table(String schema, String name, boolean autoSchema, OnConflict onConflict, List<Index> indexes,
+                 boolean marksSeen) {
+      this(schema, name, autoSchema, onConflict, indexes, marksSeen, null);
+    }
+  }
 
   public record Jpa(String entity) {}
 

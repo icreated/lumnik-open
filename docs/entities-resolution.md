@@ -30,8 +30,8 @@ email at all.
 --8<-- "docs/entities-resolution/crm-contacts.csv"
 ```
 
-The manifests read the files from `/tmp/acme-resolution/` on the hub's filesystem. Copy them in,
-then land both sources:
+The manifests read the files from `/tmp/acme-resolution/` on the hub's filesystem; no `lm`
+command places a file there. Copy them in, then land both sources:
 
 ```bash
 docker exec lumnik-hub-1 mkdir -p /tmp/acme-resolution
@@ -45,7 +45,7 @@ lm connector run res-crm
 ```
 $ lm run list --connector res-crm
 ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-65e53f0d  res-crm    default   Completed  5   5    0        0             2026-10-15 15:01  2026-10-15 15:01
+3139233c  res-crm    default   Completed  5   5    0        0             2026-10-19 01:47  2026-10-19 01:47
 ```
 
 The entity declares one rule: same email address, compared in lower case.
@@ -54,9 +54,8 @@ The entity declares one rule: same email address, compared in lower case.
 --8<-- "docs/entities-resolution/30-customer.yaml"
 ```
 
-Apply it, then resolve it once. From now on, every run of a source that ends `Completed` or
-`Partial` resolves the rows it wrote, on its own. A `Failed` or `Cancelled` run is not resolved
-automatically: the next `lm entity resolve` covers it.
+Apply it, then resolve it once. After that, every source run that ends `Completed` or `Partial`
+resolves the rows it wrote. A `Failed` or `Cancelled` run is covered by the next `lm entity resolve`.
 
 ```
 $ lm entity apply -f docs/entities-resolution/30-customer.yaml
@@ -107,7 +106,7 @@ a [correction](#correct-it) moves it.
 ```
 $ lm entity ambiguous Customer
 IDENTITY_REF                          SOURCE     SOURCE_ID  CANDIDATES                                                                 DECIDED_BY  OCCURRED_AT
-32e62f82-e688-4fd7-b999-a2e9af46418d  t_res_crm  9003       6d9256ad-2760-47c1-9670-7257e9d5de46,6f705d52-3c97-4b4c-bccc-16b7ce9818d9  automatic   2026-10-15 15:01
+8b8d23db-749e-48d8-a256-e7fbcd268022  t_res_crm  9003       2e8eb5e3-d246-456a-a0a4-cda4d2e5260a,519ee7f9-d04c-4a56-ba6f-33517b107294  automatic   2026-10-19 01:47
 ```
 
 `lm entity history NAME SOURCE ID` explains any decision, one line per pass:
@@ -115,7 +114,7 @@ IDENTITY_REF                          SOURCE     SOURCE_ID  CANDIDATES          
 ```
 $ lm entity history Customer t_res_crm 9003
 OCCURRED_AT          OUTCOME    RULE   PROVIDER  CANDIDATES                                                                 SET_ASIDE  DECIDED_BY  RUN_ID
-2026-10-15 15:01:53  AMBIGUOUS  email            6d9256ad-2760-47c1-9670-7257e9d5de46,6f705d52-3c97-4b4c-bccc-16b7ce9818d9             automatic
+2026-10-19 01:47:52  AMBIGUOUS  email            2e8eb5e3-d246-456a-a0a4-cda4d2e5260a,519ee7f9-d04c-4a56-ba6f-33517b107294             automatic
 ```
 
 `C-004` shares `C-003`'s mailbox but comes from the same ERP. One customer never holds two rows of
@@ -125,7 +124,7 @@ from:
 ```
 $ lm entity history Customer t_res_erp C-004
 OCCURRED_AT          OUTCOME   RULE  PROVIDER  CANDIDATES                            SET_ASIDE                             DECIDED_BY  RUN_ID
-2026-10-15 15:01:53  RESOLVED                  6f705d52-3c97-4b4c-bccc-16b7ce9818d9  6d9256ad-2760-47c1-9670-7257e9d5de46  automatic
+2026-10-19 01:47:52  RESOLVED                  2e8eb5e3-d246-456a-a0a4-cda4d2e5260a  519ee7f9-d04c-4a56-ba6f-33517b107294  automatic
 ```
 
 ## Correct it
@@ -158,18 +157,35 @@ CODE   NAME             EMAIL                        CRM_ID  _CONFLICTS
 C-003  Filtration Lyon  compta@groupe-rhone.example  9003    {"name": [{"src": "t_res_erp", "value": "Filtration Lyon"}, {"src": "t_res_crm", "value": "Groupe Rhône"}]}
 ```
 
-- **A correction outranks every rule**, and it survives every later run and every `lm entity
-  resolve`. The history records it as `asserted`.
-- **A correction takes effect at the next resolve**, either a run of one of the sources or `lm
-  entity resolve`.
-- **To undo it**, assert the opposite:
-  `lm entity assert-distinct Customer --left t_res_crm:9003 --right t_res_erp:C-003`, then resolve.
-  `C-003` stops being a candidate for `9003`. Here only `C-004` is left, so the next pass joins
-  `9003` to `C-004`. If that is wrong too, assert it distinct as well.
-- **Two rows of the same source can't be the same customer**: such an assertion is refused (`400`).
-- **A row is named as the history names it.** A mistyped one is refused, and the message says what
-  to check:
+The history records the correction as `asserted`:
 
+```
+$ lm entity history Customer t_res_crm 9003
+OCCURRED_AT          OUTCOME    RULE   PROVIDER  CANDIDATES                                                                 SET_ASIDE  DECIDED_BY  RUN_ID
+2026-10-19 01:47:52  AMBIGUOUS  email            2e8eb5e3-d246-456a-a0a4-cda4d2e5260a,519ee7f9-d04c-4a56-ba6f-33517b107294             automatic
+2026-10-19 01:47:57  RESOLVED                    519ee7f9-d04c-4a56-ba6f-33517b107294                                                  asserted
+```
+
+- **A correction outranks every rule** and survives every later run and resolve.
+- **It takes effect at the next resolve**: a run of one of the sources, or `lm entity resolve`.
+- **Two rows of the same source can't be the same customer**: such an assertion is refused (`400`).
+
+**To undo it**, assert the opposite, then resolve. `C-003` stops being a candidate for `9003`; only
+`C-004` is left, so the pass joins `9003` to `C-004`:
+
+```
+$ lm entity assert-distinct Customer --left t_res_crm:9003 --right t_res_erp:C-003
+recorded: t_res_crm:9003 and t_res_erp:C-003 are distinct
+$ lm entity resolve Customer
+…
+$ lm entity get Customer --filter crm_id=9003
+CODE   NAME         EMAIL                        CRM_ID  _CONFLICTS
+C-004  Levage Lyon  compta@groupe-rhone.example  9003    {"name": [{"src": "t_res_erp", "value": "Levage Lyon"}, {"src": "t_res_crm", "value": "Groupe Rhône"}]}
+```
+
+If that is wrong too, assert it distinct as well.
+
+A row is named as the history names it. A mistyped one is refused:
 ```
 $ lm entity assert-same Customer --left t_res_crm:9030 --right t_res_erp:C-003
 Error: API error 404: entity 'Customer' has no row t_res_crm:9030 — check it with lm entity history Customer t_res_crm 9030, or run lm entity resolve Customer if the row is new
@@ -182,7 +198,7 @@ again. The new row joins the CRM's `9005` with no other gesture:
 
 ```
 $ lm connector run res-erp
-run scheduled: 5c499557-1f82-4904-ac04-842707435712
+run scheduled: dbdc0745-1ba9-446c-89cb-ff65d71e9e0d
 ```
 
 ```
@@ -194,7 +210,7 @@ C-005  Pneumatique Porto  geral@pneumatique-porto.example  9005    {}
 ```
 $ lm entity history Customer t_res_erp C-005
 OCCURRED_AT          OUTCOME   RULE   PROVIDER  CANDIDATES                            SET_ASIDE  DECIDED_BY  RUN_ID
-2026-10-15 15:02:30  RESOLVED  email            3309e600-2682-4aeb-a215-3d06cb6fd989             automatic   5c499557-1f82-4904-ac04-842707435712
+2026-10-19 01:48:01  RESOLVED  email            4295e78e-360a-4198-a74a-1b20d7bf1977             automatic   dbdc0745-1ba9-446c-89cb-ff65d71e9e0d
 ```
 
 Run `lm entity resolve NAME` yourself after applying the entity, after changing its rules, and after
@@ -204,11 +220,13 @@ a correction.
 
 Type `:ambiguous`, then the entity name and `Enter`: the screen lists the same rows as
 `lm entity ambiguous`.
+
 - `Enter` on a row loads its history.
 - `Ctrl-R` resolves the entity again.
 - `r` refreshes the list.
 
-Corrections are made with `lm entity assert-same` / `assert-distinct`, not from this screen.
+Corrections are made in `:entities`: `Enter` on the entity, `m` marks a row, `=` (same) or `!`
+(distinct) on another, then `Ctrl-R` to resolve — see [The TUI](cli/tui.md#entities-and-ambiguous).
 
 ## With joins and Search
 
@@ -224,8 +242,6 @@ Corrections are made with `lm entity assert-same` / `assert-distinct`, not from 
   pass has covered every run that wrote the entity's sources, and once the lookup tables have been
   read.
   - A `Failed` or `Cancelled` run holds `asOf` back until the next `lm entity resolve`.
-  - After upgrading the hub, run `lm entity resolve NAME` once: it covers the runs made before the
-    upgrade, and `asOf` can move again.
 
 ## The manifest
 
@@ -258,7 +274,7 @@ OCCURRED_AT          OUTCOME    RULE   PROVIDER  CANDIDATES                     
 ```
 
 - `match:` and `resolution:` are two ways to fuse; an entity declares one or the other.
-- `_entity_id`, `_resolution`, `_source_id` and `_handle` are reserved column names.
+- `_entity_id`, `_resolution`, `_source_id`, `_handle` and `_canonical_key` are reserved column names.
 - A resolved entity is read like any other: [`lm entity get`](entities.md#read-api), `lm view`,
   `lm ask`, an [export](apps/exports.md), a [SearchIndex](search/search-indexes.md).
 
@@ -266,8 +282,8 @@ OCCURRED_AT          OUTCOME    RULE   PROVIDER  CANDIDATES                     
 
 - **`LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET` is required**: the hub does not start without it.
   `deploy/selfhost/up.sh` generates it; with Helm, set `secrets.entityResolutionHmacSecret`.
-  Changing it later invalidates every resolution fingerprint (the next `lm entity resolve`
-  recomputes them) and every open view page link. Back it up with your other secrets.
+  Changing it forces a full re-resolve at the next `lm entity resolve` and breaks open view page
+  links. Back it up with your other secrets.
 - **After upgrading the hub**, apply each `resolution:` entity again with the same manifest, then run
   `lm entity resolve NAME`.
 - `LUMNIK_ENTITY_RESOLUTION_BATCH_SIZE` (default `500`) sets how many rows a pass reads at a time.

@@ -73,4 +73,4 @@ In the TUI, verify each navigation works:
 - `q`                → quit
 - `:sources` then `e` on a row → $EDITOR opens; save+quit → connector PUT
 - `:sources` then `^R` on a row → run scheduled (verify via `:runs`)
-- header indicator → cycles through `[POLL]` → `[SSE✓]` once events flow
+- header indicator → `[CONNECTING]`, then `[LIVE✓]` once the hub accepts the event stream (`[RECONNECTING]` after a drop, its reason in the footer)

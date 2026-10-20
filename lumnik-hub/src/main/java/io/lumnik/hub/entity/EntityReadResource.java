@@ -4,7 +4,10 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.sql.TemporalText;
 import io.lumnik.hub.tenant.TenantContextFilter;
+import io.lumnik.hub.view.ColumnKind;
+import io.lumnik.hub.view.ViewFilter;
 import io.quarkus.agroal.DataSource;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
@@ -20,6 +23,7 @@ import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriInfo;
+import org.hibernate.Session;
 import org.jboss.logging.Logger;
 
 import java.sql.Connection;
@@ -50,8 +54,30 @@ public class EntityReadResource {
   @Inject EntityManager em;
   @Inject @DataSource("admin") AgroalDataSource adminDs;
 
+  /** One entity as the list door shows it: what a client needs to pick one and read it (#1114). */
+  public record EntitySummary(String name, String label, List<String> scopes, List<String> sources,
+                              boolean resolution, List<String> columns) {}
+
+  /**
+   * The entities the caller may read — the same {@code allowsAny} rule as {@link #read}, so a bound
+   * caller lists only what its scopes reach. Without it a client had to know a name to read one
+   * ({@code :ambiguous} asked the user to type it).
+   */
+  @GET
+  public List<EntitySummary> list() {
+    return registry.all().stream()
+        .filter(m -> ScopeGrants.allowsAny(m.scopes()))
+        .map(m -> new EntitySummary(m.name(), m.label(), m.scopes(),
+            m.sources().stream().map(EntityManifest.Source::table).toList(),
+            m.resolution() != null, List.copyOf(m.canonicalColumns())))
+        .toList();
+  }
+
+  /** The technical columns a resolution view keys its rows by (EntityViewCompiler, #850/#928). */
+  private static final List<String> IDENTITY_COLUMNS = List.of("_entity_id", "_resolution", "_handle");
+
   /** One equality filter carried from the query string, already checked against the canonical columns. */
-  private record ColumnFilter(String column, String value) {}
+  record ColumnFilter(String column, String value) {}
 
   /**
    * Resolve, authorize, build, execute, map. (S3776: five phases, three of them string-building
@@ -63,7 +89,8 @@ public class EntityReadResource {
   public Response read(@PathParam("name") String name,
                        @Context UriInfo uriInfo,
                        @QueryParam("limit") @DefaultValue("100") int limit,
-                       @QueryParam("offset") @DefaultValue("0") int offset) {
+                       @QueryParam("offset") @DefaultValue("0") int offset,
+                       @QueryParam("identity") @DefaultValue("false") boolean identity) {
     EntityManifest m = registry.find(name);
     if (m == null) return ApiErrors.notFound("entity " + name + " not found");
 
@@ -74,12 +101,20 @@ public class EntityReadResource {
     List<String> cols = new ArrayList<>(m.canonicalColumns()); // union of all sources' canonical columns
     List<ColumnFilter> filters = filtersFrom(uriInfo, new HashSet<>(cols));
 
-    Query q = em.createNativeQuery(selectSql(m, cols, filters));
+    // ?identity=true (#1116): a resolution entity's rows also name their identity — _handle is the
+    // SOURCE:ID an assertion takes. Opt-in, so the default read every client knows stays
+    // canonical columns + ledger. A match: entity has no identity columns: the flag changes nothing.
+    List<String> extra = identity && m.resolution() != null ? IDENTITY_COLUMNS : List.of();
+    // A column the sources could not type is text, and PostgreSQL writes a timestamp as text in the
+    // session's zone, the hub JVM's; a date operand is read in it too: read in UTC, as a view does
+    // (#1304, #1323).
+    em.unwrap(Session.class).doWork(TemporalText::utcSession);
+    Query q = em.createNativeQuery(selectSql(m, cols, extra, filters, filters.isEmpty() ? Set.of() : temporalColumns(m)));
     for (int i = 0; i < filters.size(); i++) q.setParameter(i + 1, filters.get(i).value());
     q.setMaxResults(Math.min(Math.max(limit, 1), 1000));
     q.setFirstResult(Math.max(offset, 0));
 
-    List<Map<String, Object>> rows = toRows(q.getResultList(), cols);
+    List<Map<String, Object>> rows = toRows(q.getResultList(), cols, extra);
     recordRead(m); // the read actually happened — audit it. A refused (403/404) read never reaches here.
     return Response.ok(rows).build();
   }
@@ -113,12 +148,23 @@ public class EntityReadResource {
     }
   }
 
+  /** The view's columns that hold a date or a timestamp (#1325), read in the read's own transaction. */
+  private Set<String> temporalColumns(EntityManifest m) {
+    Map<String, String> types = em.unwrap(Session.class)
+        .doReturningWork(c -> EntityViewCompiler.viewColumnTypes(c, m.name()));
+    Set<String> temporal = new HashSet<>();
+    types.forEach((column, type) -> {
+      if (ColumnKind.ofType(type).temporal()) temporal.add(column);
+    });
+    return temporal;
+  }
+
   /** Query params that name a canonical column; anything else (including {@code _conflicts}) is ignored. */
   private static List<ColumnFilter> filtersFrom(UriInfo uriInfo, Set<String> allowed) {
     List<ColumnFilter> filters = new ArrayList<>();
     for (Map.Entry<String, List<String>> e : uriInfo.getQueryParameters().entrySet()) {
       String key = e.getKey();
-      if ("limit".equals(key) || "offset".equals(key)) continue;
+      if ("limit".equals(key) || "offset".equals(key) || "identity".equals(key)) continue;
       if (!allowed.contains(key)) continue;
       List<String> v = e.getValue();
       if (v == null || v.isEmpty()) continue;
@@ -127,33 +173,52 @@ public class EntityReadResource {
     return filters;
   }
 
-  /** The canonical columns plus the fusion ledger, filtered by bound parameters, ordered by every column. */
-  private static String selectSql(EntityManifest m, List<String> cols, List<ColumnFilter> filters) {
+  /**
+   * The canonical columns [plus the identity columns] plus the fusion ledger, filtered by bound
+   * parameters, ordered by every canonical column — then by {@code _entity_id, _handle} on an identity read:
+   * canonical values need not be unique, and offset paging only holds over a total order.
+   */
+  static String selectSql(EntityManifest m, List<String> cols, List<String> extra,
+                                  List<ColumnFilter> filters, Set<String> temporal) {
     StringBuilder sql = new StringBuilder("SELECT ");
     for (int i = 0; i < cols.size(); i++) {
       if (i > 0) sql.append(", ");
       sql.append(quoteIdent(cols.get(i)));
     }
+    for (String x : extra) sql.append(", ").append(quoteIdent(x)).append("::text");
     sql.append(", ").append(quoteIdent("_conflicts")).append("::text"); // fusion ledger
     sql.append(" FROM ").append(EntityViewCompiler.viewName(m.name()));
     for (int i = 0; i < filters.size(); i++) {
       sql.append(i == 0 ? " WHERE " : " AND ");
-      sql.append(quoteIdent(filters.get(i).column())).append("::text = ?").append(i + 1);
+      ColumnFilter f = filters.get(i);
+      // A date against a date or a timestamp column is equal as an instant, a date-only one being its
+      // midnight UTC — the view's `=` (#1310, #1325); anything else is the exact text.
+      if (temporal.contains(f.column()) && ViewFilter.isTemporal(f.value())) {
+        sql.append(quoteIdent(f.column())).append("::timestamptz = CAST(?").append(i + 1).append(" AS timestamptz)");
+      } else {
+        sql.append(quoteIdent(f.column())).append("::text = ?").append(i + 1);
+      }
     }
     for (int i = 0; i < cols.size(); i++) {
       sql.append(i == 0 ? " ORDER BY " : ", ");
       sql.append(quoteIdent(cols.get(i)));
     }
+    // A resolved row is one _entity_id (its _handle is NULL), an unresolved one one _handle: together
+    // a total order.
+    for (String x : extra) {
+      if (!"_resolution".equals(x)) sql.append(", ").append(quoteIdent(x));
+    }
     return sql.toString();
   }
 
-  private static List<Map<String, Object>> toRows(List<?> rows, List<String> cols) {
+  private static List<Map<String, Object>> toRows(List<?> rows, List<String> cols, List<String> extra) {
     List<Map<String, Object>> out = new ArrayList<>();
     for (Object r : rows) {
-      Object[] arr = (Object[]) r; // always >= 2 selected columns (canonical + _conflicts)
+      Object[] arr = (Object[]) r; // always >= 2 selected columns (canonical [+ identity] + _conflicts)
       Map<String, Object> row = new LinkedHashMap<>();
-      for (int i = 0; i < cols.size(); i++) row.put(cols.get(i), arr[i]);
-      row.put("_conflicts", arr[cols.size()]); // JSON text, "{}" when no conflict
+      for (int i = 0; i < cols.size(); i++) row.put(cols.get(i), TemporalText.wire(arr[i]));
+      for (int i = 0; i < extra.size(); i++) row.put(extra.get(i), arr[cols.size() + i]);
+      row.put("_conflicts", arr[cols.size() + extra.size()]); // JSON text, "{}" when no conflict
       out.add(row);
     }
     return out;

@@ -34,6 +34,46 @@ class PaginationUrlGuardTest {
             () -> PaginationUrlGuard.vet("http://evil.example/steal", CURRENT));
     }
 
+    /**
+     * A next link is read out of the source's body, and a signed one carries its token in the query:
+     * the refusal reaches the run's failure text, so it shows the link the way every URL in a message
+     * is shown — without userinfo, query or fragment (#1166).
+     */
+    @Test
+    void the_refusal_never_quotes_the_links_credential() {
+        ConnectorException e = assertThrows(ConnectorException.class,
+            () -> PaginationUrlGuard.vet("http://user:pw@evil.example/p/next?k=v", CURRENT));
+
+        assertEquals("Refusing to follow pagination URL 'http://…@evil.example/p/next': host 'evil.example'"
+            + " differs from the connector's host 'api.example.com'", e.getMessage());
+    }
+
+    /**
+     * A link whose userinfo holds an unescaped {@code @}: {@code URI} reads no host and the guard
+     * refuses, and the refusal must not show the rest of the password either (#1167 review).
+     */
+    @Test
+    void the_refusal_shows_no_piece_of_a_userinfo_holding_an_at() {
+        ConnectorException e = assertThrows(ConnectorException.class,
+            () -> PaginationUrlGuard.vet("http://user:p@ss@evil.example/p/next?sig=SECRET", CURRENT));
+
+        for (String leak : new String[] {"user", "ss@", "SECRET"}) {
+            assertFalse(e.getMessage().contains(leak), "shows " + leak + ": " + e.getMessage());
+        }
+    }
+
+    /** A protocol-relative link is refused for its scheme, and the refusal shows no userinfo either (#1167 review). */
+    @Test
+    void the_refusal_of_a_protocol_relative_link_shows_no_userinfo() {
+        for (String link : new String[] {"//user:pw@evil.example/p/next?sig=SECRET", "//user:p@ss@evil.example/p"}) {
+            ConnectorException e = assertThrows(ConnectorException.class,
+                () -> PaginationUrlGuard.vet(link, CURRENT));
+            for (String leak : new String[] {"user", "pw", "ss@", "SECRET"}) {   // the path is shown on purpose (forDisplay)
+                assertFalse(e.getMessage().contains(leak), "shows " + leak + ": " + e.getMessage());
+            }
+        }
+    }
+
     @Test
     void follows_a_legitimate_same_host_next_page() {
         String url = PaginationUrlGuard.vet("http://api.example.com/v1/items?page=2", CURRENT);

@@ -59,6 +59,11 @@ public enum ColumnKind {
         return List.of("=", ">=", "<=", ">", "<");
     }
 
+    /** A date or a timestamp column: compared as an instant against a date (#1310, #1325). */
+    public boolean temporal() {
+        return this == DATE || this == DATETIME;
+    }
+
     /** Whether an ordering filter ({@code > < >= <=}) can match on this kind. */
     public boolean orders() {
         return orders;

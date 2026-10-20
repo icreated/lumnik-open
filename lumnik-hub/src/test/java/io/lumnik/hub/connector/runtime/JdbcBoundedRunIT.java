@@ -257,6 +257,8 @@ class JdbcBoundedRunIT {
         endpoint.setConfig(Map.of(
             "schema", "public",
             "name", "src_bounded",
+            // each case's connector gets its own hub table: a second one is refused the first's (#1199)
+            "target", "src_bounded_" + System.nanoTime(),
             "mode", "watermark",
             "watermark_column", "updated",
             "pk_columns", List.of("src_bounded_id")));

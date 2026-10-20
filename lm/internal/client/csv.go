@@ -97,7 +97,11 @@ func (c *Client) CsvIngest(file *os.File, sourcePath string, opts CsvIngestOpts)
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		return nil, &APIError{Status: resp.StatusCode, Body: string(body), RetryAfter: resp.Header.Get("Retry-After")}
+		apiErr := &APIError{Status: resp.StatusCode, Body: string(body), RetryAfter: resp.Header.Get("Retry-After")}
+		if resp.StatusCode == http.StatusRequestEntityTooLarge {
+			return nil, fmt.Errorf("%w — put a larger CSV on sftp:// or s3://", apiErr)
+		}
+		return nil, apiErr
 	}
 
 	var result CsvIngestResult

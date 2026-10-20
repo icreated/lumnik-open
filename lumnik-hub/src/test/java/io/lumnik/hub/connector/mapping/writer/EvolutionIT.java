@@ -57,6 +57,22 @@ class EvolutionIT {
   }
 
   @Test
+  void a_source_column_named_seen_run_is_kept_on_a_table_that_does_not_refresh() {
+    // #1214 review: _seen_run is a hub column only where the writer marksSeen (#1195); anywhere
+    // else it is the source's, and the drift read must not take it for the hub's and drop its values
+    String mappingId = "test_seen_payload_" + System.nanoTime();
+    MappingTarget.Table spec = spec(mappingId);
+
+    writeChunk(spec, "h1_" + mappingId, Map.of("email", "a@x.com", "_seen_run", "kept"));
+
+    Object kept = em.createNativeQuery(
+            "SELECT _seen_run FROM tenant_1_data." + mappingId + " WHERE _row_hash = ?1")
+        .setParameter(1, "h1_" + mappingId)
+        .getSingleResult();
+    assertThat(kept).isEqualTo("kept");
+  }
+
+  @Test
   void a_column_added_mid_run_is_typed_from_the_chunk_that_introduces_it() {
     // #485: type inference ran only in createSchema, so evolveSchema added every later column as
     // TEXT. A number or a boolean a producer introduces on day two therefore froze to its string

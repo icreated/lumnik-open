@@ -11,7 +11,6 @@ import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.run.RunLock;
 import io.lumnik.hub.run.RunQueueClaim;
 import io.lumnik.hub.run.RunQueueSettings;
-import io.lumnik.hub.sql.SqlFailureText;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.scheduler.Scheduled;
@@ -339,7 +338,7 @@ public class ConnectorRunDispatcher {
                 return QueuedCancel.CANCELLED;
             } catch (SQLException | RuntimeException e) {
                 rollbackQuietly(conn, e);
-                if (LOCK_NOT_AVAILABLE.equals(SqlFailureText.sqlStateOf(e))) return QueuedCancel.BUSY;
+                if (LOCK_NOT_AVAILABLE.equals(Jdbc.sqlStateOf(e))) return QueuedCancel.BUSY;
                 throw e;
             }
         } catch (SQLException e) {

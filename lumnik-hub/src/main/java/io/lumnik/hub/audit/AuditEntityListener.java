@@ -180,9 +180,11 @@ public class AuditEntityListener {
                 rollbackFailure.addSuppressed(e);
                 throw rollbackFailure;
             }
-            if (e instanceof SQLException se) throw se;
-            if (e instanceof RuntimeException re) throw re;
-            throw new SQLException("Audit outbox insert failed", e);
+            switch (e) {
+                case SQLException se -> throw se;
+                case RuntimeException re -> throw re;
+                default -> throw new SQLException("Audit outbox insert failed", e);
+            }
         }
     }
 }

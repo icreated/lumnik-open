@@ -112,7 +112,7 @@ func TestSearchRm_deletesByNameAndSaysSo(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	out, _, err := runLm(t, srv, "search", "rm", "pool-products")
+	out, _, err := runLm(t, srv, "search", "rm", "pool-products", "--force")
 	if err != nil {
 		t.Fatalf("rm: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestSearchRm_serverRefusalsKeepTheirMeaning(t *testing.T) {
 				_, _ = fmt.Fprint(w, tc.body)
 			}))
 			t.Cleanup(srv.Close)
-			_, _, err := runLm(t, srv, "search", "rm", "ghost")
+			_, _, err := runLm(t, srv, "search", "rm", "ghost", "--force")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want it to carry %q", err, tc.want)
 			}

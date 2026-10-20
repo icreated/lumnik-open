@@ -54,6 +54,9 @@ func (e *APIError) Error() string {
 		return "API error 401 (unauthorized): no details from the server — your token may be missing or expired (try 'lm login')"
 	case 403:
 		return "API error 403 (forbidden): no details from the server — your account may lack the required role"
+	case 413:
+		// Vert.x refuses a body over quarkus.http.limits.max-body-size before any resource runs.
+		return "API error 413 (request too large): the hub accepts a request body up to 10 MB"
 	default:
 		return fmt.Sprintf("API error %d (no details from the server)", e.Status)
 	}
@@ -178,6 +181,16 @@ func (c *Client) ReloadContext() {
 // ContextName exposes the config context name the re-login modal needs to
 // look up the full context (TLS trust settings included) from disk.
 func (c *Client) ContextName() string { return c.name }
+
+// Server is the hub URL this client talks to.
+func (c *Client) Server() string { return c.ctx.Server }
+
+// CloseIdleConnections drops the pooled keep-alive connections to the hub — for a client lm ui
+// leaves behind on :context; its transport has no idle timeout, so they would stay open.
+func (c *Client) CloseIdleConnections() {
+	c.http.CloseIdleConnections()
+	c.stream.CloseIdleConnections()
+}
 
 // GET issues an authenticated GET to path and decodes the JSON response into out.
 func (c *Client) GET(path string, out any) error {

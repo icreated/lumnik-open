@@ -12,5 +12,6 @@ spec:
   source:
     tables:
       - name: invoices
+        schema: public
         mode: watermark
         pk_columns: [id]

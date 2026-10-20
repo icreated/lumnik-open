@@ -8,6 +8,7 @@ import io.lumnik.hub.event.EventOutboxRow;
 import io.lumnik.hub.event.RowEventGate;
 import io.lumnik.hub.event.consumer.BatchProcessor;
 import io.lumnik.hub.event.consumer.OutboxSweeper;
+import io.lumnik.hub.sql.TemporalText;
 import io.lumnik.hub.view.ViewFilter;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.scheduler.Scheduled;
@@ -154,7 +155,7 @@ public class ProcessConsumer {
         List<String> refs = MessageTemplate.placeholders(template);
         if (!refs.isEmpty()) {
             Map<String, Object> fields = new LinkedHashMap<>();
-            for (String r : refs) fields.put(r, row.get(r));
+            for (String r : refs) fields.put(r, TemporalText.wire(row.get(r)));
             m.put("fields", fields);
         }
         return json.writeValueAsString(m);

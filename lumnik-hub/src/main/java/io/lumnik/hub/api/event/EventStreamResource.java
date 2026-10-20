@@ -2,6 +2,7 @@ package io.lumnik.hub.api.event;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.hub.api.TenantWide;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.quarkus.agroal.DataSource;
 import io.smallrye.common.annotation.Blocking;
@@ -40,8 +41,12 @@ import java.util.regex.Pattern;
  * {@code @RequiresPermission("lm_superadmin")} that passes a cross-tenant marker to {@link
  * #fetchSince}; do NOT widen this per-tenant door, which every {@code lm_integrator} can reach.
  *
+ * <p>{@link TenantWide}: the stream carries every métier's events — what a webhook receives, pulled
+ * instead of pushed — so a caller bound to a métier is refused it, as the subscriptions are (#1207).
+ *
  * Path: GET /api/platform/events/stream?topic=connector.run.*
  */
+@TenantWide
 @Path("/api/platform/events/stream")
 public class EventStreamResource {
 
@@ -158,7 +163,7 @@ public class EventStreamResource {
           out.add(Map.of(
               "topic",      eventType,
               "payload",    rs.getString("payload"),
-              "capturedAt", rs.getTimestamp("created_at").toInstant().toString()
+              "capturedAt", Jdbc.instant(rs, "created_at").toString()
           ));
         }
       }

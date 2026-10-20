@@ -2,7 +2,7 @@
 
 <section class="lm-hero" markdown>
 <p class="lm-eyebrow">Guided onboarding</p>
-<p class="lm-lead" markdown="span">The documentation is a map, organized by system. This page is the **walk**: the same pages, in the order a newcomer should live them. Follow it top to bottom. You go from an empty machine to a running hub, a fused entity, a métier chat that cites its sources, and a workflow that flags what stopped moving.</p>
+<p class="lm-lead" markdown="span">From an empty machine to a running hub, a fused entity, a métier chat that cites its sources, and a workflow that flags what stopped moving — in three half-days.</p>
 <div class="lm-meta" markdown>
 <div class="lm-meta-item" markdown>
 <strong>Audience</strong>
@@ -22,7 +22,7 @@ Do the steps — don't just read them.
 <div class="lm-meta-item lm-meta-item--accent" markdown>
 <strong>Before you start</strong>
 
-Docker, Go 1.26+ (only if you build `lm` rather than download it — the floor is `lm/go.mod`), and [Ollama](https://ollama.com) — the parcours' chat and ask steps need it. The exhaustive list — sizes, traps, the 60-second self-check — is [Prerequisites](quickstart/prerequisites.md).
+Docker, a terminal, and [Ollama](https://ollama.com) for the steps marked **Pro**. Go 1.26+ only if you build `lm` yourself. The full list: [Prerequisites](quickstart/prerequisites.md).
 </div>
 </div>
 </section>
@@ -30,13 +30,15 @@ Docker, Go 1.26+ (only if you build `lm` rather than download it — the floor i
 <div class="lm-pane lm-pane--accent" markdown>
 <div class="lm-kicker">The one rule</div>
 
-Run every command **from the repository root** unless a page says otherwise. Half of all mysterious failures are a wrong working directory.
-
-You do not have that repository yet — step 2 below is where you get it. If you want it now:
+Run every command **from the repository root** unless a page says otherwise.
 
 ```bash
 git clone https://github.com/icreated/lumnik-open.git && cd lumnik-open
 ```
+
+That repository is the **open edition**. A step marked **Pro** needs lumnik Pro with the AI on
+(the chat, `lm ask`, the models); on the open edition, read it and skip its checkpoint.
+See [The two editions](editions.md#feature-by-feature).
 </div>
 
 ## The three half-days at a glance
@@ -54,7 +56,7 @@ Deploy the hub, meet `lm`, run the WOW, and prove that ingestion stayed read-onl
 <div class="lm-kicker">Half-day 2</div>
 <div class="lm-title">Defrost reasoning</div>
 
-Understand entities, honesty guards, scopes, models, and the TUI an integrator operates from.
+Understand entities, the ask guards, scopes, models, and the TUI an integrator operates from.
 
 <p class="lm-note">Six steps, 3 h</p>
 </article>
@@ -79,7 +81,7 @@ Goal of the day: legacy data flows into the hub, read-only, and you can prove no
 <div class="lm-kicker">10 min</div>
 <div class="lm-title">The pitch</div>
 
-Read the [Home page](index.md). It tells you what lumnik is (a read-only defrost of legacy systems) and, just as important, what it is not (not a migration, not a BI project).
+Read the [Home page](index.md): what lumnik is (a read-only defrost of legacy systems) and what it is not (not a migration, not a BI project).
 
 <p class="lm-check" markdown="span">**You know it landed when:** you can explain why lumnik is neither a migration nor a BI project.</p>
 </div>
@@ -90,9 +92,19 @@ Read the [Home page](index.md). It tells you what lumnik is (a read-only defrost
 <div class="lm-kicker">30 min</div>
 <div class="lm-title">Deploy the hub</div>
 
-First decide what the hub should carry — Open or Pro, a Search provider, the AI on or off: [The two editions](editions.md), then [Choosing what your hub offers](choosing-what-your-hub-offers.md). Then follow [Deploy lumnik](deploy.md), self-host path: one command, `deploy/selfhost/up.sh`. It generates all secrets into a local `.env` — your credentials live there, including `HUBADMIN_PASSWORD`.
+Decide what the hub carries — [The two editions](editions.md), [Choosing what your hub offers](choosing-what-your-hub-offers.md). Then follow [Deploy lumnik](deploy.md): `./deploy/selfhost/up.sh`. Your credentials are in the `.env` it writes.
 
-<p class="lm-check" markdown="span">**You know it worked when:** the script reports the stack healthy and prints where the hub answers.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** the script ends like this:</p>
+
+```
+==> hub is healthy
+  hubadmin: per-install password set (HUBADMIN_PASSWORD in .env)
+  integrator: per-install password set (INTEGRATOR_PASSWORD in .env)
+
+  Hub:       http://localhost:8080   (health: /q/health)
+  Keycloak:  http://localhost:8180/realms/lumnik
+  Next:      point lm at the hub — server http://localhost:8080, OIDC http://localhost:8180/realms/lumnik
+```
 </div>
 </article>
 <article class="lm-step" markdown>
@@ -101,14 +113,14 @@ First decide what the hub should carry — Open or Pro, a Search provider, the A
 <div class="lm-kicker">20 min</div>
 <div class="lm-title">Meet <code>lm</code></div>
 
-The [60-second Quickstart](quickstart/installer.md) builds the `lm` binary, points it at your hub, and logs you in — then puts a first file into the hub with one command.
+Follow the [60-second Quickstart](quickstart/installer.md): install `lm`, log in, put a first file into the hub.
 
-<p class="lm-check" markdown="span">**You know it worked when:** `lm login` succeeds and `lm connector list` answers — an authenticated round trip to your own hub.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** `lm connector list` shows the connector your first file registered.</p>
 
 ```
 $ lm connector list
-NAME       TYPE      TENANT  SCHED  WINDOW  STATUS     LAST RUN
-customers  csv-file  1                      Completed  2026-09-05 05:38
+NAME         TYPE      TENANT  SCHED  WINDOW  STATUS  LAST RUN
+stock_count  csv-file  1                              
 ```
 </div>
 </article>
@@ -118,9 +130,9 @@ customers  csv-file  1                      Completed  2026-09-05 05:38
 <div class="lm-kicker">60–90 min</div>
 <div class="lm-title">The WOW</div>
 
-The heart of the first half-day. Read [The WOW, step by step](wow.md), then replay it yourself with [The WOW, hands-on](demo/wow-customer/README.md): a SOAP Siebel and a CSV fused into one canonical Customer, asked in natural language.
+Read [The WOW, step by step](wow.md), then replay it with [The WOW, hands-on](demo/wow-customer/README.md): a SOAP Siebel and a CSV fused into one Customer.
 
-<p class="lm-check" markdown="span">**You know it worked when:** you ask a question in French and the answer cites its sources.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** `lm entity get customer` lists the fused customers. **Pro:** a question asked in French answers with the SQL it ran.</p>
 </div>
 </article>
 <article class="lm-step" markdown>
@@ -129,7 +141,7 @@ The heart of the first half-day. Read [The WOW, step by step](wow.md), then repl
 <div class="lm-kicker">30 min</div>
 <div class="lm-title">How a connector is built</div>
 
-Now that you have seen one run, read [Connectors overview](connectors/index.md) and the manifest you just used, [CSV & files](connectors/csv.md). Every other source type follows the same grammar — the full list is on the shelf below.
+Read [Connectors overview](connectors/index.md) and [CSV & files](connectors/csv.md), the manifest you just used. Every source type follows the same grammar.
 
 <p class="lm-check" markdown="span">**You know it landed when:** you can explain the relationship between manifest, endpoint, and ingestion report.</p>
 </div>
@@ -142,7 +154,7 @@ Now that you have seen one run, read [Connectors overview](connectors/index.md) 
 
 Read [Seeing what was ingested, skipped, and quarantined](transparency/ingestion-honesty.md).
 
-<p class="lm-check" markdown="span">**You know it worked when:** on your own run, `lm run get` shows the arithmetic holding — IN = OUT + SKIPPED — and DEAD-LETTERS never exceeds SKIPPED: every row you read is accounted for, dropped or not.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** on your own run, `lm run get` shows IN = OUT + SKIPPED, and DEAD-LETTERS never exceeds SKIPPED.</p>
 
 ```
 $ lm run get f0466804
@@ -165,18 +177,24 @@ Goal of the day: the ingested data answers questions — sources shown, and only
 <div class="lm-kicker">40 min</div>
 <div class="lm-title">Fuse sources into one truth</div>
 
-Read [Entities — fuse](entities.md) and inspect the Customer entity you applied during the WOW.
+Read [Entities — fuse](entities.md) and read the Customer entity you applied during the WOW.
 
-<p class="lm-check" markdown="span">**You know it worked when:** you can find the `_conflicts` ledger and explain why a row is in it.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** you find the `_conflicts` ledger and can say why C-200 is in it.</p>
+
+```
+$ lm entity get customer --filter customer_code=C-200
+CUSTOMER_CODE  NAME   SEGMENT  EMAIL   CITY  _CONFLICTS
+C-200          Marie  SILVER   m@x.fr  Lyon  {"name": [{"src": "cust_siebel", "value": "Marie"}, {"src": "t_cust_csv", "value": "MARIE A."}]}
+```
 </div>
 </article>
 <article class="lm-step" markdown>
 <div class="lm-step__num">2</div>
 <div markdown>
 <div class="lm-kicker">30 min</div>
-<div class="lm-title">The five guards</div>
+<div class="lm-title">The five guards · Pro</div>
 
-Read [Ask honesty — the five guards](transparency/ask-honesty.md). This page is lumnik's spine: an abstention is a feature, a confident wrong answer is the cardinal sin.
+Read [Ask honesty — the five guards](transparency/ask-honesty.md): when `lm ask` refuses to answer, and what it says.
 
 <p class="lm-check" markdown="span">**You know it worked when:** you can name the guard that stops a hallucinated table name.</p>
 </div>
@@ -187,18 +205,36 @@ Read [Ask honesty — the five guards](transparency/ask-honesty.md). This page i
 <div class="lm-kicker">30 min</div>
 <div class="lm-title">Scopes</div>
 
-Read [Scopes](rag/scopes.md): a scope is declared on the connector (`metadata.scopes`) and granted as a Keycloak role. Zero scope roles = tenant-wide; one or more = bound.
+Read [Scopes](rag/scopes.md): a scope is declared on the connector or entity (`scopes:`) and granted as a Keycloak role `scope:<tag>`. No scope role = tenant-wide; one or more = bound.
 
-<p class="lm-check" markdown="span">**You know it worked when:** a scope-bound user gets `403 scope not granted` outside their métier — and sees answers inside it.</p>
+The bundled realm has no scope-bound user: create one in Keycloak with the realm role `scope:desk` ([Add a user](security/identity-admin.md#add-a-user), [Grant a métier scope](security/identity-admin.md#grant-or-revoke-a-metier-scope)).
+
+To work as that second user, give `lm` a second context. Open the login link in a **private browser window**: a normal window signs you in as `integrator` again.
+
+```bash
+lm config set-context desk --server http://localhost:8080 \
+    --oidc-issuer http://localhost:8180/realms/lumnik
+lm config use-context desk
+lm login
+```
+
+`lm config use-context selfhost` switches back to `integrator`.
+
+<p class="lm-check" markdown="span">**You know it worked when:** a user holding only `scope:desk` is refused the `customer` entity (scope `clients`), and a user holding `scope:clients` reads it.</p>
+
+```
+$ lm entity get customer          # as a user holding scope:desk
+Error: access refused (403): scope not granted
+```
 </div>
 </article>
 <article class="lm-step" markdown>
 <div class="lm-step__num">4</div>
 <div markdown>
 <div class="lm-kicker">20 min</div>
-<div class="lm-title">Models & providers</div>
+<div class="lm-title">Models & providers · Pro</div>
 
-Read [Models & providers](rag/models.md) to know which LLM answers you, and how to swap it (Ollama local or a remote provider).
+Read [Models & providers](rag/models.md): which model answers, and how to swap it (local Ollama or a remote provider).
 
 <p class="lm-check" markdown="span">**You know it worked when:** you know whether your install answers from Ollama or a remote provider.</p>
 </div>
@@ -209,7 +245,7 @@ Read [Models & providers](rag/models.md) to know which LLM answers you, and how 
 <div class="lm-kicker">40 min</div>
 <div class="lm-title">The integrator's cockpit</div>
 
-Skim the [CLI & TUI reference](cli/lm-reference.md), then open the TUI with `lm ui` and redo yesterday's WOW checks without leaving it.
+Skim the [CLI & TUI reference](cli/lm-reference.md), then open the TUI with `lm ui`: type `:runs` and Enter, pick a run with the arrow keys, press `d` to describe it. `?` lists every key.
 
 <p class="lm-check" markdown="span">**You know it worked when:** you can find any connector run and its report using only the TUI.</p>
 </div>
@@ -220,9 +256,16 @@ Skim the [CLI & TUI reference](cli/lm-reference.md), then open the TUI with `lm 
 <div class="lm-kicker">20 min</div>
 <div class="lm-title">Who may do what</div>
 
-Read [Roles & permissions](security/role-management.md) and skim [RLS & database roles](security/rls.md): tenant isolation is enforced by the database itself, not by application code being careful.
+Read [Roles & permissions](security/role-management.md) and skim [RLS & database roles](security/rls.md).
 
-<p class="lm-check" markdown="span">**You know it landed when:** you can explain why isolation survives even a buggy query.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** signed in as `hubadmin` (tenant 11, password `HUBADMIN_PASSWORD` in `.env`), you see none of tenant 1's decisions from the WOW.</p>
+
+Give `lm` a `hubadmin` context and sign in as in step 3 (private window), then:
+
+```
+$ lm inbox --all
+ID  WHEN  PROCESS  MESSAGE  ENTITY_KEY
+```
 </div>
 </article>
 </div>
@@ -238,9 +281,23 @@ Goal of the day: the hub stops being a mirror and starts finding things — and 
 <div class="lm-kicker">30 min</div>
 <div class="lm-title">Views — see</div>
 
-Read [Views](apps/views.md) and apply the WOW's saved view.
+Read [Views](apps/views.md) and save the WOW's view: `lm view apply -f docs/demo/wow-customer/clients-view.yaml`.
 
-<p class="lm-check" markdown="span">**You know it worked when:** `GET /api/views` lists it and a scoped user can render it.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** `lm view list` lists it and a user holding `scope:clients` renders it.</p>
+
+```
+$ lm view list
+NAME          SCOPE    TITLE
+clients-desk  clients  Clients
+$ lm view clients-desk --filter city=Lyon
+Clients · city=Lyon
+
+Code client  Nom            Ville  Segment
+C-200        Marie          Lyon   SILVER
+C-500        Claire Martin  Lyon   
+C-800        Albert Camus   Lyon   
+C-900        Saint Exupery  Lyon   
+```
 </div>
 </article>
 <article class="lm-step" markdown>
@@ -260,9 +317,9 @@ Read [Processes](apps/processes.md): declarative reactions to `data.row.changed`
 <div class="lm-kicker">45 min</div>
 <div class="lm-title">Workflows — declare the lifecycle</div>
 
-Read [Workflows](apps/workflows.md). This is the third defrost axis: the source shows current state; lumnik, ingesting repeatedly, reconstructs *time* — and a declared lifecycle plus a dormancy threshold turns silence into an alert.
+Read [Workflows](apps/workflows.md): a declared lifecycle over a status column, and a dormancy threshold that turns a document left unmoved into an alert.
 
-<p class="lm-check" markdown="span">**You know it worked when:** the métier chat answers a lifecycle question from your declared graph, not from imagination.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** `lm workflow apply` reports `EN LITIGE` as an undeclared value. **Pro:** the métier chat answers a lifecycle question from your declared graph.</p>
 </div>
 </article>
 <article class="lm-step" markdown>
@@ -271,9 +328,9 @@ Read [Workflows](apps/workflows.md). This is the third defrost axis: the source 
 <div class="lm-kicker">20 min</div>
 <div class="lm-title">Inbox — decide</div>
 
-Read [Inbox](apps/inbox.md): where `decision.*` events (including `decision.dormant.<workflow>`) wait for a human, and the ack gesture that closes the loop.
+Read [Inbox](apps/inbox.md): where `decision.*` events (including `decision.dormant.<workflow>`) wait for a human, and `lm inbox ack` that closes them.
 
-<p class="lm-check" markdown="span">**You know it landed when:** you can distinguish the emitted event from the human acknowledgement.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** an acked decision leaves `lm inbox` and shows `[traité]` in `lm inbox --all`.</p>
 </div>
 </article>
 <article class="lm-step" markdown>
@@ -282,7 +339,11 @@ Read [Inbox](apps/inbox.md): where `decision.*` events (including `decision.dorm
 <div class="lm-kicker">30 min</div>
 <div class="lm-title">The métier PWA</div>
 
-Read [The métier PWA](apps/pwa.md) and open `https://<your-host>/app/` on a phone: cards on a phone, a table on a tablet, the same scope rules as everywhere else. A phone cannot reach your laptop's `localhost` — the TLS façade on the [deploy page](deploy.md) is what gives both devices one host and one token issuer. Which tabs each app shows is one line in its manifest: [`spec.tabs`](choosing-what-your-hub-offers.md#3-does-the-app-ask-for-it).
+Read [The métier PWA](apps/pwa.md), then:
+
+- open `https://<your-host>/app/` — cards on a phone, a table on a tablet;
+- a phone cannot reach your laptop's `localhost`: put the [TLS façade](deploy.md#one-https-origin-the-tls-facade) in front first;
+- choose each app's tabs with one line of its manifest: [`spec.tabs`](choosing-what-your-hub-offers.md#3-does-the-app-ask-for-it).
 
 <p class="lm-check" markdown="span">**You know it worked when:** you see the same scope boundary on the phone and on the desktop.</p>
 </div>
@@ -293,16 +354,16 @@ Read [The métier PWA](apps/pwa.md) and open `https://<your-host>/app/` on a pho
 <div class="lm-kicker">40 min</div>
 <div class="lm-title">Run it for real</div>
 
-Read [Backup & restore](operations/backup-restore.md) and [Upgrade](operations/upgrade.md) — the two pages you must have practiced *before* the day you need them.
+Read [Backup & restore](operations/backup-restore.md) and [Upgrade](operations/upgrade.md), and practise both before you need them.
 
-<p class="lm-check" markdown="span">**You know it worked when:** you have run one backup and know where it landed.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** `./deploy/selfhost/backup.sh` ends with `==> done: <folder>` and you know where that folder is.</p>
 </div>
 </article>
 </div>
 
 ## If you get stuck
 
-Lessons from the first strangers who walked this path — each of these cost someone an hour:
+Common stumbles:
 
 - **Wrong directory.** Commands assume the repository root. When a relative path fails,
   check where you are before checking anything else.
@@ -315,15 +376,13 @@ Lessons from the first strangers who walked this path — each of these cost som
 - **Ollama pulls one model at a time.** One `ollama pull <model>` per line, and make sure
   `ollama serve` isn't already running before starting it again.
 
-If a step of this parcours doesn't match what you experience, that gap is a bug in the
-documentation — please report it. The stumbles of the first walkers are folded back into this page.
+If a step does not match what you see, report it — it is a documentation bug.
 
 ## The reference shelf
 
-Everything not on the walk above, so nothing in the documentation is orphaned. Come back
-here when the need arises — not before.
+Everything not on the walk above, for when you need it.
 
-**More source types** — same manifest grammar as CSV: [JDBC](connectors/jdbc.md) · [REST](connectors/rest.md) · [GraphQL](connectors/graphql.md) and [SOAP](connectors/soap.md) — request shapes on the REST engine · [Kafka inbound](connectors/kafka.md) · [Transform at ingestion](connectors/transformers.md)
+**More source types** — same manifest grammar as CSV: [JDBC](connectors/jdbc.md) · [REST](connectors/rest.md) · [GraphQL](connectors/graphql.md) · [SOAP](connectors/soap.md) · [Kafka inbound](connectors/kafka.md) · [Transform at ingestion](connectors/transformers.md)
 
 **Integrations & API** — [HTTP API for ask](rag/http-api.md) · [Admin API](admin-console-guide.md)
 

@@ -2,6 +2,7 @@ package resources
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
@@ -19,7 +20,7 @@ type Migrations struct {
 }
 
 func NewMigrations(app *tview.Application, c *client.Client) *Migrations {
-	t := tview.NewTable().SetBorders(false).SetSelectable(true, false)
+	t := newListTable()
 	t.SetTitle(" :migrations ").SetBorder(true)
 	m := &Migrations{app: app, table: t, client: c}
 	m.setHeader()
@@ -58,11 +59,29 @@ func (m *Migrations) renderList(list []types.MigrationStatus, err error) {
 	}
 	m.table.Clear()
 	m.setHeader()
+	pending := 0
+	var schemas []string
 	for i, s := range list {
 		row := i + 1
 		m.table.SetCell(row, 0, dataCell(s.Schema).SetExpansion(1))
 		m.table.SetCell(row, 1, dataCell(s.CurrentVersion).SetExpansion(1))
 		m.table.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("%d", s.Pending)).SetExpansion(1))
-		m.table.SetCell(row, 3, tview.NewTableCell(output.HumanTime(&s.LastApplied)).SetExpansion(1))
+		m.table.SetCell(row, 3, dataCell(output.HumanTimeStrOr(s.LastApplied, "—")).SetExpansion(1)) // the hub's string: an unparseable one comes verbatim
+		if s.Pending > 0 {
+			pending += s.Pending
+			schemas = append(schemas, s.Schema)
+		}
 	}
+	m.table.SetTitle(migrationsTitle(pending, schemas))
+}
+
+// migrationsTitle says a pending migration where it is seen, with the one thing that applies it: the
+// hub runs its migrations at startup and offers no door to run them later (#1136, #1142) — so no
+// key here, which would only meet a 404.
+func migrationsTitle(pending int, schemas []string) string {
+	if pending == 0 {
+		return " :migrations "
+	}
+	return fmt.Sprintf(" :migrations — %d pending (%s) — the hub applies them when it next starts ",
+		pending, tview.Escape(strings.Join(schemas, ", ")))
 }

@@ -1672,7 +1672,8 @@ class CascadeResolverTest {
     // impossible, not merely caught by a guard here — pin the SQL cause, not merely "some exception".
     assertThatThrownBy(() ->
         resolver.assertSame(tenantA, ENTITY_TYPE, refA, refB, "reviewer-1", "cross-tenant mistake"))
-        .hasCauseInstanceOf(SQLException.class)
+        .hasMessageContaining("SQLSTATE 23503") // foreign_key_violation; the message never carries the driver's text (#1299)
+        .cause().isInstanceOf(SQLException.class)
         .hasMessageContaining("fk_entity_assertion");
   }
 

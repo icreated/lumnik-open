@@ -109,7 +109,8 @@ class SearchProjectionKeyStreamIT {
 
     /** The match entity's own source target: {@code src_code} is its one match column. */
     private static SearchProjectionRunHook.SourceTarget target(String table, String index) {
-        return new SearchProjectionRunHook.SourceTarget("KeyStream" + table, List.of("src_code"), List.of(index));
+        return new SearchProjectionRunHook.SourceTarget("KeyStream" + table, List.of("src_code"), List.of(index),
+            List.of("\"src_code\""));
     }
 
     /** The real mark store, recording each slice it is handed. */

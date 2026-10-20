@@ -11,8 +11,9 @@ import (
 // The panel knows nothing about specific resource shapes.
 type DescribePanel struct {
 	title *tview.TextView
-	body  *tview.TextView
+	body  *tview.TextView // scrollable: Tab gives it the keys (App.focusDescribe, #1173)
 	flex  *tview.Flex
+	shown string // the title on screen: a re-describe of the same row keeps its scroll
 }
 
 func NewDescribePanel() *DescribePanel {
@@ -36,11 +37,23 @@ func NewDescribePanel() *DescribePanel {
 // RAW; tview.Escape is not idempotent, so escaping it twice would show a stray '['.
 // The BODY is left untouched: several pages colour theirs on purpose, so escaping the
 // data inside it stays each page's job (see resources/escape_sweep_test.go).
+//
+// A new row starts at the top; the same row re-described — the live tick refreshing it in place
+// every few seconds — keeps where the reader scrolled to (#1173).
 func (d *DescribePanel) SetContent(title, body string) {
 	d.title.SetText("── describe: " + tview.Escape(title) + " ──")
+	row, col := d.body.GetScrollOffset()
 	d.body.SetText(body)
-	d.body.ScrollToBeginning()
+	if title == d.shown {
+		d.body.ScrollTo(row, col)
+	} else {
+		d.body.ScrollToBeginning()
+	}
+	d.shown = title
 }
+
+// Reset forgets the row on screen: reopened, even on the same row, the panel starts at the top.
+func (d *DescribePanel) Reset() { d.shown = "" }
 
 func (d *DescribePanel) View() tview.Primitive { return d.flex }
 

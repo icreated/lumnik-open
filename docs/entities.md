@@ -9,18 +9,18 @@
 | | |
 |---|---|
 | **Kind** | `Entity` |
-| **Compiles to** | `connector.v_<name>` — a `security_invoker` view, RLS inherited from every source |
+| **Compiles to** | `connector.v_<name>` — a view; each tenant sees only its own rows |
 | **Sources** | any table in the `connector` schema: a CSV, JDBC or Kafka connector's `t_*` |
 | **Lookups** | optional `joins[]` — a table that [enriches](#fuse-or-join) the fused rows without adding one |
 | **Apply** | `lm entity apply` — `lm_admin`; validate-then-compile, atomic |
-| **Read** | [`lm entity get NAME`](#read-api) — `lm_user`, scope-bound; also `lm view`, `lm ask`; the underlying door is `GET /api/entities/{name}` |
+| **Read** | [`lm entity get NAME`](#read-api) — `lm_user`, scope-bound; also `lm view`, `lm ask` |
 | **Edition** | Open |
 
-The ERP has a customer table, the CRM has another, and the two have never agreed on a single
-name. An entity does not pick a winner and forget the loser: it declares the priority, exposes
-one row per customer, and writes down — per row, per column — where the systems still disagree.
+The ERP has a customer table, the CRM has another. An entity declares which one wins, exposes one
+row per customer, and records per row and per column where the systems disagree.
+
 That ledger is what a [`kind: View`](apps/views.md) shows under *Ambiguïtés et divergences*, and
-what `lm conflicts list` aggregates across every entity you can read.
+what `lm conflicts list` lists across every entity you can read.
 
 ## Features
 
@@ -57,10 +57,9 @@ $ lm entity apply -f docs/apps/demo/entities/10-customer.yaml
 Applied entity "AcmeCustomer" → connector."v_acmecustomer"
 ```
 
-There is no `lm entity validate`: apply is validate-then-compile, and a manifest that would not
-compile is refused before anything is written. Read the result with `lm entity get` — the view
-is named after the entity, lower-cased, `--filter` is an exact match on a canonical column, and
-`--limit`/`--offset` page beyond the first 100 rows:
+There is no `lm entity validate`: apply refuses a manifest that would not compile, before
+anything is written. Read the result with `lm entity get` (name lower-cased, `--filter` an exact
+match on a canonical column):
 
 ```
 $ lm entity get acmecustomer --filter city=Lyon -o json
@@ -86,10 +85,11 @@ $ lm entity get acmecustomer --filter city=Lyon -o json
 ]
 ```
 
-Two customers in Lyon — and on each, the CRM disagrees with the ERP about something. The ERP
-is listed first in `sources[]`, so its value is the one in the column; the CRM's is in the
-ledger. Fourteen rows in all: twelve from the ERP, two the CRM alone knows, and the CRM's row
-with no customer code is absent, because a `NULL` match key can be matched to nothing.
+Two customers in Lyon, and on each the CRM disagrees with the ERP. The ERP is first in
+`sources[]`, so its value is in the column; the CRM's is in the ledger.
+
+Fourteen rows in all: twelve from the ERP, two the CRM alone knows. The CRM's row with no customer
+code is absent: a `NULL` match key matches nothing.
 
 Where the systems disagree, across every entity at once:
 
@@ -124,22 +124,21 @@ the ERP had no city for it, the CRM did, and the fused row simply carries Aarhus
 | `scopes` | no | the métier scopes whose chat and views may read this entity — an entity with none is not discoverable by anyone |
 | `columns` | no | per-canonical-column [grounding](#the-columns-grounding-block) |
 
-The canonical shape is, in this order: first the union of every `sources[].map` value, in source
-order, then every `joins[].map` value, in the order declared. `_conflicts`, `_src` and `_ord` are
-reserved. Canonical names are case-sensitive SQL identifiers, so `email` in one
-source and `Email` in another is refused as an accidental collision rather than silently split
-into two columns. **Every value is `text`** in the compiled view — `credit_limit` reads `"500"`,
-not `500` — which is what lets sources of different types fuse at all; cast where you consume.
+- **Column order:** every `sources[].map` value in source order, then every `joins[].map` value
+  in declared order, then `_conflicts`.
+- **Reserved names:** `_conflicts`, `_src`, `_ord`, `_entity_id`, `_resolution`, `_source_id`,
+  `_handle`, `_canonical_key`.
+- **Case:** `email` in one source and `Email` in another is refused, not split into two columns.
+- **Every value is `text`, except a date:** `credit_limit` reads `"500"`, not `500`; cast where you
+  consume. A column every source holds as a date or a timestamp stays one — see
+  [Dates across sources](#dates-across-sources).
 
-The key set is closed: `scope:` for `scopes:` is named, not dropped —
+The key set is closed: an unknown key such as `scope:` for `scopes:` is refused, not dropped:
 
 ```
 $ lm entity apply -f docs/apps/demo/entities/63-refused-unknown-key.yaml
 Error: API error 400: unknown key(s) in the manifest: scope — kind:Entity honors root {apiVersion, columns, description, joins, kind, label, match, name, resolution, scopes, sources}, sources[] {map, table}, joins[] {from, map, table, to}, resolution {cascade, identity}, resolution.cascade[] {exact, id, propose}, resolution.cascade[].exact {fields, normalize}, resolution.cascade[].propose {acceptAbove, provider, reviewAbove}
 ```
-
-— because without that guard the entity would apply with an empty scope list and a clean 200,
-visible to no métier and askable by nobody.
 
 ## Fusion semantics
 
@@ -182,10 +181,201 @@ $ lm entity get acmecustomercrmfirst --filter code=P-1000 -o json
 ```
 
 Same fourteen rows, same three disputes; P-1000 now reads `HYDRAULIQUE LYON`, and `segment` —
-which the CRM does not carry — still comes from the ERP.
+which the CRM does not carry — still comes from the ERP. Each tenant sees only its own rows
+through the fusion.
 
-The view is compiled `security_invoker`, so it inherits each base table's row-level security:
-every tenant sees only its own rows through the fusion, with no per-entity policy to maintain.
+### When a source row changes
+
+Run the connector again after the source changed, and the entity shows the new value. On the demo
+desk, the ERP said Milano for P-1002 and the CRM said Milan — one of the three disputes above:
+
+```
+$ lm entity get acmecustomer --filter code=P-1002 -o json
+[
+  {
+    "code": "P-1002",
+    "name": "Fixations Milano 1002",
+    "city": "Milano",
+    "segment": "BRONZE",
+    "credit_limit": "774",
+    "email": "ventes@fixations-milano.example",
+    "_conflicts": "{\"city\": [{\"src\": \"t_acme_desk_erp\", \"value\": \"Milano\"}, {\"src\": \"t_acme_desk_crm\", \"value\": \"Milan\"}]}"
+  }
+]
+```
+
+The ERP corrects its export to Milan. Put the new file in place and run the connector:
+
+```bash
+docker cp acme-erp.csv lumnik-hub-1:/tmp/acme-desk/acme-erp.csv
+lm connector run acme-desk-erp
+```
+
+```
+$ lm entity get acmecustomer --filter code=P-1002 -o json
+[
+  {
+    "code": "P-1002",
+    "name": "Fixations Milano 1002",
+    "city": "Milan",
+    "segment": "BRONZE",
+    "credit_limit": "774",
+    "email": "ventes@fixations-milano.example",
+    "_conflicts": "{}"
+  }
+]
+$ lm conflicts list
+ENTITY                KEY     COLUMNS  SOURCES
+AcmeCustomer          P-1000  name     t_acme_desk_erp,t_acme_desk_crm
+AcmeCustomer          P-1008  city     t_acme_desk_erp,t_acme_desk_crm
+AcmeCustomerCrmFirst  P-1000  name     t_acme_desk_crm,t_acme_desk_erp
+AcmeCustomerCrmFirst  P-1008  city     t_acme_desk_crm,t_acme_desk_erp
+```
+
+The ERP's old value is gone from the row and from the ledger. The same holds for a `joins[]`
+lookup (a renamed category shows its new name) and for a `resolution:` entity. If one export lists
+the same customer twice with two different values, both stay in `_conflicts`.
+
+The demo's ERP connector reads **one local file**, so each run is a
+[full refresh](connectors/csv.md#one-file-is-the-table-full-refresh). Remove P-1011 from the file and run
+again: the customer leaves the source table and the entity.
+
+```
+$ lm run get 630cee80
+ID        CONNECTOR      ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+630cee80  acme-desk-erp  default   Completed  11  11   0        0             2026-10-19 07:28  2026-10-19 07:28
+• 1 row(s) removed — the source no longer holds them
+$ lm entity get acmecustomer --filter code=P-1011
+no rows
+```
+
+Put Milano back in the file and run again: the dispute with the CRM returns.
+
+```
+$ lm entity get acmecustomer --filter code=P-1002 -o json
+[
+  {
+    "code": "P-1002",
+    "name": "Fixations Milano 1002",
+    "city": "Milano",
+    "segment": "BRONZE",
+    "credit_limit": "774",
+    "email": "ventes@fixations-milano.example",
+    "_conflicts": "{\"city\": [{\"src\": \"t_acme_desk_erp\", \"value\": \"Milano\"}, {\"src\": \"t_acme_desk_crm\", \"value\": \"Milan\"}]}"
+  }
+]
+```
+
+What happens to a row deleted at the source:
+
+| Source | A row deleted at the source |
+|---|---|
+| `csv-file`, one local file | removed at the next run (above) |
+| `csv-file` drop folder, `sftp`, `s3` | stays — see [CSV & files](connectors/csv.md) |
+| `jdbc-generic` | stays — see [Deletes are never propagated](connectors/jdbc.md#deletes-are-never-propagated) |
+| `kafka` | stays — a tombstone goes to the dead letters, see [Tombstones](connectors/kafka.md#tombstones-a-deletion-is-not-garbage) |
+
+### Dates across sources
+
+The same business date does not land under the same type from every source:
+
+| Source | Lands as | `1 July 2026` reads |
+|---|---|---|
+| an Oracle `DATE`, a PostgreSQL `timestamp` (no zone) | a timestamp, its wall clock read in the connection's [`zone`](connectors/jdbc.md#a-time-without-a-time-zone), UTC without one | `2026-07-01 00:00:00+00` |
+| a PostgreSQL `timestamptz`, an Oracle `TIMESTAMP WITH TIME ZONE` | a timestamp, the instant | `2026-07-01 00:00:00+00` |
+| a PostgreSQL `date`, a CSV column through [`parse-date`](connectors/transformers.md#parse-date-dates-are-31122019) with a date-only format | a date | `2026-07-01` |
+| a CSV column left as written, a Kafka field | text | `01/07/2026` |
+
+The fused column follows what its sources hold:
+
+- every source a **date** → the entity's column is a date;
+- **dates and timestamps** mixed → a timestamp, a date being its **midnight UTC**. A source that only
+  knows the day cannot contradict an hour, so the sources are compared **at the day**: an ERP's
+  `2026-07-01 14:30` and a CSV's `2026-07-01` **agree**, a CSV's `2026-07-02` is a conflict. The
+  timed sources among themselves still compare to the instant. The value shown is a time before a day,
+  whatever the order of `sources`: a day never hides the hour beside it;
+- **one source text** → the column stays text, compared as written, as every other text column.
+  The hub does not guess whether `01/07` is the first of July or the seventh of January.
+
+A `match:` column follows the same rule: an ERP's `2026-07-01 00:00` and a CSV's `2026-07-01` are
+one record.
+
+An ERP's `due_at` (a timestamp) fused with a partner CSV's `due` parsed as `dd/MM/yyyy` (a date), and
+both systems' `shipped`, which the CSV leaves as written:
+
+```
+$ lm source schema --scope livedesk
+…
+connector.v_liveorder
+  order_no                 text
+  due                      timestamp with time zone
+  shipped                  text
+  status                   text
+$ lm entity get liveorder --filter due=2026-07-01 -o json
+[
+  {
+    "order_no": "SO-1",
+    "due": "2026-07-01T00:00:00Z",
+    "shipped": "2026-07-03 14:30:00+00",
+    "status": "open",
+    "_conflicts": "{\"shipped\": [{\"src\": \"t_live_erp_orders\", \"value\": \"2026-07-03 14:30:00+00\"}, {\"src\": \"t_live_partner_orders\", \"value\": \"03/07/2026\"}]}"
+  }
+]
+```
+
+`due` agrees: the ERP's midnight and the CSV's day are one instant. `shipped` is text, and two
+writings of the same day are a conflict. To type it, the CSV's table must be created again: a table
+the hub created keeps its column types, and a new `parse-date` alone changes nothing.
+
+1. `lm entity delete liveorder` — the entity holds the table;
+2. `lm connector delete live-partner-orders` — drops its table and data;
+3. add `- parse-date: { column: shipped, formats: ["dd/MM/yyyy"] }` to its `cell:` hooks, `lm apply`
+   it, and `lm connector run` it;
+4. `lm entity apply` the entity again: `shipped` is now `timestamp with time zone`.
+
+Once typed, the CSV's `03/07/2026` and the ERP's `2026-07-03 14:30` agree: the same day.
+
+A time of day has one more trap: the zone it was written in. An ERP's `2026-08-02 23:30` with no
+zone lands as `23:30` UTC unless its connection declares one. The same time in a CSV parsed with
+`zone: Europe/Paris` lands as `21:30` UTC: two hours apart, a conflict on every such row:
+
+```
+$ lm entity get liveorder --filter order_id=1 -o json
+[
+  {
+    "order_id": "1",
+    "ordered_at": "2026-08-02T23:30:00Z",
+    "_conflicts": "{\"ordered_at\": [{\"src\": \"t_orders\", \"value\": \"2026-08-02 23:30:00+00\"}, {\"src\": \"t_partner\", \"value\": \"2026-08-02 21:30:00+00\"}]}"
+  }
+]
+```
+
+Declare where each source writes: `zone: Europe/Paris` under the ERP's `connection`, the same
+`zone` on the CSV's `parse-date`. Once the ERP's table is read again
+([the gesture](connectors/jdbc.md#a-time-without-a-time-zone)), both hold the same instant:
+
+```
+$ lm entity get liveorder -o json
+[
+  {
+    "order_id": "1",
+    "ordered_at": "2026-08-02T21:30:00Z",
+    "_conflicts": "{}"
+  },
+  {
+    "order_id": "2",
+    "ordered_at": "2026-01-15T22:30:00Z",
+    "_conflicts": "{}"
+  }
+]
+```
+
+A date alone has no such trap: both sides are its midnight UTC.
+
+A typed column is a date everywhere the entity is read: a view filters it as a date, `lm ask`
+sees its type, an entity read and an export write it in UTC whatever zone the hub runs in.
+The decision is taken at **apply**: an entity applied before a source changed type keeps its
+columns until it is applied again.
 
 ### The `_conflicts` ledger
 
@@ -201,14 +391,15 @@ agrees:
 }
 ```
 
-It rides on every read of the entity, it is what a [`kind: View`](apps/views.md) renders at the
-foot of a record's detail, and `GET /api/entities/conflicts` aggregates it — see
-[Aggregated conflicts](#aggregated-conflicts). It is **not** a column the chat can query: the
-schema card advertises the canonical columns and nothing else, so *"where do the ERP and the CRM
-disagree?"* is a question for `lm conflicts list`, not for `lm ask`. What an answer does now is
-name the disputed records it **filtered on**: when `lm ask` counts a record on a value a
-source disagrees about, or leaves one out while a source holds the filtered value, the response
-lists it with the ledger entries ([Disputed rows](transparency/ask-honesty.md#disputed-rows-a-disclosure-not-a-veto)).
+Where it shows:
+
+- on every read of the entity (`lm entity get`);
+- at the foot of a record's detail in a [`kind: View`](apps/views.md);
+- across every entity in `lm conflicts list` — see [Aggregated conflicts](#aggregated-conflicts).
+
+The chat cannot query it: *"where do the ERP and the CRM disagree?"* is a question for
+`lm conflicts list`, not `lm ask`. An `lm ask` answer that filtered on a disputed value names the
+record in a `disputed` block ([Disputed rows](transparency/ask-honesty.md#disputed-rows-a-disclosure-not-a-veto)).
 
 
 ## Fuse or join
@@ -240,51 +431,60 @@ many-to-one `LEFT JOIN`. For each fused row, the lookup rows whose `to` column e
 | exactly one | that row's values | nothing |
 | **more than one** | all empty — even when the rows are identical | one entry per joined column, listing **every** duplicate row; a row with no value shows as `null` (`(empty)` on screen) |
 
-A lookup that is not unique on its key is a defect of the lookup, so the entity answers with an
-abstention rather than choosing a row: the product stays, its enrichment is empty, and the ledger
-says why. The ledger entries are ordered deterministically, so the same data always reads the same
-bytes. Because the ledger now records ambiguities as well as disagreements, `lm view` shows it under
-*Ambiguïtés et divergences* and `lm conflicts list` lists both.
+`lm view` shows lookup ambiguities under *Ambiguïtés et divergences*, and `lm conflicts list`
+lists them with the source conflicts.
 
 #### How join keys are compared
 
-A key is compared as text, with one exception: **a key written as a plain decimal number is compared by
-value**. `1000021`, `1000021.0` and `1000021.0000` are the same key, `1.5` and `1.50` too, so a `bigint` on
-one source still finds the Oracle `NUMBER` that lands in the hub as `1000021.0000`. A different number never
-matches — nothing is rounded: `1000021.5` is not `1000021.5001`.
+A key is compared as text, except that **a plain decimal number is compared by value**. The rule
+reads the value's shape, not the column's type:
 
-The rule looks at the **shape of the value, not at the type of the column**. Two text identifiers that are
-the same decimal number are therefore one key: `'1'` and `'1.0'` join, even in a `text` column. Anything
-that is not a plain decimal is compared as text, exactly: `01` is not `1`, `007` is not `7`, `C1` is not
-`c1`, and neither are `+5`, `1E7` or a number of more than 38 digits on either side of the point. Two lookup rows whose keys are the
-same number (`5` and `5.0000`) are one ambiguous key, handled as in the table above.
+| These keys match | These keys do not |
+|---|---|
+| `1000021` = `1000021.0` = `1000021.0000` | `1000021.5` ≠ `1000021.5001` (nothing is rounded) |
+| `1.5` = `1.50` | `01` ≠ `1`, `007` ≠ `7` |
+| `'1'` = `'1.0'`, even in a `text` column | `C1` ≠ `c1` |
+| | `+5`, `1E7`, more than 38 digits: compared as text |
 
-The rule is compiled into the entity's view: **re-apply an entity that already declares `joins[]`** after upgrading, or it keeps comparing keys as plain text. The [search index](search/search-indexes.md) of a joined column follows the same rule.
+Two lookup rows whose keys are the same number (`5` and `5.0000`) are one ambiguous key, as in the
+table above. The [search index](search/search-indexes.md) of a joined column follows the same rule.
+
+A key whose `from` and `to` are both [dates or times](#dates-across-sources) is compared as dates:
+
+| `from` and `to` | Matches on |
+|---|---|
+| one of them a date (a lookup keyed by day is a calendar) | the UTC day: `2026-07-01 14:30` finds the row of `2026-07-01` |
+| both times | the instant |
+| text on either side | the rule above, as text |
+
+A `from` whose sources mix dates and times is a time, so it meets a calendar at the day. Matched at the day, a
+lookup whose `to` holds times has one key per day: two of its rows on one day are an ambiguous key, as two equal
+numbers are — the joined columns empty, both rows in `_conflicts`.
 
 Rules worth knowing:
 
-- there is no `type:` — a join is a many-to-one left join; one needing anything else is not
-  expressible yet;
-- cycles cannot be declared: `joins[]` is flat and only reads the fused entity's columns;
-- joined columns are readable, filterable, askable and exportable like any other, and tenant
-  isolation applies to the lookup too (the view is `security_invoker`); the entity's `scopes` bound
-  the whole entity;
-- a joined column can be indexed by a [`kind: SearchIndex`](search/search-indexes.md): a lookup row that
-  arrives later (the first row for a key, or one more row that makes the key ambiguous) re-projects the
-  rows holding that key. The same holds on an entity that declares `resolution:`: the joins are read on
-  top of the resolved view, the lookup change re-projects every resolved entity whose sources carry the
-  key, and a source row nothing has resolved yet is not a document until its decision.
+- a join is always a many-to-one left join; there is no `type:`;
+- `joins[]` is flat and reads only the fused entity's columns, so cycles cannot be declared;
+- joined columns are readable, filterable, askable and exportable like any other; the entity's
+  `scopes` bound the whole entity;
+- a joined column can be indexed by a [`kind: SearchIndex`](search/search-indexes.md); a lookup row
+  that arrives later re-projects the rows holding its key;
+- on a [`resolution:`](entities-resolution.md) entity, the joins are read on top of the resolved view.
 
-Apply errors, each naming what to change: a `400` when `from` is not a column the sources produce, a
-joined name collides, or the lookup is also a source; a `400` naming the lookup table and the column
-when `to` or a `map` key does not exist in it; the same `409` as for a source — *run the connectors
-first* — when the lookup table does not exist yet.
+| Apply refusal | When |
+|---|---|
+| `400` | `from` is not a column the sources produce, a joined name collides, or the lookup is also a source |
+| `400` naming the lookup table and column | `to` or a `map` key does not exist in the lookup table |
+| `409` *run the source connectors first* | the lookup table does not exist yet |
 
 ### Deliver the joined entity to S3
 
 A joined entity exports like any other: its joined columns are canonical columns, so an
 [`Export`](apps/exports.md) can name them. The demo ships the whole case — two CSV files, the two
 connectors that ingest them, the Entity above and an export of it:
+
+The manifests read `/tmp/acme-catalogue/` on the hub's filesystem; no `lm` command places a file
+there, so copy it into the container:
 
 ```bash
 docker exec lumnik-hub-1 mkdir -p /tmp/acme-catalogue
@@ -306,11 +506,20 @@ PRODUCT_ID  CATEGORY_ID  PRODUCT_NAME  CATEGORY_NAME  CATEGORY_DESCRIPTION      
 P1          C1           Pump 50       Pumps          Centrifugal and gear pumps  {}
 ```
 
-`category_name` and `category_description` are not part of P1's source row — they are the
-category lookup's columns, carried onto the product by the `LEFT JOIN` on `category_id`. The
-column order is the fused columns first (declaration order of `sources[].map`), then the joined
-ones (declaration order of `joins[].map`), then `_conflicts` last — every row carries it, `{}`
-here since nothing disagrees.
+`category_name` and `category_description` come from the category lookup, joined on
+`category_id`. The four products:
+
+```
+$ lm entity get ProductWithCategory
+PRODUCT_ID  CATEGORY_ID  PRODUCT_NAME  CATEGORY_NAME  CATEGORY_DESCRIPTION        _CONFLICTS
+P1          C1           Pump 50       Pumps          Centrifugal and gear pumps  {}
+P2          C1           Pump 80       Pumps          Centrifugal and gear pumps  {}
+P3          C9           Spare gasket                                             {}
+P4          C2           Valve DN15                                               {"category_name": [{"src": "t_product_categories", "value": "Valves"}, {"src": "t_product_categories", "value": "Valves (old)"}], "category_description": [{"src": "t_product_categories", "value": "Ball valves"}, {"src": "t_product_categories", "value": "Superseded listing"}]}
+```
+
+`P3` points at a category the lookup does not have; `P4` at one it lists twice, so its category
+cells are empty and the ledger lists both rows.
 
 ```bash
 lm secret set OUTBOUND_S3_ACCESS_KEY      # prompts without echo; the names the export references
@@ -323,12 +532,9 @@ lm export run product-catalogue --wait
 --8<-- "docs/apps/exports/30-product-catalogue-s3.yaml"
 ```
 
-The object has a header line, then one data row per product, in `product_id` order. With the demo data, `P1` and `P2` share
-category `C1` and each carries its name and description; `P3` points at a category the lookup does
-not have and `P4` at one it lists twice, so both are delivered with empty category cells. The run's
-receipt gives the object's location, row count and SHA-256, computed over the bytes that were sent.
-Only the caller's tenant's lookup rows take part, and the export's `scope` must be one of the
-entity's — the same boundaries as for any export.
+- The object has a header line, then one row per product in `product_id` order — the four rows above.
+- The run's receipt gives the object's location, row count and SHA-256 of the bytes sent.
+- The export's `scope` must be one of the entity's.
 
 ## The `columns:` grounding block
 
@@ -342,13 +548,12 @@ This is where you teach the surfaces what a column *means* — the input the
 | `example` | an example value, same purpose |
 | `values` | the allowed domain — a filter on any other value is **refused, not run** (the [domain guard](transparency/ask-honesty.md#6-domain-guard-the-declared-values-contract)) |
 
-A terse lookup such as `status SO-000004` needs an `example` on the identifier column. A bare
-connector table declares none, and the model has nothing tying that identifier's shape to a column, so it
-abstains — honestly, not with a guessed filter. Declare a synthetic example (`example: SO-000001`) on the
-column that holds the identifier. The hub does not sample connector rows to fill in schema-card
-examples, so the card carries only what you declare. That is the only boundary this states: once a
-question runs, the rows it returns are still sent to the configured model so it can phrase the answer —
-with a cloud model, that means business data reaches it.
+A terse question such as `status SO-000004` needs an `example` on the identifier column, or the
+model abstains: nothing ties that shape to a column. Declare a synthetic one
+(`example: SO-000001`); the schema card carries only what you declare.
+
+The rows a question returns are sent to the configured model to phrase the answer — see
+[Models](rag/models.md).
 
 After the quickstart's manifest, the scope's card carries the labels:
 
@@ -388,47 +593,48 @@ tenant, so the fused view is in the chat's vocabulary at once:
 ```
 $ lm ask --scope desk "Combien de clients GOLD sont à Lyon, et quel est leur encours autorisé total ?"
 Il y a 2 clients GOLD à Lyon et leur encours autorisé total est de 2096.
-  data as of: 2026-10-09T14:55:10.790181Z (last completed run)
+  data as of: 2026-10-16T08:43:46.474408Z (last completed run)
 
   disputed — a source disagrees on a value this answer filtered on:
     P-1008  city = 'Lyon'  counted  t_acme_desk_erp: Lyon · t_acme_desk_crm: Villeurbanne
 
-  SQL: SELECT COUNT(*) AS gold_customers_count, SUM(credit_limit::numeric) AS total_credit_limit
-FROM "connector"."v_acmecustomer"
+  GOLD_CUSTOMERS_COUNT  TOTAL_CREDIT_LIMIT
+  2                     2096
+  1 row returned
+
+  SQL: SELECT COUNT(*) AS gold_customers_count, SUM(CAST(credit_limit AS INTEGER)) AS total_credit_limit
+FROM connector."v_acmecustomer"
 WHERE city = 'Lyon' AND segment = 'GOLD'
 LIMIT 500
 
-  try: lm conflicts list --scope desk  — where this scope has source conflicts or lookup ambiguities, row by row
+  try: lm conflicts list  — where this scope has source conflicts or lookup ambiguities, row by row
 ```
 
 And when the filter matches nothing, a record the fused view filtered *out* is named too:
 
 ```
 $ lm ask --scope desk "Quels clients sont à Villeurbanne ?"
-The query returned no rows. That can mean there are genuinely none, or that the query did not capture your question — verify the SQL before reporting that there are none. Where this scope's entities record source conflicts or lookup ambiguities, it is written row by row, on each fused record, in a conflicts ledger that is deliberately not part of the schema above.
-  data as of: 2026-10-09T15:02:04.336798Z (last completed run)
+La requête n'a renvoyé aucune ligne. Il peut n'y en avoir réellement aucune, ou la requête n'a pas saisi votre question — vérifiez le SQL avant d'affirmer qu'il n'y en a pas.
+  data as of: 2026-10-16T08:43:46.474408Z (last completed run)
 
   disputed — a source disagrees on a value this answer filtered on:
     P-1008  city = 'Villeurbanne'  not counted  t_acme_desk_erp: Lyon · t_acme_desk_crm: Villeurbanne
 
-  SQL: SELECT "name" FROM "connector"."v_acmecustomer" WHERE "city" = 'Villeurbanne'
+  no rows returned
+
+  SQL: SELECT v.code, v.name, v.city, v.segment, v.credit_limit, v.email
+FROM connector."v_acmecustomer" v
+WHERE v.city = 'Villeurbanne'
 LIMIT 500
 
-  try: lm conflicts list --scope desk  — where this scope has source conflicts or lookup ambiguities, row by row
+  try: lm conflicts list  — where this scope has source conflicts or lookup ambiguities, row by row
 ```
 
-The phrasing prompt asks the model to answer in the language of the question and to quote
-values from the rows exactly as written; the SQL, the `data as of` line and the deterministic
-messages stay in English.
-
-The chat still cannot query the `_conflicts` ledger, but an answer that filtered on a disputed
-value now says so: it names the record and both sources' values in a `disputed` block, counted
-or not counted, before the SQL (see [Disputed rows](transparency/ask-honesty.md#disputed-rows-a-disclosure-not-a-veto)).
-
-The model read the label *Encours autorisé* from the grounding, cast the `text` column itself,
-and answered over the fused view rather than either source. That refresh is best-effort: a
-discovery failure never fails the apply, and `lm source rediscover --scope <tag>` rebuilds a card
-by hand.
+- The model answers in the question's language. The hub's own sentences (the zero-row warning
+  above) follow `--lang`, else your locale (`fr_FR` here). The SQL and the lines `lm` writes
+  (`data as of`, the table, the row count) stay in English.
+- The card refresh at apply is best-effort: if a scope is missing from the chat,
+  `lm source rediscover --scope <tag>` rebuilds its card.
 
 ## Refusals
 
@@ -455,7 +661,7 @@ The last one is a `409`, not a `400`: the manifest is fine, the world is not rea
 | `match must declare at least one column` | v1 needs one match rule | declare the join key |
 | `match declares a duplicate column (case-insensitive): …` | the same key listed twice | remove the duplicate |
 | `sources must have at least one source` / `source '…' map must have at least one column` | an entity fuses real tables | declare table + map |
-| `source '…': canonical column '…' is reserved` | `_conflicts`, `_src`, `_ord` belong to the fusion machinery | pick another canonical name |
+| `source '…': canonical column '…' is reserved` | the name is one of the [reserved names](#the-manifest) | pick another canonical name |
 | `source '…' maps duplicate canonical column (case-insensitive): …` | two source columns feeding one canonical column in the same source | keep one |
 | `canonical column '…' conflicts with '…' across sources (case-insensitive collision); use one consistent case` | `email` vs `Email` would silently become two SQL columns | one consistent spelling |
 | `source '…' does not map the match column: …` | every source must produce the match column, same case — else its rows could never be matched | add it to that source's `map` |
@@ -469,78 +675,82 @@ The last one is a `409`, not a `400`: the manifest is fine, the world is not rea
 ## Read API
 
 ```
-GET /api/entities/{name}
+lm entity get NAME [--filter COLUMN=VALUE]… [--limit N] [--offset N] [-o table|json|yaml]
 ```
 
-[`lm entity get NAME`](cli/lm-reference.md) is the ordinary terminal door onto this endpoint —
-reach for the endpoint directly only from a script or another system.
+`lm_user`. The fused rows, each with its `_conflicts` ledger (`{}` when no conflict). The name is
+case-insensitive; an unknown entity is a `404`, an empty result prints `no rows`.
 
-`lm_user`. The fused rows as JSON, every row carrying its `_conflicts` ledger as JSON text
-(`"{}"` when no conflict). The lookup is case-insensitive; an unknown entity is a `404`.
+| Option | Effect |
+|---|---|
+| `--filter COLUMN=VALUE` | exact match on a canonical column; repeatable (AND). `_conflicts` is not filterable |
+| `--limit N` | 1..1000, default 100; a full page prints `note: result hit the limit` on stderr |
+| `--offset N` | skip N rows, to page further |
 
-- **Scope boundary** — the read is scope-bound like the rest of the app surface: a scope-bound
-  user who holds none of the entity's scopes gets the uniform `403 {"error":"scope not granted"}`
+A [date column](#dates-across-sources) reads as its UTC instant, `2026-07-01T00:00:00.000500Z`, or
+as its day, `2026-07-02`; `--filter due=2026-07-01` is equal as an instant (the day's midnight UTC),
+as in a view. Every other column is text and `--filter` matches it exactly; a timestamp held as text
+reads in UTC, `2026-07-01 00:00:00+00`, whatever zone the hub runs in.
+
+- A scope-bound user who holds none of the entity's scopes gets `403 scope not granted`
   (see [Scopes](rag/scopes.md)).
-- **Filters** — `?<canonical-col>=value`, exact match, repeatable across columns (AND). Unlike a
-  view's filters, an unknown parameter is **ignored**, not refused; `_conflicts` is not filterable.
-- **From a handle to the record's history.** Split the handle at its first `:` and pass the two halves:
-  `lm entity history NAME SOURCE SOURCE_ID`, or `GET /api/entities/{name}/resolution/identity/{source}/{sourceId}`.
-  A `setAside` entry on an event means the resolver passed over an entity that already holds another row of the same
-  source (one entity takes one row per source): `{"entityId": …, "reason": "same-source", "rule": …}`, `rule` being the
-  key rule that found it, or `null` for the partner of a `same` assertion. It is how a duplicated source row, which
-  mints its own entity, is told apart from a plain new record; `lm entity history` lists the ids in `SET_ASIDE`,
-  `-o json` the whole entry, and the `:ambiguous` view shows them too.
-- **Upgrading.** The source handle is a column of the compiled view: re-apply every existing `resolution:`
-  entity (`lm entity apply`) after upgrading, or the aggregate skips that entity (logged as unreadable) until you do.
-- **Paging** — `?limit=` (default 100, clamped to 1…1000) and `?offset=` (default 0). Rows are
-  ordered by the canonical columns, so pages are deterministic.
-
-Reads go through the RLS-enforced datasource and the `security_invoker` view — the response is
-tenant-scoped by your JWT, nothing else to configure.
+- `lm` refuses a filter named `limit`, `offset` or `identity`, a column named twice, and a filter
+  naming no column (when the page has rows to prove it).
+- For a `resolution:` entity, the history behind a row is on
+  [kind: Entity — resolve](entities-resolution.md).
+- From a script or another system: `GET /api/entities/{name}`, with `?<column>=value`, `?limit=`,
+  `?offset=`. Over HTTP an unknown parameter is ignored, not refused.
 
 ### Aggregated conflicts
 
-The per-entity read answers "show me this entity"; this one answers the question the ledger
-raises but a per-row read cannot: **where do my entities hold a source conflict or a lookup
-ambiguity, across every entity I may read?**
+**Where do my entities hold a source conflict or a lookup ambiguity, across every entity I may
+read?**
 
 ```
-GET /api/entities/conflicts
+$ lm conflicts list
+ENTITY        KEY     COLUMNS  SOURCES
+AcmeCustomer  P-1000  name     t_acme_desk_erp,t_acme_desk_crm
+AcmeCustomer  P-1002  city     t_acme_desk_erp,t_acme_desk_crm
+AcmeCustomer  P-1008  city     t_acme_desk_erp,t_acme_desk_crm
 ```
 
-`lm_user`. One row per fused record still in dispute, ordered by entity then match key (a
-`resolution:` entity's key is the record's `_entity_id`, or, while nothing has resolved it, its source
-handle `<source table>:<source id>`, the two values of the row's identity joined for display) —
-`lm conflicts list` prints it, and the TUI's `:conflicts` screen opens the full ledger under `d`.
+`lm_user`. One row per record still in dispute, by entity then match key; `--limit N` (default 100,
+up to 1000). The TUI's `:conflicts` page shows the full ledger under `d`.
 
-- **Scope boundary — silently narrowed, never refused.** A scope-bound user's aggregate simply
-  omits the entities they hold no scope for. This is the one place the uniform `403` does *not*
-  apply: an aggregate shows what you are allowed to see, and a non-granted entity is
-  indistinguishable from a conflict-free one.
-- **Paging** — `?limit=` (default 100, clamped 1…1000), spread across entities in order.
-- An entity whose compiled view is missing (its source table dropped by a direct DB edit — `lm
-  connector delete` cannot do this, it is refused while the entity stands), or whose view fails when
-  read (a revoked grant, the 5-second statement timeout on a very large entity), is logged and
-  skipped; the rest of the aggregate still answers.
+- A `resolution:` entity's key is the record's entity id, or `<source table>:<source id>` while
+  nothing has resolved it.
+- A scope-bound user's list **omits** the entities they hold no scope for, without a `403`.
+- An entity whose view is missing or fails when read (5-second timeout) is skipped and logged; the
+  rest of the list still answers.
+- Over HTTP: `GET /api/entities/conflicts?limit=N`.
 
 ## Remove
 
 ```
-$ lm connector delete acme-desk-crm
-Error: API error 409: table connector.t_acme_desk_crm feeds entity acmecustomer — remove the entity first (lm entity delete acmecustomer)
-$ lm entity delete AcmeCustomerCrmFirst
-deleted: AcmeCustomerCrmFirst
+$ lm connector delete acme-desk-erp
+Error: API error 409: table connector.t_acme_desk_erp feeds entity acmecustomer — remove the entity first (lm entity delete acmecustomer)
+$ lm entity delete acmecustomer
+Type 'delete' to delete entity acmecustomer — its view, for every tenant: delete
+deleted: acmecustomer
+$ lm connector delete acme-desk-erp
+Error: API error 409: table connector.t_acme_desk_erp feeds entity acmecustomercrmfirst — remove the entity first (lm entity delete acmecustomercrmfirst)
+$ lm entity delete acmecustomercrmfirst
+Type 'delete' to delete entity acmecustomercrmfirst — its view, for every tenant: delete
+deleted: acmecustomercrmfirst
+$ lm connector delete acme-desk-erp
+Type 'delete' to delete connector acme-desk-erp (csv-file) — 11 rows of connector.t_acme_desk_erp, its run history and RAG chunks: delete
+deleted: acme-desk-erp
 ```
 
-`DELETE /api/entities/{name}` (`lm_admin`) is the inverse of apply: it drops the view and deletes
-the manifest in one transaction, then rediscovers its scopes so the cards drop it — best-effort,
-like apply's refresh. A scope-bound
-integrator must hold **all** the entity's scopes to remove it, the same asymmetry as apply. An
-unknown name is a `404`.
+The `409` names one entity at a time: delete each entity that reads the table, then the connector.
 
-An entity is **shared across tenants**: the manifest and its view are deployment-global, only
-the rows they expose are tenant-scoped by RLS. Delete, like apply, acts for the whole deployment,
-and a second hub instance picks the change up on its next rediscover.
+- `lm entity delete` (`lm_admin`) drops the view, the manifest and every search index over the
+  entity, and removes it from its scopes' cards. The prompt names the search indexes when there
+  are some.
+- An entity is declared once for the whole hub: deleting it removes it **for every tenant**.
+- In a script, pass `--force`; without it and without a keyboard nothing is deleted:
+  `aborted: no confirmation read (EOF) — pass --force in a script`.
+- A scope-bound integrator must hold **all** the entity's scopes. An unknown name is a `404`.
 
 ## How to…
 
@@ -592,10 +802,11 @@ no claim on another.
 | `lm connector delete` refused `409`: `table … feeds entity …` | the interlock — the entity still fuses that table | `lm entity delete <name>` first |
 | a row you expected is missing from the fusion | its match column is `NULL` in that source — excluded by construction | give it a key at the source, or accept that it cannot be matched |
 | the wrong system's value shows | source order is the priority, per column | reorder `sources[]`; the other value is in `_conflicts` either way |
-| a number is a string (`"500"`) | every fused value is `text` | cast where you consume; `lm ask` does it by itself |
-| an entity is missing from `lm conflicts list` | you hold none of its `scopes` (silently narrowed), or its compiled view is gone or fails when read — both logged, neither refused | check your grants, or the hub log for "compiled view missing" / "compiled view unreadable" |
+| a number is a string (`"500"`) | every fused value is `text`, a [date column](#dates-across-sources) excepted | cast where you consume; `lm ask` does it by itself |
+| a date is a string, or two sources "disagree" on the same day | one source holds the date as text (a CSV left as written) | type that column with [`parse-date`](connectors/transformers.md#parse-date-dates-are-31122019): [four steps](#dates-across-sources), its table is created again |
+| an entity is missing from `lm conflicts list` | you hold none of its `scopes`, or its view is gone or fails when read | check your grants, or the hub log for "compiled view missing" / "compiled view unreadable" |
 | entity applied fine, but chat cannot discuss it | no `scopes` declared | add `scopes:` and re-apply; apply rediscovers the cards for you |
-| `403` with an **empty body** | you do not hold the role the endpoint requires (`lm_admin` for apply and delete, `lm_user` for reads) | `GET /api/bff/v1/me` returns your roles under `roles` |
+| `403` with an **empty body** | you do not hold the role the command requires (`lm_admin` for apply and delete, `lm_user` for reads) | no `lm` command lists your roles: `GET /api/bff/v1/me` returns them under `roles` |
 
 ## See also
 

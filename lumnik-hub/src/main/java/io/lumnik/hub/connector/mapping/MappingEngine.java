@@ -30,18 +30,11 @@ import java.util.function.Function;
  * @ConnectorTypeId("my-source")
  * public class MyConnectorType implements ConnectorType {
  *   @Inject MappingEngine mappingEngine;
- *   @Inject MappingResolver mappingResolver;  // available after Task 15
  *
  *   @Override
- *   public ChunkResult process(Connector c, ChunkContext ctx, List<RawRow> chunk, boolean endOfStream) {
- *     if (c.getMappingId() != null) {
- *       MappingSpec spec = mappingResolver.resolve(c.getMappingId(), c.getTenantId());
- *       MappingState state = ctx.mappingState();  // request-scoped, persists across chunks of same run
- *       var transformed = mappingEngine.transform(spec, chunk, state, endOfStream);
- *       return writer.write(transformed);
- *     }
- *     // Legacy path: bare ItemProcessor (foundation behavior unchanged)
- *     return defaultProcessing(chunk);
+ *   public ItemWriter<?> writer(ConnectorContext ctx) {
+ *     MappingSpec spec = buildSpec(ctx.config());  // the type builds its spec from its own config
+ *     return mappingEngine.itemWriter(spec);
  *   }
  * }
  * }</pre>

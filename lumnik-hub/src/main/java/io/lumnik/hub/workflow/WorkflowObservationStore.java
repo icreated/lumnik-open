@@ -1,6 +1,8 @@
 package io.lumnik.hub.workflow;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
+import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -15,6 +17,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * The dormancy sweep's ledger (V33). since = when WE started observing the current state —
@@ -38,10 +41,8 @@ public class WorkflowObservationStore {
 
         /** Reads what {@link #columns} selected, in that order, starting at column {@code first}. */
         static Observation fromRow(ResultSet rs, int first) throws SQLException {
-            Timestamp alerted = rs.getTimestamp(first + 4);
             return new Observation(rs.getString(first), rs.getString(first + 1),
-                rs.getTimestamp(first + 2).toInstant(), rs.getTimestamp(first + 3).toInstant(),
-                alerted == null ? null : alerted.toInstant());
+                Jdbc.instant(rs, first + 2), Jdbc.instant(rs, first + 3), Jdbc.instant(rs, first + 4));
         }
     }
 
@@ -56,16 +57,25 @@ public class WorkflowObservationStore {
      *  dormant — never a zero that would read as "detected instantly". */
     public record StatsRow(String workflow, long watched, long dormant, Long medianDetectionSeconds) {}
 
-    public List<StatsRow> stats(long tenantId) {
+    /** Appended to a read of {@code o}: the tape of the workflows declared in the caller's scopes.
+     *  Binds the granted scopes twice ({@code bindGrants}; null when unbound — every workflow), then
+     *  the tenant again. */
+    private static final String IN_GRANTED_WORKFLOWS = "AND (?::text[] IS NULL OR o.workflow_name IN "
+        + "(SELECT m.name FROM core.workflow_manifest m WHERE m.scope = ANY (?::text[]) "
+        + "AND m.tenant_id = ?)) ";
+
+    public List<StatsRow> stats(long tenantId, Set<String> granted) {
         String sql = "SELECT workflow_name, COUNT(*) AS watched, "
             + "COUNT(*) FILTER (WHERE alerted_at IS NOT NULL) AS dormant, "
             + "percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (alerted_at - since))) "
             + "  FILTER (WHERE alerted_at IS NOT NULL) AS median_detection_seconds "
-            + "FROM core.workflow_observation WHERE tenant_id = ? "
+            + "FROM core.workflow_observation o WHERE o.tenant_id = ? " + IN_GRANTED_WORKFLOWS
             + "GROUP BY workflow_name ORDER BY workflow_name";
         List<StatsRow> out = new ArrayList<>();
         try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setLong(1, tenantId);
+            ScopeGuardedUpsert.bindGrants(ps, 2, granted);
+            ps.setLong(4, tenantId);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     double median = rs.getDouble("median_detection_seconds");
@@ -82,20 +92,21 @@ public class WorkflowObservationStore {
     }
 
     /** The tape, flattened across workflows: tenant-bound, stillest first, bounded in SQL.
-     *  This is the read path. */
-    public List<ObservationRow> listAll(long tenantId, int limit) {
+     *  This is the read path; {@code granted} narrows it to the caller's scopes, null reads them all. */
+    public List<ObservationRow> listAll(long tenantId, Set<String> granted, int limit) {
         String sql = "SELECT workflow_name, doc_key, state, since, first_observed_at, alerted_at "
-            + "FROM core.workflow_observation WHERE tenant_id = ? "
+            + "FROM core.workflow_observation o WHERE o.tenant_id = ? " + IN_GRANTED_WORKFLOWS
             + "ORDER BY since ASC, workflow_name, doc_key LIMIT ?";
         List<ObservationRow> out = new ArrayList<>();
         try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setLong(1, tenantId);
-            ps.setInt(2, limit);
+            ScopeGuardedUpsert.bindGrants(ps, 2, granted);
+            ps.setLong(4, tenantId);
+            ps.setInt(5, limit);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     out.add(new ObservationRow(rs.getString(1), rs.getString(2), rs.getString(3),
-                        rs.getTimestamp(4).toInstant(), rs.getTimestamp(5).toInstant(),
-                        rs.getTimestamp(6) == null ? null : rs.getTimestamp(6).toInstant()));
+                        Jdbc.instant(rs, 4), Jdbc.instant(rs, 5), Jdbc.instant(rs, 6)));
                 }
             }
         } catch (Exception e) {

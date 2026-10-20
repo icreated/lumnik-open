@@ -23,7 +23,7 @@ The scale-out Search provider (#672) needs a cluster target (D3) and a client (D
 ## Consequences
 
 - Module `lumnik-search-opensearch`; a required feature that leaves the common subset (vectors/kNN, #675) reopens D4.
-- The supported-version matrix is exercised by the container-backed IT lane of the nightly Search job.
+- The supported-version matrix is exercised by the container-backed IT lane of the Search lanes, run before each release (#1285).
 - Index topology (D14) and everything else is in `docs/superpowers/specs/2026-09-30-search-opensearch-provider-design.md`.
 
 ## Rejected

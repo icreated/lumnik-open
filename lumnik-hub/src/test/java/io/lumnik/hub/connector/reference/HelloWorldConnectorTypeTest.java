@@ -27,7 +27,7 @@ class HelloWorldConnectorTypeTest {
         "test", "hello-world", Map.of("count", count),
         new SyncMode.Incremental(),
         Logger.getLogger("test"),
-        null, null, Clock.systemUTC(), null, new OwnedRunScope("test"));
+        null, Clock.systemUTC(), null, new OwnedRunScope("test"));
   }
 
   @Test

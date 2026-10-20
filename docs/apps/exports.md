@@ -220,11 +220,14 @@ columns:
       - lookup: { table: { GOLD: A, SILVER: B } }
 ```
 
-- Manifests written before this keep working unchanged.
 - Headers must be unique in the file.
 - `order` and `filter` always use the entity's names (`segment`, not `CAT`), and sort or filter on
   the entity's values, before any formatting.
 - An empty cell stays empty. No formatter touches it.
+- A [date column](../entities.md#dates-across-sources) is written in UTC, `2026-07-01 00:00:00+00`
+  or `2026-07-01`, whatever zone the hub runs in; `format-date` gives it the partner's shape. It sorts
+  by date, and a `filter` on it with dates is equal as an instant: `equals: "2026-07-01"` keeps the
+  rows at that day's midnight UTC, as in a view.
 - The same data still gives the same file and the same SHA-256, so you can compare a retry. One
   exception: after a hub upgrade, a `format-date` with a `zone` can move an hour if that zone's
   daylight-saving rules changed.
@@ -316,8 +319,7 @@ format:
 | `contact@example.com` | `keep-first: 2, keep-last: 4` | `co*************.com` |
 | `1234` | `keep-last: 4` | `****` |
 
-A value too short to keep anything is masked **entirely**. On the way in, the `mask` hook lets
-such a value through; a file leaving the house never does.
+A value too short to keep anything is masked **entirely**.
 
 ### What is checked, and when
 
@@ -395,7 +397,7 @@ Use the one-shot for a quick look or a one-off hand-over:
 
 ```
 $ lm entity export AcmeCustomer -o customers.csv
-AcmeCustomer: 1402 bytes written to customers.csv (sha256 4b0e…)
+AcmeCustomer: 1099 bytes written to customers.csv (sha256 afa5c455ceaf9a2c6e0fae54b2fbc9b671893f22220c2c2c6a685969c0deceb5)
 $ lm entity export AcmeCustomer -o customers.csv
 Error: customers.csv already exists — refusing to overwrite it (use --force to replace it)
 $ lm entity export AcmeCustomer -o - | head -3
@@ -427,16 +429,20 @@ $ lm export get customers-daily              # the stored manifest
 - `-o json|yaml` gives every command a stable machine-readable shape for scripts.
 - Short ids from `lm export runs` are accepted everywhere.
 
-The same actions are available over HTTP (`lm_integrator`):
+### Stop a schedule
 
-| Method and path | Answer |
-|---|---|
-| `POST /api/exports/apply` | apply a manifest (YAML body) |
-| `POST /api/exports/{name}/runs` | `202 {"runId": "…"}` once claimed. `409` if a run is in flight |
-| `GET /api/exports/{name}/runs?limit=50` | runs, newest first (limit 1..200) |
-| `GET /api/exports/{name}/runs/{id}` | one run |
-| `POST /api/exports/{name}/runs/{id}/retry` | `202` for a `Failed` run. `409` otherwise |
-| `GET /api/exports/entities/{entity}/download` | the one-shot CSV |
+There is no `lm export rm` or `disable`. To stop the scheduled runs, re-apply the manifest
+without `spec.schedule`:
+
+```
+$ lm export apply -f customers-daily.yaml        # the same manifest, schedule: line removed
+Applied export "customers-daily" → entity AcmeCustomer, scope desk
+$ lm export list
+NAME             ENTITY        SCOPE  DESTINATION  SCHEDULE
+customers-daily  AcmeCustomer  desk   sftp         
+```
+
+The export stays, for `lm export run` on demand, with its run history.
 
 ## Failures, and whether to retry
 
@@ -482,31 +488,31 @@ Reason        SFTP destination: /inbound/customers-2026-09-24.csv already exists
 - **Only one run is in flight per export.** A second trigger gets `409 … already has a run in flight`.
   A slot that is due while a manual run is going is picked up on a later tick, if it is still the latest.
 - **With several hub replicas, a slot is still delivered only once.**
-- **At most 2 scheduled runs are in flight per hub instance** (`lumnik.export.max-concurrent-scheduled-runs`,
-  environment variable `LUMNIK_EXPORT_MAX_CONCURRENT_SCHEDULED_RUNS`). A due slot that finds both taken
-  writes nothing and is picked up on a later tick, if it is still the latest. Each run holds one connection of
-  the hub's `admin` pool (20 by default) for its whole life: raise the pool
-  (`quarkus.datasource."admin".jdbc.max-size`) along with the bound.
-  With the run queue off (the default), `lm export run` and `lm export retry` do not count against it and
-  never wait for it. When several slots are due, the one owed longest starts first.
-- A run has 30 minutes to generate its snapshot (`lumnik.export.snapshot.timeout-seconds`).
+- When several slots are due, the one owed longest starts first. A due slot that finds no free
+  place is picked up on a later tick, if it is still the latest.
+
+| Property (environment variable) | Default | Bounds |
+|---|---|---|
+| `lumnik.export.max-concurrent-scheduled-runs` (`LUMNIK_EXPORT_MAX_CONCURRENT_SCHEDULED_RUNS`) | 2 | scheduled runs in flight per hub instance. With the run queue off, `lm export run` and `retry` do not count |
+| `quarkus.datasource."admin".jdbc.max-size` | 20 | the `admin` pool; each run holds one connection for its whole life — raise it with the bound above |
+| `lumnik.export.snapshot.timeout-seconds` | 1800 | the time a run has to generate its snapshot |
 
 ### Runs can queue
 
 With `LUMNIK_RUN_QUEUE_ENABLED=true` (off by default; read
-[Turning on the run queue](../operations/upgrade.md#turning-on-the-run-queue) first), `lm export run`,
-`lm export retry` and their doors (`POST /api/exports/{name}/runs` and `POST /api/exports/{name}/runs/{id}/retry`) answer 202 with a run in status `Queued`, and the
-hub starts it as a slot frees — on the same `LUMNIK_EXPORT_MAX_CONCURRENT_SCHEDULED_RUNS` budget as scheduled
-exports. `lm export runs` lists it `Queued`, with no start time yet; only `--wait` (on `lm export run` and `lm export retry`) waits for its
-outcome, polling through `Queued`.
+[Turning on the run queue](../operations/upgrade.md#turning-on-the-run-queue) first):
+
+- `lm export run` and `lm export retry` leave a run in status `Queued`; the hub starts it as a
+  slot frees, on the `LUMNIK_EXPORT_MAX_CONCURRENT_SCHEDULED_RUNS` budget.
+- `lm export runs` lists it `Queued`, with no start time yet.
+- `--wait` waits through `Queued` to the outcome.
 
 - A queued manual run's `${date}` and `${timestamp}` file-name tokens are fixed when the hub accepts it, not when it
   starts: a run queued at 23:59 and started after midnight keeps the previous day's name.
 - An export holds at most one queued-or-running run: a second request gets `409 … already has a run in flight`,
   naming the queued run.
 - A run not started within `LUMNIK_RUN_QUEUE_MAX_AGE` (default `1h`) ends `Failed`, failure `interrupted`, "expired in
-  queue". One whose export was deleted, or whose manifest was re-applied while it waited, ends `Failed`, failure
-  `definition`, rather than running a definition nobody asked for.
+  queue". One whose manifest was re-applied while it waited ends `Failed`, failure `definition`.
 - There is no export cancel door: a queued run cannot be cancelled and leaves the queue by starting, by failing on
   its definition, or by expiring.
 - While a queue stands, it can win the permit race against a due scheduled slot. That slot is skipped, tried again
@@ -546,6 +552,8 @@ left on the remote side:
 - **Four formatters.** No computed or constant columns, no fixed-width output, no inbound repair
   hooks (`fix-mojibake`, `parse-*`). Clean the data on the way in, and shape it on the way out.
 - **No other destinations:** no local disk, email or HTTP push. No sidecar or `.done` marker file.
+- **No delete or disable** of an export: [stop its schedule](#stop-a-schedule) by re-applying it
+  without `spec.schedule`.
 - No back-fill of missed slots and no automatic retry.
 
 ## See also

@@ -8,6 +8,10 @@ import java.util.Map;
 
 public class CustomPaginationStrategy implements PaginationStrategy {
 
+    /** The validator refuses {@code kind: custom} with this; a connector applied before it still meets it at run time. */
+    public static final String NOT_SUPPORTED =
+        "custom pagination is not supported; use page, offset, cursor, link-header or body-link";
+
     private final String script;
     private final String responsePath;
 
@@ -16,8 +20,7 @@ public class CustomPaginationStrategy implements PaginationStrategy {
     }
 
     public static CustomPaginationStrategy fromClasspath(String scriptRef, String responsePath) {
-        throw new UnsupportedOperationException(
-            "script_ref loader: wire to mapping-engine hook loader in Task 9 integration");
+        throw new UnsupportedOperationException(NOT_SUPPORTED);
     }
 
     private CustomPaginationStrategy(String script, String responsePath) {
@@ -32,8 +35,7 @@ public class CustomPaginationStrategy implements PaginationStrategy {
 
     @Override
     public RestRequest next(RestResponse resp, RestRequest current) {
-        throw new UnsupportedOperationException(
-            "Custom Kotlin pagination scheduled for Task 9 — KotlinScriptHost.executeSource integration");
+        throw new UnsupportedOperationException(NOT_SUPPORTED);
     }
 
     @Override

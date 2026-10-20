@@ -7,6 +7,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityRegistry;
 import io.lumnik.hub.entity.EntityViewCompiler;
+import io.lumnik.hub.sql.TemporalText;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -83,15 +84,42 @@ class DisputedProbeEquivalenceIT {
             map: { title: cat_title }
         """;
 
+    /** #1326 review: a date one source holds as a timestamp and another as a day (midnight UTC). */
+    static final String DUE = """
+        kind: Entity
+        name: EqvDue
+        match: [code]
+        scopes: [eqv]
+        sources:
+          - table: t_eqv_da
+            map: { code: code, due: due, city: city }
+          - table: t_eqv_db
+            map: { customer: code, day: due }
+        """;
+
     private boolean seeded;
 
     private synchronized void seed() throws Exception {
         if (seeded) return;
         exec("DROP VIEW IF EXISTS connector.v_eqvcust", "DROP VIEW IF EXISTS connector.v_eqvsite", "DROP VIEW IF EXISTS connector.v_eqvprod",
+             "DROP VIEW IF EXISTS connector.v_eqvdue", "DROP TABLE IF EXISTS connector.t_eqv_da, connector.t_eqv_db",
+             "CREATE TABLE connector.t_eqv_da (code text, due timestamptz, city text)",
+             "CREATE TABLE connector.t_eqv_db (customer text, day date)",
+             // D1: kept the 6th at 08:00, the day source says the 5th — excluded by due = 2026-07-05.
+             // D2: both say the 5th's midnight — no dispute. D3: kept the 6th, the day source says the 5th.
+             // D4: kept the 5th at 08:00, the day source says the 5th — the same day, no dispute (#1327).
+             "INSERT INTO connector.t_eqv_da VALUES ('D1','2026-07-06 08:00+00','Lyon'), ('D2','2026-07-05 00:00+00','Lyon'),"
+                 + " ('D3','2026-07-06 00:00+00','Lyon'), ('D4','2026-07-05 08:00+00','Lyon')",
+             "INSERT INTO connector.t_eqv_db VALUES ('D1','2026-07-05'), ('D2','2026-07-05'), ('D3','2026-07-05'),"
+                 + " ('D4','2026-07-05')",
              "DROP TABLE IF EXISTS connector.t_eqv_a, connector.t_eqv_b, connector.t_eqv_c, connector.t_eqv_sa, connector.t_eqv_sb,"
                  + " connector.t_eqv_pa, connector.t_eqv_pb, connector.t_eqv_cat",
              "CREATE TABLE connector.t_eqv_a (code text, city text, segment text)",
-             "CREATE TABLE connector.t_eqv_b (customer text, town text, tier text)",
+             // t_eqv_b keeps its row history like a table the hub writes (#1185): P1's town was Caluire in
+             // an older run — not the value, and no disagreement, for the view and the compiled probe alike
+             "CREATE TABLE connector.t_eqv_b (customer text, town text, tier text, id bigserial, _run_id uuid)",
+             "INSERT INTO connector.t_eqv_b (customer, town, tier, _run_id)"
+                 + " VALUES ('P1','Caluire','GOLD','00000000-0000-0000-0000-000000001185')",
              "CREATE TABLE connector.t_eqv_c (cid text, grade text)",
              // conflicts, NULLs, empty strings, a duplicate inside one source, a key only one source holds
              "INSERT INTO connector.t_eqv_a VALUES ('P1','Lyon','GOLD'), ('P2','Lyon','GOLD'), ('P3','Paris','SILVER'),"
@@ -115,7 +143,7 @@ class DisputedProbeEquivalenceIT {
              "INSERT INTO connector.t_eqv_pa VALUES ('X1','c1','Bolt'), ('X2','c2','Nut'), ('X3','c1','Bolt')",
              "INSERT INTO connector.t_eqv_pb VALUES ('X1','Bolt M8'), ('X2','Nut'), ('X3','Bolt')",
              "INSERT INTO connector.t_eqv_cat VALUES ('c1','Fasteners'), ('c2','Fasteners'), ('c2','Hardware')");
-        for (String m : List.of(CUSTOMER, SITE, PRODUCT)) {
+        for (String m : List.of(CUSTOMER, SITE, PRODUCT, DUE)) {
             given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
                 .contentType("application/yaml").body(m).post("/api/entities/apply").then().statusCode(200);
         }
@@ -127,6 +155,9 @@ class DisputedProbeEquivalenceIT {
     }
 
     static DisputedRows.Filter f(String c, String... v) { return new DisputedRows.Filter(c, List.of(v)); }
+
+    /** A filter on a date column, as the plan makes it from the card. */
+    static DisputedRows.Filter instants(String c, String... v) { return new DisputedRows.Filter(c, List.of(v), true); }
 
     static Stream<Arguments> cases() {
         var cust = "connector.v_eqvcust";
@@ -148,7 +179,11 @@ class DisputedProbeEquivalenceIT {
             new Case("an entity with a lookup, a joined column beside", "connector.v_eqvprod", "eqvprod", List.of("pid"),
                 List.of(f("name", "Bolt"), f("cat_title", "Fasteners")), 0),
             new Case("an entity with a lookup, probing the joined column", "connector.v_eqvprod", "eqvprod", List.of("pid"),
-                List.of(f("cat_title", "Fasteners")), 0));
+                List.of(f("cat_title", "Fasteners")), 0),
+            new Case("due = 2026-07-05, a date beside a timestamp", "connector.v_eqvdue", "eqvdue", key,
+                List.of(instants("due", "2026-07-05")), 0),
+            new Case("due = 2026-07-05 AND city = Lyon, probing due", "connector.v_eqvdue", "eqvdue", key,
+                List.of(instants("due", "2026-07-05"), f("city", "Lyon")), 0));
         return all.stream().flatMap(c -> Stream.of(Arguments.of(c, true), Arguments.of(c, false)));
     }
 
@@ -162,10 +197,16 @@ class DisputedProbeEquivalenceIT {
         List<String> others = c.filters().stream().filter(o -> o != f).map(DisputedRows.Filter::column).toList();
 
         List<List<String>> viaView = run(DisputedRows.probe(plan, f, c.keys(), countedAdmissible), c.keys().size());
-        Optional<EntityViewCompiler.ProbeRelation> rel = compiler.probeRelation(manifest, f.column(), others);
+        Optional<EntityViewCompiler.ProbeRelation> rel = compiler.probeRelation(manifest, sources(manifest), f.column(), others);
         List<List<String>> viaRelation = run(DisputedRows.probe(plan, f, c.keys(), countedAdmissible, rel), c.keys().size());
 
         assertThat(viaRelation).isEqualTo(viaView);
+        if (c.name().startsWith("due = 2026-07-05")) {
+            assertThat(rel).as("a date column is probed through the compiled relation too").isPresent();
+            assertThat(viaView.stream().map(r -> r.get(0)).toList())
+                .as("the excluded candidates: a source holds the 5th, the record kept another day (D4 kept that day: no dispute)")
+                .containsExactly("D1", "D3");
+        }
         if (c.name().startsWith("city = Lyon") && c.probed() == 0 && rel.isPresent()) {
             assertThat(viaView).as("the case must read something, or the comparison proves nothing").isNotEmpty();
         }
@@ -175,9 +216,10 @@ class DisputedProbeEquivalenceIT {
     void the_lookup_beside_a_probe_is_left_to_the_view_and_the_fused_column_is_not() throws Exception {
         seed();
         EntityManifest product = registry.find("eqvprod");
-        assertThat(compiler.probeRelation(product, "cat_title", List.of())).isEmpty();
-        assertThat(compiler.probeRelation(product, "name", List.of("cat_title"))).isEmpty();
-        assertThat(compiler.probeRelation(product, "name", List.of())).isPresent();
+        EntityViewCompiler.Sources sources = sources(product);
+        assertThat(compiler.probeRelation(product, sources, "cat_title", List.of())).isEmpty();
+        assertThat(compiler.probeRelation(product, sources, "name", List.of("cat_title"))).isEmpty();
+        assertThat(compiler.probeRelation(product, sources, "name", List.of())).isPresent();
     }
 
     @Test
@@ -191,9 +233,31 @@ class DisputedProbeEquivalenceIT {
         assertThat(rows.get(0).get(0)).isNotNull();
     }
 
+    /** The view's own catalog answer (#1185, #1325), as the ask path reads it before a probe. */
+    private EntityViewCompiler.Sources sources(EntityManifest m) throws SQLException {
+        try (Connection c = adminDs.getConnection()) {
+            return EntityViewCompiler.sources(c, m);
+        }
+    }
+
     private List<List<String>> run(DisputedRows.Probe probe, int keyCount) throws SQLException {
         List<List<String>> out = new ArrayList<>();
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(probe.sql())) {
+        try (Connection c = adminDs.getConnection()) {
+            // As Ask reads: in a transaction, in UTC (TenantRlsScope.applyTo) — a session SET would leak through the pool.
+            c.setAutoCommit(false);
+            try {
+                TemporalText.utcSession(c);
+                readInto(c, probe, keyCount, out);
+            } finally {
+                c.rollback();
+                c.setAutoCommit(true);
+            }
+        }
+        return out;
+    }
+
+    private static void readInto(Connection c, DisputedRows.Probe probe, int keyCount, List<List<String>> out) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement(probe.sql())) {
             for (int i = 0; i < probe.params().size(); i++) {
                 Object p = probe.params().get(i);
                 if (p instanceof List<?> l) ps.setArray(i + 1, c.createArrayOf("text", l.toArray()));
@@ -209,7 +273,6 @@ class DisputedProbeEquivalenceIT {
                 }
             }
         }
-        return out;
     }
 
     private void exec(String... sql) throws SQLException {

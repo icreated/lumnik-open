@@ -15,10 +15,11 @@ are never written to. [Deploy it](deploy.md).
 request shapes on the same REST engine — plus Kafka for inbound events.
 [Overview](connectors/index.md).
 
-**Manifest / `kind:`** — the YAML you `lm apply`. Seven kinds across two families:
-`Connector` and `Entity` describe ingestion and fusion; `View`, `App`, `Process`,
-`Workflow` and `Export` build the [app ladder](apps/views.md). [How lumnik works](how-it-works.md)
-maps all seven in one place.
+**Manifest / `kind:`** — the YAML you apply. Eight kinds in three families: `Connector` and
+`Entity` (ingestion and fusion); `View`, `App`, `Process`, `Workflow` and `Export` (the
+[app ladder](apps/views.md)); `SearchIndex` ([Search](search/search-indexes.md)). Each kind has its
+own command: `lm apply -f` for a connector, `lm <kind> apply -f` for the others (`lm entity`,
+`view`, `app`, `process`, `workflow`, `export`, `search`). [How lumnik works](how-it-works.md).
 
 **Endpoint** — one queryable surface inside a connector (a table, a file, a REST
 resource). A run fans out over the connector's enabled endpoints, and the scheduler,
@@ -32,7 +33,7 @@ its arithmetic in a ledger: records in, records out, records skipped.
 **Conservation invariant** — `records in = records out + records skipped`, on every
 run, always. A row is never silently lost; it arrives, is skipped with a counted
 reason, or lands in the DLQ (a declared filter is a counted skip, not a DLQ entry).
-[Ingestion honesty](transparency/ingestion-honesty.md).
+[Seeing what was ingested](transparency/ingestion-honesty.md).
 
 **DLQ (dead-letter queue)** — where a quarantined row waits, carrying its reason and the
 offending payload, until you close it: `discard`, or `replayed` to record that you re-sent it
@@ -42,8 +43,7 @@ yourself. The hub never re-reads a dead letter. [`lm dlq`](cli/lm-reference.md).
 connector creates in schema `connector`, one per endpoint, stamped with the tenant. The
 untouched landing zone the rest of the system builds on. The `rest-generic` engine (so
 GraphQL and SOAP too) is the exception: its hybrid tables take the name the manifest
-declares, no `t_` prefix — the WOW demo's `connector.cust_siebel` is one. Same tenant
-stamp and RLS either way; only the naming differs.
+declares, no `t_` prefix — the WOW demo's `connector.cust_siebel` is one.
 
 **Transformer** — a per-cell repair applied at ingestion — mojibake, legacy date
 formats — declared in the manifest, at the door. [Transformers](connectors/transformers.md).
@@ -67,14 +67,11 @@ Orthogonal to connector types. [CSV & files](connectors/csv.md).
 **`_conflicts` ledger** — where fused sources that disagree stay visible, instead of
 one value silently winning. [`lm conflicts list`](cli/lm-reference.md).
 
-## Ask — questions with honesty
+## Ask — questions over your data
 
-**Edition note** — the ask pipeline and its five guards are native to the hub and ship in
-every edition. The chat **doors** (`lumnik-rag`) and the model providers
-(`lumnik-llm-langchain`) are not in the open edition, so on that build neither **mode** below
-can be reached — and a chunk has no store there, `rag.chunk` being created by the rag module's
-own migrations. The **guards** and the principle behind them are on the classpath either way;
-what is missing is the door onto them. [Which edition am I on?](editions.md#which-edition-am-i-running)
+**Edition note** — the Open edition has no chat: `lm ask` and `lm chat` find no door on its hub,
+and no chunks are stored.
+[Which edition am I on?](editions.md#which-edition-am-i-running)
 
 **Analytic mode** — the chat translates your question to SQL and runs it read-only
 over the live hub, fenced by the guards. [`lm ask`](cli/lm-reference.md), TUI `:ask`,
@@ -103,9 +100,9 @@ curated, reads are scope-bound. [Views](apps/views.md).
 
 **App (`kind: App`)** — a métier application's own identity, declared instead of compiled: its
 title, the scope it reads through, one identifier from the curated icon set, and its accent/background
-theme. Applied by an integrator and discovered by the PWA at load, so a temporary sales-event or
-crisis app can exist without a product build. Exactly one app carries the default flag — the one a
-bare `/app/` opens.
+theme. Applied with `lm app apply` and discovered by the PWA at login. At most one app carries the
+default flag — the one a bare `/app/` opens; once set, it can only be moved to another app.
+[The métier PWA](apps/pwa.md).
 
 **Process (`kind: Process`)** — a declarative reaction: when data matching a
 condition arrives, notify. Refusable by design, like everything on the ladder.
@@ -116,7 +113,7 @@ states, aliases for dirty legacy spellings, transitions. The chat answers lifecy
 questions from the declared graph instead of inventing one. [Workflows](apps/workflows.md).
 
 **Alias** — a dirty-data spelling (`en cours`, `encours`) declared to resolve to one
-canonical state code. Reality is never refused, just named. [Workflows](apps/workflows.md).
+canonical state code. [Workflows](apps/workflows.md).
 
 **Data-truth report** — what `workflow apply` prints: the values found in the data but
 never declared, and the codes declared but never observed. [Workflows](apps/workflows.md).

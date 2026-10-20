@@ -2,15 +2,20 @@ package io.lumnik.hub.security;
 
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.api.ApplyScopeBoundary;
+import io.lumnik.hub.api.TenantWide;
+import io.lumnik.hub.api.TenantWideFilter;
 import io.lumnik.testkit.sources.ScopeBoundaryRule;
 import io.lumnik.testkit.sources.ScopeBoundaryRule.Sweep;
 import io.lumnik.testkit.sources.SourceTree;
+import jakarta.ws.rs.NameBinding;
+import jakarta.ws.rs.ext.Provider;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
+import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -18,6 +23,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -56,11 +62,43 @@ class ScopeBoundaryInventoryTest {
    * the connector apply door did exactly that for months without asking. Its scope side-effect
    * is asynchronous (SchemaCardRefresher, on the run-completed event), so the schema signal
    * alone never saw it.
+   *
+   * <p>The next three are the registry that names a scope's ROW tables — a door cannot reach the
+   * rows without it, since the registry, never the request, names the table. A dynamic table holds
+   * the rows of every connector writing it, each under that connector's tags. The citation row door
+   * read them with none of the first three markers and no check, and this sweep stayed green
+   * (#1201, #1204).
+   *
+   * <p>The rest are the subscription stores and the event outbox they are fed from, every scope
+   * at once: a notification rule, a webhook or the live stream receives the whole tenant's events,
+   * so a door over them decides — today by being {@code @TenantWide} (#1207). A door delegating to
+   * the webhook door by injection counts too: a request filter does not follow an injected call.
+   *
+   * <p>The last is the connector itself: it lives in the scopes its tags name, so a door that loads
+   * one acts inside them — changes, runs or deletes another métier's ingestion, or reads what it
+   * left behind (#1208). The CSV one-shot service loads and retags one by name on its caller's
+   * behalf, so naming it counts too.
+   *
+   * <p>A kind:Workflow lives in its {@code spec.scope}: its graph and the tape of the documents it
+   * watches are that métier's. The read door over them answered the whole tenant (#1254).
    */
   private static final List<String> SCOPE_TOUCHING =
-      List.of("SchemaCardStore", "DiscoveryService", "ApplyUpsert.scopes(");
+      List.of("SchemaCardStore", "DiscoveryService", "ApplyUpsert.scopes(",
+          "connector.dynamic_table", "DynamicTableRegistry", "DynamicTableScope.",
+          "NotificationRuleRepository", "WebhookEndpointRepository", "WebhookDeliveryRepository",
+          "IntegrationResource delegate", "core.event_outbox", "ConnectorRepository",
+          "CsvIngestService", "WorkflowRegistry", "WorkflowManifestStore", "WorkflowObservationStore");
 
-  private static final List<String> DECIDING_CALLS = ScopeBoundaryRule.decidingCalls(ScopeGrants.class);
+  /**
+   * {@code ScopeGrants}' own decisions, and refusals built on them that no door can reach and
+   * then ignore: the dynamic-table and connector rules refuse by throwing — for an id held, or for
+   * the tags a creating door is about to stamp — so calling one is acting on it; a {@code @TenantWide} door is refused to every scope-bound caller by its filter, before
+   * any method runs.
+   */
+  private static final List<String> DECIDING_CALLS = Stream.concat(
+      ScopeBoundaryRule.decidingCalls(ScopeGrants.class).stream(),
+      Stream.of("DynamicTableScope.readableTable(", "ConnectorScope.held(", "ConnectorScope.heldForUpdate(",
+          "ConnectorScope.refuseUnlessHolds(", "ConnectorScope::holds", "@TenantWide")).toList();
 
   /**
    * Doors that touch a scope's schema and deliberately do NOT bind to it. Each needs a reason a
@@ -207,6 +245,34 @@ class ScopeBoundaryInventoryTest {
     assertThat(ApplyScopeBoundary.class.getMethod("refuseUnlessCallerHolds", Optional.class))
         .as("and the sweep's signal must name a method that exists")
         .isNotNull();
+  }
+
+  /**
+   * {@code DynamicTableScope.readableTable(} counts as a decision only because calling it is acting
+   * on it: it refuses by throwing and hands back the table's name, never a verdict. While the shared
+   * lookup returned the name WITH a {@code granted} flag, a door could call it, skip the flag and
+   * read the rows anyway — and still look guarded to the sweep (#1204).
+   */
+  @Test
+  void theDynamicTableRuleHandsBackATableNotAVerdict() throws Exception {
+    Method m = Class.forName("io.lumnik.hub.api.data.DynamicTableScope")
+        .getDeclaredMethod("readableTable", Connection.class, String.class, long.class);
+    assertThat(m.getGenericReturnType().getTypeName())
+        .isEqualTo("java.util.Optional<java.lang.String>");
+  }
+
+  /**
+   * {@code @TenantWide} counts as a decision only because a filter enforces it: an annotation no
+   * filter is bound to would mark a door guarded and refuse no one (#1207).
+   */
+  @Test
+  void theTenantWideMarkerIsEnforcedByAFilter() {
+    assertThat(TenantWide.class.isAnnotationPresent(NameBinding.class))
+        .as("@TenantWide must be a JAX-RS name binding").isTrue();
+    assertThat(TenantWideFilter.class.isAnnotationPresent(TenantWide.class))
+        .as("and the filter that refuses a bound caller must be bound to it").isTrue();
+    assertThat(TenantWideFilter.class.isAnnotationPresent(Provider.class))
+        .as("and registered").isTrue();
   }
 
   @Test

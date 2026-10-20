@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.TimeZone;
+import java.time.ZoneOffset;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -60,7 +61,7 @@ class JdbcChunkReaderWallClockIT {
 
   private static JdbcChunkReader reader(JdbcChunkReader.Mode mode, String watermark, HikariPoolRegistry registry) {
     return new JdbcChunkReader(PG.getJdbcUrl(), "u", "p", "postgres", "public", "t", watermark,
-        List.of("id"), mode, new PostgresDialect(), registry);
+        List.of("id"), mode, new PostgresDialect(), registry, ZoneOffset.UTC);
   }
 
   @Test

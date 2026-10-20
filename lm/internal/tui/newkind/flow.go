@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/rivo/tview"
 	"gopkg.in/yaml.v3"
 )
 
@@ -33,6 +34,12 @@ func ClassifyManifest(yamlText string) (class string, kind string, err error) {
 		return "workflow", k, nil
 	case "App":
 		return "app", k, nil
+	case "View":
+		return "view", k, nil
+	case "Export":
+		return "export", k, nil
+	case "SearchIndex":
+		return "searchindex", k, nil
 	}
 	return "", k, nil
 }
@@ -55,15 +62,15 @@ type Issue struct {
 func FormatIssues(errs, warns []Issue) string {
 	var b strings.Builder
 	for _, e := range errs {
-		fmt.Fprintf(&b, "[red]✗[white] %s — %s\n", e.Path, e.Message)
+		fmt.Fprintf(&b, "[red]✗[white] %s — %s\n", tview.Escape(e.Path), tview.Escape(e.Message))
 		for _, r := range e.Recommendations {
-			fmt.Fprintf(&b, "      %s\n", r)
+			fmt.Fprintf(&b, "      %s\n", tview.Escape(r))
 		}
 	}
 	for _, w := range warns {
-		fmt.Fprintf(&b, "[yellow]WARN[white] %s — %s\n", w.Path, w.Message)
+		fmt.Fprintf(&b, "[yellow]WARN[white] %s — %s\n", tview.Escape(w.Path), tview.Escape(w.Message))
 		for _, r := range w.Recommendations {
-			fmt.Fprintf(&b, "      %s\n", r)
+			fmt.Fprintf(&b, "      %s\n", tview.Escape(r))
 		}
 	}
 	return b.String()

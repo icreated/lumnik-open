@@ -77,9 +77,11 @@ services:
         condition: service_started
     environment:
       QUARKUS_PROFILE: prod
-      # This self-host stack ships no OTLP collector — disable the exporter so the logs aren't
-      # spammed with "Connection refused localhost:4317". Set an endpoint + flip this to wire tracing.
-      QUARKUS_OTEL_SDK_DISABLED: "true"
+      # This self-host stack ships no OTLP collector — the exporter stays off so the logs aren't
+      # spammed with "Connection refused localhost:4317". To wire tracing, set both in the root .env:
+      # QUARKUS_OTEL_SDK_DISABLED=false and OTEL_EXPORTER_ENDPOINT=http://your-collector:4317.
+      QUARKUS_OTEL_SDK_DISABLED: ${QUARKUS_OTEL_SDK_DISABLED:-true}
+      OTEL_EXPORTER_ENDPOINT: ${OTEL_EXPORTER_ENDPOINT:-http://localhost:4317}
       DB_URL: jdbc:postgresql://postgres:5432/lumnik
       LUMNIK_APP_DB_PASSWORD: ${LUMNIK_APP_DB_PASSWORD:?run deploy/selfhost/up.sh (generates it in .env)}
       LUMNIK_ADMIN_DB_PASSWORD: ${LUMNIK_ADMIN_DB_PASSWORD:?run deploy/selfhost/up.sh (generates it in .env)}
@@ -103,6 +105,16 @@ services:
       LUMNIK_EVENTS_RETENTION_DAYS: ${LUMNIK_EVENTS_RETENTION_DAYS:-30}
       LUMNIK_AUDIT_RETENTION_DAYS: ${LUMNIK_AUDIT_RETENTION_DAYS:-365}
       LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS: ${LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS:-90}
+      # Rate limits per bucket, requests per minute (docs/operations/rate-limits.md); 0 disables a bucket.
+      # Empty is the same as unset: the bucket falls back to LUMNIK_RATELIMIT_DEFAULT_RPM.
+      LUMNIK_RATELIMIT_DEFAULT_RPM: ${LUMNIK_RATELIMIT_DEFAULT_RPM:-60}
+      LUMNIK_RATELIMIT_VIEW_GENERATE_RPM: ${LUMNIK_RATELIMIT_VIEW_GENERATE_RPM:-10}
+      LUMNIK_RATELIMIT_SEARCH_RPM: ${LUMNIK_RATELIMIT_SEARCH_RPM:-}
+      LUMNIK_RATELIMIT_USER_CHAT_RPM: ${LUMNIK_RATELIMIT_USER_CHAT_RPM:-}
+      LUMNIK_RATELIMIT_PLATFORM_CHAT_RPM: ${LUMNIK_RATELIMIT_PLATFORM_CHAT_RPM:-}
+      LUMNIK_RATELIMIT_PLATFORM_SEARCH_RPM: ${LUMNIK_RATELIMIT_PLATFORM_SEARCH_RPM:-}
+      # Workflow dormancy sweep cadence (docs/operations/observability.md).
+      LUMNIK_WORKFLOW_SWEEP_EVERY: ${LUMNIK_WORKFLOW_SWEEP_EVERY:-15m}
       # Durable run queue (#952): off unless set. Turn it on only once every hub replica runs a release that can read
       # the queued status (docs/operations/upgrade.md).
       LUMNIK_RUN_QUEUE_ENABLED: ${LUMNIK_RUN_QUEUE_ENABLED:-false}

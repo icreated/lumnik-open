@@ -90,7 +90,7 @@ public sealed interface ScopeGuardedUpsert {
      * {@code '{}' <@ anything} is true, but a scopeless resource is not a bound caller's to
      * overwrite, by the same rule that stops them creating one.
      */
-    static void bindGrants(PreparedStatement ps, int first, Set<String> callerScopes)
+    public static void bindGrants(PreparedStatement ps, int first, Set<String> callerScopes)
             throws SQLException {
         if (callerScopes == null) {
             ps.setNull(first, Types.ARRAY);

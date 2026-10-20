@@ -16,6 +16,7 @@ import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.util.List;
 import java.util.Map;
+import java.time.ZoneOffset;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -42,7 +43,7 @@ class JdbcChunkReaderReadColumnIT {
     HikariPoolRegistry registry = new HikariPoolRegistry();
     try {
       JdbcChunkReader reader = new JdbcChunkReader(PG.getJdbcUrl(), "u", "p", "postgres", "public", "t", null,
-          List.of("id"), JdbcChunkReader.Mode.FULL, dialect, registry);
+          List.of("id"), JdbcChunkReader.Mode.FULL, dialect, registry, ZoneOffset.UTC);
       return reader.read(10, ConnectorCursor.empty(), null);
     } finally {
       registry.evictAll();

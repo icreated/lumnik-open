@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -127,7 +129,7 @@ func TestSSE_StreamWithReconnect_RetriesOnEOF(t *testing.T) {
 	defer cancel()
 	events := make(chan SSEEvent, 10)
 
-	go c.SSEStreamWithReconnect(ctx, "/api/platform/events/stream", []string{"x"}, events, 50*time.Millisecond)
+	go c.SSEStreamWithReconnect(ctx, "/api/platform/events/stream", []string{"x"}, events, 50*time.Millisecond, nil)
 
 	seen := 0
 loop:
@@ -145,5 +147,42 @@ loop:
 	cancel()
 	if seen < 2 {
 		t.Errorf("expected at least 2 events from reconnect attempts, got %d", seen)
+	}
+}
+
+// The reconnect loop reports what the CONNECTION does — open on the 200, the error when it ends —
+// so the TUI badge stops inferring liveness from traffic (#1108).
+func TestSSEReconnect_reportsOpenAndRefusal(t *testing.T) {
+	var refuse atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if refuse.Load() {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.(http.Flusher).Flush()
+		refuse.Store(true) // the next attempt is refused
+	}))
+	defer srv.Close()
+
+	c := New(config.Context{Server: srv.URL})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	statuses := make(chan error, 16)
+	go c.SSEStreamWithReconnect(ctx, "/s", nil, make(chan SSEEvent, 1), 10*time.Millisecond,
+		func(err error) { statuses <- err })
+
+	if err := <-statuses; err != nil {
+		t.Fatalf("first status = %v, want nil (open)", err)
+	}
+	for {
+		select {
+		case err := <-statuses:
+			if err != nil && strings.Contains(err.Error(), "403") {
+				return
+			}
+		case <-ctx.Done():
+			t.Fatal("the 403 was never reported")
+		}
 	}
 }

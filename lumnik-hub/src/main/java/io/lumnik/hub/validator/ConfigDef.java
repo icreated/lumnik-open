@@ -107,6 +107,12 @@ public final class ConfigDef {
         return this;
     }
 
+    public ConfigDef optionalCustom(String name, Type type, Importance imp, String doc,
+                                     Function<JsonNode, Optional<String>> validator) {
+        fields.put(name, new FieldSpec(name, type, imp, doc, null, false, validator, null, List.of(), null));
+        return this;
+    }
+
     public Collection<FieldSpec> fields() { return fields.values(); }
 
     private boolean closed;

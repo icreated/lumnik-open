@@ -58,6 +58,7 @@ export function dataAsOfLabel(iso, now = Date.now()) {
 
 // #879: the body of an analytic ask. This shell is French only, so it names its answer language —
 // a terse question ("SO-000004 statut ?") carries none, and the model would fall back to English.
-export function analyticAsk(question, scope) {
-  return { question, mode: 'analytic', scope, lang: 'fr' };
+// #1097: `previous` is the sentence a follow-up continues (thread.mjs previousOf), absent for a standalone question.
+export function analyticAsk(question, scope, previous) {
+  return { question, mode: 'analytic', scope, lang: 'fr', ...(previous ? { previous } : {}) };
 }

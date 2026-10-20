@@ -14,6 +14,7 @@ import org.jboss.logging.Logger;
 import java.sql.*;
 import java.util.*;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 
 /**
@@ -65,11 +66,13 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
   private final JdbcDialect dialect;
   private final HikariPoolRegistry poolRegistry;
   private final JdbcQueryBuilder qb;
+  /** The zone the source writes its date-times in, without saying it: the connection's {@code zone} (#1328). */
+  private final ZoneId zone;
 
   public JdbcChunkReader(String url, String user, String password, String dialectId,
                          String schema, String table, String watermarkColumn,
                          List<String> pkColumns, Mode mode,
-                         JdbcDialect dialect, HikariPoolRegistry poolRegistry) {
+                         JdbcDialect dialect, HikariPoolRegistry poolRegistry, ZoneId zone) {
     this.url = url;
     this.user = user;
     this.password = password;
@@ -81,6 +84,7 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
     this.dialect = dialect;
     this.poolRegistry = poolRegistry;
     this.qb = new JdbcQueryBuilder(dialect);
+    this.zone = zone;
   }
 
   @Override
@@ -118,7 +122,8 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
     // was a silent return to the endless run this ceiling exists to end.
     JdbcRunBound bound = ctx != null && ctx.bound() instanceof JdbcRunBound b ? b : null;
 
-    JdbcQueryBuilder.Select select = qb.buildSelect(schema, table, watermarkColumn, pkColumns, jc, bound, chunkSize, qMode);
+    // One row past the chunk, read only to see whether it repeats the chunk's last key (#1196).
+    JdbcQueryBuilder.Select select = qb.buildSelect(schema, table, watermarkColumn, pkColumns, jc, bound, chunkSize + 1, qMode);
     String sql = select.sql();
 
     try (Connection conn = ds.getConnection();
@@ -126,10 +131,10 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
 
       // The whole chunk in one round trip. Left unset, the batch is the driver's: ojdbc 23 read a 500-row
       // chunk in 5 round trips. At the chunk size it took 2, the second only to learn there was no more; one
-      // row past the limit, the first fetch comes back short and that says it. pgjdbc honours a fetch size
+      // row past the limit (here, past the peeked row), the first fetch comes back short and that says it. pgjdbc honours a fetch size
       // only inside a transaction (it then reads through a server-side cursor); this pool's connections are
       // autocommit, so PostgreSQL still sends the whole result at once, as before.
-      ps.setFetchSize(chunkSize + 1);
+      ps.setFetchSize(chunkSize + 2);
       int next = bind(ps, select.cursorPlan(), cursorKeyValues(jc, qMode), 1);
       bind(ps, select.ceilingPlan(), bound == null ? List.of() : bound.values(), next);
 
@@ -146,8 +151,9 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
           for (int i = 1; i <= colCount; i++) {
             Object value = dialect.readColumn(rs, i);
             // A source time with no zone, read in the JVM's zone: marked, so the writer stores the
-            // wall-clock time as UTC (#1093). Same time and nanos, so hash and cursor are unmoved.
-            if (wallClock[i] && value instanceof Timestamp read) value = WallClockTimestamp.of(read);
+            // wall-clock time in the connection's zone (#1093, #1328). Same time and nanos, so the
+            // cursor is unmoved.
+            if (wallClock[i] && value instanceof Timestamp read) value = WallClockTimestamp.of(read, zone);
             row.put(md.getColumnLabel(i), value);
           }
           rows.add(row);
@@ -159,12 +165,29 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
         if (rows.isEmpty()) {
           return new ReadResult.EndOfStream<>(rows);
         }
+        if (rows.size() > chunkSize) refuseKeyCutByTheChunk(rows.getLast(), rows.get(chunkSize - 1), qMode);
+        if (rows.size() > chunkSize) rows.removeLast();
         return new ReadResult.HasMore<>(rows, buildNextCursor(rows.getLast()).toConnectorCursor());
       }
 
     } catch (SQLException e) {
       throw new RuntimeException("JDBC read failed on " + schema + "." + table + ": " + e.getMessage(), e);
     }
+  }
+
+  /**
+   * The row past the chunk under the chunk's last key (#1196): the next read resumes past that key, so it
+   * would never read this row — the key does not identify a row, and the hub table holds one row per key.
+   * Before, the row was skipped without a word; now the run fails, naming the key.
+   */
+  private void refuseKeyCutByTheChunk(Map<String, Object> peeked, Map<String, Object> last,
+                                      JdbcQueryBuilder.Mode qMode) {
+    for (String key : JdbcQueryBuilder.keyColumns(watermarkColumn, pkColumns, qMode)) {
+      if (!Objects.equals(peeked.get(key), last.get(key))) return;
+    }
+    throw new ConfigValidationException("pk_columns (" + String.join(", ", pkColumns) + ") does not identify one "
+        + "row of " + schema + "." + table + ": two rows share the key where a read ends, and paging past it would "
+        + "skip one — declare the columns of the source table's primary key");
   }
 
   /**

@@ -8,14 +8,36 @@ import (
 	"math"
 	"strings"
 
+	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/spf13/cobra"
 )
 
 func newAppCmd() *cobra.Command {
 	a := &cobra.Command{Use: "app", Short: "Manage app manifests"}
-	a.AddCommand(newAppApplyCmd(), newAppListCmd(), newAppRmCmd())
+	a.AddCommand(newAppApplyCmd(), newAppGetCmd(), newAppListCmd(), newAppRmCmd())
 	return a
+}
+
+// newAppGetCmd prints one declared app as an applyable kind:App manifest (#1176).
+func newAppGetCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "get NAME",
+		Short: "Print a declared app as an applyable kind:App manifest",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := ClientFromCmd(cmd)
+			if err != nil {
+				return err
+			}
+			manifest, err := c.AppManifest(args[0])
+			if err != nil {
+				return err
+			}
+			_, err = cmd.OutOrStdout().Write(manifest)
+			return err
+		},
+	}
 }
 
 var errNotAListOfApps = errors.New("the hub's answer is not a list of apps")
@@ -59,18 +81,6 @@ func exactNumbers(v any) any {
 	return v
 }
 
-// appRow is the part of an app the table shows. -o json / -o yaml never go through it: they print what the hub sent.
-type appRow struct {
-	Name            string   `json:"name"`
-	Title           string   `json:"title"`
-	Scope           string   `json:"scope"`
-	Icon            string   `json:"icon"`
-	AccentColor     string   `json:"accentColor"`
-	BackgroundColor string   `json:"backgroundColor"`
-	Default         bool     `json:"default"`
-	Tabs            []string `json:"tabs"`
-}
-
 func newAppListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
@@ -112,13 +122,13 @@ func newAppListCmd() *cobra.Command {
 				}
 				return output.Print(cmd.OutOrStdout(), format, nil, apps, nil)
 			}
-			var rows []appRow
-			if json.Unmarshal(raw, &rows) != nil {
+			rows, err := client.DecodeApps(raw)
+			if err != nil {
 				return errNotAListOfApps
 			}
 			return output.Print(cmd.OutOrStdout(), format,
 				[]string{"NAME", "TITLE", "SCOPE", "ICON", "ACCENT", "BACKGROUND", "DEFAULT", "TABS"}, rows,
-				func(a appRow) []string {
+				func(a client.AppInfo) []string {
 					def, tabs := "", "(all)" // no tabs declared = the app inherits every tab the hub offers
 					if a.Default {
 						def = "yes"

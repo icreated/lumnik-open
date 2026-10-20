@@ -72,3 +72,18 @@ func TestRun_machineOutStaysByteExact(t *testing.T) {
 		t.Fatalf("machine output must stay byte-exact (raw bidi), got %q", out.String())
 	}
 }
+
+// Every command says what it does in its parent's --help: an empty Short is a blank line there
+// (`lm connector --help` showed five, #1175).
+func TestEveryCommandHasAShortLine(t *testing.T) {
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		if c.Short == "" && !c.Hidden && c.Name() != "help" {
+			t.Errorf("%s has no Short", c.CommandPath())
+		}
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+	}
+	walk(NewRootCmd())
+}

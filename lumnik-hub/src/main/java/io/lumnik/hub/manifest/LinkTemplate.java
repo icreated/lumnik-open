@@ -1,5 +1,6 @@
 package io.lumnik.hub.manifest;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.regex.Matcher;
@@ -27,7 +28,7 @@ public final class LinkTemplate {
     /** The names a template mentions, in order. */
     public static List<String> placeholders(String template) {
         Matcher m = PLACEHOLDER.matcher(template);
-        List<String> out = new java.util.ArrayList<>();
+        List<String> out = new ArrayList<>();
         while (m.find()) out.add(m.group(1));
         return out;
     }

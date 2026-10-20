@@ -1,8 +1,8 @@
 diff --git a/lumnik-hub/src/main/java/io/lumnik/hub/api/run/RunAdminResource.java b/lumnik-hub/src/main/java/io/lumnik/hub/api/run/RunAdminResource.java
-index d6bbcac5..710896fc 100644
+index 87e05187e..1bf2fcd94 100644
 --- a/lumnik-hub/src/main/java/io/lumnik/hub/api/run/RunAdminResource.java
 +++ b/lumnik-hub/src/main/java/io/lumnik/hub/api/run/RunAdminResource.java
-@@ -20,6 +20,7 @@ import jakarta.ws.rs.QueryParam;
+@@ -23,6 +23,7 @@ import jakarta.ws.rs.QueryParam;
  import jakarta.ws.rs.core.MediaType;
  import jakarta.ws.rs.core.Response;
  import jakarta.transaction.Transactional;
@@ -10,7 +10,7 @@ index d6bbcac5..710896fc 100644
  import java.util.List;
  import java.util.Map;
  import java.util.Objects;
-@@ -74,8 +75,15 @@ public class RunAdminResource {
+@@ -84,8 +85,15 @@ public class RunAdminResource {
      // hard-deleted (ON DELETE SET NULL, V13). List.of(null) would throw either way.
      var endpointName = r.getEndpointId() == null ? null
          : endpoints.namesById(List.of(r.getEndpointId())).get(r.getEndpointId());
@@ -27,4 +27,4 @@ index d6bbcac5..710896fc 100644
 +    return Response.ok(dto).build();
    }
  
-   /** A filter id, or null when the caller gave none — never ignored when it cannot be read. */
+   /**

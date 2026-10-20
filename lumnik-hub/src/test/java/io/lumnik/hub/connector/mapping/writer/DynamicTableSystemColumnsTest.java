@@ -40,6 +40,27 @@ class DynamicTableSystemColumnsTest {
         .isEqualTo(DynamicTableWriter.SYSTEM_COLUMNS);
   }
 
+  /** #1195: a table whose source is a state adds {@code _seen_run} to the seven; no other table does. */
+  @Test
+  void onlyAFullRefreshTable_carriesSeenRun() {
+    Map<String, String> payload = Map.of("amount", "NUMERIC");
+    DynamicTableWriter w = new DynamicTableWriter();
+    String refresh = w.createTableDdl(
+        new MappingTarget.Table("connector", "t_x", true, MappingTarget.OnConflict.SKIP, List.of(), true), payload);
+    String plain = w.createTableDdl(
+        new MappingTarget.Table("connector", "t_x", true, MappingTarget.OnConflict.SKIP, List.of()), payload);
+
+    assertThat(columnsOf(refresh)).contains("_seen_run");
+    assertThat(columnsOf(plain)).doesNotContain("_seen_run");
+  }
+
+  @Test
+  void aSourceColumnNamedSeenRun_isRefusedOnAFullRefreshTable() {
+    assertThatThrownBy(() -> DynamicTableWriter.refuseSeenRunCollision(List.of(Map.of("_seen_run", "x"))))
+        .isInstanceOf(ConfigValidationException.class)
+        .hasMessageContaining("_seen_run").hasMessageContaining("map-columns");
+  }
+
   /**
    * The names a {@code CREATE TABLE} body declares, in the order it declares them.
    *
@@ -69,14 +90,19 @@ class DynamicTableSystemColumnsTest {
       } else if (!quoted && c == ')') {
         depth--;
       } else if (!quoted && depth == 0 && c == ',') {
-        names.add(nameOf(def.toString()));
+        addColumn(names, def.toString());
         def.setLength(0);
         continue;
       }
       def.append(c);
     }
-    if (!def.isEmpty()) names.add(nameOf(def.toString()));
+    if (!def.isEmpty()) addColumn(names, def.toString());
     return names;
+  }
+
+  /** A table constraint ({@code UNIQUE (tenant_id, _row_hash)}, #1198) declares no column. */
+  private static void addColumn(List<String> names, String definition) {
+    if (!definition.trim().startsWith("UNIQUE ")) names.add(nameOf(definition));
   }
 
   /**

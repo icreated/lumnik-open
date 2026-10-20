@@ -14,7 +14,7 @@ func newApplyCmd() *cobra.Command {
 	var file string
 	cmd := &cobra.Command{
 		Use:   "apply",
-		Short: "Apply a REST connector manifest (YAML)",
+		Short: "Apply a kind: Connector manifest (YAML), whatever its connector type",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			body, err := readManifest(cmd, file)
 			if err != nil {

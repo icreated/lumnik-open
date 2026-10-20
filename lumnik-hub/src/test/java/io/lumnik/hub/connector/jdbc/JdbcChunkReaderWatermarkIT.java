@@ -12,6 +12,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.util.List;
 import java.util.Map;
+import java.time.ZoneOffset;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -39,7 +40,7 @@ class JdbcChunkReaderWatermarkIT {
     HikariPoolRegistry registry = new HikariPoolRegistry();
     JdbcChunkReader reader = new JdbcChunkReader(PG.getJdbcUrl(), "u", "p", "postgres",
         "public", "t", "updated", List.of("id"),
-        JdbcChunkReader.Mode.WATERMARK, new PostgresDialect(), registry);
+        JdbcChunkReader.Mode.WATERMARK, new PostgresDialect(), registry, ZoneOffset.UTC);
 
     // Drain all 100 initial rows; capture final cursor position
     ConnectorCursor cursor = drainAll(reader, ConnectorCursor.empty());

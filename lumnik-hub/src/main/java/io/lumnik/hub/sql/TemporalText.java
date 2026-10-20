@@ -1,5 +1,9 @@
 package io.lumnik.hub.sql;
 
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -8,7 +12,8 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 
 /**
- * How this platform reads a timestamp written as text — one rule, for every door that has to.
+ * How this platform reads a timestamp written as text — one rule, for every door that has to —
+ * and how it writes one ({@link #render}).
  *
  * <p>It was written for the view filter, where the reason to accept everything was that the SQL
  * guard and the in-memory evaluator must never disagree on a row. The ingestion side needs the
@@ -20,13 +25,53 @@ import java.time.format.DateTimeParseException;
  *
  * <p>Naive forms are read as UTC. That is a choice, and it is the one the platform already states
  * everywhere else it converts: {@code from_epoch} documents "→ timestamp (UTC)", and the date-only
- * rung below has meant midnight UTC since the filter was written. Refusing them instead would be
+ * rung below has meant midnight UTC since the filter was written. The view's SQL reads them the
+ * same way ({@link #utcSession}, #1304). Refusing them instead would be
  * defensible in isolation and wrong here — it would leave the most common ERP export unreadable
  * while the very same string stays filterable.
  */
 public final class TemporalText {
 
     private TemporalText() {}
+
+    /**
+     * The text a row value is shown as, null staying null. A timestamp is its UTC instant
+     * ({@code 2026-07-01T00:00:00Z}, microseconds kept): its own {@code toString()} is the wall
+     * clock in the hub JVM's zone with no offset (#1303, #1310). A date keeps its {@code yyyy-MM-dd};
+     * anything else is {@code String.valueOf}.
+     */
+    public static String render(Object value) {
+        return switch (value) {
+            case null -> null;
+            case Timestamp t -> t.toInstant().toString();
+            default -> String.valueOf(value);
+        };
+    }
+
+    /**
+     * The value a row cell is written into JSON as: a timestamp is the text {@link #render} gives it,
+     * every other value is left for the serializer, so numbers and booleans stay JSON scalars.
+     * Jackson would write a timestamp as {@code 2026-07-01T00:00:00.000+00:00}, milliseconds only,
+     * or as epoch millis without the Quarkus defaults (#1314).
+     */
+    public static Object wire(Object value) {
+        return value instanceof Timestamp t ? render(t) : value;
+    }
+
+    /**
+     * The same rule on the database's side, for one transaction. PostgreSQL reads a naive date or time
+     * (a filter's operand, a literal in Ask's SQL, a date cast to a timestamp) and writes a timestamp as
+     * text in the session's TimeZone, which pgjdbc takes from the hub JVM's zone. Every read that shows
+     * or compares dates sets UTC (#1304, #1325) — the readonly readers through
+     * {@link TenantRlsScope#applyTo} — so the same filter picks the same rows and the same value reads
+     * the same text whatever zone the hub runs in. {@code SET LOCAL}: bound to the transaction like the
+     * tenant, never left on the pooled connection — so it needs one.
+     */
+    public static void utcSession(Connection c) throws SQLException {
+        try (Statement st = c.createStatement()) {
+            st.execute("SET LOCAL TimeZone = 'UTC'");
+        }
+    }
 
     /**
      * ISO date / datetime (T or space) / offset datetime → Instant; date-only = midnight UTC.

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/icreated/lumnik-open/lm/internal/tui/newkind"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -155,8 +156,10 @@ var resourceFile = map[string]string{
 	"runs": "runs.go", "conflicts": "conflicts.go", "observations": "observations.go",
 	"scopes": "scopes.go", "ask": "ask.go", "new": "newkind_page.go",
 	"ambiguous": "ambiguous.go",
-	"endpoints": "endpoints.go", "processes": "processes.go",
-	"migrations": "migrations.go", "modules": "modules.go",
+	"endpoints": "endpoints.go", "processes": "manifests.go", "secrets": "secrets.go", "entities": "entities.go", "tables": "tables.go", "apps": "manifests.go", "workflows": "manifests.go", "views": "manifests.go",
+	"exports": "exports.go", "search": "search.go",
+	"migrations": "migrations.go", "modules": "modules.go", "rag": "rag.go",
+	"integrations": "integrations.go", "notify": "notify.go",
 }
 
 var resourceFileCache = map[string]string{}
@@ -233,6 +236,23 @@ func TestHelpBulletsAreReal(t *testing.T) {
 						page, key, page)
 				}
 			}
+		}
+	}
+}
+
+// Every :new kind lands, after its apply, on a page that exists — and the one that shows what was
+// applied: a View on :views, the hub's saved views, not :view, the file renderer (#1129 review).
+func TestNewKindObservePagesExist(t *testing.T) {
+	pages := map[string]bool{}
+	for _, p := range paletteEntries {
+		pages[p] = true
+	}
+	for _, k := range newkind.All() {
+		if !pages[k.Observe] {
+			t.Errorf("%s observes %q, which is not a page", k.Kind, k.Observe)
+		}
+		if k.Kind == "View" && k.Observe != "views" {
+			t.Errorf("an applied View lands on %q, want views (the saved views)", k.Observe)
 		}
 	}
 }

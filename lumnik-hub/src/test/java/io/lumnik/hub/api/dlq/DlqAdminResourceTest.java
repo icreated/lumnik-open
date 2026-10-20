@@ -173,6 +173,19 @@ class DlqAdminResourceTest {
       .then().statusCode(400);
   }
 
+  /** The same refusal as the list's: a malformed id is a 400 with its reason, not a "not found" (#1294). */
+  @Test
+  void replayed_malformed_new_run_uuid_returns_400() throws Exception {
+    UUID dlqId = seedRunWithDeadLetterReturnDlqId();
+
+    given()
+      .headers(TestIdentity.tenantAndUser(1))
+      .queryParam("newRunId", "not-a-uuid")
+      .when().post("/api/platform/dlq/" + dlqId + "/replayed")
+      .then().statusCode(400)
+        .body("error", equalTo("invalid UUID: not-a-uuid"));
+  }
+
   // ── helpers ──────────────────────────────────────────────────────────────────
 
   private UUID seedRunWithDeadLetter() throws Exception {

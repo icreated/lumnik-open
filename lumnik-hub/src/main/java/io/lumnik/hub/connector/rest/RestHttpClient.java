@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.rest;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URLEncoder;
 import java.net.http.*;
 import java.nio.charset.StandardCharsets;
@@ -25,7 +26,7 @@ public class RestHttpClient {
 
     public RestResponse execute(RestRequest req) throws Exception {
         String url = buildUrl(req.url(), req.queryParams());
-        HttpRequest.Builder b = HttpRequest.newBuilder().uri(URI.create(url))
+        HttpRequest.Builder b = HttpRequest.newBuilder().uri(uri(url))
             .timeout(Duration.ofSeconds(60));
         req.headers().forEach(b::header);
         HttpRequest.BodyPublisher body = req.body() != null
@@ -40,6 +41,20 @@ public class RestHttpClient {
         }
         HttpResponse<String> r = client.send(b.build(), HttpResponse.BodyHandlers.ofString());
         return RestResponse.of(r.statusCode(), r.headers().map(), r.body());
+    }
+
+    /**
+     * {@code URI.create}, minus the URL in its refusal: the JDK's message quotes the whole string,
+     * userinfo and query included, and it reaches a run's failure text (#1166). Still an
+     * {@link IllegalArgumentException}, the type every caller already handles; the reason and the
+     * index say where, like {@link Urls#whyNotAbsolute}. No cause: its message is the same quote.
+     */
+    private static URI uri(String url) {
+        try {
+            return new URI(url);
+        } catch (URISyntaxException e) {
+            throw new IllegalArgumentException("invalid URL: " + e.getReason() + " at index " + e.getIndex());
+        }
     }
 
     static String buildUrl(String base, Map<String,String> q) {

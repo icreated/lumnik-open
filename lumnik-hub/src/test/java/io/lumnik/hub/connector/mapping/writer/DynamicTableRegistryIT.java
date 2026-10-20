@@ -24,14 +24,14 @@ class DynamicTableRegistryIT {
     });
 
     Map<String, String> found = TenantContext.callAsSystem(() ->
-        registry.findSchema(1L, mappingId));
+        registry.findSchema(1L, mappingId, null));
     assertThat(found).containsAllEntriesOf(schema);
   }
 
   @Test
   void find_unknown_returns_null() {
     Map<String, String> found = TenantContext.callAsSystem(() ->
-        registry.findSchema(999L, "nonexistent-" + System.nanoTime()));
+        registry.findSchema(999L, "nonexistent-" + System.nanoTime(), null));
     assertThat(found).isNull();
   }
 
@@ -42,7 +42,7 @@ class DynamicTableRegistryIT {
       registry.register(1L, mappingId, "tenant_1_data", "t1", Map.of("a", "TEXT"));
       registry.register(1L, mappingId, "tenant_1_data", "t1", Map.of("a", "TEXT", "b", "TEXT"));
     });
-    Map<String, String> found = TenantContext.callAsSystem(() -> registry.findSchema(1L, mappingId));
+    Map<String, String> found = TenantContext.callAsSystem(() -> registry.findSchema(1L, mappingId, null));
     assertThat(found).containsKeys("a", "b");
   }
 }

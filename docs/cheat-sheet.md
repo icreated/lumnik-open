@@ -1,7 +1,6 @@
 # Cheat sheet
 
-The minimum that operates lumnik, on one page. Everything here links to its full
-story; when a term puzzles you, the [glossary](glossary.md) has it in one breath.
+The minimum that operates lumnik, on one page. Unknown word: [glossary](glossary.md).
 
 ## Stand it up
 
@@ -18,21 +17,20 @@ Full walkthroughs: [Deploy](deploy.md) · [Reading the logs](recipes/logs.md).
 | # | Command | What it does |
 |---|---|---|
 | 1 | `lm login` | authenticate once; `lm` remembers the context |
-| 2 | `lm validate -f FILE` | dry-run a **`kind: Connector`** manifest without applying — errors field by field. The other five kinds have no dry-run: their checks happen at apply, which refuses rather than half-writes |
+| 2 | `lm validate -f FILE` | dry-run a **`kind: Connector`** manifest — errors field by field. The other kinds have no dry-run: their apply checks first and refuses rather than half-writes |
 | 3 | `lm apply -f FILE` | apply a connector manifest (upsert) |
 | 4 | `lm connector run NAME` | run it now |
 | 5 | `lm run list --connector NAME` | the run ledger — records in/out/skip at a glance |
 | 6 | `lm dlq list --run ID` | exactly which rows fell out, and why |
 | 7 | `lm entity apply -f FILE` | fuse sources into one canonical entity (`lm entity delete NAME` removes it, and frees a connector it blocked) |
 | 8 | `lm workflow apply -f FILE` | declare a lifecycle — prints the data-truth report |
-| 9 | `lm ask --scope S "question"` | ask the data — prints the answer *and the SQL that ran* |
+| 9 | `lm ask --scope S "question"` | ask the data — prints the answer, the rows *and the SQL that ran* (`-o json` for the whole result). **lumnik Pro** |
 | 10 | `lm secret set NAME` | store a secret — prompted, not echoed (`NAME -` reads stdin instead, for a multi-line key or a script); values are never returned |
 
 The full surface (sources, endpoints, mappings, tags, observations…) is in the
 [CLI & TUI reference](cli/lm-reference.md).
 
-Command 5 is the screen you will read most. One row per run, and the arithmetic
-`IN = OUT + SKIPPED` holds on every row — nothing is lost without being counted:
+Command 5 is the screen you will read most. On every row, `IN = OUT + SKIPPED`:
 
 ```
 $ lm run list
@@ -43,19 +41,18 @@ f0466804  orders        default   Completed  10  8    2        2             202
 852771fa  crm-contacts  default   Completed  5   5    0        0             2026-09-05 05:39  2026-09-05 05:39
 ```
 
-`Failed` is the run itself (source unreachable, bad credentials) — `lm run get 3ccd21eb`
-prints the reason. `DEAD-LETTERS` are rows set aside with their reason — `lm dlq list`.
-Still `Running` and going wrong? `lm run cancel ID` *requests* it stop — the run ends
-after the chunk in flight, not immediately, and refuses with a 409 once it has already
-ended.
-Every command above that takes `-f` also takes `-f -`, reading the manifest from stdin, and
-every listing takes `-o json` — which is what lets a whole installation live in git and be
-replayed by a loop: [Integration as code](integration-as-code.md).
+- **`Failed`** is the run itself (source unreachable, bad credentials): `lm run get 3ccd21eb` prints the reason.
+- **`DEAD-LETTERS`** are rows set aside with their reason: `lm dlq list`.
+- **Stop a running run:** `lm run cancel ID` — it ends after the chunk in flight. An ended run is refused:
 
-Command 9 is the one that is not in every build: `lm ask` posts to
-`POST /api/platform/rag/chat`, which the **open edition does not carry** — see
-[which edition you installed](editions.md#which-edition-am-i-running). The other nine are native
-to the hub.
+```
+$ lm run cancel 2af6db4c
+Error: API error 409: run 2af6db4c-31a5-4615-8cf9-96f7924fdce4 already ended (Completed)
+```
+
+Every `-f` also takes `-f -` (stdin), and every listing takes `-o json`:
+[Integration as code](integration-as-code.md). Command 9 answers `404` on the open edition —
+see [which edition you installed](editions.md#which-edition-am-i-running).
 
 ## The TUI in six keys
 
@@ -94,6 +91,6 @@ to the hub.
 
 | You see | It means | Where to look |
 |---|---|---|
-| `403 {"error":"scope not granted"}` | your user carries scope roles, and this resource isn't in them — the boundary, working | [Scopes](rag/scopes.md) |
-| "I can't answer that…" from the chat | a [guard](transparency/ask-honesty.md) preferred refusal over a guess; the message says what to do next | [The five guards](transparency/ask-honesty.md) |
-| a run with `records skipped > 0` | nothing was lost silently — but a skip is **not** a quarantine: duplicates and policy-excluded rows are counted here and never reach the DLQ. `DEAD-LETTERS` on the same run is the subset that did | [Ingestion honesty](transparency/ingestion-honesty.md) |
+| `403 {"error":"scope not granted"}` | your user holds scope roles, and this resource is in none of them | [Scopes](rag/scopes.md) |
+| "I can't answer that…" from the chat | a [guard](transparency/ask-honesty.md) refused rather than guess; the message says what to do next | [The five guards](transparency/ask-honesty.md) |
+| a run with `SKIPPED > 0` | rows counted and not written. Duplicates and policy-excluded rows are skipped without reaching the DLQ; `DEAD-LETTERS` is the part that did | [Ingestion honesty](transparency/ingestion-honesty.md) |

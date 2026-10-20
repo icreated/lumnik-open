@@ -32,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  * É2.b Task 3 review — Bug A: intra-chunk duplicate {@code _row_hash} in UPDATE mode.
  *
  * <p>Two identical rows in one chunk share their content hash. The gated path collapses the
- * chunk into ONE multi-row {@code INSERT … ON CONFLICT (_row_hash) DO UPDATE …}; Postgres then
+ * chunk into ONE multi-row {@code INSERT … ON CONFLICT (tenant_id, _row_hash) DO UPDATE …}; Postgres then
  * raises "ON CONFLICT DO UPDATE command cannot affect row a second time" and the run fails.
  *
  * <p>The fix de-dups by {@code _row_hash} (first occurrence wins) before building the INSERT:

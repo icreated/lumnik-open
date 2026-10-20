@@ -49,11 +49,14 @@ Lag               0s
 Last rebuild      aa7b5014-3dbe-4f0d-8960-133950183b7c (ready)
 ```
 
-`rebuild --wait` is the step that makes the index answer: declaring it only stores the declaration.
-Without `--wait` the command returns as soon as the hub has taken the run on, and a query made right
-away gets the [answer for an index that is not built yet](#when-the-answer-is-not-no-results).
-`lm search status customers` prints that same card whenever you want to look: `ready`, how many
-documents, how far behind the data it is (`Lag`), and the last error if the build failed.
+`rebuild --wait` makes the index answer; declaring it only stores the declaration. Without `--wait`
+the command returns once the run is claimed, and a query right away gets the
+[answer for an index that is not built yet](#when-the-answer-is-not-no-results).
+
+`lm search status customers` prints the same card at any time: status, documents, `Lag` behind the
+data, and the last error if the build failed. When the database refused a step, the last error
+gives only the database's error code (its SQLSTATE), because the database's own message can quote
+stored values. The full message is in the hub's log, on the warning that names the index.
 
 Now ask. `--entity` narrows the search to one entity; without it, every entity you may read is
 searched and the hits of several entities come back mixed (the first column says which is which).
@@ -75,7 +78,7 @@ segment   GOLD (1)  SILVER (1)
 
 | Column | Meaning |
 |---|---|
-| `ENTITY`, `KEY` | what the hit is. The key is the entity's own — read the full record with it (`GET /api/entities/AcmeCustomer?code=P-1000`) |
+| `ENTITY`, `KEY` | what the hit is. The key is the entity's own — read the full record with it (`lm entity get AcmeCustomer --filter code=P-1000`) |
 | `SCORE` | how close the hit is. **Compare scores inside one answer only**: they rank this answer, they do not measure anything across queries or indexes |
 | `MATCH` | the fields the index declares for this hit — the fields that matched first, then the others alphabetically; an empty field is left out. Words found in a `text` field are between `*stars*` |
 | `facets:` | for each filterable field, the values among **all** the matches and how many — not only the ones on this page |
@@ -113,7 +116,7 @@ facets:
 city      Lyon (1)
 segment   GOLD (1)
 
-1 hits shown · as of 2026-10-06 08:48
+1 hit shown · as of 2026-10-06 08:48
 ```
 
 and so is a missing accent:
@@ -127,7 +130,7 @@ facets:
 city      Kraków (1)
 segment   SILVER (1)
 
-1 hits shown · as of 2026-10-06 08:48
+1 hit shown · as of 2026-10-06 08:48
 ```
 
 A code that matches exactly comes first:
@@ -141,16 +144,22 @@ facets:
 city      Lyon (1)
 segment   GOLD (1)
 
-1 hits shown · as of 2026-10-06 08:48
+1 hit shown · as of 2026-10-06 08:48
 ```
 
 **A `fuzzy` field ranks by resemblance; it does not demand every word.** The first screen of this page asked for
 `"hydraulique lyon"` and got two customers: the one that matches the name *and* the city first, and the
 other *Hydraulique* second. Read the score, not only the presence.
 
-How several words combine **depends on the provider**. On the PostgreSQL provider, which these screens
-ran on, the words of a `text` field must all be present, so an added word **narrows**: two cities cannot
-both be a customer's city.
+How several words combine **depends on the provider**:
+
+| Provider | Words of a `text` field | Words of a `fuzzy` field | Words of a `prefix` field |
+|---|---|---|---|
+| PostgreSQL (these screens) | all must be present — an added word **narrows** | ranked by resemblance | all must be present |
+| OpenSearch | any may match — an added word can **widen** | any may match | all must be present |
+
+Check a query on the provider you run before relying on it. On PostgreSQL, two cities cannot both be
+a customer's city:
 
 ```
 $ lm search query "lyon porto" --entity AcmeCustomer
@@ -161,10 +170,6 @@ $ lm search query "lyon porto" --entity AcmeCustomer
 $ lm search query xyzzy --entity AcmeCustomer
 0 hits
 ```
-
-The OpenSearch provider answers the same contract but combines the words of `text` and `fuzzy` fields with
-*or* (those of a `prefix` field with *and*), so there an added word can **widen** the answer. Read the
-scores, and check a query on the provider you run before relying on how its words combine.
 
 **What a query does not have**: no `AND`, `OR` or `NOT`, no phrase search, no `field:value`. A `-`
 or a quote is only punctuation. Here `-hydraulique` excludes nothing — the answer is the same two
@@ -197,7 +202,7 @@ facets:
 city      Lyon (1)
 segment   GOLD (1)
 
-1 hits shown · as of 2026-10-06 08:48
+1 hit shown · as of 2026-10-06 08:48
 ```
 
 ```
@@ -234,7 +239,7 @@ facets:
 city      Lyon (1)  Milano (1)
 segment   GOLD (1)  SILVER (1)
 
-1 hits shown · as of 2026-10-06 08:48
+1 hit shown · as of 2026-10-06 08:48
 more: lm search query hydraulique --entity AcmeCustomer --limit 1 --cursor eyJzY29yZSI6MC41NDU0NTQ1NjE3MTAzNTc3LCJzZWFyY2hJbmRleCI6ImN1c3RvbWVycyIsImRvY3VtZW50SWQiOiIxfDY6UC0xMDAwIiwiZmluZ2VycHJpbnQiOiJzaGEyNTY6MzllODY0N2M5N2NjMzFkMDQyMGJmZjNmM2U1MDcwN2YxMTU4ODYyMDJjODY5MWJlMTBkOTk4ZTc1MmZkZTBiMSIsImVsaWdpYmxlIjp7ImN1c3RvbWVycyI6MTZ9fQ
 ```
 
@@ -249,7 +254,7 @@ facets:
 city      Lyon (1)  Milano (1)
 segment   GOLD (1)  SILVER (1)
 
-1 hits shown · as of 2026-10-06 08:48
+1 hit shown · as of 2026-10-06 08:48
 ```
 
 (The cursor is long; it is shortened to `<cursor>` here, nothing else is changed.)
@@ -312,12 +317,12 @@ $ lm search query hydraulique --entity AcmeCustomer -o json | jq '{hits: [.hits[
 Several situations look like an empty answer and are not. `lm search query` tells them apart from a
 real "nothing matches" (which is a plain `0 hits`, as for `xyzzy` above) and says what to do.
 
-**The index was deleted a moment ago.** The declaration is gone at once, but the documents already
-built take a little while to be purged — the delete [leaves a purge behind](search-indexes.md#deleting-and-the-purge-it-leaves-behind).
-The purge runs asynchronously, so the old index may still answer until it completes. Once it has:
+**The index was deleted a moment ago.** The old documents may still answer until the
+[purge](search-indexes.md#deleting-and-the-purge-it-leaves-behind) completes. Once it has:
 
 ```
 $ lm search rm customers
+Type 'delete' to delete search index customers over entity AcmeCustomer — its projected documents are purged: delete
 search index customers deleted
 ```
 
@@ -343,41 +348,29 @@ $ lm search query hydraulique --entity AcmeCustomer
 SearchIndex "customers" over AcmeCustomer is declared but not built yet: lm search rebuild customers --wait
 ```
 
-**The build failed.** `lm search status NAME` names the error. After an upgrade, an entity applied before
-Search existed has to be applied again before it can be indexed ([the declaration
-page](search-indexes.md#an-entity-applied-before-search) has the detail). The hub says so, naming the
-entity (quoted):
-
-```
-Status            degraded
-Last error        IllegalStateException: entity 'AcmeCustomer' cannot be indexed: its view has no "_canonical_key" column, because the entity was applied by a hub older than the one that added it — apply it again (lm entity apply -f <manifest>), then rebuild
-```
-
-The way out: apply the entity again — the same manifest, no other change — and rebuild, as in the
-[quickstart](#quickstart-declare-build-ask).
-
-While the build has failed, `lm search query` does not call the index "not built yet" (rebuilding would
-fail again): it says the last build failed, and why. Quoted:
+**The build failed.** `lm search status NAME` names the error, and the query says the last build
+failed rather than "not built yet". Quoted (`…` stands for the cause):
 
 ```
 SearchIndex "customers" over AcmeCustomer has nothing built: its last build failed: IllegalStateException: entity 'AcmeCustomer' cannot be indexed: … — read it with `lm search status customers`, fix the cause, then lm search rebuild customers --wait
 ```
 
-Three more answers are said by the command when it can know them; they cannot be replayed on a hub that
-has a provider and a healthy index, so they are quoted:
+The error above (no `_canonical_key` column) is fixed as in
+[An entity applied before Search](search-indexes.md#an-entity-applied-before-search).
+
+Three more answers:
 
 | You see | It means | Do |
 |---|---|---|
 | `search is not installed on this hub — no Search provider is built into it …` | the hub has no Search provider; this is **not** an empty result | build the hub with one: `deploy/selfhost/up.sh --search` (PostgreSQL) or `--search-cluster` (OpenSearch), closed edition |
-| `search is degraded: <reason> — retry in 60s` | the provider is installed but failing. Reasons: `backend_unreachable` (the search backend cannot be reached), `backend_auth_failed` (it refused the hub's credentials), `unsupported_distribution` (a distribution the provider does not support), `cluster_red` (the cluster reports red health) | fix the backend named by the reason; an outage never stops ingestion and is never shown as zero hits |
+| `search is degraded: <reason> — retry in 60s` | the provider is installed but failing. Reasons: `backend_unreachable` (cannot be reached), `backend_auth_failed` (refused the hub's credentials), `backend_error` (answered with an error), `unsupported_distribution` (not a supported distribution), `cluster_red` (red cluster health) | fix the backend named by the reason; ingestion goes on meanwhile |
 | `SearchIndex "NAME" over ENTITY is invalid: <reason>` | an entity was re-applied without a column the index declares | fix the manifest and apply it again |
 
-The build state (*not built*, *being built*) is read from the integrator's status door, so only an
-integrator is told it; any user is told the other cases.
+Only an integrator is told *not built* or *being built*; any user is told the other cases.
 
 ## Over HTTP
 
-The CLI is a thin layer over one request:
+For an application. The CLI sends one request:
 
 | Parameter | Meaning |
 |---|---|
@@ -386,7 +379,15 @@ The CLI is a thin layer over one request:
 | `limit` | 1 to 100, default 20; outside the range is refused with `400` |
 | `cursor` | the `nextCursor` of the previous page |
 | `facet.<field>` | a filter on a declared facet field; at most 10 fields, each once |
-| `scope` | a métier scope: keep only the entities that carry it, among those you may read. This is what an app (the PWA) sends so that its search stays inside its own métier. Absent means no narrowing. A value that is empty, padded with spaces, repeated, or not a lowercase identifier is refused with `400`; a user bound to scopes who does not hold it gets `403 {"error":"scope not granted"}`. A user with no scope roles may name any scope and is still narrowed to it. With `entity`, the entity must also carry the scope, otherwise the same `403` as an entity you may not read. Hits and facets are narrowed together |
+| `scope` | a métier scope: keep only the entities that carry it, among those you may read (what the PWA sends). See below |
+
+`scope=` in detail:
+
+- absent: no narrowing; hits and facets are narrowed together when present;
+- empty, padded, repeated or not a lowercase identifier: `400`;
+- a scope-bound user who does not hold it: `403 {"error":"scope not granted"}`; an unbound user may
+  name any scope and is narrowed to it;
+- with `entity`, the entity must carry the scope, else the same `403`.
 
 ```
 $ curl -s -H "Authorization: Bearer $TOKEN" \
@@ -440,13 +441,25 @@ $ curl -s -H "Authorization: Bearer $TOKEN" \
 }
 ```
 
-The answer has `hits` (each with `key`, `score`, `fields`, `highlights` and a `canonicalLink` to the
-record, plus `title` and `titleField` — the business title and the field it comes from, both `null` unless
-the index [declares one](search-indexes.md#choosing-a-title), and `links` — a list of `field` and `url` templates, absent
-unless the index [links its results to your ERP](search-indexes.md#linking-a-result-to-your-erp)), `fieldLabels` (the [human names](search-indexes.md#human-names-for-fields) of the hit entities' columns, `{entity: {column: label}}`; absent when none is labelled), `facets`, `nextCursor` (`null` on the last page) and `asOf`. Refusals keep their meaning:
-`400` for what you sent wrong (the message says what), `403 {"error":"scope not granted"}`, `501`
-when no provider is installed, `503` with a `reason` when it is degraded. To check the engine without
-searching, ask for its capability:
+| Field | Meaning | When absent or `null` |
+|---|---|---|
+| `hits[].key`, `score`, `fields`, `highlights` | the hit, as the CLI prints it | — |
+| `hits[].canonicalLink` | the record's address | — |
+| `hits[].title`, `titleField` | the business title and its field | `null` unless the index [declares one](search-indexes.md#choosing-a-title) |
+| `hits[].links` | `field` and `url` templates | absent unless the index [links to your ERP](search-indexes.md#linking-a-result-to-your-erp) |
+| `fieldLabels` | `{entity: {column: label}}`, the [human names](search-indexes.md#human-names-for-fields) | absent when none is labelled |
+| `facets` | per facet field, values and counts over the whole match | — |
+| `nextCursor` | the next page's cursor | `null` on the last page |
+| `asOf` | the index's freshness | — |
+
+| Status | Meaning |
+|---|---|
+| `400` | what you sent is wrong; the message says what |
+| `403 {"error":"scope not granted"}` | an entity or scope you may not read |
+| `501` | no provider installed |
+| `503` with a `reason` | the provider is degraded |
+
+To check the engine without searching, ask for its capability (no `lm` command prints it):
 
 ```
 $ curl -s -H "Authorization: Bearer $TOKEN" "$LUMNIK_URL/api/search/capability"

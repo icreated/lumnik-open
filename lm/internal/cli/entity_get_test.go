@@ -140,6 +140,7 @@ func TestEntityGet_refusesBeforeAskingTheHub(t *testing.T) {
 		{"filter without a column", []string{"--filter", "=5"}, "COLUMN=VALUE"},
 		{"filter named limit", []string{"--filter", "limit=5"}, "limit"},
 		{"filter named offset", []string{"--filter", "offset=5"}, "offset"},
+		{"filter named identity", []string{"--filter", "identity=true"}, "identity"},
 		{"same column twice", []string{"--filter", "a=1", "--filter", "a=2"}, "twice"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

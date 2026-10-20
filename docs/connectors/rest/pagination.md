@@ -8,8 +8,7 @@ This page serves [REST](../rest.md) and [GraphQL](../graphql.md): both are the s
 
 ## Presets
 
-Most APIs follow a convention that already has a name. Declare the preset and the engine
-expands it at apply time into the real strategy:
+Declare the preset; it is expanded at apply time into the real strategy:
 
 | Preset | For | Expands to |
 |---|---|---|
@@ -31,54 +30,44 @@ pagination: { kind: spring-page, size: 500 }            # override any expanded 
 pagination: { kind: spring-hateoas, items: products }   # {items} → $._embedded.products
 ```
 
-`nestjs` and `json-api` expand identically — pick the one that names your source, the engine
-sees the same thing. Only `spring-hateoas` requires an override: `items` is what its
-`$._embedded.{items}` placeholder needs.
+`nestjs` and `json-api` expand identically. Only `spring-hateoas` requires an override:
+`items` fills its `$._embedded.{items}` placeholder.
 
 ## Strategies
 
-When no preset fits, write the strategy out — every field the preset would have
-expanded to, in the manifest:
+When no preset fits, write the strategy out:
 
 | Strategy | Use for | Required fields | Optional fields (default) |
 |---|---|---|---|
-| `cursor` | Stripe, OpenAI, most modern APIs | cursor_param, cursor_path, has_more_path, response_path | cursor_binding (query) |
+| `cursor` | Stripe, OpenAI, most modern APIs | cursor_param, cursor_path, has_more_path, response_path | cursor_binding (query), total_path |
 | `page` | Spring, Laravel, anything with page numbers | page_param, response_path | size_param, size (50), start_page (1), total_pages_path, total_path, has_more_path, last_path, empty_check (true) |
 | `offset` | legacy REST | offset_param, limit_param, response_path | limit (100), total_path |
-| `link-header` | GitHub, JSON:API | response_path | rel (next) |
+| `link-header` | GitHub | response_path | rel (next), total_path |
 | `body-link` | Django REST, JSON:API, NestJS, HATEOAS | link_path, response_path | total_path |
-| `relay` | GraphQL Connections | cursor_path, has_more_path, response_path; plus cursor_param **or** cursor_var | cursor_binding (query) |
-| `custom` | — | response_path | a Kotlin script hook, **not wired yet** — see below |
+| `relay` | GraphQL Connections | cursor_path, has_more_path, response_path; plus cursor_param **or** cursor_var | cursor_binding (query), total_path |
+| `custom` | — | — | refused — see below |
 
 `page` stops on whichever of `total_pages_path` / `has_more_path` / `last_path` is present —
 and, with `empty_check: true` (the default), on the first empty page.
 
-`total_path` does a second job beyond stopping the walk: it becomes a witness the run is
-checked against — see [The declared
-total](../rest.md#the-declared-total-a-witness-on-the-count).
+`total_path` is accepted by every strategy; it also checks the run's row count — see
+[The declared total](../rest.md#the-declared-total-a-witness-on-the-count).
 
-!!! warning "`kind: custom` validates, then fails on the second page"
-    The Kotlin-script strategy is a stub in this release. A manifest declaring it applies
-    cleanly, `lm source rest test` reads its first page and answers `ok`, and the run dies as
-    soon as a second page is needed:
-
-    ```
-    ✖ run failed: Custom Kotlin pagination scheduled for Task 9 — KotlinScriptHost.executeSource integration
-    ```
-
-    Use one of the six strategies above, or the `path:` query-string trick, until it lands.
+!!! warning "`kind: custom` is refused"
+    `lm validate` and `lm apply` stop on it with `custom pagination is not supported; use page,
+    offset, cursor, link-header or body-link`. A connector applied before that check still meets
+    the same sentence in its run. Use one of the six strategies above.
 
 !!! warning "Page size is a knob on `page` and `offset` only"
-    `cursor`, `body-link` and `link-header` send **no size parameter at all** — their first
-    request is a bare GET — so the *server's* default page size governs the whole run. A server
-    defaulting to 50 rows turns 2 400 partners into 48 requests instead of 5. To ask for a
-    larger page, put the query string in the endpoint's `path:`
-    (`path: /drf/partners?page_size=500`, as in the manifest above): it survives, because the
-    request builder appends its own parameters with `&`. `relay` is different again — its page
-    size is the `first:` argument you write in the query yourself.
+    `cursor`, `body-link` and `link-header` send **no size parameter**: the server's default
+    page size governs the run.
 
-The `link-header` strategy written out, with an API key on the side — the next page lives in an
-RFC 5988 header and the body says nothing about paging:
+    To ask for a larger page, put it in `path:`, as
+    [`20-two-endpoints.yaml`](../rest.md#one-connector-one-api) does with
+    `path: /drf/partners?page_size=500`. `relay` takes its size from `first:` in the query.
+
+The `link-header` strategy written out, with an API key — the next page is in an RFC 5988
+`Link` header:
 
 ```yaml
 --8<-- "docs/connectors/rest/demo/30-link-header.yaml"
@@ -87,7 +76,7 @@ RFC 5988 header and the body says nothing about paging:
 ```
 $ lm run list --connector acme-header
 ID        CONNECTOR    ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
-88481a89  acme-header  partners  Completed  2400  2400  0        0             2026-09-10 09:54  2026-09-10 09:54
+539d998f  acme-header  partners  Completed  2400  2400  0        0             2026-10-19 01:40  2026-10-19 01:40
 ```
 
 ## Cursor binding
@@ -100,7 +89,7 @@ For `cursor` and `relay`, `cursor_binding` picks where the next-page cursor is i
 | `header` | an HTTP header | cursor_param (the header name) |
 | `variable` | the POST body's `variables.<name>` | cursor_var — `relay` on a graphql endpoint only |
 
-Both halves of that last rule are refused at apply, and the refusal names the way out:
+Both halves of that last rule are refused at apply:
 
 ```
 $ lm apply -f bad-binding.yaml
@@ -116,12 +105,12 @@ Fix errors above before running 'lm apply -f bad-binding.yaml'.
 Error: validation failed: 2 error(s)
 ```
 
-Two errors on one field, both true: a manifest that fixes only the first is still refused.
+Both errors must be fixed.
 
 > **A pure GraphQL API** (POST a query, cursor in `variables`): see [GraphQL](../graphql.md).
 
 ## See also
 
 - [REST](../rest.md) — the engine underneath
-- [GraphQL](../graphql.md) — `relay`, and why its binding is a variable
+- [GraphQL](../graphql.md) — `relay` with a variable binding
 - [The demo API](demo-api.md) — the dialects these examples read

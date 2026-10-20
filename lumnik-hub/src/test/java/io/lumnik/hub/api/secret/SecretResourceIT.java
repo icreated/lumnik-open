@@ -119,4 +119,23 @@ class SecretResourceIT {
             .then().statusCode(200)
             .body(containsString("rotatedAt"));
     }
+
+    /** lm rotates without --description by leaving the field out; the label must survive (#1249). */
+    @Test
+    void an_update_without_description_keeps_it() {
+        String name = "DESC_KEY_" + System.nanoTime();
+
+        RestAssured.given().header("X-Tenant-Id", "1").contentType("application/json")
+            .body("{\"name\":\"" + name + "\",\"value\":\"v1\",\"description\":\"first desc\"}")
+            .post("/api/platform/secrets").then().statusCode(201);
+
+        RestAssured.given().header("X-Tenant-Id", "1").contentType("application/json")
+            .body("{\"value\":\"v2\"}")
+            .put("/api/platform/secrets/" + name).then().statusCode(204);
+
+        RestAssured.given().header("X-Tenant-Id", "1")
+            .get("/api/platform/secrets/" + name)
+            .then().statusCode(200)
+            .body("description", equalTo("first desc"));
+    }
 }

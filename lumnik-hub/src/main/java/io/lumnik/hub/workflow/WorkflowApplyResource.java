@@ -3,6 +3,7 @@ package io.lumnik.hub.workflow;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.extraction.spi.ExtractionSink;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
@@ -11,7 +12,6 @@ import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.rag.chunk.WorkflowChunkBuilder;
-import io.lumnik.hub.sql.SqlFailureText;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.inject.Instance;
@@ -73,14 +73,8 @@ public class WorkflowApplyResource {
     public Response apply(String body) {
         long tenant = RequireTenant.current();
 
-        JsonNode root;
-        WorkflowManifest m;
-        try {
-            root = parser.readTree(body);
-            m = parser.parse(root);
-        } catch (IllegalArgumentException e) {
-            return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
-        }
+        JsonNode root = ApiErrors.orBadRequest(() -> parser.readTree(body));
+        WorkflowManifest m = ApiErrors.orBadRequest(() -> parser.parse(root));
         List<String> unknown = parser.unknownKeys(root);
         Optional<Response> unknownRefusal =
             ApplyDoorSupport.refuseUnknownKeys("Workflow", unknown, WorkflowManifestParser.honoredSurface());
@@ -153,8 +147,8 @@ public class WorkflowApplyResource {
 
         // store.upsert / truth.check throw a bare RuntimeException on anything beyond the
         // modeled "table missing" case (e.g. a DB outage) — caught here so the caller gets a
-        // stable JSON error instead of a leaked stack trace; the real exception is logged
-        // server-side. Mirrors DataRowResource's convention (error message only, no stack).
+        // stable JSON error that quotes nothing of the failure (a driver message can name a
+        // table, a role or a value); the real exception is logged server-side (#1316).
         try {
             // granted().orElse(null) — empty Optional means unscoped, i.e. every scope. The
             // write's own answer goes straight into the void guard, so it cannot be had and
@@ -198,7 +192,7 @@ public class WorkflowApplyResource {
                         + " to update it")).build();
             }
             LOG.errorf(e, "workflow apply failed for tenant %d, workflow %s", tenant, m.name());
-            return Response.status(500).entity(ApiErrors.error(e.getMessage())).build();
+            return Response.status(500).entity(ApiErrors.error("workflow apply failed")).build();
         }
     }
 
@@ -231,7 +225,7 @@ public class WorkflowApplyResource {
     private static final String UNIQUE_VIOLATION_SQLSTATE = "23505";
 
     private static boolean isUniqueViolation(Throwable e) {
-        return UNIQUE_VIOLATION_SQLSTATE.equals(SqlFailureText.sqlStateOf(e));
+        return UNIQUE_VIOLATION_SQLSTATE.equals(Jdbc.sqlStateOf(e));
     }
 
     @GET
@@ -251,7 +245,7 @@ public class WorkflowApplyResource {
     @Transactional
     public Response manifest(@PathParam("name") String name) {
         long tenant = RequireTenant.current();
-        Response refusal = refuseUnlessHeld(tenant, name);
+        Response refusal = refuseUnlessHeld(name, store.findScope(tenant, name));
         if (refusal != null) return refusal;
         return store.findYaml(tenant, name)
             .map(yaml -> Response.ok(yaml).type("application/yaml").build())
@@ -277,10 +271,16 @@ public class WorkflowApplyResource {
     @Path("/{name}")
     public Response delete(@PathParam("name") String name) {
         long tenant = RequireTenant.current();
-        Response refusal = refuseUnlessHeld(tenant, name);
+        Optional<String> scope = store.findScope(tenant, name);
+        Response refusal = refuseUnlessHeld(name, scope);
         if (refusal != null) return refusal;
-        store.delete(tenant, name);
+        boolean removed = store.delete(tenant, name);
         clearIndex(tenant, name);
+        // Same rationale as the apply's record: the store writes raw JDBC (#1232). Only the
+        // removal that removed it is recorded (#1237).
+        if (removed) {
+            audit.record("WorkflowManifest", name, "DELETE", Map.of("scope", scope.get()));
+        }
         return Response.noContent().build();
     }
 
@@ -305,9 +305,13 @@ public class WorkflowApplyResource {
             return Response.status(400).entity(ApiErrors.error(
                 "body must carry {\"enabled\": true|false}")).build();
         }
-        Response refusal = refuseUnlessHeld(tenant, name);
+        Optional<String> scope = store.findScope(tenant, name);
+        Response refusal = refuseUnlessHeld(name, scope);
         if (refusal != null) return refusal;
         store.setEnabled(tenant, name, body.enabled());
+        // Turning a lifecycle off silences its dormancy alerts: who did it is recorded (#1232).
+        audit.record("WorkflowManifest", name, "UPDATE",
+            Map.of("scope", scope.get(), "enabled", body.enabled()));
         if (body.enabled()) {
             store.findYaml(tenant, name)
                 .ifPresent(yaml -> index(tenant, WorkflowGraph.from(parser.parse(yaml))));
@@ -332,9 +336,9 @@ public class WorkflowApplyResource {
         }
     }
 
-    /** 404 when this tenant has no such workflow, 403 when the caller's scopes exclude it, else null. */
-    private Response refuseUnlessHeld(long tenant, String name) {
-        Optional<String> scope = store.findScope(tenant, name);
+    /** 404 when this tenant has no such workflow ({@code scope} empty), 403 when the caller's scopes
+     *  exclude it, else null. The caller reads the scope, so a write can record it afterwards. */
+    private Response refuseUnlessHeld(String name, Optional<String> scope) {
         if (scope.isEmpty()) {
             return Response.status(404).entity(ApiErrors.error("unknown workflow: " + name)).build();
         }

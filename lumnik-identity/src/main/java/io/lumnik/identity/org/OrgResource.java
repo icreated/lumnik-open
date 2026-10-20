@@ -3,6 +3,7 @@ package io.lumnik.identity.org;
 import io.lumnik.common.eventing.DomainEventPublisher;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.identity.Require;
+import io.lumnik.identity.TenantInPath;
 import io.lumnik.identity.geo.AddressInput;
 import io.lumnik.identity.geo.Coords;
 import io.lumnik.identity.geo.Geocoder;
@@ -26,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+@TenantInPath
 @Path("/api/tenants/{tenantId}/orgs")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
@@ -202,12 +204,10 @@ public class OrgResource {
     }
 
     private void requireTenant(Long tenantId) {
-        Require.callerOwnsTenant(tenantId);
         Require.found(tenants, tenantId, "Tenant");
     }
 
     private Organization requireOrg(Long tenantId, Long id) {
-        Require.callerOwnsTenant(tenantId);
         return Require.owned(orgs, id, tenantId, "Organization");
     }
 }

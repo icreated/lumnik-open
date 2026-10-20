@@ -23,14 +23,10 @@ func (c *Client) ProcessApply(yaml []byte) (json.RawMessage, error) {
 }
 
 // ProcessManifest returns the stored manifest yaml for one process — the edit round-trip.
-func (c *Client) ProcessManifest(name string) (string, error) {
+func (c *Client) ProcessManifest(name string) ([]byte, error) {
 	// JSON fallback in Accept: error bodies (401/404) are JSON — a yaml-only Accept could 406 them.
-	data, err := c.doRaw("GET", "/api/processes/"+url.PathEscape(name)+"/manifest", "",
+	return c.doRaw("GET", "/api/processes/"+url.PathEscape(name)+"/manifest", "",
 		"application/yaml, application/json;q=0.9", nil)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
 }
 
 // ProcessList returns the tenant's declared processes.

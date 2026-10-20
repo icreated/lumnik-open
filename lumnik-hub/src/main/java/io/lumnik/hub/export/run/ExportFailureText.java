@@ -1,5 +1,6 @@
 package io.lumnik.hub.export.run;
 
+import io.lumnik.common.error.Throwables;
 import io.lumnik.hub.connector.rest.Snippets;
 import io.lumnik.hub.export.AuthoredFailure;
 import io.lumnik.hub.sql.SqlFailureText;
@@ -20,7 +21,7 @@ public final class ExportFailureText {
   private ExportFailureText() {}
 
   public static String of(Throwable failure) {
-    List<Throwable> chain = SqlFailureText.causeChain(failure);
+    List<Throwable> chain = Throwables.causeChain(failure);
     for (Throwable t : chain) {
       if (t instanceof AuthoredFailure)
         return Snippets.bound(t.getMessage());

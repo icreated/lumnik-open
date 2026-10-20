@@ -172,10 +172,19 @@ public record ViewFilter(String column, String op, String value) {
     public OperandType operandType() {
         if (!ordering()) return null;
         if (numericOperand() != null) return OperandType.NUMERIC;
-        if (value.matches(TEMPORAL_SHAPE) && TemporalText.parse(value) != null) return OperandType.TEMPORAL;
+        if (temporalOperand()) return OperandType.TEMPORAL;
         return null;
     }
 
+    /** Whether the value is a date or date-time, whatever the operator. */
+    public boolean temporalOperand() {
+        return isTemporal(value);
+    }
+
+    /** The shape first, so nothing absurd reaches the parser, then the parser: a date or a date-time. */
+    public static boolean isTemporal(String value) {
+        return value.matches(TEMPORAL_SHAPE) && TemporalText.parse(value) != null;
+    }
 
     /** A float column is compared natively ({@code ?::float8}); Postgres raises on a value it cannot hold
      *  (overflow, or a non-zero value that underflows to zero) — refuse it here, spoken, never a 500. */

@@ -17,6 +17,11 @@ public final class CsvGlobResolver {
 
   private CsvGlobResolver() {}
 
+  /** A {@code *} or a {@code ?} makes a folder of files; anything else names one file. */
+  public static boolean isGlob(String pathPattern) {
+    return pathPattern.contains("*") || pathPattern.contains("?");
+  }
+
   /**
    * Resolve a path pattern to a list of files, sorted by filename ascending.
    *
@@ -26,7 +31,7 @@ public final class CsvGlobResolver {
   public static List<Path> resolve(String pathPattern) throws IOException {
     Path path = Paths.get(pathPattern);
 
-    if (!pathPattern.contains("*") && !pathPattern.contains("?")) {
+    if (!isGlob(pathPattern)) {
       if (Files.exists(path)) return List.of(path);
       return List.of();
     }

@@ -298,7 +298,13 @@ public class ViewDataReader {
     private static String sqlFor(ViewFilter f, String pgType) {
         String col = quoteIdent(f.column());
         if ("~".equals(f.op())) return col + "::text ILIKE ? ESCAPE '\\'";
-        if ("=".equals(f.op())) return ColumnKind.isTextual(pgType) ? col + " = ?" : col + "::text = ?";
+        if ("=".equals(f.op())) {
+            // A date against a date or timestamp column is equal as an instant, as a process compares it (#1310).
+            ColumnKind kind = ColumnKind.ofType(pgType);
+            if (f.temporalOperand() && kind.temporal())
+                return kind.orderingSql(col, "=", ViewFilter.OperandType.TEMPORAL);
+            return ColumnKind.isTextual(pgType) ? col + " = ?" : col + "::text = ?";
+        }
         if (!f.ordering() || f.operandType() == null)
             throw new IllegalStateException("not a valid ordering filter: " + f.op() + " " + f.value());
         return ColumnKind.ofType(pgType).orderingSql(col, f.op(), f.operandType());

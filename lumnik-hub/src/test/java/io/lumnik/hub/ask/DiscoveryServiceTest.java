@@ -49,6 +49,8 @@ class DiscoveryServiceTest {
     static final class RecordingStore extends SchemaCardStore {
         String sourceType;
         SchemaCard card;
+        String deleted;
+        @Override public void delete(long tenantId, String scope) { this.deleted = scope; }
         @Override public void save(long tenantId, String sourceType, SchemaCard card) {
             this.sourceType = sourceType;
             this.card = card;
@@ -154,12 +156,14 @@ class DiscoveryServiceTest {
     }
 
     @Test
-    void an_empty_scope_still_saves_a_card_rather_than_skipping_the_write() {
+    void an_empty_scope_removes_its_card_rather_than_keeping_the_previous_one() {
+        // #1188: the last table of the scope went (connector deleted or moved out) — no card at all
         DiscoveryResult r = service().rediscover(1L, "empty");
 
         assertEquals(0, r.tableCount());
         assertEquals(0, r.columnCount());
-        assertNotNull(store.card, "a scope with nothing in it must still overwrite the previous card");
+        assertNull(store.card, "nothing to describe: no card is written");
+        assertEquals("empty", store.deleted, "and the previous card does not survive");
         assertEquals("registry", r.sourceType());
     }
 

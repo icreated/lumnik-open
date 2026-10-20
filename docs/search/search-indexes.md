@@ -19,18 +19,22 @@
 --8<-- "docs/search/search-indexes/10-customers.yaml"
 ```
 
-```bash
-curl -X POST "$LUMNIK_URL/api/search-indexes/apply" \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/yaml" \
-  --data-binary @docs/search/search-indexes/10-customers.yaml
-# → {"name":"customers","entity":"AcmeCustomer","status":"valid"}
+Apply it after the [entity](../entities.md#quickstart):
+
+```
+$ lm search apply -f docs/search/search-indexes/10-customers.yaml
+Applied search index "customers" → entity AcmeCustomer (valid)
+$ lm search status
+NAME       STATUS    LAG(s)  DOCUMENTS  LAST REBUILD
+customers  building  0
 ```
 
-The same door from the CLI, which is how a scenario script applies it after the entity:
+On a hub without a [Search provider](#choosing-a-provider) the declaration is stored, nothing is
+built, and `building` stays as it is. A query says whether a provider is there:
 
-```bash
-lm search apply -f docs/search/search-indexes/10-customers.yaml
-# → Applied search index "customers" → entity AcmeCustomer (valid)
+```
+$ lm search query hydraulique
+Error: search is not installed on this hub — no Search provider is built into it, so there is nothing to query (this is not an empty result). The published hub image never carries one: build it from source with deploy/selfhost/up.sh --search (PostgreSQL) or --search-cluster (OpenSearch), both closed edition
 ```
 
 ## Fields: searchable, returned, faceted
@@ -38,9 +42,8 @@ lm search apply -f docs/search/search-indexes/10-customers.yaml
 Every declared field is **returned** with a hit. `match` also makes it **searchable**; `facet: true`
 also makes it a facet. So:
 
-- **`searchable ⊆ returnable`** and **`facet ⊆ returnable`** always hold. A field cannot be searched
-  without being shown, so the index can never answer "does anyone earn 85 000?" about a column the
-  caller cannot see.
+- **`searchable ⊆ returnable`** and **`facet ⊆ returnable`** always hold: a field cannot be searched
+  without being shown.
 - A field **without `match` is return-only**: it rides along with the hit (a status, a date) but is
   never matched against.
 - At least one field must be searchable.
@@ -56,8 +59,7 @@ also makes it a facet. So:
 | `fuzzy` | names with typos, accents and spelling variants |
 | `prefix` | autocomplete, order numbers typed partially |
 
-`phonetic` is refused as *not supported yet*: it returns once a provider proves it on French and
-German data.
+`phonetic` is refused at apply: `spec.fields[0].match: 'phonetic' is not supported yet`.
 
 `spec.language` is one of `simple` (the default), `english`, `french`, `german`, `italian`,
 `spanish`, `dutch`, `portuguese`.
@@ -87,15 +89,13 @@ family       Pompes
 
 - **`titleField` is optional.** Without it every result keeps the entity name as its heading, with the key under it.
 - **It names one of the declared fields**, searchable or return-only. Any other name is refused when you apply.
-- **It is never guessed.** The first field of the list is not the title: a status or a date would become a
-  heading by accident. Say which one, or say nothing.
+- **It is never guessed** from the field order.
 - **The entity stays visible** under the heading, because one search may return several entities.
 - **An item with no value in that field** shows the entity name for that item only.
 
-Declaring or changing a `titleField` is a re-apply like any other, so the index is re-projected
-([how fast an index catches up](#how-fast-an-index-catches-up)). The heading changes at the next search once
-the field is already in the index; when you add the title column to `spec.fields` in the same apply, results
-keep the entity name as heading until the projection has caught up.
+Declaring or changing a `titleField` is a re-apply. The heading changes at the next search when the
+field is already in the index; a title field added in the same apply shows once the index has
+[caught up](#how-fast-an-index-catches-up).
 
 ## Human names for fields
 
@@ -130,8 +130,7 @@ city  Lyon
 
 ## Linking a result to your ERP
 
-A métier user who finds an article by its reference often needs the same item in the system that owns it. Declare
-the address once, on the field people see:
+To open the same item in the system that owns it, declare the address once, on the field people see:
 
 ```yaml
 --8<-- "docs/search/search-indexes/40-products-erp-link.yaml"
@@ -159,12 +158,11 @@ the card behaves as before.
 A mistake is refused when you apply, naming the key — here an address that mentions `{ghost}`, which is not a field of the index:
 
 ```
-$ lm search apply -f products.yaml
+$ lm search apply -f linked.yaml
 Error: API error 400: spec.links[0].url: {ghost} is not one of spec.fields
 ```
 
-Adding or changing a link is a re-apply like any other, but the link does not wait for the index to catch up: it
-shows at the very next search.
+A new or changed link shows at the very next search, without waiting for the index to catch up.
 
 ## Columns joined from a lookup table
 
@@ -176,15 +174,12 @@ that declares `resolution:`. The index follows the lookup table as it follows th
   empty on those rows, it is never one of the two;
 - ingesting the same lookup row again changes nothing.
 
-A lookup change re-projects every row holding the changed key, through each source that carries the
-joined-on column, so a big lookup loaded for the first time re-projects every row that joins it — see
+A big lookup loaded for the first time re-projects every row that joins it — see
 [how fast an index catches up](#how-fast-an-index-catches-up).
 
-On an entity with `resolution:` the document is keyed by the resolved identity: a lookup change re-projects
-every identity that has at least one decided source row holding the key. A source row whose identity is
-undecided is not a document yet — its decision, later, projects it with the lookup as it then is. A
-document's freshness (`asOf`) also waits for the lookup to have been read, not only for the resolution
-pass to have covered the run that wrote it.
+On an entity with `resolution:`, one document is one resolved identity. A source row whose identity
+is undecided is not a document until its decision. A document's freshness (`asOf`) also waits for the
+lookup to have been read.
 
 ## What is refused, and why
 
@@ -193,169 +188,228 @@ pass to have covered the run that wrote it.
 | `spec.scope` / `spec.scopes` | scopes are inherited from the entity; a SearchIndex can never widen who sees its data |
 | `spec.table` / `spec.source` | only a canonical entity has a stable identity and scopes; a raw table has neither |
 | a field that is not a canonical column of the entity | the allowlist names canonical columns only (a source column name is not one) |
-| `tenant_id`, `_entity_id`, `_conflicts`, `_resolution`, `_handle` | hub bookkeeping, never business data |
-| a `metadata.name` that is not a lower-case slug, or `apply` | the name is used as written in `DELETE /api/search-indexes/{name}` |
+| `tenant_id` and the entity's [reserved columns](../entities.md#the-manifest) (`_conflicts`, `_entity_id`…) | hub bookkeeping, never business data |
+| a `metadata.name` that is not a lower-case slug, or `apply` | the name is used in the delete address |
 | an apply over an entity whose scopes you do not **all** hold | `403 {"error":"scope not granted"}` — holding one of two is escalation |
 | a second index over an entity another SearchIndex already indexes | `409` naming that index — **one SearchIndex per Entity**: two would return every hit twice, with scores that cannot be compared |
 
-A re-apply of an existing name also needs every scope of the entity the name **currently** indexes,
-so nobody can take over a declaration they could not have written.
+```
+$ lm search apply -f scoped.yaml
+Error: API error 400: spec.scopes: scopes are inherited from the entity and cannot be declared on a SearchIndex
+$ lm search apply -f tenant.yaml
+Error: API error 400: spec.fields[0].name: 'tenant_id' is an internal column and cannot be indexed
+$ lm search apply -f apply.yaml
+Error: API error 400: metadata.name must be a URL-safe slug ([a-z0-9_-], starting with a letter or digit) and not one of [apply]
+$ lm search apply -f second.yaml
+Error: API error 409: entity 'AcmeCustomer' is already indexed by SearchIndex 'customers' — one SearchIndex per Entity: re-apply 'customers' to change it (match modes can be mixed field by field), or delete it first
+```
 
-Searching one column two ways does not take two indexes: give each field its own `match` mode inside the
-one index. To change what an entity's index declares, re-apply it under its own name — or delete it first.
-An install that already held two indexes over one entity when it upgraded keeps the oldest **valid** one
-(the oldest, if none is valid) and has the others deleted with the usual purge (see [Deleting](#deleting-and-the-purge-it-leaves-behind)).
+- A re-apply of an existing name needs every scope of the entity that name **currently** indexes.
+- To search one column two ways, give each field its own `match` mode inside the one index.
 
 ## Deleting — and the purge it leaves behind
 
-```bash
-curl -X DELETE "$LUMNIK_URL/api/search-indexes/customers" -H "Authorization: Bearer $TOKEN"
-# → 204
+`lm search rm` names the index and its entity and asks you to type `delete` (`--force` skips the
+question in a script):
+
+```
+$ lm search rm customers
+Type 'delete' to delete search index customers over entity AcmeCustomer — its projected documents are purged: delete
+search index customers deleted
 ```
 
-From the CLI: `lm search rm customers`.
+The delete also queues the purge of the documents already in the Search backend. The purge happens
+even if the provider was down or installed later, and re-applying the same name never cancels it.
 
-A delete removes the declaration **and records a purge obligation in the same transaction**. The
-obligation outlives the declaration: documents already projected into a Search backend are purged
-even if the provider was down, absent, or installed only later. Re-applying the same name afterwards
-is a new declaration; it never cancels the pending purge.
+**The purge is asynchronous**, and waits while the provider is down:
 
-**The purge is asynchronous.** Until it has completed, the deleted index's documents can still come back from
-`GET /api/search`: the provider answers from what is projected, and does not ask whether a declaration
-still exists. It does not complete while the projection worker or the provider is down. Three consequences:
-
-- A query made right after `lm search rm` can still return that index's hits. Scopes are unaffected: they
-  belong to the entity and are checked at query time, so this is stale data, never data a caller may not read.
-- Replacing an index by deleting it and declaring a new one over the same entity can show both for that
-  window: duplicate hits, and scores shaped by the old definition. Wait for the empty answer, or re-apply
-  the same name instead — a re-apply rebuilds in place.
-- A client that must be sure a deleted index no longer answers should poll for the empty answer, not assume it.
+- A query right after `lm search rm` can still return that index's hits (never hits the caller may
+  not read: scopes are checked at query time).
+- Deleting an index and declaring a new one over the same entity can show both for a while. Re-apply
+  the same name instead: a re-apply rebuilds in place. A deleted name declared again before its purge
+  ran stays [withheld](#removing-a-field-from-an-index) until rebuilt.
+- A script that must be sure a deleted index no longer answers polls for the empty answer.
 
 ## Rows deleted directly in the database
 
-Search follows what ingestion writes. If someone removes rows straight from an ingested table — a `DELETE`
-on `connector.t_*`, bypassing lumnik — Search is not told: those rows stay searchable until the index is
-rebuilt. Ingestion never deletes rows, so this concerns two gestures: a direct `DELETE` in the database, and `lm endpoint purge` on an endpoint whose hybrid target lives in the `connector` schema (for example the demo's `connector.cust_siebel`). Either way, Search is not told.
+Search is not told about rows removed outside ingestion; they stay searchable until the index is
+rebuilt. Two gestures do this:
+
+- a direct `DELETE` on `connector.t_*` in the database;
+- `lm endpoint purge` on an endpoint whose hybrid target is in the `connector` schema (for example
+  the demo's `connector.cust_siebel`).
+
+Rebuild, and wait for the end:
 
 ```bash
 lm search rebuild customers --wait
 ```
 
-Use `--wait`. Without it the command returns as soon as the hub has *claimed* the run, and a search made
-right away can still return the deleted row; with it, the command follows the rebuild to its end
-(`ready`, `failed` or `cancelled`). Only `ready` means the deleted row is no longer searchable.
+Without `--wait` the command returns once the run is claimed, and a search right away can still return
+the deleted row. Only the `ready` outcome means it is gone (`failed` and `cancelled` are the others).
 
 ## When the entity changes
 
-Entities are deployment-global. When one is re-applied without a column that a SearchIndex uses,
-every tenant's SearchIndex over it turns **`invalid`**, with the reason in the list:
+When an entity is re-applied without a column a SearchIndex uses, every tenant's SearchIndex over it
+turns **`invalid`**. The entity apply is never refused because of Search. An invalid index serves no
+query until it is **re-applied** successfully; restoring the column alone does not revalidate it.
 
-```json
-{"name":"customers","entity":"AcmeCustomer","language":"french",
- "status":"invalid","invalidReason":"spec.fields[2].name: 'city' is not a canonical column of entity 'AcmeCustomer'"}
+`lm search status` says so in its `STATUS` column; what was built before stays under `LAST REBUILD`:
+
+```
+$ lm search status
+NAME       STATUS   LAG(s)  DOCUMENTS  LAST REBUILD
+customers  invalid  0       14         ready
+$ lm search status customers
+Name              customers
+Status            invalid
+Live generation   1
+Documents         14
+Lag               0s
+Last rebuild      97641fed-1dd2-4f35-bd29-353763e0f249 (ready)
+Invalid           spec.fields[2].name: 'city' is not a canonical column of entity 'AcmeCustomer'
 ```
 
-The entity apply itself is never refused because of Search. An invalid declaration takes no part in
-Search until it is **re-applied** successfully — restoring the column alone does not revalidate it.
+A query no longer reaches the index's documents — neither their hits nor their facets — and the empty
+answer says why:
+
+```
+$ lm search query hydraulique
+0 hits
+SearchIndex "customers" over AcmeCustomer is invalid: spec.fields[2].name: 'city' is not a canonical column of entity 'AcmeCustomer' — fix the manifest and re-apply it: lm search apply -f <manifest>
+```
+
+To serve again, remove the column from the index and re-apply it. The index then reads
+[`withheld`](#removing-a-field-from-an-index) until a rebuild without the column has replaced its
+build; the section below shows that step.
+
+### Removing a field from an index
+
+Removing a field is how you stop exposing it. What a re-apply does to the index:
+
+| The re-apply… | The index |
+|---|---|
+| removes a field, or stops searching or faceting on one | **withheld**: answers no query until rebuilt |
+| changes a field's `match` mode, the `language` or the `entity` | **withheld** until rebuilt |
+| only adds (a field, a field newly searched or faceted) | keeps answering from its current build; the addition appears after the rebuild |
+
+The hub starts the rebuild on its own at its next pass; `lm search rebuild NAME --wait` starts it now
+and returns when it is done. A withheld index stays withheld until that rebuild, even if you put the
+field back.
+
+```
+$ lm search apply -f customers.yaml
+Applied search index "customers" → entity AcmeCustomer (valid)
+$ lm search query hydraulique
+0 hits
+SearchIndex "customers" over AcmeCustomer is withheld: a re-apply removed or changed what its build still serves — it answers again once rebuilt: lm search rebuild customers --wait
+$ lm search status
+NAME       STATUS    LAG(s)  DOCUMENTS  LAST REBUILD
+customers  withheld  0       14         ready
+$ lm search status customers
+Name              customers
+Status            withheld
+Live generation   3
+Documents         14
+Lag               0s
+Last rebuild      fe1e7ee9-2d01-472b-a397-60f0b7e4ba84 (ready)
+Withheld          a re-apply removed or changed what its build serves; it answers nothing until rebuilt: lm search rebuild customers --wait
+$ lm search rebuild customers --wait
+Name              customers
+Status            ready
+Live generation   4
+Documents         14
+Lag               0s
+Last rebuild      fe72138f-9a9c-4ae7-8a3c-7c274fe5e559 (ready)
+$ lm search query hydraulique
+ENTITY        KEY          SCORE  MATCH
+AcmeCustomer  code=P-1000  0.55   code=P-1000 | name=Hydraulique Lyon 1000 | segment=GOLD
+AcmeCustomer  code=P-1010  0.50   code=P-1010 | name=Hydraulique Milano 1010 | segment=SILVER
+
+facets:
+segment   GOLD (1)  SILVER (1)
+
+2 hits shown · as of 2026-10-18 22:13
+```
+
+Here `customers.yaml` is the quickstart manifest without its `city` field.
 
 ### An entity applied before Search
 
-An index reads the entity's compiled view, and that view only gets the column the index needs
-(`_canonical_key`) when the entity is **applied**. An entity applied by a hub older than the one that
-introduced Search therefore cannot be indexed yet. Declaring the index still answers `valid`; the first
-build fails, and `lm search status NAME` says why:
+| Symptom | Gesture |
+|---|---|
+| `lm search status NAME` reads `degraded`, `Last error … its view has no "_canonical_key" column …` | `lm entity apply -f <manifest>` (the same manifest), then `lm search rebuild NAME --wait` |
 
-```
-Status            degraded
-Last error        IllegalStateException: entity 'AcmeCustomer' cannot be indexed: its view has no "_canonical_key" column, because the entity was applied by a hub older than the one that added it — apply it again (lm entity apply -f <manifest>), then rebuild
-```
-
-Apply the entity again — the same manifest, no other change — then rebuild:
-`lm entity apply -f <manifest>` and `lm search rebuild NAME --wait`. Do it once for each entity you index
-that was applied before the upgrade. `lm search query` over such an index says the build failed (and why),
-not that the index "is not built yet".
+Do it once for each indexed entity that was last applied by an older hub.
 
 ## How fast an index catches up
 
-After a bulk load the index trails the data until the hub has re-projected every changed row. The rule it follows:
+After a bulk load the index trails the data. `lm search status` shows the lag; the hub catches up
+about once a minute, in batches of at most 500 documents. A backlog over the threshold below is
+rebuilt instead, while the index keeps answering from its current content.
 
-- A batch is **at most 500 documents**.
-- A document the provider **refuses** does not hold the index back. The hub first sends the batch in one call; if that call fails it retries mark by mark, leaves the refused document pending, and carries on with the ones behind it. It stops for the tick after **3 failures in a row** in that mark-by-mark pass (a success resets the count), so a provider that is down costs **four** calls per index per tick (the batch call, then three), not one per document. The index shows `degraded` with the provider's message for as long as a refused document is pending, and its freshness claim (`asOf`) does not move past it. Read the message with `lm search status NAME`, then: if the **source row** is what the provider rejects, correct it and ingest it again — the change re-marks the document and the next tick retries it; if the **index declaration** is the cause, correct it, re-apply it with `lm search apply -f <manifest>`, then `lm search rebuild NAME --wait`. Rebuilding without fixing the cause fails on the same document again. The limit is `lumnik.search.projection.catchup-consecutive-failure-limit` (environment variable `LUMNIK_SEARCH_PROJECTION_CATCHUP_CONSECUTIVE_FAILURE_LIMIT`), at least `1`; with `1`, the pass stops at the first failed mark.
-- Every eligible index gets **one attempt on each scheduler tick**, nominally once per minute. A successful attempt processes at most 500 documents. An attempt can come to nothing: another replica may hold the index's lock, the batch may fail, or a full rebuild may be owed; and a tick that overruns the minute makes the next one be skipped.
-- While the minute's time budget lasts, the indexes that are still behind get **further batches, taking turns**: one batch each per round, so a very large index never takes another's turn.
-- Further batches stop when an index is up to date, at that index's first failure of the minute, or when the budget is spent. The budget stops a new batch from **starting**; it never cuts one short, so a minute can run a little over.
-- The budget is `lumnik.search.projection.catchup-budget` (environment variable `LUMNIK_SEARCH_PROJECTION_CATCHUP_BUDGET`), a duration with a unit. The default is `30s`. With `0s`, no additional batches run during a tick.
-- An index with more than **5,000 pending changes** is not caught up batch by batch: it is **rebuilt**, as after re-applying its declaration. Reading one batch costs about as much as reading the whole entity, whatever the batch holds, so past a few thousand changes one rebuild costs less than the batches it replaces. While it rebuilds, the index keeps answering from its current content; changes made after the rebuild started are caught up after it. An index whose last attempt failed is caught up batch by batch until one succeeds. The threshold is `lumnik.search.projection.rebuild-backlog-threshold` (environment variable `LUMNIK_SEARCH_PROJECTION_REBUILD_BACKLOG_THRESHOLD`), a number of pending changes. With `0`, a backlog never causes a rebuild.
-- A batch has as long to read the entity as a rebuild has to scan it: `lumnik.search.projection.rebuild-scan-timeout-seconds`, 1,800 by default.
+| Property (env var) | Default | Effect |
+|---|---|---|
+| `lumnik.search.projection.catchup-budget` (`LUMNIK_SEARCH_PROJECTION_CATCHUP_BUDGET`) | `30s` | time per minute for extra batches on indexes still behind; `0s` = one batch per minute |
+| `lumnik.search.projection.rebuild-backlog-threshold` (`LUMNIK_SEARCH_PROJECTION_REBUILD_BACKLOG_THRESHOLD`) | `5000` | pending changes above which the index is rebuilt; `0` = never |
+| `lumnik.search.projection.catchup-consecutive-failure-limit` (`LUMNIK_SEARCH_PROJECTION_CATCHUP_CONSECUTIVE_FAILURE_LIMIT`) | `3` | refused documents in a row before the index waits for the next minute; at least `1` |
+| `lumnik.search.projection.rebuild-scan-timeout-seconds` | `1800` | time a batch or a rebuild has to read the entity |
 
-The budget trades freshness for load on the primary database: a longer budget empties a backlog sooner and keeps the database busier while it does. To watch it, `lumnik_search_projection_lag_seconds` and `lumnik_search_projection_lagging_indexes` report the oldest pending change and how many indexes still have one. Your own freshness budget, measured on your hardware, is the figure that decides the setting.
+Two metrics watch it: `lumnik_search_projection_lag_seconds` (oldest pending change) and
+`lumnik_search_projection_lagging_indexes` (indexes still behind).
 
-The rebuild threshold weighs reading against writing. Measured on one laptop with the PostgreSQL provider, a rebuild cost the same as catching up somewhere between 1,600 and 6,800 pending changes, for entities of 100,000 and of 1,000,000 rows. A provider whose writes cost more per document moves that point up; replay a backlog on your own hardware before changing the default.
+A document the provider refuses leaves the index `degraded`, with the provider's message in
+`lm search status NAME`; the other documents carry on. Then:
+
+- the **source row** is the cause: correct it and ingest it again;
+- the **declaration** is the cause: correct it, `lm search apply -f <manifest>`, then
+  `lm search rebuild NAME --wait`.
 
 ## Database cost on observed tables
 
-Once a Search provider is installed, the hub automatically adds an index to every source or lookup
-table observed by a valid SearchIndex. Existing tables need no migration or manual preparation.
-
-The index uses disk space and adds work to ingestion, especially when unchanged rows are ingested
-again with `on-conflict: update`. The hub does not remove it when a SearchIndex is deleted or becomes
-invalid, or when the provider is removed. Leave it in place unless the table is no longer used by
-Search and reclaiming that space or write capacity matters; a database administrator can then identify
-and drop it with the usual PostgreSQL tools. The hub recreates it if Search observes the table again.
+- With a provider installed, the hub adds a database index to every source or lookup table a valid
+  SearchIndex reads. Nothing to prepare.
+- It costs disk space and ingestion work, and stays when the SearchIndex or the provider goes. A DBA
+  may drop it once the table no longer serves Search; the hub recreates it if needed.
 
 ## Choosing a provider
 
-Search needs a provider, and there are two, chosen when the hub is **built**, never implied by
-enabling Pro:
+Search needs a provider, chosen when the hub is **built**. The published hub image carries neither.
 
-- **PostgreSQL** (`-Psearch`): the index lives in the database you already run. Nothing else to
-  operate. Projection writes and index maintenance share the primary database's resources with
-  ingestion, so it suits installations where that headroom exists. One measured envelope, on one
-  laptop, is in [Search (PostgreSQL provider)](../operations/sizing.md#search-postgresql-provider).
-- **Cluster** (`-Psearch-cluster`, closed edition): the index lives in an OpenSearch 2.x/3.x cluster,
-  or in your own Elasticsearch 8.x/9.x. Graduate to it when projection and query load start to
-  contend with ingestion — and decide that on your own measurements, not on a row count:
+| Provider | Build | Where the index lives | Try it on one host (closed-edition sources) |
+|---|---|---|---|
+| PostgreSQL | `-Psearch` | the database you already run; shares its resources with ingestion | `deploy/selfhost/up.sh --search` |
+| Cluster | `-Psearch-cluster` (closed edition) | an OpenSearch 2.x/3.x cluster, or your Elasticsearch 8.x/9.x | `deploy/selfhost/up.sh --search-cluster` |
 
-> On your production hardware, replay the scenario at the volume and rate you expect. Move to the cluster provider when, **under ingestion**, the p95 of a matching mode exceeds your latency budget, or projection lag exceeds your freshness budget, or ingestion throughput drops noticeably against the ingest-alone phase — while the same search load **alone** stays within budget. That combination identifies contention from keeping Search on the primary database; the cluster provider moves query execution, projection writes and search-index maintenance off it (the projection worker still reads the canonical data from PostgreSQL). If the search load alone already exceeds the budget, the cause is volume or matching, not sharing: re-read the index declaration before adding infrastructure.
+- The two are alternatives: `up.sh` refuses `--search` and `--search-cluster` together.
+- `--search-cluster` starts an OpenSearch container with security on and writes two passwords into
+  `.env`: the cluster admin's, and that of a `lumnik` user confined to the `lumnik-*` indexes.
+- The hub reads the cluster from `LUMNIK_SEARCH_OPENSEARCH_URL`, `…_USERNAME`, `…_PASSWORD` and, for
+  a private CA, `…_TLS_CA_FILE`.
 
-Rows per tenant is a column of the observed table, not a trigger.
+**When to move to the cluster provider.** Replay your expected volume on production hardware. Move
+when, **under ingestion**, query p95 or projection lag exceeds your budget, or ingestion slows — while
+the same search load **alone** stays within budget. If search alone is already too slow, re-read the
+index declaration first.
 
-The published hub image carries **neither**. A provider is built in from source, so an installation
-that never asked for Search never has a search client on its classpath.
-
-To try the PostgreSQL provider on a single host, run `deploy/selfhost/up.sh --search` from the
-closed-edition sources: it builds the hub from source with the provider and starts the usual stack — there is nothing else to run. It is an alternative to
-`--search-cluster`; the script refuses both together.
-
-To try the cluster provider on a single host, run `deploy/selfhost/up.sh --search-cluster` from the
-closed-edition sources: it builds the hub with the provider, starts an OpenSearch container with
-security on and per-install certificates, and generates two passwords into `.env`: the cluster's own admin, and the password of a dedicated `lumnik` user that the hub runs as. That user is confined to the cluster's `lumnik-*` indexes and cannot read or change the cluster's security settings. The hub reads the
-cluster from `LUMNIK_SEARCH_OPENSEARCH_URL`, `..._USERNAME`, `..._PASSWORD` and, for a private CA,
-`..._TLS_CA_FILE`.
-
-Once an index is built, query it from the CLI, or over HTTP with `GET /api/search`:
+Once an index is built, query it — the [full guide](querying.md):
 
 ```bash
 lm search query "hydraulique lyon" --entity AcmeCustomer --facet segment=GOLD
 ```
 
-An empty answer is explained rather than left bare. Anyone is told when no engine is installed, when no
-index is declared over the entity, or when the index is invalid; an integrator is also told whether the
-index is not built yet or still being built (the build state is theirs to read). See
-[Querying Search](querying.md), which also covers the match modes seen from the query side, filters, pages and
-the answers that are not "no results".
+**Is there a provider?** `lm search query` and the TUI's `:search` page say *not installed*. No `lm`
+command prints the raw state; over HTTP:
 
-You can tell whether it works without guessing:
-
-```bash
-curl -H "Authorization: Bearer $TOKEN" "$LUMNIK_URL/api/search/capability"
+```
+$ curl -H "Authorization: Bearer $TOKEN" "$LUMNIK_URL/api/search/capability"
+{"state":"unavailable","provider":null,"reason":"not_installed","version":null}
 ```
 
-The answer is one of three, and none of them looks like "zero hits": a provider that is `AVAILABLE`,
-a provider that is `DEGRADED` with a short reason (`backend_unreachable`, `backend_auth_failed`,
-`unsupported_distribution`, `cluster_red`), or no provider installed. A cluster outage never stops
-ingestion and never turns into an empty answer.
+| `state` | Meaning |
+|---|---|
+| `available` | a provider answers |
+| `degraded` | a provider is installed but impaired; `reason` is `backend_unreachable`, `backend_auth_failed`, `backend_error`, `unsupported_distribution` or `cluster_red` |
+| `unavailable` | no provider in this hub (`reason`: `not_installed`) |
 
-Two limits to know. A search is **not a snapshot** across pages: a page fetched after the index was
-rebuilt is refused rather than spliced into the previous one. And the answer's `asOf` is the freshness
-it reports — trust that value, not the wall clock.
+A cluster outage never stops ingestion and never turns into an empty answer.

@@ -25,7 +25,7 @@ func newInboxCmd() *cobra.Command {
 			}
 			now := time.Now()
 			return printPage(cmd,
-				[]string{"ID", "QUAND", "PROCESS", "MESSAGE", "ENTITY_KEY"}, entries,
+				[]string{"ID", "WHEN", "PROCESS", "MESSAGE", "ENTITY_KEY"}, entries,
 				func(e client.InboxEntry) []string { return inboxRow(e, now) })
 		},
 	}
@@ -65,7 +65,7 @@ func inboxRow(e client.InboxEntry, now time.Time) []string {
 	return []string{strconv.FormatInt(e.ID, 10), quandOf(e.OccurredAt, now), e.Process, msg, e.EntityKey}
 }
 
-// quandOf renders the QUAND column: the humanized age of a decision's RFC3339 timestamp.
+// quandOf renders the WHEN column: the humanized age of a decision's RFC3339 timestamp.
 // RFC3339Nano is used because Java Instant.toString() includes fractional seconds when non-zero
 // (Postgres NOW() has microsecond precision); it parses both "…Z" and "….123Z". An unparseable
 // value falls back to the raw string.

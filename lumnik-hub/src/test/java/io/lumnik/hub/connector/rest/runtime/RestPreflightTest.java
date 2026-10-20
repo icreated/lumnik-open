@@ -11,13 +11,22 @@ import io.lumnik.hub.connector.rest.auth.AuthProviderRegistry;
 import io.lumnik.hub.connector.rest.auth.AuthSpec;
 import io.lumnik.hub.connector.rest.pagination.PaginationFactory;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
+import javax.net.ssl.SSLHandshakeException;
+import java.io.IOException;
 import java.lang.reflect.RecordComponent;
+import java.net.ConnectException;
+import java.net.http.HttpTimeoutException;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 /**
  * The pre-flight must knock the way the run knocks.
@@ -56,6 +65,13 @@ class RestPreflightTest {
         c.setTypeId("rest-generic");
         c.setConfig(config);
         return c;
+    }
+
+    /** An auth registry whose every provider signs nothing: the request goes out as composed. */
+    private static AuthProviderRegistry noAuth() {
+        return new AuthProviderRegistry() {
+            @Override public AuthProvider build(AuthSpec spec) { return request -> request; }
+        };
     }
 
     /** The offset endpoint of the bench's `acme-headers`: pagination lives on the ENDPOINT. */
@@ -141,9 +157,7 @@ class RestPreflightTest {
      */
     @Test
     void anInterruptedRequestIsRaised_notReportedAsARefusal() {
-        preflight.authReg = new AuthProviderRegistry() {
-            @Override public AuthProvider build(AuthSpec spec) { return request -> request; }
-        };
+        preflight.authReg = noAuth();
         preflight.http = new RestHttpClient() {
             @Override public RestResponse execute(RestRequest req) throws Exception {
                 throw new InterruptedException("cancelled");
@@ -212,6 +226,72 @@ class RestPreflightTest {
             .isEqualTo("POST");
         assertThat(refused.url()).as("the URL was known — hiding it helps nobody")
             .isEqualTo("http://erp.invalid/graphql");
+    }
+
+    /**
+     * A request that never got an answer is reported by its kind, never by the exception's message:
+     * a JDK message can quote the source URL — whole, without its userinfo, its path alone,
+     * percent-encoded — and that URL is the integrator's, legally carrying a credential (#1164).
+     */
+    @ParameterizedTest
+    @MethodSource("quotingExceptions")
+    void anUnreachableSourceIsReportedByItsKind_neverByTheMessage(Exception thrown, String expected) {
+        preflight.authReg = noAuth();
+        preflight.http = new RestHttpClient() {
+            @Override public RestResponse execute(RestRequest req) throws Exception { throw thrown; }
+        };
+
+        RestPreflight.Verdict refused =
+            preflight.check(connector(Map.of("base_url", "http://erp.invalid")), offsetEndpoint());
+
+        assertThat(refused.ok()).isFalse();
+        assertThat(refused.detail()).isEqualTo(expected).doesNotContain("user", "pw", "ECRET", "k=v");
+    }
+
+    private static final String SOURCE = "https://user:pw@api.example/p/SECRET?k=v";
+
+    static Stream<Arguments> quotingExceptions() {
+        return Stream.of(
+            arguments(new ConnectException("Connection refused: " + SOURCE), "connection failed (ConnectException)"),
+            arguments(new HttpTimeoutException("request timed out: /p/SECRET?k=v"), "timeout (HttpTimeoutException)"),
+            arguments(new IOException("https://api.example/p/%53ECRET?k%3Dv", new SSLHandshakeException(SOURCE)),
+                      "TLS failure (IOException)"));
+    }
+
+    /**
+     * And a real JDK failure, thrown before any I/O: a space in the composed URL makes
+     * {@code URI.create} inside the real client refuse it, with the whole URL in its message.
+     */
+    @Test
+    void aRealJdkRefusalOfTheUrlIsReportedByItsKind() {
+        preflight.authReg = noAuth();
+        preflight.http = new RestHttpClient();
+
+        RestPreflight.Verdict refused = preflight.check(
+            connector(Map.of("base_url", "https://user:pw@api.example")),
+            endpoint("partners", "GET", "/p/SECRET?k=v w", Map.of("pagination", Map.of("kind", "link-header"))));
+
+        assertThat(refused.detail()).isEqualTo("invalid URL (IllegalArgumentException)");
+    }
+
+    /**
+     * The URL is shown on purpose — but through {@code Urls.forDisplay}: userinfo in {@code base_url}
+     * and a token in the endpoint path's query would otherwise reach the CLI verbatim (#1166).
+     */
+    @Test
+    void theReportedUrlKeepsItsHostAndPathButNeverItsCredential() {
+        preflight.authReg = noAuth();
+        preflight.http = new RestHttpClient() {
+            @Override public RestResponse execute(RestRequest req) throws Exception {
+                throw new ConnectException("Connection refused");
+            }
+        };
+
+        RestPreflight.Verdict refused = preflight.check(
+            connector(Map.of("base_url", "https://user:pw@api.example")),
+            endpoint("partners", "GET", "/p/orders?k=v", Map.of("pagination", Map.of("kind", "link-header"))));
+
+        assertThat(refused.url()).isEqualTo("https://…@api.example/p/orders");
     }
 
     /** Nothing composed, nothing to report: no request shape exists to be honest about. */

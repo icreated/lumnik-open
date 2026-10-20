@@ -26,12 +26,13 @@ type Ask struct {
 	answer   *tview.TextView
 	scope    string
 	last     *client.AskResult
+	isFront  func() bool // true when :ask is the front page of a live app; gates the answer's focus
 	onError  func(string)
 	onToast  func(string)
 }
 
-func NewAsk(app *tview.Application, c *client.Client, onError, onToast func(string)) *Ask {
-	a := &Ask{app: app, client: c, onError: onError, onToast: onToast}
+func NewAsk(app *tview.Application, c *client.Client, isFront func() bool, onError, onToast func(string)) *Ask {
+	a := &Ask{app: app, client: c, isFront: isFront, onError: onError, onToast: onToast}
 
 	a.input = tview.NewInputField().SetLabel(" Ask: ").SetFieldWidth(0)
 	a.input.SetDoneFunc(func(key tcell.Key) {
@@ -49,7 +50,7 @@ func NewAsk(app *tview.Application, c *client.Client, onError, onToast func(stri
 	a.sqlView = tview.NewTextView().SetDynamicColors(true)
 	a.answer = tview.NewTextView().SetDynamicColors(true).SetWordWrap(true)
 
-	a.table = tview.NewTable().SetBorders(false).SetSelectable(true, false)
+	a.table = newListTable()
 	style.ApplyTableSelection(a.table)
 	a.table.SetInputCapture(a.tableKeys)
 
@@ -94,9 +95,11 @@ func (a *Ask) submit(question string) {
 	}
 	a.headline.SetText("[yellow]…thinking[white]")
 	scope := a.scope // capture on the event loop; SetScope may write a.scope concurrently
-	go func() {
+	// The answer to a question asked must not be lost: background lands it once an open $EDITOR
+	// closes, where QueueUpdate dropped it (#1158).
+	background(a.app, func() func() {
 		res, err := a.client.RagAsk(question, scope, client.AnswerLang(""))
-		QueueUpdate(a.app, func() {
+		return func() {
 			if err != nil {
 				// Calm, full-page degradation — notably for REST/CSV scopes with no
 				// discovered schema, where the backend returns 500/503 today.
@@ -104,8 +107,8 @@ func (a *Ask) submit(question string) {
 				return
 			}
 			a.render(res)
-		})
-	}()
+		}
+	})
 }
 
 // renderNotice shows a calm, full-page message (e.g. no discovered schema for a
@@ -121,7 +124,17 @@ func (a *Ask) renderNotice(msg string) {
 	} else {
 		a.answer.SetText(msg)
 	}
-	a.app.SetFocus(a.input)
+	a.focusIfFront(a.input)
+}
+
+// focusIfFront moves the focus for an answer that lands after the question: it always renders,
+// but takes the focus only while :ask is the front page of a live app — otherwise the keys went to
+// a widget of a page not shown, or of an app :context had retired (#1160). A bare page (no seam)
+// is always in front.
+func (a *Ask) focusIfFront(p tview.Primitive) {
+	if a.isFront == nil || a.isFront() {
+		a.app.SetFocus(p)
+	}
 }
 
 func (a *Ask) render(res *client.AskResult) {
@@ -165,7 +178,7 @@ func (a *Ask) render(res *client.AskResult) {
 	a.answer.SetText(tview.Escape(answerText))
 
 	// hand focus to the results so y / e / n work without typing into the input
-	a.app.SetFocus(a.table)
+	a.focusIfFront(a.table)
 }
 
 // doorGestures turns the hub's door tokens into THIS surface's gestures.

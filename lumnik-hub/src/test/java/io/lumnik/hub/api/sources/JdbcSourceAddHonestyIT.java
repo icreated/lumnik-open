@@ -1,12 +1,16 @@
 package io.lumnik.hub.api.sources;
 
+import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorCredential;
 import io.lumnik.hub.connector.repository.ConnectorCredentialRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
+import io.lumnik.hub.testsupport.RivalConnectorWrite;
 import io.lumnik.hub.webhook.SecretCipher;
 import io.lumnik.testkit.auth.TestIdentity;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.http.ContentType;
@@ -45,6 +49,7 @@ class JdbcSourceAddHonestyIT {
   @Inject ConnectorRepository connectors;
   @Inject ConnectorCredentialRepository credentials;
   @Inject SecretCipher cipher;
+  @Inject @DataSource("admin") AgroalDataSource adminDs;
 
   @BeforeAll
   static void startSourceDb() throws Exception {
@@ -124,6 +129,24 @@ class JdbcSourceAddHonestyIT {
         .when().post("/api/platform/sources/jdbc/add")
         .then().statusCode(200);
     assertThat(config("erp-mode--ref_codes")).containsEntry("mode", "full");
+  }
+
+  /** #1193: the guided add creates connectors, so each one it creates leaves a row in the audit trail. */
+  @Test
+  void add_records_each_connector_it_creates_in_the_audit_trail() {
+    given().headers(TestIdentity.tenantAndUser(1))
+        .contentType(ContentType.JSON)
+        .body(add("erp-audit", Map.of("table", "ref_codes")))
+        .when().post("/api/platform/sources/jdbc/add")
+        .then().statusCode(200)
+              .body("created.size()", is(1));
+
+    String key = connectorId("erp-audit--ref_codes").toString();
+    long rows = Jdbc.queryOne(adminDs, "JdbcSourceAddHonestyIT.auditRows",
+        "SELECT count(*) FROM core.audit_outbox "
+            + "WHERE tenant_id = 1 AND entity_type = 'Connector' AND entity_key = ? AND operation = 'APPLY'",
+        ps -> ps.setString(1, key), rs -> rs.getLong(1)).orElseThrow();
+    assertThat(rows).isEqualTo(1);
   }
 
   @Test
@@ -265,6 +288,49 @@ class JdbcSourceAddHonestyIT {
       assertThat(cred).as("no credential '%s' was persisted", credentialName).isNotNull();
       return cipher.decrypt(cred.getCiphertext());
     }));
+  }
+
+  /**
+   * #1231: a connector created under the table's name while the add introspects — after its
+   * unlocked look for existing connectors — is the one the add skips, not a constraint's 500.
+   */
+  @Test
+  void a_connector_created_under_the_name_while_the_add_runs_is_skipped_not_a_500() throws Exception {
+    UUID holder = UUID.randomUUID();
+    try (var rival = new RivalConnectorWrite(adminDs, holder, "erp-race--ref_codes")) {
+      rival.answerAfterCommit(() -> given().headers(TestIdentity.tenantAndUser(1))
+              .contentType(ContentType.JSON)
+              .body(add("erp-race", Map.of("table", "ref_codes")))
+              .when().post("/api/platform/sources/jdbc/add"))
+          .then().statusCode(200)
+                .body("created.size()", is(0))
+                .body("skipped[0].connectorId", is(holder.toString()));
+    }
+  }
+
+  /** #1244: the schedule is checked like the manifest's — a malformed one never fires, so it is refused. */
+  @Test
+  void add_refuses_a_schedule_that_is_not_a_cron_and_stores_a_valid_one() {
+    Map<String, Object> bad = add("erp-cron", Map.of("table", "ref_codes"));
+    bad.put("scheduleCron", "not a cron");
+    given().headers(TestIdentity.tenantAndUser(1))
+        .contentType(ContentType.JSON).body(bad)
+        .when().post("/api/platform/sources/jdbc/add")
+        .then().statusCode(400)
+              .body("error", containsString("not a cron"));
+
+    given().headers(TestIdentity.tenantAndUser(1))
+        .when().get("/api/platform/sources/jdbc/erp-cron/tables")
+        .then().statusCode(200)
+              .body("tables.size()", is(0));
+
+    Map<String, Object> good = add("erp-cron", Map.of("table", "ref_codes"));
+    good.put("scheduleCron", "0 6 * * *");
+    given().headers(TestIdentity.tenantAndUser(1))
+        .contentType(ContentType.JSON).body(good)
+        .when().post("/api/platform/sources/jdbc/add")
+        .then().statusCode(200);
+    assertThat(onConnector("erp-cron--ref_codes", Connector::getSchedule)).isEqualTo("0 6 * * *");
   }
 
   private static Map<String, Object> add(String source, Map<String, String> table) {

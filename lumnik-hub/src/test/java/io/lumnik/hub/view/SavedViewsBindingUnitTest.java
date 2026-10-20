@@ -44,6 +44,7 @@ class SavedViewsBindingUnitTest {
   private static SavedViewsResource res(FakeStore store) {
     SavedViewsResource r = new SavedViewsResource();
     r.store = store;
+    r.audit = new ViewApplyContractUnitTest.RecordingAudit();
     return r;
   }
 

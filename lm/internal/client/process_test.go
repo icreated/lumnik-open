@@ -37,7 +37,7 @@ func TestProcessManifest_escapesName(t *testing.T) {
 	c := New(config.Context{Server: srv.URL})
 	raw, err := c.ProcessManifest("gold arrive/v2")
 	require.NoError(t, err)
-	assert.Contains(t, raw, "kind: Process")
+	assert.Contains(t, string(raw), "kind: Process")
 }
 
 func TestProcessList_parses(t *testing.T) {

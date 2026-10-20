@@ -2,7 +2,7 @@
 
 <section class="lm-hero" markdown>
 <p class="lm-eyebrow">Show, don't explain</p>
-<p class="lm-lead" markdown="span">A SOAP Siebel and a CSV become one canonical **Customer** — served over REST, then asked in natural language. Every file below is the *real* file the end-to-end test runs, so this walkthrough cannot drift away from what actually works.</p>
+<p class="lm-lead" markdown="span">A SOAP Siebel and a CSV become one canonical **Customer** — served over REST, then asked in natural language. The files below are the demo's real files.</p>
 <div class="lm-meta" markdown>
 <div class="lm-meta-item" markdown>
 <strong>What you will see</strong>
@@ -22,7 +22,7 @@ Replay the same flow by hand on the deployed stack.
 <div class="lm-meta-item lm-meta-item--accent" markdown>
 <strong>Why it matters</strong>
 
-Sixty seconds of watching beats any feature list.
+One fused customer shows what the hub does.
 </div>
 </div>
 </section>
@@ -30,20 +30,17 @@ Sixty seconds of watching beats any feature list.
 <div class="lm-pane lm-pane--accent" markdown>
 <div class="lm-kicker">Read this one, run the other one</div>
 
-This page is the **narrated** WOW: the manifests and the commands are here so you can see
-what the flow is made of, but running them needs a hub, this repository on disk and a
-logged-in `lm`. To actually do it, follow
-[The WOW, hands-on](demo/wow-customer/README.md) — same files, on the deployed self-host
-stack, with the prerequisites and the `fake-siebel.py` stub it needs.
+This page is the **narrated** WOW. To run it, follow
+[The WOW, hands-on](demo/wow-customer/README.md) — same files, on the self-host stack, with the
+`fake-siebel.py` stub.
 
-Three parts of the flow are not in every build: the *ask* of §4 and the chat that answers §8's
-lifecycle questions both go through `lumnik-rag`, a module the **open edition does not carry**
-— nor `lumnik-llm-langchain`, where the model providers live. §5 has a foot in the same place:
-`lm view generate` needs a chat model; with `lumnik-llm-langchain` pruned it **abstains** with
-a named refusal ("no chat model is available on this hub") rather than generating — the same
-answer a hub gives when the operator has switched the AI off. §5's other half — writing the view YAML and rendering it with `lm view -f` —
-does not touch a model at all. Every other step here ingests, fuses and serves on that build.
-See [which edition you installed](editions.md#which-edition-am-i-running).
+Three steps need **lumnik Pro** with the AI on:
+
+- §4, the ask;
+- §5's `lm view generate` (elsewhere it answers *no chat model is available on this hub*);
+- §8's lifecycle question to the chat.
+
+Every other step runs on the open edition. See [which edition you installed](editions.md#which-edition-am-i-running).
 </div>
 
 ## Act 1 — ingest and fuse
@@ -78,40 +75,50 @@ Its data:
 ```bash
 lm apply -f docs/demo/wow-customer/csv-connector.yaml
 lm connector run cust-csv
-lm run list                         # both runs Completed before you fuse anything
 ```
 
-Both CSV manifests on this page — this one and Act 3's — read `/demo/…`, a path **inside the
-hub container**. The demo overlay (`docker-compose.wow.yml`) is what mounts this folder there.
-Without it the run still reports `Completed`, with `IN=0 OUT=0`: the glob simply matched
-nothing.
+Both runs must be `Completed` before you fuse:
+
+```
+$ lm run list
+ID        CONNECTOR         ENDPOINT   STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+9ef96149  cust-csv          default    Completed  8   8    0        0             2026-10-19 01:38  2026-10-19 01:38
+4197d406  siebel-customers  customers  Completed  2   2    0        0             2026-10-19 01:38  2026-10-19 01:38
+```
+
+The CSV manifests read `/demo/…`, a path **inside the hub container**, mounted by the overlay
+`docs/demo/wow-customer/docker-compose.wow.yml`. Without it the run reports `Completed` with
+`IN=0 OUT=0`.
 
 ### 3. Fuse into one canonical customer
 
-The entity manifest declares the `match` and merge rules that unify both sources into one governed truth:
+The entity manifest declares how both sources match and merge:
 
 ```yaml
 --8<-- "docs/demo/wow-customer/customer-entity.yaml"
 ```
 
-```bash
-lm entity apply -f docs/demo/wow-customer/customer-entity.yaml
+```
+$ lm entity apply -f docs/demo/wow-customer/customer-entity.yaml
+Applied entity "Customer" → connector."v_customer"
+$ lm entity get customer --filter customer_code=C-200
+CUSTOMER_CODE  NAME   SEGMENT  EMAIL   CITY  _CONFLICTS
+C-200          Marie  SILVER   m@x.fr  Lyon  {"name": [{"src": "cust_siebel", "value": "Marie"}, {"src": "t_cust_csv", "value": "MARIE A."}]}
 ```
 
-### 4. Ask it
+Siebel and the CSV disagree on C-200's name: Siebel's value wins (it is listed first), and both
+are kept in `_conflicts`.
 
-The first question proves the answer is computed over a fused truth that lived in neither source alone.
+### 4. Ask it (Pro)
 
 ```bash
 lm ask --scope clients "combien de clients à Lyon ?"
-# → an answer computed over a fused truth that lived in neither Siebel nor the CSV alone,
-#   with the SQL that ran shown beneath it.
+# → the answer, computed over the fused Customer, with the SQL that ran beneath it
 ```
 
 ## Act 2 — the data starts working for you
 
-*(The doctrine behind this act — the chain, the channels, the named limits — is
-[How lumnik breathes](respiration.md); this act runs it for real.)*
+*(The chain, the channels and the named limits: [How lumnik breathes](respiration.md).)*
 
 <div class="lm-grid" markdown>
 <article class="lm-card" markdown>
@@ -146,13 +153,19 @@ Teach the substrate lifecycle and dormancy so silence becomes a signal — [refe
 --8<-- "docs/demo/wow-customer/clients-view.yaml"
 ```
 
-```bash
-lm view -f docs/demo/wow-customer/clients-view.yaml --filter city=Lyon
+```
+$ lm view -f docs/demo/wow-customer/clients-view.yaml --filter city=Lyon
+Clients · city=Lyon
+
+Code client  Nom            Ville  Segment
+C-200        Marie          Lyon   SILVER
+C-500        Claire Martin  Lyon   
+C-800        Albert Camus   Lyon   
+C-900        Saint Exupery  Lyon   
 ```
 
-Or skip writing the YAML — **describe the view and let the AI write it**, validated by the
-same gate (an unknown column can never slip through, and an unanswerable ask is refused
-with the reason):
+Or **describe the view and let the AI write it** (Pro). The same checks apply: an unknown column
+is refused, and so is a request the scope cannot answer:
 
 ```bash
 lm view generate clients "les clients gold avec leur ville et segment" -o gold.yaml
@@ -162,8 +175,7 @@ lm view -f gold.yaml --filter 'segment=GOLD'
 
 ### 6. React to it (`kind: Process`)
 
-When a new Lyon customer lands, emit a decision — delivery rides your existing webhook
-subscriptions (n8n here):
+When a new Lyon customer lands, emit a decision — your webhooks (n8n here) receive it:
 
 ```yaml
 --8<-- "docs/demo/wow-customer/lyon-process.yaml"
@@ -176,46 +188,34 @@ lm process apply -f docs/demo/wow-customer/lyon-process.yaml
 
 ### 7. Decide (inbox → ack)
 
-**A process fires only on a genuinely new row.** `data.row.changed` is born at the raw write
-path and dedups on the row's content hash, so re-running the same CSV emits nothing — and
-applying a process never fires retroactively over rows that already landed in step 2. Give it
-something new, then re-run the connector:
+**A process fires only on a new row** — not on rows already ingested, not on a re-run of the
+same file. Add a Lyon customer, then re-run the connector:
 
 ```bash
 echo 'C-400,Camille Roux,camille@x.fr,Lyon' >> docs/demo/wow-customer/customer.csv
 lm connector run cust-csv
 ```
 
-`customer.csv` is `code,cname,email,ville` — pick a `code` the file does not already carry
-(`C-400` is free) and a `ville` of `Lyon`, which is what `lyon-process.yaml` filters on. The
-process consumer ticks every 5s, so the decision lands a few seconds after the run.
+Pick a `code` the file does not carry (`C-400` is free) and `ville` = `Lyon`. A few seconds
+after the run, the decision is in the inbox; the human acks it:
 
-Then the human disposes — and the ack is itself an event, idempotent by construction. The
-listing below is an **illustration of the shape**, not a transcript: the ID and the key are
-whatever your own run produced.
-
-```bash
-lm inbox
-# ID    QUAND        PROCESS             MESSAGE                             ENTITY_KEY
-# <id>  à l'instant  lyon-client-arrive  Nouveau client Camille Roux à Lyon  <row hash, 64 hex>
-lm inbox ack <id>
-# acked.
+```
+$ lm inbox
+ID  WHEN         PROCESS             MESSAGE                             ENTITY_KEY
+8   à l'instant  lyon-client-arrive  Nouveau client Camille Roux à Lyon  ff1027320a1acbe2646ce1b2d1e4a42111868a75bb30825dc4609d785e6aaa7f
+$ lm inbox ack 8
+acked.
 ```
 
-`QUAND` is a humanized age — under a minute it reads `à l'instant`. `ENTITY_KEY` here is the row's
-**content hash**, not a customer code: the event is emitted at the raw ingest table, before any
-entity key exists, and the inbox prints it whole — its 64 hex characters, unabridged.
-`MESSAGE` is `lyon-process.yaml`'s `"Nouveau client {cname} à {ville}"` rendered from the row
-that fired it. Re-acking the same ID answers the same 200: the ack event is written once, ever.
+- `MESSAGE` is the process's `"Nouveau client {cname} à {ville}"`, filled from the row.
+- `ENTITY_KEY` is the row's content hash, not a customer code.
+- Acking twice answers `acked.` twice and records one ack.
 
 ### 8. Declare the lifecycle (`kind: Workflow`)
 
-The three rungs above act on rows. This one teaches the substrate what the rows *mean*:
-the states a document moves through, the aliases twenty years of Excel produced for them,
-and which are terminal.
-
-A lifecycle is declared **over a column of real rows**, so this act brings its own source —
-a commandes export whose `statut` column carries twenty years of drift:
+A workflow declares what a status column *means*: the states, their aliases, which are
+terminal. It is declared over real rows, so this act brings its own source — a commandes
+export with dirty statuses:
 
 ```yaml
 --8<-- "docs/demo/wow-customer/commandes-connector.yaml"
@@ -226,76 +226,62 @@ lm apply -f docs/demo/wow-customer/commandes-connector.yaml
 lm connector run commandes-csv       # lands connector.t_commandes_csv — seven commandes
 ```
 
-Declare it only once those rows are in. Declaring first is *allowed* — the apply returns 200
-over a table that does not exist yet — but then `dataTruth` has nothing to report and the
-whole point of the next paragraph disappears silently:
+Apply the workflow **after** the run: over a table that does not exist yet the apply still
+succeeds, but reports nothing.
 
 ```yaml
 --8<-- "docs/demo/wow-customer/commande-workflow.yaml"
 ```
 
-```bash
-lm workflow apply -f docs/demo/wow-customer/commande-workflow.yaml
-# {"name":"commande-lifecycle","scope":"demo", … ,
-#  "dataTruth":{"undeclared":[{"value":"EN LITIGE","rows":2}], … }}
+```
+$ lm workflow apply -f docs/demo/wow-customer/commande-workflow.yaml
+{"name":"commande-lifecycle","scope":"demo","table":"connector.t_commandes_csv","column":"statut","dataTruth":{"undeclared":[{"value":"EN LITIGE","rows":2}],"unobserved":[],"nullOrBlank":0,"tableMissing":false,"keyColumnMissing":false,"keyNullOrBlank":0,"checkUnavailable":false,"unavailableReason":null}}
 ```
 
-Applying it doesn't hide the mess, it names it: `EN LITIGE` sits in the column and in no
-declared state, so the response reports it — and still returns 200, because reality doesn't
-ask the manifest's permission. The declared graph then lands in the scope's corpus, so the
-chat answers a lifecycle question from it instead of inventing one.
+`EN LITIGE` is in the column and in no declared state: the apply names it, with its row count,
+and succeeds. On Pro, the chat then answers lifecycle questions from the declared graph.
 
-The manifest also declares `spec.on.key` (`num`) and `spec.dormancy.after: 30d` — a scheduled
-sweep watching every commande for the one thing the raw table itself cannot say: how long it
-has sat, unmoved, in a non-terminal state. Cold start counts from observation — nothing can be dormant before
-`30d` elapses from lumnik's own first observation, never from the source's unknown history —
-and the alert never claims a source-absolute duration. To watch the sweep fire without the real
-30-day wait, shorten the threshold in your own copy — `spec.dormancy.after` accepts minutes, so
-`1m` is enough (the committed manifest still declares `30d`). The listing below is an
-**illustration of the shape**, not a transcript: the ID is whatever your own run produced, and
-`QUAND` is the humanized age of §7 — `à l'instant` if you look right after the sweep. The `…` in
-`MESSAGE` is this page eliding for width, not the CLI abridging — `lm inbox` prints the alert in
-full, and [Dormancy](apps/workflows.md#the-alert-verbatim) quotes the whole line:
+The manifest also declares `spec.on.key: num` and `spec.dormancy.after: 30d`: a sweep alerts on
+every commande left unmoved in a non-terminal state for 30 days.
+
+- The 30 days count from lumnik's **first observation** of the commande, not from the source's history.
+- To see it fire without waiting, set `after: 1m` in your own copy; the sweep runs every 15 minutes.
+- The alert lands in `lm inbox` under `workflow:commande-lifecycle` — full wording in
+  [Dormancy](apps/workflows.md#the-alert-verbatim).
+
+With `after: 1m`, two sweeps after the run:
 
 ```
-lm inbox
-# ID    QUAND        PROCESS                      MESSAGE                                                ENTITY_KEY
-# <id>  à l'instant  workflow:commande-lifecycle  CMD-005 : observé immobile en « EN LITIGE » depuis …    CMD-005
+$ lm inbox
+ID  WHEN         PROCESS                      MESSAGE                                                                                                                                        ENTITY_KEY
+23  à l'instant  workflow:commande-lifecycle  CMD-007 : observé immobile en « EN LITIGE » depuis le 2026-10-18 (première observation 2026-10-18) — seuil déclaré 1m dans commande-lifecycle  CMD-007
+22  à l'instant  workflow:commande-lifecycle  CMD-006 : observé immobile en « EN_COURS » depuis le 2026-10-18 (première observation 2026-10-18) — seuil déclaré 1m dans commande-lifecycle   CMD-006
+21  à l'instant  workflow:commande-lifecycle  CMD-005 : observé immobile en « EN LITIGE » depuis le 2026-10-18 (première observation 2026-10-18) — seuil déclaré 1m dans commande-lifecycle  CMD-005
+20  à l'instant  workflow:commande-lifecycle  CMD-004 : observé immobile en « BROUILLON » depuis le 2026-10-18 (première observation 2026-10-18) — seuil déclaré 1m dans commande-lifecycle  CMD-004
+19  à l'instant  workflow:commande-lifecycle  CMD-001 : observé immobile en « EN_COURS » depuis le 2026-10-18 (première observation 2026-10-18) — seuil déclaré 1m dans commande-lifecycle   CMD-001
 ```
 
-`CMD-002` and `CMD-003` never alert — both resolve to the terminal `TERMINE`, which the sweep
-excludes. `EN LITIGE` — undeclared, and therefore never terminal — is watchable too: `CMD-005`
-and `CMD-007` sleep in it and alert exactly like any other stalled commande. See
-[Dormancy](apps/workflows.md#dormancy-the-memory-of-the-breathing) for the full vocabulary.
+`CMD-002` and `CMD-003` never alert: they are `TERMINE`, a terminal state. `CMD-005` and
+`CMD-007` sit in the undeclared `EN LITIGE`, which is never terminal, and alert like the others.
+See [Dormancy](apps/workflows.md#dormancy-the-memory-of-the-breathing).
 
 ## After the demo — your data
 
-The WOW you just read runs on the shipped dataset, and says so. The question every
-once-burned sponsor asks within a minute — *"and on OUR data?"* — has a road, and it is
-shorter than the demo suggests:
+The same road on the customer's own data:
 
-1. **Point at the real base, interactively.** `lm source jdbc test` proves the connection,
-   `discover` lists tables with row estimates and suggested watermark columns, `add`
-   creates one connector per table with an encrypted credential — a `SELECT`-only account
-   is all it ever needs ([the guided flow](connectors/jdbc.md#guided-flow-lm-source-jdbc)).
-2. **Expect the mess — it is the point.** Fifteen years of mojibake, legacy dates and
-   fantasy statuses don't block ingestion: [transformers](connectors/transformers.md)
-   repair what should be repaired, and declaring a [workflow](apps/workflows.md) gets you
-   a data-truth report at apply time that **names** the dirty statuses it found — a
-   report, never a police. The freezer's frost is inventory, not failure.
-3. **Promote to a scope, ask the first question.** Tag the connector with the scope,
-   then run it (or `lm source rediscover`) — that is what writes the scope's schema
-   card; from there the chat answers on *your* rows the same way it did on the demo's
-   ([what makes a scope answerable](quickstart/installer.md#what-makes-a-scope-answerable)).
+1. **Point at the real database.** `lm source jdbc test` checks the connection, `discover`
+   lists tables with row estimates, `add` creates one connector per table. A `SELECT`-only
+   account is enough ([the guided flow](connectors/jdbc.md#guided-flow-lm-source-jdbc)).
+2. **Repair at the door.** [Transformers](connectors/transformers.md) fix mojibake and legacy
+   dates; a [workflow](apps/workflows.md) apply names the dirty statuses it finds.
+3. **Tag a scope, run, ask.** The run writes the scope's schema card; then the chat answers on
+   the customer's rows ([what makes a scope answerable](quickstart/installer.md#what-makes-a-scope-answerable)).
 
-Boundaries: the mechanics above take hours, not days — what takes calendar time
-is what sits outside lumnik: the `SELECT` account, the network path, your DBA's diary.
-And two dependencies to have in place: the chat surfaces need lumnik Pro
-([which edition includes what](editions.md#feature-by-feature)), and the models must be
-[pulled](quickstart/prerequisites.md) first.
+What takes calendar time is outside lumnik: the `SELECT` account, the network path. The chat
+needs lumnik Pro ([which edition includes what](editions.md#feature-by-feature)) and
+[pulled models](quickstart/prerequisites.md).
 
 ## Continue hands-on
 
-Continue with [the full by-hand replay](demo/wow-customer/README.md) — on the **deployed**
-self-host stack, real OIDC, `lm login` and Bearer-authenticated calls throughout (including
-the `fake-siebel.py` SOAP stub and the demo credentials).
+Continue with [the by-hand replay](demo/wow-customer/README.md) on the self-host stack,
+with the `fake-siebel.py` stub and the demo credentials.

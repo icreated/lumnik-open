@@ -41,7 +41,7 @@ class CellErrorDrainTest {
   private static ConnectorContext ctx() {
     return new ConnectorContext(
         UUID.randomUUID(), null, null, 1L, "test", "test", Map.of(),
-        new SyncMode.FullRefresh(), null, null, null, Clock.systemUTC(), null, new OwnedRunScope("test"));
+        new SyncMode.FullRefresh(), null, null, Clock.systemUTC(), null, new OwnedRunScope("test"));
   }
 
   @Test

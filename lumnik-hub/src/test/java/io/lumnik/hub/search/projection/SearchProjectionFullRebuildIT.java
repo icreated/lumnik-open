@@ -226,6 +226,104 @@ class SearchProjectionFullRebuildIT {
         assertThat(state.get().position()).isEqualTo(expectedWatermark);
     }
 
+    // -- 1a: a withheld index is released only by a build of what it declares now (#1219) ---------
+
+    private boolean withheld(long tenant, String index) throws Exception {
+        try (Connection c = adminDs.getConnection();
+             PreparedStatement ps = c.prepareStatement(
+                 "SELECT withheld FROM core.search_index WHERE tenant_id = ? AND name = ?")) {
+            ps.setLong(1, tenant);
+            ps.setString(2, index);
+            try (var rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getBoolean(1);
+            }
+        }
+    }
+
+    @Test
+    void aRebuildReleasesAWithheldIndexOnlyWhenItBuiltWhatTheIndexDeclaresNow() throws Exception {
+        long tenant = 671_601_019L;
+        String entityName = unique("Rbld19");
+        String table = unique("t_rbld19_").toLowerCase(Locale.ROOT);
+        applyMatchEntity(tenant, entityName, table);
+        insertMatchRow(table, tenant, "c1", "Alice", "Lyon");
+        String idxName = unique("rbld19-");
+        applySearchIndex(tenant, idxName, entityName, "name", "city");
+        RecordingSink sink = new RecordingSink();
+        SearchProjectionWorker worker = workerWith(sink, markStore, stateStore, adminDs, readonlyDs, registry);
+        worker.rebuild(tenant, idxName);
+        assertThat(withheld(tenant, idxName)).isFalse();
+
+        // `city` is removed while a rebuild is under way: that build read the declaration with `city`,
+        // so publishing it must not release the index.
+        sink.onBeginGeneration = () -> applySearchIndex(tenant, idxName, entityName, "name");
+        worker.rebuild(tenant, idxName);
+        assertThat(sink.published).hasSize(2);
+        assertThat(withheld(tenant, idxName)).as("the build that read `city` serves it").isTrue();
+
+        // The next rebuild reads the declaration without `city`: what it serves is what is declared.
+        sink.onBeginGeneration = () -> {};
+        worker.rebuild(tenant, idxName);
+        assertThat(sink.published).hasSize(3);
+        assertThat(withheld(tenant, idxName)).isFalse();
+    }
+
+    /**
+     * A re-apply locks the declaration row, then re-marks {@code ALL} — an upsert onto the mark the rebuild
+     * is about to delete. The ready transaction must take the declaration row in that same order, or the
+     * two wait on each other and PostgreSQL aborts one: the rebuild ends degraded, or the apply fails.
+     */
+    @Test
+    void aReApplyLandingAsTheRebuildCommitsWaitsInsteadOfDeadlocking() throws Exception {
+        long tenant = 671_601_020L;
+        String entityName = unique("Rbld20");
+        String table = unique("t_rbld20_").toLowerCase(Locale.ROOT);
+        applyMatchEntity(tenant, entityName, table);
+        insertMatchRow(table, tenant, "c1", "Alice", "Lyon");
+        String idxName = unique("rbld20-");
+        applySearchIndex(tenant, idxName, entityName, "name", "city");
+        RecordingSink sink = new RecordingSink();
+        SearchProjectionWorker worker = workerWith(sink, markStore, stateStore, adminDs, readonlyDs, registry);
+        worker.rebuild(tenant, idxName);
+        applySearchIndex(tenant, idxName, entityName, "name"); // withheld, with its ALL mark pending
+
+        // Stands in for a re-apply: holds the declaration row, then — once the worker is inside its ready
+        // transaction — re-marks ALL and commits.
+        AtomicReference<Throwable> applyFailure = new AtomicReference<>();
+        Thread[] apply = new Thread[1];
+        sink.onPublish = () -> {
+            try {
+                Connection side = adminDs.getConnection();
+                side.setAutoCommit(false);
+                try (PreparedStatement ps = side.prepareStatement(
+                        "SELECT 1 FROM core.search_index WHERE tenant_id = ? AND name = ? FOR UPDATE")) {
+                    ps.setLong(1, tenant);
+                    ps.setString(2, idxName);
+                    ps.executeQuery().close();
+                }
+                apply[0] = new Thread(() -> {
+                    try (side) {
+                        Thread.sleep(1_500);
+                        markStore.markAll(side, tenant, idxName, entityName, "index-apply");
+                        side.commit();
+                    } catch (Throwable t) {
+                        applyFailure.set(t);
+                    }
+                });
+                apply[0].start();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        };
+        worker.rebuild(tenant, idxName);
+        apply[0].join();
+
+        assertThat(applyFailure.get()).as("the re-apply's mark write").isNull();
+        assertThat(stateStore.find(tenant, idxName).orElseThrow().status()).isEqualTo("ready");
+        assertThat(withheld(tenant, idxName)).as("the rebuild read the declaration without `city`").isFalse();
+    }
+
     // -- 1b: a NULL returnable (non-match) column is omitted, never crashes the rebuild (C2 fix) --
 
     @Test
@@ -527,8 +625,10 @@ class SearchProjectionFullRebuildIT {
                   + "then degrades it with the real cause instead of leaving it stuck in 'building'")
                 .isEqualTo("degraded");
             assertThat(state.get().lastError())
-                .as("the real diagnostic, not the reaper's later generic 'reaped' message")
-                .contains("injected markReady failure");
+                .as("the real diagnostic, not the reaper's later generic 'reaped' message — the failing step and "
+                  + "its SQLSTATE, never the database's own text, which can quote values (#1299)")
+                .contains("SearchProjectionWorker.commitMarkCleanupAndMarkReady failed (SQLSTATE P0001)")
+                .doesNotContain("injected markReady failure");
             assertThat(state.get().liveGeneration()).as("never advanced past the failed write").isNull();
         } finally {
             try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
@@ -658,6 +758,8 @@ class SearchProjectionFullRebuildIT {
          *  the observation point {@code degradedRowRetriesIntoBuildingWithLastErrorClearedWithoutConstraintViolation}
          *  uses to read the state row mid-rebuild without adding any hook to production code. */
         Runnable onBeginGeneration = () -> {};
+        /** Fires at the end of {@link #publish}, just before the worker's ready transaction opens. */
+        Runnable onPublish = () -> {};
 
         @Override public String name() { return "fake"; }
         @Override public ProviderStatus status() { return null; }
@@ -676,6 +778,7 @@ class SearchProjectionFullRebuildIT {
 
         @Override public void publish(long tenantId, String searchIndex, String generation) {
             published.add(generation);
+            onPublish.run();
         }
 
         @Override public void abandon(long tenantId, String searchIndex, String generation) {

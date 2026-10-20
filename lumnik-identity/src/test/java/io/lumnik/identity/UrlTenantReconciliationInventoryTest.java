@@ -33,8 +33,12 @@ class UrlTenantReconciliationInventoryTest {
 
   private static final SourceTree TREE = SourceTree.of("lumnik-identity", "io/lumnik/identity");
 
-  /** The call every such resource must make, on every path that reaches a tenanted row. */
-  private static final String RECONCILIATION = "Require.callerOwnsTenant(";
+  /**
+   * The marker every such resource must carry (#1292): {@code TenantInPathFilter} then reconciles
+   * every door of it. A call to {@code Require.callerOwnsTenant} somewhere in the file used to be the
+   * rule, but a call proves only that one helper makes it, not that every door goes through it.
+   */
+  private static final String RECONCILIATION = "@TenantInPath";
 
   /**
    * Resources that name a tenant in their path and deliberately do NOT reconcile it. Each needs a
@@ -62,9 +66,8 @@ class UrlTenantReconciliationInventoryTest {
     assertEquals(Map.of(), unreconciled, """
         These resources name a tenant in their own URL and never ask whether it is the caller's. \
         RLS still confines the rows, so nothing leaks — but the path parameter becomes a fiction \
-        and the caller is served their own data under someone else's URL. Call \
-        Require.callerOwnsTenant(tenantId) before any lookup, or add the file to EXEMPT with a \
-        reason a reader can check.""");
+        and the caller is served their own data under someone else's URL. Annotate the class \
+        @TenantInPath, or add the file to EXEMPT with a reason a reader can check.""");
   }
 
   @Test
@@ -85,13 +88,13 @@ class UrlTenantReconciliationInventoryTest {
   // ---- the guardian, guarded ----
 
   @Test
-  void aMentionInACommentOrAnImportIsNotTheCall() {
-    assertFalse(SourceTree.code("import io.lumnik.identity.Require;\nclass R {}").contains(RECONCILIATION),
+  void aMentionInACommentOrAnImportIsNotTheMarker() {
+    assertFalse(SourceTree.code("import io.lumnik.identity.TenantInPath;\nclass R {}").contains(RECONCILIATION),
         "an import must not satisfy the rule");
-    assertFalse(SourceTree.code("class R { /* Require.callerOwnsTenant( is not needed here */ }")
-        .contains(RECONCILIATION), "a comment explaining the absence is not the call");
-    assertTrue(SourceTree.code("class R { void f(Long t) { Require.callerOwnsTenant(t); } }")
-        .contains(RECONCILIATION), "a real call is");
+    assertFalse(SourceTree.code("class R { /* @TenantInPath is not needed here */ }")
+        .contains(RECONCILIATION), "a comment explaining the absence is not the marker");
+    assertTrue(SourceTree.code("@TenantInPath\n@Path(\"/api/tenants/{tenantId}/x\")\nclass R {}")
+        .contains(RECONCILIATION), "the annotation on the class is");
   }
 
   @Test

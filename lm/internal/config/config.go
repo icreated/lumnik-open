@@ -8,6 +8,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Context is one entry of ~/.lm/config.yaml. Its credentials (Token, Access, Refresh) are
+// redacted by `lm config view` (cli.redacted): a new secret field must be added there too.
 type Context struct {
 	Server             string `yaml:"server"`
 	Token              string `yaml:"token"`

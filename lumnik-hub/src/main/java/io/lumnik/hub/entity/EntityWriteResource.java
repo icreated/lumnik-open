@@ -5,6 +5,7 @@ import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.ask.DiscoveryService;
+import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.search.SearchIndexStore;
 import io.lumnik.hub.tenant.TenantContextFilter;
 import jakarta.inject.Inject;
@@ -15,6 +16,8 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
+
+import java.util.Map;
 
 /**
  * The integrator's write door for canonical entities — global and {@code lm_admin}, the inverse of
@@ -34,6 +37,7 @@ public class EntityWriteResource {
   @Inject EntityViewCompiler compiler;
   @Inject DiscoveryService discovery;
   @Inject SearchIndexStore searchIndexStore;
+  @Inject AuditRecorder audit;
 
   /**
    * Remove an entity: purge every tenant's SearchIndex over it, drop its view, delete its manifest
@@ -63,6 +67,8 @@ public class EntityWriteResource {
     Long actor = TenantContextFilter.currentUser();
     compiler.delete(m.name(), c -> searchIndexStore.purgeAllForEntity(c, m.name(), actor));
     registry.remove(m.name());
+    // The SearchIndexes it took are audited by the purge itself, each in the tenant that owned it.
+    audit.record("Entity", m.name(), "DELETE", Map.of("scopes", m.scopes()));
     // Best-effort, like apply: the view + manifest row are already gone, so a card-refresh failure
     // must not fail the delete. No tenant context (system caller) → skip: every tenant picks the
     // removal up on its next rediscover, since entity_manifest is global.

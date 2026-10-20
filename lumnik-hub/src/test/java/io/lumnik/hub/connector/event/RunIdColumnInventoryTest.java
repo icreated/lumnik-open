@@ -30,7 +30,11 @@ class RunIdColumnInventoryTest {
   private static final Map<String, String> KNOWN = Map.of(
       "DynamicTableWriter", "the one writer: creates the column and stamps it; write() records the table",
       "MultiTargetWriter", "puts the run id into the system context DynamicTableWriter stamps; writes no table",
-      "EntityResolutionPass", "reads it: the incremental selection");
+      "EntityResolutionPass", "reads it: the incremental selection",
+      "EntityViewCompiler", "reads it: an entity view keeps each key's newest run (#1185); writes no table",
+      "DynamicTableRegistry", "reads it: a connector delete removes its own rows from a shared table (#1186); writes no table",
+      "UnseenRowSweeper", "reads it: a full refresh counts the rows held before the run (#1195); writes no table",
+      "SourceKeyIndex", "reads it: a key one run read twice is not a key (#1196); stamps it on no row");
 
   /** The column itself — not {@code active_run_id}, {@code last_rebuild_run_id} or any other {@code *_run_id}. */
   private static final Pattern RUN_ID_COLUMN = Pattern.compile("(?<![\\w])_run_id(?![\\w])");

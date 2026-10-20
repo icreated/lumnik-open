@@ -51,7 +51,10 @@ public class DiscoveryService implements DiscoveryPort {
         tables.addAll(views.tables());
 
         String sourceType = hub.enriched() ? "jdbc-ad" : "registry";
-        store.save(tenantId, sourceType, new SchemaCard(scope, tables));
+        // A scope whose last table went (a connector deleted or moved out) keeps no card: the ask
+        // then says there is nothing to ask, instead of writing SQL against what is gone (#1188).
+        if (tables.isEmpty()) store.delete(tenantId, scope);
+        else store.save(tenantId, sourceType, new SchemaCard(scope, tables));
         return new DiscoveryResult(scope, tables.size(),
             hub.columnCount() + views.columnCount(), hub.enriched(), sourceType);
     }

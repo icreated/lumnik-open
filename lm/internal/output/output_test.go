@@ -89,3 +89,23 @@ func TestPrint_tableEscapesBidi(t *testing.T) {
 		t.Fatalf("table output should contain escaped form, got %q", raw.String())
 	}
 }
+
+// lm's JSON goes to a terminal or a script, never into an HTML page: & < > are written as they are, the way the hub
+// sends them, not as &-style escapes (#1105 review). A SQL comparison must read `<>` in `-o json`.
+func TestPrint_jsonWritesHTMLCharactersAsTheyAre(t *testing.T) {
+	type doc struct {
+		SQL string `json:"sql"`
+	}
+	for name, print := range map[string]func(*bytes.Buffer) error{
+		"Print":       func(b *bytes.Buffer) error { return Print(b, "json", nil, []doc{{"a <> 'x' AND b >= 1 & c"}}, nil) },
+		"PrintObject": func(b *bytes.Buffer) error { return PrintObject(b, "json", doc{"a <> 'x' AND b >= 1 & c"}) },
+	} {
+		buf := new(bytes.Buffer)
+		if err := print(buf); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(buf.String(), `"sql": "a <> 'x' AND b >= 1 & c"`) {
+			t.Errorf("%s: %s", name, buf.String())
+		}
+	}
+}

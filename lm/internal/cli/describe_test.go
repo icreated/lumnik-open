@@ -10,6 +10,7 @@ import (
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/config"
+	"github.com/icreated/lumnik-open/lm/internal/output"
 )
 
 func TestDescribeConnectorType_unknownKind_errors(t *testing.T) {
@@ -59,12 +60,12 @@ func TestDescribeConnectorTypeHonoursJson(t *testing.T) {
 }
 
 func TestRenderConfigDef_topLevelFields_printed(t *testing.T) {
-	def := configDefBlock{Fields: []configDefField{
+	def := output.ConfigDef{Fields: []output.ConfigDefField{
 		{Name: "base_url", Type: "STRING", Importance: "HIGH", Required: true, Doc: "Base URL"},
 		{Name: "default_rate_limit", Type: "STRING", Importance: "MEDIUM", Required: false, Doc: "Rate limit, e.g. 100/s"},
 	}}
 	out := &bytes.Buffer{}
-	_ = renderConfigDef(out, "rest-generic", def, 0)
+	renderConfigDef(out, "rest-generic", def)
 	s := out.String()
 	if !strings.Contains(s, "Connector type: rest-generic") {
 		t.Errorf("missing header, got: %s", s)

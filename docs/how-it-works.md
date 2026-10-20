@@ -1,92 +1,65 @@
 # How lumnik works
 
-> Everything you configure is a YAML **manifest**: apply it, then observe it land in the
-> TUI. Every apply is checked first — refused naming the exact field, or upserted,
-> idempotently. `kind: Connector` additionally has a dry-run, `lm validate`; the other
-> kinds run the same checks at apply time.
+> Everything you configure is a YAML **manifest**. Apply it, then see it in `lm` or the TUI.
+> Every apply is checked first: refused with the exact field named, or saved.
 
-This page is the **apply-time** story — what happens when you declare. The **runtime**
-story — what happens when a row changes and who gets warned — is
+This page covers what happens when you apply. What happens when a row changes is
 [How lumnik breathes](respiration.md).
 
 ## The kubectl parallel
 
-If you know `kubectl`, you already know most of `lm`: declarative objects, an idempotent
-`apply -f`, a dry-run check before you commit (`lm validate` — Connector manifests), a schema reference before
-you write a line of YAML ([`lm describe connector-type <kind>`](cli/lm-reference.md)), and
-contexts to point the CLI at different hubs ([`lm config use-context`](cli/lm-reference.md#context-auth)).
+If you know `kubectl`, you know most of `lm`:
 
-That schema-reference command is connector-only, though: `lm describe` covers the five
-connector types, not the app kinds. For `Entity`, `View`, `Process` and `Workflow` the
-schema lives on each kind's own page (the Fields table) and in the TUI's `:new` screen,
-which opens a living, valid example of the kind you pick straight into `$EDITOR` — see
-[CLI & TUI reference](cli/lm-reference.md).
+- declarative objects and an idempotent `apply -f`;
+- a dry run for connectors: `lm validate -f`;
+- a schema reference for connector types: [`lm describe connector-type <type>`](cli/lm-reference.md);
+- contexts for several hubs: [`lm config use-context`](cli/lm-reference.md#context-auth).
 
-**One place the parallel stops: `lm apply` never reconciles.** It is a
-one-shot validate-then-upsert transaction, not a background loop.
+For the other kinds, the fields are on each kind's page, and the TUI's `:new` opens a valid
+example of the kind you pick in `$EDITOR`.
 
-Kubernetes controllers watch a cluster forever, pulling it back toward the declared
-state whenever something drifts. lumnik does not: apply it once, and it stays applied
-until you apply again. Nothing watches your source systems or the hub's own tables
-afterwards to "correct" drift.
+**`lm apply` never reconciles.** Apply once and it stays applied until you apply again;
+nothing pulls the hub or your sources back toward the manifest. The one watcher is a
+`Workflow`'s [dormancy sweep](apps/workflows.md#dormancy-the-memory-of-the-breathing): it
+raises an alert, and never changes the manifest or the data.
 
-The one declared exception is a `Workflow`'s optional
-[dormancy sweep](apps/workflows.md#dormancy-the-memory-of-the-breathing): it
-periodically *observes* a document's state and *alerts*
-(`decision.dormant.<workflow>`) when it has sat too long — but it never rewrites the
-manifest or the data.
+## Eight kinds, three families { #seven-kinds-two-families }
 
-## Seven kinds, two families
-
-Every manifest starts with `kind:` — seven kinds, grouped into two families by what they
-build, not by a shared envelope: `apiVersion` is required and validated for `Connector`,
-strictly validated for `Export`, declared-but-not-yet-enforced for the other four app
-kinds (accepted today for forward compatibility), and simply absent from `Entity`'s
-schema.
-
-| `kind:` | `apiVersion:` | What it declares | Apply command | Owning page |
+| `kind:` | `apiVersion:` | What it declares | Apply | Owning page |
 |---|---|---|---|---|
-| `Connector` | `connectors.lumnik.io/v1` — required, validated | ingestion from one legacy source | `lm apply -f` | [Connectors — Overview](connectors/index.md) |
-| `Entity` | not part of this manifest's schema | canonical fusion of N sources into one thing | `lm entity apply -f` | [Entities](entities.md) |
-| `View` | `apps.lumnik.io/v1` — accepted, ignored | a read-only list a métier sees | `lm view apply -f` | [Views](apps/views.md) |
-| `App` | `apps.lumnik.io/v1` — accepted, ignored | a métier app's own title, scope, icon and theme | `lm app apply -f` | [The métier PWA](apps/pwa.md) |
-| `Process` | `apps.lumnik.io/v1` — accepted, ignored | a declared reaction to a row landing | `lm process apply -f` | [Processes](apps/processes.md) |
-| `Workflow` | `apps.lumnik.io/v1` — accepted, ignored | a declared document lifecycle over a status column | `lm workflow apply -f` | [Workflows](apps/workflows.md) |
-| `Export` | `apps.lumnik.io/v1` — required, validated | a managed delivery of an entity's rows to a destination | `lm export apply -f` | [Exports](apps/exports.md) |
+| `Connector` | `connectors.lumnik.io/v1` — required | ingestion from one source | `lm apply -f` | [Connectors](connectors/index.md) |
+| `Entity` | none | one thing fused from N sources | `lm entity apply -f` | [Entities](entities.md) |
+| `View` | `apps.lumnik.io/v1` — not checked | a read-only list a métier sees | `lm view apply -f` | [Views](apps/views.md) |
+| `App` | `apps.lumnik.io/v1` — not checked | a métier app's title, scope, icon and theme | `lm app apply -f` | [The métier PWA](apps/pwa.md) |
+| `Process` | `apps.lumnik.io/v1` — not checked | a reaction to a row landing | `lm process apply -f` | [Processes](apps/processes.md) |
+| `Workflow` | `apps.lumnik.io/v1` — not checked | a document lifecycle over a status column | `lm workflow apply -f` | [Workflows](apps/workflows.md) |
+| `Export` | `apps.lumnik.io/v1` — required | a managed delivery of an entity's rows | `lm export apply -f` | [Exports](apps/exports.md) |
+| `SearchIndex` | `search.lumnik.io/v1` — required | which entity columns an optional Search provider indexes | `lm search apply -f` | [Choosing what your hub offers](choosing-what-your-hub-offers.md) |
 
-`Connector` and `Entity` ingest and fuse; `View`, `App`, `Process`, `Workflow` and `Export`
-build the [app ladder](apps/views.md) on top of what's been fused. Note the one CLI
-irregularity: `lm apply -f` (no prefix) is `Connector`'s own command — every other kind
-uses its own prefixed `apply` (`lm entity apply`, `lm view apply`, `lm app apply`,
-`lm process apply`, `lm workflow apply`, `lm export apply`), as the
-[CLI reference](cli/lm-reference.md) documents.
+- **Ingest and fuse:** `Connector`, `Entity`.
+- **Apps:** `View`, `App`, `Process`, `Workflow`, `Export`.
+- **Search:** `SearchIndex`.
+
+`Connector` is the only kind applied with the bare `lm apply -f`; every other kind has its
+own prefixed `apply`.
 
 ### Living with your objects
 
-`apply` is only the write half — what you can list, fetch, or remove afterward differs
-by kind (verified against the `lm` CLI source, `lm/internal/cli/`):
+| Kind | List | Read one | Remove | Also |
+|---|---|---|---|---|
+| `Connector` | `lm connector list` | `lm connector get NAME` (stored fields) | `lm connector delete NAME` | `run`, `pause`, `resume`, `scope` |
+| `Entity` | `lm entity list` | `lm entity get NAME` (rows) | `lm entity delete NAME` | `export`, `resolve`, `ambiguous` |
+| `View` | `lm view list` | `lm view get NAME` (manifest) | `lm view rm NAME` | `lm view NAME` renders it |
+| `App` | `lm app list` | `lm app get NAME` (manifest) | `lm app rm NAME` | |
+| `Process` | `lm process list` | — | `lm process rm NAME` | `enable`, `disable` |
+| `Workflow` | `lm workflow list` | `lm workflow get NAME` (manifest) | `lm workflow rm NAME` | `enable`, `disable` |
+| `Export` | `lm export list` | `lm export get NAME` (manifest) | — | `run`, `runs`, `status`, `retry` |
+| `SearchIndex` | `lm search status` | `lm search status NAME` | `lm search rm NAME` | `query`, `rebuild`, `cancel` |
 
-| Kind | `list` | `get NAME` | `delete NAME` |
-|---|---|---|---|
-| `Connector` | yes | yes | yes |
-| `View` | yes | yes | no |
-| `Workflow` | yes | yes | no |
-| `Process` | yes | no | no |
-| `Export` | yes | yes | no |
-| `Entity` | no | yes | yes |
-| `App` | no | no | no |
+- An `Export` cannot be removed. Re-applying it without `spec.schedule` lifts its schedule.
+- No single command lists every kind; each kind keeps its own `list`.
 
-`Entity` has no `list` — `lm entity apply`, [`lm entity get NAME`](entities.md#read-api)
-and `lm entity delete NAME` are its CLI surface; `lm entity get` is a thin facade over
-[`GET /api/entities/{name}`](entities.md#read-api), the door to reach for only when the CLI
-cannot express what you need. `Export` has no `delete` — there is no door that removes a
-stored export manifest; `lm export apply` without `spec.schedule` lifts a previously
-declared schedule, the same upsert posture a `Connector`'s own `schedule` key has. `App`
-has no `list`/`get`/`delete` at all — `lm app apply` is its only CLI surface, and the
-registry is read back through [`GET /api/apps`](cli/lm-reference.md) (`lm_user`, scope-bound), which is
-how the PWA discovers its own identity at load.
-There is no single command that lists every kind at once — each shelf keeps its own
-`list`. See [CLI & TUI reference](cli/lm-reference.md) for the full command tables.
+Full command tables: [CLI & TUI reference](cli/lm-reference.md).
 
 ## One lifecycle
 
@@ -99,14 +72,10 @@ flowchart LR
   apply -. refused .-> write
 ```
 
-Write, apply, observe — every kind, same shape (plus a `lm validate` dry-run for
-Connector manifests). A refusal at either check sends
-you back to the file, not into a retry loop.
+Write, apply, observe — every kind. A refusal at either check sends you back to the file.
 
-Manifests are files in **your** repository — version them there, the same way you'd
-version a Kubernetes manifest. The hub stores the applied copy alongside its own state,
-and [`lm view get NAME`](cli/lm-reference.md) / [`lm workflow get NAME`](cli/lm-reference.md)
-re-extract that stored copy verbatim if your local file is ever lost.
+Keep manifests in **your** repository and version them there. If a local file is lost,
+`lm view get`, `lm app get`, `lm workflow get` and `lm export get` print the stored manifest back.
 
 ## The little languages inside the YAML
 
@@ -121,22 +90,31 @@ manual.
 | glob | `*` and `?` only, in the **final filename segment** — no `**` recursion | CSV local/sftp/s3 `transport.path` — [CSV & files](connectors/csv.md) |
 | date patterns | `dd/MM/yyyy` — capital `MM` is month, lowercase `mm` is minutes; add `H`/`h`/`m`/`s` only when the value carries a time | `parse-date` — [Transformers](connectors/transformers.md) |
 | regex | full-match vs find semantics — differs per hook | `regex-extract` / `regex-replace` / `filter-where` — [Transformers](connectors/transformers.md) |
-| `{{env:NAME}}` / `{{secret:NAME}}` | resolved from the **hub's own process environment** (OS env var, JVM system property as dev/test fallback) — **not** the `lm secret` registry; unresolved fails the run fast | SOAP body/header templates — [SOAP](connectors/soap.md) |
+| `{{secret:NAME}}` / `{{env:NAME}}` | `secret:` reads the `lm secret` registry, then the hub's process environment (OS env var, JVM system property as dev/test fallback); `env:` reads the environment only; unresolved fails the run fast | SOAP body/header templates — [SOAP](connectors/soap.md) |
 | `${now}` | resolves once, to the ingestion instant | `enrich-context` — [Transformers](connectors/transformers.md) |
 | Kotlin `.kts` | the escape hatch — full JVM trust, no sandbox/timeout/memory cap, classpath-only scripts | mapping hooks ([Transformers](connectors/transformers.md)) and platform lifecycle/action hooks (developer SPI, documented beside the code) |
 
 ## Refusability as a feature
 
-Every `apply` runs the same check that `validate` does first — a refusal names the exact
-field, not a stack trace. That is not a shortcoming to work around; it is the same posture
-the rest of lumnik carries: a refusal costs you a retry, a silent half-applied
-manifest would cost you a lot more. See [Architecture — Declared over inferred](architecture.md#declared-over-inferred)
-for the why, and [Connectors — Validate before apply](connectors/index.md#validate-before-apply)
-for what a real refusal (and a real warning) look like on the wire.
+Every `apply` runs the same checks as `validate`. A refusal names the field and the fix:
+
+```
+$ lm validate -f acme-nightly.yaml
+✗ acme-nightly.yaml — 1 error(s), 0 warning(s)
+
+  ERROR    spec.archive_path
+          archive_path is required when after_process=move
+          → Set archive_path: /path/to/archive/
+
+Fix errors above before running 'lm apply -f acme-nightly.yaml'.
+Error: validation failed: 1 error(s)
+```
+
+More refusals and warnings: [Connectors — Validate before apply](connectors/index.md#validate-before-apply).
 
 ## See also
 
 - [Quickstart](quickstart/installer.md) — show value with a real connector in under a minute.
 - [Connectors — Overview](connectors/index.md) — the ingestion half of the manifest model.
-- [Views](apps/views.md) · Apps · [Processes](apps/processes.md) · [Workflows](apps/workflows.md) — the app ladder built on `apps.lumnik.io/v1`.
+- [Views](apps/views.md) · [Apps](apps/pwa.md) · [Processes](apps/processes.md) · [Workflows](apps/workflows.md) · [Exports](apps/exports.md) — the app kinds.
 - [Glossary](glossary.md) — every lumnik word, one breath each.

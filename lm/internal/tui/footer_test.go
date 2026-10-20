@@ -23,6 +23,25 @@ func TestSetToastEscapesMarkup(t *testing.T) {
 	}
 }
 
+// A toast ends on the footer as it is when it ends, not as it was when it began: the describe
+// panel closed while a toast was up must not have its note restored (#1179 review).
+func TestSetToast_restoresTheFooterAsItIsWhenTheToastEnds(t *testing.T) {
+	a := runningApp(t, "http://127.0.0.1:1")
+	f := a.footer
+	onLoop(a, time.Second, func() {
+		f.SetHints("hints")
+		f.SetNote("Tab: scroll")
+		f.SetToast(a.tv, "copied", 50*time.Millisecond)
+		f.SetNote("") // the panel closes while the toast is up
+	})
+	time.Sleep(300 * time.Millisecond) // the toast's revert is queued after 50 ms
+	var got string
+	onLoop(a, time.Second, func() { got = f.tv.GetText(true) })
+	if strings.Contains(got, "Tab: scroll") {
+		t.Errorf("the toast restored the closed panel's note: %q", got)
+	}
+}
+
 func TestShowErrorEscapesMarkup(t *testing.T) {
 	a := &App{footer: NewFooter()}
 	a.showError("[red]evil")

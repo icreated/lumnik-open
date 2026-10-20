@@ -24,7 +24,8 @@ import (
 // reason, and a candidate in an ambiguous row is a bare entity ID with no door to browse or
 // pick an identity by it. That would be blind free-text with nothing to validate against until
 // submit — exactly the "corrective-action UX with no second use case to shape it against" #646
-// itself warns against. `lm entity assert-same`/`assert-distinct` remain CLI-only.
+// itself warns against. The gesture lives on :entities instead (#1116): there a row carries its
+// SOURCE:ID handle, so both sides of an assertion are picked from rows on screen, not typed.
 // ambiguousActive is the entity name + rows currently on screen, replaced as ONE unit only
 // after a successful list — never a bare entity write ahead of items, or vice versa. That
 // atomicity (not a "remember to update both, in this order" discipline) is what guarantees ^R
@@ -63,7 +64,7 @@ type Ambiguous struct {
 	historyLoading bool
 
 	spawn   func(func()) // seam: `go` in prod, inline in tests
-	enqueue func(func()) // seam: QueueUpdate in prod, inline in tests
+	enqueue func(func()) // seam: QueueUpdateAfterResume in prod, inline in tests
 
 	showError func(string)
 	toast     func(string)
@@ -76,10 +77,12 @@ func NewAmbiguous(app *tview.Application, c *client.Client, showError, toast fun
 		spawn:   func(f func()) { go f() },
 		sortCol: style.NewColumnSort([]string{"SOURCE", "OCCURRED_AT"}),
 	}
-	a.enqueue = func(f func()) { QueueUpdate(app, f) }
+	// Every enqueued update clears a flag (resolving, historyLoading) or lands a gated submit: none
+	// may be dropped under an open editor, or ^R / Enter would say "in progress" for good (#1156).
+	a.enqueue = func(f func()) { QueueUpdateAfterResume(app, f) }
 
 	a.input = tview.NewInputField().SetLabel(" Entity: ").SetFieldWidth(40)
-	a.table = tview.NewTable().SetBorders(false).SetSelectable(true, false)
+	a.table = newListTable()
 	style.ApplyChrome(a.table.Box)
 	style.ApplyTableSelection(a.table)
 	a.setHeader()
@@ -120,7 +123,13 @@ func NewAmbiguous(app *tview.Application, c *client.Client, showError, toast fun
 func (a *Ambiguous) View() tview.Primitive { return a.flex }
 
 func (a *Ambiguous) Hints() string {
-	return "Enter: entity name · row: load history  ^R: resolve  d: describe  y: yank  s: sort  r: refresh"
+	return "Enter: entity name · Esc: leave the field · row: load history ^R: resolve  d: describe  y: yank  s: sort  r: refresh"
+}
+
+// Open lists one entity's ambiguities as if its name had been typed — :entities' a (#1114).
+func (a *Ambiguous) Open(name string) {
+	a.input.SetText(name)
+	a.submit(name)
 }
 
 // FocusPrimitive lets the App focus the entity-name field when the page opens.
@@ -247,11 +256,12 @@ func (a *Ambiguous) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 // resolve re-runs the resolution pass for the last-submitted entity (^R). EntityResolve rides
 // POSTSlow — the hub walks every row of every source synchronously, which can run well past a
 // UI-thread-tolerable delay on a large entity — so this must never call the client on the event
-// loop. It runs off-thread (spawn) and reports back through enqueue (QueueUpdate), single-flight
-// (resolving) so a second ^R while one is in flight is a no-op rather than a second concurrent
-// pass against the same entity.
+// loop. It runs off-thread (spawn) and reports back through enqueue (QueueUpdateAfterResume), single-flight
+// (resolving) so a second ^R while one is in flight is dropped rather than a second concurrent
+// pass against the same entity — and says so, like every page's guard (#1147).
 func (a *Ambiguous) resolve() {
 	if a.resolving {
+		say(a.toast, stillInProgress("^R"))
 		return
 	}
 	if a.active.entity == "" {
@@ -287,8 +297,7 @@ func (a *Ambiguous) resolve() {
 				return
 			}
 			if a.toast != nil {
-				a.toast(fmt.Sprintf("resolved %s: %d seen, %d resolved, %d ambiguous",
-					entity, res.RowsSeen, res.Resolved, res.Ambiguous))
+				a.toast(resolvedTally(entity, res))
 			}
 			// Only auto-refresh if no submit() has been requested since this resolve
 			// started — a newer one, even one still in flight, must win.
@@ -306,6 +315,7 @@ func (a *Ambiguous) resolve() {
 // own key and its own single-flight guard.
 func (a *Ambiguous) loadHistory() {
 	if a.historyLoading {
+		say(a.toast, stillInProgress("Enter"))
 		return
 	}
 	row, ok := a.selected()
@@ -357,6 +367,12 @@ func writeSetAside(b *strings.Builder, indent string, set []client.SetAside) {
 		}
 		fmt.Fprintf(b, "%s  %s  %s (%s)\n", indent, tview.Escape(s.EntityID), tview.Escape(s.Reason), tview.Escape(via))
 	}
+}
+
+// resolvedTally is the toast a finished resolution pass leaves, on :ambiguous and :entities alike.
+func resolvedTally(entity string, res *client.EntityResolveResult) string {
+	return fmt.Sprintf("resolved %s: %d seen, %d resolved, %d ambiguous",
+		entity, res.RowsSeen, res.Resolved, res.Ambiguous)
 }
 
 func renderHistory(events []client.EvidenceEvent) string {

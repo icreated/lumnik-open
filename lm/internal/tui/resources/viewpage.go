@@ -3,6 +3,7 @@ package resources
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -88,8 +89,10 @@ type ViewPage struct {
 	scope      func() string                                    // session scope getter (a.currentScope)
 	isFront    func() bool                                      // true when :view is the visible page; gates the async generate callback
 	spawn      func(func())                                     // seam: `go` in prod, inline in tests
-	enqueue    func(func())                                     // seam: QueueUpdate in prod, inline in tests
+	enqueue    func(func())                                     // seam: QueueUpdateAfterResume in prod, inline in tests
 	generating bool                                             // single-flight; event goroutine only
+	inFlight   inFlight                                         // the guard on Enter and a (#1171)
+	renderGen  uint64                                           // the latest render asked: only its answer lands; event goroutine only
 	genBuffer  string                                           // the generated YAML being edited — survives every failure
 	genPhrase  string                                           // the sentence, kept when generation fails
 	showError  func(string)
@@ -106,11 +109,12 @@ func NewViewPage(app *tview.Application, c *client.Client, suspend func(func()),
 		spawn:     func(f func()) { go f() },
 		pathInput: tview.NewInputField().SetLabel("view file: ").SetFieldWidth(60),
 		recentsUI: tview.NewTable().SetSelectable(true, false),
-		list:      tview.NewTable().SetBorders(false).SetSelectable(true, false),
+		list:      newListTable(),
 		detail:    tview.NewTextView().SetDynamicColors(true),
 		genIssues: tview.NewTextView().SetDynamicColors(true),
 		pages:     tview.NewPages()}
-	v.enqueue = func(f func()) { QueueUpdate(app, f) }
+	// Off the loop only (generate's spawn): an update under an open $EDITOR waits for it to close (#1158).
+	v.enqueue = func(f func()) { QueueUpdateAfterResume(app, f) }
 	v.pathInput.SetPlaceholder(viewPathHint + "   (Enter to open this suggestion)")
 	v.openFlex = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(v.pathInput, 1, 0, true).
@@ -192,7 +196,7 @@ func (v *ViewPage) Hints() string {
 func (v *ViewPage) Refresh() {
 	switch v.state {
 	case viewList:
-		v.render()
+		v.render(v.manifest, v.filters, nil)
 	default:
 		v.renderRecents()
 	}
@@ -213,7 +217,9 @@ func (v *ViewPage) toState(s viewPageState) {
 			v.pages.SwitchToPage("genissues")
 		}
 	}
-	if v.setHints != nil {
+	// A render lands off the loop: one landing after the user left :view must not write its
+	// hints over the page now in front.
+	if v.setHints != nil && (v.isFront == nil || v.isFront()) {
 		v.setHints(v.Hints())
 	}
 }
@@ -240,29 +246,45 @@ func (v *ViewPage) open(path string) {
 		}
 		return
 	}
-	v.manifest = data
-	v.path = path
-	v.filters = nil
-	if !v.render() {
-		return // render error shown; stay where we are
-	}
-	v.recents = pushRecent(v.recents, path, 8)
-	v.toState(viewList)
+	v.render(data, nil, func() { // a render error is shown and we stay where we are
+		v.path = path
+		v.recents = pushRecent(v.recents, path, 8)
+		v.toState(viewList)
+	})
 }
 
-// render calls the server and fills the list table. A filter refusal (or any
-// render error) surfaces verbatim and leaves the current rows untouched —
-// never a lying empty table.
-func (v *ViewPage) render() bool {
-	res, err := v.client.ViewRender(v.manifest, v.filters)
-	if err != nil {
-		if v.showError != nil {
-			v.showError(err.Error())
+// OpenManifest renders a saved view the hub served (:views Enter, #1119) — the file path's twin.
+func (v *ViewPage) OpenManifest(name string, data []byte) {
+	v.render(data, nil, func() {
+		v.path = "hub:" + name
+		v.toState(viewList)
+	})
+}
+
+// render renders manifest under filters off the event loop — an unbounded query (#1171). Only a
+// success becomes the page's manifest and filters and runs landed; a refusal is said verbatim and
+// leaves the rows untouched — never a lying empty table. The latest render wins: an answer landing
+// after a newer one was asked is dropped.
+func (v *ViewPage) render(manifest []byte, filters []string, landed func()) {
+	v.renderGen++
+	gen := v.renderGen
+	background(v.app, func() func() {
+		res, err := v.client.ViewRender(manifest, filters)
+		return func() {
+			if gen != v.renderGen {
+				return
+			}
+			if err != nil {
+				say(v.showError, err.Error())
+				return
+			}
+			v.manifest, v.filters = manifest, filters
+			v.fill(res)
+			if landed != nil {
+				landed()
+			}
 		}
-		return false
-	}
-	v.fill(res)
-	return true
+	})
 }
 
 // fill populates the list table from an already-fetched render result.
@@ -301,29 +323,20 @@ func (v *ViewPage) handleListKey(ev *tcell.EventKey) *tcell.EventKey {
 	switch {
 	case ev.Key() == tcell.KeyEnter:
 		if row, ok := v.selectedRow(); ok && len(row) > 0 {
-			d, err := v.client.ViewDetail(v.manifest, row[0])
-			if err != nil {
-				if v.showError != nil {
-					v.showError(err.Error())
-				}
-				return nil
-			}
-			v.detail.SetText(detailBody(*d))
-			v.toState(viewDetail)
+			v.openDetail(row[0])
 		}
 		return nil
 	case ev.Rune() == 'f':
 		v.promptFilter()
 		return nil
 	case ev.Rune() == 'F':
-		v.filters = nil
-		v.render()
+		v.render(v.manifest, nil, nil)
 		return nil
 	case ev.Rune() == 'o':
 		v.toState(viewOpen)
 		return nil
 	case ev.Rune() == 'r':
-		v.render()
+		v.render(v.manifest, v.filters, nil)
 		return nil
 	case ev.Rune() == 'g':
 		v.promptGenerate()
@@ -352,11 +365,24 @@ func (v *ViewPage) promptFilter() {
 		if f == "" {
 			return
 		}
-		v.filters = append(v.filters, f)
-		if !v.render() {
-			// refused → not kept; the failed render left rows/result untouched,
-			// so no second fetch is needed
-			v.filters = v.filters[:len(v.filters)-1]
+		// refused → not kept: only a render that succeeded keeps its filters, and the failed
+		// one left rows/result untouched, so no second fetch is needed
+		v.render(v.manifest, append(slices.Clone(v.filters), f), nil)
+	})
+}
+
+// openDetail drills into the record keyed key, off the event loop like render (#1171).
+func (v *ViewPage) openDetail(key string) {
+	manifest := v.manifest
+	v.inFlight.background(v.app, "Enter", v.toast, func() func() {
+		d, err := v.client.ViewDetail(manifest, key)
+		return func() {
+			if err != nil {
+				say(v.showError, err.Error())
+				return
+			}
+			v.detail.SetText(detailBody(*d))
+			v.toState(viewDetail)
 		}
 	})
 }

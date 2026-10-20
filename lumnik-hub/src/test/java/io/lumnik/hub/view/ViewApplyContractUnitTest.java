@@ -81,8 +81,10 @@ class ViewApplyContractUnitTest {
     RecordingStore store = new RecordingStore();
     ViewApplyResource res = new ViewApplyResource();
     res.store = store;
-    Response r = res.apply("kind: Nonsense");
-    assertThat(r.getStatus()).isEqualTo(400);
+    // Thrown since #1293 (ApiErrors.orBadRequest); JAX-RS serves the attached response.
+    assertThatThrownBy(() -> res.apply("kind: Nonsense"))
+        .isInstanceOfSatisfying(WebApplicationException.class,
+            e -> assertThat(e.getResponse().getStatus()).isEqualTo(400));
     assertThat(store.name).isNull();
   }
 

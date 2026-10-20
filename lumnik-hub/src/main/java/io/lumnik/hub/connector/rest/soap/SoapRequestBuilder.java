@@ -14,7 +14,8 @@ import java.util.regex.Pattern;
  * Mirrors {@code GraphQlRequestBuilder} (a request-shape on the HTTP engine).
  *
  * <p>Placeholders ({@code {{...}}}): {@code page_size} / {@code cursor} are the pagination values;
- * {@code secret:NAME} / {@code env:NAME} resolve a credential via the supplied resolver. An
+ * {@code secret:NAME} resolves through {@code secrets} (the hub passes the lm secret registry, then
+ * the environment) and {@code env:NAME} through {@code environment} (the hub environment only). An
  * unresolved placeholder fails fast (never sent literally; never logged).
  */
 public final class SoapRequestBuilder {
@@ -30,15 +31,16 @@ public final class SoapRequestBuilder {
 
     public static RestRequest render(String baseUrl, String path, String soapAction,
                                      String headerTemplate, String bodyTemplate,
-                                     String pageSize, String cursor, UnaryOperator<String> secrets) {
+                                     String pageSize, String cursor, UnaryOperator<String> secrets,
+                                     UnaryOperator<String> environment) {
         if (bodyTemplate == null) {
             throw new IllegalStateException("SOAP body template must not be null — the validator requires 'body'");
         }
-        String body = subst(bodyTemplate, pageSize, cursor, secrets);
+        String body = subst(bodyTemplate, pageSize, cursor, secrets, environment);
         StringBuilder env = new StringBuilder()
             .append("<soap:Envelope xmlns:soap=\"").append(SOAP_NS).append("\">");
         if (headerTemplate != null && !headerTemplate.isBlank()) {
-            env.append("<soap:Header>").append(subst(headerTemplate, pageSize, cursor, secrets)).append("</soap:Header>");
+            env.append("<soap:Header>").append(subst(headerTemplate, pageSize, cursor, secrets, environment)).append("</soap:Header>");
         }
         env.append("<soap:Body>").append(body).append("</soap:Body></soap:Envelope>");
 
@@ -55,11 +57,12 @@ public final class SoapRequestBuilder {
      * <p>Resolving a token is its own concern ({@link #resolveToken}); this method is the scan and
      * the never-echo guard that refuses anything which survived it.
      */
-    private static String subst(String template, String pageSize, String cursor, UnaryOperator<String> secrets) {
+    private static String subst(String template, String pageSize, String cursor,
+                                UnaryOperator<String> secrets, UnaryOperator<String> environment) {
         Matcher m = TOKEN.matcher(template);
         StringBuilder out = new StringBuilder();
         while (m.find()) {
-            String value = resolveToken(m.group(1), pageSize, cursor, secrets);
+            String value = resolveToken(m.group(1), pageSize, cursor, secrets, environment);
             m.appendReplacement(out, Matcher.quoteReplacement(escapeXml(value)));
         }
         m.appendTail(out);
@@ -79,13 +82,14 @@ public final class SoapRequestBuilder {
      * would go out as the literal {@code {{secret:NAME}}}.
      */
     private static String resolveToken(String token, String pageSize, String cursor,
-                                       UnaryOperator<String> secrets) {
+                                       UnaryOperator<String> secrets, UnaryOperator<String> environment) {
         if ("page_size".equals(token)) return required(pageSize, token);
         if ("cursor".equals(token))    return required(cursor, token);
         if (token.startsWith("secret:") || token.startsWith("env:")) {
             String name = token.substring(token.indexOf(':') + 1);
+            UnaryOperator<String> resolver = token.startsWith("secret:") ? secrets : environment;
             // Guard the resolver itself: a null resolver must fail closed, not NPE.
-            String value = secrets == null ? null : secrets.apply(name);
+            String value = resolver == null ? null : resolver.apply(name);
             if (value == null) {
                 // Fail closed: do not send "{{secret:NAME}}" literally, and do not echo any value.
                 throw new IllegalStateException("unresolved secret/env placeholder: " + name);

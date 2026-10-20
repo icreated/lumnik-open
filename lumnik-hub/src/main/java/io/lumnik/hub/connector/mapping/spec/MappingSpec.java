@@ -11,7 +11,7 @@ public record MappingSpec(
     List<HookInvocation> dataset,
     List<HookInvocation> row,
     List<HookInvocation> cell,
-    /** Parsed from templates but NOT enforced by any runtime consumer yet (tribunal B3). */
+    /** Parsed from the mapping but NOT enforced by any runtime consumer yet (tribunal B3). */
     ErrorPolicy onError
 ) {
   public enum StreamMode { STREAM, SORTED_STREAM }

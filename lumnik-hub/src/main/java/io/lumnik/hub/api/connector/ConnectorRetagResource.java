@@ -26,7 +26,8 @@ public class ConnectorRetagResource {
   @Consumes(MediaType.WILDCARD)
   @Transactional
   public Response retag(@PathParam("id") UUID id) {
-    var c = repo.findById(id);
+    // Held: the tags pushed are the ones a concurrent retag commits, never the ones read before (#1217).
+    var c = ConnectorScope.heldForUpdate(repo, id);
     if (c == null) return ApiErrors.notFound("connector " + id + " not found");
     var tags = c.getTags() != null ? c.getTags() : List.<String>of();
 

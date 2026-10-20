@@ -89,24 +89,24 @@ public class ExportRunResource {
     @Path("/{id}/retry")
     public Response retry(@PathParam("name") String name, @PathParam("id") String rawId) {
         long tenant = RequireTenant.current();
-        UUID id = ApiErrors.uuidOrRefuse(rawId);
         Object checked = QuarkusTransaction.requiringNew().call(() -> {
             Object authorized = authorize(tenant, name);
             if (authorized instanceof Response refused) return refused;
+            UUID id = ApiErrors.uuidOrRefuse(rawId);
             Optional<RetrySeed> seed = ledger.retrySeed(tenant, name, id);
             if (seed.isEmpty()) return ApiErrors.notFound("no run " + id + " of export '" + name + "'");
             if (seed.get().status() != ExportRunStatus.FAILED) {
                 return ApiErrors.conflict("run " + id + " is " + seed.get().status().sqlValue()
                     + "; only a Failed run can be retried");
             }
-            return new Retry(seed.get(), (ExportManifestStore.Row) authorized);
+            ExportManifestStore.Row row = (ExportManifestStore.Row) authorized;
+            RetrySeed s = seed.get();
+            return new Retry(new ExportRunRequest(tenant, row.name(), s.trigger(), RequireUser.current(),
+                s.occurrence(), s.artifactTime(), s.nextAttempt(), id), row);
         });
         if (checked instanceof Response r) return r;
         Retry retry = (Retry) checked;
-        RetrySeed seed = retry.seed();
-        return answer(name, started(runner.start(new ExportRunRequest(tenant, retry.row().name(), seed.trigger(),
-            RequireUser.current(), seed.occurrence(), seed.artifactTime(), seed.nextAttempt(), id),
-            retry.row())));
+        return answer(name, started(runner.start(retry.request(), retry.row())));
     }
 
     /** A run the door just queued is not left to the next poll (a no-op unless {@code lumnik.run-queue.enabled}). */
@@ -115,8 +115,8 @@ public class ExportRunResource {
         return result;
     }
 
-    /** A failed run's retry seed and the manifest row the retry was authorized on. */
-    private record Retry(RetrySeed seed, ExportManifestStore.Row row) {}
+    /** The retry of a failed run and the manifest row it was authorized on. */
+    private record Retry(ExportRunRequest request, ExportManifestStore.Row row) {}
 
     /**
      * 404 for an unknown export, 403 for one outside the caller's scopes, else the manifest row

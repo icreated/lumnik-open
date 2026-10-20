@@ -44,7 +44,6 @@ var manifestDoors = []manifestDoor{
 	// `hook apply` used to be a third one here — #610 removed it entirely (not implemented:
 	// hooks come from deployment manifests, no `-f` flag left to read from stdin at all).
 	{[]string{"connector", "apply"}, "tenantId: 1\nname: " + marker + "\ntypeId: csv-file\nenabled: true\n"},
-	{[]string{"mapping", "apply"}, "id: " + marker + "\ntarget: t_ad_user\n"},
 }
 
 // The inventory: the table above must name every -f door and no others. Anchored on the command

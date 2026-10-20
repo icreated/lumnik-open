@@ -4,6 +4,7 @@ import io.lumnik.identity.Require;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.api.TenantWide;
 import io.lumnik.hub.event.EventRegistry;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.hub.tenant.TenantContextFilter;
@@ -19,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+@TenantWide
 @Path("/api/tenants/{tid}/integrations")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
@@ -62,6 +64,7 @@ public class IntegrationResource {
         e.setAuthMode(in.authMode() == null ? AuthMode.HMAC : in.authMode());
         if (in.secret() != null && !in.secret().isBlank())
             e.setSecretEncrypted(cipher.encrypt(in.secret()));
+        requireSecretForSigning(e);
         e.setEventTypes(in.eventTypes());
         e.setEnabled(in.enabled() == null || in.enabled());
         repo.persist(e);
@@ -83,6 +86,7 @@ public class IntegrationResource {
         if (in.enabled()    != null) e.setEnabled(in.enabled());
         if (in.secret() != null && !in.secret().isBlank())
             e.setSecretEncrypted(cipher.encrypt(in.secret()));
+        requireSecretForSigning(e);
         return IntegrationDto.from(e);
     }
 
@@ -120,6 +124,18 @@ public class IntegrationResource {
         if (holder == null || holder.getId().equals(selfId)) return;
         throw new ClientErrorException(ApiErrors.conflict(
             "an integration named " + name + " already exists (id " + holder.getId() + ")"));
+    }
+
+    /**
+     * HMAC signs every delivery with the secret, BEARER sends it as the token; without one each
+     * delivery fails (WebhookDeliveryService) while the registration itself had answered 201
+     * (#1239). Thrown before the persist on create and inside the transaction on update, so
+     * nothing is stored.
+     */
+    private static void requireSecretForSigning(WebhookEndpoint e) {
+        if (e.getAuthMode() == AuthMode.NONE || e.getSecretEncrypted() != null) return;
+        throw new BadRequestException(ApiErrors.badRequest(
+            e.getAuthMode() + " mode needs a secret (lm integration add: --secret-stdin)"));
     }
 
     // ── Test / Deliveries / Replay ──────────────────────────────────────────

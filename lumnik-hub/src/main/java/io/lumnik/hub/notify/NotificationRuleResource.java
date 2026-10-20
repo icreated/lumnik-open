@@ -2,6 +2,7 @@ package io.lumnik.hub.notify;
 
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.api.TenantWide;
 import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
 import io.lumnik.hub.event.RowEventGate;
 import io.lumnik.hub.tenant.RequireTenant;
@@ -32,10 +33,12 @@ import java.util.Map;
  * workflow's watched table, which may be a fused view), so the pattern decides whether it applies.
  *
  * <p>Tenant-implicit (the InboxResource pattern — lm carries no numeric tenant), lm_admin (a rule
- * is a tenant-admin subscription, like a webhook). The tenant is read FIRST on every door, so a
+ * is a tenant-admin subscription, like a webhook), and {@link TenantWide}: an admin bound to a
+ * métier is refused, a rule receiving every métier's events (#1207). The tenant is read FIRST on every door, so a
  * malformed body cannot be answered before the 401, and the tenant filter is explicit on every
  * read/write — belt and braces over RLS.
  */
+@TenantWide
 @Path("/api/notifications")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)

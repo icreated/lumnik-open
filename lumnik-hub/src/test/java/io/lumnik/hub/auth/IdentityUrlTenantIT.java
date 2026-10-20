@@ -78,6 +78,23 @@ class IdentityUrlTenantIT {
     }
 
     /**
+     * A segment that is not a number is not a tenant: the door's {@code Long} parameter fails to
+     * convert and answers 404, as it did before the reconciliation moved into a filter (#1292).
+     */
+    @ParameterizedTest(name = "{0} with a tenant that is not a number stays a 404")
+    @CsvSource(delimiter = '|', value = {
+        "GET | /api/tenants/not-a-number/users",
+        "GET | /api/tenants/not-a-number/orgs",
+    })
+    void aTenantSegmentThatIsNotANumberStaysA404(String method, String path) {
+        given()
+            .header("Authorization", "Bearer " + NoBypassOidcProfile.tokenForTenant(2L, "lm_admin"))
+            .request(method.trim(), path.trim())
+        .then()
+            .statusCode(404);
+    }
+
+    /**
      * A tenant that does not exist and one that does must answer alike to a caller who owns
      * neither — otherwise the surface is a directory of which tenants exist.
      */

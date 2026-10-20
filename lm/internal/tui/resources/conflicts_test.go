@@ -95,3 +95,19 @@ func TestConflictsDescendingSortKeepsTiesStable(t *testing.T) {
 		t.Errorf("ties must keep their relative order, got %q then %q", c.items[1].Key, c.items[2].Key)
 	}
 }
+
+// The list lands off the loop now (#1171): a refresh that reorders the ledger keeps the active sort
+// and the cursor on the record it was on.
+func TestConflictsRefreshKeepsTheSortAndTheSelectedRecord(t *testing.T) {
+	c := &Conflicts{table: tview.NewTable(), sortCol: style.NewColumnSort([]string{"ENTITY", "KEY"})}
+	c.sortCol.Next() // ENTITY ascending
+	c.renderList(sampleConflicts(), nil)
+	c.table.Select(2, 0) // FusedCustomer C-200, below Article A-1
+	c.renderList(append(sampleConflicts(), client.Conflict{Entity: "Bin", Key: "B-1"}), nil)
+	if got := c.table.GetCell(1, 0).Text; got != "Article" {
+		t.Errorf("first row = %q, want the ENTITY sort kept", got)
+	}
+	if it, ok := c.selected(); !ok || it.Key != "C-200" {
+		t.Errorf("cursor on %+v, want it kept on C-200", it)
+	}
+}

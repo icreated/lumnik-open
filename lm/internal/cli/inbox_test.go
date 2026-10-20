@@ -2,6 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,11 +38,22 @@ func TestInboxRow_ackedMarker(t *testing.T) {
 	e := client.InboxEntry{ID: 4212, OccurredAt: "2026-07-05T10:00:00Z",
 		Process: "lyon-client-arrive", Message: "Nouveau client à Lyon", EntityKey: "e717", Acked: true}
 	row := inboxRow(e, now)
-	// columns: ID(0) QUAND(1) PROCESS(2) MESSAGE(3) ENTITY_KEY(4)
+	// columns: ID(0) WHEN(1) PROCESS(2) MESSAGE(3) ENTITY_KEY(4)
 	assert.Equal(t, "4212", row[0]) // the ID column
 	assert.Contains(t, row[3], "[traité]")
 	e.Acked = false
 	assert.NotContains(t, inboxRow(e, now)[3], "traité")
+}
+
+// An English header in an English CLI: WHEN, as on :outputs (#1175).
+func TestInboxCmd_header(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"id":1,"occurredAt":"2026-07-05T10:00:00Z","process":"p","message":"m","entityKey":"k"}]`))
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+	out := runRoot(t, "inbox")
+	assert.Equal(t, []string{"ID", "WHEN", "PROCESS", "MESSAGE", "ENTITY_KEY"}, strings.Fields(strings.SplitN(out, "\n", 2)[0]))
 }
 
 func TestInboxAckCmd_requiresOneIntArg(t *testing.T) {

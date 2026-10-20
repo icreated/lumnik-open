@@ -33,3 +33,12 @@ func TestHumanTimeStr(t *testing.T) {
 		t.Errorf("empty stays empty, got %q", got)
 	}
 }
+
+func TestHumanTimeStrOr(t *testing.T) {
+	if got := HumanTimeStrOr("", "—"); got != "—" {
+		t.Errorf("absent must read the stand-in, got %q", got)
+	}
+	if got, want := HumanTimeStrOr("2026-09-02T12:38:47Z", "—"), HumanTimeStr("2026-09-02T12:38:47Z"); got != want {
+		t.Errorf("present must render as HumanTimeStr: got %q, want %q", got, want)
+	}
+}

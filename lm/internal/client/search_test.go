@@ -111,3 +111,44 @@ func TestSearchCancel_acceptedIsNotAnError(t *testing.T) {
 		t.Fatalf("SearchCancel: %v", err)
 	}
 }
+
+// GET /api/search/capability always answers 200 — the body says whether Search is there (#1132).
+func TestSearchCapability_decodesTheAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/search/capability" {
+			w.WriteHeader(404)
+			return
+		}
+		_, _ = w.Write([]byte(`{"state":"unavailable","provider":null,"reason":"not_installed","version":null}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	got, err := New(config.Context{Server: srv.URL, Token: "x"}).SearchCapability()
+	if err != nil {
+		t.Fatalf("SearchCapability: %v", err)
+	}
+	if got.State != "unavailable" || got.Reason != "not_installed" || got.Provider != "" {
+		t.Errorf("decoded %+v", got)
+	}
+}
+
+// A scope narrows a query the way the PWA's Search tab does; no scope sends no scope= (an empty one
+// is refused by the hub, never widened).
+func TestSearchQuery_sendsTheScopeOnlyWhenSet(t *testing.T) {
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.RawQuery)
+		_, _ = w.Write([]byte(`{"hits":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := New(config.Context{Server: srv.URL, Token: "x"})
+	if _, err := c.SearchQuery(SearchQueryParams{Text: "x", Scope: "ventes"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SearchQuery(SearchQueryParams{Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(queries[0], "scope=ventes") || strings.Contains(queries[1], "scope") {
+		t.Errorf("queries %q", queries)
+	}
+}

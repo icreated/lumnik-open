@@ -7,6 +7,121 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.9.0 — 2026-10-20
+
+A hub table now holds what its source holds: one row per key for a database table, the file's rows
+and no others for a single CSV file. Dates keep their type through an entity, align across sources,
+and read the same whatever zone the hub runs in. `lm ui` becomes the integrator's workbench: every
+kind can be browsed, created and acted on without leaving it. A caller bound to a métier is now
+bound everywhere: connectors, runs, dead letters, workflows and the decision inbox.
+
+### Before you upgrade
+- **Take a backup.** This release carries six migrations (V70–V75), and migrations are
+  forward-only. See `docs/operations/upgrade.md`.
+- **Plan for a lock at first boot.** V73 rebuilds the unique key of every existing `t_*` table as
+  `(tenant_id, _row_hash)`: one index per table, and every table stays locked until the migration
+  commits. Time it on a copy if your tables are large.
+- **Add `--force` to scripts that delete.** `lm connector delete`, `lm entity delete` and `lm search
+  rm` now ask you to type `delete`. Without a keyboard they stop: `aborted: no confirmation read
+  (EOF) — pass --force in a script`, and nothing is deleted.
+- **Stop using `lm migration apply` and `lm mapping`.** Both are removed. The hub migrates at every
+  start; the mapping template surface acted on nothing (V70 drops its table).
+- **Check manifests the validator now refuses.** Each of these used to pass `lm validate` and fail
+  every run:
+  - a `jdbc-generic` table with no `schema`, on the table or in `defaults`;
+  - an `sftp` csv-file with a strict host key (the default) and no `host_key_fingerprint` (the hint
+    gives the `ssh-keyscan` command for your host and port);
+  - a REST endpoint with `pagination.kind: custom`.
+- **Helm: OpenTelemetry is now off by default**, as on self-host. If your hub exported traces, add a
+  `hub.extraEnv` entry `QUARKUS_OTEL_SDK_DISABLED=false`.
+
+### After you upgrade
+- **Watch the first run of each `jdbc-generic` table.** It moves the table to one row per key:
+  the newest version of each key stays, the others are removed, and `lm run get` reports how many.
+  Two different rows under one key now fail the run naming `pk_columns`: declare the source's real
+  primary key. A key combined with an `on-conflict` other than `SKIP` is refused.
+- **Watch the first run of each single-file CSV connector.** A `csv-file` reading one local file
+  (no glob, `after_process: none`) now removes the rows the file no longer holds. A run that would
+  remove more than 30% of the table fails and removes nothing; `spec.refresh.max_removed` changes
+  the limit (`off` disables it).
+- **Re-apply your entities** (`lm entity apply -f …`, same manifest). A view is compiled at apply,
+  so an existing entity keeps its old rules until then. After it:
+  - each source key is read from the newest run that brought it, so an updated source row no
+    longer conflicts with its own old version;
+  - a column every source holds as a date stays a `date`, and dates mixed with timestamps become a
+    `timestamptz` (a date is its midnight UTC). A column with one text source stays text;
+  - a source's day and another's time on that same day agree instead of conflicting;
+  - a join key that is a date or a time finds a day-keyed lookup row.
+- **If your hub does not run in UTC, expect dates to read differently.** Views, view filters,
+  process rules and messages, entity reads and raw rows now all read and write in UTC, so the same
+  filter picks the same rows everywhere. The published Docker image runs in UTC.
+- **If a webhook or n8n flow parses timestamps by exact format, check it.** View JSON and the
+  process payload `fields` now carry `2026-07-01T00:00:00.000500Z` (microseconds kept) instead of
+  `2026-07-01T00:00:00.000+00:00`. Both are RFC 3339.
+- **Review notifications and webhooks if you use `scope:*` roles.** Notification rules,
+  integrations, deliveries and the event stream are now tenant-wide administration: a caller
+  bound to a métier is refused them. Existing subscriptions keep firing; `lm notify list` and
+  `lm integration list` show what is there.
+- **A credential now leaves with the last connector that uses it.** The delete confirmation names
+  it.
+- **SOAP `{{secret:NAME}}` now reads `lm secret` first, then the environment.** A tenant secret
+  outranks a hub variable of the same name; write `{{env:NAME}}` to read the environment only.
+
+### Added
+- **`lm ui`, the integrator's workbench.** New pages: `:entities` (rows, identities, history),
+  `:tables` (the `t_*` tables with real row counts and their raw rows), `:views`, `:apps`,
+  `:workflows`, `:exports`, `:search`, `:integrations`, `:notify`, `:secrets` and `:context` (switch
+  hub without leaving). `:new` creates every kind, validating before it applies. A JDBC source is
+  onboarded from the TUI, a REST endpoint is pre-flighted and probed there, and `/` filters most
+  lists. Every action runs off the screen's loop: a slow hub no longer freezes a key.
+- **A jdbc connection declares its zone.** `spec.connection.zone: Europe/Paris` reads a source's
+  `timestamp` (no time zone) in that zone, each time at its own offset. Without it, such times are read as UTC, as before. To move rows already landed:
+  `lm apply`, `lm endpoint reset-cursor`, `lm connector run`.
+- **jdbc `source.tables[].target`** names the hub table a source table lands in.
+- **Delete says what goes before it asks.** `lm connector delete` names each table, its rows and the
+  credential that goes with it; `--dry-run` on connector delete and `lm endpoint purge` show it
+  without deleting.
+- **The audit trail records connector, entity, view, workflow and process writes.**
+- **New commands**: `lm entity list`, `lm app get NAME` (an applyable manifest), `lm view NAME
+  [KEY]` (a saved view by name), `lm outputs replay ID`.
+- **Settings that reach the hub**: rate limits, the workflow sweep and OpenTelemetry can now be set
+  through `.env` on self-host and `hub.extraEnv` on Helm.
+
+### Changed
+- **A métier-bound caller is bound everywhere.** Connector doors (get, update, delete, run, pause,
+  endpoints, tags) act only on connectors whose scopes the caller holds, and lists are filtered;
+  so are runs, dead letters, the `lm source` doors, workflow graphs and tape, and the decision
+  inbox. Another métier's object is the uniform `403 {"error":"scope not granted"}`. A caller with
+  no `scope:*` role keeps tenant-wide administration.
+- **A second connector cannot write another connector's table.** Its run fails naming the holder
+  and the way out (jdbc: `target`; csv: rename the connector). A sharing that existed before
+  keeps working, and deleting one of the sharers removes only its own rows.
+- **A row identical to another tenant's is stored** (it was silently dropped while the run counted
+  it).
+- **A SearchIndex re-apply that removes or changes what is served is withheld** until a rebuild of
+  the new declaration cuts over, and an index made invalid by an entity re-apply serves nothing.
+  `lm search status` shows `withheld` and `invalid`.
+- **The flat connector door (`lm connector apply -f`) creates only what it can run**: `jdbc-generic`,
+  `rest-generic` and unknown types are refused naming `lm apply -f`.
+- **Errors stop quoting what they should not.** A webhook delivery, a REST probe or run, a database
+  failure and a workflow apply now say the kind of failure and its SQLSTATE, never a message that
+  can carry a URL credential or a stored value. Rows written before keep their text.
+- **Output**: `lm config view` redacts tokens (`--raw` shows them); `lm connector run` prints one
+  run id per endpoint; `lm dlq list` shows whether an entry was replayed or discarded; `lm view`
+  says when the 1 000-row cap dropped rows; `lm secret set` without `--description` keeps the
+  stored one; the `lm inbox` header reads `WHEN`.
+- **Refusals that were 500s**: a taken connector name is a 409 naming its holder; a malformed CSV
+  row in a one-shot ingest is a 400 naming its line; a body over 10 MB says the limit; an
+  integration in `HMAC` or `BEARER` mode without a secret is refused; a schedule on `lm source jdbc
+  add` must be a 5-field cron.
+
+### Fixed
+- A connector delete no longer removes a table another connector shares, or another tenant's rows.
+- A process rule on a `DATE` column fires on the day it names, whatever the hub's zone.
+- Several replicas no longer copy an audit row twice.
+- `lm migration status` no longer fails on a schema with no applied migration.
+- A SOAP or GraphQL endpoint without `method` is stored as `POST`, the method it is sent with.
+
 ## v1.8.1 — 2026-10-15
 
 What the documentation already showed is now in the binary: export files shaped for a partner,

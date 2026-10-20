@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
+import io.lumnik.hub.connector.rest.runtime.RestEndpointReader;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.rest.pagination.preset.PaginationPresetRegistry;
@@ -109,7 +110,11 @@ public class RestConnectorApplyHandler implements ConnectorApplyHandler {
         // does not merely sit in the row, it ERASES the connector-level value of the same name.
         epCfg.values().removeIf(Objects::isNull);
 
+        // SOAP and GraphQL send POST whatever the row says; storing GET made a pre-flight that
+        // composed nothing print METHOD GET for them. Recognised by the engine's own predicates.
+        String defaultMethod = RestEndpointReader.isSoapEndpoint(epCfg) || RestEndpointReader.isGraphQlEndpoint(epCfg)
+            ? "POST" : "GET";
         ApplyUpsert.endpoint(epRepo, conn, tenant, epName,
-            epNode.path("method").asText("GET"), epNode.path("path").asText(), epCfg);
+            epNode.path("method").asText(defaultMethod), epNode.path("path").asText(), epCfg);
     }
 }

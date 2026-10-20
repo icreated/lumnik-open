@@ -25,7 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import io.lumnik.hub.sql.SqlFailureText;
+import io.lumnik.common.sql.Jdbc;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteTable;
@@ -132,7 +132,7 @@ public class WorkflowDormancySweep {
      * <p>Package-private for {@code WorkflowDormancySweepQuietTest}.
      */
     void noteSweepFailed(long tenant, WorkflowGraph g, RuntimeException e) {
-        String sqlState = SqlFailureText.sqlStateOf(e);
+        String sqlState = Jdbc.sqlStateOf(e);
         String what = sqlState == null ? null : DECLARATION_OUTRAN_DATA.get(sqlState);
         if (what == null) {
             LOG.errorf(e, "dormancy sweep failed for tenant %d workflow %s — skipped",

@@ -19,14 +19,15 @@ import java.util.function.Function;
  * 2026-09-11). One of the five copies was already wrong: the two transports read the system property
  * BEFORE the OS variable. A rule in five copies is four that can go quietly false.
  *
- * <p><b>Three paths deliberately do NOT come here</b>, and each says so where an integrator reads
- * it: {@code jdbc-generic}'s {@code password_env}, REST's declarative {@code headers[].value_env},
- * and SOAP's {@code {{secret:}}}/{@code {{env:}}} templates. The reason is the same for all three
- * and it is about behaviour, not design — folding the others in changed nothing, because
+ * <p><b>Two paths deliberately do NOT come here</b>, and each says so where an integrator reads
+ * it: {@code jdbc-generic}'s {@code password_env} and REST's declarative {@code headers[].value_env}.
+ * The reason is about behaviour, not design — folding the others in changed nothing, because
  * {@code rest} basic auth and {@code sftp} already read the registry first and {@code kafka} read
- * nothing at all. Folding these three WOULD change what a live connector resolves: a tenant secret
+ * nothing at all. Folding these two WOULD change what a live connector resolves: a tenant secret
  * would start outranking an environment variable of the same name on a connector that has been
- * running for months. That is a lot of its own, with its own doc edits.
+ * running for months. SOAP's {@code {{secret:}}} took that change on purpose (#1246): its name
+ * says registry, and an installer could not set it with {@code lm secret}; {@code {{env:}}} stays
+ * environment-only.
  *
  * <p>Resolution reads the tenant from {@code CurrentTenantHolder}, so a caller must already be in a
  * tenant scope — the run thread is ({@code ConnectorEngine} wraps every run in

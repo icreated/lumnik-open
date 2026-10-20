@@ -14,6 +14,13 @@ import (
 
 var integrationHeaders = []string{"ID", "NAME", "URL", "EVENTS", "ENABLED"}
 
+// integrationTargetNote is list's and describe's help: what the table shows of a target, and why
+// -o json|yaml shows more.
+const integrationTargetNote = `The table shows each target's scheme and host only: a webhook URL's user,
+path and query are often its credential. -o json and -o yaml print the hub's
+body as it is, the full target URL included: that is the machine contract,
+and asking for it is your explicit choice.`
+
 // readLineFrom reads one line from the command's input — cmd.InOrStdin(), so tests can drive it
 // with SetIn. Its other caller is readPassword in source_jdbc.go, which uses it for the piped
 // half of the guided flow's password.
@@ -25,9 +32,41 @@ func readLineFrom(r io.Reader) (string, error) {
 	return strings.TrimRight(line, "\r\n"), nil
 }
 
+// confirmTyped asks "Type '<word>' to <what>: " and goes on only when the integrator types word.
+// With nothing to read — a script, stdin at /dev/null — it names --force rather than a bare
+// "aborted", so the script's author learns what to pass.
+func confirmTyped(cmd *cobra.Command, word, what string) error {
+	fmt.Fprintf(cmd.OutOrStdout(), "Type '%s' to %s: ", word, what)
+	s, err := readLineFrom(cmd.InOrStdin())
+	if err != nil {
+		return fmt.Errorf("aborted: no confirmation read (%v) — pass --force in a script", err)
+	}
+	if strings.TrimSpace(s) != word {
+		return fmt.Errorf("aborted")
+	}
+	return nil
+}
+
+// integrationRow shows the target's host only; integrationTargetNote says why (#1158).
 func integrationRow(i client.Integration) []string {
-	return []string{strconv.FormatInt(i.ID, 10), i.Name, i.TargetURL,
+	return []string{strconv.FormatInt(i.ID, 10), i.Name, output.TargetHost(i.TargetURL),
 		strings.Join(i.EventTypes, ","), strconv.FormatBool(i.Enabled)}
+}
+
+// deliveryFailed is a failed test's error. The hub's text can quote the target URL, credential
+// included, so it is shown with the target's host only — list's and describe's rule (#1160). The
+// target is read here, on failure only; when that read fails too the text is withheld, since it
+// cannot be scrubbed, and only the status is said.
+func deliveryFailed(c *client.Client, id int64, res *client.IntegrationTestResult) error {
+	target, err := c.IntegrationGet(id)
+	if err != nil {
+		status := "no response"
+		if res.HTTPStatus != nil {
+			status = "HTTP " + strconv.Itoa(*res.HTTPStatus)
+		}
+		return fmt.Errorf("delivery failed (%s); the hub's message is withheld: it may quote the target URL, which lm could not read to hide", status)
+	}
+	return fmt.Errorf("delivery failed: %s", output.ScrubURL(res.Error, target.TargetURL))
 }
 
 // newIntegrationCmd is the registration side of the webhook road; `lm outputs` stays the
@@ -68,12 +107,13 @@ func newIntegrationCmd() *cobra.Command {
 	add.Flags().String("url", "", "target URL (required)")
 	add.Flags().StringSlice("events", []string{"decision.*"}, "event types or prefix patterns")
 	add.Flags().String("platform", "", "target platform hint (generic when omitted)")
-	add.Flags().Bool("secret-stdin", false, "read the signing secret from stdin")
+	add.Flags().Bool("secret-stdin", false, "read the signing secret from stdin (required: the hub refuses a target without one)")
 	_ = add.MarkFlagRequired("url")
 
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List registered webhook targets",
+		Long:  integrationTargetNote,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
@@ -92,6 +132,7 @@ func newIntegrationCmd() *cobra.Command {
 		Use:   "describe ID",
 		Args:  cobra.ExactArgs(1),
 		Short: "One target's registration",
+		Long:  integrationTargetNote,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
@@ -133,7 +174,7 @@ func newIntegrationCmd() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "delivered in %dms (HTTP %d)\n", res.DurationMs, *res.HTTPStatus)
 				return nil
 			}
-			return fmt.Errorf("delivery failed: %s", res.Error)
+			return deliveryFailed(c, id, res)
 		},
 	}
 	test.Flags().String("event", "org.created", "catalog event type to fire (decision.* types are dynamic and not testable this way)")

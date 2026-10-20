@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// humanizeAge renders how long ago t was, for the inbox QUAND column.
+// humanizeAge renders how long ago t was, for the inbox WHEN column.
 // Duration-based on purpose (no calendar math) — rung-1 simplicity.
 func humanizeAge(t, now time.Time) string {
 	d := now.Sub(t)

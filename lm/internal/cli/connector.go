@@ -73,8 +73,9 @@ func newConnectorCmd() *cobra.Command {
 	})
 
 	cn.AddCommand(&cobra.Command{
-		Use:  "get NAME",
-		Args: cobra.ExactArgs(1),
+		Use:   "get NAME",
+		Short: "Print a connector's stored fields as YAML — what `connector apply` takes back",
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
@@ -100,6 +101,10 @@ func newConnectorCmd() *cobra.Command {
 		Long: "Create or update a connector from the FLAT stored fields — tenantId, name, typeId,\n" +
 			"schedule, window, enabled, config, tags — which is what `lm connector get` writes. The designed\n" +
 			"loop is `get` → edit → `apply`, the same one the TUI runs against $EDITOR.\n\n" +
+			"Without an `id` it creates — a csv-file or hello-world connector only: the tables of a\n" +
+			"jdbc-generic, the endpoints of a rest-generic and the topic of a kafka connector are not\n" +
+			"flat fields, so those are created from their manifest with `lm apply -f`. `tenantId` may be\n" +
+			"left out: the connector is written in your tenant, and naming another one is refused.\n\n" +
 			"A `kind: Connector` manifest goes to `lm apply -f` instead: different format,\n" +
 			"different endpoint. Hand one here and this command says so rather than posting it.",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -133,29 +138,57 @@ func newConnectorCmd() *cobra.Command {
 	_ = apply.MarkFlagRequired("file")
 	cn.AddCommand(apply)
 
-	cn.AddCommand(&cobra.Command{
-		Use:  "delete NAME",
+	var forceDelete, dryRunDelete bool
+	del := &cobra.Command{
+		Use:   "delete NAME",
+		Short: "Delete a connector and its data: mirror tables, registry rows, RAG chunks",
+		Long: "Delete a connector and its data: its mirror tables, run history and RAG chunks, and its\n" +
+			"stored credential when no other connector uses it.\n\n" +
+			"A table a fused entity depends on blocks the delete: the hub names the entity, before any\n" +
+			"question, and nothing goes. Otherwise lm states each table and the rows that go with it, and\n" +
+			"asks you to type 'delete'; --force skips the question in a script, --dry-run stops at the\n" +
+			"statement.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
 				return err
 			}
-			id, err := resolveConnectorID(c, args[0])
+			conn, err := resolveConnector(c, args[0])
 			if err != nil {
 				return err
 			}
-			if err := c.ConnectorDelete(id); err != nil {
+			if !forceDelete || dryRunDelete {
+				// The dry run first, as lm endpoint purge: a refusal arrives before any question, and
+				// the question can say what it is about to delete.
+				takes, err := c.ConnectorDeleteDryRun(conn.ID)
+				if err != nil {
+					return err
+				}
+				what := fmt.Sprintf("connector %s (%s) — %s", conn.Name, conn.TypeID, output.ConnectorDeleteTakes(takes))
+				if dryRunDelete {
+					fmt.Fprintf(cmd.OutOrStdout(), "Would delete %s (dry run, nothing deleted)\n", what)
+					return nil
+				}
+				if err := confirmTyped(cmd, "delete", "delete "+what); err != nil {
+					return err
+				}
+			}
+			if err := c.ConnectorDelete(conn.ID); err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "deleted:", args[0])
 			return nil
 		},
-	})
+	}
+	del.Flags().BoolVar(&forceDelete, "force", false, "Skip confirmation")
+	del.Flags().BoolVar(&dryRunDelete, "dry-run", false, "Print the tables and rows that would go, delete nothing")
+	cn.AddCommand(del)
 
 	cn.AddCommand(&cobra.Command{
-		Use:  "run NAME",
-		Args: cobra.ExactArgs(1),
+		Use:   "run NAME",
+		Short: "Trigger an immediate run",
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
@@ -169,14 +202,22 @@ func newConnectorCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), "run scheduled:", out["runId"])
+			// One run per endpoint: the hub lists them all under runIds, runId is the first.
+			ids, _ := out["runIds"].([]any)
+			if len(ids) == 0 {
+				ids = []any{out["runId"]}
+			}
+			for _, runID := range ids {
+				fmt.Fprintln(cmd.OutOrStdout(), "run scheduled:", runID)
+			}
 			return nil
 		},
 	})
 
 	cn.AddCommand(&cobra.Command{
-		Use:  "pause NAME",
-		Args: cobra.ExactArgs(1),
+		Use:   "pause NAME",
+		Short: "Stop scheduling the connector's runs",
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
@@ -195,8 +236,9 @@ func newConnectorCmd() *cobra.Command {
 	})
 
 	cn.AddCommand(&cobra.Command{
-		Use:  "resume NAME",
-		Args: cobra.ExactArgs(1),
+		Use:   "resume NAME",
+		Short: "Schedule a paused connector's runs again",
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
@@ -220,8 +262,9 @@ func newConnectorCmd() *cobra.Command {
 	scope := &cobra.Command{Use: "scope", Short: "Manage the connector's métier scopes"}
 
 	scope.AddCommand(&cobra.Command{
-		Use:  "ls NAME",
-		Args: cobra.ExactArgs(1),
+		Use:   "ls NAME",
+		Short: "List the connector's scopes",
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
@@ -243,8 +286,9 @@ func newConnectorCmd() *cobra.Command {
 	})
 
 	scope.AddCommand(&cobra.Command{
-		Use:  "set NAME SCOPES",
-		Args: cobra.ExactArgs(2),
+		Use:   "set NAME SCOPES",
+		Short: "Replace the connector's scopes (comma-separated)",
+		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
@@ -265,8 +309,9 @@ func newConnectorCmd() *cobra.Command {
 	})
 
 	scope.AddCommand(&cobra.Command{
-		Use:  "add NAME SCOPE",
-		Args: cobra.ExactArgs(2),
+		Use:   "add NAME SCOPE",
+		Short: "Add one scope to the connector",
+		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
@@ -297,8 +342,9 @@ func newConnectorCmd() *cobra.Command {
 	})
 
 	scope.AddCommand(&cobra.Command{
-		Use:  "rm NAME SCOPE",
-		Args: cobra.ExactArgs(2),
+		Use:   "rm NAME SCOPE",
+		Short: "Remove one scope from the connector",
+		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {

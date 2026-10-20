@@ -12,14 +12,17 @@ import (
 
 type Scopes struct {
 	client   *client.Client
+	app      *tview.Application
+	offLoop  offLoop
 	table    *tview.Table
 	items    []client.RagScope
 	onEnter  func(scope string)
 	onSelect func()
 }
 
-func NewScopes(c *client.Client) *Scopes {
-	s := &Scopes{client: c, table: tview.NewTable().SetBorders(false).SetSelectable(true, false)}
+func NewScopes(app *tview.Application, c *client.Client) *Scopes {
+	s := &Scopes{client: c, app: app, table: newListTable()}
+	s.table.SetTitle(" :scopes ").SetBorder(true)
 	style.ApplyChrome(s.table.Box)
 	style.ApplyTableSelection(s.table)
 	s.table.SetInputCapture(s.handleKey)
@@ -37,29 +40,46 @@ func (s *Scopes) Hints() string {
 }
 func (s *Scopes) SetOnEnter(fn func(string)) { s.onEnter = fn }
 
+// Refresh lists off the event loop (offLoop), like every page since #1171.
 func (s *Scopes) Refresh() {
-	items, err := s.client.RagScopes()
+	s.offLoop.run(s.app, func() func() {
+		items, err := s.client.RagScopes()
+		return func() { s.renderList(items, err) }
+	})
+}
+
+func (s *Scopes) renderList(items []client.RagScope, err error) {
 	if err != nil {
+		s.items = nil
 		s.table.Clear()
 		s.table.SetCell(0, 0, dataCell("error: "+err.Error()))
+		if s.onSelect != nil { // an open describe panel closes: its row is gone
+			s.onSelect()
+		}
 		return
 	}
-	s.items = items
-	s.render()
+	relist(s.table, &s.items, items, scopeKey, s.render, s.onSelect)
 }
+
+func scopeKey(sc client.RagScope) string { return sc.Scope }
 
 func (s *Scopes) render() {
 	s.table.Clear()
+	renderRagScopes(s.table, s.items)
+}
+
+// renderRagScopes draws the per-scope RAG coverage — :scopes and :rag show the same table.
+func renderRagScopes(t *tview.Table, items []client.RagScope) {
 	headers := []string{"SCOPE", "CONNECTORS", "CHUNKS", "LAST INDEXED"}
 	for i, h := range headers {
-		s.table.SetCell(0, i, tview.NewTableCell(h).SetSelectable(false).SetTextColor(tcell.ColorYellow))
+		t.SetCell(0, i, tview.NewTableCell(h).SetSelectable(false).SetTextColor(tcell.ColorYellow))
 	}
-	for i, sc := range s.items {
+	for i, sc := range items {
 		row := i + 1
-		s.table.SetCell(row, 0, dataCell(sc.Scope))
-		s.table.SetCell(row, 1, tview.NewTableCell(fmt.Sprintf("%d", sc.Connectors)))
-		s.table.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("%d", sc.Chunks)))
-		s.table.SetCell(row, 3, dataCell(output.HumanTimeStr(sc.LastIndexed)))
+		t.SetCell(row, 0, dataCell(sc.Scope))
+		t.SetCell(row, 1, tview.NewTableCell(fmt.Sprintf("%d", sc.Connectors)))
+		t.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("%d", sc.Chunks)))
+		t.SetCell(row, 3, dataCell(output.HumanTimeStr(sc.LastIndexed)))
 	}
 }
 

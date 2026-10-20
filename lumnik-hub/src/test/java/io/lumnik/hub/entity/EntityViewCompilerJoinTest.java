@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -13,7 +14,7 @@ class EntityViewCompilerJoinTest {
   private final EntityManifestParser parser = new EntityManifestParser();
   private final EntityViewCompiler compiler = new EntityViewCompiler();
 
-  private String create(String yaml) { return compiler.buildStatements(parser.parse(yaml)).get(1); }
+  private String create(String yaml) { return compiler.buildStatements(parser.parse(yaml), Set.of()).get(1); }
 
   @Test
   void the_fused_view_is_wrapped_not_rewritten() {
@@ -66,7 +67,7 @@ class EntityViewCompilerJoinTest {
 
   @Test
   void the_view_stays_security_invoker_and_the_grants_are_unchanged() {
-    var stmts = compiler.buildStatements(parser.parse(EntityManifestJoinsParserTest.BASE));
+    var stmts = compiler.buildStatements(parser.parse(EntityManifestJoinsParserTest.BASE), Set.of());
     assertThat(stmts).hasSize(4);
     assertThat(stmts.get(1)).startsWith("CREATE VIEW connector.\"v_product\" WITH (security_invoker = true) AS WITH fused AS (");
     assertThat(stmts.get(2)).startsWith("GRANT SELECT ON ");
@@ -76,8 +77,8 @@ class EntityViewCompilerJoinTest {
   void an_empty_joins_list_compiles_byte_identically_to_no_joins_key() {
     String base = EntityManifestJoinsParserTest.BASE;
     String noKey = base.substring(0, base.indexOf("joins:"));
-    assertThat(compiler.buildStatements(parser.parse(noKey + "joins: []\n")))
-        .isEqualTo(compiler.buildStatements(parser.parse(noKey)));
+    assertThat(compiler.buildStatements(parser.parse(noKey + "joins: []\n"), Set.of()))
+        .isEqualTo(compiler.buildStatements(parser.parse(noKey), Set.of()));
   }
 
   // #871 follow-up: the structural guarantee — not just "plausibly" — that every join's own
@@ -102,7 +103,7 @@ class EntityViewCompilerJoinTest {
         List.of(new EntityManifest.Source("t_products", map)),
         List.of(), null, Map.of(), null, List.of(categoryJoin, brandJoin));
 
-    String sql = compiler.buildStatements(m).get(1);
+    String sql = compiler.buildStatements(m, Set.of()).get(1);
     assertThat(sql).contains("lk0 AS MATERIALIZED (SELECT");
     assertThat(sql).contains("lk1 AS MATERIALIZED (SELECT");
   }
@@ -122,7 +123,7 @@ class EntityViewCompilerJoinTest {
         List.of(new EntityManifest.Source("t_erp_customers", erp)),
         List.of(), null, Map.of(), resolution, List.of(regionJoin));
 
-    String sql = compiler.buildStatements(m).get(1);
+    String sql = compiler.buildStatements(m, Set.of()).get(1);
     assertThat(sql).contains("lk0 AS MATERIALIZED (SELECT");
   }
 }

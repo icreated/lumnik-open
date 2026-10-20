@@ -120,3 +120,29 @@ func TestEmitList_tableUsesHumanLayout(t *testing.T) {
 	require.NoError(t, emitList(&b, "", res, nil))
 	assert.Contains(t, b.String(), "Nom") // the header label appears in the table
 }
+
+func TestEmitList_truncatedSaysSo(t *testing.T) {
+	res := &client.ViewResult{
+		Title:     "Clients",
+		Columns:   []client.ViewColumn{{Name: "name", Label: "Nom", PgType: "text"}},
+		Rows:      [][]string{{"Marie"}},
+		Truncated: true,
+	}
+	var b bytes.Buffer
+	require.NoError(t, emitList(&b, "", res, nil))
+	assert.Contains(t, b.String(), "first 1 rows shown; more match — narrow with --filter")
+
+	b.Reset()
+	require.NoError(t, emitList(&b, "json", res, nil))
+	assert.Contains(t, b.String(), `"truncated": true`)
+}
+
+func TestEmitList_notTruncatedNoFooter(t *testing.T) {
+	res := &client.ViewResult{
+		Columns: []client.ViewColumn{{Name: "name", Label: "Nom", PgType: "text"}},
+		Rows:    [][]string{{"Marie"}},
+	}
+	var b bytes.Buffer
+	require.NoError(t, emitList(&b, "", res, nil))
+	assert.NotContains(t, b.String(), "more match")
+}

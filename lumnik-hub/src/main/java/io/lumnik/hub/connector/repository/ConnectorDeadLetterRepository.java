@@ -58,9 +58,14 @@ public class ConnectorDeadLetterRepository implements PanacheRepositoryBase<Conn
   }
 
   /** The unfiltered admin list, newest first, EXCLUDING soft-deleted/GDPR-erased rows — so the
-   *  no-filter list endpoint can't leak erased payloads (consistent with findByRun / GET /{id}). */
-  public List<ConnectorDeadLetter> findAllActive(int limit) {
-    return find("deletedAt is null order by capturedAt desc")
+   *  no-filter list endpoint can't leak erased payloads (consistent with findByRun / GET /{id}).
+   *  {@code heldConnectors} narrows it to a scope-bound caller's reach (#1212); null for an unbound
+   *  one, and empty holds nothing. */
+  public List<ConnectorDeadLetter> findAllActive(Collection<UUID> heldConnectors, int limit) {
+    if (heldConnectors != null && heldConnectors.isEmpty()) return List.of();
+    return (heldConnectors == null
+        ? find("deletedAt is null order by capturedAt desc")
+        : find("connectorId in ?1 and deletedAt is null order by capturedAt desc", heldConnectors))
         .page(0, limit).list();
   }
 }

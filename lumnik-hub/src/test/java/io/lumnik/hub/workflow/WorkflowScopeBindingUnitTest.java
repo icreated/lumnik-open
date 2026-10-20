@@ -4,12 +4,15 @@ import io.lumnik.common.security.CurrentRolesHolder;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.audit.AuditRecorder;
+import io.lumnik.testkit.cdi.EmptyInstance;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -316,6 +319,29 @@ class WorkflowScopeBindingUnitTest {
         assertThat(res.delete("nope").getStatus()).isEqualTo(404);
         assertThat(res.setEnabled("nope", new WorkflowApplyResource.EnabledRequest(true)).getStatus())
             .isEqualTo(404);
+    }
+
+    @Test
+    void a_removal_that_found_the_row_already_gone_writes_no_audit_row() {
+        // #1237: a second removal passed findScope before the first one deleted the row. The
+        // store says it removed nothing, so the trail must not count a second DELETE.
+        bindTo("magasin");
+        List<String> recorded = new ArrayList<>();
+        WorkflowApplyResource res = new WorkflowApplyResource();
+        res.store = new WorkflowManifestStore() {
+            @Override public Optional<String> findScope(long tenantId, String name) { return Optional.of("magasin"); }
+            @Override public boolean delete(long tenantId, String name) { return false; }
+        };
+        res.sinks = new EmptyInstance<>();
+        res.audit = new AuditRecorder() {
+            @Override public void record(String entityType, String entityKey, String operation,
+                                         Map<String, Object> snapshot) {
+                recorded.add(operation);
+            }
+        };
+
+        assertThat(res.delete("commande").getStatus()).isEqualTo(204);
+        assertThat(recorded).isEmpty();
     }
 
     @Test

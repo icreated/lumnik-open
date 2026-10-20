@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/editor"
 	"github.com/icreated/lumnik-open/lm/internal/newfile"
 	"github.com/rivo/tview"
@@ -165,58 +166,51 @@ func (v *ViewPage) generate(scope, phrase string) {
 	v.spawn(func() {
 		yaml, err := v.client.ViewGenerate(scope, phrase)
 		// The call takes ~4s; the user may have suspended an editor on ANOTHER
-		// page meanwhile. enqueue (QueueUpdate) DROPS updates while an editor
-		// session owns the terminal — delivering straight into it would wedge
-		// v.generating (and the YAML/phrase) shut for the rest of the session.
-		// DeferIfSuspended holds the delivery until the session ends instead of
-		// dropping it; v.spawn decouples the run so the drain (which runs on
-		// the event goroutine) never calls enqueue re-entrantly.
-		deliver := func() {
-			v.enqueue(func() {
-				v.generating = false
-				// The world may have changed during the call: gate on :view still
-				// being the front page before touching focus or popping the editor
-				// (a hidden promptGenerate would steal every keystroke into an
-				// invisible InputField; a hidden editGenerated would pop vim over
-				// whatever page the user switched to).
-				front := v.isFront == nil || v.isFront()
-				if err != nil {
-					// Abstention/failure: honest, verbatim — and the sentence is kept
-					// (a phrase is expensive to retype; the refused-filter precedent
-					// does not apply). The error always surfaces (global surface);
-					// only re-open the prompt when still front.
-					v.genPhrase = phrase
-					if v.showError != nil {
-						v.showError(err.Error())
-					}
-					if front {
-						v.promptGenerate()
-					}
-					return
+		// page meanwhile. enqueue (QueueUpdateAfterResume) holds the delivery
+		// until that session ends instead of dropping it — a dropped one would
+		// wedge v.generating (and the YAML/phrase) shut for the rest of the
+		// session. It is called here, off the event loop, as it must be (#1158).
+		v.enqueue(func() {
+			v.generating = false
+			// The world may have changed during the call: gate on :view still
+			// being the front page before touching focus or popping the editor
+			// (a hidden promptGenerate would steal every keystroke into an
+			// invisible InputField; a hidden editGenerated would pop vim over
+			// whatever page the user switched to).
+			front := v.isFront == nil || v.isFront()
+			if err != nil {
+				// Abstention/failure: honest, verbatim — and the sentence is kept
+				// (a phrase is expensive to retype; the refused-filter precedent
+				// does not apply). The error always surfaces (global surface);
+				// only re-open the prompt when still front.
+				v.genPhrase = phrase
+				if v.showError != nil {
+					v.showError(err.Error())
 				}
-				v.genPhrase = ""
 				if front {
-					v.editGenerated(yaml)
-					return
+					v.promptGenerate()
 				}
-				// Hidden: never pop the editor over another page. Hold the YAML as
-				// a file instead — nothing is lost, and the next `g` (or a manual
-				// open) can pick it up.
-				path, perr := persistBuffer("lm-view-*.yaml", yaml)
-				if perr != nil {
-					v.enterGenIssues("[red]persist[white] — "+tview.Escape(perr.Error())+
-						"\n\nYour manifest is intact — e to re-edit.", yaml)
-					return
-				}
-				v.recents = pushRecent(v.recents, path, 8) // discoverable beyond the toast
-				if v.toast != nil {
-					v.toast("view generated — kept at " + path) // toast escapes at the chokepoint
-				}
-			})
-		}
-		if !DeferIfSuspended(func() { v.spawn(deliver) }) {
-			deliver()
-		}
+				return
+			}
+			v.genPhrase = ""
+			if front {
+				v.editGenerated(yaml)
+				return
+			}
+			// Hidden: never pop the editor over another page. Hold the YAML as
+			// a file instead — nothing is lost, and the next `g` (or a manual
+			// open) can pick it up.
+			path, perr := persistBuffer("lm-view-*.yaml", yaml)
+			if perr != nil {
+				v.enterGenIssues("[red]persist[white] — "+tview.Escape(perr.Error())+
+					"\n\nYour manifest is intact — e to re-edit.", yaml)
+				return
+			}
+			v.recents = pushRecent(v.recents, path, 8) // discoverable beyond the toast
+			if v.toast != nil {
+				v.toast("view generated — kept at " + path) // toast escapes at the chokepoint
+			}
+		})
 	})
 }
 
@@ -241,10 +235,18 @@ func (v *ViewPage) editGenerated(buffer string) {
 	v.renderGenerated(updated)
 }
 
-// renderGenerated renders the buffer; only a successful render births the file
-// (suggested name, collision-suffixed — never a silent overwrite).
+// renderGenerated renders the buffer off the event loop (#1171); only a successful render births
+// the file (suggested name, collision-suffixed — never a silent overwrite). Its answer always
+// lands, so the buffer is never lost.
 func (v *ViewPage) renderGenerated(buffer string) {
-	res, err := v.client.ViewRender([]byte(buffer), nil)
+	v.renderGen++ // stales any render still out
+	background(v.app, func() func() {
+		res, err := v.client.ViewRender([]byte(buffer), nil)
+		return func() { v.landGenerated(buffer, res, err) }
+	})
+}
+
+func (v *ViewPage) landGenerated(buffer string, res *client.ViewResult, err error) {
 	if err != nil {
 		v.enterGenIssues("[red]render refused[white] — "+tview.Escape(err.Error())+
 			"\n\ne: re-edit · Esc: abandon (buffer kept in a temp file)", buffer)
@@ -272,25 +274,25 @@ func (v *ViewPage) renderGenerated(buffer string) {
 // broadening of the generate-only brief): it applies WHATEVER manifest the
 // page holds — opened or generated — mirroring `lm view apply -f`; the hub's
 // validate-then-upsert is the safety gate, and the confirmed name comes from
-// the manifest on screen. Called synchronously — like the render/detail
-// calls on this same key handler — since validate-then-upsert is a single
-// quick round-trip, not the multi-second generate call that needs a spawn.
+// the manifest on screen. It waits for the hub off the event loop, like the
+// render and detail calls on this same key handler (#1171).
 // Errors surface via the honest strings (Task 1: 403/429 render verbatim);
 // success toasts the confirmed name, mirroring the local-write toast style.
 func (v *ViewPage) applyToHub() {
 	if v.manifest == nil {
 		return
 	}
-	res, err := v.client.ViewApply(v.manifest)
-	if err != nil {
-		if v.showError != nil {
-			v.showError(err.Error())
+	manifest := v.manifest
+	v.inFlight.background(v.app, "a", v.toast, func() func() {
+		res, err := v.client.ViewApply(manifest)
+		return func() {
+			if err != nil {
+				say(v.showError, err.Error())
+				return
+			}
+			say(v.toast, "applied: "+res.Name)
 		}
-		return
-	}
-	if v.toast != nil {
-		v.toast("applied: " + res.Name)
-	}
+	})
 }
 
 // enterGenIssues mirrors the :new issues state: message verbatim, buffer held.

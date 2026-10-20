@@ -39,9 +39,6 @@ public class Connector extends TenantedEntity {
   @Column(name = "credential_id")
   private UUID credentialId;
 
-  @Column(name = "mapping_id")
-  private UUID mappingId;
-
   @Column(length = 60)
   private String schedule;
 

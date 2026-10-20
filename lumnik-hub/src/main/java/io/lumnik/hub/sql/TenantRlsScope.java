@@ -49,6 +49,10 @@ public final class TenantRlsScope {
      * bypass LeakGuard (which inspects schema-qualified refs) to read another métier's
      * table via the search path. {@code pg_catalog} functions still resolve (implicitly
      * searched), and qualified {@code connector.x} refs work.
+     *
+     * <p>{@code SET LOCAL TimeZone = 'UTC'} ({@link TemporalText#utcSession}): every reader that
+     * scopes a connection here shows or compares dates, and must do so whatever zone the hub runs in
+     * (#1304, #1325).
      */
     public static void applyTo(Connection c, long tenantId) throws SQLException {
         if (!QuarkusTransaction.isActive()) {
@@ -70,5 +74,6 @@ public final class TenantRlsScope {
             st.execute("SET LOCAL app.current_tenant = '" + tenantId + "'");
             st.execute("SET LOCAL search_path = ''");
         }
+        TemporalText.utcSession(c);
     }
 }

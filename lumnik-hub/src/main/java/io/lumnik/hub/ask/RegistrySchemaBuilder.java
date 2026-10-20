@@ -50,8 +50,8 @@ public class RegistrySchemaBuilder {
     /**
      * Resolve scope → ingested hub tables. Connectors carry the scope in {@code tags}; each hub
      * table in {@code connector.dynamic_table} carries its owning {@code connector_id} (set by the
-     * writer). So scope → connectors(by tag) → their hub tables — model-agnostic, no dependency on
-     * the legacy {@code connector_mapping} link. Exposed for level-2 (needs sourceEntity per table).
+     * writer). So scope → connectors(by tag) → their hub tables — model-agnostic.
+     * Exposed for level-2 (needs sourceEntity per table).
      */
     public List<HubTable> resolve(long tenantId, String scope) {
         List<UUID> connectorIds = new ArrayList<>();
@@ -72,13 +72,20 @@ public class RegistrySchemaBuilder {
 
         List<PendingTable> pending = new ArrayList<>();
         Set<String> seenFqn = new HashSet<>();
+        // A table another connector also writes holds that connector's rows too (#1186): it enters
+        // the card only when every connector writing it carries the scope.
         String dtSql =
             "SELECT table_schema, table_name, schema_inferred::text AS schema_json " +
-            "FROM connector.dynamic_table WHERE tenant_id = ? AND connector_id = ANY(?)";
+            "FROM connector.dynamic_table dt WHERE tenant_id = ? AND connector_id = ANY(?) " +
+            "AND NOT EXISTS (SELECT 1 FROM connector.dynamic_table o " +
+            "LEFT JOIN connector.connector oc ON oc.id = o.connector_id AND oc.tenant_id = o.tenant_id " +
+            "WHERE o.tenant_id = dt.tenant_id AND o.table_schema = dt.table_schema " +
+            "AND o.table_name = dt.table_name AND (? = ANY(oc.tags)) IS NOT TRUE)";
         try (Connection cx = adminDs.getConnection();
              PreparedStatement ps = cx.prepareStatement(dtSql)) {
             ps.setLong(1, tenantId);
             ps.setArray(2, cx.createArrayOf("uuid", connectorIds.toArray()));
+            ps.setString(3, scope);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     String schema = rs.getString("table_schema");

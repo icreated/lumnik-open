@@ -7,6 +7,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -19,7 +20,7 @@ class EntityViewCompilerTest {
     // projections/FROM if handed a programmatic/invalid manifest — it must fail fast.
     EntityManifest m = new EntityManifest("Entity", "Customer", List.of("customer_code"),
         List.of(new EntityManifest.Source("t_x", null)));
-    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m))
+    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m, Set.of()))
         .isInstanceOf(IllegalStateException.class);
   }
 
@@ -31,7 +32,7 @@ class EntityViewCompilerTest {
     map.put("other", "name");
     EntityManifest m = new EntityManifest("Entity", "Customer", List.of("customer_code"),
         List.of(new EntityManifest.Source("t_x", map)));
-    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m))
+    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m, Set.of()))
         .isInstanceOf(IllegalStateException.class);
   }
 
@@ -39,7 +40,7 @@ class EntityViewCompilerTest {
   void array_agg_and_jsonb_agg_have_a_deterministic_secondary_sort_key() {
     // A secondary tie-break on the value itself keeps the representative and the ledger deterministic
     // even when a source has multiple rows for the same match key (ties on _ord are otherwise unordered).
-    String create = new EntityViewCompiler().buildStatements(twoSources()).get(1);
+    String create = new EntityViewCompiler().buildStatements(twoSources(), Set.of()).get(1);
     assertThat(create).contains("array_agg(\"name\" ORDER BY _ord, \"name\")");
     assertThat(create).contains("jsonb_agg(jsonb_build_object('src', _src, 'value', \"name\") ORDER BY _ord, \"name\")");
   }
@@ -48,14 +49,14 @@ class EntityViewCompilerTest {
   void build_statements_fails_fast_on_empty_match() {
     EntityManifest m = new EntityManifest("Entity", "Customer", List.of(),
         List.of(new EntityManifest.Source("t_x", new LinkedHashMap<>(Map.of("a", "b")))));
-    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m))
+    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m, Set.of()))
         .isInstanceOf(IllegalStateException.class);
   }
 
   @Test
   void build_statements_fails_fast_on_empty_sources() {
     EntityManifest m = new EntityManifest("Entity", "Customer", List.of("customer_code"), List.of());
-    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m))
+    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m, Set.of()))
         .isInstanceOf(IllegalStateException.class);
   }
 
@@ -63,7 +64,7 @@ class EntityViewCompilerTest {
   void build_statements_fails_fast_on_a_null_source_entry() {
     EntityManifest m = new EntityManifest("Entity", "Customer", List.of("customer_code"),
         Collections.singletonList((EntityManifest.Source) null));
-    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m))
+    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m, Set.of()))
         .isInstanceOf(IllegalStateException.class);
   }
 
@@ -71,7 +72,7 @@ class EntityViewCompilerTest {
   void build_statements_fails_fast_on_a_blank_table() {
     EntityManifest m = new EntityManifest("Entity", "Customer", List.of("customer_code"),
         List.of(new EntityManifest.Source("  ", new LinkedHashMap<>(Map.of("c", "customer_code")))));
-    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m))
+    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m, Set.of()))
         .isInstanceOf(IllegalStateException.class);
   }
 
@@ -96,7 +97,7 @@ class EntityViewCompilerTest {
     match.add(null);
     EntityManifest m = new EntityManifest("Entity", "Customer", match,
         List.of(new EntityManifest.Source("t_x", new LinkedHashMap<>(Map.of("c", "customer_code")))));
-    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m))
+    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m, Set.of()))
         .isInstanceOf(IllegalStateException.class);
   }
 
@@ -104,7 +105,7 @@ class EntityViewCompilerTest {
   void build_statements_fails_fast_on_a_blank_match_element() {
     EntityManifest m = new EntityManifest("Entity", "Customer", List.of("customer_code", "  "),
         List.of(new EntityManifest.Source("t_x", new LinkedHashMap<>(Map.of("c", "customer_code")))));
-    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m))
+    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m, Set.of()))
         .isInstanceOf(IllegalStateException.class);
   }
 
@@ -112,13 +113,13 @@ class EntityViewCompilerTest {
   void build_statements_fails_fast_on_a_null_name() {
     EntityManifest m = new EntityManifest("Entity", null, List.of("customer_code"),
         List.of(new EntityManifest.Source("t_x", new LinkedHashMap<>(Map.of("c", "customer_code")))));
-    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m))
+    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m, Set.of()))
         .isInstanceOf(IllegalStateException.class);
   }
 
   @Test
   void form_b_drop_create_grant() {
-    List<String> sql = new EntityViewCompiler().buildStatements(twoSources());
+    List<String> sql = new EntityViewCompiler().buildStatements(twoSources(), Set.of());
     assertThat(sql).hasSize(4);
     assertThat(sql.get(0)).isEqualTo("DROP VIEW IF EXISTS connector.\"v_customer\"");
     assertThat(sql.get(2)).isEqualTo("GRANT SELECT ON connector.\"v_customer\" TO lumnik_app");
@@ -126,7 +127,7 @@ class EntityViewCompilerTest {
 
   @Test
   void form_b_create_statement_has_the_fusion_shape() {
-    String create = new EntityViewCompiler().buildStatements(twoSources()).get(1);
+    String create = new EntityViewCompiler().buildStatements(twoSources(), Set.of()).get(1);
     assertThat(create).contains("CREATE VIEW connector.\"v_customer\" WITH (security_invoker = true)");
     assertThat(create).contains("WITH unified AS");
     assertThat(create).containsOnlyOnce("UNION ALL");
@@ -148,7 +149,7 @@ class EntityViewCompilerTest {
     EntityManifest m = new EntityManifest("Entity", "Customer",
         List.of("customer_code"),
         List.of(new EntityManifest.Source("t_a", Map.of("code", "customer_code"))));
-    String all = String.join("\n", new EntityViewCompiler().buildStatements(m));
+    String all = String.join("\n", new EntityViewCompiler().buildStatements(m, Set.of()));
     assertThat(all).contains("GRANT SELECT ON connector.\"v_customer\" TO lumnik_readonly");
   }
 
@@ -162,7 +163,7 @@ class EntityViewCompilerTest {
     EntityManifest m = new EntityManifest("Entity", "cust$$evil", List.of("customer_code"),
         List.of(new EntityManifest.Source("t_a", Map.of("code", "customer_code"))));
 
-    List<String> sql = new EntityViewCompiler().buildStatements(m);
+    List<String> sql = new EntityViewCompiler().buildStatements(m, Set.of());
     String grantBlock = sql.get(3);
 
     assertThat(grantBlock).doesNotContain("DO $$ BEGIN");
@@ -192,7 +193,7 @@ class EntityViewCompilerTest {
     erp.put("weird\"col", "weird\"col");
     EntityManifest m = new EntityManifest("Entity", "Customer", List.of("customer_code"),
         List.of(new EntityManifest.Source("t_cust_erp", erp)));
-    String create = new EntityViewCompiler().buildStatements(m).get(1);
+    String create = new EntityViewCompiler().buildStatements(m, Set.of()).get(1);
     assertThat(create).contains("\"weird\"\"col\""); // doubled inner quote
   }
 
@@ -221,26 +222,26 @@ class EntityViewCompilerTest {
     EntityManifest m = new EntityManifest("Entity", "Customer", null, null,
         List.of(new EntityManifest.Source("t_x", new LinkedHashMap<>(Map.of("c", "customer_code")))),
         List.of(), null, Map.of(), null);
-    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m))
+    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m, Set.of()))
         .isInstanceOf(IllegalStateException.class);
   }
 
   @Test
   void build_statements_fails_fast_when_a_source_is_missing_from_resolution_identity() {
-    // Same "don't rely solely on the parser" posture as appendMatchNotNull: a programmatic
+    // Same "don't rely solely on the parser" posture as matchKey: a programmatic
     // manifest whose identity map skips a declared source must not silently emit a branch that
     // joins on nothing.
     EntityManifest.Resolution resolution = new EntityManifest.Resolution(Map.of(), List.of());
     EntityManifest m = new EntityManifest("Entity", "Customer", null, null,
         List.of(new EntityManifest.Source("t_x", new LinkedHashMap<>(Map.of("c", "customer_id")))),
         List.of(), null, Map.of(), resolution);
-    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m))
+    assertThatThrownBy(() -> new EntityViewCompiler().buildStatements(m, Set.of()))
         .isInstanceOf(IllegalStateException.class);
   }
 
   @Test
   void resolved_manifest_compiles_to_the_drop_create_grant_shape() {
-    List<String> sql = new EntityViewCompiler().buildStatements(resolvedTwoSources());
+    List<String> sql = new EntityViewCompiler().buildStatements(resolvedTwoSources(), Set.of());
     assertThat(sql).hasSize(4);
     assertThat(sql.get(0)).isEqualTo("DROP VIEW IF EXISTS connector.\"v_customer\"");
     assertThat(sql.get(2)).isEqualTo("GRANT SELECT ON connector.\"v_customer\" TO lumnik_app");
@@ -248,7 +249,7 @@ class EntityViewCompilerTest {
 
   @Test
   void resolved_manifest_left_joins_entity_identity_on_its_own_declared_identity_column_per_source() {
-    String create = new EntityViewCompiler().buildStatements(resolvedTwoSources()).get(1);
+    String create = new EntityViewCompiler().buildStatements(resolvedTwoSources(), Set.of()).get(1);
     assertThat(create).contains("LEFT JOIN core.entity_identity");
     assertThat(create).contains("ei.entity_type = 'customer'"); // lower-cased like the view name
     assertThat(create).contains("ei.source = 't_erp_customers'");
@@ -263,7 +264,7 @@ class EntityViewCompilerTest {
     // #967: next to LEFT JOIN core.entity_identity ei, an unqualified physical column named like one of
     // ei's own (state, source, source_id, created_at…) is ambiguous and CREATE VIEW fails. Every
     // occurrence of every physical column — projection, _source_id, join condition, NULL filter — is s.
-    String create = new EntityViewCompiler().buildStatements(resolvedTwoSources()).get(1);
+    String create = new EntityViewCompiler().buildStatements(resolvedTwoSources(), Set.of()).get(1);
     assertThat(create).contains("FROM connector.\"t_erp_customers\" s LEFT JOIN core.entity_identity ei");
     for (String physical : List.of("cust_id", "cust_name", "contact_ref", "email_addr")) {
       assertThat(create).as(physical + " is referenced").contains("s.\"" + physical + "\"");
@@ -274,7 +275,7 @@ class EntityViewCompilerTest {
 
   @Test
   void resolved_manifest_groups_on_the_coalesced_canonical_id_not_on_a_match_column() {
-    String create = new EntityViewCompiler().buildStatements(resolvedTwoSources()).get(1);
+    String create = new EntityViewCompiler().buildStatements(resolvedTwoSources(), Set.of()).get(1);
     assertThat(create).doesNotContain("GROUP BY \"customer_id\"");
     assertThat(create).contains("GROUP BY coalesce(");
     assertThat(create).contains("\"_entity_id\"::text");
@@ -283,7 +284,7 @@ class EntityViewCompilerTest {
 
   @Test
   void resolved_manifest_exposes_entity_id_and_resolution_columns() {
-    String create = new EntityViewCompiler().buildStatements(resolvedTwoSources()).get(1);
+    String create = new EntityViewCompiler().buildStatements(resolvedTwoSources(), Set.of()).get(1);
     assertThat(create).contains("AS \"_entity_id\"");
     assertThat(create).contains("AS \"_resolution\"");
     assertThat(create).contains("AS \"_handle\"");
@@ -294,7 +295,7 @@ class EntityViewCompilerTest {
     // No match: set carves out an "equal by construction" column in resolution mode, so every
     // canonical column — including the per-source identity ones — goes through the same
     // count(DISTINCT …) > 1 ledger mechanism as v1's non-match columns (#618 acceptance: unchanged).
-    String create = new EntityViewCompiler().buildStatements(resolvedTwoSources()).get(1);
+    String create = new EntityViewCompiler().buildStatements(resolvedTwoSources(), Set.of()).get(1);
     assertThat(create).contains("jsonb_strip_nulls(jsonb_build_object(");
     assertThat(create).contains("count(DISTINCT \"customer_id\") > 1");
     assertThat(create).contains("count(DISTINCT \"email\") > 1");

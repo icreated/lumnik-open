@@ -1,6 +1,7 @@
 package io.lumnik.hub.workflow;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.hub.sql.SqlFailureText;
 import io.lumnik.hub.sql.TenantRlsScope;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -131,14 +132,17 @@ public class WorkflowDataTruth {
      * not landed yet. Anything else — a statement timeout on a 50M-row table, a dropped column, a
      * revoked grant — is logged and the caller is told plainly that the data was not confronted.
      */
-    private static Report degraded(long tenantId, WorkflowGraph g, SQLException e) {
+    static Report degraded(long tenantId, WorkflowGraph g, SQLException e) {
         if (UNDEFINED_TABLE.equals(e.getSQLState())) {
             return new Report(List.of(), List.of(), 0L, true, false, null, false, null);
         }
         LOG.warnf(e, "workflow data-truth check unavailable for tenant %d, workflow %s "
             + "(%s.%s, SQLSTATE %s)", tenantId, g.name(), g.table(), g.column(), e.getSQLState());
+        // rootMessage withholds a class that can carry a stored value (22 first) and then names
+        // the SQLSTATE itself; a structural message keeps its words behind ours (#1315).
+        String said = SqlFailureText.rootMessage(e);
         return new Report(List.of(), List.of(), 0L, false, false, null, true,
-            "SQLSTATE " + e.getSQLState() + ": " + e.getMessage());
+            said.startsWith("SQLSTATE ") ? said : "SQLSTATE " + e.getSQLState() + ": " + said);
     }
 
     /** What the data says that the manifest does not, and what the manifest says that the data never shows. */

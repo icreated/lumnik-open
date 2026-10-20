@@ -98,7 +98,12 @@ func newTestViewPage(scopeTag string) (*ViewPage, *[]string, *[]string) {
 		genIssues: tview.NewTextView(),
 		scope:     func() string { return scopeTag },
 		spawn:     func(f func()) { f() },
-		enqueue:   func(f func()) { f() },
+		// prod's QueueUpdateAfterResume without a loop: held under an open editor, else inline
+		enqueue: func(f func()) {
+			if !DeferIfSuspended(f) {
+				f()
+			}
+		},
 		suspend:   func(f func()) { f() },
 		showError: func(m string) { errs = append(errs, m) },
 		toast:     func(m string) { toasts = append(toasts, m) },
@@ -326,10 +331,10 @@ func TestGenerateAbandonPersistsBuffer(t *testing.T) {
 	}
 }
 
-// TestGenerateDeferredAcrossEditorSuspension covers finding 1: enqueue
-// (QueueUpdate) silently DROPS updates while an editor session owns the
-// terminal on another page. Without DeferIfSuspended the callback vanishes
-// and v.generating wedges shut for the rest of the session.
+// TestGenerateDeferredAcrossEditorSuspension covers finding 1: while an editor
+// session owns the terminal on another page, enqueue (QueueUpdateAfterResume)
+// holds the outcome until it closes. A dropped one would wedge v.generating
+// shut for the rest of the session.
 func TestGenerateDeferredAcrossEditorSuspension(t *testing.T) {
 	t.Chdir(t.TempDir())
 	EditorSuspended.Store(true)

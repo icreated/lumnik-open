@@ -5,8 +5,8 @@
 #
 # Same connector name as 10-full-dump.yaml on purpose. Applying this over a table that already
 # ran in `full` meets the cursor the full read persisted; the hub recognises it as foreign,
-# logs a WARN naming both, and restarts the table from the beginning. Rows already in the hub
-# table are deduplicated on their content hash — the table does not grow.
+# logs a WARN naming both, and restarts the table from the beginning. A row the hub table already
+# holds unchanged is skipped — the table does not grow.
 apiVersion: connectors.lumnik.io/v1
 kind: Connector
 metadata:

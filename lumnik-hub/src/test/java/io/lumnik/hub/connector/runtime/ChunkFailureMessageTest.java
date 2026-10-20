@@ -1,11 +1,16 @@
 package io.lumnik.hub.connector.runtime;
 
 import io.lumnik.hub.connector.domain.Connector;
+import io.lumnik.hub.connector.exceptions.SourceCallException;
+import io.lumnik.hub.connector.rest.RestHttpClient;
+import io.lumnik.hub.connector.rest.RestRequest;
 import org.junit.jupiter.api.Test;
 
+import java.net.ConnectException;
 import java.sql.SQLException;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * What an operator is told a run failed of.
@@ -60,6 +65,41 @@ class ChunkFailureMessageTest {
 
     assertThat(msg).contains("ext.orders").contains("SQLSTATE 22P02");
     assertThat(msg).doesNotContain("abc");
+  }
+
+  private static final String SOURCE = "https://user:pw@api.example/p/SECRET?k=v";
+
+  private static void assertQuotesNothingOfTheSource(String msg) {
+    assertThat(msg).doesNotContain("user", "pw", "ECRET", "k=v");
+  }
+
+  /**
+   * A call to the source that threw is stored by its kind (#1166). Its cause is the JDK's, and the
+   * root-cause rule above would append that cause's message — the very one that quotes the URL.
+   */
+  @Test
+  void a_call_to_the_source_that_threw_is_stored_by_its_kind_alone() {
+    String msg = messageFor(new SourceCallException(
+        new Exception("Connection refused: " + SOURCE, new ConnectException(SOURCE))));
+
+    assertThat(msg).isEqualTo("connection failed (Exception)");
+    assertQuotesNothingOfTheSource(msg);
+  }
+
+  /**
+   * A real JDK refusal, thrown before any I/O: a space in the composed URL makes {@code URI.create}
+   * inside the real client refuse it. Its message and its cause's both carried the whole URL; the
+   * type stays the one every caller already handles.
+   */
+  @Test
+  void a_url_the_client_cannot_parse_is_stored_without_quoting_it() {
+    Exception refused = assertThrows(IllegalArgumentException.class,
+        () -> new RestHttpClient().execute(RestRequest.get(SOURCE + " w")));
+
+    String msg = messageFor(refused);
+
+    assertThat(msg).isEqualTo("invalid URL: Illegal character in query at index 40");
+    assertQuotesNothingOfTheSource(msg);
   }
 
   @Test

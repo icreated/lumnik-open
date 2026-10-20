@@ -50,11 +50,11 @@ func newDlqCmd() *cobra.Command {
 				return err
 			}
 			return printPage(cmd,
-				[]string{"ID", "CONNECTOR", "RUN", "REASON", "ATTEMPTS", "MESSAGE"}, items,
+				[]string{"ID", "CONNECTOR", "RUN", "REASON", "ATTEMPTS", "RESOLUTION", "MESSAGE"}, items,
 				func(d types.DeadLetter) []string {
 					return []string{
 						shortID(d.ID), d.ConnectorLabel(), shortID(d.RunID),
-						d.SkipReason, fmt.Sprintf("%d", d.Attempts),
+						d.SkipReason, fmt.Sprintf("%d", d.Attempts), d.Resolution,
 						output.Truncate(d.ErrorMessage, output.DlqMessageWidth),
 					}
 				})
@@ -64,8 +64,9 @@ func newDlqCmd() *cobra.Command {
 	d.AddCommand(listCmd)
 
 	d.AddCommand(&cobra.Command{
-		Use:  "discard ID",
-		Args: cobra.ExactArgs(1),
+		Use:   "discard ID",
+		Short: "Mark a dead-letter entry handled without replaying it",
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
@@ -89,8 +90,9 @@ func newDlqCmd() *cobra.Command {
 
 	var newRunID string
 	replayed := &cobra.Command{
-		Use:  "replayed ID",
-		Args: cobra.ExactArgs(1),
+		Use:   "replayed ID",
+		Short: "Mark a dead-letter entry replayed (--new-run-id links the run that did it)",
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
@@ -104,7 +106,13 @@ func newDlqCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := c.DlqReplayed(id, newRunID); err != nil {
+			replayedBy := newRunID
+			if replayedBy != "" {
+				if replayedBy, err = resolveRunID(c, replayedBy); err != nil {
+					return err
+				}
+			}
+			if err := c.DlqReplayed(id, replayedBy); err != nil {
 				return err
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), "marked replayed:", id)
@@ -152,7 +160,7 @@ func newDlqCmd() *cobra.Command {
 		},
 	})
 
-	d.PersistentFlags().String("connector", "", "Filter by connector ID")
+	d.PersistentFlags().String("connector", "", "Filter by connector name or ID")
 	d.PersistentFlags().String("run", "", "Filter by run ID")
 	return d
 }

@@ -112,6 +112,10 @@ func TestAsk_anAbstentionRendersTheGestureThisClientHas(t *testing.T) {
 			t.Errorf("missing the gesture %q in:\n%s", want, buf.String())
 		}
 	}
+	// Neither lm chat nor lm conflicts list takes --scope: a hint carrying it is an unknown-flag error.
+	if strings.Contains(buf.String(), "--scope") {
+		t.Errorf("a gesture must not offer a flag its command does not have:\n%s", buf.String())
+	}
 }
 
 // A token this build has no gesture for is silence, never an invented command — and an answer
@@ -220,9 +224,13 @@ func TestAsk_theWholeBlockGoesToStdoutInOrder(t *testing.T) {
 		"  disputed — a source disagrees on a value this answer filtered on:\n" +
 		"    P-1008  city = 'Lyon'  counted  t_erp: Lyon · t_crm: Villeurbanne\n" +
 		"\n" +
+		"  COUNT\n" +
+		"  2\n" +
+		"  1 row returned\n" +
+		"\n" +
 		"  SQL: SELECT COUNT(*) FROM v WHERE city = 'Lyon'\n" +
 		"\n" +
-		"  try: lm conflicts list --scope desk  — where this scope has source conflicts or lookup ambiguities, row by row\n"
+		"  try: lm conflicts list  — where this scope has source conflicts or lookup ambiguities, row by row\n"
 
 	t.Run("through cli.Run", func(t *testing.T) {
 		stdout, stderr, code := runCmd(t, args...)
@@ -264,4 +272,209 @@ func captureProcessOutput(t *testing.T, fn func()) (stdout, stderr string) {
 	e, err := os.ReadFile(errF.Name())
 	require.NoError(t, err)
 	return string(o), string(e)
+}
+
+// #1105: the rows the hub returned are tabulated between what qualifies the answer and the SQL. A
+// withheld answer says "the rows and the SQL below are the answer": the rows must be there to read.
+func TestAsk_aWithheldAnswerShowsTheRowsItPointsTo(t *testing.T) {
+	askServer(t, map[string]any{
+		"answer": "La réponse rédigée citait un chiffre que ces lignes ne confirment pas ; elle est donc retenue. " +
+			"Les lignes et le SQL ci-dessous font foi.",
+		"sql":      "SELECT v.reference, v.description FROM v WHERE c.name = 'Pompes' AND v.description ILIKE '%Badu%'\nLIMIT 500",
+		"rowCount": 2, "abstained": true, "dataAsOf": "2026-10-16T08:00:00Z",
+		"rows": []json.RawMessage{ // raw: a Go map would sort the keys, and the hub sends them in the query's order
+			json.RawMessage(`{"reference":"2195.300.037","description":"Pompe Badu Resort"}`),
+			json.RawMessage(`{"reference":"2195.300.041","description":"Pompe Badu Prime 40"}`),
+		},
+	})
+	stdout, stderr, code := runCmd(t, "ask", "--scope", "pwa-chat", "--lang", "fr",
+		"Donne-moi les références de la catégorie Pompes dont la description contient Badu.")
+	require.Zero(t, code, stderr)
+	assert.Equal(t, "La réponse rédigée citait un chiffre que ces lignes ne confirment pas ; elle est donc retenue. "+
+		"Les lignes et le SQL ci-dessous font foi.\n"+
+		"  data as of: 2026-10-16T08:00:00Z (last completed run)\n"+
+		"\n"+
+		"  REFERENCE     DESCRIPTION\n"+
+		"  2195.300.037  Pompe Badu Resort\n"+
+		"  2195.300.041  Pompe Badu Prime 40\n"+
+		"  2 rows returned\n"+
+		"\n"+
+		"  SQL: SELECT v.reference, v.description FROM v WHERE c.name = 'Pompes' AND v.description ILIKE '%Badu%'\n"+
+		"LIMIT 500\n", stdout)
+	assert.Empty(t, stderr)
+}
+
+// Zero rows is said in words, never as a header over nothing; an answer that ran no SQL has no result to count.
+func TestAsk_zeroRowsAreSaidWithoutATable(t *testing.T) {
+	t.Run("a query that returned none", func(t *testing.T) {
+		out := askWith(t, map[string]any{"answer": "La requête n'a renvoyé aucune ligne.", "sql": "SELECT name FROM v",
+			"rowCount": 0, "rows": []any{}, "abstained": true}, "qui ?")
+		assert.Equal(t, "La requête n'a renvoyé aucune ligne.\n\n  no rows returned\n\n  SQL: SELECT name FROM v\n", out)
+	})
+	t.Run("no query at all", func(t *testing.T) {
+		out := askWith(t, map[string]any{"answer": "Je ne peux pas répondre.", "sql": "",
+			"rowCount": 0, "rows": []any{}, "abstained": true}, "pourquoi ?")
+		assert.Equal(t, "Je ne peux pas répondre.\n", out)
+	})
+}
+
+// The count line is the hub's rowCount next to what was printed: they agree today, and if they ever do
+// not, the line says both rather than letting a page pass for the whole result.
+func TestAsk_aCountTheRowsDoNotReachIsStated(t *testing.T) {
+	out := askWith(t, map[string]any{"answer": "5.", "sql": "SELECT n FROM v", "rowCount": 5,
+		"rows": []map[string]any{{"n": 1}, {"n": 2}, {"n": 3}}}, "combien ?")
+	assert.Contains(t, out, "  3\n  3 rows shown; the hub counted 5\n")
+}
+
+// A tab or a line break inside a value would push it under another column's header, or start a row that
+// is not one: it is printed as its escape.
+func TestAsk_aValueCannotShiftIntoAnotherColumn(t *testing.T) {
+	out := askWith(t, map[string]any{"answer": "1.", "sql": "SELECT a, b FROM v", "rowCount": 1,
+		"rows": []map[string]any{{"a": "x\ty\nz\r", "b": "w"}}}, "quoi ?")
+	assert.Contains(t, out, "  A          B\n  x\\ty\\nz\\r  w\n  1 row returned\n")
+}
+
+// #1105: -o json and -o yaml print the whole analytic result as ONE document — the rows as the hub typed
+// them (a number stays a number, the query's column order), the honesty fields — and nothing around it.
+func TestAsk_jsonAndYamlAreOneDocument(t *testing.T) {
+	payload := map[string]any{
+		"answer": "La réponse rédigée est retenue.", "sql": "SELECT ref, stock, note FROM v\nLIMIT 500",
+		"rowCount": 1, "rows": []json.RawMessage{json.RawMessage(`{"ref":"A-1","stock":12,"note":null}`)},
+		"dataAsOf": "2026-10-16T08:00:00Z", "otherDoors": []string{"conflicts"}, "abstained": true,
+		"disputed": []map[string]any{{"key": "P-1", "column": "city", "label": "Ville", "matched": "Lyon",
+			"retained": "Lyon", "counted": true, "sources": []map[string]any{{"src": "t_erp", "value": "Lyon"}}}},
+		"disputedTruncated": false,
+	}
+	t.Run("json", func(t *testing.T) {
+		askServer(t, payload)
+		stdout, stderr, code := runCmd(t, "ask", "-o", "json", "--scope", "desk", "quoi ?")
+		require.Zero(t, code, stderr)
+		assert.Equal(t, `{
+  "answer": "La réponse rédigée est retenue.",
+  "sql": "SELECT ref, stock, note FROM v\nLIMIT 500",
+  "rowCount": 1,
+  "columns": [
+    "ref",
+    "stock",
+    "note"
+  ],
+  "rows": [
+    {
+      "ref": "A-1",
+      "stock": 12,
+      "note": null
+    }
+  ],
+  "dataAsOf": "2026-10-16T08:00:00Z",
+  "otherDoors": [
+    "conflicts"
+  ],
+  "disputed": [
+    {
+      "key": "P-1",
+      "column": "city",
+      "label": "Ville",
+      "matched": "Lyon",
+      "retained": "Lyon",
+      "counted": true,
+      "sources": [
+        {
+          "src": "t_erp",
+          "value": "Lyon"
+        }
+      ]
+    }
+  ],
+  "disputedTruncated": false,
+  "abstained": true
+}
+`, stdout)
+		assert.Empty(t, stderr)
+	})
+	t.Run("yaml", func(t *testing.T) {
+		askServer(t, payload)
+		stdout, stderr, code := runCmd(t, "ask", "-o", "yaml", "--scope", "desk", "quoi ?")
+		require.Zero(t, code, stderr)
+		assert.Equal(t, `answer: La réponse rédigée est retenue.
+sql: |-
+    SELECT ref, stock, note FROM v
+    LIMIT 500
+rowCount: 1
+columns:
+    - ref
+    - stock
+    - note
+rows:
+    - ref: A-1
+      stock: 12
+      note: null
+dataAsOf: "2026-10-16T08:00:00Z"
+otherDoors:
+    - conflicts
+disputed:
+    - key: P-1
+      column: city
+      label: Ville
+      matched: Lyon
+      retained: Lyon
+      counted: true
+      sources:
+        - src: t_erp
+          value: Lyon
+disputedTruncated: false
+abstained: true
+`, stdout)
+		assert.Empty(t, stderr)
+	})
+}
+
+// An ask costs a model call: a format lm cannot print is refused before the hub is asked, not after.
+func TestAsk_anUnknownOutputFormatIsRefusedBeforeAsking(t *testing.T) {
+	asked := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = true
+		_ = json.NewEncoder(w).Encode(map[string]any{"answer": "1.", "sql": "SELECT 1", "rowCount": 0, "rows": []any{}})
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	_, stderr, code := runCmd(t, "ask", "-o", "csv", "combien ?")
+	assert.NotZero(t, code)
+	assert.Contains(t, stderr, "unknown output format: csv (want table|json|yaml)")
+	assert.False(t, asked, "the hub must not be asked for an answer lm cannot print")
+}
+
+// A null in the last column is an empty cell, not padding: no line of the table ends in spaces.
+func TestAsk_anEmptyLastCellLeavesNoTrailingSpaces(t *testing.T) {
+	out := askWith(t, map[string]any{"answer": "Retenue.", "sql": "SELECT reference, total FROM v", "rowCount": 1,
+		"rows": []json.RawMessage{json.RawMessage(`{"reference":"2195.300.037","total":null}`)}}, "quoi ?")
+	assert.Contains(t, out, "  REFERENCE     TOTAL\n  2195.300.037\n  1 row returned\n")
+}
+
+// #1105 review: the document carries the hub's text as written — a `<>` in the SQL, a `&` in the answer or in a cell
+// (a jsonb one included) — never their &-style escapes.
+func TestAsk_jsonKeepsHTMLCharactersAsWritten(t *testing.T) {
+	askServer(t, map[string]any{
+		"answer": "Dupont & Fils.", "sql": "SELECT name, note FROM v WHERE segment <> 'GOLD'", "rowCount": 1,
+		"rows": []json.RawMessage{json.RawMessage(`{"name":"Dupont & Fils","note":{"text":"<b> & c"}}`)},
+	})
+	stdout, stderr, code := runCmd(t, "ask", "-o", "json", "qui ?")
+	require.Zero(t, code, stderr)
+	for _, want := range []string{`"answer": "Dupont & Fils."`, `segment <> 'GOLD'`, `"name": "Dupont & Fils"`, `"text": "<b> & c"`} {
+		assert.Contains(t, stdout, want)
+	}
+	assert.NotContains(t, stdout, `\u00`)
+}
+
+// The hub sends "dataAsOf": null when the scope has no completed run (a CSV ingested one-shot, a refusal): that is
+// "unknown", read as such and printed back as null — never an error (#1105 review).
+func TestAsk_aNullFreshnessIsUnknownNotAnError(t *testing.T) {
+	askServer(t, map[string]any{"answer": "1.", "sql": "SELECT 1", "rowCount": 1, "dataAsOf": nil,
+		"rows": []json.RawMessage{json.RawMessage(`{"n":1}`)}})
+	stdout, stderr, code := runCmd(t, "ask", "-o", "json", "combien ?")
+	require.Zero(t, code, stderr)
+	assert.Contains(t, stdout, `"dataAsOf": null`)
+	out := askWith(t, map[string]any{"answer": "1.", "sql": "SELECT 1", "rowCount": 1, "dataAsOf": nil,
+		"rows": []json.RawMessage{json.RawMessage(`{"n":1}`)}}, "combien ?")
+	assert.NotContains(t, out, "data as of")
 }

@@ -160,14 +160,14 @@ public class ExportScheduler {
     List<ScheduledExport> scheduled() {
         return Jdbc.query(adminDs, "ExportScheduler scheduled exports", SELECT_SCHEDULED, ps -> {},
             rs -> new ScheduledExport(rs.getLong(1), rs.getString(2), rs.getString(3),
-                rs.getTimestamp(4).toInstant()));
+                Jdbc.instant(rs, 4)));
     }
 
     boolean occurrenceExists(ScheduledExport e, Instant occurrence) {
-        return Jdbc.queryOne(adminDs, "ExportScheduler occurrence claimed", OCCURRENCE_EXISTS, ps -> {
+        return Jdbc.exists(adminDs, "ExportScheduler occurrence claimed", OCCURRENCE_EXISTS, ps -> {
             ps.setLong(1, e.tenantId());
             ps.setString(2, e.name());
             ps.setObject(3, occurrence.atOffset(ZoneOffset.UTC));
-        }, rs -> true).isPresent();
+        });
     }
 }

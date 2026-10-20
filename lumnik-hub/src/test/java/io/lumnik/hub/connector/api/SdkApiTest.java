@@ -35,7 +35,6 @@ class SdkApiTest {
         new SyncMode.Incremental(),
         Logger.getLogger("test"),
         null,
-        null,
         Clock.systemUTC(),
         null, new OwnedRunScope("test"));
 
@@ -56,7 +55,6 @@ class SdkApiTest {
         Map.of(),
         new SyncMode.Incremental(),
         Logger.getLogger("test"),
-        null,
         null,
         Clock.systemUTC(),
         null, new OwnedRunScope("test"));

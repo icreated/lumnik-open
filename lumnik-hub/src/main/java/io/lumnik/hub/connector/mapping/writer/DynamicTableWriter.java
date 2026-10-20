@@ -32,6 +32,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
@@ -60,6 +61,7 @@ public class DynamicTableWriter {
   @Inject RowEventGate gate;
   @Inject ObjectMapper mapper;
   @Inject DriftDetector driftDetector;
+  @Inject SourceKeyIndex keyIndex;
 
   @Inject
   @DataSource("admin")
@@ -97,15 +99,23 @@ public class DynamicTableWriter {
                     UUID connectorId, Map<String, String> sourceTypeHints) {
     if (rows.isEmpty()) return;
     refuseSystemColumnCollisions(rows);
+    if (spec.marksSeen()) refuseSeenRunCollision(rows);
+    if (spec.key() != null) SourceKeyIndex.refuseRepeatedKeyInChunk(spec, rows, systemContexts);
 
     String mappingId = (String) systemContexts.get(0).get("_mapping");
 
-    Map<String, String> registered = registry.findSchema(tenantId, mappingId);
+    Map<String, String> registered = registry.findSchema(tenantId, mappingId, connectorId);
     registered = registered == null
         ? createSchema(spec, rows, sourceTypeHints, tenantId, mappingId, connectorId)
         : evolveSchema(spec, rows, registered, sourceTypeHints, tenantId, mappingId, connectorId);
+    if (spec.key() != null) {
+      stats.recordRemoved(runIdOf(systemContexts), keyIndex.ensure(spec, sourceOf(systemContexts), tenantId));
+      keyIndex.refuseRepeatedKeyInRun(spec, rows, systemContexts, registered, tenantId, sourceOf(systemContexts),
+          runIdOf(systemContexts));
+    }
 
     Written w = insertRows(spec, rows, systemContexts, tenantId, registered, connectorId);
+    if (spec.marksSeen()) markSeen(spec, systemContexts, tenantId);
     // Recorded here, once, whatever insert path ran: the incremental resolution pass reads only the
     // tables a run recorded (#904), so a path stamping _run_id unrecorded would go unresolved.
     stats.recordCounts(runIdOf(systemContexts), fqnUnquoted(spec), w.written(), w.skipped());
@@ -143,7 +153,8 @@ public class DynamicTableWriter {
     try (Connection c = adminDs.getConnection()) {
       c.setAutoCommit(false);
       try {
-        advisoryXactLock(c, spec.schema() + "." + spec.name());
+        firstWriteLock(c, spec.schema(), spec.name());
+        refuseSecondWriter(c, spec, tenantId, connectorId);
 
         Map<String, String> inferred = inferrer.infer(rows, sourceTypeHints);
         createTable(c, spec, inferred);
@@ -152,11 +163,15 @@ public class DynamicTableWriter {
 
         Map<String, String> actual = driftDetector.actualSchema(c, spec.schema(), spec.name());
         actual.keySet().removeAll(SYSTEM_COLUMNS);
+        if (spec.marksSeen()) actual.keySet().remove(SEEN_RUN);   // elsewhere a column of that name is the source's
         Map<String, String> reconciled = applyDrift(c, spec, rows, actual, sourceTypeHints);
 
         registry.register(c, tenantId, mappingId, spec.schema(), spec.name(), reconciled, connectorId);
         c.commit();
         return reconciled;
+      } catch (ConfigValidationException e) {
+        rollbackQuietly(c);
+        throw e;
       } catch (Exception e) {
         rollbackQuietly(c);
         throw new ConnectorException("DynamicTableWriter.createSchema: " + e.getMessage(), e);
@@ -164,6 +179,27 @@ public class DynamicTableWriter {
     } catch (SQLException e) {
       throw new ConnectorException("DynamicTableWriter.createSchema: " + e.getMessage(), e);
     }
+  }
+
+  /**
+   * A hub table is named after its source, so a second connector of the tenant can reach a table
+   * another one writes without anyone deciding it; their rows would merge and their scopes with
+   * them (#1199). Refused at this connector's first write, naming the holder. A connector already
+   * registered for the table never gets here: a sharing that predates the refusal keeps working.
+   * Per connector type, the gesture that names another hub table, as in
+   * {@link #refuseSystemColumnCollisions}.
+   */
+  private void refuseSecondWriter(Connection c, MappingTarget.Table spec, Long tenantId, UUID connectorId)
+      throws SQLException {
+    if (connectorId == null) return;
+    String holder = registry.otherWriter(c, tenantId, spec.schema(), spec.name(), connectorId);
+    if (holder == null) return;
+    throw new ConfigValidationException(
+        fqnUnquoted(spec) + " is already written by connector '" + holder + "'; a second connector "
+        + "cannot write it — give this one its own hub table: "
+        + "jdbc: source.tables[].target; "
+        + "csv: the table is named after the connector, rename it; "
+        + "kafka: the endpoint's name");
   }
 
   /** Best-effort: the original failure above already carries the real cause. */
@@ -175,9 +211,28 @@ public class DynamicTableWriter {
     }
   }
 
-  private void advisoryXactLock(Connection c, String key) throws SQLException {
-    try (PreparedStatement ps = c.prepareStatement("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))")) {
-      ps.setString(1, key);
+  /** The lock a table's first write holds; a connector delete takes it too before dropping the table. */
+  static void firstWriteLock(Connection c, String schema, String table) throws SQLException {
+    advisory(c, "pg_advisory_xact_lock", schema, table);
+  }
+
+  /**
+   * The same lock, shared and held by the session: a write that registers outside
+   * {@link #firstWriteLock} (the hybrid writer) holds it for the whole write, so a connector delete
+   * deciding whether to drop the table waits for it, and writers never wait on each other (#1186).
+   * Pair it with {@link #releaseWriteLock} in a {@code finally}: a pooled connection keeps it otherwise.
+   */
+  static void writeLock(Connection c, String schema, String table) throws SQLException {
+    advisory(c, "pg_advisory_lock_shared", schema, table);
+  }
+
+  static void releaseWriteLock(Connection c, String schema, String table) throws SQLException {
+    advisory(c, "pg_advisory_unlock_shared", schema, table);
+  }
+
+  private static void advisory(Connection c, String function, String schema, String table) throws SQLException {
+    try (PreparedStatement ps = c.prepareStatement("SELECT " + function + "(hashtextextended(?, 0))")) {
+      ps.setString(1, schema + "." + table);
       ps.execute();
     }
   }
@@ -352,6 +407,12 @@ public class DynamicTableWriter {
   /** Ingestion-run system column carrying the originating run id. */
   private static final String RUN_ID = "_run_id";
   private static final String MAPPING_VERSION = "_mapping_version";
+  /**
+   * The last run that wrote or met the row again (#1195) — only on a table whose writer
+   * {@code marksSeen}, so it is not one of {@link #SYSTEM_COLUMNS}: every other table, and every
+   * page that shows one, keeps the seven.
+   */
+  static final String SEEN_RUN = "_seen_run";
   private static final String TENANT_ID = "tenant_id";
 
   /**
@@ -400,6 +461,17 @@ public class DynamicTableWriter {
     }
   }
 
+  /** The one column a full-refresh table adds to the seven: a source column of that name cannot be written either. */
+  static void refuseSeenRunCollision(List<Map<String, Object>> rows) {
+    for (Map<String, Object> row : rows) {
+      if (row.containsKey(SEEN_RUN)) {
+        throw new ConfigValidationException("source column '" + SEEN_RUN + "' collides with the column a "
+            + "full refresh keeps on this table; it must reach the hub under another name — "
+            + "csv: a map-columns row hook under spec.mapping");
+      }
+    }
+  }
+
   private void createTable(Connection c, MappingTarget.Table spec, Map<String, String> schema)
       throws SQLException {
     exec(c, "CREATE SCHEMA IF NOT EXISTS " + quoteIdent(spec.schema()));
@@ -417,16 +489,18 @@ public class DynamicTableWriter {
      .append(fqn(spec))
      .append(" (")
      .append("id BIGSERIAL PRIMARY KEY, ")
-     .append("_row_hash TEXT UNIQUE NOT NULL, ")
+     .append("_row_hash TEXT NOT NULL, ")
      .append("_ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(), ")
      .append("_source TEXT, ")
      .append("_run_id UUID, ")
      .append("_mapping_version INT, ")
+     .append(spec.marksSeen() ? SEEN_RUN + " UUID, " : "")
      .append("tenant_id BIGINT NOT NULL");
     for (var e : schema.entrySet()) {
       t.append(", ").append(quoteIdent(e.getKey())).append(' ').append(e.getValue());
     }
-    t.append(')');
+    // Per tenant: the table holds every tenant's rows, and the hash covers the row's content only (#1198).
+    t.append(", UNIQUE (tenant_id, _row_hash))");
     return t.toString();
   }
 
@@ -476,6 +550,42 @@ public class DynamicTableWriter {
 
   // ── DML ────────────────────────────────────────────────────────────────────
 
+  /** Tables known to carry {@link #SEEN_RUN}: checked once per table per JVM, not per chunk. */
+  private final Set<String> seenColumnReady = ConcurrentHashMap.newKeySet();
+
+  /**
+   * Stamps this run on every row of the chunk it wrote or met again (#1195, see {@code CsvFullRefresh}).
+   * A separate UPDATE after the insert, not a {@code DO UPDATE} touch: the insert, its counts and its
+   * events stay what they were; {@code _run_id} keeps naming the run that LANDED the row (the #1185
+   * entity view and the incremental resolution read it); and {@code _ingested_at} (Search marks,
+   * freshness) does not move for a row that did not change. Only this source's rows are stamped.
+   */
+  private void markSeen(MappingTarget.Table spec, List<Map<String, Object>> sys, Long tenantId) {
+    UUID runId = runIdOf(sys);
+    if (runId == null) return;
+    String[] hashes = sys.stream().map(m -> (String) m.get(ROW_HASH)).distinct().toArray(String[]::new);
+    try (Connection c = adminDs.getConnection()) {
+      if (!seenColumnReady.contains(fqnUnquoted(spec))) {
+        // A table created before #1195. Asked first: ADD COLUMN takes an exclusive lock even when
+        // the column is there, and would queue behind every reader of the table after a restart.
+        if (!driftDetector.actualSchema(c, spec.schema(), spec.name()).containsKey(SEEN_RUN)) {
+          exec(c, "ALTER TABLE " + fqn(spec) + " ADD COLUMN IF NOT EXISTS " + SEEN_RUN + " UUID");
+        }
+        seenColumnReady.add(fqnUnquoted(spec));
+      }
+      try (PreparedStatement ps = c.prepareStatement("UPDATE " + fqn(spec) + " SET " + SEEN_RUN + " = ? "
+          + "WHERE tenant_id = ? AND _source IS NOT DISTINCT FROM ? AND _row_hash = ANY (?)")) {
+        ps.setObject(1, runId);
+        ps.setLong(2, tenantId);
+        ps.setString(3, (String) sys.get(0).get(SOURCE));
+        ps.setArray(4, c.createArrayOf("text", hashes));
+        ps.executeUpdate();
+      }
+    } catch (SQLException e) {
+      throw new ConnectorException("DynamicTableWriter.markSeen failed: " + e.getMessage(), e);
+    }
+  }
+
   /** Fixed system columns, in bind order, always first in the INSERT. */
   private static final List<String> FIXED_COLS =
       List.of(ROW_HASH, SOURCE, RUN_ID, MAPPING_VERSION, TENANT_ID);
@@ -516,7 +626,7 @@ public class DynamicTableWriter {
                                     List<Map<String, Object>> sys, Long tenantId,
                                     Map<String, String> schema) {
     List<String> schemaCols = new ArrayList<>(schema.keySet());
-    String sql = buildInsertSql(spec, schemaCols, conflictClause(spec), false, 1);
+    String sql = buildInsertSql(spec, schemaCols, conflictClause(spec, schemaCols, sys, tenantId), false, 1);
 
     try (Connection c = adminDs.getConnection();
          PreparedStatement ps = c.prepareStatement(sql)) {
@@ -642,7 +752,7 @@ public class DynamicTableWriter {
                             int start, int end, String fqn, String source, UUID runId)
                             throws SQLException, JsonProcessingException {
     int n = end - start;
-    String sql = buildInsertSql(spec, schemaCols, conflictClause(spec), true, n);
+    String sql = buildInsertSql(spec, schemaCols, conflictClause(spec, schemaCols, sys, tenantId), true, n);
     int written = 0;
     int returned = 0;
     int colsPerRow = FIXED_COLS.size() + schemaCols.size();
@@ -658,8 +768,9 @@ public class DynamicTableWriter {
           boolean inserted = rs.getBoolean(2);
           // UPDATE touches (inserted=false) count as written too, to match the un-gated path.
           written++;
-          if (inserted) {
-            stageEvent(outbox, tenantId, source, fqn, hash, runId);
+          // A keyed table returns a row only when it changed (#1196): its new version is an event too.
+          if (inserted || spec.key() != null) {
+            stageEvent(outbox, tenantId, source, fqn, hash, runId, inserted ? "insert" : "update");
           }
         }
       }
@@ -667,8 +778,8 @@ public class DynamicTableWriter {
     return new SubBatchResult(written, returned);
   }
 
-  private void stageEvent(PreparedStatement outbox, Long tenantId, String source,
-                          String fqn, String hash, UUID runId) throws SQLException, JsonProcessingException {
+  private void stageEvent(PreparedStatement outbox, Long tenantId, String source, String fqn, String hash,
+                          UUID runId, String op) throws SQLException, JsonProcessingException {
     outbox.setLong(1, tenantId);
     outbox.setString(2, RowEventGate.DATA_ROW_CHANGED);
     outbox.setString(3, source);
@@ -678,7 +789,7 @@ public class DynamicTableWriter {
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("entity", fqn);
     payload.put("entity_key", hash);
-    payload.put("op", "insert");
+    payload.put("op", op);
     if (runId != null) payload.put("run_id", runId.toString());
     outbox.setString(6, mapper.writeValueAsString(payload));
     outbox.addBatch();
@@ -686,12 +797,29 @@ public class DynamicTableWriter {
 
   // ── SQL / binding shared by both paths ───────────────────────────────────────
 
-  private String conflictClause(MappingTarget.Table spec) {
+  private String conflictClause(MappingTarget.Table spec, List<String> schemaCols, List<Map<String, Object>> sys,
+                                long tenantId) {
+    if (spec.key() != null) return upsertClause(spec, schemaCols, tenantId, sourceOf(sys));
     return switch (spec.onConflict()) {
-      case SKIP   -> " ON CONFLICT (_row_hash) DO NOTHING";
-      case UPDATE -> " ON CONFLICT (_row_hash) DO UPDATE SET _ingested_at = now()";
+      case SKIP   -> " ON CONFLICT (tenant_id, _row_hash) DO NOTHING";
+      case UPDATE -> " ON CONFLICT (tenant_id, _row_hash) DO UPDATE SET _ingested_at = now()";
       case ERROR  -> "";
     };
+  }
+
+  /**
+   * A keyed table (#1196): a row whose key is there replaces it when its content differs, and is skipped
+   * when it does not — so an unchanged row keeps its run, its ingestion time and its id. The key index is
+   * partial, over this tenant's rows of this source, and is named as the arbiter by repeating its predicate.
+   */
+  static String upsertClause(MappingTarget.Table spec, List<String> schemaCols, long tenantId, String source) {
+    StringBuilder set = new StringBuilder("_row_hash = EXCLUDED._row_hash, _run_id = EXCLUDED._run_id, "
+        + "_mapping_version = EXCLUDED._mapping_version, _ingested_at = now()");
+    for (String col : schemaCols) {
+      if (!spec.key().contains(col)) set.append(", ").append(quoteIdent(col)).append(" = EXCLUDED.").append(quoteIdent(col));
+    }
+    return " ON CONFLICT (" + SourceKeyIndex.columns(spec) + ") WHERE " + SourceKeyIndex.predicate(tenantId, source)
+        + " DO UPDATE SET " + set + " WHERE " + quoteIdent(spec.name()) + "._row_hash IS DISTINCT FROM EXCLUDED._row_hash";
   }
 
   /** Builds INSERT with {@code rowCount} value tuples; appends RETURNING on the emitting path. */
@@ -736,6 +864,11 @@ public class DynamicTableWriter {
       String col = schemaCols.get(i);
       bindValue(ps, base + 6 + i, row.get(col), schema.get(col));
     }
+  }
+
+  /** The source every row of a chunk carries, as {@link #bindRow} writes it. */
+  private static String sourceOf(List<Map<String, Object>> sys) {
+    return (String) sys.get(0).getOrDefault(SOURCE, "unknown");
   }
 
   private UUID runIdOf(List<Map<String, Object>> sys) {
@@ -783,16 +916,18 @@ public class DynamicTableWriter {
    * zone — the hub JVM's — so the same 23:30 landed 23:30Z on a UTC hub and 21:30Z on a Paris one
    * (#1092). Into any other column (a TEXT column whose first chunk mixed dates and times) it stays
    * as it is: there an offset would be rendered in the session zone, "2026-08-03 01:30:00+02".
-   * A {@link WallClockTimestamp} — a jdbc source time with no zone (#1093) — is the same case.
+   * A {@link WallClockTimestamp} — a jdbc source time with no zone (#1093) — is the same case, read
+   * in the zone its connection declares (#1328).
    */
   static Object bindable(Object v, String columnType) {
-    if (v instanceof Instant instant) return instant.atOffset(ZoneOffset.UTC);
-    if (v instanceof LocalDateTime local && "TIMESTAMPTZ".equals(columnType))
-      return local.atOffset(ZoneOffset.UTC);
-    if (v instanceof WallClockTimestamp wallClock && "TIMESTAMPTZ".equals(columnType))
-      return wallClock.toLocalDateTime().atOffset(ZoneOffset.UTC);
-    if (v instanceof ZonedDateTime zdt) return zdt.toOffsetDateTime();
-    return v;
+    boolean timestamptz = "TIMESTAMPTZ".equals(columnType);
+    return switch (v) {
+      case Instant instant -> instant.atOffset(ZoneOffset.UTC);
+      case LocalDateTime local when timestamptz -> local.atOffset(ZoneOffset.UTC);
+      case WallClockTimestamp wallClock when timestamptz -> wallClock.instant();
+      case ZonedDateTime zdt -> zdt.toOffsetDateTime();
+      case null, default -> v;
+    };
   }
 
   /**
@@ -812,13 +947,13 @@ public class DynamicTableWriter {
     }
   }
 
-  private void exec(Connection c, String sql) throws SQLException {
+  static void exec(Connection c, String sql) throws SQLException {
     try (Statement st = c.createStatement()) {
       st.execute(sql);
     }
   }
 
-  private String fqn(MappingTarget.Table spec) {
+  static String fqn(MappingTarget.Table spec) {
     return quoteIdent(spec.schema()) + '.' + quoteIdent(spec.name());
   }
 }

@@ -2,6 +2,7 @@ package io.lumnik.identity.roleorgaccess;
 
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.identity.Require;
+import io.lumnik.identity.TenantInPath;
 import io.lumnik.identity.org.OrgRepository;
 import io.lumnik.identity.org.Organization;
 import io.lumnik.identity.role.Role;
@@ -16,6 +17,7 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 
 import java.util.List;
 
+@TenantInPath
 @Path("/api/tenants/{tenantId}/roles/{roleId}/orgs")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.WILDCARD)
@@ -72,12 +74,10 @@ public class RoleOrgAccessResource {
     }
 
     private Role requireRole(Long tenantId, Long roleId) {
-        Require.callerOwnsTenant(tenantId);
         return Require.owned(roles, roleId, tenantId, "Role");
     }
 
     private Organization requireOrg(Long tenantId, Long orgId) {
-        Require.callerOwnsTenant(tenantId);
         return Require.owned(orgs, orgId, tenantId, "Organization");
     }
 }

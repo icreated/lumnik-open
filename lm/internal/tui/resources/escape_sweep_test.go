@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -74,7 +75,7 @@ func TestDlqCellsEscape(t *testing.T) {
 	if got := d.table.GetCell(1, 3).Text; strings.Contains(got, evil) {
 		t.Errorf("dlq SKIP_REASON unescaped: %q", got)
 	}
-	if got := d.table.GetCell(1, 5).Text; strings.Contains(got, evil) {
+	if got := d.table.GetCell(1, 6).Text; strings.Contains(got, evil) {
 		t.Errorf("dlq ERROR unescaped: %q", got)
 	}
 }
@@ -342,20 +343,6 @@ func TestEndpointsDescribeBodyEscapes(t *testing.T) {
 	}
 }
 
-func TestProcessesDescribeBodyEscapes(t *testing.T) {
-	p := &Processes{table: tview.NewTable(), items: []client.ProcessInfo{
-		{Name: evil, Table: evil, Emit: evil}}}
-	p.render()
-	p.table.Select(1, 0)
-	_, body, ok := p.SelectedDescribe()
-	if !ok {
-		t.Fatal("describe !ok")
-	}
-	if strings.Contains(body, evil) {
-		t.Errorf("processes describe body unescaped: %q", body)
-	}
-}
-
 func TestScopesDescribeBodyEscapes(t *testing.T) {
 	s := &Scopes{table: tview.NewTable(), items: []client.RagScope{
 		{Scope: evil, LastIndexed: evil}}}
@@ -398,12 +385,15 @@ func TestOutputsCellsAndDescribeEscape(t *testing.T) {
 func TestEveryDescribePageIsInTheEscapeInventory(t *testing.T) {
 	covered := map[string]bool{
 		"Ambiguous": true, "Conflicts": true, "DLQ": true, "Endpoints": true, "Inbox": true,
-		"Observations": true, "Outputs": true, "Processes": true, "Runs": true, "Scopes": true,
-		"Sources": true, "ViewPage": true,
+		"Observations": true, "Outputs": true, "Runs": true, "Scopes": true,
+		"Entities": true, "Tables": true, "Manifests": true, "Secrets": true, "Sources": true, "ViewPage": true,
+		"Hooks": true, "NewKind": true,
+		"Integrations": true, "Notify": true,
+		"Exports": true, "Search": true,
 	}
-	// Exempt, with the reason: NewKind's body is compile-time embedded template text and
-	// highlightYAML already escapes it — there is no runtime data on that path.
-	exempt := map[string]bool{"NewKind": true}
+	// Exempt, with the reason. NewKind used to be — its body was embedded template text only — until
+	// it showed a connector type's config schema, the hub's own words (#1138).
+	exempt := map[string]bool{}
 
 	// Directory-scoped by design: filepath.Glob("*.go") only sees this package. Every
 	// SelectedDescribe implementation lives here today; a future one added in a sibling
@@ -433,13 +423,144 @@ func TestEveryDescribePageIsInTheEscapeInventory(t *testing.T) {
 		}
 	}
 	// found counts BOTH covered and exempt implementations, so it must be compared
-	// against their sum — comparing against len(covered) alone leaves a full page of
-	// slack (today's one exempt page) under which deleting NewKind's SelectedDescribe
-	// would go unnoticed: exempt pages have no test calling the method, so nothing else
-	// would fail either.
+	// against their sum — comparing against len(covered) alone leaves a page of slack per
+	// exempt page, under which deleting that page's SelectedDescribe would go unnoticed:
+	// exempt pages have no test calling the method, so nothing else would fail either.
 	if found != len(covered)+len(exempt) {
 		t.Errorf("found %d SelectedDescribe implementations, inventory lists %d covered + %d exempt = %d — "+
 			"either a new page arrived without an inventory entry, or a covered/exempt page was "+
 			"deleted without removing its entry", found, len(covered), len(exempt), len(covered)+len(exempt))
+	}
+}
+
+// :secrets — name and description are integrator-typed text shown in cells and describe.
+func TestSecretsDescribeEscapes(t *testing.T) {
+	s := NewSecrets(nil, nil, nil, nil)
+	s.renderList([]client.SecretMeta{{Name: "db[red]", Description: "x[::b]"}}, nil)
+	s.table.Select(1, 0)
+	_, body, ok := s.SelectedDescribe()
+	if !ok || !strings.Contains(body, "db[red[]") || !strings.Contains(body, "x[::b[]") {
+		t.Errorf("describe not escaped:\n%s", body)
+	}
+}
+
+// :integrations — the name, event types and a delivery's event and error are hub data in describe.
+func TestIntegrationsDescribeEscapes(t *testing.T) {
+	p := NewIntegrations(nil, nil, nil, nil)
+	p.renderList([]client.Integration{{ID: 1, Name: "ops[red]", EventTypes: []string{"e[::b]"}}},
+		map[int64]deliveries{1: {rows: []client.IntegrationDelivery{{EventType: "x[blue]", Error: "y[::u]"}}}}, nil)
+	p.table.Select(1, 0)
+	_, body, ok := p.SelectedDescribe()
+	for _, want := range []string{"ops[red[]", "e[::b[]", "x[blue[]", "y[::u[]"} {
+		if !ok || !strings.Contains(body, want) {
+			t.Errorf("describe not escaped (%s):\n%s", want, body)
+		}
+	}
+}
+
+// :notify — every field of a rule is integrator-typed text shown in describe.
+func TestNotifyDescribeEscapes(t *testing.T) {
+	p := NewNotify(nil, nil, nil, nil)
+	p.renderList([]client.NotificationRule{{ID: 1, EventPattern: "a[red]", EntityFilter: "b[::b]", Recipient: "c[blue]", Template: "d[::u]"}}, nil)
+	p.table.Select(1, 0)
+	_, body, ok := p.SelectedDescribe()
+	for _, want := range []string{"a[red[]", "b[::b[]", "c[blue[]", "d[::u[]"} {
+		if !ok || !strings.Contains(body, want) {
+			t.Errorf("describe not escaped (%s):\n%s", want, body)
+		}
+	}
+}
+
+// :entities — entity names, sources and every row value are integrator data shown in describe.
+func TestEntitiesDescribeEscapes(t *testing.T) {
+	p := NewEntities(nil, nil, nil, nil)
+	p.list = []client.EntitySummary{{Name: "cust[red]", Sources: []string{"t[::b]"}}}
+	p.renderList()
+	p.table.Select(1, 0)
+	_, body, ok := p.SelectedDescribe()
+	if !ok || !strings.Contains(body, "cust[red[]") || !strings.Contains(body, "t[::b[]") {
+		t.Errorf("describe not escaped:\n%s", body)
+	}
+}
+
+// :tables — table and mapping names, and every row value, are hub data shown in describe.
+func TestTablesDescribeEscapes(t *testing.T) {
+	p := NewTables(nil, nil, nil)
+	p.list = []client.DataTable{{MappingID: "m[red]", TableSchema: "connector", TableName: "t[::b]"}}
+	p.renderList()
+	p.table.Select(1, 0)
+	_, body, ok := p.SelectedDescribe()
+	if !ok || !strings.Contains(body, "m[red[]") || !strings.Contains(body, "t[::b[]") {
+		t.Errorf("describe not escaped:\n%s", body)
+	}
+}
+
+// Column names come from the hub (a source's own headers): as table headers they are data too.
+func TestRowPageHeadersEscape(t *testing.T) {
+	var row client.EntityRow
+	if err := json.Unmarshal([]byte(`{"col[red]":"v"}`), &row); err != nil {
+		t.Fatal(err)
+	}
+	p := NewTables(nil, nil, nil)
+	p.mapping, p.rows = "m", []client.EntityRow{row}
+	p.renderRows()
+	e := NewEntities(nil, nil, nil, nil)
+	e.entity, e.rows = "x", []client.EntityRow{row}
+	e.renderRows()
+	for name, got := range map[string]string{"tables": p.table.GetCell(0, 0).Text, "entities": e.table.GetCell(0, 0).Text} {
+		if got != tview.Escape("COL[RED]") {
+			t.Errorf("%s header %q is not escaped", name, got)
+		}
+	}
+}
+
+// :apps / :workflows / :views — names, titles and scopes are integrator text shown in describe.
+func TestManifestsDescribeEscapes(t *testing.T) {
+	p := NewManifests(nil, ManifestSource{Title: "x", Columns: []string{"title"}}, nil, nil)
+	p.items = []ManifestRow{{Name: "n", Cells: []string{"t[red]"}}}
+	p.render()
+	p.table.Select(1, 0)
+	_, body, ok := p.SelectedDescribe()
+	if !ok || !strings.Contains(body, "t[red[]") {
+		t.Errorf("describe not escaped:\n%s", body)
+	}
+}
+
+// :exports — export names, entities and a run's failure reason are hub text shown in cells and describe.
+func TestExportsCellsAndDescribeEscape(t *testing.T) {
+	p := NewExports(nil, nil, nil, nil)
+	p.all = []exportRow{{ExportSummary: client.ExportSummary{Name: "x", Entity: "e[red]"}}}
+	p.render()
+	p.table.Select(1, 0)
+	if _, body, ok := p.SelectedDescribe(); !ok || !strings.Contains(body, "e[red[]") || strings.Contains(p.table.GetCell(1, 1).Text, "e[red]") {
+		t.Errorf("export not escaped:\n%s", body)
+	}
+	p.export, p.allRuns = "x", []client.ExportRun{{ID: "r", Status: "Failed", FailureCode: "c", FailureReason: "r[::b]"}}
+	p.render()
+	p.table.Select(1, 0)
+	if _, body, ok := p.SelectedDescribe(); !ok || !strings.Contains(body, "r[::b[]") {
+		t.Errorf("run describe not escaped:\n%s", body)
+	}
+}
+
+// :search — index names, hit fields and the capability's provider are hub text.
+func TestSearchCellsAndDescribeEscape(t *testing.T) {
+	p := NewSearch(nil, nil, nil, nil, nil)
+	p.capability = &client.SearchCapability{State: "available", Provider: evil}
+	p.renderBanner()
+	if strings.Contains(p.banner.GetText(false), evil) {
+		t.Errorf("banner not escaped: %q", p.banner.GetText(false))
+	}
+	p.indexes = []client.SearchIndexStatus{{Name: "i[red]"}}
+	p.render()
+	p.table.Select(1, 0)
+	if _, body, ok := p.SelectedDescribe(); !ok || !strings.Contains(body, "i[red[]") {
+		t.Errorf("index describe not escaped:\n%s", body)
+	}
+	p.q, p.hits = "q", []client.SearchHit{{Entity: "E", Fields: map[string]string{"n": "v[::b]"}}}
+	p.render()
+	p.table.Select(1, 0)
+	if _, body, ok := p.SelectedDescribe(); !ok || !strings.Contains(body, "v[::b[]") {
+		t.Errorf("hit describe not escaped:\n%s", body)
 	}
 }

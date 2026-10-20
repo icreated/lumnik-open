@@ -9,6 +9,8 @@ import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.api.connector.handler.ApplyResult;
 import io.lumnik.hub.api.connector.handler.ApplyUpsert;
 import io.lumnik.hub.api.connector.handler.ConnectorApplyHandler;
+import io.lumnik.hub.ask.SchemaCardRefresher;
+import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.hub.validator.ConnectorValidationService;
@@ -19,6 +21,8 @@ import jakarta.transaction.Transactional;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+
+import java.util.Map;
 
 @Path("/api/platform/connectors")
 @Produces(MediaType.APPLICATION_JSON)
@@ -32,6 +36,8 @@ public class ConnectorApplyResource {
     @Inject ConnectorValidationService validationService;
     @Inject Instance<ConnectorApplyHandler> handlers;
     @Inject ConnectorRepository connectors;
+    @Inject SchemaCardRefresher cardRefresher;
+    @Inject AuditRecorder audit;
 
     @POST
     @Path("/apply")
@@ -66,8 +72,8 @@ public class ConnectorApplyResource {
         // a caller who holds every scope they DECLARE can still take over a connector that lives in
         // scopes they do not — or narrow it out of one by re-applying a subset. Same words as the
         // check above, and before validation for the same reason (#509).
-        ApplyScopeBoundary.refuseUnlessCallerHolds(
-            connectors.lockedScopesOf(tenant, doc.path(METADATA).path("name").asText()));
+        var storedScopes = connectors.lockedScopesOf(tenant, doc.path(METADATA).path("name").asText());
+        ApplyScopeBoundary.refuseUnlessCallerHolds(storedScopes);
 
         ValidationResult vr = validationService.validate(doc);
         if (!vr.isValid()) return Response.status(400).entity(vr).build();
@@ -80,6 +86,14 @@ public class ConnectorApplyResource {
         }
 
         ApplyResult result = handler.apply(doc, tenant);
+        // A re-apply that moves the connector moves its tables between cards once committed (#1194).
+        storedScopes.ifPresent(before -> cardRefresher.afterRetag(tenant, before, ApplyUpsert.scopes(doc.path(METADATA))));
+        audit.recordAfterCommit("Connector", result.connectorId().toString(), "APPLY", Map.of(
+            "via", "manifest",
+            "name", result.name(),
+            "type", kind,
+            "tags", ApplyUpsert.scopes(doc.path(METADATA)),
+            "manifest_sha256", AuditRecorder.sha256(body)));
         // The advisories the validator produced above ride the success body: on this path they
         // have no other way out, and the one they warn about most — no scopes, so nothing the
         // connector ingests is askable in any métier — is silent everywhere else (#531).

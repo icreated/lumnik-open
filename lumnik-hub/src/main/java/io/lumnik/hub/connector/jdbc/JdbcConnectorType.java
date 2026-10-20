@@ -13,12 +13,14 @@ import io.lumnik.hub.connector.exceptions.SourceUnreachableException;
 import io.lumnik.jdbc.spi.JdbcDialect;
 import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
 import io.lumnik.hub.connector.mapping.MappingEngine;
+import io.lumnik.hub.connector.mapping.Zones;
 import io.lumnik.hub.connector.mapping.spec.ErrorPolicy;
 import io.lumnik.hub.connector.mapping.spec.HookInvocation;
 import io.lumnik.hub.connector.mapping.spec.MappingSpec;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget;
 import io.lumnik.hub.connector.mapping.MapColumnsRules;
 import io.lumnik.hub.connector.mapping.writer.DynamicTableWriter;
+import io.lumnik.hub.connector.mapping.writer.SourceKeyIndex;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.sql.SqlIdentifiers;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -29,6 +31,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.ZoneId;
 
 import java.util.*;
 
@@ -43,6 +46,7 @@ public class JdbcConnectorType implements ConnectorType {
   @Inject JdbcDialectRegistry dialectRegistry;
   @Inject HikariPoolRegistry  poolRegistry;
   @Inject MappingEngine       mappingEngine;
+  @Inject SourceKeyIndex      keyIndex;
 
   @Override public String id() { return TYPE_ID; }
 
@@ -62,13 +66,10 @@ public class JdbcConnectorType implements ConnectorType {
     // dialect is optional in the manifest — explicit, else inferred from the JDBC url.
     resolveDialectId(config);
     Configs.requireString(config, "schema");
-    String name = Configs.requireString(config, "name");
     // Mirrors dumpSpec's refusal below. What keeps `lm apply` from accepting such a manifest is
-    // SourceBlockValidator.perTableDef(), not this line: nothing on the jdbc path calls validateConfig.
-    if (!SqlIdentifiers.isPlainIdentifier(name)) {
-      throw new ConfigValidationException(
-          "config key 'name' must be a plain identifier (letters, digits, underscore; not starting with a digit): " + name);
-    }
+    // SourceBlockValidator.perTableDef(), not these lines: nothing on the jdbc path calls validateConfig.
+    requirePlainIdentifier("name", Configs.requireString(config, "name"));
+    if (config.get("target") != null) requirePlainIdentifier("target", String.valueOf(config.get("target")));
     String mode = Configs.requireString(config, "mode");
     if (!Set.of("watermark", "full").contains(mode))
       throw new ConfigValidationException("mode must be 'watermark' or 'full'");
@@ -84,6 +85,13 @@ public class JdbcConnectorType implements ConnectorType {
     validateRename(readRename(config));
   }
 
+  private static void requirePlainIdentifier(String key, String value) {
+    if (!SqlIdentifiers.isPlainIdentifier(value)) {
+      throw new ConfigValidationException("config key '" + key
+          + "' must be a plain identifier (letters, digits, underscore; not starting with a digit): " + value);
+    }
+  }
+
   /**
    * Everything both the reader and the run-start probe need from one endpoint's config, read once.
    * Two copies of this extraction is how they drift: the probe would measure a ceiling over a key
@@ -91,7 +99,7 @@ public class JdbcConnectorType implements ConnectorType {
    */
   private record Wiring(String url, String user, String password, String dialectId, String schema,
                         String table, String watermark, List<String> pk, JdbcChunkReader.Mode mode,
-                        JdbcDialect dialect) {
+                        JdbcDialect dialect, ZoneId zone) {
 
     List<String> keyColumns() {
       return JdbcQueryBuilder.keyColumns(watermark, pk, mode.forQuery());
@@ -116,14 +124,16 @@ public class JdbcConnectorType implements ConnectorType {
         ctx.configValue("watermark_column", String.class, null),
         pk,
         "full".equals(modeStr) ? JdbcChunkReader.Mode.FULL : JdbcChunkReader.Mode.WATERMARK,
-        dialectRegistry.resolve(dialectId));
+        dialectRegistry.resolve(dialectId),
+        // The zone the source's naive times were written in (#1328).
+        Zones.orUtc(ctx.configValue("zone", String.class, null)));
   }
 
   @Override
   public ItemReader<?> reader(ConnectorContext ctx) {
     Wiring w = wiringOf(ctx);
     return new JdbcChunkReader(w.url(), w.user(), w.password(), w.dialectId(), w.schema(), w.table(),
-        w.watermark(), w.pk(), w.mode(), w.dialect(), poolRegistry);
+        w.watermark(), w.pk(), w.mode(), w.dialect(), poolRegistry, w.zone());
   }
 
   /**
@@ -182,13 +192,12 @@ public class JdbcConnectorType implements ConnectorType {
    */
   @Override
   public ItemWriter<?> writer(ConnectorContext ctx) {
-    String table = ctx.configValue("name", String.class);
     Map<String, String> rename = readRename(ctx.config());
-    MappingSpec spec = dumpSpec(table, parseIndexes(ctx.config()), rename);
+    MappingSpec spec = dumpSpec(ctx.config(), rename);
     // Built through MappingEngine.itemWriter — the seam that reaches the ItemWriter.prepare hook
     // (a bare write-only lambda cannot override it). dumpSpec is Table-only today (no rag target),
-    // so this has no observable effect yet, but any future rag-target support in dumpSpec, or a
-    // mapping resolved via MappingResolver, hoists its embedding for free through this same seam.
+    // so this has no observable effect yet, but any future rag-target support in dumpSpec hoists
+    // its embedding for free through this same seam.
     return mappingEngine.itemWriter(spec, c -> {
       // The reader stashes the source's declared column types on the shared context config
       // (see JdbcChunkReader); they authoritatively type all-NULL-sampled columns at DDL time.
@@ -200,6 +209,22 @@ public class JdbcConnectorType implements ConnectorType {
       // hint map's keys the same way, or a renamed column's hint never matches.
       return renameHintKeys(typeHints, rename);
     });
+  }
+
+  /**
+   * The hub table moves to one row per key at the first run after #1196 even when that run writes no row —
+   * a watermark run usually reads nothing, its cursor past every row. A run that wrote rows has moved it
+   * already, and this finds the index in place.
+   */
+  @Override
+  public StreamEnd endOfStream(ConnectorContext ctx) {
+    MappingSpec spec = dumpSpec(ctx.config(), readRename(ctx.config()));
+    return new StreamEnd.Removed(keyIndex.ensure(spec.targets().table(), spec.id(), ctx.tenantId()));
+  }
+
+  @SuppressWarnings("unchecked")
+  private static MappingSpec dumpSpec(Map<String, Object> config, Map<String, String> rename) {
+    return dumpSpec(hubName(config), (List<String>) config.get("pk_columns"), parseIndexes(config), rename);
   }
 
   /**
@@ -229,6 +254,11 @@ public class JdbcConnectorType implements ConnectorType {
     return out;
   }
 
+  /** The hub table's name: {@code target} when the manifest declares one (#1199), else the source table's. */
+  static String hubName(Map<String, Object> config) {
+    return config.get("target") instanceof String target ? target : (String) config.get("name");
+  }
+
   /**
    * 1:1 dump mapping: one Table target {@code connector.t_<table>} (auto-schema), plus — when
    * {@code rename} is non-empty — one {@code map-columns} row hook translating source column
@@ -244,22 +274,28 @@ public class JdbcConnectorType implements ConnectorType {
    * {@link #writer(ConnectorContext)}, so it is the one that must refuse a bad rename before it
    * reaches {@link io.lumnik.hub.connector.mapping.hooks.row.MapColumnsHook}, where a
    * two-sources-one-target collision would silently drop a column's values forever.
+   *
+   * <p>{@code pk} is the source's declared key, {@code pk_columns}, under its hub names: the table holds
+   * one row per key, so a changed source row replaces its previous version (#1196).
    */
-  static MappingSpec dumpSpec(String table, List<MappingTarget.Index> indexes, Map<String, String> rename) {
+  static MappingSpec dumpSpec(String table, List<String> pk, List<MappingTarget.Index> indexes,
+                              Map<String, String> rename) {
     // DDL-injection boundary (layer 2, alongside the escaping fix in RlsDdl): `table` is prefixed
     // with `t_` and handed straight to DDL that DynamicTableWriter executes on the BYPASSRLS admin
     // datasource, so refuse anything that is not a plain identifier before that happens.
     if (!SqlIdentifiers.isPlainIdentifier(table)) {
       throw new ConfigValidationException(
-          "config key 'name' must be a plain identifier (letters, digits, underscore; not starting with a digit): " + table);
+          "config key 'name' (or its 'target') must be a plain identifier "
+          + "(letters, digits, underscore; not starting with a digit): " + table);
     }
     validateRename(rename);
+    List<String> key = pk.stream().map(col -> rename.getOrDefault(col, col)).toList();
     MappingTarget.Table tbl = new MappingTarget.Table(
         "connector", "t_" + table, /* autoSchema */ true,
-        MappingTarget.OnConflict.SKIP, indexes);
+        MappingTarget.OnConflict.SKIP, indexes, false, key);
     MappingTarget target = new MappingTarget(null, tbl, null, null);
     List<HookInvocation> rowHooks = List.of();
-    if (rename != null && !rename.isEmpty()) {
+    if (!rename.isEmpty()) {
       ObjectNode params = MAPPER.createObjectNode();
       ObjectNode renameNode = params.putObject("rename");
       rename.forEach(renameNode::put);

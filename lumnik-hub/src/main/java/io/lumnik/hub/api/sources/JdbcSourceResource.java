@@ -5,6 +5,7 @@ import io.lumnik.hub.sql.SqlIdentifiers;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.api.connector.ConnectorScope;
 import io.lumnik.hub.api.sources.JdbcSourceDtos.*;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorCredential;
@@ -20,8 +21,11 @@ import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.repository.ConnectorRunRepository;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.hub.tenant.TenantContextFilter;
+import io.lumnik.hub.validator.common.CronField;
 import io.lumnik.hub.webhook.SecretCipher;
+import io.lumnik.hub.audit.AuditRecorder;
 import jakarta.inject.Inject;
+import jakarta.persistence.LockModeType;
 import jakarta.transaction.Transactional;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
@@ -49,6 +53,7 @@ public class JdbcSourceResource {
   @Inject SecretCipher cipher;
   @Inject HikariPoolRegistry poolRegistry;
   @Inject JdbcDialectRegistry dialectRegistry;
+  @Inject AuditRecorder audit;
 
   // ── POST /test ──────────────────────────────────────────────────────────────
 
@@ -91,12 +96,8 @@ public class JdbcSourceResource {
   @POST
   @Path("/discover")
   public Response discover(DiscoverRequest req) {
-    JdbcConnectionConfig cc;
-    try {
-      cc = JdbcConnectionConfig.parse(req.url(), req.user(), req.password(), dialectRegistry);
-    } catch (IllegalArgumentException e) {
-      return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
-    }
+    JdbcConnectionConfig cc = ApiErrors.orBadRequest(
+        () -> JdbcConnectionConfig.parse(req.url(), req.user(), req.password(), dialectRegistry));
     String schema = req.schemaOrDefault();
     try {
       List<TableDescriptor> tables = introspector.discover(
@@ -113,13 +114,20 @@ public class JdbcSourceResource {
   @POST
   @Path("/add")
   public Response add(AddRequest req) {
+    // The guided add creates its connectors with no tags — scopeless, tenant-wide — which a
+    // scope-bound caller may not create (#1212, the apply door's rule). Asked before anything else:
+    // the existing-connector lookup below answers with another métier's connector ids.
+    ConnectorScope.refuseUnlessHolds(List.of());
     Long tenantId = Objects.requireNonNullElse(TenantContextFilter.current(), 0L);
 
-    JdbcConnectionConfig cc;
-    try {
-      cc = JdbcConnectionConfig.parse(req.url(), req.user(), req.password(), dialectRegistry);
-    } catch (IllegalArgumentException e) {
-      return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
+    JdbcConnectionConfig cc = ApiErrors.orBadRequest(
+        () -> JdbcConnectionConfig.parse(req.url(), req.user(), req.password(), dialectRegistry));
+    // The manifest's own cron check (#1244): a schedule that does not parse would never fire.
+    if (req.scheduleCron() != null && !req.scheduleCron().isBlank()) {
+      Optional<String> badCron = CronField.validCron(req.scheduleCron());
+      if (badCron.isPresent()) {
+        return Response.status(400).entity(ApiErrors.error(badCron.get())).build();
+      }
     }
 
     // No transaction spans this method: introspection is several round trips to the customer's
@@ -169,14 +177,24 @@ public class JdbcSourceResource {
 
   /** The credential and every new connector, written inside the caller's short transaction. */
   private Response persistPrepared(List<PreparedTable> prepared, AddRequest req, Long tenantId) {
+    List<AddResultEntry> skipped = new ArrayList<>();
+    List<PreparedTable> toCreate = new ArrayList<>();
+    for (PreparedTable p : prepared) {
+      // Asked again under the address lock (#1231): a connector created under this name while the
+      // tables were introspected is skipped like one that was there before, not a 500 at commit.
+      Connector existing = p.existing() != null ? p.existing()
+          : connectorRepo.byAddressForUpdate(tenantId, p.connectorName()).orElse(null);
+      if (existing != null) {
+        skipped.add(new AddResultEntry(existing.getId(), existing.getName(), "skipped"));
+      } else {
+        toCreate.add(p);
+      }
+    }
+    // The credential after the connector locks, in the order a connector delete takes them (#1250):
+    // the reverse order deadlocks an add against the delete of one of the source's connectors.
     UUID credentialId = findOrCreateCredential(req, tenantId);
     List<AddResultEntry> created = new ArrayList<>();
-    List<AddResultEntry> skipped = new ArrayList<>();
-    for (PreparedTable p : prepared) {
-      if (p.existing() != null) {
-        skipped.add(new AddResultEntry(p.existing().getId(), p.existing().getName(), "skipped"));
-        continue;
-      }
+    for (PreparedTable p : toCreate) {
       try {
         created.add(persistTable(p, req, credentialId, tenantId));
       } catch (Exception e) {
@@ -187,6 +205,11 @@ public class JdbcSourceResource {
             .entity(ApiErrors.error("Failed processing table '" + p.tableReq().table() + "': " + e.getMessage()))
             .build());
       }
+    }
+    // After the loop: a refused table rolls the whole add back, and its connectors with it (#1193).
+    for (AddResultEntry e : created) {
+      audit.recordAfterCommit("Connector", e.connectorId().toString(), "APPLY", Map.of(
+          "via", "jdbc-add", "name", e.connectorName(), "type", JdbcConnectorType.TYPE_ID, "tags", List.of()));
     }
     return Response.ok(new AddResponse(created, skipped)).build();
   }
@@ -204,8 +227,11 @@ public class JdbcSourceResource {
   private UUID findOrCreateCredential(AddRequest req, Long tenantId) {
     String credName = req.sourceName() + "--credential";
     byte[] secret = cipher.encrypt(req.user() + ":" + req.password());
+    // Locked like a connector delete locks it (#1250): a delete taking the source's last connector
+    // either goes first, and this add creates a fresh credential, or waits and sees this one use it.
     ConnectorCredential cred = credentialRepo
         .find("name = ?1 AND tenantId = ?2", credName, tenantId)
+        .withLock(LockModeType.PESSIMISTIC_WRITE)
         .firstResult();
     if (cred == null) {
       cred = new ConnectorCredential();
@@ -226,9 +252,8 @@ public class JdbcSourceResource {
    *
    * <p>No mapping row is written. The guided add used to persist a {@code connector.connector_mapping}
    * row named {@code <connector>-mapping} and point the connector at it — a row nothing ever read
-   * back: the {@code MappingResolver} bound into every {@code ConnectorContext} is an identity stub,
-   * and the mapping a jdbc run actually executes is built from the connector's own config by
-   * {@link JdbcConnectorType#dumpSpec}. What the row did have was {@code UNIQUE (tenant_id, name)},
+   * back (V70 dropped the table, #1174): the mapping a jdbc run actually executes is built from the
+   * connector's own config by {@link JdbcConnectorType#dumpSpec}. What the row did have was {@code UNIQUE (tenant_id, name)},
    * which {@code connector delete} left behind — so re-adding a deleted table died at COMMIT with an
    * anonymous 500, and no command could remove the orphan.
    */
@@ -305,7 +330,9 @@ public class JdbcSourceResource {
     List<Connector> connectors = connectorRepo
         .find("name LIKE ?1 AND tenantId = ?2 AND deletedAt IS NULL",
               prefix + "%", tenantId)
-        .list();
+        .list().stream()
+        .filter(ConnectorScope::holds)   // the connectors the caller holds (#1212)
+        .toList();
 
     List<ListedTable> tables = new ArrayList<>();
     for (Connector c : connectors) {

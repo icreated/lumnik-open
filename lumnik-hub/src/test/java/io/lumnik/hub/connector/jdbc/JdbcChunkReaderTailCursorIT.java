@@ -15,6 +15,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.util.List;
 import java.util.Map;
+import java.time.ZoneOffset;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -58,7 +59,7 @@ class JdbcChunkReaderTailCursorIT {
   void the_readers_own_cursors_reach_the_last_row(JdbcChunkReader.Mode mode, int chunk) {
     JdbcChunkReader reader = new JdbcChunkReader(PG.getJdbcUrl(), "u", "p", "postgres",
         "public", "t", mode == JdbcChunkReader.Mode.WATERMARK ? "updated" : null, List.of("id"),
-        mode, new PostgresDialect(), REGISTRY);
+        mode, new PostgresDialect(), REGISTRY, ZoneOffset.UTC);
 
     ConnectorCursor cursor = ConnectorCursor.empty();
     int rows = 0;

@@ -1,6 +1,9 @@
 package client
 
-import "fmt"
+import (
+	"errors"
+	"net/url"
+)
 
 // SecretMeta is the metadata returned by the secrets API (value is never exposed).
 type SecretMeta struct {
@@ -16,17 +19,22 @@ type SecretMeta struct {
 
 // SecretCreate creates a new secret via POST /api/platform/secrets; the value
 // is stored write-only and never echoed back by later reads.
-func (c *Client) SecretCreate(name, value, description string) error {
-	return c.POST("/api/platform/secrets", map[string]string{
-		"name": name, "value": value, "description": description,
-	}, nil)
+func (c *Client) SecretCreate(name, value string, description *string) error {
+	body := map[string]any{"name": name, "value": value}
+	if description != nil {
+		body["description"] = *description
+	}
+	return c.POST("/api/platform/secrets", body, nil)
 }
 
-// SecretUpdate rotates an existing secret's value/description via
-// PUT /api/platform/secrets/{name}.
-func (c *Client) SecretUpdate(name, value, description string) error {
-	return c.PUT(fmt.Sprintf("/api/platform/secrets/%s", name),
-		map[string]string{"value": value, "description": description}, nil)
+// SecretUpdate rotates an existing secret's value via PUT /api/platform/secrets/{name}. A nil
+// description keeps the stored one: the hub keeps it only when the field is absent (#1249).
+func (c *Client) SecretUpdate(name, value string, description *string) error {
+	body := map[string]any{"value": value}
+	if description != nil {
+		body["description"] = *description
+	}
+	return c.PUT("/api/platform/secrets/"+url.PathEscape(name), body, nil)
 }
 
 // SecretList lists secret metadata (never values) via GET /api/platform/secrets.
@@ -42,7 +50,7 @@ func (c *Client) SecretList() ([]SecretMeta, error) {
 // GET /api/platform/secrets/{name}.
 func (c *Client) SecretDescribe(name string) (*SecretMeta, error) {
 	var out SecretMeta
-	if err := c.GET(fmt.Sprintf("/api/platform/secrets/%s", name), &out); err != nil {
+	if err := c.GET("/api/platform/secrets/"+url.PathEscape(name), &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -50,5 +58,17 @@ func (c *Client) SecretDescribe(name string) (*SecretMeta, error) {
 
 // SecretDelete removes a secret via DELETE /api/platform/secrets/{name}.
 func (c *Client) SecretDelete(name string) error {
-	return c.DELETE(fmt.Sprintf("/api/platform/secrets/%s", name))
+	return c.DELETE("/api/platform/secrets/" + url.PathEscape(name))
+}
+
+// SecretSet creates the secret, or rotates it when the name is taken (the hub's 409) — what
+// lm secret set and :secrets both mean by "store". created says which happened; a nil
+// description keeps a rotated secret's label.
+func (c *Client) SecretSet(name, value string, description *string) (created bool, err error) {
+	err = c.SecretCreate(name, value, description)
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.Status == 409 {
+		return false, c.SecretUpdate(name, value, description)
+	}
+	return err == nil, err
 }

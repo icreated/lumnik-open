@@ -4,7 +4,9 @@ import io.lumnik.hub.view.ViewFilter;
 import io.lumnik.hub.sql.TemporalText;
 
 import java.math.BigDecimal;
+import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -58,12 +60,18 @@ public final class ProcessRuleEvaluator {
     }
 
     /** {@code =}: a native Number against a numeric operand is equal by VALUE (Double 5.0 = 5, BigDecimal
-     *  5.00 = 5, 2.0E-5 = 0.00002); anything else is an exact text comparison, as before. */
+     *  5.00 = 5, 2.0E-5 = 0.00002); a DATE or timestamp column against a date is equal as an INSTANT, as
+     *  the view's SQL compares it (#1310); anything else is an exact text comparison, as before. */
     private static boolean equalsValue(Object v, ViewFilter f) {
-        BigDecimal operand = v instanceof Number ? f.numericOperand() : null;
-        if (operand == null) return String.valueOf(v).equals(f.value());
-        BigDecimal left = nativeNumber((Number) v);
-        return left != null && left.compareTo(operand) == 0;
+        return switch (v) {
+            case Timestamp t when f.temporalOperand() -> compareTemporal(t, f.value()) == 0;
+            case java.sql.Date d when f.temporalOperand() -> compareTemporal(d, f.value()) == 0;
+            case Number n when f.numericOperand() != null -> {
+                BigDecimal left = nativeNumber(n);
+                yield left != null && left.compareTo(f.numericOperand()) == 0;
+            }
+            default -> String.valueOf(v).equals(f.value());
+        };
     }
 
     /** A native Number by value. It has no dirty form, so it is NOT held to the text shape the SQL guard
@@ -96,15 +104,16 @@ public final class ProcessRuleEvaluator {
     }
 
     private static Integer compareTemporal(Object v, String operand) {
-        Instant left;
-        if (v instanceof Date d) {           // covers java.sql.Timestamp/Date
-            left = Instant.ofEpochMilli(d.getTime());
-        } else if (v instanceof Instant i) {
-            left = i;
-        } else {
-            left = TemporalText.parse(String.valueOf(v));
-            if (left == null) return null;
-        }
+        Instant left = switch (v) {
+            // A DATE column: pgjdbc's midnight in the JVM's zone, read as the day it names at midnight
+            // UTC — the rung TemporalText gives a date-only operand, whatever zone the hub runs in (#1301).
+            case java.sql.Date d -> d.toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant();
+            case Timestamp t -> t.toInstant();   // keeps the microseconds getTime() would drop
+            case Date d -> Instant.ofEpochMilli(d.getTime());   // not toInstant(): java.sql.Time throws on it
+            case Instant i -> i;
+            default -> TemporalText.parse(String.valueOf(v));
+        };
+        if (left == null) return null;
         return left.compareTo(TemporalText.parse(operand));
     }
 }

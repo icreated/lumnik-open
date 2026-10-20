@@ -289,7 +289,7 @@ def s_flaky(c):
 
 def s_session(c):
     """Wants a session token inside <soap:Header>, the way legacy EAI services do — which is what
-    the endpoint's `header:` template and its {{env:NAME}} placeholder exist for."""
+    the endpoint's `header:` template and its {{secret:NAME}} placeholder exist for."""
     if c.tag("SessionToken") != SESSION_TOKEN:
         return 401, fault("soap:Client", "SBL-SEC-00001: invalid or missing session token")
     return c.query_page(flag="last_page")

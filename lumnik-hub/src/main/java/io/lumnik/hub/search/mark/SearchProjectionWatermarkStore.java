@@ -1,6 +1,7 @@
 package io.lumnik.hub.search.mark;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -37,8 +38,7 @@ public class SearchProjectionWatermarkStore {
             ps.setString(2, tableName);
             try (ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) return Optional.empty();
-                Timestamp ts = rs.getTimestamp(1);
-                return Optional.of(ts.toInstant());
+                return Optional.of(Jdbc.instant(rs, 1));
             }
         }
     }

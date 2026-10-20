@@ -23,6 +23,7 @@ import jakarta.inject.Inject;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -130,7 +131,7 @@ class DisputedProbeBenchmark {
         long viewMs = (System.nanoTime() - t0) / 1_000_000;
         t0 = System.nanoTime();
         List<List<String>> viaRelation = run(DisputedRows.probe(plan, filters.get(0), List.of("code"), true,
-            compiler.probeRelation(manifest, column, others)));
+            compiler.probeRelation(manifest, sources(manifest), column, others)));
         long relationMs = (System.nanoTime() - t0) / 1_000_000;
         System.out.printf("    same rows? probe through the view %,dms | compiled %,dms | %d rows%n", viewMs, relationMs, viaView.size());
         assertThat(viaRelation).isEqualTo(viaView);
@@ -138,12 +139,20 @@ class DisputedProbeBenchmark {
         return relationMs;
     }
 
+    /** The view's own catalog answer (#1185, #1325), as the ask path reads it before a probe. */
+    private EntityViewCompiler.Sources sources(EntityManifest m) throws SQLException {
+        try (Connection c = adminDs.getConnection()) {
+            return EntityViewCompiler.sources(c, m);
+        }
+    }
+
     /** The executed plan of the worst case, for the record: where the rows go, which node pays for the ledger. */
     private void printPlan(String column, String value) throws Exception {
         var filter = new DisputedRows.Filter(column, List.of(value));
         var plan = new DisputedRows.Plan(VIEW, "probebench", List.of(filter), DisputedRows.Counted.IF_ANY_ROW);
+        EntityManifest bench = registry.find("probebench");
         var probe = DisputedRows.probe(plan, filter, List.of("code"), true,
-            compiler.probeRelation(registry.find("probebench"), column, List.of()));
+            compiler.probeRelation(bench, sources(bench), column, List.of()));
         try (Connection c = adminDs.getConnection();
              PreparedStatement ps = c.prepareStatement("EXPLAIN (ANALYZE, COSTS OFF, TIMING OFF) " + probe.sql())) {
             bind(c, ps, probe.params());

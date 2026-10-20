@@ -39,10 +39,18 @@ public class EndpointResource {
     /** Schemas dynamic ingestion writes to — the only ones an endpoint purge may target. */
     private static final Set<String> PURGEABLE_SCHEMAS = Set.of("connector", "ext");
 
+    /**
+     * The refusal for a non-hybrid endpoint, worded for the integrator (#1181): never the config key
+     * or the internal column, and the gesture that does remove the data (connector delete).
+     */
+    static final String NOT_PURGEABLE_ON_ITS_OWN =
+        "This endpoint writes to a connector table whose rows are not tracked per endpoint, so it "
+        + "cannot be purged on its own. Deleting the connector removes its data, along with its run history.";
+
     @GET
     @Transactional
     public Response list(@PathParam("cid") UUID cid) {
-        if (connRepo.findById(cid) == null) return ApiErrors.notFound("connector " + cid + " not found");
+        if (ConnectorScope.held(connRepo, cid) == null) return ApiErrors.notFound("connector " + cid + " not found");
         List<EndpointDto> dtos = epRepo.listAllByConnector(cid).stream()
             .map(EndpointDto::from)
             .toList();
@@ -63,7 +71,7 @@ public class EndpointResource {
     @Transactional
     public Response update(@PathParam("cid") UUID cid, @PathParam("eid") UUID eid,
                            EndpointDto body) {
-        ConnectorEndpoint ep = resolveEndpoint(cid, eid);
+        ConnectorEndpoint ep = heldEndpoint(cid, eid);
         if (ep == null) return ApiErrors.notFound("endpoint " + eid + " not found under connector " + cid);
 
         // The sibling of ConnectorAdminResource: this door persisted config with no validation.
@@ -90,7 +98,7 @@ public class EndpointResource {
     @Path("{eid}")
     @Transactional
     public Response delete(@PathParam("cid") UUID cid, @PathParam("eid") UUID eid) {
-        ConnectorEndpoint ep = resolveEndpoint(cid, eid);
+        ConnectorEndpoint ep = heldEndpoint(cid, eid);
         if (ep == null) return ApiErrors.notFound("endpoint " + eid + " not found under connector " + cid);
         ep.softDelete();
         return Response.status(204).build();
@@ -109,7 +117,7 @@ public class EndpointResource {
     public Response test(@PathParam("cid") UUID cid, @PathParam("eid") UUID eid) {
         record Found(Connector conn, ConnectorEndpoint ep) {}
         Found f = QuarkusTransaction.requiringNew().call(() -> {
-            Connector conn = connRepo.findById(cid);
+            Connector conn = ConnectorScope.held(connRepo, cid);
             ConnectorEndpoint ep = endpointOf(conn, eid);
             return ep == null ? null : new Found(conn, ep);
         });
@@ -124,7 +132,7 @@ public class EndpointResource {
     @Consumes(MediaType.WILDCARD)
     @Transactional
     public Response resetCursor(@PathParam("cid") UUID cid, @PathParam("eid") UUID eid) {
-        ConnectorEndpoint ep = resolveEndpoint(cid, eid);
+        ConnectorEndpoint ep = heldEndpoint(cid, eid);
         if (ep == null) return ApiErrors.notFound("endpoint " + eid + " not found under connector " + cid);
 
         // Cursor entity keyed by connectorId; for endpoint-level cursors we store endpoint id
@@ -137,13 +145,18 @@ public class EndpointResource {
         return Response.ok(Map.of("deleted", deleted)).build();
     }
 
-    /** Hard-delete rows in the ext.* table written by this endpoint. */
+    /**
+     * Hard-delete this endpoint's rows from its hybrid target (ext.* or connector.&lt;hybrid&gt;).
+     * {@code dryRun=true} runs the same checks and refusals and counts the rows instead, so the CLI
+     * can refuse, or state the count, before it asks for a confirmation.
+     */
     @POST
     @Path("{eid}/purge")
     @Consumes(MediaType.WILDCARD)
     @Transactional
-    public Response purge(@PathParam("cid") UUID cid, @PathParam("eid") UUID eid) {
-        ConnectorEndpoint ep = resolveEndpoint(cid, eid);
+    public Response purge(@PathParam("cid") UUID cid, @PathParam("eid") UUID eid,
+                          @QueryParam("dryRun") boolean dryRun) {
+        ConnectorEndpoint ep = heldEndpoint(cid, eid);
         if (ep == null) return ApiErrors.notFound("endpoint " + eid + " not found under connector " + cid);
 
         Map<String, Object> cfg = ep.getConfig();
@@ -154,11 +167,9 @@ public class EndpointResource {
             if (tbl instanceof String s) table = s;
         }
 
-        if (table == null) {
-            return Response.status(400)
-                .entity(Map.of("error", "no target.table found in endpoint config"))
-                .build();
-        }
+        // No hybrid target: the usual JDBC/CSV/hello-world endpoint, whose rows land in a
+        // connector.t_* table the config never names.
+        if (table == null) return ApiErrors.badRequest(NOT_PURGEABLE_ON_ITS_OWN);
 
         // Bound the blast radius: dynamic ingestion only ever writes to the `connector` (t_*)
         // and `ext` schemas, so purge must target one of those — a mis-set target.table can
@@ -180,30 +191,40 @@ public class EndpointResource {
         // (ext.* and connector.<hybrid>) do; a connector.t_* table (DynamicTableWriter) has no
         // endpoint column and is not purgeable this way. The schema allowlist gates by SCHEMA, but
         // "has endpoint_id" is a per-TABLE property, so check it here and fail cleanly (400) rather
-        // than let the native DELETE raise a raw 500.
-        Number hasCol = (Number) em.createNativeQuery(
-            "SELECT count(*) FROM information_schema.columns "
-          + "WHERE table_schema = ? AND table_name = ? AND column_name = 'endpoint_id'")
-            .setParameter(1, parts[0])
-            .setParameter(2, parts[1])
+        // than let the native DELETE raise a raw 500. A table that does not exist yet — a hybrid
+        // endpoint that has never run — has nothing to purge. The catalog, not information_schema:
+        // that one hides a table lumnik_app has no privilege on, a false "0 deleted" (EndpointPurgeRlsIT).
+        Object[] found = (Object[]) em.createNativeQuery(
+            "SELECT r IS NOT NULL, EXISTS (SELECT 1 FROM pg_attribute "
+          + "WHERE attrelid = r AND attname = 'endpoint_id' AND NOT attisdropped) "
+          + "FROM to_regclass(CAST(? AS text)) r")
+            .setParameter(1, fqn)
             .getSingleResult();
-        if (hasCol.intValue() == 0) {
-            return Response.status(400)
-                .entity(Map.of("error", "table " + table + " is not purgeable by endpoint (no endpoint_id column)"))
-                .build();
-        }
+        if (!(Boolean) found[0]) return purged(0, table, dryRun);
+        if (!(Boolean) found[1]) return ApiErrors.badRequest(NOT_PURGEABLE_ON_ITS_OWN);
 
-        // Native query: delete all rows for this endpoint
-        int rows = em.createNativeQuery(
-            "DELETE FROM " + fqn + " WHERE endpoint_id = ?")
-            .setParameter(1, ep.getId())
-            .executeUpdate();
+        long rows = dryRun
+            ? ((Number) em.createNativeQuery("SELECT count(*) FROM " + fqn + " WHERE endpoint_id = ?")
+                .setParameter(1, ep.getId()).getSingleResult()).longValue()
+            : em.createNativeQuery("DELETE FROM " + fqn + " WHERE endpoint_id = ?")
+                .setParameter(1, ep.getId()).executeUpdate();
+        return purged(rows, table, dryRun);
+    }
 
-        return Response.ok(Map.of("deleted", rows, "table", table)).build();
+    private static Response purged(long rows, String table, boolean dryRun) {
+        return Response.ok(Map.of("deleted", rows, "table", table, "dryRun", dryRun)).build();
     }
 
     private ConnectorEndpoint resolveEndpoint(UUID cid, UUID eid) {
-        return endpointOf(connRepo.findById(cid), eid);
+        return endpointOf(ConnectorScope.held(connRepo, cid), eid);
+    }
+
+    /**
+     * {@link #resolveEndpoint} for a door that writes the endpoint or its rows: the connector its
+     * scope decision is taken on stays held until that write commits (#1217).
+     */
+    private ConnectorEndpoint heldEndpoint(UUID cid, UUID eid) {
+        return endpointOf(ConnectorScope.heldForUpdate(connRepo, cid), eid);
     }
 
     /**

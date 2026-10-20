@@ -2,6 +2,7 @@ package resources
 
 import (
 	"fmt"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -45,14 +46,18 @@ func inboxCells(e client.InboxEntry, now time.Time) []string {
 	return []string{fmt.Sprintf("%d", e.ID), inboxWhen(e.OccurredAt, now), e.Process, msg, e.EntityKey}
 }
 
-// Inbox is the observation deck: the tenant's decision.* events, newest first.
+// Inbox is the observation deck: the decision.* events of the caller's métiers (the whole
+// tenant's for a caller with no scope:* role), newest first.
 // `a` acks the selected decision (idempotent server-side); `A` toggles disposed entries.
 type Inbox struct {
-	app       *tview.Application
-	client    *client.Client
-	table     *tview.Table
-	items     []client.InboxEntry
+	app    *tview.Application
+	client *client.Client
+	table  *tview.Table
+	items  []client.InboxEntry
+	all    []client.InboxEntry // every entry the hub listed; items is what the / filter shows
+	textFilter
 	offLoop   offLoop
+	inFlight  inFlight    // the guard on a (#1147)
 	showAll   atomic.Bool // toggled on the loop, read by the off-loop fetch
 	showError func(string)
 	toast     func(string)
@@ -61,7 +66,8 @@ type Inbox struct {
 
 func NewInbox(app *tview.Application, c *client.Client, showError func(string), toast func(string)) *Inbox {
 	i := &Inbox{app: app, client: c, showError: showError, toast: toast,
-		table: tview.NewTable().SetBorders(false).SetSelectable(true, false)}
+		table: newListTable()}
+	i.table.SetTitle(" :inbox ").SetBorder(true)
 	style.ApplyChrome(i.table.Box)
 	style.ApplyTableSelection(i.table)
 	i.table.SetInputCapture(i.handleKey)
@@ -97,8 +103,11 @@ func (i *Inbox) renderList(items []client.InboxEntry, err error) {
 		i.table.Clear()
 		i.table.SetCell(0, 0, dataCell("error: "+err.Error()))
 	} else {
-		i.items = items
+		prev := selectedKey(i.table, i.items, inboxKey)
+		i.all = items
+		i.items = filterRows(items, i.q, func(e client.InboxEntry) []string { return inboxCells(e, time.Now()) })
 		i.render()
+		reselect(i.table, i.items, inboxKey, prev)
 	}
 	if i.onSelect != nil { // an open describe panel follows the fresh row, or its absence
 		i.onSelect()
@@ -107,7 +116,7 @@ func (i *Inbox) renderList(items []client.InboxEntry, err error) {
 
 func (i *Inbox) render() {
 	i.table.Clear()
-	headers := []string{"ID", "QUAND", "PROCESS", "MESSAGE", "ENTITY_KEY"}
+	headers := []string{"ID", "WHEN", "PROCESS", "MESSAGE", "ENTITY_KEY"}
 	for c, h := range headers {
 		i.table.SetCell(0, c, tview.NewTableCell(h).SetSelectable(false).SetTextColor(tcell.ColorYellow))
 	}
@@ -118,6 +127,11 @@ func (i *Inbox) render() {
 		}
 	}
 }
+
+// SetTextFilter narrows the table to the entries holding q (#1120); "" shows them all.
+func (i *Inbox) SetTextFilter(q string) { i.q = q; i.renderList(i.all, nil) }
+
+func inboxKey(e client.InboxEntry) string { return strconv.FormatInt(e.ID, 10) }
 
 func (i *Inbox) selected() (client.InboxEntry, bool) {
 	row, _ := i.table.GetSelection()
@@ -131,16 +145,17 @@ func (i *Inbox) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 	switch ev.Rune() {
 	case 'a':
 		if e, ok := i.selected(); ok {
-			if err := i.client.InboxAck(e.ID); err != nil {
-				if i.showError != nil {
-					i.showError(err.Error())
+			i.inFlight.background(i.app, "a", i.toast, func() func() {
+				err := i.client.InboxAck(e.ID)
+				return func() {
+					if err != nil {
+						say(i.showError, err.Error())
+						return
+					}
+					say(i.toast, "acked.")
+					i.Refresh()
 				}
-				return nil
-			}
-			if i.toast != nil {
-				i.toast("acked.")
-			}
-			i.Refresh()
+			})
 		}
 		return nil
 	case 'A':

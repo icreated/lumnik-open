@@ -101,3 +101,10 @@ test('analyticAsk(): the French-only PWA names its answer language (#879)', () =
   assert.deepEqual(analyticAsk('SO-000004 statut ?', 'desk'),
     { question: 'SO-000004 statut ?', mode: 'analytic', scope: 'desk', lang: 'fr' });
 });
+
+test('analyticAsk(): a follow-up carries the sentence it continues; a standalone question carries none (#1097)', () => {
+  assert.deepEqual(analyticAsk('Et HAWARD ?', 'desk', 'Les références Badu ?'),
+    { question: 'Et HAWARD ?', mode: 'analytic', scope: 'desk', lang: 'fr', previous: 'Les références Badu ?' });
+  assert.deepEqual(analyticAsk('Combien ?', 'desk', null),
+    { question: 'Combien ?', mode: 'analytic', scope: 'desk', lang: 'fr' });
+});

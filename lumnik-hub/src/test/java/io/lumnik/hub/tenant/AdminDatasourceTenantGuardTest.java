@@ -96,10 +96,11 @@ class AdminDatasourceTenantGuardTest {
           "an Entity is deployment-global, so its re-apply re-checks every tenant's SearchIndex over it "
           + "(#669); it reads definitions only (tenant, name, manifest) and each invalidating UPDATE "
           + "names that row's own tenant_id"),
-      e("SearchIndexStore:delete:core.search_index,core.search_index_purge",
+      e("SearchIndexStore:delete:core.audit_outbox,core.search_index,core.search_index_purge",
           "purgeAllForEntity (#701): an Entity is deployment-global, so deleting it purges every "
           + "tenant's SearchIndex over it, keyed by entity name not tenant_id; each purged row still "
-          + "carries its own tenant_id into the appended core.search_index_purge obligation"),
+          + "carries its own tenant_id into the appended core.search_index_purge obligation and into "
+          + "its core.audit_outbox row (#1193)"),
       e("SearchIndexStore:select:core.search_index",
           "the same purgeAllForEntity statement — its WITH gone AS (DELETE ... RETURNING ...) INSERT "
           + "... SELECT ... FROM gone shape is one statement, textually matched twice by this guard"),
@@ -150,7 +151,11 @@ class AdminDatasourceTenantGuardTest {
           "purge keyed by a tenant-unique connector UUID; the SELECT and INSERT here ARE scoped"),
       e("DynamicTableRegistry:select:connector.dynamic_table",
           "dependentViews enumerates a connector's tables (keyed by tenant-unique connector UUID, "
-          + "like purge) to ask pg_depend which views block the drop — the same tenant-safe key"),
+          + "like purge) to ask pg_depend which views block the drop — the same tenant-safe key; and "
+          + "purge asks whether ANY tenant still registers a table before dropping it (#1186)"),
+      e("DynamicTableRegistry:select:connector.connector_run",
+          "purge picks a connector's rows in a shared table by its runs, keyed by the tenant-unique "
+          + "connector UUID (#1186)"),
       e("WorkflowDormancySweep:select:core.workflow_manifest",
           "the dormancy sweep's cross-tenant scan for which tenants have a workflow to check"),
       e("TenantListResource:select:identity.app_user,identity.org",

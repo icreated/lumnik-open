@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.error.Throwables;
 import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityRegistry;
@@ -27,7 +28,6 @@ import io.lumnik.hub.export.run.ExportRunLedger.NewRun;
 import io.lumnik.hub.run.RunLock;
 import io.lumnik.hub.run.RunQueueSettings;
 import io.lumnik.hub.scheduler.TenantScope;
-import io.lumnik.hub.sql.SqlFailureText;
 import io.lumnik.hub.sql.TenantRlsScope;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.arc.Arc;
@@ -355,7 +355,7 @@ public class ExportRunner {
      * anything else is {@code otherwise}, the stage it happened in.
      */
     static ExportFailureCode classify(Throwable failure, ExportFailureCode otherwise) {
-        List<Throwable> chain = SqlFailureText.causeChain(failure);
+        List<Throwable> chain = Throwables.causeChain(failure);
         for (Throwable t : chain)
             if (t instanceof ExportRunFailure f) return f.code();
         if (chain.stream().anyMatch(FileDestinationCollisionException.class::isInstance))

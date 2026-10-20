@@ -144,3 +144,30 @@ func (c *Client) EntityAssertDistinct(name string, a EntityAssertion) error {
 func (c *Client) entityAssert(name, verb string, a EntityAssertion) error {
 	return c.POST("/api/entities/"+url.PathEscape(name)+"/assertions/"+verb, a, nil)
 }
+
+// EntitySummary is one entity GET /api/entities lists: what a client needs to pick one and read it.
+type EntitySummary struct {
+	Name       string   `json:"name"`
+	Label      string   `json:"label,omitempty"`
+	Scopes     []string `json:"scopes"`
+	Sources    []string `json:"sources"`
+	Resolution bool     `json:"resolution"`
+	Columns    []string `json:"columns"`
+}
+
+// Mode is how the entity fuses its sources: "resolution" or "match".
+func (e EntitySummary) Mode() string {
+	if e.Resolution {
+		return "resolution"
+	}
+	return "match"
+}
+
+// EntityList lists the entities the caller may read (a bound caller sees only its scopes).
+func (c *Client) EntityList() ([]EntitySummary, error) {
+	var out []EntitySummary
+	if err := c.GET("/api/entities", &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}

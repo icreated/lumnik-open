@@ -1,48 +1,44 @@
 # kind: Process — react
 
 > The second rung: a **declarative watcher** on ingested rows. When a row lands that matches
-> your conditions, the process emits a `decision.*` event — and the effect *is* the event. It
-> lands in the outbox and in the inbox every time; reaching n8n, Make, Zapier or your own
-> endpoint rides the hub's webhook subscriptions. Zero new code paths.
+> your conditions, the process emits a `decision.*` event. It always lands in the
+> [inbox](inbox.md); a webhook subscription carries it on to n8n, Make, Zapier or your own
+> endpoint.
 
 | | |
 |---|---|
 | **Kind** | `Process` — `apps.lumnik.io/v1` |
-| **Trigger** | `data.row.changed` on a raw `connector.t_*` table — the only v1 trigger |
+| **Trigger** | `data.row.changed` on a raw `connector.t_*` table — the only trigger |
 | **Conditions** | the [view filter grammar](views.md#filter-grammar), ANDed, over the table's own columns |
 | **Emits** | one `decision.<name>` event per matching row, `{col}`-templated, fields included |
-| **Apply** | `lm process apply` — `lm_admin`; the whole `/api/processes` surface is the admin door |
+| **Commands** | `lm process apply` · `list` · `disable` · `enable` · `rm` — all need `lm_admin` |
 | **Edition** | Open |
 
-A process is how the substrate breathes out: it does not update anything, it does not call
-anyone — it says, once, that something worth a human's attention just landed, with the row's own
-words. Who gets told, and how, is a subscription question answered elsewhere. The story for the
-métier reader is [How lumnik breathes](../respiration.md); this page is the mechanics of one link.
+A process changes nothing and calls no one: it says, once, that a row worth a human's attention
+just landed, in the row's own words. The métier story is [How lumnik breathes](../respiration.md).
 
 ## Features
 
-- **[Fires on rows that land, not rows that exist.](#firing-it)** A process reacts to
-  `data.row.changed`, which the write path emits for genuinely new rows only — re-running the
-  same export emits nothing.
+- **[Fires on rows that land, not rows that exist.](#firing-it)** Re-running the same export
+  emits nothing.
 - **[Conditions in the view grammar.](#the-manifest)** `status=EN LITIGE`, `amount>1000`,
-  `city~lyon` — the same forms a view filters by, validated at apply against the trigger table.
-- **[The row's own words.](#message-templating)** `{col}` placeholders are validated at apply and
-  rendered at fire time; every referenced column also rides in the event as data.
-- **[Refused at apply, never silent at fire time.](#refusals)** A trigger table that cannot fire,
-  an unknown column, a quoted condition value, an unknown placeholder, an emit type outside
-  `decision.` — each is a `400` that names the fix.
+  `city~lyon` — validated at apply against the trigger table.
+- **[The row's own words.](#message-templating)** `{col}` placeholders are validated at apply;
+  every referenced column also rides in the event as data.
+- **[Refused at apply, never silent at fire time.](#refusals)** Each refusal is a `400` that
+  names the fix.
 - **[Reversible, and removable.](#turn-a-process-off)** `lm process disable` stops it firing and
   keeps the manifest; `lm process rm` removes it.
-- **[Fail-closed per process.](#failure-contract)** A process that breaks at runtime logs and
-  skips; it never blocks the event cursor or its siblings.
+- **[Fail-closed per process.](#failure-contract)** A process that breaks at runtime is skipped;
+  its siblings keep firing.
 - **[Delivery is a subscription.](#delivery-is-opt-in)** The inbox always has the decision;
-  a webhook has it once one is registered for the tenant.
+  a webhook has it once one is registered.
 
 ## Quickstart
 
 !!! note "Every screen on this page reads the demo desk that ships with the repo"
     An order book whose export arrives every morning, under `docs/apps/demo/`. Land it first —
-    [The demo desk](demo-desk.md) has the three commands.
+    [The demo desk](demo-desk.md#landing-the-sources) has the commands.
 
 ```yaml
 --8<-- "docs/apps/demo/processes/10-litige.yaml"
@@ -55,80 +51,66 @@ $ lm process list
 NAME           TABLE                         EMIT                    ENABLED
 litige-ouvert  connector.t_acme_desk_orders  decision.litige-ouvert  true
 $ lm inbox
-ID  QUAND  PROCESS  MESSAGE  ENTITY_KEY
+ID  WHEN  PROCESS  MESSAGE  ENTITY_KEY
 ```
 
-Nothing fired: two orders already sat in `EN LITIGE` when the process was declared, and a
-process reacts to rows that **land**, not to rows that exist. Now the next morning's export
-arrives, with one new order in dispute:
+Nothing fired: the two orders already in `EN LITIGE` were there before the process. Now load
+**day 2** — the next morning's export, with one new order in dispute:
 
 ```
 $ docker cp docs/apps/demo/data/acme-orders-day2.csv lumnik-hub-1:/tmp/acme-desk/acme-orders.csv
 $ lm connector run acme-desk-orders
-run scheduled: 70e54370-f53f-4811-8deb-86a7c5d15ad6
+run scheduled: dc0a38a3-3caf-40b8-9461-4fd202978dfb
 $ lm run list --connector acme-desk-orders
 ID        CONNECTOR         ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-70e54370  acme-desk-orders  default   Completed  13  13   0        0             2026-09-13 02:39  2026-09-13 02:39
-a5f820af  acme-desk-orders  default   Completed  12  12   0        0             2026-09-13 02:38  2026-09-13 02:38
+dc0a38a3  acme-desk-orders  default   Completed  13  13   0        0             2026-10-19 01:42  2026-10-19 01:42
+7b972d2b  acme-desk-orders  default   Completed  12  12   0        0             2026-10-19 01:38  2026-10-19 01:38
 ```
 
-Thirteen rows read; twelve of them the table already held and deduplicated by content; **one**
-genuinely new row, and it is in dispute. A few seconds later:
+(`lumnik-hub-1` is the self-host stack's hub container; the file goes on the hub's disk.)
+Thirteen rows read, one of them new. A few seconds later:
 
 ```
 $ lm inbox
-ID    QUAND        PROCESS        MESSAGE                                                   ENTITY_KEY
-1929  à l'instant  litige-ouvert  Commande SO-000013 du client P-1007 en litige — 860.00 €  96357a4a5750f97026f9ec5b8ce0f986517179f470e8a74b9fd013befe0e3622
+ID  WHEN         PROCESS        MESSAGE                                                   ENTITY_KEY
+18  à l'instant  litige-ouvert  Commande SO-000013 du client P-1007 en litige — 860.00 €  96357a4a5750f97026f9ec5b8ce0f986517179f470e8a74b9fd013befe0e3622
 ```
 
-One decision, for the one row, in the row's own words. `ENTITY_KEY` is the row's content hash —
-the same `_row_hash` the table deduplicates by, so the decision points at exactly one row for as
-long as that row exists. The event behind it, in the outbox:
+One decision for the one new row. `ENTITY_KEY` is the row's content hash: it points at exactly
+that row. The event itself, checked in the database:
 
-```json
-{"process": "litige-ouvert",
- "entity": "connector.t_acme_desk_orders",
- "entity_key": "96357a4a…e3622",
- "message": "Commande SO-000013 du client P-1007 en litige — 860.00 €",
- "fields": {"code": "P-1007", "amount": "860.00", "order_no": "SO-000013"}}
+```
+$ echo "select payload from core.event_outbox where id = 18" | psql …
+{"entity": "connector.t_acme_desk_orders", "fields": {"code": "P-1007", "amount": "860.00", "order_no": "SO-000013"}, "message": "Commande SO-000013 du client P-1007 en litige — 860.00 €", "process": "litige-ouvert", "entity_key": "96357a4a5750…"}
 ```
 
-`fields` carries every column the message referenced, as data — an automation consumes values,
-not a sentence to parse. (`entity_key` is abridged here; the inbox above prints it whole.)
+(`entity_key` abridged.) `fields` carries every column the message references, as data — an automation reads values,
+not a sentence. A timestamp field is the text the message shows, its UTC instant,
+`"2026-07-01T00:00:00Z"`.
 
 ## The manifest
 
 | Field | Required | Meaning |
 |---|---|---|
-| `metadata.name` | yes | kebab-case (`[a-z0-9-]+`); becomes the event's `process` and, by convention, its type |
+| `metadata.name` | yes | kebab-case (`[a-z0-9-]+`); becomes the event's `process` |
 | `spec.scope` | yes | the scope whose [schema card](../rag/http-api.md#schema-admin) declares `on.table` |
-| `spec.on.event` | yes | **must be `data.row.changed`** — the only v1 trigger |
+| `spec.on.event` | yes | **must be `data.row.changed`** |
 | `spec.on.table` | yes | the **raw ingest table** (`connector.t_<name>`) — see [Trigger at the raw write path](#trigger-at-the-raw-write-path) |
 | `spec.when[]` | yes (≥ 1) | conditions in the [view filter grammar](views.md#filter-grammar), ANDed |
-| `spec.emit.type` | yes | **must start with `decision.`** — the governed taxonomy the inbox and the webhook filters are built on |
+| `spec.emit.type` | yes | **must start with `decision.`** |
 | `spec.emit.message` | yes | the human sentence, `{col}`-templated |
 
-That table is the whole surface: `apply` refuses a key it does not honour and names it, so a
-misspelled `mesage:` costs a `400` rather than a decision that fires with no text. The
-`apiVersion:` envelope is accepted and ignored.
+`apply` refuses a key it does not know and names it — a misspelled `mesage:` is a `400`, not a
+decision with no text.
 
-Every stored process carries an `enabled` flag (default `true`, the `ENABLED` column of
-`lm process list`), and only enabled processes fire. There is **no API or CLI gesture to toggle
-or delete** a process yet — both are a database-level edit, so if you do not operate the hub
-yourself, this one goes to whoever does.
+A stored process is `enabled` by default (the `ENABLED` column of `lm process list`); only
+enabled processes fire. See [Turn a process off](#turn-a-process-off).
 
 ### Trigger at the raw write path
 
-`data.row.changed` is born where rows are written — the connector's write path — so `on.table`
-is the **raw** table a connector fills, and `when` columns are that table's own. The scope must be
-the one whose card carries that raw table. A fused entity view (`connector.v_*`) receives no
-such event: nothing writes rows *into* a view.
-
-Being in the card is not enough, and apply checks the stronger thing: that the table is one a
-connector's row writer actually fills. A card also advertises the fused entity views and the
-`ext.*` tables a [`kind: hybrid` target](../connectors/rest.md) fills — no row is written *into*
-either — so both are refused. A view gets the better sentence, because the entity knows the raw
-tables it fuses:
+`on.table` is the **raw** table a connector fills, and `when` columns are that table's own. A
+fused entity view (`connector.v_*`) and an `ext.*` table a [`kind: hybrid` target](../connectors/rest.md)
+fills are refused: no connector writes rows into them. A view gets the better sentence:
 
 ```
 $ lm process apply -f docs/apps/demo/processes/63-refused-fused-view.yaml
@@ -137,74 +119,65 @@ Error: API error 400: spec.on.table 'connector.v_acmecustomer' is a fused entity
 
 Declare one process per raw source, or move the condition to the source that carries it.
 
-Emission is **gated**, and cheaply: the write path asks, per chunk, whether *any* subscriber on
-the tenant wants `data.row.changed` for this table — a webhook endpoint, a notification rule or a
-process — and stages events only when one does. A table nobody watches costs nothing at
-ingestion; declaring a process is what turns the events on for its table.
-
 ## Message templating
 
-`{col}` interpolates the row's value — `"Commande {order_no} du client {code} en litige — {amount} €"`.
-A `NULL` renders as an empty string. There is no escape syntax: a placeholder is exactly
-`{letters_digits_}`, anything else (`{}`, `{a-b}`, a lone brace) passes through literally.
+`{col}` inserts the row's value — `"Commande {order_no} du client {code} en litige — {amount} €"`.
 
-Every `{col}` is validated at **apply time** against the trigger table:
+- A `NULL` renders as an empty string.
+- A timestamp column renders as its UTC instant, `2026-07-01T00:00:00Z`, whatever zone the hub
+  runs in. A date column renders as its day, `2026-07-01`. A text column renders as stored: a CSV
+  date stays as the file wrote it until a
+  [`parse-date`](../connectors/transformers.md#parse-date-dates-are-31122019) types the column.
+- A placeholder is exactly `{letters_digits_}`; anything else (`{}`, `{a-b}`, a lone brace)
+  stays literal.
+- Every `{col}` is checked at **apply** against the trigger table:
 
 ```
 $ lm process apply -f docs/apps/demo/processes/61-refused-placeholder.yaml
 Error: API error 400: message references {customer_name} — not a column of connector.t_acme_desk_orders
 ```
 
-— never discovered silently at fire time. Every referenced column also rides in the event's
-`fields`, so the receiving automation gets the data, not just the sentence.
-
 ## Firing it
 
-The process consumer reads the event log a few seconds behind the write. For each
-`data.row.changed` on a watched table it loads the row, evaluates every enabled process on that
-table, and stages one `decision.*` per process whose conditions all hold. Two consequences worth
-knowing:
+A decision appears a few seconds after the run that landed the row.
 
-- **Only genuinely new rows fire.** The write path emits `data.row.changed` for rows the table
-  accepted; a row it refused as a duplicate (same `_row_hash`) emits nothing. Re-running an
-  unchanged export is silent — the quickstart's second run read 13 and fired once.
-- **A row that matches two processes fires two decisions**, one per process, each under its own
-  type — [measured below](#watch-a-second-condition-on-the-same-table).
+**Only new rows fire.** Re-running the unchanged day-2 file leaves the inbox as it was:
+
+```
+$ lm connector run acme-desk-orders
+run scheduled: 20db972d-f540-4c0d-80b6-05ed4d4a534d
+$ lm inbox
+ID  WHEN         PROCESS        MESSAGE                                                   ENTITY_KEY
+18  à l'instant  litige-ouvert  Commande SO-000013 du client P-1007 en litige — 860.00 €  96357a4a5750f97026f9ec5b8ce0f986517179f470e8a74b9fd013befe0e3622
+```
+
+**A row that matches two processes fires two decisions**, one per process —
+[shown below](#watch-a-second-condition-on-the-same-table).
 
 ## Delivery is opt-in
 
-A firing process's decision lands in the outbox — and in [the inbox](inbox.md) — every time,
-regardless of subscriptions. Reaching an external system additionally needs a **webhook
-subscription** registered for the tenant; none is seeded by default. With none registered,
-nothing is pushed anywhere — the inbox is still where the decision is.
+A decision always lands in [the inbox](inbox.md). Reaching an external system also needs a
+**webhook subscription** for the tenant; none exists by default. A human disposes of it:
 
 ```
-$ lm inbox ack 1929
+$ lm inbox ack 18
 acked.
-$ lm inbox --all
-ID    QUAND  PROCESS        MESSAGE                                                            ENTITY_KEY
-1929  2min   litige-ouvert  Commande SO-000013 du client P-1007 en litige — 860.00 € [traité]  96357a4a5750f97026f9ec5b8ce0f986517179f470e8a74b9fd013befe0e3622
 ```
 
-The human disposes; the ack is itself an event (`annotation.decision.acked`), so a webhook
-subscribed to `annotation.*` reacts when someone marks it done — and app state stays a fold over
-the log, never a state row. Registering a subscription is `lm integration add` — it posts to
-`/api/platform/integrations`, so it needs `lm_integrator` for the platform door **and** `lm_admin`
-for the endpoint; the raw admin form is `POST /api/tenants/{tid}/integrations`, `lm_admin` alone. The
+The ack is itself an event (`annotation.decision.acked`), so a webhook subscribed to
+`annotation.*` learns that someone handled it. Register a subscription with `lm integration add`
+(needs `lm_integrator` **and** `lm_admin`) — the
 [Admin API guide](../admin-console-guide.md#send-events-out-to-another-system) walks the whole
 gesture, and the [WOW demo](../demo/wow-customer/README.md) plays it against a stand-in n8n.
 
 ## Failure contract
 
-- **Refusable at apply**: structural errors, a [trigger table that cannot
+- **Refused at apply**: structural errors, a [trigger table that cannot
   fire](#trigger-at-the-raw-write-path), an unknown `when` column, an unknown placeholder, an emit
-  type outside `decision.`, an out-of-domain value — each is refused with the card's hint. A
-  process that could never fire is never accepted silently.
-- **Fail-closed per process at runtime**: a process that breaks (its table vanished) logs and
-  skips — it never blocks the event cursor or its sibling processes.
-- **Declarative only, by doctrine**: there is no Kotlin escape hatch for processes. If a real
-  métier process cannot be expressed declaratively, that limitation should surface — not be
-  hidden inside a script. The substrate breathes; it does not mutate.
+  type outside `decision.`, a quoted or out-of-domain value.
+- **Fail-closed per process at runtime**: a process whose table vanished is skipped and logged;
+  sibling processes keep firing.
+- **Declarative only**: there is no script hook for processes.
 
 ## Refusals
 
@@ -221,19 +194,16 @@ $ lm process apply -f docs/apps/demo/processes/64-refused-quoted-value.yaml
 Error: API error 400: filter value 'EN LITIGE' is quoted; a value here is a bare literal, so the quotes would be compared to status too — write status=EN LITIGE
 ```
 
-The last one is the [view grammar](views.md#filter-grammar) speaking, not a rule of its own: a
-value here is a **bare literal**, and quotes are ordinary characters. `status='EN LITIGE'` used to
-be accepted and then compared to the column quotes and all — a condition that can never be true,
-sitting enabled and silent for ever.
+The last one is the [view grammar](views.md#filter-grammar): a value is a **bare literal**.
 
-The whole `/api/processes` surface (apply, list, `GET /api/processes/{name}/manifest`,
-`PUT /api/processes/{name}/enabled`, `DELETE /api/processes/{name}`) is the **admin door** —
-`lm_admin`: declaring an attention rule is tenant administration, not a métier gesture. Inside
-that door the [métier-scope boundary](../rag/scopes.md) applies with its opt-in semantics, the
-same as every app-ladder door: an admin with no `scope:` role sees and declares
-for the whole tenant; a scope-bound admin declares only for granted scopes, lists only those, and
-gets the uniform `403 {"error":"scope not granted"}` outside them. In the TUI, `:processes` lists
-the declared rules and `e` re-opens a stored manifest through the `:new` authoring loop.
+| Who | What they can do |
+|---|---|
+| `lm_admin`, no `scope:` role | declare, list, disable, enable and remove processes for the whole tenant |
+| `lm_admin` bound to scopes | the same, for the granted scopes only; anything else is `403 scope not granted` |
+| without `lm_admin` | nothing — `API error 403 (forbidden)` |
+
+In the TUI, `:processes` lists the declared rules; `e` re-opens a stored manifest in the `:new`
+authoring loop.
 
 ## How to…
 
@@ -244,9 +214,8 @@ lm process apply -f docs/apps/demo/processes/10-litige.yaml
 lm inbox
 ```
 
-**Result:** every genuinely new `EN LITIGE` row lands as one decision in `lm inbox` (and the
-PWA's *Décisions* tab), with the order's own number, customer and amount. To push it further,
-register a webhook subscription on `decision.*`.
+**Result:** every new `EN LITIGE` row lands as one decision in `lm inbox` (and the PWA's
+*Décisions* tab), with the order's number, customer and amount.
 
 ### Watch a second condition on the same table
 
@@ -254,31 +223,44 @@ register a webhook subscription on `decision.*`.
 --8<-- "docs/apps/demo/processes/20-grosse-commande.yaml"
 ```
 
+Apply it, then load **day 3** — one more order, in dispute **and** above 1 000 €:
+
 ```
 $ lm process apply -f docs/apps/demo/processes/20-grosse-commande.yaml
 {"name":"grosse-commande","table":"connector.t_acme_desk_orders","emit":"decision.grosse-commande"}
 $ docker cp docs/apps/demo/data/acme-orders-day3.csv lumnik-hub-1:/tmp/acme-desk/acme-orders.csv
 $ lm connector run acme-desk-orders
+run scheduled: 36f56e82-40cf-4ec1-9604-b48e46a1a327
 $ lm inbox
-ID    QUAND        PROCESS          MESSAGE                                                    ENTITY_KEY
-1935  à l'instant  grosse-commande  Grosse commande SO-000014 : 5000.00 € pour P-1003          3a47cea8e762663021d4c5bba36b5a410ad0731a1271e17706ce6976ee8c138b
-1934  à l'instant  litige-ouvert    Commande SO-000014 du client P-1003 en litige — 5000.00 €  3a47cea8e762663021d4c5bba36b5a410ad0731a1271e17706ce6976ee8c138b
+ID  WHEN         PROCESS          MESSAGE                                                    ENTITY_KEY
+25  à l'instant  grosse-commande  Grosse commande SO-000014 : 5000.00 € pour P-1003          3a47cea8e762663021d4c5bba36b5a410ad0731a1271e17706ce6976ee8c138b
+24  à l'instant  litige-ouvert    Commande SO-000014 du client P-1003 en litige — 5000.00 €  3a47cea8e762663021d4c5bba36b5a410ad0731a1271e17706ce6976ee8c138b
 ```
 
-**Result:** the third morning's export carries one new order, in dispute and above 1 000 €. Two
-processes, two decisions, the same `ENTITY_KEY` — each triaged on its own. `amount` is a `text`
-column, as every CSV column is; `amount>1000` casts it for the comparison exactly as a view
-filter does.
+**Result:** two processes, two decisions, the same `ENTITY_KEY`. `amount` is a `text` column (every
+CSV column is); `amount>1000` compares it as a number, like a view filter.
 
-**How a number is compared.** A value that arrives as *text* (every CSV cell) must be a plain decimal to be
-compared: a cell holding `1e5` never matches `amount>100`, so a dirty cell cannot fire a process. A value
-that arrives as a *number* is compared by its value, however small or large: `0.00002` matches
-`x>1e-5`, and `x=5` matches `5`, `5.0` and `5.00`. `NaN` and the infinities never match. On a text value,
-`=` stays an exact text comparison.
+How a number is compared:
+
+| Value arrives as | Rule |
+|---|---|
+| text (every CSV cell) | must be a plain decimal: `1e5` never matches `amount>100`. `=` stays an exact text comparison |
+| a number | compared by value: `0.00002` matches `x>1e-5`; `x=5` matches `5`, `5.0` and `5.00` |
+| `NaN`, infinities | never match |
+
+How a date is compared, against an operand written `YYYY-MM-DD` (midnight UTC) or as an ISO date-time:
+
+| Value arrives as | Rule |
+|---|---|
+| a `DATE` column (a JDBC source) | the day it names, at midnight UTC: the same day whatever time zone the hub runs in |
+| a timestamp column | to the microsecond |
+| text (every CSV cell) | read as an ISO date or date-time, UTC when it carries no offset; anything else never matches |
+
+`=` with a date against a `DATE` or timestamp column is equal as an instant, as in a view:
+`at=2026-07-01T00:00:00Z` matches the row stamped at that instant. Against text, `=` stays an exact
+text comparison.
 
 ### Turn a process off
-
-Two gestures, one reversible and one not.
 
 ```
 $ lm process disable litige-ouvert
@@ -287,45 +269,56 @@ $ lm process list
 NAME             TABLE                         EMIT                      ENABLED
 grosse-commande  connector.t_acme_desk_orders  decision.grosse-commande  true
 litige-ouvert    connector.t_acme_desk_orders  decision.litige-ouvert    false
+$ lm process enable litige-ouvert
+process litige-ouvert enabled=true
 $ lm process rm litige-ouvert
 process litige-ouvert deleted
 $ lm process rm litige-ouvert
 Error: API error 404: unknown process: litige-ouvert
 ```
 
-**Result:** `disable` stops it firing and keeps everything else — the manifest is still stored,
-still re-appliable, and `lm process enable` puts it back. `rm` removes it for good, with no prompt;
-a second `rm` answers `404`. In the TUI's `:processes` page the same two gestures are `^P` and
-`Del` on the row under the cursor, and `e` re-opens the stored manifest in the authoring loop.
+**Result:** `disable` stops it firing and keeps the manifest; `enable` puts it back. `rm` removes
+it for good, with no prompt. In the TUI's `:processes`, the same gestures are `^P` and `Del` on
+the row under the cursor. There is no `lm process get`: `e` in the TUI re-opens the stored
+manifest.
 
-Disabling is not cosmetic: the hub only stages a `data.row.changed` when *some* subscription wants
-it, and a disabled process stops counting as one. If nothing else listens to that table, the event
-stops being written at all.
+Each gesture is recorded in the [audit trail](../security/index.md#the-audit-trail), within
+seconds; a refused one leaves no row:
+
+```
+$ echo "select operation, changes from core.audit_event where entity_key='litige-ouvert' order by id desc limit 4" | psql …
+ operation |                                                                      changes
+-----------+---------------------------------------------------------------------------------------------------------------------------------------------------
+ DELETE    | {"scope": "desk"}
+ UPDATE    | {"scope": "desk", "enabled": true}
+ UPDATE    | {"scope": "desk", "enabled": false}
+ APPLY     | {"scope": "desk", "table": "connector.t_acme_desk_orders", "manifest_sha256": "2ada066a02e114c10e8390a00254fb995d56d25dfac438db8cd97c81f3b362e9"}
+(4 rows)
+```
 
 ## Troubleshooting
 
 | Symptom | Cause | Gesture |
 |---|---|---|
 | apply refused: `unknown key(s) in the manifest: …` | a misspelled field (`mesage:`) | the message lists what `kind:Process` honors — fix the spelling |
-| apply refused `404`: `no schema for scope '…' — run discovery first` | `spec.scope` is not a discovered scope | `lm source rediscover --scope <tag>` — needs **both** `lm_integrator` and `lm_admin`, and the scope must be one the caller holds; `lm source schema --scope <tag>` shows what it holds |
+| apply refused `404`: `no schema for scope '…' — run discovery first` | `spec.scope` is not a discovered scope | `lm source rediscover --scope <tag>` (`lm_integrator` + `lm_admin`, a scope you hold); `lm source schema --scope <tag>` shows what it holds |
 | apply refused: `spec.on.table '…' is not in the '…' scope` | the scope's card does not carry that table | `lm source schema --scope <tag>`, then fix the name |
-| apply refused: `spec.on.table '…' is a fused entity view …` | the trigger is a `connector.v_*` view, which no connector writes into | declare the process on one of the raw tables the message names |
-| apply refused: `spec.on.table '…' cannot fire …` | the trigger is in the card but no row writer fills it (an `ext.*` hybrid target) | declare the process on a `connector.t_*` table |
-| apply refused: `when: column '…' is not in …`, or `'…' is not an allowed value for …` | a condition names an unknown column, or an `=` value outside its declared domain | fix the condition against the card |
+| apply refused: `spec.on.table '…' is a fused entity view …` | the trigger is a `connector.v_*` view | declare the process on one of the raw tables the message names |
+| apply refused: `spec.on.table '…' cannot fire …` | the table is in the card but no connector writes rows into it (an `ext.*` hybrid target) | declare the process on a `connector.t_*` table |
+| apply refused: `when: column '…' is not in …`, or `'…' is not an allowed value for …` | an unknown column, or an `=` value outside its declared domain | fix the condition against the card |
 | apply refused: `message references {…} — not a column of …` | a placeholder that is not a column of the trigger table | fix the placeholder, or drop it |
 | apply refused: `spec.emit.type … must start with 'decision.'` | an emit type outside the taxonomy | `decision.<something>` |
-| a process applied cleanly and never fires | `on.table` is a fused view (`connector.v_*`) — no row is ever written into a view | point it at the raw `connector.t_*` table the view is built from |
-| a process never fires on a re-run | the rows were already in the table — the write path emits nothing for a duplicate | it is doing its job; only new rows fire |
-| a declared, enabled process stopped firing | its trigger table vanished or broke at runtime — fail-closed per process | check the hub's log; sibling processes keep firing |
-| a process still fires after you meant to turn it off | it is still enabled | `lm process disable <name>` (reversible), or `lm process rm <name>` to remove it |
-| decisions show in `lm inbox` but never reach an external system | delivery needs a webhook subscription registered for the tenant — none is seeded | `lm integration add` (`lm_integrator` + `lm_admin`), or keep triaging from `lm inbox` |
-| `403 {"error":"scope not granted"}` | you are scope-bound and `spec.scope` is not one of your grants | ask for that `scope:` role, or declare under a granted scope |
-| `403` with an **empty body** | you do not hold `lm_admin` — the whole `/api/processes` surface requires it | `GET /api/bff/v1/me` returns your roles under `roles` |
+| a process never fires on a re-run | the rows were already in the table | expected: only new rows fire |
+| a declared, enabled process stopped firing | its trigger table vanished or broke at runtime | check the hub's log; sibling processes keep firing |
+| a process still fires after you meant to turn it off | it is still enabled | `lm process disable <name>`, or `lm process rm <name>` |
+| decisions show in `lm inbox` but never reach an external system | no webhook subscription for the tenant | `lm integration add` (`lm_integrator` + `lm_admin`) |
+| `403 … scope not granted` | you are scope-bound and `spec.scope` is not one of your grants | ask for that `scope:` role, or declare under a granted scope |
+| `API error 403 (forbidden): no details from the server` | you do not hold `lm_admin` | ask your administrator; no `lm` command lists your roles (`GET /api/bff/v1/me` returns them under `roles`) |
 
 ## See also
 
 - [The demo desk](demo-desk.md) — the order book every screen here reads
 - [Inbox](inbox.md) — where a human sees and disposes of the emitted decisions
 - [Admin API guide — Integration Hub](../admin-console-guide.md#send-events-out-to-another-system) — the webhook subscription delivery depends on
-- [Workflows](workflows.md) — declares what a status column's values *mean*, so a `when: status=…` condition matches a state someone actually declared; a process fires on a row landing, but silence — nothing landing — is the workflow's dormancy sweep to see
+- [Workflows](workflows.md) — declares what a status column's values *mean*, and watches for documents that stop moving
 - [Kafka connector](../connectors/kafka.md) — events *into* the hub

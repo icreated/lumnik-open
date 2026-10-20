@@ -15,6 +15,7 @@ spec:
   source:
     tables:
       - name: invoices
+        schema: public
         mode: full
         pk_columns: [id]
   schedule: 22

@@ -6,11 +6,14 @@ import io.restassured.response.Response;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.not;
 
 @QuarkusTest
 class IntegrationResourceIT {
@@ -145,7 +148,7 @@ class IntegrationResourceIT {
             .header("X-Tenant-ID", TENANT.toString())
             .body("""
                   {"name":"%s","targetUrl":"https://hook.make.com/abc",
-                   "platform":"make","authMode":"BEARER",
+                   "platform":"make","authMode":"BEARER","secret":"sk-test-123",
                    "eventTypes":["repair.completed"]}""".formatted(name))
         .when().post("/api/tenants/" + TENANT + "/integrations");
     }
@@ -207,5 +210,47 @@ class IntegrationResourceIT {
             // documented the emptiness three times and sent the reader to the SERVER LOG for the
             // sentence. The doc now quotes this body, so the claim is pinned where the door is.
             .body("error", equalTo("Unknown event type: does.not.exist"));
+    }
+
+    /** #1239 — why in IntegrationResource.requireSecretForSigning. */
+    @ParameterizedTest
+    @ValueSource(strings = {"", "\"authMode\":\"HMAC\",", "\"authMode\":\"BEARER\","})
+    void a_signing_mode_without_a_secret_is_a_400_and_persists_nothing(String mode) {
+        String name = "nosecret-" + System.nanoTime();
+        given().contentType("application/json")
+            .header("X-Tenant-ID", TENANT.toString())
+            .body("{" + mode + "\"name\":\"" + name + "\",\"targetUrl\":\"https://hook.example.com/x\",\"eventTypes\":[\"repair.completed\"]}")
+        .when().post("/api/tenants/" + TENANT + "/integrations")
+        .then().statusCode(400)
+            .body("error", containsString("secret"));
+
+        given()
+            .header("X-Tenant-ID", TENANT.toString())
+        .when().get("/api/tenants/" + TENANT + "/integrations")
+            .then().statusCode(200)
+            .body("name", not(hasItem(name)));
+    }
+
+    @Test
+    void switching_an_unsigned_integration_to_hmac_without_a_secret_is_a_400() {
+        // The setup is also the proof that authMode NONE needs no secret.
+        Integer id = given().contentType("application/json")
+            .header("X-Tenant-ID", TENANT.toString())
+            .body("{\"authMode\":\"NONE\",\"name\":\"toggle-" + System.nanoTime()
+                + "\",\"targetUrl\":\"https://hook.example.com/x\",\"eventTypes\":[\"repair.completed\"]}")
+        .when().post("/api/tenants/" + TENANT + "/integrations")
+        .then().statusCode(201).extract().path("id");
+
+        given().contentType("application/json")
+            .header("X-Tenant-ID", TENANT.toString())
+            .body("{\"authMode\":\"HMAC\"}")
+        .when().put("/api/tenants/" + TENANT + "/integrations/" + id)
+        .then().statusCode(400);
+
+        given()
+            .header("X-Tenant-ID", TENANT.toString())
+        .when().get("/api/tenants/" + TENANT + "/integrations/" + id)
+            .then().statusCode(200)
+            .body("authMode", equalTo("NONE"));
     }
 }

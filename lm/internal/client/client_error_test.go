@@ -44,3 +44,11 @@ func TestAPIErrorEmptyBodyHintsUnchanged(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestAPIErrorBodilessTooLargeNamesTheLimit(t *testing.T) {
+	e := &APIError{Status: 413}
+	want := "API error 413 (request too large): the hub accepts a request body up to 10 MB"
+	if got := e.Error(); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

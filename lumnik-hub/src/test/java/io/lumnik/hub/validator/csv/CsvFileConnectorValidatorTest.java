@@ -1,6 +1,7 @@
 package io.lumnik.hub.validator.csv;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.validator.ConnectorValidationService;
 import io.lumnik.hub.testsupport.ValidationWarnings;
@@ -8,6 +9,7 @@ import io.lumnik.hub.validator.ValidationResult;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -44,6 +46,47 @@ class CsvFileConnectorValidatorTest {
     @Test void localManifest_withoutParserOrTarget_passes() throws Exception {
         ValidationResult r = service.validate(load("csv-no-optional-blocks.yaml"));
         assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
+    }
+
+    /** #1195: one local file, with the removal guard declared — in each accepted form. */
+    @ParameterizedTest
+    @ValueSource(strings = {"30%", "100%", "off", "0%"})
+    void refresh_onOneLocalFile_isAccepted(String maxRemoved) throws Exception {
+        ObjectNode doc = (ObjectNode) load("csv-local-valid.yaml");
+        ((ObjectNode) doc.path("spec").path("transport")).put("path", "/imports/ref.csv");
+        ((ObjectNode) doc.path("spec")).putObject("refresh").put("max_removed", maxRemoved);
+        ValidationResult r = service.validate(doc);
+        assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
+        assertTrue(r.warnings().stream().noneMatch(w -> w.path().startsWith("spec.refresh")), () -> r.warnings().toString());
+    }
+
+    @Test void refresh_withAMalformedMaxRemoved_isRefusedNamingTheForms() throws Exception {
+        ObjectNode doc = (ObjectNode) load("csv-local-valid.yaml");
+        ((ObjectNode) doc.path("spec").path("transport")).put("path", "/imports/ref.csv");
+        ((ObjectNode) doc.path("spec")).putObject("refresh").put("max_removed", "150%");
+        ValidationResult r = service.validate(doc);
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.refresh.max_removed")
+            && e.message().contains("0% to 100%")), () -> r.errors().toString());
+    }
+
+    /** #1214 review: an absent kind is the runtime's local; the refresh warning must agree. */
+    @Test void refresh_withoutATransportKind_isNotTakenForADropFolder() throws Exception {
+        ObjectNode doc = (ObjectNode) load("csv-local-valid.yaml");
+        ObjectNode tr = (ObjectNode) doc.path("spec").path("transport");
+        tr.remove("kind");
+        tr.put("path", "/imports/ref.csv");
+        ((ObjectNode) doc.path("spec")).putObject("refresh").put("max_removed", "30%");
+        ValidationResult r = service.validate(doc);
+        assertTrue(r.warnings().stream().noneMatch(w -> w.path().equals("spec.refresh")), () -> r.warnings().toString());
+    }
+
+    @Test void refresh_onADropFolder_warnsThatItDoesNothing() throws Exception {
+        ObjectNode doc = (ObjectNode) load("csv-local-valid.yaml");   // path: /imports/*.csv
+        ((ObjectNode) doc.path("spec")).putObject("refresh").put("max_removed", "30%");
+        ValidationResult r = service.validate(doc);
+        assertTrue(r.isValid(), () -> r.errors().toString());
+        assertTrue(r.warnings().stream().anyMatch(w -> w.path().equals("spec.refresh")
+            && w.message().contains("does nothing")), () -> r.warnings().toString());
     }
 
     @Test void sftpManifest_valid_passes() throws Exception {
@@ -144,7 +187,7 @@ class CsvFileConnectorValidatorTest {
             {"apiVersion":"connectors.lumnik.io/v1","kind":"Connector",
              "metadata":{"name":"empty-key","connector_type":"csv-file","scopes":["test"]},
              "spec":{"transport":{"kind":"sftp","host":"sftp.acme.io","user":"lumnik",
-                                  "path":"/export/*.csv","key_env":null},
+                                  "path":"/export/*.csv","key_env":null,"strict_host_key":false},
                      "after_process":"none"}}""");
 
         ValidationResult r = service.validate(manifest);
@@ -152,6 +195,38 @@ class CsvFileConnectorValidatorTest {
         assertFalse(r.isValid(), () -> "a credential key written empty names no credential");
         assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.transport")),
             () -> "the refusal must name spec.transport, got: " + r.errors());
+    }
+
+    /**
+     * strict_host_key defaults to true, and the run then refuses a server whose key it has nothing
+     * to check against — so a missing fingerprint is refused at validate, not at every run (#1251).
+     */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {
+        "\"key_env\":\"K\"",
+        "\"key_env\":\"K\",\"strict_host_key\":true",
+        "\"key_env\":\"K\",\"host_key_fingerprint\":\"  \"",
+        "\"key_env\":\"K\",\"host_key_fingerprint\":null"})
+    void sftpWithoutAFingerprintToCheck_isRefused(String transportKeys) throws Exception {
+        ValidationResult r = service.validate(sftpManifest(transportKeys));
+
+        assertFalse(r.isValid(), "the run would refuse to connect");
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.transport.host_key_fingerprint")
+            && e.recommendations().stream().anyMatch(s -> s.contains("ssh-keyscan -p 22 sftp.acme.io"))), () -> r.errors().toString());
+    }
+
+    @Test void sftpWithStrictHostKeyOff_needsNoFingerprint() throws Exception {
+        ValidationResult r = service.validate(sftpManifest("\"key_env\":\"K\",\"strict_host_key\":false"));
+        assertTrue(r.isValid(), () -> r.errors().toString());
+    }
+
+    private JsonNode sftpManifest(String transportKeys) throws Exception {
+        return mapper.readTree("""
+            {"apiVersion":"connectors.lumnik.io/v1","kind":"Connector",
+             "metadata":{"name":"no-fp","connector_type":"csv-file","scopes":["test"]},
+             "spec":{"transport":{"kind":"sftp","host":"sftp.acme.io","user":"lumnik",
+                                  "path":"/export/*.csv",%s},
+                     "after_process":"none"}}""".formatted(transportKeys));
     }
 
     /** The twin of the rule above, on the other key of the same either-or. */

@@ -16,11 +16,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.Map;
 import java.util.UUID;
 
 import static io.restassured.RestAssured.given;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.*;
 
 @QuarkusTest
@@ -194,11 +196,31 @@ class EndpointResourceIT {
                 .body("error", containsString("out-of-scope"));
     }
 
+    /**
+     * The one refusal both non-hybrid cases give, in the integrator's terms (#1181). Copied, not
+     * read from {@code EndpointResource}: the test pins the wire text, so a rewording must be seen here.
+     */
+    private static final String NOT_PURGEABLE_ON_ITS_OWN =
+        "This endpoint writes to a connector table whose rows are not tracked per endpoint, so it "
+        + "cannot be purged on its own. Deleting the connector removes its data, along with its run history.";
+
+    @Test
+    void purge_refuses_an_endpoint_without_a_hybrid_target_in_the_integrators_terms() {
+        // The usual JDBC/CSV endpoint: its rows land in a connector.t_* table the config never
+        // names. The refusal says what the integrator can do, never mentions target.table (#1181).
+        given().headers(TestIdentity.tenantAndUser(1))
+            .when().post("/api/platform/connectors/" + connectorId + "/endpoints/" + endpointId + "/purge")
+            .then()
+                .statusCode(400)
+                .body("error", equalTo(NOT_PURGEABLE_ON_ITS_OWN));
+    }
+
     @Test
     void purge_rejects_an_in_scope_table_without_an_endpoint_id_column() throws Exception {
         // A connector.t_* table (DynamicTableWriter) is in a purgeable schema but has no endpoint
         // column — purge-by-endpoint is undefined there. The guard is per-table, not just per-schema:
-        // a clean 400, not the raw 500 the DELETE would raise hitting a missing column.
+        // a clean 400, not the raw 500 the DELETE would raise hitting a missing column, in the same
+        // words as the no-target case — never the internal column's name (#1181).
         String table = "t_noepid_" + System.nanoTime();
         exec("CREATE TABLE connector.\"" + table + "\" (id bigint)");
         try {
@@ -207,9 +229,72 @@ class EndpointResourceIT {
                 .when().post("/api/platform/connectors/" + connectorId + "/endpoints/" + eid + "/purge")
                 .then()
                     .statusCode(400)
-                    .body("error", containsString("not purgeable by endpoint"));
+                    .body("error", equalTo(NOT_PURGEABLE_ON_ITS_OWN));
         } finally {
             exec("DROP TABLE IF EXISTS connector.\"" + table + "\"");
+        }
+    }
+
+    @Test
+    void purge_of_a_hybrid_target_not_created_yet_deletes_nothing() throws Exception {
+        // A hybrid endpoint that has never run names a table that does not exist yet: there is
+        // nothing to purge, and "delete the connector" would be the wrong advice (#1181).
+        String eid = createEndpointWithTargetTable("connector.never_written_" + System.nanoTime());
+        given().headers(TestIdentity.tenantAndUser(1))
+            .when().post("/api/platform/connectors/" + connectorId + "/endpoints/" + eid + "/purge")
+            .then()
+                .statusCode(200)
+                .body("deleted", equalTo(0));
+    }
+
+    @Test
+    void purge_dry_run_refuses_exactly_like_the_purge() {
+        // The CLI asks the dry run BEFORE its confirmation prompt, so the refusal must arrive there.
+        given().headers(TestIdentity.tenantAndUser(1))
+            .when().post("/api/platform/connectors/" + connectorId + "/endpoints/" + endpointId + "/purge?dryRun=true")
+            .then()
+                .statusCode(400)
+                .body("error", equalTo(NOT_PURGEABLE_ON_ITS_OWN));
+    }
+
+    @Test
+    void purge_dry_run_counts_the_endpoints_rows_and_deletes_nothing() throws Exception {
+        String table = "hybrid_dryrun_" + System.nanoTime();
+        exec("CREATE TABLE connector.\"" + table + "\" (id bigint, endpoint_id uuid)");
+        try {
+            String eid = createEndpointWithTargetTable("connector." + table);
+            exec("INSERT INTO connector.\"" + table + "\" VALUES (1, '" + eid + "'), (2, '" + eid + "'), "
+                + "(3, '" + UUID.randomUUID() + "')");
+            String purge = "/api/platform/connectors/" + connectorId + "/endpoints/" + eid + "/purge";
+
+            given().headers(TestIdentity.tenantAndUser(1))
+                .when().post(purge + "?dryRun=true")
+                .then()
+                    .statusCode(200)
+                    .body("deleted", equalTo(2))
+                    .body("table", equalTo("connector." + table))
+                    .body("dryRun", equalTo(true));
+            assertThat(count("connector.\"" + table + "\"")).as("a dry run deletes nothing").isEqualTo(3);
+
+            given().headers(TestIdentity.tenantAndUser(1))
+                .when().post(purge)
+                .then()
+                    .statusCode(200)
+                    .body("deleted", equalTo(2))
+                    .body("dryRun", equalTo(false));
+            assertThat(count("connector.\"" + table + "\"")).as("the other endpoint's row stays").isEqualTo(1);
+        } finally {
+            exec("DROP TABLE IF EXISTS connector.\"" + table + "\"");
+        }
+    }
+
+    private long count(String fqn) {
+        try (Connection c = adminDs.getConnection(); Statement st = c.createStatement();
+             ResultSet rs = st.executeQuery("SELECT count(*) FROM " + fqn)) {
+            rs.next();
+            return rs.getLong(1);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 

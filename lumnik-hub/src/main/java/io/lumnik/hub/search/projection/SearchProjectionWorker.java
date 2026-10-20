@@ -1,7 +1,9 @@
 package io.lumnik.hub.search.projection;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.error.Throwables;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.extraction.spi.search.ProjectionDefinition;
 import io.lumnik.extraction.spi.search.ProjectionDocument;
 import io.lumnik.extraction.spi.search.ProjectionSink;
 import io.lumnik.hub.entity.EntityManifest;
@@ -14,6 +16,7 @@ import io.lumnik.hub.search.SearchIndexManifestParser;
 import io.lumnik.hub.search.mark.MarkKind;
 import io.lumnik.hub.search.mark.MarkRow;
 import io.lumnik.hub.search.mark.SearchProjectionMarkStore;
+import io.lumnik.hub.sql.SqlFailureText;
 import io.lumnik.hub.sql.SqlIdentifiers;
 import io.lumnik.hub.sql.TenantRlsScope;
 import io.lumnik.hub.run.RunLock;
@@ -577,10 +580,11 @@ public class SearchProjectionWorker {
             return;
         }
         ProjectionSink sink = resolved.get();
+        ProjectionDefinition built = ProjectionDefinitions.from(decl.manifest());
 
         String gen = null;
         try {
-            gen = sink.beginGeneration(tenantId, index, ProjectionDefinitions.from(decl.manifest()));
+            gen = sink.beginGeneration(tenantId, index, built);
             stateStore.recordActiveGeneration(tenantId, index, gen, sink.name());
             rowScanner.scan(tenantId, index, decl.entity(), decl.manifest(), sink, gen, run.runId());
 
@@ -603,7 +607,7 @@ public class SearchProjectionWorker {
             // Everything up to and including casToPublishing itself failing is still pre-publish:
             // the sink was never told to switch generations, so `gen` is still just staging.
             abandonQuietly(sink, tenantId, index, gen);
-            stateStore.markDegradedEndingRun(tenantId, index, shortDiagnostic(e), run.runId());
+            stateStore.markDegradedEndingRun(tenantId, index, logged(tenantId, index, e), run.runId());
             metrics.recordRebuildTerminal("failed", Duration.between(run.startedAt(), Instant.now()));
             return;
         }
@@ -619,13 +623,13 @@ public class SearchProjectionWorker {
             // javadoc) — this synchronous path must not assume otherwise: never abandon `gen` here,
             // it may already be live at the provider. markDegradedClearingGeneration, same
             // conservative posture as the post-publish markReady failure below.
-            stateStore.markDegradedClearingGeneration(tenantId, index, shortDiagnostic(e), run.runId());
+            stateStore.markDegradedClearingGeneration(tenantId, index, logged(tenantId, index, e), run.runId());
             metrics.recordRebuildTerminal("failed", Duration.between(run.startedAt(), Instant.now()));
             return;
         }
 
         try {
-            commitMarkCleanupAndMarkReady(tenantId, index, sink.name(), gen, markIds, run.runId()); // step 5, atomically
+            commitMarkCleanupAndMarkReady(tenantId, index, sink.name(), gen, markIds, run.runId(), built); // step 5, atomically
         } catch (Exception e) {
             // `gen` is already the live generation at this point (publish above already succeeded) --
             // never abandon it here, only record the real cause so the field sees it instead of the
@@ -636,7 +640,7 @@ public class SearchProjectionWorker {
             // dispatch() see a non-null liveGeneration and try an incremental catch-up against a
             // generation the sink no longer recognizes as live, instead of the full rebuild this
             // degraded state actually needs.
-            stateStore.markDegradedClearingGeneration(tenantId, index, shortDiagnostic(e), run.runId());
+            stateStore.markDegradedClearingGeneration(tenantId, index, logged(tenantId, index, e), run.runId());
             metrics.recordRebuildTerminal("failed", Duration.between(run.startedAt(), Instant.now()));
             return;
         }
@@ -675,11 +679,17 @@ public class SearchProjectionWorker {
      * write then failed transiently: {@code publish} above has already dropped the OLD generation
      * from the provider's side, so a state row left pointing at it (with the {@code ALL} mark that
      * would force a fresh rebuild already deleted) would be stuck forever.
+     *
+     * <p>The same transaction releases a withheld index (#1219) when {@code built} — the declaration this
+     * generation was built from — serves nothing the declaration stored now leaves out. It runs FIRST: a
+     * re-apply locks the declaration row, then re-marks {@code ALL} onto the mark deleted below; taking them
+     * in the opposite order deadlocks the two.
      */
     private void commitMarkCleanupAndMarkReady(long tenantId, String index, String providerName, String gen,
-                                                List<Long> markIds, UUID runId) {
+                                                List<Long> markIds, UUID runId, ProjectionDefinition built) {
         long watermark = markIds.isEmpty() ? 0L : markIds.get(markIds.size() - 1);
         Jdbc.transaction(adminDs, "SearchProjectionWorker.commitMarkCleanupAndMarkReady", c -> {
+            stateStore.releaseIfServingTheDeclaration(c, tenantId, index, built);
             markStore.deleteByExactIds(c, tenantId, index, markIds);
             stateStore.markReady(c, tenantId, index, providerName, gen, watermark, runId);
         });
@@ -718,11 +728,21 @@ public class SearchProjectionWorker {
         return new ClaimedRun(runId, startedAt);
     }
 
-    /** What {@code Last error} shows: the failure itself, not the transaction wrapper around it. */
-    private static String shortDiagnostic(Exception e) {
-        Throwable t = e;
-        while (t instanceof QuarkusTransactionException && t.getCause() != null) t = t.getCause();
-        return t.getClass().getSimpleName() + ": " + (t.getMessage() == null ? "" : t.getMessage());
+    /** {@link #shortDiagnostic}, after logging the failure whole — the log is where an operator reads what
+     *  the served {@code last_error} withholds (#1299). */
+    private String logged(long tenantId, String index, Exception e) {
+        LOG.warnf(e, "SearchProjectionWorker: (%d, %s) degraded", tenantId, index);
+        return shortDiagnostic(e);
+    }
+
+    /** What {@code Last error} shows: the failure itself, not the transaction wrapper around it — and, for
+     *  a raw database failure, only what {@link SqlFailureText#rootMessage} lets an API caller read (#1299). */
+    static String shortDiagnostic(Exception e) {
+        List<Throwable> chain = Throwables.causeChain(e);
+        Throwable t = chain.stream().filter(c -> !(c instanceof QuarkusTransactionException)).findFirst()
+            .orElse(chain.getLast());
+        String message = t instanceof SQLException ? SqlFailureText.rootMessage(t) : t.getMessage();
+        return t.getClass().getSimpleName() + ": " + (message == null ? "" : message);
     }
 
     /** Feeds documents to {@code sink.upsert} for a full rebuild's scan (§5b step 4); the real
@@ -1045,7 +1065,7 @@ public class SearchProjectionWorker {
             }
         }
         if (failure != null) {
-            stateStore.markDegraded(tenantId, index, shortDiagnostic(failure));
+            stateStore.markDegraded(tenantId, index, logged(tenantId, index, failure));
             metrics.recordCatchupFailure();
         } else if ("degraded".equals(state.status())) {
             // I2 fix (#671 final review): a later successful batch clears a prior failure's

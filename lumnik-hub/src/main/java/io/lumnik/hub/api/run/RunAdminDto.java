@@ -17,6 +17,11 @@ public record RunAdminDto(
     long recordsOut,
     long recordsSkipped,
     long cellErrors,
+    /**
+     * Rows removed because the source no longer holds them (#1195), or older versions of a key (#1196):
+     * outside the conservation identity.
+     */
+    long recordsRemoved,
     String triggeredBy,
     int chunkCount,
     String errorMessage,
@@ -40,7 +45,7 @@ public record RunAdminDto(
         r.getEndpointId(), endpointName, r.getStatus(),
         r.getStartedAt(), r.getEndedAt(),
         r.getRecordsIn(), r.getRecordsOut(), r.getRecordsSkipped(), r.getCellErrors(),
-        r.getTriggeredBy(), r.getChunkCount(),
+        r.getRecordsRemoved(), r.getTriggeredBy(), r.getChunkCount(),
         r.getErrorMessage(), deadLetterCount
     );
   }

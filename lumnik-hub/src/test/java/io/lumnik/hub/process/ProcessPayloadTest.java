@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -60,5 +62,17 @@ class ProcessPayloadTest {
         JsonNode n = json.readTree(payload);
         assertThat(n.get("message").asText()).isEqualTo("Client !");
         assertThat(n.get("fields").get("cname").isNull()).isTrue();
+    }
+
+    /** #1314: a timestamp field is its UTC instant, microseconds kept — the text the message shows. */
+    @Test
+    void aTimestampFieldIsItsInstant_asInTheMessage() throws Exception {
+        Map<String, Object> row = new HashMap<>();
+        row.put("due", Timestamp.from(Instant.parse("2026-07-01T00:00:00.000500Z")));
+        String payload = ProcessConsumer.buildPayload(json, "Due {due}", "p", "e", "k", row);
+
+        JsonNode n = json.readTree(payload);
+        assertThat(n.get("message").asText()).isEqualTo("Due 2026-07-01T00:00:00.000500Z");
+        assertThat(n.get("fields").get("due").asText()).isEqualTo("2026-07-01T00:00:00.000500Z");
     }
 }

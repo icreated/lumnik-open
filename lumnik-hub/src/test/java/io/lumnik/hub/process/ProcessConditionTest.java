@@ -11,6 +11,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TimeZone;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -102,6 +103,33 @@ class ProcessConditionTest {
         assertThat(ProcessRuleEvaluator.matches(
             Map.of("due", new Date(Instant.parse("2026-07-01T00:00:00Z").toEpochMilli())),
             List.of(ViewFilter.parse("due<2026-08-01")))).isTrue();                                 // bare java.util.Date
+    }
+
+    /**
+     * #1301: pgjdbc reads a DATE column as a java.sql.Date at midnight in the JVM's zone, while a
+     * date-only operand is midnight UTC. On a hub that does not run in UTC, the row's day must still
+     * be the operand's day.
+     */
+    @Test
+    void aDateColumnIsTheSameDayWhateverTheHubsZone() {
+        TimeZone hubZone = TimeZone.getDefault();
+        TimeZone.setDefault(TimeZone.getTimeZone("Europe/Paris"));
+        try {
+            Map<String, Object> row = Map.of("due", java.sql.Date.valueOf("2026-01-01"));
+            assertThat(ProcessRuleEvaluator.matches(row, List.of(ViewFilter.parse("due>=2026-01-01")))).isTrue();
+            assertThat(ProcessRuleEvaluator.matches(row, List.of(ViewFilter.parse("due<2026-01-01")))).isFalse();
+            assertThat(ProcessRuleEvaluator.matches(row, List.of(ViewFilter.parse("due<2026-01-02")))).isTrue();
+        } finally {
+            TimeZone.setDefault(hubZone);
+        }
+    }
+
+    /** #1301: a timestamptz carries microseconds; the comparison keeps them, as SQL does. */
+    @Test
+    void aTimestampKeepsItsMicroseconds() {
+        Timestamp due = Timestamp.from(Instant.parse("2026-07-01T00:00:00.000500Z"));
+        assertThat(ProcessRuleEvaluator.matches(Map.of("due", due),
+            List.of(ViewFilter.parse("due>2026-07-01T00:00:00Z")))).isTrue();
     }
 
     @Test

@@ -6,6 +6,9 @@ import io.lumnik.hub.tenant.TenantContextFilter;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import jakarta.transaction.Status;
+import jakarta.transaction.Synchronization;
+import jakarta.transaction.TransactionSynchronizationRegistry;
 import org.jboss.logging.Logger;
 
 import java.nio.charset.StandardCharsets;
@@ -31,11 +34,34 @@ public class AuditRecorder {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Inject @DataSource("admin") AgroalDataSource adminDs;
+    @Inject TransactionSynchronizationRegistry txSync;
 
     public void record(String entityType, String entityKey, String operation, Map<String, Object> snapshot) {
         Long tenantId = TenantContextFilter.current();
         if (tenantId == null) return; // no request tenant (scheduler/startup) — same guard as the listener
         record(tenantId, TenantContextFilter.currentUser(), entityType, entityKey, operation, snapshot);
+    }
+
+    /**
+     * {@link #record(String, String, String, Map)} once the caller's transaction has COMMITTED — for a
+     * door whose write Hibernate flushes at commit, where a constraint can still refuse it after the
+     * door returned (#1193): the trail never shows a write that did not happen. Without a transaction
+     * it records at once. Tenant and actor are read now, while the request's ThreadLocals hold them.
+     */
+    public void recordAfterCommit(String entityType, String entityKey, String operation, Map<String, Object> snapshot) {
+        if (txSync.getTransactionKey() == null) {
+            record(entityType, entityKey, operation, snapshot);
+            return;
+        }
+        Long tenantId = TenantContextFilter.current();
+        if (tenantId == null) return;
+        Long actorId = TenantContextFilter.currentUser();
+        txSync.registerInterposedSynchronization(new Synchronization() {
+            @Override public void beforeCompletion() { /* nothing to flush */ }
+            @Override public void afterCompletion(int status) {
+                if (status == Status.STATUS_COMMITTED) record(tenantId, actorId, entityType, entityKey, operation, snapshot);
+            }
+        });
     }
 
     /**

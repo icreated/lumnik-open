@@ -9,6 +9,7 @@ import io.lumnik.hub.connector.api.types.ReadResult;
 import io.lumnik.hub.connector.api.types.SyncMode;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
+import io.lumnik.hub.connector.exceptions.SourceCallException;
 import io.lumnik.hub.connector.rest.RestHttpClient;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
@@ -20,15 +21,23 @@ import io.lumnik.hub.connector.rest.pagination.PaginationFactory;
 import io.lumnik.hub.connector.rest.pagination.PaginationStrategy;
 import io.lumnik.hub.connector.rest.reliability.RateLimiterRegistry;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
+import java.net.ConnectException;
+import java.net.URISyntaxException;
+import java.net.UnknownHostException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 /**
  * The cursor contract and the incremental modes of RestEndpointReader, at unit speed.
@@ -107,7 +116,7 @@ class RestEndpointReaderCursorTest {
 
     private ConnectorContext ctx(Map<String, Object> config) {
         return new ConnectorContext(RUN, CONNECTOR, ENDPOINT, 1L, "erp", "rest-generic",
-            config, new SyncMode.FullRefresh(), null, null, null, null, null, new OwnedRunScope("test"));
+            config, new SyncMode.FullRefresh(), null, null, null, null, new OwnedRunScope("test"));
     }
 
     private ConnectorCursor cursorOf(String watermark, String emittedByRun) {
@@ -205,7 +214,72 @@ class RestEndpointReaderCursorTest {
             () -> reader.read(100, null, ctx(Map.of("base_url", "https://erp.test"))));
 
         assertTrue(e.getMessage().contains("302"), "names the status: " + e.getMessage());
-        assertTrue(e.getMessage().contains("https://erp.test/login"), "names the Location: " + e.getMessage());
+        assertTrue(e.getMessage().contains("to https://erp.test "), "names the Location's host: " + e.getMessage());
+        assertFalse(e.getMessage().contains("/login"), "never its path, which can carry a token (#1166): "
+            + e.getMessage());
+    }
+
+    // ── a call to the source that threw ───────────────────────────────────────────────────────
+
+    private static final String SOURCE = "https://user:pw@api.example/p/SECRET?k=v";
+
+    /**
+     * The checked failures of a call, quoting the source URL in their messages — whole, its path
+     * alone, percent-encoded, inside a cause. None of them is an IOException on purpose: the retry
+     * executor would spend its five attempts and fifteen seconds of backoff on one, and the kind is
+     * read off the whole cause chain anyway.
+     */
+    static Stream<Arguments> quotingFailures() {
+        return Stream.of(
+            arguments(new Exception("Connection refused: " + SOURCE, new ConnectException(SOURCE)),
+                      "connection failed (Exception)"),
+            arguments(new Exception("/p/SECRET?k=v", new UnknownHostException("user:pw@api.example")),
+                      "host not resolved (Exception)"),
+            arguments(new URISyntaxException("https://api.example/p/%53ECRET?k%3Dv", "Illegal character"),
+                      "other (URISyntaxException)"));
+    }
+
+    /** A source that throws instead of answering. */
+    static final class ThrowingHttp extends RestHttpClient {
+        private final Exception thrown;
+        ThrowingHttp(Exception thrown) { this.thrown = thrown; }
+        @Override public RestResponse execute(RestRequest req) throws Exception { throw thrown; }
+    }
+
+    /**
+     * The run's failure text is this exception's message (#1166): it says the KIND, never the JDK
+     * message, which the old {@code new RuntimeException(e)} carried in full as {@code e.toString()}.
+     * The original stays the cause. Both loops: the page window (full, watermark, GraphQL) and
+     * SOAP's single fetch.
+     */
+    @ParameterizedTest
+    @MethodSource("quotingFailures")
+    void a_call_that_threw_is_named_by_its_kind_never_by_its_message(Exception thrown, String expected) {
+        for (Map<String, Object> cfg : List.of(
+                Map.<String, Object>of("base_url", "https://erp.test"),
+                Map.<String, Object>of("base_url", "https://erp.test", "pagination", Map.of("kind", "soap")))) {
+            RestEndpointReader reader = new RestEndpointReader(endpoint, new PassThroughAuth(),
+                pagination, new RateLimiterRegistry(), new ThrowingHttp(thrown), mapper);
+
+            var e = assertThrows(SourceCallException.class, () -> reader.read(100, null, ctx(cfg)));
+
+            assertEquals(expected, e.getMessage());
+            assertSame(thrown, e.getCause(), "the original stays the cause: stacks and cause readers keep it");
+            for (String secret : List.of("user", "pw", "ECRET", "k=v", "k%3Dv")) {
+                assertFalse(e.getMessage().contains(secret), secret + " in: " + e.getMessage());
+            }
+        }
+    }
+
+    /** Our own refusals already speak for themselves: their type and text pass through untouched. */
+    @Test
+    void our_own_refusal_passes_through_unchanged() {
+        ConnectorException ours = new ConnectorException("upstream returned HTTP 401 (permanent)");
+        RestEndpointReader reader = new RestEndpointReader(endpoint, new PassThroughAuth(),
+            pagination, new RateLimiterRegistry(), new ThrowingHttp(ours), mapper);
+
+        assertSame(ours, assertThrows(ConnectorException.class,
+            () -> reader.read(100, null, ctx(Map.of("base_url", "https://erp.test")))));
     }
 
     // ── incremental ────────────────────────────────────────────────────────────────────────────

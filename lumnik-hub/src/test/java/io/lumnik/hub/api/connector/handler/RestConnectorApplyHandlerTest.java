@@ -3,6 +3,7 @@ package io.lumnik.hub.api.connector.handler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.connector.domain.Connector;
+import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.validator.JsonNodes;
@@ -46,10 +47,9 @@ class RestConnectorApplyHandlerTest {
 
     // ── apply-path tests (KafkaConnectorApplyHandlerTest pattern: public apply(), mocked repos) ──
 
-    /** A bare handler whose repositories answer "nothing exists yet"; captures the persisted connector. */
-    private static Connector applyAndCapture(String doc) throws Exception {
-        ConnectorRepository connRepo = mock(ConnectorRepository.class);
-        ConnectorEndpointRepository epRepo = mock(ConnectorEndpointRepository.class);
+    /** Applies {@code doc} through a bare handler whose connector repository answers "nothing exists yet". */
+    private static void apply(String doc, ConnectorRepository connRepo, ConnectorEndpointRepository epRepo)
+            throws Exception {
         @SuppressWarnings("unchecked")
         PanacheQuery<Connector> emptyQuery = mock(PanacheQuery.class);
         when(emptyQuery.firstResultOptional()).thenReturn(Optional.empty());
@@ -59,7 +59,12 @@ class RestConnectorApplyHandlerTest {
         handler.connRepo = connRepo;
         handler.epRepo = epRepo;
         handler.apply(M.readTree(doc), 1L);
+    }
 
+    /** A bare handler whose repositories answer "nothing exists yet"; captures the persisted connector. */
+    private static Connector applyAndCapture(String doc) throws Exception {
+        ConnectorRepository connRepo = mock(ConnectorRepository.class);
+        apply(doc, connRepo, mock(ConnectorEndpointRepository.class));
         ArgumentCaptor<Connector> captor = ArgumentCaptor.forClass(Connector.class);
         Mockito.verify(connRepo).persist(captor.capture());
         return captor.getValue();
@@ -93,5 +98,35 @@ class RestConnectorApplyHandlerTest {
             + "\"defaults\":{\"default_rate_limit\":\"50/s\"},"
             + "\"default_rate_limit\":\"5/m\"}}");
         assertEquals("5/m", conn.getConfig().get("default_rate_limit"));
+    }
+
+    /** The method stored for the one endpoint of {@code endpoint} (JSON), when the manifest leaves it to the default. */
+    private static String storedMethod(String endpoint) throws Exception {
+        ConnectorEndpointRepository epRepo = mock(ConnectorEndpointRepository.class);
+        apply("{\"metadata\":{\"name\":\"c1\"},"
+            + "\"spec\":{\"base_url\":\"https://api.example.com\",\"endpoints\":[" + endpoint + "]}}",
+            mock(ConnectorRepository.class), epRepo);
+
+        ArgumentCaptor<ConnectorEndpoint> captor = ArgumentCaptor.forClass(ConnectorEndpoint.class);
+        Mockito.verify(epRepo).persist(captor.capture());
+        return captor.getValue().getMethod();
+    }
+
+    // SOAP always sends POST; storing GET made a pre-flight that composed nothing print METHOD GET.
+    @Test
+    void apply_stores_POST_for_a_soap_endpoint_without_a_method() throws Exception {
+        assertEquals("POST", storedMethod("{\"id\":\"partners\",\"path\":\"/ws\",\"kind\":\"soap\"}"));
+    }
+
+    // GraphQL is POST too, recognised as the engine does (RestEndpointReader.isGraphQlEndpoint): kind OR query.
+    @Test
+    void apply_stores_POST_for_a_graphql_endpoint_without_a_method() throws Exception {
+        assertEquals("POST", storedMethod("{\"id\":\"partners\",\"kind\":\"graphql\",\"query\":\"{ a }\"}"));
+        assertEquals("POST", storedMethod("{\"id\":\"partners\",\"query\":\"{ a }\"}"));
+    }
+
+    @Test
+    void apply_stores_GET_for_a_plain_endpoint_without_a_method() throws Exception {
+        assertEquals("GET", storedMethod("{\"id\":\"partners\",\"path\":\"/p\"}"));
     }
 }

@@ -8,6 +8,7 @@ import org.jboss.logging.Logger;
 
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * The one shape a hub JSON error body takes: {@code {"error": "…"}}. Single-sourced so the
@@ -98,6 +99,36 @@ public final class ApiErrors {
      */
     public static Response badRequest(String why) {
         return Response.status(400).type(MediaType.APPLICATION_JSON).entity(error(why)).build();
+    }
+
+    /**
+     * Runs {@code step}; an {@link IllegalArgumentException} it throws is the caller's 400, its message
+     * the body ({@link #badRequest}). It is how a parser, resolver or filter states that the input is
+     * wrong, and the manifest, view and source doors all answered it with the same hand-written
+     * try/catch (#1293).
+     *
+     * <p>Thrown, not returned, so it serves a door that returns an entity as well as one that returns
+     * a {@code Response}; {@link BadRequestExceptionMapper} passes the dressed response through
+     * untouched. Only {@code step} is covered: an IAE raised anywhere else in the door stays the
+     * defect it is, never a 400 that echoes its message. Thrown inside a {@code @Transactional} door it
+     * rolls the transaction back, so call it before the door writes.
+     */
+    public static <T> T orBadRequest(Supplier<T> step) {
+        try {
+            return step.get();
+        } catch (IllegalArgumentException e) {
+            // BadRequestExceptionMapper's fallback: badRequest(null) would be Map.of(KEY, null), a 500.
+            String why = e.getMessage();
+            throw new BadRequestException(badRequest(why == null || why.isBlank() ? "bad request" : why), e);
+        }
+    }
+
+    /** {@link #orBadRequest} for a check that returns nothing. */
+    public static void checkOrBadRequest(Runnable check) {
+        orBadRequest(() -> {
+            check.run();
+            return null;
+        });
     }
 
     /**

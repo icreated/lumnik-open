@@ -1,11 +1,13 @@
 package io.lumnik.hub.api.rest;
 
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.api.connector.ConnectorScope;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.api.helpers.Configs;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
+import io.lumnik.hub.connector.rest.OutboundFailure;
 import io.lumnik.hub.connector.rest.Urls;
 import io.lumnik.hub.connector.rest.auth.AuthConfigException;
 import io.lumnik.hub.connector.rest.discovery.OpenApiImporter;
@@ -50,12 +52,7 @@ public class RestDiscoveryResource {
         if (notAUrl.isPresent()) return refuse(400, "'url' " + notAUrl.get());
         String name = Configs.string(body, "name").orElse("connector");
 
-        List<String> tags;
-        try {
-            tags = stringList(body, "tags");
-        } catch (IllegalArgumentException wrongType) {
-            return refuse(400, wrongType.getMessage());
-        }
+        List<String> tags = ApiErrors.orBadRequest(() -> stringList(body, "tags"));
 
         try {
             return Response.ok(importer.importFromUrl(url, name, tags)).build();
@@ -87,7 +84,8 @@ public class RestDiscoveryResource {
         // SET LOCAL, which is transaction-scoped, so an unwrapped lookup finds nothing on an
         // RLS-enforced hub. Its own and not the method's, so the probe below — up to the
         // HttpClient's 60s — holds no pooled connection. Same shape as IntegrationResource#test.
-        Connector c = QuarkusTransaction.requiringNew().call(() -> connRepo.findById(cid));
+        // The connector rule of the by-id doors (#1212): another métier's connector is the uniform 403.
+        Connector c = QuarkusTransaction.requiringNew().call(() -> ConnectorScope.held(connRepo, cid));
         if (c == null) return ApiErrors.notFound("connector " + cid + " not found");
 
         String endpointPath = Configs.string(body, "endpointPath").orElse("/");
@@ -121,12 +119,20 @@ public class RestDiscoveryResource {
             // keep saying 500 rather than be dressed up as the customer's network.
             // forDisplay on the path too: it is caller input and legitimately carries a query, so
             // it can carry a token. Both warn lines in this method, not only one of them.
+            // The kind, never the exception: its message can quote the source URL (#1164).
             LOG.warnf("REST probe could not reach connector %s path %s: %s",
-                cid, Urls.forDisplay(endpointPath), unreachable);
-            // toString(), not getMessage(): a ConnectException's message can be null, and
-            // "could not reach the source: null" tells the operator nothing.
-            return refuse(502, "could not reach the source: " + unreachable);
+                cid, Urls.forDisplay(endpointPath), OutboundFailure.describe(unreachable));
+            return refuse(502, unreachable(unreachable));
         }
+    }
+
+    /**
+     * The 502 body of a source nobody answered on: the failure's kind and class, never its
+     * message, which can quote the integrator's URL — userinfo, a token in the path or the query
+     * (#1164). Never empty either: a ConnectException's message can be null.
+     */
+    static String unreachable(IOException unreachable) {
+        return "could not reach the source: " + OutboundFailure.describe(unreachable);
     }
 
     /**

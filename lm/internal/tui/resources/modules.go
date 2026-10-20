@@ -19,7 +19,7 @@ type Modules struct {
 }
 
 func NewModules(app *tview.Application, c *client.Client) *Modules {
-	t := tview.NewTable().SetBorders(false).SetSelectable(true, false)
+	t := newListTable()
 	t.SetTitle(" :modules ").SetBorder(true)
 	p := &Modules{app: app, table: t, client: c}
 	p.setHeader()

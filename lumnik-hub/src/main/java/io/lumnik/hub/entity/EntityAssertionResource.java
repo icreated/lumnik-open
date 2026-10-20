@@ -1,10 +1,10 @@
 package io.lumnik.hub.entity;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.entity.resolution.CascadeResolver;
 import io.lumnik.hub.entity.resolution.SameSourceAssertionException;
-import io.lumnik.hub.sql.SqlFailureText;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.hub.tenant.RequireUser;
 import jakarta.inject.Inject;
@@ -99,7 +99,7 @@ public class EntityAssertionResource {
       // only crash later, asynchronously, when either row is next reprocessed.
       return ApiErrors.badRequest(e.getMessage());
     } catch (RuntimeException e) {
-      if (FOREIGN_KEY_VIOLATION_SQLSTATE.equals(SqlFailureText.sqlStateOf(e))) {
+      if (FOREIGN_KEY_VIOLATION_SQLSTATE.equals(Jdbc.sqlStateOf(e))) {
         return ApiErrors.notFound(
             "unknown identity_ref for entity '" + name + "': neither ref may exist, belong to "
                 + "another tenant, or belong to another entity type");

@@ -12,6 +12,7 @@ import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityManifestParser;
 import io.lumnik.hub.entity.EntityRegistry;
+import io.lumnik.hub.search.projection.ProjectionDefinitions;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.hub.tenant.TenantContextFilter;
 import jakarta.inject.Inject;
@@ -60,23 +61,13 @@ public class SearchIndexApplyResource {
     public Response apply(String body) {
         long tenant = RequireTenant.current();
 
-        JsonNode root;
-        SearchIndexManifest manifest;
-        try {
-            root = parser.readTree(body);
-        } catch (IllegalArgumentException e) {
-            return ApiErrors.badRequest(e.getMessage());
-        }
+        JsonNode root = ApiErrors.orBadRequest(() -> parser.readTree(body));
         Optional<String> named = parser.namedRefusal(root);
         if (named.isPresent()) return ApiErrors.badRequest(named.get());
         Optional<Response> unknownRefusal = ApplyDoorSupport.refuseUnknownKeys(
             "SearchIndex", parser.unknownKeys(root), SearchIndexManifestParser.honoredSurface());
         if (unknownRefusal.isPresent()) return unknownRefusal.get();
-        try {
-            manifest = parser.parse(root);
-        } catch (IllegalArgumentException e) {
-            return ApiErrors.badRequest(e.getMessage());
-        }
+        SearchIndexManifest manifest = ApiErrors.orBadRequest(() -> parser.parse(root));
 
         // Kept as written (spec N): a name that is not already a URL-safe slug is refused, not folded.
         String name = manifest.name();
@@ -105,7 +96,7 @@ public class SearchIndexApplyResource {
         SearchIndexManifest canonical = new SearchIndexManifest(
             name, entity.name(), manifest.language(), manifest.fields(), manifest.titleField(), manifest.links());
         SearchIndexStore.Applied applied = store.upsert(tenant, name, entity.name(), stored.get().yaml(),
-            manifest.language(), body, toJson(canonical), TenantContextFilter.currentUser(),
+            manifest.language(), body, toJson(canonical), ProjectionDefinitions.from(canonical), TenantContextFilter.currentUser(),
             ScopeGrants.granted().orElse(null));
         switch (applied.outcome()) {
             case APPLIED -> { }

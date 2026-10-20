@@ -142,7 +142,7 @@ final class SqlFilters {
         return Optional.empty();
     }
 
-    private static boolean isKeyword(Token t, String word) {
+    static boolean isKeyword(Token t, String word) {
         return t.kind() == Kind.IDENT && !t.quoted() && t.text().equalsIgnoreCase(word);
     }
 

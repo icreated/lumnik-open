@@ -10,12 +10,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestParseRowsPreservesColumnOrder(t *testing.T) {
-	raw := []json.RawMessage{
-		json.RawMessage(`{"documentno":"SO-9","total":312480,"paid":null}`),
-		json.RawMessage(`{"documentno":"SO-10","total":5,"paid":true}`),
+func TestFlattenRowsPreservesColumnOrder(t *testing.T) {
+	var records []EntityRow
+	if err := json.Unmarshal([]byte(`[{"documentno":"SO-9","total":312480,"paid":null},{"paid":true,"documentno":"SO-10","total":5}]`), &records); err != nil {
+		t.Fatal(err)
 	}
-	cols, rows := parseRows(raw)
+	cols, rows := flattenRows(records)
 
 	want := []string{"documentno", "total", "paid"}
 	if len(cols) != len(want) || cols[0] != want[0] || cols[1] != want[1] || cols[2] != want[2] {
@@ -76,4 +76,25 @@ func TestRagAskSendsAnalyticMode(t *testing.T) {
 	if len(res.Rows) != 1 || res.Rows[0][1] != "312480" {
 		t.Errorf("rows = %v, want [[SO-9 312480]]", res.Rows)
 	}
+}
+
+// #1105: a result with no rows and no freshness is still a whole document: [] where a list is empty,
+// null where the hub sends null — a consumer never has to tell an absent key from an empty answer.
+func TestAskResult_aDocumentWithNoRowsKeepsEveryKey(t *testing.T) {
+	js, err := json.Marshal(AskResult{Answer: "Je ne peux pas répondre.", Abstained: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, `{"answer":"Je ne peux pas répondre.","sql":"","rowCount":0,"columns":[],"rows":[],`+
+		`"dataAsOf":null,"otherDoors":[],"disputed":[],"disputedTruncated":false,"abstained":true}`, string(js))
+}
+
+// A jsonb cell is shown as JSON, with its characters as written: & < > are not turned into \u0026 escapes.
+func TestFlattenRowsShowsANestedValueAsWritten(t *testing.T) {
+	var records []EntityRow
+	if err := json.Unmarshal([]byte(`[{"address":{"street":"1 rue A & B <C>"},"tags":["x&y"]}]`), &records); err != nil {
+		t.Fatal(err)
+	}
+	_, rows := flattenRows(records)
+	assert.Equal(t, []string{`{"street":"1 rue A & B <C>"}`, `["x&y"]`}, rows[0])
 }

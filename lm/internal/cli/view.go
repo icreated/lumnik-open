@@ -16,34 +16,53 @@ func newViewCmd() *cobra.Command {
 	var file string
 	var filters []string
 	cmd := &cobra.Command{
-		Use:   "view [KEY]",
+		Use:   "view {-f FILE | NAME} [KEY]",
 		Short: "Render a kind:View as a list, or one record's detail when a KEY is given",
 		Long: `Render a kind:View as a list, or one record's detail when a KEY is given.
 
+The view is a manifest file (-f FILE, or - for stdin) or, without -f, a saved view NAME.
+
 Subcommands manage the saved-view store: list, get, apply, generate.`,
-		Args: cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 1 && len(filters) > 0 {
-				return fmt.Errorf("--filter applies to the list; it is not used with a detail KEY — pass one or the other")
+		// -f names the view, or the first argument does (#1176): either way one KEY may follow.
+		Args: func(cmd *cobra.Command, args []string) error {
+			if file != "" {
+				return cobra.MaximumNArgs(1)(cmd, args)
 			}
-			body, err := readManifest(cmd, file)
-			if err != nil {
-				return err
+			if len(args) == 0 {
+				return fmt.Errorf("name the view: -f FILE, or a saved view NAME (lm view list)")
+			}
+			return cobra.MaximumNArgs(2)(cmd, args)
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			keys := args
+			if file == "" {
+				keys = args[1:]
+			}
+			if len(keys) == 1 && len(filters) > 0 {
+				return fmt.Errorf("--filter applies to the list; it is not used with a detail KEY — pass one or the other")
 			}
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
 				return err
 			}
-			if len(args) == 1 {
-				return renderDetail(cmd, c, body, args[0])
+			var body []byte
+			if file != "" {
+				body, err = readManifest(cmd, file)
+			} else {
+				body, err = c.ViewGet(args[0])
+			}
+			if err != nil {
+				return err
+			}
+			if len(keys) == 1 {
+				return renderDetail(cmd, c, body, keys[0])
 			}
 			return renderList(cmd, c, body, filters)
 		},
 	}
-	cmd.Flags().StringVarP(&file, "file", "f", "", "kind:View YAML manifest, or - for stdin (required)")
+	cmd.Flags().StringVarP(&file, "file", "f", "", "kind:View YAML manifest, or - for stdin (or name a saved view instead)")
 	cmd.Flags().StringArrayVar(&filters, "filter", nil,
 		"filter rows: col=value (exact), col~text (contains), col>v col<v col>=v col<=v (number/ISO date); repeatable (AND)")
-	_ = cmd.MarkFlagRequired("file")
 	// Accepted collision: a detail KEY literally named "generate", "list", "get", "apply", or
 	// "rm" now routes to the subcommand (cobra resolves subcommands before positionals); no
 	// real key is named that.
@@ -268,8 +287,14 @@ func emitList(out io.Writer, format string, res *client.ViewResult, filters []st
 	for i, col := range res.Columns {
 		headers[i] = col.Label
 	}
-	return output.Print(out, "table", headers, res.Rows,
-		func(row []string) []string { return row })
+	if err := output.Print(out, "table", headers, res.Rows,
+		func(row []string) []string { return row }); err != nil {
+		return err
+	}
+	if res.Truncated {
+		fmt.Fprintf(out, "\nfirst %d rows shown; more match — narrow with --filter\n", len(res.Rows))
+	}
+	return nil
 }
 
 func renderDetail(cmd *cobra.Command, c *client.Client, body []byte, key string) error {

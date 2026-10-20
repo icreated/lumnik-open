@@ -17,7 +17,7 @@ class SourceBlockValidatorTest {
         // a supported manifest key (wave-finale inventory refutation); it must not warn.
         List<ValidationError> errs = ConfigDefRunner.run(
             SourceBlockValidator.perTableDef(),
-            mapper.readTree("{\"name\":\"orders\",\"mode\":\"full\","
+            mapper.readTree("{\"name\":\"orders\",\"mode\":\"full\",\"schema\":\"public\","
                 + "\"indexes\":[{\"columns\":[\"email\"],\"unique\":true}]}"),
             "spec.source.tables[0]");
         assertTrue(errs.isEmpty(), () -> "indexes is honored — no warning allowed, got: " + errs);
@@ -58,5 +58,19 @@ class SourceBlockValidatorTest {
             "spec.source.tables[0]");
         assertTrue(errs.stream().noneMatch(e -> e.path().equals("spec.source.tables[0].name")),
             () -> "a plain identifier must pass, got: " + errs);
+    }
+
+    @Test void perTable_withoutSchema_isRefusedAtTheDoor_notOnEveryRun() throws Exception {
+        // The run reads `schema` unconditionally (JdbcConnectorType -> "Missing config key: schema");
+        // an optional key here let such a manifest validate, apply, and then fail every run (#1243).
+        // The node is the defaults-merged table, so a schema set once in `defaults` still satisfies it.
+        List<ValidationError> errs = ConfigDefRunner.run(
+            SourceBlockValidator.perTableDef(),
+            mapper.readTree("{\"name\":\"orders\",\"mode\":\"full\"}"),
+            "spec.source.tables[0]");
+        assertTrue(errs.stream().anyMatch(e ->
+                e.severity() == ValidationError.Severity.ERROR
+                && e.path().equals("spec.source.tables[0].schema")),
+            () -> "expected the missing-schema refusal, got: " + errs);
     }
 }

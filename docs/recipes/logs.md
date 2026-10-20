@@ -1,13 +1,9 @@
 # Reading the logs
 
-> Where each service's log lives — self-host, Kubernetes, dev mode — how to shape a JSON log
+> Where each service's log lives — self-host or Kubernetes — how to shape a JSON log
 > line into something readable, and when the answer isn't in the logs at all.
 
-Something is wrong and you want to see what the system saw. Where to look depends on
-two things: **how you run the hub** (self-host Docker, Kubernetes, dev mode) and
-**what kind of wrong it is** — because not every failure lands in the hub's log.
-Ingestion failures leave a better trail in the run ledger and the dead-letter queue,
-and outbound deliveries keep their own journal. Start from the symptom:
+Start from the symptom: not every failure lands in the hub's log.
 
 ```mermaid
 flowchart LR
@@ -21,32 +17,42 @@ flowchart LR
 
 !!! tip "Health before logs"
     Restart decisions (what is safe, what it costs, the commands) live in the
-    [on-call runbook](../operations/oncall-runbook.md).
-    Before reading anything, ask the hub how it feels — it often answers in one line
-    what an hour of log-scrolling would:
+    [on-call runbook](../operations/oncall-runbook.md). Ask the hub first (no `lm` command reads this):
 
-    ```bash
-    curl -s http://localhost:8080/q/health
+    ```
+    $ curl -s http://localhost:8080/q/health
+    {
+        "status": "UP",
+        "checks": [
+            {
+                "name": "Database connections health check",
+                "status": "UP",
+                "data": {
+                    "readonly": "UP",
+                    "<default>": "UP",
+                    "admin": "UP"
+                }
+            }
+        ]
+    }
     ```
 
-    `DOWN` with a named check (e.g. the database connections check) points you straight
-    at the right service. While migrations run, the hub does not serve `/q/health` at
-    all yet — no response is itself the "migrations still running" signal. The full endpoint list is on the
-    [observability page](../operations/observability.md).
+    A `DOWN` names the failing check. While migrations run at boot, `/q/health` may not
+    answer yet; the hub log shows the `Migrating schema …` lines. All endpoints:
+    [observability](../operations/observability.md).
 
 ## Where the logs live
 
 ### Self-host stack (Docker Compose)
 
 The stack started by `deploy/selfhost/up.sh` has three services: `hub`, `postgres`,
-`keycloak` (plus `caddy` if you run the TLS façade). All commands run from the repo
-root:
+`keycloak` (plus `caddy` with the TLS façade). Run these from the repo root:
 
 ```bash
-# The short form — follow the hub live (Ctrl-C stops following, not the hub)
+# Follow the hub live (Ctrl-C stops following, not the hub)
 ./deploy/selfhost/logs.sh hub
 
-# The explicit form takes any docker compose logs flag: a time window, timestamps
+# Any docker compose logs flag: a time window, timestamps
 docker compose -f docker-compose.selfhost.yml logs --since 10m -t hub
 
 # Another service: keycloak, postgres
@@ -56,8 +62,7 @@ docker compose -f docker-compose.selfhost.yml logs --since 10m -t hub
 ./deploy/selfhost/logs.sh
 ```
 
-Running the TLS façade? `caddy` lives in the overlay file, not in the base stack —
-name both files to reach it:
+`caddy` lives in the TLS overlay file; name both files to reach it:
 
 ```bash
 docker compose -f docker-compose.selfhost.yml -f docker-compose.tls.yml logs -f caddy
@@ -77,26 +82,23 @@ kubectl logs -f deploy/lumnik-keycloak     # auth trouble
 
 Add `-n <namespace>` if you installed into one.
 
-### Dev mode
-
-`mvn quarkus:dev -pl lumnik-hub -am` logs straight to the terminal it runs in —
-nothing to fetch, and changes to log levels hot-reload.
-
 ## Anatomy of a hub log line
 
-The hub speaks two formats. **The packaged stack — what Docker and Kubernetes run —
-emits one JSON object per line**, built for log collectors and for `jq`:
+The packaged hub (Docker, Kubernetes) writes one JSON object per line:
 
 ```json
 {"timestamp":"2026-08-18T09:41:24+02:00","level":"ERROR","loggerName":"io.lumnik.hub.connector.runtime.ChunkExecutor","threadName":"executor-thread-1","mdc":{"tenantId":"12","runId":"66541f10-0dc7-4534-85b0-942668020fb1"},"message":"chunk 4 failed: …"}
 ```
 
-`mdc.tenantId` is the **tenant id** — `0` is the cross-tenant system sentinel, and it is
-carried both on the request path and on every line an ingestion run writes. `mdc.runId` is
-the **run id**, present only on lines a run wrote: it is what separates two connectors
-ingesting at the same time, and it is on the reader and writer warnings too, not just on
-the run's own start and end lines. Slice the stream along the axes you actually search by (`--no-log-prefix` strips compose's
-`hub-1 |` prefix so `jq` can parse; `fromjson? // empty` skips any non-JSON line):
+| Field | Meaning |
+|---|---|
+| `level` | `ERROR`, `WARN`, `INFO`, `DEBUG` |
+| `loggerName` | the component; ingestion lines start with `io.lumnik.hub.connector` |
+| `mdc.tenantId` | the tenant the line belongs to |
+| `mdc.runId` | the run id (as in `lm run list`) — on every line a run wrote, absent elsewhere |
+
+Slice the stream with `jq` (`--no-log-prefix` strips compose's `hub-1 |` prefix;
+`fromjson? // empty` skips any non-JSON line):
 
 ```bash
 LOGS="docker compose -f docker-compose.selfhost.yml logs --no-log-prefix"
@@ -110,64 +112,53 @@ $LOGS hub | jq -rR 'fromjson? // empty | select(.mdc.tenantId=="12") | .message'
 # One run's story, warnings included — the id comes from `lm run list`
 $LOGS hub | jq -rR 'fromjson? // empty | select(.mdc.runId=="66541f10-0dc7-4534-85b0-942668020fb1") | "\(.level) \(.message)"'
 
-# One subsystem — everything the connector runtime said
+# Everything the connector runtime said
 $LOGS hub | jq -rR 'fromjson? // empty | select(.loggerName | startswith("io.lumnik.hub.connector")) | .message'
 ```
 
-(No `jq` on the box? `grep '"level":"ERROR"'` still works on JSON lines.)
-
-**Dev mode** (`mvn quarkus:dev`) keeps the human one-line format:
-
-```
-14:03:27 ERROR [io.lu.hu.co.ru.ChunkExecutor] (executor-thread-1) 12 66541f10-… chunk 4 failed: ...
-   │      │            │                            │             │      │
-   time  level   logger (abbreviated)             thread     tenant id  run id
-```
-
-Same information, shaped for eyes: the logger category is abbreviated (two letters per
-package segment), and the two fields after the thread are the tenant id and the run id.
-Off a run — a plain HTTP request, a scheduler tick — the run id slot is simply blank.
+No `jq` on the box? `grep '"level":"ERROR"'` still works on JSON lines.
 
 ## Turning up the volume
-
-Quarkus log levels are plain configuration, so any of them can be set from the
-environment. The two useful knobs:
 
 | Env var | Effect |
 |---|---|
 | `QUARKUS_LOG_CATEGORY__IO_LUMNIK__LEVEL=DEBUG` | debug for lumnik code only — the usual choice |
 | `QUARKUS_LOG_LEVEL=DEBUG` | debug for *everything*, frameworks included — a firehose |
 
-Self-host: add the variable under the `hub:` service's `environment:` block in
-`docker-compose.selfhost.yml`, then `docker compose -f docker-compose.selfhost.yml up -d`
-(only the hub restarts). Kubernetes:
+**Self-host.** The hub container only receives the variables listed in
+`docker-compose.selfhost.yml`; a line in `.env` does not reach it. Add an override file
+next to it, so the shipped file stays untouched:
+
+```yaml
+# debug.yml
+services:
+  hub:
+    environment:
+      QUARKUS_LOG_CATEGORY__IO_LUMNIK__LEVEL: DEBUG
+```
+
+```bash
+docker compose -f docker-compose.selfhost.yml -f debug.yml up -d hub
+```
+
+Also name every overlay file you started with (`-f docker-compose.tls.yml`, `-f docker-compose.search.yml`),
+or the hub restarts without it.
+To turn it back down, run the same command without `-f debug.yml`.
+
+**Kubernetes.**
 
 ```bash
 kubectl set env deploy/lumnik-hub QUARKUS_LOG_CATEGORY__IO_LUMNIK__LEVEL=DEBUG
 ```
 
+Turn it down with `kubectl set env deploy/lumnik-hub QUARKUS_LOG_CATEGORY__IO_LUMNIK__LEVEL-`.
+
 !!! warning "Turn it back down"
-    DEBUG is for the minutes you are actively looking. It is chatty enough to drown
-    the signal — and the log may echo data you would rather not keep. Remove the
-    variable the same way you added it.
+    DEBUG is for the minutes you are actively looking. It drowns the signal, and the log
+    may echo data you would rather not keep.
 
 ## When the answer is not in the logs
 
-An ingestion problem usually isn't a stack trace — it's *"why did only 4,980 of my
-5,000 rows arrive?"*. The hub answers that question with its per-run ledger, not with
-log lines. Every run conserves its arithmetic (`records in = out + skipped`): quality
-failures — a `validate-row` rejection, a malformed row — land in the dead-letter queue
-with their reason and the offending payload; a declared filter is a counted skip with
-no DLQ entry at all. Dead-letters are a subset of skips, never the whole of them:
-
-```bash
-lm run list --connector my-erp     # runs, newest first, records in/out/skip at a glance
-lm run get <RUN_ID>                # one run's full transparency report
-lm dlq list --run <RUN_ID>         # exactly which rows fell out, and why
-lm outputs list                    # outbound deliveries, failures first
-```
-
-In the TUI the same trail is `:runs`, `:dlq` and `:outputs` — the first two
-live-update, so you can watch a run while it happens. The full command surface is in
-the [CLI & TUI reference](../cli/lm-reference.md), and the thinking behind the ledger
-in [ingestion honesty](../transparency/ingestion-honesty.md).
+Missing rows and failed runs are answered by the run ledger and the dead-letter queue, not by
+log lines: [Diagnosing a failed run](diagnose-a-run.md). Outbound deliveries: `lm outputs list`.
+In the TUI: `:runs`, `:dlq` and `:outputs`.

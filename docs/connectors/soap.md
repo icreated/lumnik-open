@@ -21,7 +21,7 @@ and the error channel that is not the HTTP status.
 !!! note "Every screen on this page reads a demo service that ships with the repo"
     The same Python file the REST page uses answers SOAP on `POST /<service>/start.swe` — eight
     services over the same 2 400 fictional ACME partners, in XML. Start it in a terminal of its
-    own, and put the one credential these manifests need in the hub's registry:
+    own, and put the credential these manifests need in the hub's registry:
 
     ```bash
     python3 docs/connectors/rest/demo/acme-api.py
@@ -38,12 +38,12 @@ and the error channel that is not the HTTP status.
 
 ```
 $ lm validate -f docs/connectors/rest/demo/90-soap-querypage.yaml
-✓ docs/connectors/rest/demo/90-soap-querypage.yaml — valid
+✓ 90-soap-querypage.yaml — valid
 $ lm apply -f docs/connectors/rest/demo/90-soap-querypage.yaml
-{"name":"acme-soap","connectorId":"b0a39e2f-29b3-43ed-be20-2526d23bc06c","endpointsApplied":1}
+{"name":"acme-soap","connectorId":"d4f12957-40b8-4508-926d-32e4fb170ad5","endpointsApplied":1}
 ```
 
-Before running anything, ask the service the first question a run would ask:
+Before running anything, send the first request a run would send:
 
 ```
 $ lm source rest test acme-soap
@@ -51,21 +51,22 @@ ENDPOINT  METHOD  STATUS  ITEMS  VERDICT
 partners  POST    200     500    ok
 ```
 
-`METHOD` reads `POST`: the pre-flight composes the request a run composes — envelope, body
-template, `SOAPAction` and all — so a SOAP endpoint is knocked on the way a run knocks. One
-page, 500 customers, nothing written.
+The pre-flight sends the request a run sends — envelope, body template, `SOAPAction` — for one
+page. Nothing is written.
 
 ```
 $ lm connector run acme-soap
-run scheduled: df8459f5-ec4c-4269-bd87-ea8f046c3f08
+run scheduled: 45b9d0b8-ffb9-4bbf-ab2a-95fe42e03d70
 $ lm run list --connector acme-soap
 ID        CONNECTOR  ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
-df8459f5  acme-soap  partners  Completed  2400  2400  0        0             2026-09-10 17:54  2026-09-10 17:54
+45b9d0b8  acme-soap  partners  Completed  2400  2400  0        0             2026-10-19 01:46  2026-10-19 01:46
 ```
 
 What landed in `ext.acme_soap_partners` — the promoted columns, beside the whole payload:
 
 ```
+lumnik=> SELECT external_id, name, city, credit_limit, updated_at
+lumnik->   FROM ext.acme_soap_partners ORDER BY external_id LIMIT 3;
  external_id |           name            |   city    | credit_limit |       updated_at       
 -------------+---------------------------+-----------+--------------+------------------------
  1000        | Hydraulique Lyon 1000     | Lyon      |          500 | 2026-01-01 00:00:00+00
@@ -73,11 +74,9 @@ What landed in `ext.acme_soap_partners` — the promoted columns, beside the who
  1002        | Fixations Milano 1002     | Milano    |          774 | 2026-01-01 00:02:00+00
 ```
 
-Those are the same three partners the [REST quickstart](rest.md#quickstart) read out of JSON,
-and that is the point: what changed is the envelope, not the table. `credit_limit` is a numeric
-column and `updated_at` a `timestamptz` because the `promote` ladder said so — **XML carries no
-types**, and every leaf arrived as a string. The table itself is the shared
-[storage layout](rest.md#storage-layout).
+The same partners as the [REST quickstart](rest.md#quickstart), in the same
+[storage layout](rest.md#storage-layout). XML carries no types: `credit_limit` and
+`updated_at` are typed by their `promote` entries.
 
 ## The manifest
 
@@ -94,36 +93,23 @@ types**, and every leaf arrived as a string. The table itself is the shared
 | `last_page_path` / `has_more_path` | pagination | no | One stop signal — see [Where the QueryPage loop stops](#where-the-querypage-loop-stops) |
 | `target` | endpoint | yes | The same hybrid target as REST: `table`, `unique_key`, `promote` |
 
-`method` is implicit: always `POST`, with `Content-Type: text/xml; charset=utf-8`. The engine
-sends SOAP **1.1** envelopes only — a service that requires SOAP 1.2
-(`application/soap+xml`) is not supported in this release.
-
-`page_size` is deliberately defaultless. It is not just the loop's stride: it is substituted
-into the body as `{{page_size}}`. A default that did not match what the service actually
-returns would skip or duplicate rows — the arithmetic and the request would disagree about the
-same number.
+- The request is always a `POST` with `Content-Type: text/xml; charset=utf-8`.
+- SOAP **1.1** envelopes only; a service that requires SOAP 1.2 (`application/soap+xml`) is not
+  supported.
+- Set `page_size` to the number of rows the service actually returns per page.
 
 ## How it works
 
 - The rendered body is wrapped in a `<soap:Envelope>` and POSTed to `base_url + path`.
-- `{{cursor}}` is a **row offset**: `0` on the first request, `+page_size` per page. There is no
-  next-page link and no total to read — QueryPage advances by arithmetic.
-- The XML answer is parsed into a tree, and **namespace prefixes are stripped**
-  (`ns1:Customer` → `Customer`) before any path is matched. That is why every path in the
-  manifest above is written without a prefix while the service answers with them.
-- The terminal segment of `response_path` is **force-listed**: one `<Customer>` or fifty, the
-  run reads a list. XML has no arrays, and without that coercion a page holding a single element
-  parses as an object and is lost without a word. (Limit: *intermediate* repeated segments are
-  not coerced.)
-- The parser is **XXE-hardened** — DTDs and external entities are disabled.
+- `{{cursor}}` is a **row offset**: `0` on the first request, `+page_size` per page.
+- **Namespace prefixes are stripped** (`ns1:Customer` → `Customer`): write every path without
+  prefixes.
+- The last segment of `response_path` is always read as a list, even when a page holds a single
+  element. A repeated *intermediate* segment is not.
+- DTDs and external entities are disabled.
 
-!!! warning "A SOAP endpoint does not chunk — size it accordingly"
-    Every other reader in this family follows the pagination chain one chunk at a time. SOAP
-    cannot: its resume state lives inside the strategy and cannot be rebuilt from a cursor, so
-    a run fetches **all** its pages in one pass and holds the whole payload in memory. The
-    quickstart's 2 400 partners cost five requests inside a single fetch. `lm run get <id> -o
-    json` still reports `"chunkCount": 2` — the fetch, then the chunk that recognises its own
-    run on the cursor and ends the stream without asking for anything.
+!!! warning "A SOAP endpoint reads all its pages in one pass, in memory — size it accordingly"
+    The quickstart's 2 400 partners are five requests in a single fetch.
 
 ## Body templating
 
@@ -133,55 +119,39 @@ Four placeholders are resolved on every request — in `body:` **and** `header:`
 |---|---|
 | `{{page_size}}` | `pagination.page_size`, verbatim |
 | `{{cursor}}` | the row offset of the page being fetched |
-| `{{secret:NAME}}` / `{{env:NAME}}` | the hub's **process environment** — see below |
+| `{{secret:NAME}}` | the `lm secret` registry, then the hub's process environment — see below |
+| `{{env:NAME}}` | the hub's process environment only |
 
-An **unresolved placeholder fails the run before the request is sent**: a template is never put
-on the wire with a literal `{{...}}` inside it, and the value is never echoed in the error.
-Anything else — `{{watermark}}`, a typo — is refused the same way.
+An **unresolved placeholder fails the run before any request is sent**; the error names the
+placeholder, never a value. Any other placeholder (`{{watermark}}`, a typo) fails the same way.
 
-### The credential the secret registry does not serve
+### A credential inside the envelope
 
-This is the one thing on this page that will surprise you. `{{secret:NAME}}` and `{{env:NAME}}`
-are synonyms, and **both** resolve from the hub's own process environment (an OS variable, or a
-JVM system property as a dev/test fallback). The DB-backed `lm secret` registry is *not*
-consulted — unlike `password_env` and `value_env`, which read that registry first.
+`{{secret:NAME}}` reads the `lm secret` registry first, then the hub's process environment (an
+OS variable, or a JVM system property), like `password_env`. `{{env:NAME}}` reads the hub's
+process environment only.
 
-Legacy EAI services often want their session token inside the envelope, where no auth provider
-can put it. That is what `header:` is for:
+A session token inside the envelope goes in `header:`:
 
 ```yaml
 --8<-- "docs/connectors/rest/demo/94-soap-session.yaml"
 ```
 
-Applied without the variable, the refusal happens **in the hub** — the service is never asked:
+Without the secret, nothing is sent:
 
 ```
 $ lm source rest test acme-soap-session
 ENDPOINT  METHOD  STATUS  ITEMS  VERDICT
-partners  GET     -       0      unresolved secret/env placeholder: ACME_SESSION_TOKEN
+partners  POST    -       0      unresolved secret/env placeholder: ACME_SESSION_TOKEN
 Error: 1 of 1 enabled endpoint(s) did not answer with readable data
 ```
 
-`STATUS -` is the column that matters: no request was composed at all, so nothing was sent. The
-`METHOD` column falls back to the endpoint row's stored default and prints `GET` on an endpoint
-this command only ever POSTs to — read `STATUS -` first.
+`STATUS -`: no request was composed. When no request is composed, `METHOD` shows the endpoint's stored method — `POST` for a SOAP endpoint unless the manifest sets one.
 
-`lm secret set ACME_SESSION_TOKEN …` would change nothing here. The variable has to exist where
-the hub process runs, which for the container stack means one override file — it adds that
-single variable to the hub service and changes nothing else:
+Store it, and the next run sends it; the manifest does not change:
 
 ```bash
-docker compose -f docker-compose.selfhost.yml \
-               -f docs/connectors/rest/demo/soap-session.override.yml up -d hub
-```
-
-Nothing about the manifest changes. The same endpoint, before and after, in one ledger:
-
-```
-$ lm run list --connector acme-soap-session
-ID        CONNECTOR          ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
-61e70fbd  acme-soap-session  partners  Completed  2400  2400  0        0             2026-09-10 18:12  2026-09-10 18:12
-eaefa10b  acme-soap-session  partners  Failed     0     0     0        0             2026-09-10 17:57  2026-09-10 17:57
+lm secret set ACME_SESSION_TOKEN        # demo-session-42
 ```
 
 ## Where the QueryPage loop stops
@@ -195,13 +165,10 @@ configuration and never tried in sequence:
 | else `has_more_path` | only while the flag reads explicitly `true` |
 | neither | until a page comes back shorter than `page_size` |
 
-Both flag rules are asymmetric about absence on purpose: a missing, null or unreadable flag
-**stops**. A loop that kept going on a flag it could not read would hammer a legacy service
-forever — offset arithmetic gives it no natural end. (Flags arrive as XML strings;
-`"true"`/`"false"` are read as booleans.)
+A missing, null or unreadable flag **stops** the loop. `"true"`/`"false"` strings are read as
+booleans.
 
-The quickstart covers `last_page_path`. Here are the other two, plus the trap underneath all of
-them:
+The quickstart uses `last_page_path`; here are the other two, plus a single-element last page:
 
 ```yaml
 --8<-- "docs/connectors/rest/demo/91-soap-stop-signals.yaml"
@@ -210,25 +177,20 @@ them:
 ```
 $ lm run list --connector acme-soap-stops
 ID        CONNECTOR        ENDPOINT             STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
-00ea7a5c  acme-soap-stops  single-element-tail  Completed  201   201   0        0             2026-09-10 17:54  2026-09-10 17:54
-f5011cb7  acme-soap-stops  short-page           Completed  2400  2400  0        0             2026-09-10 17:54  2026-09-10 17:54
-507ad6e8  acme-soap-stops  more-records         Completed  2400  2400  0        0             2026-09-10 17:54  2026-09-10 17:54
+4ad8f592  acme-soap-stops  single-element-tail  Completed  201   201   0        0             2026-10-19 01:46  2026-10-19 01:46
+9ace6ce2  acme-soap-stops  short-page           Completed  2400  2400  0        0             2026-10-19 01:46  2026-10-19 01:46
+993bbd1a  acme-soap-stops  more-records         Completed  2400  2400  0        0             2026-10-19 01:46  2026-10-19 01:46
 ```
 
-**201, not 200.** The `/tail` service serves a truncated 201-row dataset against a page size of
-100, so its last page carries exactly one `<Customer>`. That row is the force-list's witness: it
-is the one an engine that iterates blindly drops, and no error is raised when it does. Whenever
-you meet a SOAP source, the count of a truncated read is the check worth running.
+**201, not 200**: `/tail` holds 201 rows at a page size of 100, so its last page carries one
+`<Customer>`, and it is ingested. On a new SOAP source, compare the row count with the source's.
 
 ## When the service misbehaves
 
 ### A Fault fails the run — and is never retried
 
-SOAP, like GraphQL, has an error channel that is not the HTTP status, and stacks use it two
-ways: `<soap:Fault>` on HTTP 500, which is what SOAP 1.1 prescribes, and the same Fault on HTTP
-200, which plenty of gateways send. Both must fail the run — the second is the dangerous one,
-because an engine that trusts the status reads a body with no rows in it and reports a clean,
-empty, successful sync.
+A `<soap:Fault>` fails the run, whether it arrives on HTTP 500 (SOAP 1.1) or on HTTP 200 (some
+gateways):
 
 ```yaml
 --8<-- "docs/connectors/rest/demo/92-soap-fault.yaml"
@@ -237,23 +199,18 @@ empty, successful sync.
 ```
 $ lm run list --connector acme-soap-fault
 ID        CONNECTOR        ENDPOINT      STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-a4b52877  acme-soap-fault  fault-on-500  Failed  0   0    0        0             2026-09-10 17:55  2026-09-10 17:55
-2e52e76a  acme-soap-fault  fault-on-200  Failed  0   0    0        0             2026-09-10 17:55  2026-09-10 17:55
+0de9fa56  acme-soap-fault  fault-on-200  Failed  0   0    0        0             2026-10-19 01:46  2026-10-19 01:46
+8d179cc0  acme-soap-fault  fault-on-500  Failed  0   0    0        0             2026-10-19 01:46  2026-10-19 01:46
 
-$ lm run get a4b52877
+$ lm run get 8d179cc0
 ID        CONNECTOR        ENDPOINT      STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-a4b52877  acme-soap-fault  fault-on-500  Failed  0   0    0        0             2026-09-10 17:55  2026-09-10 17:55
+8d179cc0  acme-soap-fault  fault-on-500  Failed  0   0    0        0             2026-10-19 01:46  2026-10-19 01:46
 ✖ run failed: SOAP Fault: SBL-DAT-00500: no such Business Component 'Customer'
 ```
 
-The message carries the service's own `faultstring`, verbatim. The refusal is total: no partial
-ingestion, nothing dead-lettered — a query the service would not answer produced no rows to
-quarantine — and neither endpoint's `ext.*` table was created at all.
-
-A Fault is a **business** error: the service answered, and its answer is "no". Retrying it is
-waiting for a different answer to the same wrong question, so the fault check runs *inside* the
-retry boundary and refuses first. In the demo API's log, that run is one request per endpoint —
-not five.
+- The message carries the service's `faultstring` verbatim.
+- Nothing is ingested or dead-lettered; neither endpoint's `ext.*` table is created.
+- A Fault is **never retried**: the demo API logs one request per endpoint.
 
 ### The same 500, without a Fault, is retried
 
@@ -261,43 +218,36 @@ not five.
 --8<-- "docs/connectors/rest/demo/93-soap-retry.yaml"
 ```
 
-The `/flaky` service answers 500 twice per page window before serving the page, and the body of
-those 500s carries no Fault — an infrastructure hiccup, not an answer. The shared REST policy
-applies unchanged: five attempts, transient on exactly `429, 500, 502, 503, 504, 408` (plus
-network errors); every other status is permanent.
+The `/flaky` service answers 500 **without** a Fault twice per page before serving it. The
+[REST retry policy](rest.md#retry-page-cap-rate-limit) applies unchanged.
 
 ```
 $ lm run list --connector acme-soap-retry
 ID        CONNECTOR        ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
-bcbf2d82  acme-soap-retry  flaky     Completed  2400  2400  0        0             2026-09-10 17:55  2026-09-10 17:55
+520b32f6  acme-soap-retry  flaky     Completed  2400  2400  0        0             2026-10-19 01:46  2026-10-19 01:46
 ```
 
-Completed, all 2 400 rows — and the demo API's own terminal is where you see what it cost:
+The demo API's log shows three requests per page, with the backoff between them:
 
 ```
-10/Sep/2026 17:55:34  "POST /flaky/start.swe HTTP/1.1" 500 -
-10/Sep/2026 17:55:35  "POST /flaky/start.swe HTTP/1.1" 500 -
-10/Sep/2026 17:55:37  "POST /flaky/start.swe HTTP/1.1" 200 -
-10/Sep/2026 17:55:37  "POST /flaky/start.swe HTTP/1.1" 500 -
-10/Sep/2026 17:55:38  "POST /flaky/start.swe HTTP/1.1" 500 -
-10/Sep/2026 17:55:40  "POST /flaky/start.swe HTTP/1.1" 200 -
+19/Oct/2026 01:46:32  "POST /flaky/start.swe HTTP/1.1" 500 -
+19/Oct/2026 01:46:33  "POST /flaky/start.swe HTTP/1.1" 500 -
+19/Oct/2026 01:46:34  "POST /flaky/start.swe HTTP/1.1" 200 -
+19/Oct/2026 01:46:34  "POST /flaky/start.swe HTTP/1.1" 500 -
+19/Oct/2026 01:46:35  "POST /flaky/start.swe HTTP/1.1" 500 -
+19/Oct/2026 01:46:37  "POST /flaky/start.swe HTTP/1.1" 200 -
 ```
 
-Three requests per window, with the backoff visible between them. Read those two runs together:
-same server, same status code, opposite handling — **the body is the only thing that differs**.
-The status says something went wrong; the body says whose fault it is.
+Same status code as the Fault above, opposite handling: a 500 with a Fault fails at once, a 500
+without one is retried.
 
 !!! warning "Reset the counters before re-running"
-    `curl http://127.0.0.1:8099/admin/reset`. The demo API's failure counters are per page
-    window and they persist: a second run finds them already burnt in, retries nothing, and goes
-    green for the wrong reason.
+    `curl http://127.0.0.1:8099/admin/reset`. Otherwise a second run finds the counters spent
+    and retries nothing.
 
 ### What the front door refuses
 
-`kind: soap` and `pagination.kind: soap` require each other, in both directions. `kind` picks
-the request builder; `pagination.kind` picks the XML parser and the offset arithmetic. Either
-half alone pairs a builder with a parser that cannot read it — not a crash, an empty run that
-looks successful, which is why this is refused at the front door:
+`kind: soap` and `pagination.kind: soap` require each other:
 
 ```
 $ lm apply -f bad-soap.yaml
@@ -315,10 +265,8 @@ Fix errors above before running 'lm apply -f bad-soap.yaml'.
 Error: validation failed: 2 error(s)
 ```
 
-And a SOAP `response_path` cannot be a projection. Everywhere else in this family `[*]` is the
-normal way to write one; here the parser has to *walk* those segments to reach the repeated
-element and coerce it into a list. An operator makes that walk impossible — the path would still
-match, and the run would still succeed, minus every page whose last element stood alone:
+A SOAP `response_path` must be a plain dotted path (no `[*]`, no `..`), and `page_size` is
+required:
 
 ```
 $ lm apply -f bad-paths.yaml
@@ -330,13 +278,15 @@ $ lm apply -f bad-paths.yaml
 
   ERROR    spec.endpoints[1].pagination.page_size
           page_size is required when pagination.kind = soap
+
+Fix errors above before running 'lm apply -f bad-paths.yaml'.
+Error: validation failed: 2 error(s)
 ```
 
 ## Incremental — the mark rides the URL, not the body
 
-`incremental: { mode: watermark }` works on a SOAP endpoint: the stored mark goes out on the
-first request of a run and the new one is the MAX of `watermark_path` over everything the run
-read.
+`incremental: { mode: watermark }` works on a SOAP endpoint: the stored mark goes out with the
+run's first request; the new mark is the MAX of `watermark_path` over the rows read.
 
 ```yaml
 --8<-- "docs/connectors/rest/demo/95-soap-watermark.yaml"
@@ -345,66 +295,62 @@ read.
 ```
 $ lm run list --connector acme-soap-incremental
 ID        CONNECTOR              ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
-94bd6b1a  acme-soap-incremental  partners  Completed  1     1     0        0             2026-09-10 17:56  2026-09-10 17:56
-fa948c13  acme-soap-incremental  partners  Completed  2400  2400  0        0             2026-09-10 17:56  2026-09-10 17:56
+7f2e0dbf  acme-soap-incremental  partners  Completed  1     1     0        0             2026-10-19 01:46  2026-10-19 01:46
+e5a98a0f  acme-soap-incremental  partners  Completed  2400  2400  0        0             2026-10-19 01:46  2026-10-19 01:46
 ```
 
-Run 1 reads 2 400 and stores the maximal `UpdatedAt`; run 2 sends it and reads the single row
-sharing that instant — inclusive, like most sources, and re-upserted on its unique key.
+Run 1 reads 2 400 rows; run 2 sends the mark and reads the one row sharing that instant
+(inclusive filter), re-upserted on its key.
 
 !!! warning "Know this before you promise a customer an incremental SOAP feed"
-    The mark is **not** woven into the body. There is no `{{watermark}}` placeholder — the
-    table above is the whole list, and anything else fails the run. The mark rides in the URL
-    query string, bolted onto the POST, which is what the demo service reads:
+    The mark goes in the URL query string, not in the body — there is no `{{watermark}}`
+    placeholder:
 
     ```
-    10/Sep/2026 17:56:49  "POST /siebel/start.swe?updated_since=2026-01-02T15%3A59%3A00Z HTTP/1.1" 200 -
+    19/Oct/2026 01:46:44  "POST /siebel/start.swe?updated_since=2026-01-02T15%3A59%3A00Z HTTP/1.1" 200 -
     ```
 
-    A real SOAP service will almost certainly want that filter as an element inside the body
-    instead, and this release gives no way to put it there. When it does, filter in the body
-    with a literal and leave `incremental` at `full`.
+    A service that expects the filter inside the body ignores it. Then filter in the body with a
+    literal and leave `incremental` at `full`.
 
 ## Connector-level headers
 
-[`spec.headers[]`](rest.md#request-headers) applies to SOAP endpoints too — the entries ride
-every page of the QueryPage loop. They are applied **before** auth (an auth-injected header wins
-a name clash), and `Content-Type` and `SOAPAction` are set by the engine, so don't redeclare
-them. Endpoint-level `headers` are refused at apply, exactly as for REST.
+[`spec.headers[]`](rest.md#request-headers) applies to every SOAP request, as for REST. Do not
+redeclare `Content-Type` or `SOAPAction`: the engine sets them.
 
 ## How to…
 
 ### Point it at your own service
 
-The manifest the TUI's `:new` picker hands you for `soap` is a Siebel EAI endpoint with nothing
-demo about it:
+The TUI's `:new` picker hands you this manifest for `soap` — a Siebel EAI endpoint:
 
 ```yaml
 --8<-- "docs/connectors/soap/10-siebel-querypage.yaml"
 ```
 
-**Result:** `lm apply -f siebel-customers.yaml` registers it; `lm source rest test
-siebel-customers` knocks once before you commit to a run. Change four things and it is yours:
-`base_url`, the `path` your EAI listener publishes, the operation names inside `body:` and the
-`response_path` that names its repeated element.
+Change `base_url`, the `path` your EAI listener publishes, the operation names inside `body:`
+and the `response_path`. Then:
+
+```bash
+lm apply -f siebel-customers.yaml
+lm source rest test siebel-customers
+```
 
 ### Read a second collection from the same service
 
-Add a second endpoint with its own `body:` (a different QueryPage operation), its own
-`response_path` and its own table. One connector, one service, one credential; the ledger
-records one run per endpoint, exactly as the
-[stop-signals connector](#where-the-querypage-loop-stops) shows with three.
+Add a second endpoint with its own `body:`, `response_path` and table. The ledger records one
+run per endpoint, as the [stop-signals connector](#where-the-querypage-loop-stops) shows.
 
 ## Troubleshooting
 
 | Symptom | Cause | Gesture |
 |---|---|---|
-| Run fails instantly with `unresolved secret/env placeholder` | the name is not in the **hub's** process environment | export it where the hub runs — the `lm secret` registry is not consulted for templates |
-| Run fails on HTTP 500 with no retry | a `<soap:Fault>` is a business error, and is never retried | read the `faultstring` in `lm run get`; fix the request or the permission it needs |
+| Run fails instantly with `unresolved secret/env placeholder` | `secret:` — the name is neither in `lm secret` nor in the hub's environment; `env:` — it is not in the hub's environment | `lm secret set NAME` for `secret:`; the hub's environment for `env:` |
+| Run fails on HTTP 500 with no retry | a `<soap:Fault>` is never retried | read the `faultstring` in `lm run get`; fix the request or the permission it needs |
 | Run completed with `IN` 0 | `response_path` does not match the answer | remember the namespace strip — write the path **without** prefixes; `lm source rest test` prints the item count from one page |
 | A run reads one row fewer than the source holds | `response_path` carries `[*]` or `..`, or an intermediate segment repeats | use a plain dotted path; the last page holding a single element is where the loss shows |
-| Pagination stops after one page | the flag is missing, null or unreadable — which stops, by design | check `last_page_path` / `has_more_path` against the real answer, or set neither and rely on the short page |
-| Pre-flight prints `METHOD GET` on a SOAP endpoint | no request was composed — read `STATUS -` | the verdict column carries the real reason |
+| Pagination stops after one page | the flag is missing, null or unreadable, which stops the loop | check `last_page_path` / `has_more_path` against the real answer, or set neither and rely on the short page |
+| Pre-flight prints `METHOD GET` on a SOAP endpoint | the endpoint was applied by a hub that stored `GET` when the manifest set no `method`; the run sends `POST` anyway | `lm apply` the manifest again to store `POST` |
 
 ## See also
 

@@ -12,6 +12,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.util.List;
 import java.util.Map;
+import java.time.ZoneOffset;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -40,7 +41,7 @@ class JdbcChunkReaderIT {
     JdbcChunkReader reader = new JdbcChunkReader(
         PG.getJdbcUrl(), "u", "p", "postgres", "public", "c_bp", "updated",
         List.of("id"), JdbcChunkReader.Mode.WATERMARK,
-        new PostgresDialect(), registry);
+        new PostgresDialect(), registry, ZoneOffset.UTC);
 
     ConnectorCursor cursor = ConnectorCursor.empty();
     int chunks = 0, total = 0;

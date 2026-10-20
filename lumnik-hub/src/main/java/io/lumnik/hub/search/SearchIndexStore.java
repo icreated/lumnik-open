@@ -6,10 +6,12 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.extraction.spi.search.ProjectionDefinition;
 import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.lumnik.hub.entity.EntityDefinitionLock;
 import io.lumnik.hub.entity.EntityRegistry;
 import io.lumnik.hub.search.mark.SearchProjectionMarkStore;
+import io.lumnik.hub.search.projection.ProjectionDefinitions;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -19,17 +21,16 @@ import org.hibernate.Session;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
-import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Tenant-bound {@code kind: SearchIndex} declarations (#669), on the request's own RLS-enforced
@@ -49,7 +50,7 @@ public class SearchIndexStore {
 
     /** One declaration as the list door shows it; {@code entityScopes} is empty when the entity is gone. */
     public record Summary(String name, String entity, String language, String status, String invalidReason,
-                          List<String> entityScopes) {}
+                          boolean withheld, List<String> entityScopes) {}
 
     /** What an apply did. Two predicates guard it, so zero rows is disambiguated, not guessed. */
     public enum ApplyOutcome { APPLIED, NAME_HELD_OUT_OF_SCOPE, ENTITY_CHANGED, ENTITY_ALREADY_INDEXED }
@@ -69,7 +70,7 @@ public class SearchIndexStore {
      *  the 404/403/409-invalid checks need. A brand new method (not reusing Summary/list): the wire
      *  shape of the existing registry door stays untouched. */
     public record Declaration(String entity, String manifestYaml, String status, String invalidReason,
-                              List<String> entityScopes) {}
+                              boolean withheld, List<String> entityScopes) {}
 
     /** The caller's grants hold every scope of entity row {@code alias}, and it has at least one. */
     private static String held(String alias) {
@@ -107,7 +108,8 @@ public class SearchIndexStore {
      */
     @Transactional(Transactional.TxType.MANDATORY)
     public Applied upsert(long tenantId, String name, String entity, String entityYaml, String language,
-                               String yaml, String manifestJson, Long actor, Set<String> callerScopes) {
+                               String yaml, String manifestJson, ProjectionDefinition declared, Long actor,
+                               Set<String> callerScopes) {
         return session().doReturningWork(conn -> {
             // Held to this transaction's commit: an entity re-apply waits for this write, and this write
             // waits for a compile in flight, then re-reads the committed definition below.
@@ -118,65 +120,97 @@ public class SearchIndexStore {
             lockEntitySlot(conn, tenantId, entity);
             Optional<String> holder = holderOtherThan(conn, tenantId, entity, name);
             if (holder.isPresent()) return new Applied(ApplyOutcome.ENTITY_ALREADY_INDEXED, holder.get());
-            try (PreparedStatement ps = conn.prepareStatement(
+            boolean withheld = withholds(conn, tenantId, name, declared);
+            if (Jdbc.update(conn, "SearchIndexStore.upsert",
                     "INSERT INTO core.search_index "
-                  + "(tenant_id, name, entity, language, manifest_yaml, manifest, created_by, updated_by) "
-                  + "SELECT ?, ?, ?, ?, ?, ?::jsonb, ?, ? "
+                  + "(tenant_id, name, entity, language, manifest_yaml, manifest, created_by, updated_by, withheld) "
+                  + "SELECT ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ? "
                   + "WHERE EXISTS (SELECT 1 FROM connector.entity_manifest n "
                   + "  WHERE n.name = lower(?) AND n.yaml_text = ? AND (?::text[] IS NULL OR " + held("n") + ")) "
                   + "ON CONFLICT (tenant_id, name) DO UPDATE SET "
                   + "entity = excluded.entity, language = excluded.language, "
                   + "manifest_yaml = excluded.manifest_yaml, manifest = excluded.manifest, "
-                  + "status = 'valid', invalid_reason = NULL, updated_at = now(), updated_by = excluded.updated_by "
-                  + "WHERE " + GUARD)) {
-                ps.setLong(1, tenantId);
-                ps.setString(2, name);
-                ps.setString(3, entity);
-                ps.setString(4, language);
-                ps.setString(5, yaml);
-                ps.setString(6, manifestJson);
-                setActor(ps, 7, actor);
-                setActor(ps, 8, actor);
-                ps.setString(9, entity);
-                ps.setString(10, entityYaml);
-                ScopeGuardedUpsert.bindGrants(ps, 11, callerScopes);
-                ScopeGuardedUpsert.bindGrants(ps, 13, callerScopes);
-                if (ps.executeUpdate() == 1) {
-                    // Trigger 4a (design §4, row 4a): a fresh apply or a changed declaration has no
-                    // prior projected set to diff against — full re-project is the only sound option.
-                    // Same transaction as the upsert itself: a mark-write failure fails the apply, same
-                    // as any other write in this method would.
-                    mark.markAll(conn, tenantId, name, entity, "index-apply");
-                    return Applied.of(ApplyOutcome.APPLIED);
-                }
+                  + "status = 'valid', invalid_reason = NULL, withheld = excluded.withheld, "
+                  + "updated_at = now(), updated_by = excluded.updated_by "
+                  + "WHERE " + GUARD,
+                    ps -> {
+                        ps.setLong(1, tenantId);
+                        ps.setString(2, name);
+                        ps.setString(3, entity);
+                        ps.setString(4, language);
+                        ps.setString(5, yaml);
+                        ps.setString(6, manifestJson);
+                        setActor(ps, 7, actor);
+                        setActor(ps, 8, actor);
+                        ps.setBoolean(9, withheld);
+                        ps.setString(10, entity);
+                        ps.setString(11, entityYaml);
+                        ScopeGuardedUpsert.bindGrants(ps, 12, callerScopes);
+                        ScopeGuardedUpsert.bindGrants(ps, 14, callerScopes);
+                    }) == 1) {
+                // Trigger 4a (design §4, row 4a): a fresh apply or a changed declaration has no
+                // prior projected set to diff against — full re-project is the only sound option.
+                // Same transaction as the upsert itself: a mark-write failure fails the apply, same
+                // as any other write in this method would.
+                mark.markAll(conn, tenantId, name, entity, "index-apply");
+                return Applied.of(ApplyOutcome.APPLIED);
             }
             // Nothing written: the entity moved since the door read it, or the name is held elsewhere.
-            return exists(conn, "SELECT 1 FROM connector.entity_manifest WHERE name = lower(?) AND yaml_text = ?",
-                    entity, entityYaml)
+            return Jdbc.exists(conn, "SearchIndexStore.upsert(entity unchanged?)",
+                    "SELECT 1 FROM connector.entity_manifest WHERE name = lower(?) AND yaml_text = ?",
+                    ps -> {
+                        ps.setString(1, entity);
+                        ps.setString(2, entityYaml);
+                    })
                 ? Applied.of(ApplyOutcome.NAME_HELD_OUT_OF_SCOPE) : Applied.of(ApplyOutcome.ENTITY_CHANGED);
         });
     }
 
-    private static void lockEntitySlot(Connection conn, long tenantId, String entity) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))")) {
-            ps.setString(1, "core.search_index:" + tenantId + ":" + entity.toLowerCase(Locale.ROOT));
-            ps.execute();
-        }
+    /**
+     * Whether re-applying {@code name} as {@code declared} leaves it withheld (#1219): it already was — only a
+     * rebuild releases it — or {@code declared} narrows the stored declaration. FOR UPDATE: concurrent re-applies
+     * of one name each compare against what the other wrote.
+     */
+    private static boolean withholds(Connection conn, long tenantId, String name, ProjectionDefinition declared) {
+        return Jdbc.queryOne(conn, "SearchIndexStore.withholds",
+                "SELECT manifest_yaml, withheld FROM core.search_index WHERE tenant_id = ? AND name = ? FOR UPDATE",
+                ps -> {
+                    ps.setLong(1, tenantId);
+                    ps.setString(2, name);
+                },
+                rs -> rs.getBoolean(2) || ProjectionDefinitions.fromStored(rs.getString(1))
+                    .map(stored -> ProjectionDefinitions.narrows(stored, declared)).orElse(true))
+            .orElseGet(() -> purgePending(conn, tenantId, name));
+    }
+
+    /** A name deleted but not yet purged: its old build may still answer under it, so a declaration re-applied
+     *  under that name is no fresh index — what that build serves cannot be compared, only withheld. */
+    private static boolean purgePending(Connection conn, long tenantId, String name) {
+        return Jdbc.exists(conn, "SearchIndexStore.purgePending",
+                "SELECT 1 FROM core.search_index_purge WHERE tenant_id = ? AND name = ?",
+                ps -> {
+                    ps.setLong(1, tenantId);
+                    ps.setString(2, name);
+                });
+    }
+
+    private static void lockEntitySlot(Connection conn, long tenantId, String entity) {
+        // The lock is the statement's effect; its one (void) row is read and dropped.
+        Jdbc.queryOne(conn, "SearchIndexStore.lockEntitySlot", "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+            ps -> ps.setString(1, "core.search_index:" + tenantId + ":" + entity.toLowerCase(Locale.ROOT)),
+            rs -> true);
     }
 
     /** The declaration over {@code entity} whose name is not {@code except}. */
-    private static Optional<String> holderOtherThan(Connection conn, long tenantId, String entity, String except)
-            throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement(
+    private static Optional<String> holderOtherThan(Connection conn, long tenantId, String entity, String except) {
+        return Jdbc.queryOne(conn, "SearchIndexStore.holderOtherThan",
                 "SELECT name FROM core.search_index WHERE tenant_id = ? AND lower(entity) = lower(?) "
-              + "AND name <> ?")) {
-            ps.setLong(1, tenantId);
-            ps.setString(2, entity);
-            ps.setString(3, except);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? Optional.of(rs.getString(1)) : Optional.<String>empty();
-            }
-        }
+              + "AND name <> ?",
+                ps -> {
+                    ps.setLong(1, tenantId);
+                    ps.setString(2, entity);
+                    ps.setString(3, except);
+                }, rs -> rs.getString(1));
     }
 
     /**
@@ -186,41 +220,27 @@ public class SearchIndexStore {
      */
     @Transactional(Transactional.TxType.MANDATORY)
     public Optional<List<String>> storedEntityScopes(long tenantId, String name) {
-        return session().doReturningWork(conn -> {
-            try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT e.scopes FROM core.search_index s "
-                  + "LEFT JOIN connector.entity_manifest e ON e.name = lower(s.entity) "
-                  + "WHERE s.tenant_id = ? AND s.name = ?")) {
-                ps.setLong(1, tenantId);
-                ps.setString(2, name);
-                try (ResultSet rs = ps.executeQuery()) {
-                    return rs.next()
-                        ? Optional.of(EntityRegistry.scopes(rs.getArray(1)))
-                        : Optional.<List<String>>empty();
-                }
-            }
-        });
+        return session().doReturningWork(conn -> Jdbc.queryOne(conn, "SearchIndexStore.storedEntityScopes",
+                "SELECT e.scopes FROM core.search_index s "
+              + "LEFT JOIN connector.entity_manifest e ON e.name = lower(s.entity) "
+              + "WHERE s.tenant_id = ? AND s.name = ?",
+                ps -> {
+                    ps.setLong(1, tenantId);
+                    ps.setString(2, name);
+                }, rs -> EntityRegistry.scopes(rs.getArray(1))));
     }
 
     /** Every declaration of this tenant with its entity's scopes; the door filters them by grants. */
     @Transactional(Transactional.TxType.MANDATORY)
     public List<Summary> list(long tenantId) {
-        return session().doReturningWork(conn -> {
-            try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT s.name, s.entity, s.language, s.status, s.invalid_reason, e.scopes "
-                  + "FROM core.search_index s "
-                  + "LEFT JOIN connector.entity_manifest e ON e.name = lower(s.entity) "
-                  + "WHERE s.tenant_id = ? ORDER BY s.name")) {
-                ps.setLong(1, tenantId);
-                try (ResultSet rs = ps.executeQuery()) {
-                    List<Summary> out = new ArrayList<>();
-                    while (rs.next())
-                        out.add(new Summary(rs.getString(1), rs.getString(2), rs.getString(3),
-                            rs.getString(4), rs.getString(5), EntityRegistry.scopes(rs.getArray(6))));
-                    return out;
-                }
-            }
-        });
+        return session().doReturningWork(conn -> Jdbc.query(conn, "SearchIndexStore.list",
+                "SELECT s.name, s.entity, s.language, s.status, s.invalid_reason, s.withheld, e.scopes "
+              + "FROM core.search_index s "
+              + "LEFT JOIN connector.entity_manifest e ON e.name = lower(s.entity) "
+              + "WHERE s.tenant_id = ? ORDER BY s.name",
+                ps -> ps.setLong(1, tenantId),
+                rs -> new Summary(rs.getString(1), rs.getString(2), rs.getString(3),
+                    rs.getString(4), rs.getString(5), rs.getBoolean(6), EntityRegistry.scopes(rs.getArray(7)))));
     }
 
     /** What a client needs to draw one hit of an index beyond the provider's answer: the title field (#1044)
@@ -241,20 +261,30 @@ public class SearchIndexStore {
     @Transactional
     public Map<String, HitPresentation> presentations(long tenantId, Collection<String> indexNames) {
         if (indexNames.isEmpty()) return Map.of();
-        return session().doReturningWork(conn -> {
-            try (PreparedStatement ps = conn.prepareStatement(
+        return session().doReturningWork(conn -> Jdbc.query(conn, "SearchIndexStore.presentations",
                     "SELECT name, manifest->>'titleField', (manifest->'links')::text FROM core.search_index "
                   + "WHERE tenant_id = ? AND name = ANY(?) "
-                  + "AND (manifest->>'titleField' IS NOT NULL OR manifest->'links' IS NOT NULL)")) {
-                ps.setLong(1, tenantId);
-                ps.setArray(2, conn.createArrayOf("text", indexNames.toArray()));
-                try (ResultSet rs = ps.executeQuery()) {
-                    Map<String, HitPresentation> out = new HashMap<>();
-                    while (rs.next()) out.put(rs.getString(1), new HitPresentation(rs.getString(2), links(rs.getString(3))));
-                    return out;
-                }
-            }
-        });
+                  + "AND (manifest->>'titleField' IS NOT NULL OR manifest->'links' IS NOT NULL)",
+                    ps -> {
+                        ps.setLong(1, tenantId);
+                        ps.setArray(2, conn.createArrayOf("text", indexNames.toArray()));
+                    },
+                    rs -> Map.entry(rs.getString(1), new HitPresentation(rs.getString(2), links(rs.getString(3)))))
+            .stream().collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
+    }
+
+    /**
+     * The entities, lower-cased, whose SearchIndex of this tenant must not answer: an {@code invalid} declaration
+     * (#1187), or one {@code withheld} because its build still serves a field it no longer declares (#1219). One
+     * index per entity (#832) makes the entity the unit to leave out.
+     * Plain REQUIRED, like {@link #presentations}: the search resource holds no transaction of its own.
+     */
+    @Transactional
+    public Set<String> unservedEntities(long tenantId) {
+        return session().doReturningWork(conn -> new HashSet<>(Jdbc.query(conn, "SearchIndexStore.unservedEntities",
+                "SELECT lower(entity) FROM core.search_index WHERE tenant_id = ? "
+              + "AND (status = 'invalid' OR withheld)",
+                ps -> ps.setLong(1, tenantId), rs -> rs.getString(1))));
     }
 
     /** Links are cosmetic: a stored value that is null, JSON null or unreadable is "no links" for that index —
@@ -275,22 +305,17 @@ public class SearchIndexStore {
      */
     @Transactional(Transactional.TxType.MANDATORY)
     public Optional<Declaration> get(long tenantId, String name) {
-        return session().doReturningWork(conn -> {
-            try (PreparedStatement ps = conn.prepareStatement(
-                    "SELECT s.entity, s.manifest_yaml, s.status, s.invalid_reason, e.scopes "
-                  + "FROM core.search_index s "
-                  + "LEFT JOIN connector.entity_manifest e ON e.name = lower(s.entity) "
-                  + "WHERE s.tenant_id = ? AND s.name = ?")) {
-                ps.setLong(1, tenantId);
-                ps.setString(2, name);
-                try (ResultSet rs = ps.executeQuery()) {
-                    return rs.next()
-                        ? Optional.of(new Declaration(rs.getString(1), rs.getString(2), rs.getString(3),
-                            rs.getString(4), EntityRegistry.scopes(rs.getArray(5))))
-                        : Optional.<Declaration>empty();
-                }
-            }
-        });
+        return session().doReturningWork(conn -> Jdbc.queryOne(conn, "SearchIndexStore.get",
+                "SELECT s.entity, s.manifest_yaml, s.status, s.invalid_reason, s.withheld, e.scopes "
+              + "FROM core.search_index s "
+              + "LEFT JOIN connector.entity_manifest e ON e.name = lower(s.entity) "
+              + "WHERE s.tenant_id = ? AND s.name = ?",
+                ps -> {
+                    ps.setLong(1, tenantId);
+                    ps.setString(2, name);
+                },
+                rs -> new Declaration(rs.getString(1), rs.getString(2), rs.getString(3),
+                    rs.getString(4), rs.getBoolean(5), EntityRegistry.scopes(rs.getArray(6)))));
     }
 
     /**
@@ -302,21 +327,26 @@ public class SearchIndexStore {
     @Transactional(Transactional.TxType.MANDATORY)
     public DeleteOutcome deleteWithPurge(long tenantId, String name, Long actor, Set<String> callerScopes) {
         return session().doReturningWork(conn -> {
-            try (PreparedStatement ps = conn.prepareStatement(
+            if (Jdbc.update(conn, "SearchIndexStore.deleteWithPurge",
                     "WITH gone AS ("
                   + "  DELETE FROM core.search_index WHERE tenant_id = ? AND name = ? AND " + GUARD
                   + "  RETURNING tenant_id, name, entity) "
                   + "INSERT INTO core.search_index_purge (tenant_id, name, entity, requested_by) "
-                  + "SELECT tenant_id, name, entity, ? FROM gone")) {
-                ps.setLong(1, tenantId);
-                ps.setString(2, name);
-                ScopeGuardedUpsert.bindGrants(ps, 3, callerScopes);
-                setActor(ps, 5, actor);
-                if (ps.executeUpdate() == 1) return DeleteOutcome.DELETED;
-            }
+                  + "SELECT tenant_id, name, entity, ? FROM gone",
+                    ps -> {
+                        ps.setLong(1, tenantId);
+                        ps.setString(2, name);
+                        ScopeGuardedUpsert.bindGrants(ps, 3, callerScopes);
+                        setActor(ps, 5, actor);
+                    }) == 1) return DeleteOutcome.DELETED;
             // Nothing deleted. The door already 404'd a missing name, so NOT_FOUND here is only the race
             // where a concurrent delete won; a row still present means the guard refused it.
-            return exists(conn, "SELECT 1 FROM core.search_index WHERE tenant_id = ? AND name = ?", tenantId, name)
+            return Jdbc.exists(conn, "SearchIndexStore.deleteWithPurge(still there?)",
+                    "SELECT 1 FROM core.search_index WHERE tenant_id = ? AND name = ?",
+                    ps -> {
+                        ps.setLong(1, tenantId);
+                        ps.setString(2, name);
+                    })
                 ? DeleteOutcome.SCOPE_REFUSED : DeleteOutcome.NOT_FOUND;
         });
     }
@@ -354,16 +384,27 @@ public class SearchIndexStore {
         }
     }
 
+    /**
+     * The audit row of each declaration it removes rides the same statement (#1193), in the tenant that
+     * owned it: the cascade commits with its trace or not at all, and a tenant's trail shows a
+     * SearchIndex another tenant's entity delete took — the same row {@code DELETE /api/search-indexes}
+     * writes, plus the entity that caused it.
+     */
     private static final String PURGE_ALL_FOR_ENTITY_SQL =
         "WITH gone AS ("
       + "  DELETE FROM core.search_index WHERE lower(entity) = lower(?) "
-      + "  RETURNING tenant_id, name, entity) "
-      + "INSERT INTO core.search_index_purge (tenant_id, name, entity, requested_by) "
-      + "SELECT tenant_id, name, entity, ? FROM gone";
+      + "  RETURNING tenant_id, name, entity), "
+      + "purge AS ("
+      + "  INSERT INTO core.search_index_purge (tenant_id, name, entity, requested_by) "
+      + "  SELECT tenant_id, name, entity, ? FROM gone) "
+      + "INSERT INTO core.audit_outbox (tenant_id, actor_id, entity_type, entity_key, operation, changes) "
+      + "SELECT tenant_id, ?, 'SearchIndex', name, 'DELETE', "
+      + "  jsonb_build_object('purge', 'requested', 'entity_deleted', entity) FROM gone";
 
     private static void bindPurgeAllForEntity(PreparedStatement ps, String entity, Long actor) throws SQLException {
         ps.setString(1, entity);
         setActor(ps, 2, actor);
+        setActor(ps, 3, actor);
     }
 
     /**
@@ -388,16 +429,6 @@ public class SearchIndexStore {
                 ps.setLong(1, tenantId);
                 setActor(ps, 2, actor);
             });
-    }
-
-    /** Does {@code sql} (a {@code SELECT 1 …}) return a row for these parameters, on this connection. */
-    private static boolean exists(Connection conn, String sql, Object... params) throws SQLException {
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            for (int i = 0; i < params.length; i++) ps.setObject(i + 1, params[i]);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next();
-            }
-        }
     }
 
     private static void setActor(PreparedStatement ps, int index, Long actor) throws SQLException {

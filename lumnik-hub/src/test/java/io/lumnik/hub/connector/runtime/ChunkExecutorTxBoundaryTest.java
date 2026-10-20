@@ -9,6 +9,7 @@ import io.lumnik.hub.connector.api.types.ChunkResult;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
+import io.lumnik.hub.connector.api.types.StreamEnd;
 import io.lumnik.hub.connector.api.types.TriggerMode;
 import io.lumnik.hub.connector.api.types.WriteOutcome;
 import io.lumnik.hub.connector.api.types.WritePerformanceProfile;
@@ -34,6 +35,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -148,6 +150,56 @@ class ChunkExecutorTxBoundaryTest {
         @Override public ItemReader<Map<String, Object>> reader(ConnectorContext ctx) {
             throw new IllegalStateException(REFUSAL);
         }
+    }
+
+    /**
+     * #1214 review: a type whose stream ends with a position, and whose {@code endOfStream} records
+     * the position stored when it is called — its side effects (a csv full refresh deletes rows,
+     * committed on the admin datasource) must come after the step that can still fail the chunk.
+     */
+    final class EndingType implements ConnectorType {
+        final AtomicReference<String> storedWhenEnding = new AtomicReference<>("never called");
+        final boolean refuses;
+
+        EndingType(boolean refuses) { this.refuses = refuses; }
+
+        @Override public String id() { return "ending-probe"; }
+        @Override public WritePerformanceProfile defaultWriteProfile() { return new WritePerformanceProfile.Safe(); }
+        @Override public Set<TriggerMode> supportedTriggerModes() { return Set.of(TriggerMode.MANUAL); }
+        @Override public void validateConfig(Map<String, Object> config) { /* nothing to validate */ }
+
+        @Override public ItemReader<Map<String, Object>> reader(ConnectorContext ctx) {
+            return (chunkSize, cursor, c) -> new ReadResult.EndOfStream<>(List.of(Map.of("k", "v")), NEXT);
+        }
+
+        @Override public StreamEnd endOfStream(ConnectorContext ctx) {
+            ConnectorCursorEntity stored = cursors.findByEndpoint(endpointId);
+            storedWhenEnding.set(stored == null ? null : stored.getCursorValue().asText());
+            return refuses ? new StreamEnd.Refused("refused at the end") : new StreamEnd.Removed(0);
+        }
+    }
+
+    @Test
+    void the_final_position_is_stored_before_the_type_ends_the_stream() {
+        EndingType type = new EndingType(false);
+
+        TenantContext.callAsSystem(() -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty(), null));
+
+        assertThat(type.storedWhenEnding.get())
+            .as("endOfStream's side effects must follow the last step that can still fail the chunk")
+            .isEqualTo("cursor-after-chunk");
+        assertThat(persistedCursor().getCursorValue().asText()).isEqualTo("cursor-after-chunk");
+    }
+
+    @Test
+    void a_refused_end_leaves_no_stored_position() {
+        EndingType type = new EndingType(true);
+
+        ChunkResult result = TenantContext.callAsSystem(
+            () -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty(), null));
+
+        assertThat(result).isInstanceOf(ChunkResult.Failure.class);
+        assertThat(persistedCursor()).as("the next run reads the source from its start").isNull();
     }
 
     @BeforeEach

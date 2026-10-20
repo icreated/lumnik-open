@@ -114,14 +114,10 @@ class JdbcGenericConnectorApplyHandlerIT {
 
     /**
      * The endpoint door of the same family, and the one where the null is not cosmetic: a table key
-     * written empty is a NullNode that {@code TableDefaultsMerger} copies over the inherited value,
-     * so {@code defaults: {schema: legacy}} plus a table carrying {@code schema:} loses the default
-     * the manifest declares three lines above — silently, because the merged node validates clean
-     * (the validator reads null as absent, and {@code schema} is optional).
-     *
-     * <p>Required keys are safe by a different mechanism: a {@code mode:} written empty makes the
-     * merged node fail {@code requireEnum}, so the manifest is refused. Only the optional inherited
-     * keys leak — which is why this pins one of those.
+     * written empty is a NullNode, and {@code TableDefaultsMerger} skips it as absent, so
+     * {@code defaults: {schema: legacy}} plus a table carrying {@code schema:} keeps the default the
+     * manifest declares three lines above. Were the null copied over it instead, the merged table
+     * would have no schema — refused since #1243, stored as null before it. This pins the kept default.
      */
     @Test void aTableKeyWrittenEmpty_keepsTheDeclaredDefault() {
         String name = "jdbc-emptytablekey-%d".formatted(System.nanoTime());
@@ -169,6 +165,8 @@ class JdbcGenericConnectorApplyHandlerIT {
 
     /** One jdbc manifest with one table, varying only the spec block under test. */
     private String applyJdbcNamed(String name, String specBlock) {
+        // schema is required (#1243): a spec block that does not set it gets one on the table.
+        String tableSchema = specBlock.contains("schema:") ? "" : "\n        schema: public";
         String yaml = """
             apiVersion: connectors.lumnik.io/v1
             kind: Connector
@@ -186,8 +184,8 @@ class JdbcGenericConnectorApplyHandlerIT {
                 tables:
                   - name: invoices
                     mode: full
-                    pk_columns: [id]
-            """.formatted(name, specBlock);
+                    pk_columns: [id]%s
+            """.formatted(name, specBlock, tableSchema);
 
         return given().config(YamlBody.CONFIG)
             .headers(TestIdentity.tenantAndUser(1))

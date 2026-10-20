@@ -16,23 +16,39 @@ import (
 )
 
 type DLQ struct {
-	table    *tview.Table
-	client   *client.Client
-	items    []types.DeadLetter
+	table  *tview.Table
+	client *client.Client
+	items  []types.DeadLetter
+	all    []types.DeadLetter // every letter the hub listed; items is what the / filter shows
+	textFilter
 	mu       sync.Mutex
+	app      *tview.Application
+	offLoop  offLoop
+	inFlight inFlight // the guard on ^R and ^D (#1147)
 	onError  func(string)
 	sortCol  *style.ColumnSort
 	onSelect func()
+	// The drill-downs, at most one set: :runs leads here by run, :sources by connector.
+	filterConnector string
+	filterRun       string
+	ask             Prompt // wired by the App: ^R asks which run carried the replay
 }
 
-func NewDLQ(c *client.Client, onError func(string)) *DLQ {
-	t := tview.NewTable().SetBorders(false).SetSelectable(true, false)
+// SetAsk is wired by the App; without it ^R records the replay with no run, as before #1127.
+func (d *DLQ) SetAsk(fn Prompt) { d.ask = fn }
+
+// dlqPageCap is the page the hub serves (it clamps limit to 200).
+const dlqPageCap = 200
+
+func NewDLQ(app *tview.Application, c *client.Client, onError func(string)) *DLQ {
+	t := newListTable()
 	t.SetTitle(" :dlq ").SetBorder(true)
 	style.ApplyChrome(t.Box)
 	style.ApplyTableSelection(t)
 	d := &DLQ{
 		table:   t,
 		client:  c,
+		app:     app,
 		onError: onError,
 		sortCol: style.NewColumnSort([]string{"CONNECTOR", "CAPTURED", "REASON"}),
 	}
@@ -49,7 +65,11 @@ func NewDLQ(c *client.Client, onError func(string)) *DLQ {
 func (d *DLQ) View() tview.Primitive { return d.table }
 
 func (d *DLQ) Hints() string {
-	return "^R: replay  ^D: discard  d: describe  y: yank  s: sort  r: refresh"
+	base := "^R: replay  ^D: discard  d: describe  y: yank  s: sort  r: refresh"
+	if d.FilterActive() {
+		base = "Esc: clear filter  " + base
+	}
+	return base
 }
 
 func (d *DLQ) setHeader() {
@@ -59,6 +79,7 @@ func (d *DLQ) setHeader() {
 		"RUN",
 		d.sortCol.HeaderLabel(2),
 		"ATTEMPTS",
+		"RESOLUTION",
 		"MESSAGE",
 	}
 	for i, h := range headers {
@@ -66,19 +87,90 @@ func (d *DLQ) setHeader() {
 	}
 }
 
+// Refresh lists off the event loop (offLoop): the live ticker and every run event call it while
+// the page is in front (#1109).
 func (d *DLQ) Refresh() {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	list, err := d.client.DlqList("", "", 200)
+	d.offLoop.run(d.app, func() func() {
+		connectorID, runID := d.filters()
+		list, err := d.client.DlqList(connectorID, runID, dlqPageCap)
+		return func() { d.renderList(list, err) }
+	})
+}
+
+func (d *DLQ) renderList(list []types.DeadLetter, err error) {
 	if err != nil {
 		if d.onError != nil {
 			d.onError(fmt.Sprintf("dlq list: %v", err))
 		}
 		return
 	}
-	d.items = list
+	d.setTitle(len(list) >= dlqPageCap)
+	d.mu.Lock()
+	prev := selectedKey(d.table, d.items, dlqKey)
+	d.all = list
+	d.items = filterRows(list, d.q, func(it types.DeadLetter) []string {
+		return []string{it.ID, it.ConnectorLabel(), it.RunID, it.SkipReason, it.ErrorMessage}
+	})
 	d.applySort()
 	d.render()
+	reselect(d.table, d.items, dlqKey, prev)
+	d.mu.Unlock()
+	if d.onSelect != nil { // an open describe panel follows the fresh row
+		d.onSelect()
+	}
+}
+
+// SetTextFilter narrows the table to the letters holding q (#1120); "" shows them all.
+func (d *DLQ) SetTextFilter(q string) { d.q = q; d.renderList(d.all, nil) }
+
+func dlqKey(it types.DeadLetter) string { return it.ID }
+
+// SetRunFilter narrows the queue to one run's dead letters (#1111). Empty = all.
+func (d *DLQ) SetRunFilter(runID string) { d.setFilters("", runID) }
+
+// SetConnectorFilter narrows the queue to one connector's dead letters. Empty = all.
+func (d *DLQ) SetConnectorFilter(connectorID string) { d.setFilters(connectorID, "") }
+
+// ClearFilter shows the whole queue again.
+func (d *DLQ) ClearFilter() { d.setFilters("", "") }
+
+// FilterActive reports whether a drill-down is in force.
+func (d *DLQ) FilterActive() bool {
+	connectorID, runID := d.filters()
+	return connectorID != "" || runID != ""
+}
+
+func (d *DLQ) setFilters(connectorID, runID string) {
+	d.mu.Lock()
+	d.filterConnector, d.filterRun = connectorID, runID
+	d.mu.Unlock()
+	d.setTitle(false)
+	d.Refresh()
+}
+
+// filters reads the drill-downs under the lock: Refresh carries them into the fetch goroutine.
+func (d *DLQ) filters() (connectorID, runID string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.filterConnector, d.filterRun
+}
+
+// setTitle names the drill-down in force and, on a full page, that the queue goes on beyond it:
+// the hub serves at most dlqPageCap rows, and a page of exactly that many must not pass for the
+// whole queue.
+func (d *DLQ) setTitle(capped bool) {
+	connectorID, runID := d.filters()
+	title := " :dlq "
+	switch {
+	case runID != "":
+		title = fmt.Sprintf(" :dlq [run=%s] ", shortDlqID(runID))
+	case connectorID != "":
+		title = fmt.Sprintf(" :dlq [conn=%s] ", shortDlqID(connectorID))
+	}
+	if capped {
+		title += fmt.Sprintf("(first %d) ", dlqPageCap)
+	}
+	d.table.SetTitle(title)
 }
 
 func (d *DLQ) applySort() {
@@ -119,9 +211,10 @@ func (d *DLQ) render() {
 		d.table.SetCell(row, 2, dataCell(shortDlqID(it.RunID)).SetExpansion(1))
 		d.table.SetCell(row, 3, dataCell(it.SkipReason).SetExpansion(1))
 		d.table.SetCell(row, 4, tview.NewTableCell(fmt.Sprintf("%d", it.Attempts)).SetExpansion(1))
+		d.table.SetCell(row, 5, dataCell(it.Resolution).SetExpansion(1))
 		// The same message, the same width, the same rule as `lm dlq list` — this used to slice
 		// BYTES and could cut a rune in half (#498).
-		d.table.SetCell(row, 5,
+		d.table.SetCell(row, 6,
 			dataCell(output.Truncate(it.ErrorMessage, output.DlqMessageWidth)).SetExpansion(2))
 	}
 }
@@ -138,18 +231,20 @@ func (d *DLQ) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 	switch ev.Key() {
 	case tcell.KeyCtrlR:
 		if it, ok := d.selected(); ok {
-			if err := d.client.DlqReplayed(it.ID, ""); err != nil && d.onError != nil {
-				d.onError(fmt.Sprintf("replayed: %v", err))
-			}
-			d.Refresh()
+			d.replayed(it)
 		}
 		return nil
 	case tcell.KeyCtrlD:
 		if it, ok := d.selected(); ok {
-			if err := d.client.DlqDiscard(it.ID); err != nil && d.onError != nil {
-				d.onError(fmt.Sprintf("discard: %v", err))
-			}
-			d.Refresh()
+			d.inFlight.background(d.app, "^D", d.onError, func() func() {
+				err := d.client.DlqDiscard(it.ID)
+				return func() {
+					if err != nil {
+						say(d.onError, fmt.Sprintf("discard: %v", err))
+					}
+					d.Refresh()
+				}
+			})
 		}
 		return nil
 	}
@@ -164,8 +259,6 @@ func (d *DLQ) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 	}
 	return ev
 }
-
-func (d *DLQ) ApplyEvent(_ map[string]any) { d.Refresh() }
 
 // Describable
 
@@ -229,4 +322,60 @@ func shortDlqID(s string) string {
 		return s[:8]
 	}
 	return s
+}
+
+// replayed marks a letter replayed and names the run that carried it (#1127): it offers the
+// letter's connector's latest run — Enter takes it, "-" records the replay with no run, anything
+// else is the run typed. The lookup and the mark run off the event loop, each under ^R: a ^R
+// pressed while either is out is dropped.
+func (d *DLQ) replayed(it types.DeadLetter) {
+	mark := func(runID string) {
+		d.inFlight.background(d.app, "^R", d.onError, func() func() {
+			err := d.client.DlqReplayed(it.ID, runID)
+			return func() {
+				if err != nil {
+					say(d.onError, fmt.Sprintf("replayed: %v", err))
+				}
+				d.Refresh()
+			}
+		})
+	}
+	if d.ask == nil {
+		mark("")
+		return
+	}
+	d.inFlight.background(d.app, "^R", d.onError, func() func() {
+		latest := latestRun(d.client, it.ConnectorID)
+		return func() {
+			label := "Run that carried the replay (- for none): "
+			if latest != "" {
+				label = fmt.Sprintf("Run that carried the replay (Enter: %s, the connector's latest · - for none): ", shortRunID(latest))
+			}
+			d.ask(label, false, func(answer string) {
+				switch answer = strings.TrimSpace(answer); answer {
+				case "":
+					mark(latest)
+				case "-":
+					mark("")
+				default:
+					mark(answer)
+				}
+			})
+		}
+	})
+}
+
+// latestRun is the newest run of a connector, "" when it has none or the hub cannot say.
+func latestRun(c *client.Client, connectorID string) string {
+	runs, err := c.RunList(connectorID, "", 20)
+	if err != nil {
+		return ""
+	}
+	var best types.Run
+	for _, r := range runs {
+		if best.ID == "" || newestFirst(r, best) {
+			best = r
+		}
+	}
+	return best.ID
 }

@@ -16,6 +16,7 @@ import java.util.Optional;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.equalTo;
 
 /**
  * The losing side of a concurrent apply hits the DB's {@code uq_workflow_manifest_tenant_column}
@@ -71,5 +72,18 @@ class WorkflowApplyConflictIT {
             .body("error", containsString("already has a declared lifecycle"))
             .body("error", containsString("a column has exactly one lifecycle"))
             .body("error", containsString("re-apply"));
+    }
+
+    @Test
+    void any_other_store_failure_is_a_500_that_does_not_quote_its_message() {
+        SQLException outage = new SQLException("permission denied for table t_secret_payroll", "42501");
+        Mockito.doThrow(new RuntimeException("WorkflowManifestStore.upsert: " + outage.getMessage(), outage))
+            .when(store).upsert(Mockito.anyLong(), Mockito.any(), Mockito.anyString(), Mockito.any());
+
+        given().config(YamlBody.CONFIG).header("X-Tenant-ID", TENANT).header("X-User-ID", "1")
+            .contentType("application/yaml").body(YAML)
+            .when().post("/api/workflows/apply")
+            .then().statusCode(500)
+            .body("error", equalTo("workflow apply failed"));
     }
 }

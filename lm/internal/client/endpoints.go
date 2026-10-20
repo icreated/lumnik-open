@@ -30,11 +30,21 @@ func (c *Client) EndpointEnable(connectorID, endpointID string, enabled bool) er
 // POST /api/platform/connectors/{connectorID}/endpoints/{endpointID}/purge,
 // returning the number of rows deleted.
 func (c *Client) EndpointPurge(connectorID, endpointID string) (int, error) {
+	return c.endpointPurge(connectorID, endpointID, "")
+}
+
+// EndpointPurgeDryRun asks the same door with ?dryRun=true: the hub runs the same checks and
+// refusals and returns how many rows a purge would delete, deleting none.
+func (c *Client) EndpointPurgeDryRun(connectorID, endpointID string) (int, error) {
+	return c.endpointPurge(connectorID, endpointID, "?dryRun=true")
+}
+
+func (c *Client) endpointPurge(connectorID, endpointID, query string) (int, error) {
 	var out struct {
 		Deleted int `json:"deleted"`
 	}
 	if err := c.POST(
-		fmt.Sprintf("/api/platform/connectors/%s/endpoints/%s/purge", connectorID, endpointID),
+		fmt.Sprintf("/api/platform/connectors/%s/endpoints/%s/purge%s", connectorID, endpointID, query),
 		map[string]any{},
 		&out,
 	); err != nil {

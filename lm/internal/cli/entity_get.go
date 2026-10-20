@@ -17,7 +17,7 @@ func newEntityGetCmd() *cobra.Command {
 	var filterArgs []string
 	cmd := &cobra.Command{
 		Use:   "get NAME",
-		Short: "Read an entity's canonical rows (one page; --filter COLUMN=VALUE is an exact match)",
+		Short: "Read an entity's canonical rows (one page; --filter COLUMN=VALUE matches exactly, a date as an instant)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			limit, _ := cmd.Flags().GetInt("limit")
@@ -70,7 +70,7 @@ func newEntityGetCmd() *cobra.Command {
 	}
 	addPageLimitFlag(cmd, 100, client.EntityRowsPageCap, fmt.Sprintf("max rows to return (1..%d)", client.EntityRowsPageCap))
 	cmd.Flags().IntVar(&offset, "offset", 0, "page offset")
-	cmd.Flags().StringArrayVar(&filterArgs, "filter", nil, "exact match COLUMN=VALUE on a canonical column (repeatable)")
+	cmd.Flags().StringArrayVar(&filterArgs, "filter", nil, "COLUMN=VALUE on a canonical column: exact, or equal as an instant for a date on a date column (repeatable)")
 	return cmd
 }
 
@@ -87,6 +87,9 @@ func parseEntityFilters(args []string) ([]client.EntityFilter, error) {
 		}
 		if col == "limit" || col == "offset" {
 			return nil, fmt.Errorf("--filter %s=…: %q is the paging control (--%s), not a filterable column", col, col, col)
+		}
+		if col == "identity" {
+			return nil, fmt.Errorf("--filter identity=…: %q is the hub's switch for the identity columns, not a filterable column", col)
 		}
 		if seen[col] {
 			return nil, fmt.Errorf("--filter names %q twice — the hub would keep only the first value", col)

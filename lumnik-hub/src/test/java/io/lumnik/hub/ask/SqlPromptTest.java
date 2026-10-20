@@ -1,8 +1,10 @@
 package io.lumnik.hub.ask;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 import io.lumnik.extraction.spi.ask.SchemaCard;
+import java.time.Duration;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -54,8 +56,8 @@ class SqlPromptTest {
     @Test
     void the_asker_decides_the_rule_not_the_models_paraphrase() {
         // the retry asks about the rewritten question; a containment the asker wrote keeps its rule through it
-        assertThat(AskToSqlAgent.sqlPrompt(CARD, "Quels documents parlent de Badu ?", true)).contains("Text containment");
-        assertThat(AskToSqlAgent.sqlPrompt(CARD, CONTAINS, false)).doesNotContain("Text containment");
+        assertThat(AskToSqlAgent.sqlPrompt(CARD, "Quels documents parlent de Badu ?", true, false)).contains("Text containment");
+        assertThat(AskToSqlAgent.sqlPrompt(CARD, CONTAINS, false, false)).doesNotContain("Text containment");
     }
 
     @Test
@@ -85,8 +87,8 @@ class SqlPromptTest {
     /** Switching the rule on adds exactly one block of text and moves nothing else. */
     @Test
     void the_rule_is_the_only_difference_between_the_two_prompts() {
-        String with = AskToSqlAgent.sqlPrompt(CARD, CATEGORY, true);
-        String without = AskToSqlAgent.sqlPrompt(CARD, CATEGORY, false);
+        String with = AskToSqlAgent.sqlPrompt(CARD, CATEGORY, true, false);
+        String without = AskToSqlAgent.sqlPrompt(CARD, CATEGORY, false, false);
         int from = with.indexOf("- Text containment");
         int to = with.indexOf("- If the question cannot be answered");
         assertThat(from).isPositive();
@@ -140,7 +142,7 @@ class SqlPromptTest {
     @Test
     void an_unclosed_quote_followed_by_a_long_run_of_spaces_is_linear() {
         // a pattern whose parts compete for the same whitespace took seconds on this, from any user (#1047)
-        org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(10), () -> {
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> {
             AskToSqlAgent.straightQuotes("«" + " ".repeat(20_000));
             AskToSqlAgent.straightQuotes("« ".repeat(10_000));
             AskToSqlAgent.straightQuotes("“" + " x".repeat(10_000));

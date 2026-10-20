@@ -58,14 +58,8 @@ public class AppApplyResource {
     @POST
     @Consumes({"application/yaml", "text/yaml", MediaType.APPLICATION_JSON})
     public Response apply(String body) {
-        JsonNode root;
-        AppManifest manifest;
-        try {
-            root = parser.readTree(body);
-            manifest = parser.parse(root);
-        } catch (IllegalArgumentException e) {
-            return ApiErrors.badRequest(e.getMessage());
-        }
+        JsonNode root = ApiErrors.orBadRequest(() -> parser.readTree(body));
+        AppManifest manifest = ApiErrors.orBadRequest(() -> parser.parse(root));
 
         // A key the parser does not honour would otherwise be accepted and stored, so a misspelled
         // `titel:` costs the integrator their title with no word said. Refused at the curated door

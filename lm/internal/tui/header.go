@@ -23,7 +23,7 @@ func NewHeader() *Header {
 		SetTextAlign(tview.AlignLeft).
 		SetText("")
 	tv.SetBackgroundColor(tview.Styles.PrimitiveBackgroundColor)
-	return &Header{tv: tv, live: "[POLL]"}
+	return &Header{tv: tv, live: "[CONNECTING]"}
 }
 
 func (h *Header) View() tview.Primitive { return h.tv }

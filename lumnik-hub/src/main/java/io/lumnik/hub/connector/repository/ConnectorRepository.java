@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.repository;
 
 import io.lumnik.hub.connector.domain.Connector;
+import io.quarkus.hibernate.orm.panache.PanacheQuery;
 import io.quarkus.hibernate.orm.panache.PanacheRepositoryBase;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.persistence.LockModeType;
@@ -29,6 +30,34 @@ public class ConnectorRepository implements PanacheRepositoryBase<Connector, UUI
         .collect(Collectors.toMap(row -> (UUID) row[0], row -> (String) row[1]));
   }
   /**
+   * This tenant's connector under {@code id}, null when it has none. The tenant is the query's own
+   * predicate, as in {@code ConnectorRunRepository.findByIdForTenant}: {@code findById} bypasses the
+   * tenant {@code @Filter}.
+   */
+  public Connector findByIdForTenant(UUID id, Long tenantId) {
+    return byIdForTenant(id, tenantId).firstResult();
+  }
+
+  /**
+   * {@link #findByIdForTenant}, HELD for the rest of the transaction — for a door that decides on
+   * the row and then writes it or its children (#1217), as {@link #byAddressForUpdate} is for the
+   * apply path. A read door must not use it: readers would queue behind writers for nothing.
+   */
+  public Connector findByIdForTenantForUpdate(UUID id, Long tenantId) {
+    return byIdForTenant(id, tenantId).withLock(LockModeType.PESSIMISTIC_WRITE).firstResult();
+  }
+
+  /** The advisory-lock key of one (tenant, name) address — see {@link #byAddressForUpdate}. */
+  public static String addressLockKey(long tenant, String name) {
+    return "connector.connector:" + tenant + ":" + name;
+  }
+
+  /** The (id, tenant) address, written once for the unlocked and the locked read. */
+  private PanacheQuery<Connector> byIdForTenant(UUID id, Long tenantId) {
+    return find("id = ?1 and tenantId = ?2", id, tenantId);
+  }
+
+  /**
    * This tenant's connector of that name, HELD for the rest of the transaction — the ONE place the
    * (tenantId, name) address is written.
    *
@@ -49,18 +78,24 @@ public class ConnectorRepository implements PanacheRepositoryBase<Connector, UUI
    * the door. {@code PESSIMISTIC_WRITE} closes it: the concurrent writer waits for this transaction
    * instead of racing it.
    *
-   * <p><b>Both callers are the write path</b>, which is why the lock lives here rather than in a
+   * <p><b>Every caller is a write path</b>, which is why the lock lives here rather than in a
    * separate locked sibling the apply door would have to remember to call — the door's guard and
-   * {@code ApplyUpsert}'s own read, one after the other in the same request. Taking it twice is
+   * {@code ApplyUpsert}'s own read, one after the other in the same request, the flat door's
+   * taken-name check (#1224), the guided jdbc add's insert (#1231) and the CSV one-shot. Taking it twice is
    * free; the second is already the holder. A future READ path must NOT reuse this method: it would
    * queue readers behind writers for nothing. Give it an unlocked sibling, and keep the address
    * itself in one place.
    *
-   * <p>A name with no row takes no lock — there is nothing to hold. The create race is the
-   * {@code (tenant_id, name)} unique constraint's job: a second insert trips 23505, which is loud,
-   * not a silent re-home.
+   * <p><b>A free name is held too</b> (#1231). A row lock holds nothing where there is no row, so two
+   * writers creating, or renaming onto, the same free name both read "free" and the loser met the
+   * {@code (tenant_id, name)} constraint as a 500. A transaction-scoped advisory lock on the address
+   * is taken first: the second writer waits for the first to commit, then reads its row as the
+   * holder — the flat door's 409 or the uniform 403, the manifest door's update of that row.
    */
   public Optional<Connector> byAddressForUpdate(long tenant, String name) {
+    getEntityManager().createNativeQuery("SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(?1, 0))")
+        .setParameter(1, addressLockKey(tenant, name))
+        .getSingleResult();
     return find("tenantId = ?1 and name = ?2", tenant, name)
         .withLock(LockModeType.PESSIMISTIC_WRITE)
         .firstResultOptional();

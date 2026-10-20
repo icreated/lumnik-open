@@ -72,7 +72,7 @@ public class SearchIndexRegistryResource {
         };
     }
 
-    /** Every key always present, {@code invalidReason} null when valid. */
+    /** Every key always present, {@code invalidReason} null when valid; {@code withheld} until rebuilt (#1219). */
     private static Map<String, Object> body(SearchIndexStore.Summary s) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("name", s.name());
@@ -80,6 +80,7 @@ public class SearchIndexRegistryResource {
         body.put("language", s.language());
         body.put("status", s.status());
         body.put("invalidReason", s.invalidReason());
+        body.put("withheld", s.withheld());
         return body;
     }
 }

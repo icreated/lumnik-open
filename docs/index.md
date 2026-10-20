@@ -2,8 +2,7 @@
 
 <section class="lm-hero" markdown>
 <p class="lm-eyebrow">Documentation</p>
-<p class="lm-lead" markdown="span">Your information systems — the ERP, the LIMS, the exports nobody dares to touch — hold twenty years of history nobody can question any more. lumnik un-freezes that data, **read-only**.</p>
-<p class="lm-lead" markdown="span">Then someone asks it a question in plain language, from a phone. The answer cites its sources — or declines and says why.</p>
+<p class="lm-lead" markdown="span">lumnik reads the data in your ERP, LIMS and exports — **read-only** — and lets people ask it questions in plain language. The answer cites its sources, or declines and says why.</p>
 <div class="lm-meta" markdown>
 <div class="lm-meta-item" markdown>
 <strong>Read-only first</strong>
@@ -54,7 +53,7 @@ Run the self-host stack, wire OIDC, and get to a healthy local hub without guess
 <div class="lm-kicker">First value</div>
 <h3>Quickstart in 60 seconds</h3>
 
-Build `lm`, point it at the hub, and show value on CSV, REST, or SFTP data.
+Install `lm`, point it at the hub, and show value on CSV, REST, or SFTP data.
 
 [Open quickstart](quickstart/installer.md){ .lm-link }
 </article>
@@ -70,9 +69,7 @@ Go from an empty machine to scoped métier apps, dormancy alerts, and day-2 oper
 
 ## The system in one glance
 
-Frozen data flows one way — left to right, read-only at the door. On the right it meets
-people, and it leaves again: what changed becomes an event, then a decision, then a message
-in your own tools. Every page in this documentation sits somewhere on this map:
+The system in one picture — data flows left to right, read-only at the door:
 
 ```mermaid
 flowchart LR
@@ -87,7 +84,7 @@ flowchart LR
     conn["Connectors — read-only ingestion"]
     tables[("Raw tables, per tenant")]
     ent["Entities — fused, conflicts kept"]
-    ask["Ask — five honesty guards"]
+    ask["Ask — five guards (Pro)"]
     ev["Events → decisions"]
     conn --> tables --> ent --> ask
     tables -->|"new rows only ·<br/>REST/SOAP/GraphQL silent"| ev
@@ -116,7 +113,9 @@ flowchart LR
 <div class="lm-kicker">Ingest</div>
 <h3>The hub</h3>
 
-[Declarative](how-it-works.md) connectors ingest JDBC, CSV, files, and REST (GraphQL and SOAP are request shapes on the same REST engine) — plus Kafka event brokers in [lumnik Pro](editions.md) — into a multi-tenant PostgreSQL where **isolation lives in the database** (Row-Level Security), not in the URL. [Transformers](connectors/transformers.md) repair the freezer's damage — mojibake, legacy dates — right at the door.
+- **Sources:** JDBC, CSV and files, REST, GraphQL, SOAP — plus Kafka in [lumnik Pro](editions.md) — through [declarative](how-it-works.md) connectors.
+- **Tenants:** each tenant sees only its own rows ([RLS](security/rls.md)).
+- **Repair at the door:** [transformers](connectors/transformers.md) fix mojibake and legacy dates.
 
 [Connector overview](connectors/index.md){ .lm-link }
 </article>
@@ -132,7 +131,7 @@ N legacy sources become one canonical, queryable thing. Disagreements stay visib
 <div class="lm-kicker">Ask</div>
 <h3>Answers that cite — or refuse</h3>
 
-Per-métier chat and read-only text-to-SQL over the live hub, fenced by five deterministic honesty guards and métier scopes.
+Per-métier chat and read-only text-to-SQL over the live hub, fenced by five guards and métier scopes (lumnik Pro).
 
 [See the five guards](transparency/ask-honesty.md){ .lm-link }
 </article>
@@ -154,7 +153,7 @@ Views, processes, workflows, inbox, and the métier PWA turn the hub into operat
 <div markdown>
 <h3>Watch first</h3>
 
-Use the [WOW](wow.md) before reading feature lists. Seeing one fused customer beats absorbing ten abstractions.
+Run the [WOW](wow.md) before reading feature lists.
 
 <p class="lm-check" markdown="span">**You know it landed when:** you understand what a connector, an entity, and a sourced answer look like in one run.</p>
 </div>
@@ -166,7 +165,12 @@ Use the [WOW](wow.md) before reading feature lists. Seeing one fused customer be
 
 [Run the hub locally](deploy.md), point `lm` at it, and verify your first authenticated call succeeds.
 
-<p class="lm-check" markdown="span">**You know it worked when:** `lm login` succeeds and `lm connector list` answers.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** `lm connector list` answers — on a fresh hub, with headers only.</p>
+
+```
+$ lm connector list
+NAME  TYPE  TENANT  SCHED  WINDOW  STATUS  LAST RUN
+```
 </div>
 </article>
 <article class="lm-step" markdown>
@@ -187,7 +191,7 @@ Once the system is alive, branch into Connectors, Apps, Security, or Operations 
 <article class="lm-card" markdown>
 <h3>Connectors</h3>
 
-[Overview](connectors/index.md) · [transformers](connectors/transformers.md) · [CSV & files](connectors/csv.md) · [JDBC](connectors/jdbc.md) · [REST](connectors/rest.md) · [GraphQL](connectors/graphql.md) and [SOAP](connectors/soap.md) — both request shapes on the REST engine, not connector types of their own · [Kafka](connectors/kafka.md) (Pro)
+[Overview](connectors/index.md) · [transformers](connectors/transformers.md) · [CSV & files](connectors/csv.md) · [JDBC](connectors/jdbc.md) · [REST](connectors/rest.md) · [GraphQL](connectors/graphql.md) · [SOAP](connectors/soap.md) · [Kafka](connectors/kafka.md) (Pro)
 </article>
 <article class="lm-card" markdown>
 <h3>Ask your data</h3>
@@ -201,4 +205,4 @@ Once the system is alive, branch into Connectors, Apps, Security, or Operations 
 </article>
 </div>
 
-If you want the full newcomer sequence rather than the shelf model, go straight to [Parcours](parcours.md).
+The full newcomer sequence: [Parcours](parcours.md).

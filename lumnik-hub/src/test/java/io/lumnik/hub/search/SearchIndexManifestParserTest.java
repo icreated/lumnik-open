@@ -358,7 +358,8 @@ class SearchIndexManifestParserTest {
 
     @Test void phonetic_is_refused_as_deferred_not_as_a_typo() {
         assertThatThrownBy(() -> parser.parse(withSpec(ONE_FIELD.replace("match: text", "match: phonetic"))))
-            .hasMessageContaining("not supported yet");
+            .hasMessageContaining("not supported yet")
+            .hasMessageNotContaining("#");
     }
 
     @Test void facet_must_be_a_boolean() {

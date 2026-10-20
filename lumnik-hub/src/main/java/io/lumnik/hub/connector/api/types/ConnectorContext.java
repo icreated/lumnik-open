@@ -1,7 +1,6 @@
 package io.lumnik.hub.connector.api.types;
 
 import io.lumnik.hub.connector.api.helpers.CredentialResolver;
-import io.lumnik.hub.connector.api.helpers.MappingResolver;
 import org.jboss.logging.Logger;
 
 import java.time.Clock;
@@ -19,7 +18,6 @@ public record ConnectorContext(
     SyncMode syncMode,
     Logger logger,
     CredentialResolver credentials,
-    MappingResolver mappings,
     Clock clock,
     /**
      * The target this run drains to, measured once by {@link ConnectorType#runStart} — or null when

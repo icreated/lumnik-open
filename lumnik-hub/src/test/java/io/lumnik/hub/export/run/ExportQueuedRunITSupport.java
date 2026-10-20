@@ -11,11 +11,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 
@@ -116,7 +113,7 @@ abstract class ExportQueuedRunITSupport extends ExportRunITSupport {
             "SELECT status, started_at, ended_at, queued_at, failure_code, failure_reason "
           + "FROM connector.export_run WHERE id = ?",
             ps -> ps.setObject(1, id),
-            rs -> new QueuedRun(rs.getString(1), instant(rs, 2), instant(rs, 3), instant(rs, 4),
+            rs -> new QueuedRun(rs.getString(1), Jdbc.instant(rs, 2), Jdbc.instant(rs, 3), Jdbc.instant(rs, 4),
                 rs.getString(5), rs.getString(6))).orElseThrow();
     }
 
@@ -139,10 +136,5 @@ abstract class ExportQueuedRunITSupport extends ExportRunITSupport {
 
     static String unique(String prefix) {
         return prefix + "-" + UUID.randomUUID().toString().substring(0, 8);
-    }
-
-    private static Instant instant(ResultSet rs, int i) throws SQLException {
-        OffsetDateTime t = rs.getObject(i, OffsetDateTime.class);
-        return t == null ? null : t.toInstant();
     }
 }

@@ -91,12 +91,10 @@ public class HookExecutor implements HookSpi {
         Instance inst = CDI.current().select(cls);
         Object handler = inst.get();
         try {
-            if (handler instanceof LifecycleHook lh && event != null) {
-                lh.dispatch(event, entity, ctx);
-            } else if (handler instanceof ActionHandler ah) {
-                ah.handle(entity, ctx);
-            } else {
-                throw new IllegalStateException(
+            switch (handler) {
+                case LifecycleHook lh when event != null -> lh.dispatch(event, entity, ctx);
+                case ActionHandler ah -> ah.handle(entity, ctx);
+                default -> throw new IllegalStateException(
                   "Handler " + jh.className() + " is not LifecycleHook or ActionHandler");
             }
         } finally {
@@ -117,13 +115,15 @@ public class HookExecutor implements HookSpi {
         } catch (HookCancellation hc) {
             throw hc; // re-throw; caught by invoke()'s outer catch
         } catch (Exception e) {
-            if (e.getCause() instanceof HookCancellation hc) {
-                LOG.debugf("Kotlin hook '%s' cancelled: [%s] %s",
-                           b.id(), hc.code(), hc.getMessage());
-                throw new BusinessException(hc.code(), hc.getMessage(), hc.details());
+            switch (e.getCause()) {
+                case HookCancellation hc -> {
+                    LOG.debugf("Kotlin hook '%s' cancelled: [%s] %s",
+                               b.id(), hc.code(), hc.getMessage());
+                    throw new BusinessException(hc.code(), hc.getMessage(), hc.details());
+                }
+                case null, default -> throw new IllegalStateException(
+                    "Kotlin script error in hook '" + b.id() + "': " + kh.scriptPath(), e);
             }
-            throw new IllegalStateException(
-                "Kotlin script error in hook '" + b.id() + "': " + kh.scriptPath(), e);
         }
     }
 }

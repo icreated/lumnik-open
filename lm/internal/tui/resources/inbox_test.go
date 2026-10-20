@@ -1,6 +1,7 @@
 package resources
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,26 @@ func TestInboxCells(t *testing.T) {
 	e.Acked = true
 	if got := inboxCells(e, now); got[3] != "Nouveau client Claire à Lyon [traité]" {
 		t.Errorf("acked message = %q, want ' [traité]' suffix", got[3])
+	}
+}
+
+// The inbox speaks the UI's language in its header — WHEN, as on :outputs, not QUAND — and wears
+// the title every page wears (#1175); :scopes' title, likewise.
+func TestInbox_headerAndTitle(t *testing.T) {
+	i := NewInbox(nil, nil, nil, nil)
+	i.renderList([]client.InboxEntry{{ID: 1, Message: "x"}}, nil)
+	var header []string
+	for c := 0; c < i.table.GetColumnCount(); c++ {
+		header = append(header, i.table.GetCell(0, c).Text)
+	}
+	if got := strings.Join(header, "|"); got != "ID|WHEN|PROCESS|MESSAGE|ENTITY_KEY" {
+		t.Errorf("header = %q", got)
+	}
+	if got := i.table.GetTitle(); got != " :inbox " {
+		t.Errorf(":inbox title = %q", got)
+	}
+	if got := NewScopes(nil, nil).table.GetTitle(); got != " :scopes " {
+		t.Errorf(":scopes title = %q", got)
 	}
 }
 

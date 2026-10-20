@@ -97,40 +97,64 @@ public class HybridJsonbWriter {
         List<JsonPath> colPaths = spec.promote().stream()
             .map(p -> JsonPath.compile(p.jsonPath()))
             .toList();
+        String[] target = schemaAndTable(spec);
         try (Connection c = adminDs.getConnection()) {
-            boolean schemaChanged = ensureTable(c, spec);
-            if (schemaChanged) registered.remove(spec.table() + "|" + tenantId);
-            registerIfNeeded(spec, tenantId, connectorId);
-            String sql = buildInsertSql(spec);
-            try (PreparedStatement ps = c.prepareStatement(sql)) {
-                for (int r = 0; r < items.size(); r++) {
-                    String rowHash = systemContexts == null ? null
-                        : (String) systemContexts.get(r).get("_row_hash");
-                    bind(ps, spec, uniqueKey, colPaths, items.get(r), rowHash,
-                         tenantId, connectorId, endpointId);
-                }
-                ps.executeBatch();
+            DynamicTableWriter.writeLock(c, target[0], target[1]);
+            try {
+                writeLocked(c, spec, items, systemContexts, tenantId, connectorId, endpointId, uniqueKey, colPaths);
+            } finally {
+                DynamicTableWriter.releaseWriteLock(c, target[0], target[1]);
             }
         } catch (SQLException e) {
             throw new RuntimeException("HybridJsonbWriter failed for " + spec.table(), e);
         }
     }
 
+    private void writeLocked(Connection c, HybridJsonbSpec spec, List<Map<String, Object>> items,
+                             List<Map<String, Object>> systemContexts, long tenantId, UUID connectorId,
+                             UUID endpointId, JsonPath uniqueKey, List<JsonPath> colPaths) throws SQLException {
+        boolean schemaChanged = ensureTable(c, spec);
+        if (schemaChanged) registered.removeIf(k -> k.startsWith(spec.table() + "|" + tenantId + "|"));
+        registerIfNeeded(spec, tenantId, connectorId, c);
+        String sql = buildInsertSql(spec);
+        try (PreparedStatement ps = c.prepareStatement(sql)) {
+            for (int r = 0; r < items.size(); r++) {
+                String rowHash = systemContexts == null ? null
+                    : (String) systemContexts.get(r).get("_row_hash");
+                bind(ps, spec, uniqueKey, colPaths, items.get(r), rowHash,
+                     tenantId, connectorId, endpointId);
+            }
+            ps.executeBatch();
+        }
+    }
+
+    /** {@code [schema, table]} of the target, as it is registered — {@code public} when the spec names none. */
+    private static String[] schemaAndTable(HybridJsonbSpec spec) {
+        String[] parts = spec.table().split("\\.", 2);
+        return parts.length == 2 ? parts : new String[] {"public", parts[0]};
+    }
+
     /**
      * Register the ext.* table in {@code connector.dynamic_table} so scope discovery sees it —
      * the missing link that kept every hybrid scope un-answerable (HybridTargetSchemaCardIT).
-     * Key {@code hybrid:<table>}: unique per endpoint target, and immune to the
-     * UNIQUE(tenant_id, mapping_id) trap — two endpoints of one mapping write two tables and
-     * get two registry rows. For connector runs the card appears when the completed RUN
-     * triggers rediscover; the run-less one-shot CSV path rediscoveres its own scopes after
+     * Key {@code hybrid:<table>}: unique per endpoint target, so two endpoints of one mapping
+     * write two tables and get two registry rows. For connector runs the card appears when the completed RUN
+     * triggers rediscover; the run-less one-shot CSV path rediscovers its own scopes after
      * its ingest commits (spec 2026-09-02) — one command, an askable table.
      */
-    private void registerIfNeeded(HybridJsonbSpec spec, long tenantId, UUID connectorId) {
-        String key = spec.table() + "|" + tenantId;
+    /**
+     * @param c the write's connection, which holds the table's write lock — registering on it, never
+     *          on a second connection, keeps a wait on the registry visible to Postgres's deadlock
+     *          detector (a delete of this connector holds its registry rows while it waits for the
+     *          lock); {@code null} outside a write, on its own connection
+     */
+    private void registerIfNeeded(HybridJsonbSpec spec, long tenantId, UUID connectorId, Connection c) {
+        // per connector (#1186): a second connector writing the same table registers it too
+        String key = spec.table() + "|" + tenantId + "|" + connectorId;
         if (!registered.add(key)) return;
-        String[] parts = spec.table().split("\\.", 2);
-        String schema = parts.length == 2 ? parts[0] : "public";
-        String table  = parts.length == 2 ? parts[1] : parts[0];
+        String[] parts = schemaAndTable(spec);
+        String schema = parts[0];
+        String table  = parts[1];
         // Business columns ONLY — every entry here becomes a queryable column on the scope's
         // schema card, surfaced to the LLM. Lineage (row_hash, tenant_id, endpoint_id…) stays
         // out, same contract as DynamicTableWriter registering just the inferred columns.
@@ -139,9 +163,10 @@ public class HybridJsonbWriter {
         for (PromotedColumn col : spec.promote()) cols.put(col.name(), col.type().ddl);
         cols.put("data", "JSONB");
         try {
-            registry.register(tenantId, DynamicTableRegistry.HYBRID_MAPPING_PREFIX + spec.table(),
-          schema, table, cols, connectorId);
-        } catch (RuntimeException e) {
+            String mapping = DynamicTableRegistry.HYBRID_MAPPING_PREFIX + spec.table();
+            if (c == null) registry.register(tenantId, mapping, schema, table, cols, connectorId);
+            else registry.register(c, tenantId, mapping, schema, table, cols, connectorId);
+        } catch (RuntimeException | SQLException e) {
             // Registration must never fail a data write. The known case: the one-shot CSV path
             // writes rows INSIDE the transaction that creates its connector row, so the registry
             // FK (dynamic_table_connector_fk, admin DS, outside that tx) cannot see it yet. It
@@ -156,7 +181,7 @@ public class HybridJsonbWriter {
                     @Override public void beforeCompletion() { /* nothing to flush */ }
                     @Override public void afterCompletion(int status) {
                         if (status == Status.STATUS_COMMITTED) {
-                            registerIfNeeded(spec, tenantId, connectorId);
+                            registerIfNeeded(spec, tenantId, connectorId, null);
                         }
                     }
                 });
@@ -438,7 +463,7 @@ public class HybridJsonbWriter {
     public void forget(String table) {
         if (table == null) return;
         schemaCache.remove(table);
-        // registered keys are always "<table>|<tenantId>" (registerIfNeeded), so match by that prefix.
+        // registered keys are always "<table>|<tenantId>|<connectorId>" (registerIfNeeded), so match by that prefix.
         registered.removeIf(k -> k.startsWith(table + "|"));
     }
 

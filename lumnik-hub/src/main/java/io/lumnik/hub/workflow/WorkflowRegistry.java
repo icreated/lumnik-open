@@ -7,6 +7,7 @@ import org.jboss.logging.Logger;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Predicate;
 
 /**
  * Serves WorkflowGraphs from the per-tenant manifest store. Until 2026-08 this scanned the
@@ -31,8 +32,15 @@ public class WorkflowRegistry {
     private final WorkflowManifestParser parser = new WorkflowManifestParser();
 
     public List<WorkflowGraph> all(long tenantId) {
+        return all(tenantId, scope -> true);
+    }
+
+    /** {@link #all}, keeping the workflows whose scope passes — tested before the parse, so a
+     *  manifest the caller may not read neither costs a parse nor fails its list. */
+    public List<WorkflowGraph> all(long tenantId, Predicate<String> scope) {
         return store.listByTenant(tenantId).stream()
             .filter(WorkflowManifestStore.StoredWorkflow::enabled)
+            .filter(w -> scope.test(w.scope()))
             .map(w -> WorkflowGraph.from(parser.parse(w.yaml())))
             .toList();
     }

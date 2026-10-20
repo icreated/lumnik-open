@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/spf13/cobra"
@@ -17,19 +16,6 @@ func newDescribeCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newDescribeConnectorTypeCmd())
 	return cmd
-}
-
-type configDefField struct {
-	Name       string          `json:"name"`
-	Type       string          `json:"type"`
-	Importance string          `json:"importance"`
-	Required   bool            `json:"required"`
-	Doc        string          `json:"doc"`
-	Nested     *configDefBlock `json:"nested,omitempty"`
-}
-
-type configDefBlock struct {
-	Fields []configDefField `json:"fields"`
 }
 
 func newDescribeConnectorTypeCmd() *cobra.Command {
@@ -46,7 +32,7 @@ func newDescribeConnectorTypeCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			var def configDefBlock
+			var def output.ConfigDef
 			if err := json.Unmarshal(raw, &def); err != nil {
 				return err
 			}
@@ -55,28 +41,13 @@ func newDescribeConnectorTypeCmd() *cobra.Command {
 			if format, _ := cmd.Flags().GetString("output"); format != "table" {
 				return output.PrintObject(cmd.OutOrStdout(), format, def)
 			}
-			return renderConfigDef(cmd.OutOrStdout(), args[0], def, 0)
+			renderConfigDef(cmd.OutOrStdout(), args[0], def)
+			return nil
 		},
 	}
 }
 
-func renderConfigDef(out io.Writer, kind string, def configDefBlock, depth int) error {
-	indent := strings.Repeat("  ", depth)
-	if depth == 0 {
-		fmt.Fprintf(out, "Connector type: %s\n\n", kind)
-	}
-	for _, f := range def.Fields {
-		req := "optional"
-		if f.Required {
-			req = "REQUIRED"
-		}
-		fmt.Fprintf(out, "%s%-20s %s  [%s, %s]\n", indent, f.Name, req, f.Type, f.Importance)
-		if f.Doc != "" {
-			fmt.Fprintf(out, "%s  %s\n", indent, f.Doc)
-		}
-		if f.Nested != nil {
-			_ = renderConfigDef(out, "", *f.Nested, depth+1)
-		}
-	}
-	return nil
+func renderConfigDef(out io.Writer, kind string, def output.ConfigDef) {
+	fmt.Fprintf(out, "Connector type: %s\n\n", kind)
+	output.RenderConfigDef(out, def, 0)
 }

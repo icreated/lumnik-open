@@ -10,12 +10,14 @@ import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 
+import java.sql.Array;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -252,10 +254,11 @@ class InboxResourceIT {
      * nightly picked the hash anti-join (which reads the acks by tenant, not by key) while a
      * laptop picked the per-row probe.
      */
-    @ParameterizedTest(name = "all={0}")
-    @ValueSource(booleans = {false, true})
-    void theInboxReadIsTwoIndexPaths(boolean all) throws Exception {
-        List<JsonNode> plan = plan(all);
+    @ParameterizedTest(name = "all={0}, bound={1}")
+    @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+    void theInboxReadIsTwoIndexPaths(boolean all, boolean bound) throws Exception {
+        // bound: a caller held to their métiers' sources (#1209) walks the same index, one array test a row
+        List<JsonNode> plan = plan(all, bound);
         // Only the walk's predicate implies the partial index's (a bitmap scan names it on an alias-less node).
         Assertions.assertThat(plan).as("the walk reads no row event: %s", plan.get(0))
             .anyMatch(n -> "idx_event_outbox_decisions".equals(n.path("Index Name").asText()));
@@ -269,14 +272,17 @@ class InboxResourceIT {
      * Every node of {@code EXPLAIN (FORMAT JSON)} of the inbox read for tenant 5100, planned over
      * a seeded history that is rolled back with the plan's transaction.
      */
-    private List<JsonNode> plan(boolean all) throws Exception {
+    private List<JsonNode> plan(boolean all, boolean bound) throws Exception {
         try (Connection c = adminDs.getConnection()) {
             c.setAutoCommit(false);
             try (Statement st = c.createStatement();
                  PreparedStatement ps = c.prepareStatement("EXPLAIN (FORMAT JSON) " + InboxResource.listSql(all))) {
                 st.execute("INSERT INTO core.event_outbox (tenant_id, event_type, source, payload, occurred_at, created_at) "
                     + "SELECT 5100, CASE WHEN g % 10 = 0 THEN 'decision.history' ELSE 'data.row.changed' END, "
-                    + "'ingest', '{}'::jsonb, NOW(), NOW() FROM generate_series(1, 2000) g");
+                    // half the decisions come from a source the bound reader holds, so its plan
+                    // is planned over rows its filter keeps, not over none (#1211 review)
+                    + "CASE WHEN g % 20 = 0 THEN 'process:p-1' ELSE 'ingest' END, "
+                    + "'{}'::jsonb, NOW(), NOW() FROM generate_series(1, 2000) g");
                 st.execute("INSERT INTO core.event_outbox (tenant_id, event_type, source, payload, dedup_key, occurred_at, created_at) "
                     + "SELECT 5100, 'annotation.decision.acked', 'user:7', jsonb_build_object('decision_id', id), "
                     + "'ack:' || id, NOW(), NOW() FROM core.event_outbox WHERE tenant_id = 5100 AND event_type = 'decision.history'");
@@ -285,7 +291,15 @@ class InboxResourceIT {
                 st.execute("SET LOCAL enable_hashjoin = off");    // a nested loop is the per-row probe on the key
                 st.execute("SET LOCAL enable_mergejoin = off");
                 ps.setLong(1, 5100);
-                ps.setInt(2, 50);
+                if (bound) {
+                    Array sources = c.createArrayOf("text", new String[] {"process:p-1", "workflow:w-1"});
+                    ps.setArray(2, sources);
+                    ps.setArray(3, sources);
+                } else {
+                    ps.setNull(2, Types.ARRAY);   // an unbound caller: every source
+                    ps.setNull(3, Types.ARRAY);
+                }
+                ps.setInt(4, 50);
                 try (ResultSet rs = ps.executeQuery()) {
                     rs.next();
                     List<JsonNode> nodes = new ArrayList<>();

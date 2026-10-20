@@ -98,6 +98,16 @@ func newRunCmd() *cobra.Command {
 					return err
 				}
 			}
+			// A table that shrank must say why: rows a csv file no longer holds, removed by a run that
+			// read the whole file (#1195), or the older versions of a key, removed by a jdbc table's
+			// first keyed run (#1196). Outside the IN/OUT/SKIPPED identity, so a note.
+			if run.RecordsRemoved > 0 {
+				if _, err := fmt.Fprintf(cmd.ErrOrStderr(),
+					"• %d row(s) removed — the source no longer holds them\n",
+					run.RecordsRemoved); err != nil {
+					return err
+				}
+			}
 			// A terminal run's reason must reach the human — a mute Failed was one of
 			// the first real test's silences. Same stderr contract as the alert above.
 			// The label follows the STATUS: Cancelled runs carry a message too

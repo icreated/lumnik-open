@@ -8,29 +8,38 @@ import (
 	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/types"
 	"github.com/rivo/tview"
+	"gopkg.in/yaml.v3"
 )
 
 type Hooks struct {
-	app     *tview.Application
-	table   *tview.Table
-	client  *client.Client
-	offLoop offLoop
-	mu      sync.Mutex
-	onError func(string)
+	app      *tview.Application
+	table    *tview.Table
+	client   *client.Client
+	offLoop  offLoop
+	mu       sync.Mutex
+	onError  func(string)
+	items    []types.Hook
+	detail   lazyDetail // d: the hook as `lm hook get` shows it (#1138)
+	onSelect func()
 }
 
 func NewHooks(app *tview.Application, c *client.Client, onError func(string)) *Hooks {
-	t := tview.NewTable().SetBorders(false).SetSelectable(true, false)
+	t := newListTable()
 	t.SetTitle(" :hooks ").SetBorder(true)
 	h := &Hooks{app: app, table: t, client: c, onError: onError}
 	h.setHeader()
 	h.table.SetInputCapture(h.handleKey)
+	h.table.SetSelectionChangedFunc(func(row, col int) {
+		if h.onSelect != nil {
+			h.onSelect()
+		}
+	})
 	return h
 }
 
 func (h *Hooks) View() tview.Primitive { return h.table }
 func (h *Hooks) Hints() string {
-	return "r: refresh  :: switch  ?: help  q: quit"
+	return "d: describe  r: refresh  :: switch  ?: help  q: quit"
 }
 
 func (h *Hooks) setHeader() {
@@ -51,13 +60,16 @@ func (h *Hooks) Refresh() {
 
 func (h *Hooks) renderList(list []types.Hook, err error) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if err != nil {
+		h.mu.Unlock()
 		if h.onError != nil {
 			h.onError(fmt.Sprintf("hooks list: %v", err))
 		}
 		return
 	}
+	prev := selectedKey(h.table, h.items, hookKey)
+	h.items = list
+	h.detail.retryFailed()
 	h.table.Clear()
 	h.setHeader()
 	for i, hk := range list {
@@ -68,7 +80,14 @@ func (h *Hooks) renderList(list []types.Hook, err error) {
 		h.table.SetCell(row, 3, dataCell(hk.Scope).SetExpansion(1))
 		h.table.SetCell(row, 4, dataCell(hk.Status).SetExpansion(1))
 	}
+	reselect(h.table, h.items, hookKey, prev)
+	h.mu.Unlock()
+	if h.onSelect != nil { // an open describe panel follows the fresh row
+		h.onSelect()
+	}
 }
+
+func hookKey(hk types.Hook) string { return hk.ID }
 
 // handleKey no longer binds Ctrl-L: it used to call HookReload, POST
 // /api/platform/hooks/{id}/reload — an endpoint that does not exist on the hub. Hooks are
@@ -81,3 +100,32 @@ func (h *Hooks) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 	}
 	return ev
 }
+
+// SelectedDescribe shows the hook as `lm hook get` does: the singular door's binding (handler,
+// events, priority…), richer than the list's row. It is fetched once per hook, off the loop; until
+// it lands the panel shows the row itself.
+func (h *Hooks) SelectedDescribe() (string, string, bool) {
+	row, _ := h.table.GetSelection()
+	if row < 1 || row-1 >= len(h.items) {
+		return "", "", false
+	}
+	hk := h.items[row-1]
+	body, ok := h.detail.get(h.app, hk.ID, func() (string, error) {
+		d, err := h.client.HookGet(hk.ID)
+		if err != nil {
+			return "", err
+		}
+		data, err := yaml.Marshal(d)
+		if err != nil {
+			return "", err
+		}
+		return highlightYAML(string(data)), nil
+	}, h.onSelect)
+	if !ok {
+		body = fmt.Sprintf("type:    %s\nentity:  %s\nscope:   %s\nstatus:  %s\n\n[gray]fetching the binding…[white]",
+			tview.Escape(hk.Type), tview.Escape(hk.Entity), tview.Escape(hk.Scope), tview.Escape(hk.Status))
+	}
+	return "hook " + hk.ID, body, true
+}
+
+func (h *Hooks) OnSelectionChange(cb func()) { h.onSelect = cb }

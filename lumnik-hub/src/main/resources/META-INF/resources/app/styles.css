@@ -137,13 +137,13 @@ body.sheet-open #sheet { transform: translateY(0); }
 .ack-btn:active { background: rgba(111,211,154,.12); }
 .ack-btn:disabled { opacity: .5; cursor: default; }
 .treated { color: var(--ok); font-size: 13px; }
-/* C5: the known-limit note under the décisions list */
-.footer-note { color: var(--dim); font-size: 12.5px; text-align: center; margin-top: 18px; }
 /* ---- chat ---- */
 /* Matrix-F width fix: the thread stays a centered column even where `main` goes unbounded
    (≥640px, widened above for the B4 data table) — the chat root owns its own cap. */
 .chat-col { max-width: 640px; margin: 0 auto; }
-.msgs { display: flex; flex-direction: column; gap: 10px; padding-bottom: 76px; }
+/* The end of the thread must clear the fixed input AND the tab bar under it (~63 + 56px): body's own
+   padding-bottom does not count once html/body are height:100% and the thread overflows them. */
+.msgs { display: flex; flex-direction: column; gap: 10px; padding-bottom: calc(env(safe-area-inset-bottom) + 108px); }
 .bubble { max-width: 86%; border-radius: 16px; padding: 10px 14px; font-size: 15.5px; overflow-wrap: anywhere; }
 .bubble.me { align-self: flex-end; background: var(--accent); color: #17122e; border-bottom-right-radius: 5px; }
 .bubble.bot { align-self: flex-start; background: var(--card); border: 1px solid var(--edge); border-bottom-left-radius: 5px; }
@@ -162,6 +162,14 @@ body.sheet-open #sheet { transform: translateY(0); }
 .msgs .refusal, .msgs .error {
   max-width: 86%; align-self: flex-start; border-bottom-left-radius: 5px; margin: 0;
 }
+/* #1097: what the hub answered when it is not what was typed — quiet, but always there to read */
+.understood { font-size: 12.5px; color: var(--dim); margin-top: 6px; overflow-wrap: anywhere; }
+/* #1097: the end of the thread — the sentence the next question continues (the chip; a tap sends the
+   next question alone), and a fresh start. Last in the thread, so it sits right above the input. */
+.thread { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px 10px; }
+.thread button { border: 0; cursor: pointer; font-family: inherit; }
+.thread .chip { max-width: 100%; text-align: left; overflow-wrap: anywhere; }
+.thread-new { background: none; color: var(--dim); font-size: 12.5px; text-decoration: underline; padding: 2px 4px; }
 /* fixed above the tab bar on phone (F) — the component only mounts this markup while on the
    chat tab, so unlike the spike there is no body[data-tab] gate to keep it hidden elsewhere. */
 #ask {
@@ -205,7 +213,6 @@ body.sheet-open #sheet { transform: translateY(0); }
   main { max-width: none; }
   /* décisions keep a readable column even though main is unbounded for tables */
   .decision { max-width: 640px; margin-left: auto; margin-right: auto; }
-  .footer-note { max-width: 640px; margin-left: auto; margin-right: auto; }
   /* Chat (F): input joins the thread's flow instead of floating fixed above a nav that,
      at this width, is still the bottom tabs (the rail only replaces them at ≥900px). */
   .msgs { padding-bottom: 0; }

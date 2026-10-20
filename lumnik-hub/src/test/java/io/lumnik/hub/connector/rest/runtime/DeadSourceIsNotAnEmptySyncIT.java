@@ -11,6 +11,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.transaction.UserTransaction;
 import org.junit.jupiter.api.*;
 
+import java.util.List;
 import java.util.UUID;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
@@ -57,9 +58,13 @@ class DeadSourceIsNotAnEmptySyncIT {
     }
 
     private UUID seed(String path, String table) {
+        return seed(path, table, "http://localhost:" + wm.port());
+    }
+
+    private UUID seed(String path, String table, String baseUrl) {
         UUID connId = UUID.randomUUID();
         UUID epId = UUID.randomUUID();
-        String connJson = "{\"kind\":\"rest-generic\",\"base_url\":\"http://localhost:" + wm.port()
+        String connJson = "{\"kind\":\"rest-generic\",\"base_url\":\"" + baseUrl
             + "\",\"default_rate_limit\":\"100/s\"}";
         String epJson = "{\"pagination\":{\"kind\":\"page\",\"page_param\":\"page\",\"size_param\":\"size\",\"size\":2,"
             + "\"start_page\":1,\"empty_check\":true,\"response_path\":\"$.data\"},"
@@ -139,5 +144,72 @@ class DeadSourceIsNotAnEmptySyncIT {
             "the failure must name the status, got: " + failed.message());
         assertFalse(failed.retryable(),
             "a credential failure is permanent — retrying the chunk cannot fix it");
+    }
+
+    // ── what the run's failure text may quote (#1166) ─────────────────────────────────────────
+
+    private static final List<String> SECRETS = List.of("user", "pw", "ECRET", "k=v");
+
+    /**
+     * The text the run row stores — what `:runs` and `lm connector runs` show. Read inside a
+     * transaction: the tenant setting that RLS reads is transaction-local.
+     */
+    private String storedFailure(UUID connectorId) {
+        return TenantContext.callAsSystem(() -> {
+            utx.begin();
+            try {
+                return (String) em.createNativeQuery(
+                        "SELECT error_message FROM connector.connector_run WHERE connector_id = :c")
+                    .setParameter("c", connectorId).getSingleResult();
+            } finally {
+                utx.commit();
+            }
+        });
+    }
+
+    private void assertQuotesNothingOfTheSource(String text) {
+        for (String secret : SECRETS) {
+            assertFalse(text.contains(secret), secret + " in: " + text);
+        }
+    }
+
+    /**
+     * A redirect's {@code Location} can carry a token or a signed query: the run names its host,
+     * never the rest of it.
+     */
+    @Test
+    void a_redirect_names_its_host_in_the_run_failure_never_its_path_or_query() {
+        String path = "/v1/moved";
+        String table = "ext.dead_302_" + Math.abs(System.nanoTime());
+        stubFor(get(urlPathEqualTo(path)).willReturn(aResponse().withStatus(302)
+            .withHeader("Location", "https://user:pw@api.example/p/SECRET?k=v")));
+
+        UUID connectorId = seed(path, table);
+        RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(connectorId, new RunTrigger.Manual(1L)));
+
+        RunStatus.Failed failed = assertInstanceOf(RunStatus.Failed.class, s);
+        String expected = "upstream returned a redirect (302) to https://api.example"
+            + " — refusing to follow it or ingest its body as data";
+        assertEquals(expected, failed.message());
+        assertEquals(expected, storedFailure(connectorId));
+    }
+
+    /**
+     * A source nobody answers on: the run says the failure's kind, never the JDK message, which
+     * can quote the URL. Port 1 on localhost is never bound — nothing leaves the machine. Slow by
+     * construction, like the 500 case: a network failure spends the retry budget first.
+     */
+    @Test
+    void a_source_nobody_answers_on_is_stored_by_its_kind() {
+        UUID connectorId = seed("/p/SECRET?k=v", "ext.dead_refused_" + Math.abs(System.nanoTime()),
+            "http://user:pw@localhost:1");
+
+        RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(connectorId, new RunTrigger.Manual(1L)));
+
+        RunStatus.Failed failed = assertInstanceOf(RunStatus.Failed.class, s);
+        assertEquals("connection failed (ConnectException)", failed.message());
+        String stored = storedFailure(connectorId);
+        assertEquals("connection failed (ConnectException)", stored);
+        assertQuotesNothingOfTheSource(stored);
     }
 }

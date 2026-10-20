@@ -279,6 +279,36 @@ func TestRunGet_noCellErrorsAlertWhenZero(t *testing.T) {
 	}
 }
 
+// #1195: a csv connector reading one local file removes the rows the file no longer holds; #1196: a
+// jdbc table's first keyed run removes the older versions of a key. The count lives beside the
+// conservation identity, not in it, so `run get` says it on stderr — a table that shrank must say
+// why, in words true of both.
+func TestRunGet_removedRowsNoteOnStderr(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "12121212-0000-4000-8000-000000000012", "connectorId": "c1", "status": "Completed",
+			"recordsIn": 9, "recordsOut": 0, "recordsSkipped": 9, "recordsRemoved": 1,
+		})
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	outBuf, errBuf := new(bytes.Buffer), new(bytes.Buffer)
+	cmd.SetOut(outBuf)
+	cmd.SetErr(errBuf)
+	cmd.SetArgs([]string{"run", "get", "12121212-0000-4000-8000-000000000012"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errBuf.String(), "1 row(s) removed — the source no longer holds them") {
+		t.Errorf("the removal should be said on stderr: %q", errBuf.String())
+	}
+	if strings.Contains(outBuf.String(), "removed") {
+		t.Errorf("stdout must not carry the note: %q", outBuf.String())
+	}
+}
+
 func TestRunGet_noAlertWhenZeroDeadLetters(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{

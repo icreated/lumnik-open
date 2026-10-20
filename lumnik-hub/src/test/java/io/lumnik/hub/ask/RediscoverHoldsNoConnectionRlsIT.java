@@ -13,6 +13,7 @@ import io.lumnik.hub.connector.event.ConnectorRunCompleted;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.lumnik.hub.source.csv.CsvIngestService;
 import io.lumnik.hub.webhook.SecretCipher;
+import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.test.InjectMock;
@@ -82,7 +83,6 @@ class RediscoverHoldsNoConnectionRlsIT {
     @BeforeEach
     void seed() throws Exception {
         exec("DELETE FROM connector.connector WHERE tenant_id = " + TENANT);
-        exec("DELETE FROM connector.connector_mapping WHERE tenant_id = " + TENANT);
         exec("DELETE FROM connector.dynamic_table WHERE tenant_id = " + TENANT);
         exec("DELETE FROM connector.connector_credential WHERE tenant_id = " + TENANT);
         exec("DELETE FROM connector.schema_card WHERE tenant_id = " + TENANT);
@@ -96,14 +96,11 @@ class RediscoverHoldsNoConnectionRlsIT {
             ps.setBytes(3, cipher.encrypt("aduser:adpass")); ps.setBytes(4, new byte[0]);
             ps.executeUpdate();
         }
-        UUID mappingId = UUID.randomUUID();
-        exec("INSERT INTO connector.connector_mapping (id, tenant_id, name, target_entity, spec_format, spec_content) "
-           + "VALUES ('" + mappingId + "', " + TENANT + ", 'm_order', 'public.c_order', 'yaml', 'x')");
         connectorId = UUID.randomUUID();
-        exec("INSERT INTO connector.connector (id, tenant_id, name, type_id, config, credential_id, mapping_id, "
+        exec("INSERT INTO connector.connector (id, tenant_id, name, type_id, config, credential_id, "
            + "enabled, tags, sync_mode, skip_policy) VALUES ('" + connectorId + "', " + TENANT
            + ", 'ntx--c_order', 'jdbc-generic', '{\"url\":\"jdbc:postgresql://erp.invalid/db\",\"user\":\"aduser\"}'::jsonb, '"
-           + credId + "', '" + mappingId + "', true, ARRAY['" + SCOPE + "'], 'Incremental', "
+           + credId + "', true, ARRAY['" + SCOPE + "'], 'Incremental', "
            + "'{\"type\":\"SkipUpTo\",\"maxSkips\":100}'::jsonb)");
         exec("INSERT INTO connector.dynamic_table (id, tenant_id, mapping_id, table_schema, table_name, schema_inferred, connector_id) "
            + "VALUES (gen_random_uuid(), " + TENANT + ", 'jdbc:c_order', 'connector', 't_c_order', "
@@ -117,9 +114,13 @@ class RediscoverHoldsNoConnectionRlsIT {
     }
 
     private String storedSourceType() {
+        return storedSourceType(SCOPE);
+    }
+
+    private String storedSourceType(String scope) {
         try (Connection c = adminDs.getConnection(); Statement st = c.createStatement();
              var rs = st.executeQuery("SELECT source_type FROM connector.schema_card WHERE tenant_id = "
-                 + TENANT + " AND scope = '" + SCOPE + "'")) {
+                 + TENANT + " AND scope = '" + scope + "'")) {
             return rs.next() ? rs.getString(1) : null;
         } catch (Exception e) { throw new RuntimeException(e); }
     }
@@ -153,6 +154,26 @@ class RediscoverHoldsNoConnectionRlsIT {
         assertThat(txActiveAtAdRead).as("the refresher reached the AD provider").hasSize(1);
         assertThat(txActiveAtAdRead).containsOnly(false);
         assertThat(storedSourceType()).isEqualTo("jdbc-ad");
+    }
+
+    /**
+     * A connector moved to another scope rebuilds both cards from the commit callback (#1194), like
+     * the one-shot below: the credential must still be visible there, or the new scope's card is
+     * written without its AD labels.
+     */
+    @Test
+    void a_connector_moved_to_another_scope_rebuilds_its_card_with_the_credential_visible() {
+        String moved = SCOPE + "-moved";
+        exec("DELETE FROM connector.schema_card WHERE tenant_id = " + TENANT);
+
+        given().headers(TestIdentity.tenantAndUser(TENANT)).contentType(ContentType.JSON)
+            .body(List.of(moved))
+        .when().put("/api/platform/connectors/" + connectorId + "/tags")
+        .then().statusCode(200);
+
+        assertThat(txActiveAtAdRead).as("the AD provider was reached").isNotEmpty();
+        assertThat(txActiveAtAdRead).containsOnly(false);
+        assertThat(storedSourceType(moved)).as("the credential was visible from the commit callback").isEqualTo("jdbc-ad");
     }
 
     /**

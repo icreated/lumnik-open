@@ -34,10 +34,15 @@ import java.util.Map;
  * value, an ambiguous filter, a refused read, a zero-row result, a figure the rows do not back). It is
  * the structural mark of a refusal: the sentence is served in the language the caller named, so no client
  * or grader may recognise it by what its words say. False for an answer.
+ *
+ * <p>{@code understoodAs} (#1096): the question this result answers, when the asked one continued a previous
+ * question and was resolved against it — the surface sends it back as the next {@code previous}. Null for a
+ * standalone question, and for a follow-up that could not be resolved.
  */
 public record AskResult(String answer, String sql, List<Map<String,Object>> rows, int rowCount,
                         String dataAsOf, List<String> otherDoors,
-                        List<Disputed> disputed, boolean disputedTruncated, boolean abstained) {
+                        List<Disputed> disputed, boolean disputedTruncated, boolean abstained,
+                        String understoodAs) {
 
     /** The scope declares a document lifecycle; the semantic door retrieves it, SQL never reads it. */
     public static final String DOOR_LIFECYCLE = "lifecycle";
@@ -58,6 +63,12 @@ public record AskResult(String answer, String sql, List<Map<String,Object>> rows
         disputed = disputed == null ? List.of() : List.copyOf(disputed);
         // No client renders an empty list, so a lone truncation flag would say nothing visible.
         disputedTruncated = disputedTruncated && !disputed.isEmpty();
+    }
+
+    public AskResult(String answer, String sql, List<Map<String,Object>> rows, int rowCount,
+                     String dataAsOf, List<String> otherDoors,
+                     List<Disputed> disputed, boolean disputedTruncated, boolean abstained) {
+        this(answer, sql, rows, rowCount, dataAsOf, otherDoors, disputed, disputedTruncated, abstained, null);
     }
 
     public AskResult(String answer, String sql, List<Map<String,Object>> rows, int rowCount,
@@ -87,11 +98,16 @@ public record AskResult(String answer, String sql, List<Map<String,Object>> rows
             doors = new ArrayList<>(doors);
             doors.add(DOOR_CONFLICTS);
         }
-        return new AskResult(answer, sql, rows, rowCount, dataAsOf, doors, disputed, truncated, abstained);
+        return new AskResult(answer, sql, rows, rowCount, dataAsOf, doors, disputed, truncated, abstained, understoodAs);
     }
 
     /** This result marked as an abstention (#915). */
     public AskResult withAbstained() {
-        return new AskResult(answer, sql, rows, rowCount, dataAsOf, otherDoors, disputed, disputedTruncated, true);
+        return new AskResult(answer, sql, rows, rowCount, dataAsOf, otherDoors, disputed, disputedTruncated, true, understoodAs);
+    }
+
+    /** This result, answering {@code understoodAs} (#1096). */
+    public AskResult withUnderstoodAs(String understoodAs) {
+        return new AskResult(answer, sql, rows, rowCount, dataAsOf, otherDoors, disputed, disputedTruncated, abstained, understoodAs);
     }
 }

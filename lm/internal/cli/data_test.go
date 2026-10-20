@@ -36,7 +36,8 @@ func TestDataRow(t *testing.T) {
 func TestDataTables(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode([]map[string]any{
-			{"mappingId": "shopify-customers", "tableSchema": "tenant_1_data", "tableName": "customers", "rowCount": -1},
+			{"mappingId": "shopify-customers", "tableSchema": "tenant_1_data", "tableName": "customers", "rowCount": 4211},
+			{"mappingId": "gone", "tableSchema": "connector", "tableName": "t_gone", "rowCount": nil},
 		})
 	}))
 	defer srv.Close()
@@ -50,7 +51,9 @@ func TestDataTables(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "shopify-customers") {
-		t.Errorf("missing mapping: %s", buf.String())
+	for _, want := range []string{"shopify-customers", "ROWS", "4211", "unknown"} { // #1115: the hub counts now
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("missing %q: %s", want, buf.String())
+		}
 	}
 }

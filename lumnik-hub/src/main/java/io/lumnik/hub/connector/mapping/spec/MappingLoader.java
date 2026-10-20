@@ -145,9 +145,9 @@ public final class MappingLoader {
     if (n.isMissingNode() || n.isNull()) return ErrorPolicy.soft();
     // Honest boundary (tribunal B3): the policy is parsed and carried on MappingSpec,
     // but NO runtime consumer enforces it yet — rows follow the engine's default
-    // behavior regardless. Warn so a template author doesn't rely on it silently.
+    // behavior regardless. Warn so a mapping author doesn't rely on it silently.
     Logger.getLogger(MappingLoader.class).warn(
-        "mapping template declares on-error, which is parsed but NOT enforced yet — "
+        "mapping declares on-error, which is parsed but NOT enforced yet — "
             + "rows follow the engine's default error handling");
     String def = n.path("default").asText("soft");
     var defaultMode = ErrorPolicy.Mode.valueOf(def.toUpperCase());

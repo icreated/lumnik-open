@@ -2,6 +2,7 @@ package io.lumnik.hub.validator.csv;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.MissingNode;
+import io.lumnik.hub.connector.csv.CsvFullRefresh;
 import io.lumnik.hub.connector.mapping.MapColumnsRules;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.validator.ConfigDef;
@@ -47,13 +48,19 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
             .optional("archive_path", Type.STRING, Importance.LOW,
                 "Destination for `move` action", null)
             // Two keys the root of a csv spec really carries, declared so closing does not accuse
-            // them. `mapping` is consumed by MappingLoader (and shipped manifests carry it); its
+            // them. `mapping` is consumed by CsvFileConnectorType.buildSpec (and shipped manifests carry it); its
             // INSIDE stays open — closing that would need an audit of the whole hook vocabulary.
             // `window` is read by the SHARED apply preamble (ApplyUpsert); declared and checked
             // through WindowField, which owns both wordings for all four connector types.
             .optional("mapping", Type.NESTED, Importance.MEDIUM,
                 "Dataset/row/cell transformer hooks — see the transformers page", null)
             .optional("window", Type.STRING, Importance.MEDIUM, WindowField.DOC, null)
+            // #1195: one local file is the table, and a run that read it whole removes what it no
+            // longer holds — at most this share of the table, unless lifted.
+            .optionalNested("refresh", Importance.MEDIUM, "Full refresh of one local file: the removal guard",
+                new ConfigDef().optionalCustom("max_removed", Type.STRING, Importance.MEDIUM,
+                    "Largest share of the table one run may remove: a percentage (30% by default), or off",
+                    CsvFullRefresh::maxRemovedProblem).closed())
             // Optional: its only key (`indexes`) is optional too, so requiring the block made every
             // csv manifest carry an empty `target: {}` that the runtime reads nothing from (#543).
             .optionalNested(TARGET, Importance.HIGH, "Target persistence",
@@ -75,6 +82,7 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
         List<ValidationError> errs = new ArrayList<>();
         errs.addAll(transportPathRequired(tr, tKind));
         errs.addAll(sftpNeedsACredential(tr, tKind));
+        errs.addAll(sftpNeedsAFingerprint(tr, tKind));
         errs.addAll(moveNeedsAnArchivePath(spec, afterProc));
         errs.addAll(localCannotRelocate(tKind, afterProc));
         errs.addAll(oneShotOnlyTransportKeys(tr));
@@ -86,7 +94,25 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
         errs.addAll(aggregatorRefused(spec));
         errs.addAll(validateRowAfterSplitRowRefused(spec));
         errs.addAll(mapColumnsRefused(spec));
+        errs.addAll(refreshWithoutAState(spec));
         return errs;
+    }
+
+    /**
+     * {@code refresh} only means something where the source is a state: one local file. A glob is a
+     * drop folder and a remote transport keeps a watermark over the files it took — both only ever
+     * add rows, so the block would be read by nothing. A warning, not a refusal: the manifest is not
+     * wrong, it says something this source cannot do.
+     */
+    private static List<ValidationError> refreshWithoutAState(JsonNode spec) {
+        if (spec.path("refresh").isMissingNode()) return List.of();
+        JsonNode tr = spec.path("transport");
+        // The runtime's default for an absent kind (resolveTransport), so the two never disagree.
+        if (CsvFullRefresh.isOneLocalFile(tr.path("kind").asText("local"), tr.path("path").asText(""))) return List.of();
+        return List.of(new ValidationError("spec.refresh", Severity.WARNING,
+            "refresh is read only for one local file (transport kind: local, a path without * or ?): "
+                + "this source is a drop folder and never removes rows, so the block does nothing here",
+            List.of("Remove the refresh block, or point transport.path at the one file that holds the table")));
     }
 
     private static List<ValidationError> transportPathRequired(JsonNode tr, String tKind) {
@@ -111,6 +137,17 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
         return List.of(new ValidationError("spec.transport", Severity.ERROR,
             "SFTP transport requires key_env or password_env",
             List.of("Use `lm secret set <NAME> ...` then reference via key_env: <NAME>")));
+    }
+
+    /** strict_host_key (default true) refuses at every run a server whose key nothing declares (#1251). */
+    private static List<ValidationError> sftpNeedsAFingerprint(JsonNode tr, String tKind) {
+        if (!"sftp".equals(tKind) || !tr.path("strict_host_key").asBoolean(true)
+            || JsonNodes.nonBlank(tr.path("host_key_fingerprint"))) return List.of();
+        return List.of(new ValidationError("spec.transport.host_key_fingerprint", Severity.ERROR,
+            "SFTP transport with strict_host_key (the default) needs host_key_fingerprint — every run would refuse to connect",
+            List.of("Read it with `ssh-keyscan -p " + tr.path("port").asInt(22) + " " + tr.path("host").asText("HOST")
+                + " | ssh-keygen -lf -` (the run's refusal prints the same), confirm it out of band, "
+                + "then set host_key_fingerprint: \"SHA256:…\"")));
     }
 
     private static List<ValidationError> moveNeedsAnArchivePath(JsonNode spec, String afterProc) {

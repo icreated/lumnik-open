@@ -110,10 +110,8 @@ func decodeManifest(data []byte, path string) (map[string]any, error) {
 //
 // `lm connector apply` posts its YAML as JSON to POST /api/platform/connectors, whose request is
 // (tenantId, name, typeId, schedule, enabled, config). A kind: Connector manifest shares none of
-// those names, so every field arrives null — tenantId included, it being a nullable Long — and
-// the insert carries a NULL tenant_id, which the row-level security policy never matches. The
-// refusal surfaces as an anonymous 500 with an error id. The reader wrote a valid file; nothing
-// told them it was the wrong door.
+// those names, so every field arrives null and the hub answers a bare "typeId is required". The
+// reader wrote a valid file; nothing would tell them it was the wrong door.
 //
 // An envelope (apiVersion or kind) is what tells the two apart: the flat payload has neither.
 // `lm apply` posts the YAML untouched to the endpoint that parses manifests, so the redirect

@@ -1,23 +1,27 @@
 # The métier PWA — your data in your pocket
 
-The hub rendered on a phone. `/app/` is a small Preact app served by the hub itself —
-no app store, no build step, no new endpoints: it speaks the same scope-bound API that
-`lm` does, and installs from the browser like any PWA. One deployment carries every
-métier; the `?m=` parameter decides whose app it is.
+The hub rendered on a phone. `/app/` is served by the hub itself — no app store, no build
+step — and installs from the browser like any PWA. One deployment carries every métier; the
+`?m=` parameter decides whose app it is.
 
 The UI speaks French — it is built for the métier user, not the integrator.
 
 ## Reaching it
 
 ```
-https://<your-host>/app/            # the clients métier (default)
+https://<your-host>/app/            # the app declared default: true
 https://<your-host>/app/?m=stock    # the stock métier
 ```
 
-Each métier in the registry carries its own title, home-screen icon, and web manifest
-(`manifest-clients.json`, `manifest-stock.json`), swapped in before first paint — so
-"Clients" and "Stock" install as two distinct apps on the same phone. An unknown or
-absent `?m=` falls back to `clients`; it never errors.
+After sign-in the PWA looks `?m=` up in the apps the user may see ([`lm app list`](#see-what-is-declared)):
+
+| `?m=` | Opens |
+|---|---|
+| a name in the list | that app, with its own title, icon and theme |
+| absent | the app declared `default: true` the user sees — or their only app; otherwise the refusal below |
+| unknown, or an app of a scope the user does not hold | *Application inconnue — vérifie le lien ou contacte ton intégrateur.* |
+
+Each app installs as its own home-screen icon: "Clients" and "Stock" are two apps on the same phone.
 
 What a métier user actually *sees* inside is decided elsewhere: by the saved views the
 integrator has [applied](views.md) for that scope, and by the `scope:<tag>` role on the
@@ -35,8 +39,7 @@ The PWA needs a **secure origin**: service workers and the real install prompt o
 exist over `https`. The self-host stack ships a TLS façade for exactly this —
 one Caddy origin fronting hub and Keycloak, with automatic Let's Encrypt for a public
 `LUMNIK_TLS_HOST` (see `deploy/tls/README.md`). On a LAN address Caddy uses its
-internal CA; trust its root on the device or installability is degraded (the
-browser's rule, not ours).
+internal CA; trust its root on the device, or the browser will not offer a real install.
 
 Then, on the phone:
 
@@ -47,101 +50,151 @@ Then, on the phone:
 
 ## The tabs
 
-The tabs an app shows are the ones its hub offers, narrowed by what the app declares ([Choosing the tabs](#choosing-the-tabs)). By default that is Fiches and Décisions everywhere, plus Chat on a build that carries it and Recherche on a hub that has [Search](../search/querying.md); a hub without them shows no such tab at all, not a greyed-out one. Same surfaces on every device — bottom tabs on a phone, a left rail on a display.
+The tabs an app shows are the ones its hub offers, narrowed by what the app declares ([Choosing the tabs](#choosing-the-tabs)):
+
+| Tab | Shown |
+|---|---|
+| Fiches | always |
+| Décisions | always |
+| Chat | on a build with the AI, switched on |
+| Recherche | on a hub with [Search](../search/querying.md), for a user who may read an index |
+
+A tab the hub does not offer is absent, not greyed out. Bottom tabs on a phone, a left rail on a display.
 
 ### Fiches — the saved views
 
-The tab discovers its views from the hub (`GET /api/views?scope=<métier>`), then fetches the
-chosen manifest by name (`GET /api/views/{name}`):
+The tab lists the [saved views](views.md#the-saved-view-store) of the app's scope:
 
 | Views applied for your métier | What you see |
 |---|---|
 | One | It opens directly. |
 | Several | A picker to choose from. |
-| **None** | An amber message naming the cause — ask your integrator to apply one (`POST /api/views/apply`, or `lm view apply -f`). |
+| **None** | An amber message naming the cause — ask your integrator to apply one (`lm view apply -f`). |
 
-Rendering and filtering go through the same `POST /api/views/render` as `lm view`, with the
-same [refusal rules](views.md#refusal-rules). A view opens on its first **50 rows**, never the whole
-table, and the screen says so: the header count reads `50+` and a line under the filters says *Première page —
-d'autres résultats existent* (*Page 3 — d'autres résultats existent* further on). **Suivant ›** and **‹ Précédent** move one page at a time, **« Début** returns to the first page,
-and the controls are disabled while a page is loading. The same controls sit **above and below** the rows, on the right, so a long page needs no scrolling to move on; the view's own title (its `spec.title`) heads the results. Changing a filter always goes back to the first
-page; moving between pages keeps your filters. The last page says *Page N — dernière page* and its header
-count is that page's own rows, without the `+`: the hub never counts the whole table, so "more results exist"
-is the only total it states.
+The [refusal rules](views.md#refusal-rules) are those of `lm view`. A view opens on its first
+**50 rows**, under its `spec.title`:
 
-A phone shows the rows as cards, a tablet or a display as a table; only the one that fits your screen is
-built, and it follows when you rotate or resize.
+| On screen | Means |
+|---|---|
+| header count `50+`, *Première page — d'autres résultats existent* | more rows exist; no total is counted |
+| **Suivant ›** / **‹ Précédent** | one page forward / back (above and below the rows) |
+| **« Début** | back to the first page |
+| *Page N — dernière page*, count without `+` | the last page |
+| *this page link is no longer valid — reload the view from its first page* | the data or the filter changed under the page; tap **« Début** |
 
-**Filters are built, not typed.** Pick a column by its label, then an operator that suits it, then a value
-control that suits its type: a free text box, a number, a date or a date-and-time, or — when the column has a
-declared set of values — a list to choose from. The hub decides which operators a column offers: a `money` or `time` column
-is only ever offered *contient* and *=*. Each filter becomes a chip; tap it (or press Enter on it) to
-remove it, and several chips combine with AND. The hub is still the one referee: a filter it refuses is
-shown, as the hub worded it, under the filter bar, and a refused page move shows its refusal under the page
-controls. In both cases the last good page stays on screen. A page link that has gone stale (a changed
-filter, a record removed at the page edge) says *this page link is no longer valid — reload the view from
-its first page*; **« Début** does exactly that.
+Changing a filter goes back to the first page; moving between pages keeps the filters. A phone
+shows cards, a tablet or a display a table.
 
-Tapping a row opens the detail (`POST /api/views/detail`) — including the `_conflicts`
-ledger: which source conflicted on which field, or which lookup key was ambiguous (a row with no value reads
-"(empty)"), or an explicit "no ambiguity or divergence".
+**Filters are built, not typed:**
+
+- pick a column by its label, then an operator, then a value — a text box, a number, a date, or a
+  list when the column declares its values;
+- a `money` or `time` column offers only *contient* and *=*;
+- each filter is a chip; tap it (or Enter) to remove it; chips combine with AND;
+- a refused filter or page move shows the hub's message, and the last good page stays on screen.
+
+Tapping a row opens the detail, ending with the sources' disagreements (`_conflicts`) or
+*aucune ambiguïté ni divergence*.
 
 ### Décisions — the inbox
 
-The [inbox](inbox.md) fold (`GET /api/inbox`), newest first, with the ack gesture —
-✓ *Traiter* posts `POST /api/inbox/{id}/ack`, the same idempotent ack-is-an-event as
-`lm inbox ack`. The unacked count rides as a badge on the tab from the first frame.
+The [inbox](inbox.md), newest first: open decisions with a ✓ *Traiter* button (the same ack as
+`lm inbox ack`), handled ones dimmed with *✓ traité*. The open count is a badge on the tab.
 
-!!! note "Tenant-wide, for now"
-    Decisions are not yet bounded by métier — the tab shows the whole tenant's
-    decisions and says so in its footer. Per-métier bounding is a known follow-up.
+It shows the decisions of the métiers the user holds — every decision of the tenant for a user
+with no `scope:` role ([who sees which decision](inbox.md#who-sees-which-decision)). It is not
+narrowed to the open app: a user holding `desk` and `stock` sees both in either app, at most the
+50 newest, handled ones included.
 
 ### Recherche — search the business data
 
-A search box over your business data, the same search `lm search query` runs. Type a word or two,
-press **Chercher**: the results are ranked, and the words that matched are highlighted in each one.
-Nothing is searched while you type; one press, one search.
-Each result is headed by the index's [business title](../search/search-indexes.md#choosing-a-title) when the integrator declared one, otherwise by the entity name.
-A field the index [links to your ERP](../search/search-indexes.md#linking-a-result-to-your-erp) shows its value as a link that opens the other system in a new tab; the rest of the card still opens the record.
-Fields carry the [human names](../search/search-indexes.md#human-names-for-fields) their entity gives them, on the results, the record and the filter chips; a column without a label keeps its name.
-Once there is something on screen, a **✕** next to the box puts the screen back to empty — query, filters, results and any open record — without searching.
+A search box over your business data — the search `lm search query` runs. Type a word or two
+and press **Chercher**: ranked results, matched words highlighted. Nothing is searched while you type.
 
-- **Who sees the tab.** Recherche appears when your hub has Search installed and you may read
-  at least one search index ([declare one](../search/search-indexes.md)). A hub without Search, or a user with no
-  index to read, simply has no Recherche tab. If Search is installed but struggling, the tab is there and a
-  line at the top says so with the reason; if the app could not find out (the network dropped at start-up), it keeps the tab; a search that fails says why too, and how long to wait when the
-  hub told it.
-- **What it searches.** Only your app's métier. The `stock` app searches the entities tagged `stock`, even
-  for someone who also holds other scopes; the app never searches wider than its own scope, and what you may
-  read is still decided by your roles and scopes.
-- **Narrowing.** The values the hub counts for a search (a city, a segment) appear as chips under the box. Tap one to
-  keep only those results, tap it again to lift it. **Plus de résultats** loads the next page.
-- **Opening a result.** Tap a result to open its record, read-only, with each source's value shown where
-  a source disagrees with the others. If the record has changed since the search, the screen says it can no longer be found; if
-  several records answer to the same key, it says so rather than choosing one.
-- **No result** reads *Aucun résultat*. It means nothing matched: the screen does not claim to know whether your
-  métier has anything indexed at all. If you expect results and see none, ask your integrator to check that
-  an index exists for your métier ([Enabling Recherche for an app](#enabling-recherche-for-an-app)).
-- **How fresh it is.** A line under the chips says how up to date the search index is.
+- Each result is headed by the index's [business title](../search/search-indexes.md#choosing-a-title), or the entity name.
+- A field the index [links to your ERP](../search/search-indexes.md#linking-a-result-to-your-erp) opens the other system in a new tab.
+- Fields carry their entity's [human names](../search/search-indexes.md#human-names-for-fields).
+- **✕** next to the box empties the screen — query, filters, results and open record.
+
+| Situation | The tab |
+|---|---|
+| hub without Search, or a user with no index to read | absent |
+| Search installed but struggling | present, with a line saying why |
+| the app could not find out at start-up (network) | present |
+| a search fails | says why, and how long to wait when the hub says so |
+
+- **What it searches.** Only the app's métier: the `stock` app searches the entities tagged
+  `stock`, even for a user holding other scopes too.
+- **Narrowing.** Counted values (a city, a segment) appear as chips under the box; tap one to keep
+  only those results, again to lift it. **Plus de résultats** loads the next page.
+- **Opening a result.** The record opens read-only, with each source's value where they disagree.
+  A record changed since the search, or a key shared by several records, is said so.
+- **No result** reads *Aucun résultat*: nothing matched. Expected results? Check that an index
+  exists for the métier ([Enabling Recherche for an app](#enabling-recherche-for-an-app)).
+- **How fresh it is.** A line under the chips gives the index's age.
 
 ### Chat — ask your data
 
-The guarded analytic ask, through the `lm_user` door (`POST /api/rag/chat`, analytic
-mode, bound to the métier's scope). An answer always shows the SQL it ran and the row
-count, folded under the reply. An answer that ran **no** SQL is an abstention and wears
-the amber refusal tone — the same [honesty contract](../transparency/ask-honesty.md)
-as everywhere else. The thread survives tab switches but not a reload; nothing is
-stored.
+The guarded analytic ask (as `lm ask`), bound to the app's scope. An answer shows the SQL it
+ran and the row count, folded under the reply. An answer that ran **no** SQL is an abstention,
+in the amber refusal tone — the [ask contract](../transparency/ask-honesty.md). The thread survives
+tab switches, not a reload; nothing is stored.
 
-When the answer filtered on a value a source disagrees about, an amber block
-« Désaccord sur une valeur filtrée » sits under the freshness line and above the SQL. One
-entry per record: *P-1008 · Ville — comptée avec « Lyon »*, or *écartée, alors qu'une source
-indique « Villeurbanne »*, followed by each source's value; « … et d'autres fiches » closes it
-when more than ten exist. An answered result then also carries the button « Ouvrir les fiches — les désaccords sont sur
-chaque fiche », shown whenever `disputed` is non-empty (the door `conflicts` is present;
-before, only a refusal carried doors) and the app shows the Fiches tab — an app that hides it has nowhere to send the button. Nothing renders when nothing is disputed — and the absence is not
-a guarantee: the [shapes the disclosure skips](../transparency/ask-honesty.md#disputed-rows-a-disclosure-not-a-veto)
-(`OR`, joins, ranges…) show no block.
+When the answer filtered on a value a source disagrees about:
+
+- an amber block « Désaccord sur une valeur filtrée » sits above the SQL, one entry per record —
+  *P-1008 · Ville — comptée avec « Lyon »*, or *écartée, alors qu'une source indique
+  « Villeurbanne »* — closed by « … et d'autres fiches » past ten;
+- the button « Ouvrir les fiches — les désaccords sont sur chaque fiche » opens them, when the app
+  shows the Fiches tab;
+- no block is not a guarantee: some query [shapes are skipped](../transparency/ask-honesty.md#disputed-rows-a-disclosure-not-a-veto)
+  (`OR`, joins, ranges…).
+
+#### Follow-up questions
+
+The chat speaks as **lumnik**: the input reads « Demande à lumnik… », and a question may start with « lumnik, … ».
+A question can continue the previous one — « Et HAWARD ? » after a question about Badu, « Et seulement celles de la
+catégorie Pompes ? » to narrow it. On a phone, over a catalogue of eight articles (bubbles marked by who wrote them,
+the SQL folded):
+
+```text
+[you]     Donne-moi les références dont la description contient Badu.
+[lumnik]  Il y a 3 références dont la description contient "Badu". Les références sont : 2195.300.037, 2195.300.038 et 3000.000.001.
+          ▶ le SQL exécuté · 3 lignes
+[you]     Et HAWARD ?
+[lumnik]  Il y a 2 références dont la description contient HAWARD :
+
+          1. 4100.000.001
+          2. 4100.000.002
+
+          Total de références : 2
+          Compris comme : Donne-moi les références dont la description contient HAWARD.
+          ▶ le SQL exécuté · 2 lignes
+[you]     Et seulement celles de la catégorie Pompes ?
+[lumnik]  Les références de la catégorie Pompes dont la description contient HAWARD sont : 4100.000.001.
+          Compris comme : Donne-moi les références de la catégorie Pompes dont la description contient HAWARD.
+          ▶ le SQL exécuté · 1 ligne
+[you]     Et le deuxième, il coûte combien ?
+[lumnik]  Je n'ai pas pu rattacher cette question à la précédente. Posez-la en entier, avec la valeur ou le nom auquel elle renvoie.
+          [ suite de : Donne-moi les références de la catégorie Pompes dont la description contient HAWARD. ✕ ]
+          Nouvelle conversation
+```
+
+- **« Compris comme : … »** sits under an answer whose question lumnik completed: it is the question that was really
+  answered, and the SQL is that question's. Read it before trusting the figure. A question asked on its own gets no
+  such line.
+- **The chip « suite de : … »**, just above the input, is the one sentence the next question continues: the last
+  question lumnik answered, as it understood it. A refusal or an error does not replace it, so you can rephrase and try
+  again. A long sentence loses its middle on the chip, never its end. Tap the chip to ask the next question on its own.
+- **« Nouvelle conversation »** clears the thread and the chip.
+- **What lumnik remembers is that sentence, nothing else** — not the answers, not the questions before it. « Le
+  deuxième », « celui-ci » point at a row of an answer lumnik does not keep, so they are refused, and the refusal asks
+  for the value. A reload forgets the sentence, like the whole thread; and each app opens on its own page, so a thread
+  never carries from one métier to another.
+
+How a follow-up is resolved, and when it is refused, is in
+[A question that follows the previous one](../transparency/ask-honesty.md#a-question-that-follows-the-previous-one);
+the field the PWA sends is [`previous`](../rag/http-api.md#follow-up-questions).
 
 ## Responsive modes
 
@@ -166,7 +219,6 @@ same-origin at `/realms/lumnik` — one issuer for every device.
     the mapper for `lumnik-spa`; if you broker or replace Keycloak with your own IdP,
     the SPA client must add the same audience mapper — without it, every PKCE token
     is a plain `401` at the hub, with nothing wrong visible on the login side.
-    (Learned live: see `docs/studies/2026-07-11-mobile-metier-renderer-study.md`.)
 
 Access is the métier-scope boundary, nothing PWA-specific: the user needs the
 `scope:<tag>` role for their métier. Views, entities, and chat all refuse uniformly —
@@ -175,77 +227,69 @@ refusal, never a broken screen.
 
 ## Offline behavior
 
-The service worker caches the **app shell only** — HTML, CSS, modules, icons. Data is
-**never** cached: everything under `/api/*` and `/realms/*` bypasses the worker
-entirely and always hits the network. Tenant data and tokens never touch disk.
+Only the **app shell** (HTML, CSS, modules, icons) is cached on the device. Data and tokens
+never are: every data call goes to the network.
 
-So offline, the app opens instantly — and says the truth: an "Hors ligne" screen with
-a retry button, instead of stale rows pretending to be fresh. When the network returns,
-so does the data.
-
-!!! note "Deploying a shell change"
-    The browser only re-installs the shell when `sw.js` itself changes bytes. Every
-    shell-file change must bump the `CACHE` version in `app/sw.js` — otherwise
-    returning visitors keep the old shell forever.
+Offline, the app opens and shows *Hors ligne — tes données reviendront avec le réseau.* with a
+**Réessayer** button — never stale rows.
 
 ## How old is what I'm looking at?
 
-lumnik is a scheduled mirror, not a live feed: a change in the source appears at the
-**next run that reads it** (its cron, or a manual `lm connector run`) — deletes never
-propagate, and a jdbc watermark run only re-reads rows whose watermark advanced. Rows in
-`connector.t_*` tables carry an `_ingested_at` timestamp (REST hybrid tables carry
-`indexed_at`), but treat it with care: under the default conflict mode an unchanged
-re-ingested row keeps its *first* timestamp. The reliable signal is the **run history**,
-and chat answers now carry it: every answered ask includes a `data as of` timestamp —
-the scope's last completed run (`lm ask` prints it; the API field is `dataAsOf`).
-The PWA shows the same dial: the chat answer and the Fiches list both carry a quiet
-« données : il y a … » line — absent when the scope has no completed run, never a
-fabricated age. For the schedule itself, your integrator reads the run history in
-one command (`lm run list`, or the TUI's `:runs`).
+A change in the source appears at the **next run that reads it** (its schedule, or
+`lm connector run`). The Fiches list and every chat answer carry a « données : il y a … » line:
+the age of the scope's last completed run. It is absent when the scope has none.
+
+The integrator reads the run history with `lm run list` (or the TUI's `:runs`); what a run
+skipped or quarantined is in [ingestion transparency](../transparency/ingestion-honesty.md).
 
 ## How to…
 
 ### Add a métier
 
-A métier app's identity — its title, the scope it reads through, its icon and its
-accent/background colours — is something you *declare*, in a `kind: App` manifest
-applied with `lm app apply -f`. The hub validates and stores it; the PWA reads its
-whole registry live from `GET /api/apps` on every login. A métier is an entry in that
-registry, not a deployment — no hub rebuild, no PWA source change.
+A métier app — title, scope, icon, colours — is a `kind: App` manifest applied with
+`lm app apply -f`. The PWA reads the apps at every login: no rebuild, no redeploy.
 
 ```yaml
-kind: App
-apiVersion: apps.lumnik.io/v1
-metadata:
-  name: lumilait
-spec:
-  title: Lumilait
-  scope: lumilait
-  icon: generic
-  theme:
-    accentColor: "#4fd1a5"
-    backgroundColor: "#f4f1ea"
-  default: false
+--8<-- "docs/apps/demo/apps/10-lumilait.yaml"
 ```
 
 - **`icon`** — one of a curated set: `clients`, `stock`, `generic`, `event`, `alert`,
   `contract`. There is no upload path for a custom icon; `generic` is the right choice
   for a métier with no dedicated one.
-- **`theme`** — both colours are optional, defaulting to today's shared
-  `#8b7ff0`/`#14121f`. `accentColor` is contrast-checked (WCAG AA) because it doubles
-  as the chat bubble's background, not only its text colour.
-- **`default`** — the app an absent `?m=` resolves to. At most one manifest may hold
-  it; the apply door refuses to demote the current default without another manifest
-  promoting a replacement in the same apply.
+- **`theme`** — both colours are optional, defaulting to `#8b7ff0`/`#14121f`. `accentColor`
+  is contrast-checked (WCAG AA): it is also the chat bubble's background.
+- **`default`** — the app an absent `?m=` opens. At most one app holds it. To move it, apply
+  another app with `default: true`; re-applying the current default with `default: false` is
+  refused. Here `clients-nodefault.yaml` is the seeded `clients` app with `default: false`:
+
+    ```yaml
+    kind: App
+    apiVersion: apps.lumnik.io/v1
+    metadata:
+      name: clients
+    spec:
+      title: Clients
+      scope: clients
+      icon: clients
+      default: false
+    ```
+
+    ```
+    $ lm app apply -f clients-nodefault.yaml
+    Error: API error 400: cannot remove the last default app — apply a different app with default: true first, which demotes this one automatically
+    ```
+
 - **`tabs`** — optional: which tabs the app shows, and in what order. Absent means every
   tab the hub offers. See [Choosing the tabs](#choosing-the-tabs).
 
-1. **Declare it** — `lm app apply -f app.yaml`.
-2. **Server side** — apply at least one saved view for the scope
-   (`POST /api/views/apply`) and grant the users their `scope:<tag>` role in Keycloak.
+```
+$ lm app apply -f docs/apps/demo/apps/10-lumilait.yaml
+Applied app "lumilait" → scope lumilait
+```
 
-Without step 2 the app still opens — Fiches states that no view is applied, and
-every scoped call refuses with the uniform 403.
+Then apply at least one saved view for the scope (`lm view apply -f`) and grant the users their
+`scope:<tag>` role in Keycloak. Without them the app still opens: Fiches says that no view is
+applied, and every scoped call is refused.
 
 #### See what is declared
 
@@ -253,16 +297,18 @@ every scoped call refuses with the uniform 403.
 
 ```
 $ lm app list
-NAME            TITLE      SCOPE      ICON     ACCENT   BACKGROUND  DEFAULT  TABS
-pwa-pagination  Catalogue  catalogue  stock    #8b7ff0  #14121f     yes      fiches,search
-stock           Stock      stock      generic  #f5b83d  #14121f              (all)
+NAME      TITLE     SCOPE     ICON     ACCENT   BACKGROUND  DEFAULT  TABS
+clients   Clients   clients   clients  #8b7ff0  #14121f     yes      (all)
+lumilait  Lumilait  lumilait  generic  #4fd1a5  #f4f1ea              (all)
+stock     Stock     stock     stock    #8b7ff0  #14121f              (all)
 ```
 
-`DEFAULT` marks the app an absent `?m=` opens; `(all)` under `TABS` means the app declares none and shows every tab
-the hub offers. For a script, `-o json` (or `-o yaml`) gives every field the hub sends for each app, theme included:
+A new hub carries `clients` (the default) and `stock`. `DEFAULT` marks the app an absent `?m=`
+opens; `(all)` means the app declares no `tabs`. For a script, `-o json` (or `-o yaml`) gives
+every field, theme included:
 
 ```
-$ lm app list -o json | jq -e '.[] | select(.name == "pwa-pagination") | .accentColor == "#8b7ff0" and .backgroundColor == "#14121f"'
+$ lm app list -o json | jq -e '.[] | select(.name == "lumilait") | .accentColor == "#4fd1a5" and .backgroundColor == "#f4f1ea"'
 true
 ```
 
@@ -286,8 +332,32 @@ spec:
 - Leave `tabs` out and the app shows every tab the hub has and the app can draw, including one added by a later release.
 - The app opens on the first tab of your list that the hub has.
 - The names are `fiches`, `inbox` (shown as *Décisions*), `chat` and `search` (shown as *Recherche*).
-- Asking for a tab your hub does not have is fine: `lm app apply` tells you, and the tab appears the
-  day the hub has it. The same manifest therefore works on an Open hub and on a Pro hub.
+- Asking for a tab your hub does not have is fine: `lm app apply` warns, and the tab appears the
+  day the hub has it. The same manifest works on an Open hub and on a Pro hub:
+
+    ```yaml
+    kind: App
+    apiVersion: apps.lumnik.io/v1
+    metadata:
+      name: desk
+    spec:
+      title: Desk
+      scope: desk
+      icon: generic
+      tabs: [fiches, inbox, search]
+    ```
+
+    ```
+    $ lm app apply -f desk-app.yaml
+    Applied app "desk" → scope desk
+      tabs: fiches, inbox, search
+    ! desk-app.yaml — 0 error(s), 1 warning(s)
+
+      WARN     spec.tabs[2]
+              tab 'search' is not offered by this hub; the declaration is kept and takes effect when a module offering it is active
+              → offered here: [fiches, inbox]
+    ```
+
 - If none of the tabs you listed exists on the hub, the app says that no feature is available for it,
   instead of showing an empty screen.
 - Hiding a tab does not lock anything: who may read what is still decided by roles and scopes.

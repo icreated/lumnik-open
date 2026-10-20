@@ -35,6 +35,18 @@ public interface ConnectorType {
     return RunStart.none();
   }
 
+  /**
+   * Called once the stream has ended, in the last chunk's transaction, LAST: after its rows were
+   * written and counted and its position stored, so a side effect here follows every step that can
+   * still fail the chunk — all but the transaction's own commit and the run's finalisation, which an
+   * admin-datasource write (it commits at once) cannot wait for. A {@link StreamEnd.Refused}, or a
+   * throw, fails the run and clears the position. csv-file sweeps the rows its file lost (#1195, see
+   * {@code CsvFullRefresh}); jdbc-generic moves a table written before #1196 to one row per key.
+   */
+  default StreamEnd endOfStream(ConnectorContext ctx) {
+    return new StreamEnd.Removed(0);
+  }
+
   ItemReader<?> reader(ConnectorContext ctx);
 
   default ItemWriter<?> writer(ConnectorContext ctx) {

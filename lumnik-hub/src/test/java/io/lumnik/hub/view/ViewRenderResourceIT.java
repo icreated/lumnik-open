@@ -83,12 +83,9 @@ class ViewRenderResourceIT {
         // the scope's last completed run — absent when none, never fabricated.
         exec("DELETE FROM connector.connector_run WHERE tenant_id = 1");
         exec("DELETE FROM connector.connector WHERE tenant_id = 1 AND name = 'src-vr-asof'");
-        exec("INSERT INTO connector.connector_mapping (id, tenant_id, name, target_entity, spec_format, spec_content) "
-           + "VALUES ('00000000-0000-0000-0000-00000000b6f1', 1, 'm_vr_asof', 'public.x', 'yaml', 'x') "
-           + "ON CONFLICT DO NOTHING");
-        exec("INSERT INTO connector.connector (id, tenant_id, name, type_id, config, mapping_id, enabled, tags, sync_mode, skip_policy) "
+        exec("INSERT INTO connector.connector (id, tenant_id, name, type_id, config, enabled, tags, sync_mode, skip_policy) "
            + "VALUES ('00000000-0000-0000-0000-00000000b6f2', 1, 'src-vr-asof', 'csv-file', '{}'::jsonb, "
-           + "'00000000-0000-0000-0000-00000000b6f1', true, ARRAY['desk'], 'Incremental', '{\"type\":\"SkipUpTo\",\"maxSkips\":1}'::jsonb)");
+           + "true, ARRAY['desk'], 'Incremental', '{\"type\":\"SkipUpTo\",\"maxSkips\":1}'::jsonb)");
         exec("INSERT INTO connector.connector_run (tenant_id, connector_id, status, sync_mode, triggered_by, started_at, ended_at) "
            + "VALUES (1, '00000000-0000-0000-0000-00000000b6f2', 'Completed', 'Incremental', 'test', "
            + "'2026-08-21T05:00:00Z', '2026-08-21T05:04:00Z')");

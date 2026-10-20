@@ -29,10 +29,11 @@ class SchemaMigrationIT {
       while (rs.next()) found.add(rs.getString(1));
       assertThat(found).contains(
           "connector", "connector_credential", "connector_cursor", "connector_dead_letter",
-          "connector_endpoint", "connector_mapping", "connector_run",
+          "connector_endpoint", "connector_run",
           "dynamic_table", "schema_card");
-      // cursor_state was dropped in V23 (legacy REST direct path retired)
-      assertThat(found).doesNotContain("cursor_state");
+      // cursor_state was dropped in V23 (legacy REST direct path retired), connector_mapping in V70
+      // (the mapping override storage, #1174)
+      assertThat(found).doesNotContain("cursor_state", "connector_mapping");
     }
   }
 
@@ -42,7 +43,6 @@ class SchemaMigrationIT {
         "connector.connector",
         "connector.connector_cursor",
         "connector.connector_run",
-        "connector.connector_mapping",
         "connector.connector_credential",
         "connector.connector_dead_letter"
     );

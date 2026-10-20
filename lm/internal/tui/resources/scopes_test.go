@@ -36,7 +36,7 @@ func TestScopesRenderAndDescribe_lastIndexedIsLocalInBothPlaces(t *testing.T) {
 	}
 	want := ts.In(time.Local).Format("2006-01-02 15:04")
 
-	s := NewScopes(nil)
+	s := NewScopes(nil, nil)
 	s.items = []client.RagScope{{Scope: "compta", Connectors: 3, Chunks: 12431, LastIndexed: "2026-05-24T09:12:00Z"}}
 	s.render()
 

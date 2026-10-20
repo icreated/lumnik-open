@@ -3,6 +3,7 @@ package client
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -20,6 +21,11 @@ type SSEEvent struct {
 // SSEStream connects to an SSE endpoint and pushes events to ch until ctx is done
 // or the connection fails.
 func (c *Client) SSEStream(ctx context.Context, path string, topics []string, ch chan<- SSEEvent) error {
+	return c.sseStream(ctx, path, topics, ch, nil)
+}
+
+// sseStream is SSEStream, calling onStatus(nil) (when set) once the hub has accepted the stream.
+func (c *Client) sseStream(ctx context.Context, path string, topics []string, ch chan<- SSEEvent, onStatus func(error)) error {
 	u := strings.TrimRight(c.ctx.Server, "/") + path
 	if len(topics) > 0 {
 		params := url.Values{}
@@ -50,6 +56,9 @@ func (c *Client) SSEStream(ctx context.Context, path string, topics []string, ch
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("SSE upstream status %d", resp.StatusCode)
+	}
+	if onStatus != nil {
+		onStatus(nil)
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -88,14 +97,21 @@ func (c *Client) SSEStream(ctx context.Context, path string, topics []string, ch
 }
 
 // SSEStreamWithReconnect keeps reconnecting to the SSE endpoint on errors with a
-// fixed backoff between attempts, until ctx is done.
-func (c *Client) SSEStreamWithReconnect(ctx context.Context, path string, topics []string, ch chan<- SSEEvent, backoff time.Duration) {
+// fixed backoff between attempts, until ctx is done. onStatus (when set) hears the connection
+// itself: nil once the hub accepts a stream, the reason each time one ends — a 401/403 or a hub
+// that is down used to vanish here, behind a badge that kept reading healthy (#1108).
+func (c *Client) SSEStreamWithReconnect(ctx context.Context, path string, topics []string, ch chan<- SSEEvent, backoff time.Duration, onStatus func(error)) {
 	for {
-		err := c.SSEStream(ctx, path, topics, ch)
+		err := c.sseStream(ctx, path, topics, ch, onStatus)
 		if ctx.Err() != nil {
 			return
 		}
-		_ = err
+		if onStatus != nil {
+			if err == nil {
+				err = errors.New("event stream closed by the hub")
+			}
+			onStatus(err)
+		}
 		select {
 		case <-ctx.Done():
 			return

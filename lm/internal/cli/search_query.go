@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"sort"
 	"strings"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
@@ -169,6 +168,11 @@ func diagnoseNoHits(cmd *cobra.Command, c *client.Client, entity string) {
 				d.Name, d.Entity, reason)
 			continue
 		}
+		if d.Withheld {
+			fmt.Fprintf(w, "SearchIndex %q over %s is withheld: a re-apply removed or changed what its build still serves — "+
+				"it answers again once rebuilt: lm search rebuild %s --wait\n", d.Name, d.Entity, d.Name)
+			continue
+		}
 		st, err := c.SearchStatus(d.Name)
 		if err != nil {
 			continue // not an integrator, or the door is down: the build state is unknown, so unsaid
@@ -207,7 +211,7 @@ func printSearchHits(cmd *cobra.Command, res *client.SearchResult, p client.Sear
 		return nil
 	}
 	if err := output.Print(w, "table", []string{"ENTITY", "KEY", "SCORE", "MATCH"}, res.Hits, func(h client.SearchHit) []string {
-		return []string{h.Entity, joinPairs(h.Key, ","), fmt.Sprintf("%.2f", h.Score), matchSummary(h)}
+		return []string{h.Entity, output.JoinPairs(h.Key, ","), fmt.Sprintf("%.2f", h.Score), output.SearchMatch(h, maxFieldValueWidth)}
 	}); err != nil {
 		return err
 	}
@@ -221,7 +225,10 @@ func printSearchHits(cmd *cobra.Command, res *client.SearchResult, p client.Sear
 		pw.flush(w)
 	}
 	fmt.Fprintln(w)
-	footer := fmt.Sprintf("%d hits shown", len(res.Hits))
+	footer := "1 hit shown"
+	if len(res.Hits) > 1 {
+		footer = fmt.Sprintf("%d hits shown", len(res.Hits))
+	}
 	if res.AsOf != nil {
 		footer += " · as of " + output.HumanTimeStr(*res.AsOf)
 	}
@@ -232,52 +239,6 @@ func printSearchHits(cmd *cobra.Command, res *client.SearchResult, p client.Sear
 	return nil
 }
 
-var (
-	boldMarkup = strings.NewReplacer("<b>", "*", "</b>", "*")
-	lineBreaks = strings.NewReplacer("\t", " ", "\r", " ", "\n", " ")
-)
-
-// matchSummary lists the hit's non-empty fields as name=value, a matched field showing its highlighted
-// fragment (<b>…</b> becomes *…*: raw markup is noise, and an ANSI bold would be escaped by textsafe).
-// Matched fields come first, so what made this hit a hit is not pushed off the line by a facet field.
-func matchSummary(h client.SearchHit) string {
-	names := slices.Collect(maps.Keys(h.Fields))
-	sort.Slice(names, func(i, j int) bool {
-		hi, hj := len(h.Highlights[names[i]]) > 0, len(h.Highlights[names[j]]) > 0
-		if hi != hj {
-			return hi
-		}
-		return names[i] < names[j]
-	})
-	var parts []string
-	for _, n := range names {
-		v := h.Fields[n]
-		if frags := h.Highlights[n]; len(frags) > 0 {
-			v = boldMarkup.Replace(frags[0])
-		}
-		v = oneLine(v)
-		if v == "" {
-			continue
-		}
-		parts = append(parts, n+"="+output.Truncate(v, maxFieldValueWidth))
-	}
-	return strings.Join(parts, " | ")
-}
-
-// oneLine keeps a field value inside its table cell: a tab or a line break from the source data would
-// split the row.
-func oneLine(s string) string {
-	return strings.TrimSpace(lineBreaks.Replace(s))
-}
-
-func joinPairs(m map[string]string, sep string) string {
-	var parts []string
-	for _, k := range slices.Sorted(maps.Keys(m)) {
-		parts = append(parts, k+"="+oneLine(m[k]))
-	}
-	return strings.Join(parts, sep)
-}
-
 func facetValues(counts []client.SearchFacetCount) string {
 	shown := counts
 	if len(shown) > maxFacetValuesShown {
@@ -285,7 +246,7 @@ func facetValues(counts []client.SearchFacetCount) string {
 	}
 	parts := make([]string, 0, len(shown)+1)
 	for _, c := range shown {
-		parts = append(parts, fmt.Sprintf("%s (%d)", oneLine(c.Value), c.Count))
+		parts = append(parts, fmt.Sprintf("%s (%d)", output.OneLine(c.Value), c.Count))
 	}
 	if extra := len(counts) - len(shown); extra > 0 {
 		parts = append(parts, fmt.Sprintf("… +%d", extra))

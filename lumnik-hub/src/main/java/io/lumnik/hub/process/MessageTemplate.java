@@ -1,9 +1,12 @@
 package io.lumnik.hub.process;
 
+import io.lumnik.hub.sql.TemporalText;
+
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -12,7 +15,9 @@ import java.util.regex.Pattern;
  * The kind:Process message template — {col} placeholders substituted from the triggering row.
  * A placeholder is exactly {@code \{[A-Za-z0-9_]+\}}; anything else ({}, {a-b}, a lone brace)
  * passes through literal — no escape syntax to learn. A null value renders as the empty string
- * (absence renders as absence, never the text "null"). Pure: no DB, no HTTP, no CDI.
+ * (absence renders as absence, never the text "null"). A timestamp renders as its ISO instant in
+ * UTC whatever the hub's zone (#1303); a date keeps its {@code yyyy-MM-dd}. Pure: no DB, no HTTP,
+ * no CDI.
  */
 public final class MessageTemplate {
 
@@ -29,14 +34,14 @@ public final class MessageTemplate {
         return new ArrayList<>(out);
     }
 
-    /** Substitute each placeholder with the row's value (null → empty string). */
+    /** Substitute each placeholder with the row's value (null → empty string, timestamp → instant). */
     public static String render(String template, Map<String, Object> row) {
         if (template == null) return null;
         Matcher m = PLACEHOLDER.matcher(template);
         StringBuilder sb = new StringBuilder();
         while (m.find()) {
-            Object v = row.get(m.group(1));
-            m.appendReplacement(sb, Matcher.quoteReplacement(v == null ? "" : String.valueOf(v)));
+            String text = Objects.toString(TemporalText.render(row.get(m.group(1))), "");
+            m.appendReplacement(sb, Matcher.quoteReplacement(text));
         }
         m.appendTail(sb);
         return sb.toString();

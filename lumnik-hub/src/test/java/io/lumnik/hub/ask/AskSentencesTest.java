@@ -51,6 +51,15 @@ class AskSentencesTest {
     }
 
     @Test
+    void follow_up_unresolved() {
+        assertThat(AskSentences.followUpUnresolved(null)).isEqualTo(
+            "I couldn't tie this question to the previous one. Ask it in full, with the value or the name it refers to.");
+        assertThat(AskSentences.followUpUnresolved("fr")).isEqualTo(
+            "Je n'ai pas pu rattacher cette question à la précédente. Posez-la en entier, avec la valeur ou le nom "
+                + "auquel elle renvoie.");
+    }
+
+    @Test
     void zero_rows() {
         assertThat(AskSentences.zeroRows(null)).isEqualTo(
             "The query returned no rows. That can mean there are genuinely none, or that the query did not "

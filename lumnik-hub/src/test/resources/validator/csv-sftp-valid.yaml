@@ -10,6 +10,7 @@ spec:
     host: sftp.acme.io
     user: lumnik
     path: /export/*.csv
+    host_key_fingerprint: "SHA256:M0Is0aG8ubOr0cLpQs6QcDwVSxMkvmlfuW4K9Q6CJuc"
     key_env: ACME_SFTP_KEY
   parser:
     has_header: true

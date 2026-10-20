@@ -7,10 +7,23 @@ func (c *Client) ApplyWorkflow(body []byte) ([]byte, error) {
 	return c.doRaw("POST", "/api/workflows/apply", "application/yaml", "application/json", body)
 }
 
-// ListWorkflows returns the tenant's declared kind:Workflow manifests, as the hub's raw
-// JSON array — the cli formats it for the table.
-func (c *Client) ListWorkflows() ([]byte, error) {
-	return c.doRaw("GET", "/api/workflows", "", "application/json", nil)
+// WorkflowInfo is one declared kind:Workflow, as GET /api/workflows lists it — the one decoding
+// of that list `lm workflow list` and :workflows share (#1140).
+type WorkflowInfo struct {
+	Name    string `json:"name"`
+	Table   string `json:"table"`
+	Column  string `json:"column"`
+	Scope   string `json:"scope"`
+	Enabled bool   `json:"enabled"`
+}
+
+// ListWorkflows returns the tenant's declared kind:Workflow manifests.
+func (c *Client) ListWorkflows() ([]WorkflowInfo, error) {
+	var out []WorkflowInfo
+	if err := c.GET("/api/workflows", &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // GetWorkflowManifest fetches one declared workflow's manifest YAML, verbatim. The name is

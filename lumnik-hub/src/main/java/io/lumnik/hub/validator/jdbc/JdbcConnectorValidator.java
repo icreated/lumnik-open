@@ -19,8 +19,10 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -120,9 +122,20 @@ public class JdbcConnectorValidator implements ConnectorValidator {
             return;
         }
         Set<String> seen = new HashSet<>();
+        Map<String, String> hubTables = new HashMap<>();
         for (int i = 0; i < tables.size(); i++) {
             JsonNode merged = TableDefaultsMerger.merge(defaults, tables.get(i));
             validateTable(merged, "spec.source.tables[" + i + "]", seen, errs);
+            // Two tables of one connector landing in one hub table would merge their rows (#1199);
+            // two of the same name are already refused above, once.
+            String name = merged.path("name").asText();
+            String hub = merged.path("target").asText(name);
+            String earlier = hub.isEmpty() ? null : hubTables.putIfAbsent(hub, name);
+            if (earlier != null && !earlier.equals(name)) {
+                errs.add(new ValidationError("spec.source.tables[" + i + "].name", Severity.ERROR,
+                    "another table of this connector already lands in connector.t_" + hub,
+                    List.of("Name this table's hub table: target: <name>")));
+            }
         }
     }
 

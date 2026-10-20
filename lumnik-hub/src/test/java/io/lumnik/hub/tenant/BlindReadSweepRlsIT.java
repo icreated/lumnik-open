@@ -40,7 +40,7 @@ class BlindReadSweepRlsIT {
   void a_webhook_endpoint_that_was_written_can_be_listed_and_fetched() {
     String name = "RLS_IT_" + System.nanoTime();
     int id = RestAssured.given().headers(TestIdentity.tenantOnly(1)).contentType("application/json")
-        .body("{\"name\":\"" + name + "\",\"targetUrl\":\"http://localhost:9/hook\","
+        .body("{\"name\":\"" + name + "\",\"targetUrl\":\"http://localhost:9/hook\",\"secret\":\"s\","
             + "\"eventTypes\":[\"org.created\"]}")
         .post("/api/tenants/1/integrations")
         .then().statusCode(201).extract().path("id");
@@ -67,7 +67,7 @@ class BlindReadSweepRlsIT {
   void a_registered_webhook_can_be_test_fired() {
     int id = RestAssured.given().headers(TestIdentity.tenantOnly(1)).contentType("application/json")
         .body("{\"name\":\"RLS_IT_test_" + System.nanoTime() + "\","
-            + "\"targetUrl\":\"http://localhost:9/hook\",\"eventTypes\":[\"org.created\"]}")
+            + "\"targetUrl\":\"http://localhost:9/hook\",\"secret\":\"s\",\"eventTypes\":[\"org.created\"]}")
         .post("/api/tenants/1/integrations")
         .then().statusCode(201).extract().path("id");
 

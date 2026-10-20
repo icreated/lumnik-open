@@ -337,4 +337,17 @@ class ExportRunResourceIT {
             .get("/api/exports/" + name + "/runs/not-a-uuid")
             .then().statusCode(400);
     }
+
+    /** Both run doors judge the export (404, then 403) before the run id, as the class says every door does (#1294). */
+    @Test
+    void aMalformedRunIdIsJudgedAfterTheExportOnBothRunDoors() {
+        String name = applyExport("resource-order.csv");
+        String bad = "/api/exports/" + name + "/runs/not-a-uuid";
+        given().header("Authorization", "Bearer " + integratorMagasin()).get(bad)
+            .then().statusCode(403).body("error", equalTo("scope not granted"));
+        post(integratorMagasin(), bad + "/retry")
+            .then().statusCode(403).body("error", equalTo("scope not granted"));
+        post(integratorSales(), "/api/exports/no-such-export-1294/runs/not-a-uuid/retry").then().statusCode(404);
+        post(integratorSales(), bad + "/retry").then().statusCode(400);
+    }
 }

@@ -33,17 +33,17 @@ func (a *App) showAuthLost() {
 	body.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
 		switch {
 		case ev.Rune() == 'L' || ev.Rune() == 'l':
-			a.tv.SetRoot(a.rootFlex, true)
+			a.setRoot(a.rootFlex)
 			a.reLogin()
 			return nil
 		case ev.Key() == tcell.KeyEscape:
-			a.tv.SetRoot(a.rootFlex, true)
+			a.setRoot(a.rootFlex)
 			a.client.RearmAuthLost() // so the next failing request re-raises the modal
 			return nil
 		}
 		return ev
 	})
-	a.tv.SetRoot(body, true)
+	a.setRoot(body)
 	a.tv.SetFocus(body)
 }
 

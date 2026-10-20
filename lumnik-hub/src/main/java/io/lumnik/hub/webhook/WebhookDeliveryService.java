@@ -1,5 +1,6 @@
 package io.lumnik.hub.webhook;
 
+import io.lumnik.hub.connector.rest.OutboundFailure;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -64,8 +65,8 @@ public class WebhookDeliveryService {
             Thread.currentThread().interrupt();
             return DeliveryResult.failure("interrupted", 0, durationMs(start));
         } catch (Exception e) {
-            return DeliveryResult.failure(e.getClass().getSimpleName() + ": " + e.getMessage(),
-                                          0, durationMs(start));
+            // The kind and the class, never the message (#1162): see OutboundFailure.
+            return DeliveryResult.failure(OutboundFailure.describe(e), 0, durationMs(start));
         }
     }
 

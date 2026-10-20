@@ -2,6 +2,8 @@ package io.lumnik.hub.process;
 
 import org.junit.jupiter.api.Test;
 
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -36,6 +38,13 @@ class MessageTemplateTest {
         // a repeated placeholder renders every occurrence
         assertThat(MessageTemplate.render("{cname} / {cname}", row))
             .isEqualTo("Claire Martin / Claire Martin");
+    }
+
+    /** #1303: a timestamp renders as {@code TemporalText.render} shows it, tested there. */
+    @Test
+    void rendersATimestampAsItsInstant() {
+        Map<String, Object> row = Map.of("at", Timestamp.from(Instant.parse("2026-07-01T00:00:00Z")));
+        assertThat(MessageTemplate.render("{at}", row)).isEqualTo("2026-07-01T00:00:00Z");
     }
 
     @Test

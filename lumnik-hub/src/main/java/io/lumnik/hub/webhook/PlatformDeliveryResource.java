@@ -1,6 +1,7 @@
 package io.lumnik.hub.webhook;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.hub.api.TenantWide;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.inject.Inject;
@@ -20,6 +21,7 @@ import java.util.Map;
  * this one answers the question that one cannot: "what did NOT arrive?", without having to know
  * which integration to look at first. Tenant comes from the request context, never a parameter.
  */
+@TenantWide
 @Path("/api/platform/deliveries")
 @Produces(MediaType.APPLICATION_JSON)
 @RequiresPermission({"lm_admin", "lm_superadmin"})

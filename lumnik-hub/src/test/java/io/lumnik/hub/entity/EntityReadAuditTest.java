@@ -145,7 +145,7 @@ class EntityReadAuditTest {
     Response r = inTx(() -> {
       TenantContextFilter.CURRENT_TENANT.set(tenantId);
       TenantContextFilter.CURRENT_USER.set(555L);
-      return res.read("auditprobeentity", emptyUriInfo(), 100, 0);
+      return res.read("auditprobeentity", emptyUriInfo(), 100, 0, false);
     });
 
     assertThat(r.getStatus()).isEqualTo(200);

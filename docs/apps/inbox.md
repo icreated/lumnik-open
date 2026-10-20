@@ -4,71 +4,83 @@
 > And the disposal gesture: **ack**.
 
 ```bash
-lm inbox                 # open decisions (ID, QUAND, PROCESS, MESSAGE, ENTITY_KEY)
+lm inbox                 # open decisions (ID, WHEN, PROCESS, MESSAGE, ENTITY_KEY)
 lm inbox --limit 100     # 1..200, default 50
 lm inbox --all           # include disposed ones, marked [traité]
 lm inbox ack 42          # dispose of decision 42
 ```
 
-A process watching an orders table for `status=ON HOLD` just fired; then a human disposes of it:
+On the [demo desk](demo-desk.md) after **day 3** (see [Processes](processes.md#watch-a-second-condition-on-the-same-table)),
+two processes fired on the same order; a human disposes of one:
 
 ```
 $ lm inbox
-ID  QUAND        PROCESS        MESSAGE                                       ENTITY_KEY
-50  à l'instant  order-on-hold  Order ORD-1011 for C-007 is on hold (860.00)  ef68325b1cfbee9eb96f42c72a48d21d2c53922f144a26b855a4142bfbb94949
-$ lm inbox ack 50
+ID  WHEN  PROCESS          MESSAGE                                                    ENTITY_KEY
+25  2min  grosse-commande  Grosse commande SO-000014 : 5000.00 € pour P-1003          3a47cea8e762663021d4c5bba36b5a410ad0731a1271e17706ce6976ee8c138b
+24  2min  litige-ouvert    Commande SO-000014 du client P-1003 en litige — 5000.00 €  3a47cea8e762663021d4c5bba36b5a410ad0731a1271e17706ce6976ee8c138b
+$ lm inbox ack 25
 acked.
 $ lm inbox
-ID  QUAND  PROCESS  MESSAGE  ENTITY_KEY
+ID  WHEN  PROCESS        MESSAGE                                                    ENTITY_KEY
+24  2min  litige-ouvert  Commande SO-000014 du client P-1003 en litige — 5000.00 €  3a47cea8e762663021d4c5bba36b5a410ad0731a1271e17706ce6976ee8c138b
 $ lm inbox --all
-ID  QUAND  PROCESS        MESSAGE                                                ENTITY_KEY
-50  1min   order-on-hold  Order ORD-1011 for C-007 is on hold (860.00) [traité]  ef68325b1cfbee9eb96f42c72a48d21d2c53922f144a26b855a4142bfbb94949
+ID  WHEN  PROCESS          MESSAGE                                                            ENTITY_KEY
+25  2min  grosse-commande  Grosse commande SO-000014 : 5000.00 € pour P-1003 [traité]         3a47cea8e762663021d4c5bba36b5a410ad0731a1271e17706ce6976ee8c138b
+24  2min  litige-ouvert    Commande SO-000014 du client P-1003 en litige — 5000.00 €          3a47cea8e762663021d4c5bba36b5a410ad0731a1271e17706ce6976ee8c138b
+18  3min  litige-ouvert    Commande SO-000013 du client P-1007 en litige — 860.00 € [traité]  96357a4a5750f97026f9ec5b8ce0f986517179f470e8a74b9fd013befe0e3622
 ```
 
-The inbox speaks French — `QUAND` (when) is a humanized age, `à l'instant` is "just now", and
-`[traité]` marks a disposed entry. `ENTITY_KEY` is the row's content hash, printed whole.
-In the TUI, `:inbox` shows the same fold live — `a` acks, `A` toggles disposed entries.
+| Column | Reads |
+|---|---|
+| `WHEN` | a humanized age, in French: `à l'instant` (just now), `2min`, `hier` (yesterday), `3j` (three days) |
+| `PROCESS` | the process name, or `workflow:<name>` for a [dormancy alert](workflows.md#dormancy-the-memory-of-the-breathing) |
+| `ENTITY_KEY` | a process decision: the row's content hash. A workflow alert: the document's business key (`SO-000014`) |
+| `[traité]` | after the message: a disposed decision |
 
-API: `GET /api/inbox?limit&all`, `POST /api/inbox/{id}/ack` — requires the `lm_user` role.
-An id from another tenant is a plain `404` (no cross-tenant existence leak).
+Re-acking is harmless: it answers the same `acked.`. In the TUI, `:inbox` shows the same list
+live — `a` acks, `A` toggles disposed entries. The inbox needs the `lm_user` role.
 
-The inbox is **tenant-wide, not métier-scope-bound**: unlike views, entities, and chat
-(which refuse with the uniform `403 {"error":"scope not granted"}` outside your scopes),
-any `lm_user` of the tenant sees all its decisions. Per-métier bounding is a known
-follow-up — the PWA's Décisions tab says so in its footer.
+## Who sees which decision
 
-## The ack IS an event
+Each decision belongs to the `scope` of the [`kind: Process`](processes.md) or
+[`kind: Workflow`](workflows.md) that raised it, as the manifest stands now:
 
-Acking does not update a status column — it **emits** `annotation.decision.acked` into the same
-outbox as everything else. The inbox you read is a *fold over the event log*: a decision is
-"open" if no ack event follows it. There is no separate inbox state to migrate, back up, or
-drift.
+- a user with no `scope:*` role sees the whole tenant's decisions;
+- a user holding `scope:<tag>` roles sees, and can ack, only those métiers' decisions — another
+  one's id answers `404`, like an id that does not exist (or another tenant's);
+- re-scope a manifest and its past decisions move with it; remove or rename it and they belong to
+  no métier, so only users with no `scope:*` role still see them.
 
-**Idempotent by construction**: the ack event carries a dedup key (`ack:<id>`) with
-`ON CONFLICT DO NOTHING` — re-acking returns the same `200 {"acked": true}` and writes **zero**
-new rows. Retry your script freely.
+Above, `litige-ouvert` has since been removed (`lm process rm`). A user holding `scope:desk`
+therefore sees only `grosse-commande`'s decision, and a `scope:stock` user sees none:
+
+```
+$ lm inbox --all                      # as a scope:desk user
+ID  WHEN  PROCESS          MESSAGE                                                     ENTITY_KEY
+25  2min  grosse-commande  Grosse commande SO-000014 : 5000.00 € pour P-1003 [traité]  3a47cea8e762663021d4c5bba36b5a410ad0731a1271e17706ce6976ee8c138b
+$ lm inbox ack 24                     # as a scope:stock user
+Error: API error 404: no decision 24 in your inbox
+```
 
 !!! note "Retention"
-    The inbox reads the outbox log; entries age out with the event retention window
-    (`lumnik.events.retention-days`, default 30). The inbox is a work surface, not an archive.
+    Decisions age out with the event log (`lumnik.events.retention-days`, default 30). The inbox
+    is a work surface, not an archive.
 
 ## Decision sources
 
-Two things emit into the same `decision.*` outbox, and the inbox does not distinguish their
-origin beyond the event type:
-
 - **`decision.<process-name>`** — a [`kind: Process`](processes.md) reacting to a row landing
   (the end-to-end story: [How lumnik breathes](../respiration.md)).
-- **`decision.dormant.<workflow-name>`** — a [`kind: Workflow`](workflows.md)'s dormancy sweep
-  reacting to a row's *absence of movement*: a non-terminal document observed unchanged past
-  its declared threshold. See [Dormancy](workflows.md#dormancy-the-memory-of-the-breathing) for
-  the wording the message carries and why it never asserts a source-absolute duration.
+- **`decision.dormant.<workflow-name>`** — a [`kind: Workflow`](workflows.md)'s dormancy sweep:
+  a non-terminal document observed unchanged past its declared threshold. See
+  [Dormancy](workflows.md#dormancy-the-memory-of-the-breathing) for its wording.
+
+The ack is itself an event (`annotation.decision.acked`), so a webhook can react to it.
 
 ## See also
 
 - [Processes](processes.md) — where decisions come from.
 - [Workflows](workflows.md) — declares what the values behind a decision mean.
 - [Admin API guide — Integration Hub](../admin-console-guide.md#send-events-out-to-another-system) — how a
-  decision here also reaches an external system, not just this list.
+  decision also reaches an external system.
 - The [WOW walkthrough](../wow.md) — the whole ladder in one thread: see → react → decide,
-  with [declare](workflows.md) underneath, grounding all three.
+  with [declare](workflows.md) underneath.

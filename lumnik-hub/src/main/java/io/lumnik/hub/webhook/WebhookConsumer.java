@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.common.tenant.TenantContext;
+import io.lumnik.hub.connector.rest.OutboundFailure;
 import io.lumnik.hub.event.EntityFilters;
 import io.lumnik.hub.event.EventOutboxRow;
 import io.lumnik.hub.event.consumer.BatchProcessor;
@@ -141,10 +142,13 @@ public class WebhookConsumer {
         } catch (RuntimeException e) {
             // Count the failed attempt so a row that throws every time still caps at 3
             // (claimNext: attempts < 3) instead of being reprocessed every 30s forever.
-            LOG.errorf(e, "retryBatch: delivery %d threw — counting the attempt", c.deliveryId());
+            // The kind, never the exception: a message or a stack can quote the target URL, which
+            // is often the webhook's credential itself (#1162, #1166).
+            LOG.errorf("retryBatch: delivery %d threw — %s — counting the attempt",
+                       c.deliveryId(), OutboundFailure.describe(e));
             recordOutcome(c, d -> {
                 d.setAttempts(d.getAttempts() + 1);
-                markNoHttpResult(d, "retry threw: " + e.getMessage());
+                markNoHttpResult(d, "retry threw: " + OutboundFailure.describe(e));
             });
             return;
         }

@@ -56,6 +56,8 @@ class BlindReadInventoryTest {
    */
   private static final Map<String, String> DELIBERATE = Map.ofEntries(
       Map.entry("TenantResource.listAll", "identity.tenant has no RLS policy"),
+      Map.entry("EntityReadResource.list",
+          "reads the in-memory EntityRegistry (global manifests) — no query, so no tenant GUC to lose"),
       Map.entry("TenantResource.findById", "identity.tenant has no RLS policy"),
       Map.entry("ConnectorAdminResource.runNow",
           "opens its own transaction for the read; the run rows must commit on their own"),

@@ -2,13 +2,14 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/spf13/cobra"
 )
 
-var outputHeaders = []string{"INTEGRATION", "EVENT", "STATUS", "WHEN", "ERROR"}
+var outputHeaders = []string{"ID", "INTEGRATION", "EVENT", "STATUS", "WHEN", "ERROR"}
 
 // WHEN renders like every other date column (output.HumanTime): -o json/yaml already carry
 // the full-precision timestamp untouched (Print marshals the struct directly for those
@@ -23,7 +24,7 @@ func outputRow(o client.Output) []string {
 			status = fmt.Sprintf("%d", *o.HTTPStatus)
 		}
 	}
-	return []string{o.Integration, o.EventType, status, output.HumanTime(&o.AttemptedAt), o.Error}
+	return []string{fmt.Sprintf("%d", o.ID), o.Integration, o.EventType, status, output.HumanTime(&o.AttemptedAt), o.Error}
 }
 
 func newOutputsCmd() *cobra.Command {
@@ -45,5 +46,25 @@ func newOutputsCmd() *cobra.Command {
 	}
 	addPageLimitFlag(list, 200, client.OutputsPageCap, "max deliveries to list")
 	root.AddCommand(list)
+	root.AddCommand(&cobra.Command{
+		Use:   "replay ID",
+		Short: "Re-send one failed delivery (the hub records a new attempt; the original stays)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.ParseInt(args[0], 10, 64)
+			if err != nil {
+				return fmt.Errorf("ID must be a delivery number, as in the ID column of lm outputs list")
+			}
+			c, err := ClientFromCmd(cmd)
+			if err != nil {
+				return err
+			}
+			if err := c.OutputReplay(id); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "replayed: delivery %d — a new attempt is on record\n", id)
+			return nil
+		},
+	})
 	return root
 }

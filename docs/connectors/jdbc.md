@@ -7,12 +7,11 @@
 |---|---|
 | **Type** | `jdbc-generic` |
 | **Dialect** | postgres — Open; [oracle](#oracle) — **Pro only** |
-| **Target** | `connector.t_<table>` |
+| **Target** | `connector.t_<table>`, or `connector.t_<target>` |
 | **Schedulable** | cron |
 | **Edition** | Open for PostgreSQL. Oracle ships only in lumnik Pro — see [Oracle](#oracle) |
 
-The connection is read-only: every query this connector issues is a `SELECT`, and nothing in
-it inserts, updates, deletes or alters anything on the source.
+The connection is read-only: every query this connector issues is a `SELECT`.
 
 ## Quickstart — one table, three commands, a look at the ledger
 
@@ -20,9 +19,8 @@ it inserts, updates, deletes or alters anything on the source.
 --8<-- "docs/connectors/jdbc/10-full-dump.yaml"
 ```
 
-Every screen on this page reads a source that lives in the hub's **own** PostgreSQL — four
-tables and a view — so the page can be replayed with nothing but the
-[self-host stack](../deploy.md). Create them first:
+The screens on this page read a demo source in the hub's **own** PostgreSQL — four tables and a
+view — so they replay on the [self-host stack](../deploy.md) alone. Create it first:
 
 ```bash
 docker exec -i lumnik-postgres-1 psql -U lumnik -d lumnik < docs/connectors/jdbc/data/demo-source.sql
@@ -38,11 +36,11 @@ Then, from the repository root:
 
 ```
 $ lm validate -f docs/connectors/jdbc/10-full-dump.yaml
-✓ docs/connectors/jdbc/10-full-dump.yaml — valid
+✓ 10-full-dump.yaml — valid
 $ lm apply -f docs/connectors/jdbc/10-full-dump.yaml
-{"name":"demo-invoices","connectorId":"f0e7d07b-289b-47c1-874d-ecb167dc2e90","endpointsApplied":1}
+{"name":"demo-invoices","connectorId":"6b8503f0-42f1-45bd-bb4e-7d9923e64775","endpointsApplied":1}
 $ lm connector run demo-invoices
-run scheduled: 16b2bee8-c96a-4c27-8d74-39b3697f5a72
+run scheduled: d36a90a0-c658-4335-baa4-d63f685b59e0
 ```
 
 "Scheduled" is not "done" — the run ledger is where the result lands:
@@ -50,13 +48,13 @@ run scheduled: 16b2bee8-c96a-4c27-8d74-39b3697f5a72
 ```
 $ lm run list --connector demo-invoices
 ID        CONNECTOR      ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-16b2bee8  demo-invoices  invoices  Completed  4   4    0        0             2026-09-08 01:18  2026-09-08 01:18
+d36a90a0  demo-invoices  invoices  Completed  4   4    0        0             2026-10-19 01:40  2026-10-19 01:40
 ```
 
-`STARTED` / `ENDED` print in **your terminal's** time zone (these screens: Paris, UTC+2). The
-hub stores UTC, and `schedule` is evaluated in UTC.
+`STARTED` / `ENDED` print in **your terminal's** time zone (these screens: Paris, UTC+2).
+`schedule` is evaluated in UTC.
 
-What landed in `connector.t_invoices` — every source column, no column filter:
+What landed in `connector.t_invoices` — every source column:
 
 ```
  invoice_id |   customer    |   total   | status |       updated_at
@@ -67,23 +65,19 @@ What landed in `connector.t_invoices` — every source column, no column filter:
        1004 | Adventure BV  |  199.9000 | draft  | 2026-09-02 16:20:00+00
 ```
 
-- **`jdbc-generic` is a 1:1 dump.** `SELECT *` on the declared table; there is no column
-  filter in the manifest. `rename:` is the only per-column knob.
-- **`invoice_id` reads `1001`, `total` reads `1250.0000`.** A whole-number source type lands
-  in `BIGINT`, a source type that carries a scale in `NUMERIC(18,4)` — see
-  [Column types](#column-types).
+- **`jdbc-generic` is a 1:1 dump.** There is no column filter; `rename:` is the only per-column
+  knob. To read fewer columns or rows, [read a view](#reading-a-view).
+- **`invoice_id` reads `1001`, `total` reads `1250.0000`** — see [Column types](#column-types).
 - **The password never sits in the manifest.** `password_env` names a variable in the
-  environment where the **hub** runs; the self-host stack already exports the one used here.
+  environment where the **hub** runs; the self-host stack exports the one used here.
 
 ## Two modes — `full` and `watermark`
 
-Both modes page through the table 500 rows at a time and remember where they stopped. What
-they remember is the whole difference:
+Both modes page through the table 500 rows at a time and remember where they stopped:
 
-- **`mode: full`** remembers the **last primary key** it read. The next run continues past
-  that key.
+- **`mode: full`** remembers the **last primary key** it read. The next run continues past it.
 - **`mode: watermark`** remembers the **last value of a column that moves on every change**,
-  plus that row's primary key. The next run reads everything past that value.
+  plus that row's key. The next run reads everything past that value.
 
 | | `mode: full` | `mode: watermark` |
 |---|---|---|
@@ -98,8 +92,8 @@ they remember is the whole difference:
 
 ### The watermark manifest
 
-The quickstart's connector, read incrementally instead. `mode` and `watermark_column` sit
-under `defaults:` — the place for what every table of a connector shares:
+The quickstart's connector, read incrementally. `mode` and `watermark_column` sit under
+`defaults:`, which holds what every table of the connector shares:
 
 ```yaml
 --8<-- "docs/connectors/jdbc/20-watermark.yaml"
@@ -107,8 +101,7 @@ under `defaults:` — the place for what every table of a connector shares:
 
 ### The same table, five runs
 
-Runs 1 and 2 use the quickstart manifest; run 3 applies the one above over the same
-connector, without touching the hub table.
+Runs 1 and 2 use the quickstart manifest; run 3 applies the one above over the same connector.
 
 ```sql
 -- between run 1 and run 2: one insert, one update
@@ -122,23 +115,23 @@ UPDATE demo.invoices SET status = 'paid', updated_at = '2026-09-08 09:10:00' WHE
 ```
 $ lm run list --connector demo-invoices
 ID        CONNECTOR      ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-41823606  demo-invoices  invoices  Completed  0   0    0        0             2026-09-08 01:19  2026-09-08 01:19
-8440fe3e  demo-invoices  invoices  Completed  1   1    0        0             2026-09-08 01:19  2026-09-08 01:19
-69f31e57  demo-invoices  invoices  Completed  5   5    0        0             2026-09-08 01:18  2026-09-08 01:18
-bdfb4d96  demo-invoices  invoices  Completed  1   1    0        0             2026-09-08 01:18  2026-09-08 01:18
-16b2bee8  demo-invoices  invoices  Completed  4   4    0        0             2026-09-08 01:18  2026-09-08 01:18
+87b4931c  demo-invoices  invoices  Completed  0   0    0        0             2026-10-19 01:40  2026-10-19 01:40
+5e3330f8  demo-invoices  invoices  Completed  1   1    0        0             2026-10-19 01:40  2026-10-19 01:40
+772a43f1  demo-invoices  invoices  Completed  5   5    0        0             2026-10-19 01:40  2026-10-19 01:40
+55bd41b4  demo-invoices  invoices  Completed  1   1    0        0             2026-10-19 01:40  2026-10-19 01:40
+d36a90a0  demo-invoices  invoices  Completed  4   4    0        0             2026-10-19 01:40  2026-10-19 01:40
 ```
 
 | run | mode | source change before it | `IN` | why |
 |---|---|---|---|---|
-| 16b2bee8 | full | — | 4 | first read, no cursor |
-| bdfb4d96 | full | 1 insert, 1 update | **1** | only the insert — its key sorts past the cursor. The update is invisible to a key cursor |
-| 69f31e57 | watermark | the manifest changed mode | 5 | the full-mode cursor belongs to another configuration, so the table restarts |
-| 8440fe3e | watermark | 1 update | **1** | the changed row's `updated_at` is past the cursor |
-| 41823606 | watermark | — | 0 | nothing past the cursor |
+| d36a90a0 | full | — | 4 | first read, no cursor |
+| 55bd41b4 | full | 1 insert, 1 update | **1** | only the insert — its key sorts past the cursor. The update is invisible to a key cursor |
+| 772a43f1 | watermark | the manifest changed mode | 5 | the table restarts — see [What restarts a table](#what-restarts-a-table) |
+| 5e3330f8 | watermark | 1 update | **1** | the changed row's `updated_at` is past the cursor |
+| 87b4931c | watermark | — | 0 | nothing past the cursor |
 
-After run 2 the hub still said invoice 1002 was `open` while the source said `paid`. That is
-`mode: full` doing exactly what it declares.
+After run 2 the hub still said invoice 1002 was `open` while the source said `paid`: `mode: full`
+does not see updates.
 
 ### Which one to declare
 
@@ -146,19 +139,17 @@ After run 2 the hub still said invoice 1002 was `open` while the source said `pa
   usually have one: `updated_at`, `updated`, `modified_at`, `last_modified`.
 - **`full`, for a table that only grows** — an append-only ledger, a reference table nobody
   edits in place.
-- **`full` on a table that *is* edited in place will not see the edits.** Either expose a
-  timestamp column on the source, or re-read the table on purpose with
+- **`full` on a table that *is* edited in place will not see the edits.** Expose a timestamp
+  column on the source, or re-read the table with
   [`lm endpoint reset-cursor`](#restarting-a-table-on-purpose) before each run.
 
 !!! warning "A watermark column that does not move is worse than `full`"
-    The mode is a promise about the column, and the hub cannot check it. Two ways to get it
-    wrong, both silent:
+    The hub cannot check that the column moves. Two ways to get it wrong, both silent:
 
     - **A column the application forgets to touch** on some writes — those changes never
       reach the hub.
     - **A numeric primary key as the watermark.** `lm source jdbc discover` suggests one when
-      it finds no timestamp (see the `price_list` line [below](#discover)) — accepting it
-      gives you `mode: full` behaviour under another name.
+      it finds no timestamp (see `price_list` [below](#discover)) — it behaves like `mode: full`.
 
 ## Connection
 
@@ -168,15 +159,18 @@ connection:
   user: ro_user                                    # required
   password_env: ACME_DB_PASSWORD                   # required — a variable where the HUB runs
   dialect: postgres                                # optional, inferred from the url
+  zone: Europe/Paris                               # optional, UTC when absent
 ```
 
-- **Dialect**: the providers installed in your hub — PostgreSQL (`postgres`, alias `postgresql`)
-  ships with every edition; Oracle (`oracle`) ships only with lumnik Pro — see [Oracle](#oracle).
-  A declared `dialect` that is not installed, or that does not accept the URL, fails validation;
-  an absent one is inferred only when exactly one installed provider accepts the URL.
-- **Grants**: `USAGE` on the schema and `SELECT` on the tables. Nothing more — ingestion
-  issues `SELECT * FROM <schema>.<table>`, and `test` / `discover` use the driver's read-only
-  metadata calls.
+- **Dialect**: PostgreSQL (`postgres`, alias `postgresql`) ships with every edition; Oracle
+  (`oracle`) only with lumnik Pro — see [Oracle](#oracle). A declared `dialect` that is not
+  installed, or does not accept the URL, fails validation. An absent one is inferred when exactly
+  one installed dialect accepts the URL.
+- **Zone**: the time zone the database writes its dates-and-times in when it stores no zone
+  with them — see [A time without a time zone](#a-time-without-a-time-zone). An unknown zone
+  fails validation. A connector made by [`lm source jdbc add`](#guided-flow-lm-source-jdbc) has
+  no zone option: it reads such times as UTC.
+- **Grants**: `USAGE` on the schema and `SELECT` on the tables. Nothing more.
 - **Reachability is the hub's, not yours.** The URL is resolved where the hub runs: a
   database on your Mac is `host.docker.internal` for a hub in Docker, not `localhost`.
 
@@ -186,19 +180,27 @@ Resolved at run time, first match wins:
 
 | | Source | Notes |
 |---|---|---|
-| 1 | **Attached credential** | A Basic credential on the connector, stored encrypted. Created by [`lm source jdbc add`](#guided-flow-lm-source-jdbc), named `<source-name>--credential`. A manifest applied with `lm apply` never sets one. |
-| 2 | `password` in the manifest | Plain text. Dev and test only — it **wins over** `password_env`. |
-| 3 | `password_env` | The name of a variable in the **hub server's** environment (OS variable or JVM system property). Unset at run time is a failed run with the variable named. |
+| 1 | **Attached credential** | Stored encrypted, created by [`lm source jdbc add`](#guided-flow-lm-source-jdbc) as `<source-name>--credential`. `lm apply` never sets one. |
+| 2 | `password` in the manifest | Plain text, dev and test only. It **wins over** `password_env`; `lm validate` warns. |
+| 3 | `password_env` | The name of a variable in the **hub server's** environment (OS variable or JVM system property). Unset at run time is a failed run naming the variable. |
 
 - `password_env` is **required by validation** even when `password` is present.
-- jdbc does **not** read the [`lm secret`](../admin-console-guide.md) registry — that is for
-  the CSV transports. The value must exist where the hub process runs.
-- "Stored encrypted" is pgcrypto **AES-256** under `LUMNIK_CRYPTO_SECRET_KEY` — see
+- jdbc does **not** read the [`lm secret`](../cli/lm-reference.md#data-runs-answers) registry.
+  The variable must exist where the hub process runs.
+- The attached credential is encrypted under `LUMNIK_CRYPTO_SECRET_KEY` — see
   [Security → Secrets at rest](../security/rls.md#secrets-at-rest-the-master-key).
 
-!!! warning "Never commit a real password"
-    Line 2 exists for a local demo. Anything else uses `password_env` or the guided flow's
-    credential.
+The quickstart connector re-applied with `password_env: ACME_DB_PASSWORD`, a variable the hub
+does not have:
+
+```
+$ lm connector run demo-invoices
+run scheduled: 3570bbf6-29f5-4b1c-99a9-5e6e0aec810e
+$ lm run get 3570bbf6
+ID        CONNECTOR      ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+3570bbf6  demo-invoices  invoices  Failed  0   0    0        0             2026-10-19 07:24  2026-10-19 07:24
+✖ run failed: password_env 'ACME_DB_PASSWORD' is not set in the server environment
+```
 
 ## Source — one entry per table
 
@@ -208,86 +210,82 @@ Resolved at run time, first match wins:
 
 Each entry in `source.tables[]` is an **endpoint** of the connector:
 
-- the endpoint name is the table name, its path is `/<table-name>`;
-- one `lm connector run` fans out over all of them;
-- **each endpoint writes its own row in the run ledger** — a two-table connector logs two
-  rows per run.
+- the endpoint name is the table name;
+- one `lm connector run` runs all of them;
+- **each endpoint writes its own row in the run ledger** — two rows per run here.
 
 ```
 $ lm run list --connector demo-erp
 ID        CONNECTOR  ENDPOINT    STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-41b06fa9  demo-erp   price_list  Completed  0   0    0        0             2026-09-08 01:22  2026-09-08 01:22
-18c3897f  demo-erp   warehouses  Completed  0   0    0        0             2026-09-08 01:22  2026-09-08 01:22
-103bb6c9  demo-erp   price_list  Completed  3   3    0        0             2026-09-08 01:20  2026-09-08 01:20
-8953b0c8  demo-erp   warehouses  Completed  2   2    0        0             2026-09-08 01:20  2026-09-08 01:20
+122112a8  demo-erp   price_list  Completed  0   0    0        0             2026-10-19 01:41  2026-10-19 01:41
+d2eb4159  demo-erp   warehouses  Completed  0   0    0        0             2026-10-19 01:41  2026-10-19 01:41
+4013a639  demo-erp   price_list  Completed  3   3    0        0             2026-10-19 01:41  2026-10-19 01:41
+664b8c9b  demo-erp   warehouses  Completed  2   2    0        0             2026-10-19 01:41  2026-10-19 01:41
 ```
 
-The first run read `warehouses` (2 rows) and `price_list` (3); the second found nothing new
-in either. `ENDPOINT` is the table each row read — and the second half of the address the
-endpoint commands take, so a row that needs one reads straight into
+The first run read `warehouses` (2 rows) and `price_list` (3); the second found nothing new.
+`ENDPOINT` is also the second half of the endpoint commands' address:
 `lm endpoint reset-cursor demo-erp/warehouses`.
 
 ### Per-table keys
 
 | Key | Required | What it does |
 |---|---|---|
-| `name` | yes | The source table. Also names the hub table, `connector.t_<name>` |
+| `name` | yes | The source table. Also names the hub table, `connector.t_<name>`, unless `target` does |
+| `target` | no | Names the hub table `connector.t_<target>` instead |
 | `schema` | yes (here or in `defaults`) | The source schema |
 | `mode` | yes | `full` or `watermark` |
 | `watermark_column` | when `mode: watermark` | The column that moves on every change |
-| `pk_columns` | yes | The paging key, read whole and in order. It must be unique **together** |
+| `pk_columns` | yes | The paging key and the hub table's key: one row per key. It must be unique **together** |
 | `indexes` | no | Postgres indexes to create on the hub table |
 | `rename` | no | Source column name → hub column name |
 
-- **Any other key is refused**, `chunk_size` first among them — see
-  [Validation rules](#validation-rules).
+- **`chunk_size` is refused**; any other key gets a warning, `unknown key — ignored by the
+  runtime` — see [Validation rules](#validation-rules).
 
 !!! tip "`pk_columns` is the paging key, read whole"
-    The reader orders by every entry and resumes on all of them at once —
-    `WHERE (order_id, line_no) > (72, 3)`, one lexicographic comparison. A composite key pages
-    exactly like a single-column one: no group is split by a chunk boundary.
-
-    `demo.order_lines` is 700 lines over 100 orders, seven each:
+    The reader orders by every entry and resumes on all of them at once. A composite key pages
+    exactly like a single-column one. `demo.order_lines` is 700 lines over 100 orders, seven each:
 
     ```yaml
     --8<-- "docs/connectors/jdbc/60-composite-key.yaml"
     ```
 
-    The full read, then a second run that finds nothing — and 700 rows in the hub table:
+    The full read, then a second run that finds nothing:
 
     ```
     $ lm run list --connector demo-lines --limit 2
     ID        CONNECTOR   ENDPOINT     STATUS     IN   OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-    b8b26cac  demo-lines  order_lines  Completed  0    0    0        0             2026-09-08 23:38  2026-09-08 23:38
-    65dee4bd  demo-lines  order_lines  Completed  700  700  0        0             2026-09-08 23:37  2026-09-08 23:37
+    a04d56c9  demo-lines  order_lines  Completed  0    0    0        0             2026-10-19 01:42  2026-10-19 01:42
+    17ce005f  demo-lines  order_lines  Completed  700  700  0        0             2026-10-19 01:41  2026-10-19 01:41
     note: result hit the limit of 2 — there may be more
     ```
 
-    **The order of the entries matters** — it is the paging order, and it is part of what the
-    cursor belongs to. Reversing it restarts the table (see
-    [What restarts a table](#what-restarts-a-table)).
+    - **The order of the entries is the paging order.** Reversing it restarts the table (see
+      [What restarts a table](#what-restarts-a-table)).
+    - **The key must be unique together.** `lm source jdbc add` writes the discovered primary
+      key; a hand-written manifest may not. A run that meets two rows under one key fails, and
+      that read writes nothing. `demo.order_lines` declared on `order_id` alone:
 
-    What still has to hold: the key must be unique **together**. A real primary key is — that is
-    what makes it one, and `lm source jdbc add` writes the discovered primary key, so the guided
-    flow is safe by construction. A hand-written manifest is not: declaring part of a key, or a
-    plain column that repeats, still drops the group a chunk boundary falls inside, with no skip,
-    no dead letter and no failed run.
+    ```
+    $ lm run get 0fdd0a87
+    ID        CONNECTOR   ENDPOINT     STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+    0fdd0a87  demo-lines  order_lines  Failed  0   0    0        0             2026-10-19 01:42  2026-10-19 01:42
+    ✖ run failed: pk_columns (order_id) does not identify one row of demo.order_lines: two rows share the key where a read ends, and paging past it would skip one — declare the columns of the source table's primary key
+    ```
 
 ### `defaults`
 
-`defaults:` is a flat overlay: every key it holds is a fallback for every table, and a table
-that declares the same key wins.
+`defaults:` holds fallbacks for every table; a table that declares the same key wins.
 
-- The merge is **per key, not deep**. A table's `rename:` replaces the one in `defaults:`
-  entirely rather than merging into it.
-- `mode`, `watermark_column`, `schema` in `defaults:` are the common case — see
-  [the watermark manifest](#the-watermark-manifest), where both live there.
+- The merge is **per key, not deep**: a table's `rename:` replaces the one in `defaults:`.
+- `mode`, `watermark_column` and `schema` are the usual ones — see
+  [the watermark manifest](#the-watermark-manifest).
 
 ### Chunking is fixed
 
-Reads page through the source in **500-row chunks**, keyset-paginated on the primary key, so
-a table of millions of rows stays linear and memory-bounded. There is no `chunk_size` setting:
-a manifest that declares one is refused rather than silently ignored.
+Reads page through the source in **500-row chunks**, keyset-paginated on `pk_columns`. There is no
+`chunk_size` setting: `lm validate` refuses one.
 
 ## The hub table
 
@@ -295,37 +293,33 @@ Rows land in the `connector` schema as `connector.t_<table-name>`, one table per
 table, created on the first run from the columns the source returned.
 
 !!! warning "The hub table is named after the source table, not the connector"
-    Two connectors reading a table of the same name — the same table in two schemas, or the
-    same table on two servers — write into the **same** `connector.t_<name>`. Give one of
-    them a view under another name.
+    Two connectors of a tenant reading a table of the same name land in the same
+    `connector.t_<name>`. The second one's run is refused; give it its own hub table with
+    `target:` — see
+    [Two connectors reading a table of the same name](#two-connectors-reading-a-table-of-the-same-name).
 
 ### Column types
 
-The hub types each column from the source's declared JDBC type:
+The hub types each column from the source's declared type:
 
 | Source type | Hub column |
 |---|---|
 | `smallint`, `integer`, `bigint` | `BIGINT` |
 | `real`, `double precision`, `numeric`, `decimal` | `NUMERIC(18,4)` |
-| `timestamp` (no time zone) | `TIMESTAMPTZ`, the time read as UTC ([below](#a-time-without-a-time-zone)) |
+| `timestamp` (no time zone) | `TIMESTAMPTZ`, the time read in the connection's `zone`, UTC without one ([below](#a-time-without-a-time-zone)) |
 | `timestamptz` | `TIMESTAMPTZ`, the same instant |
 | `date` | `DATE` |
 | `boolean`, `bit` | `BOOLEAN` |
 | everything else | `TEXT` |
 
-- **`TEXT` is the generic fallback for a type this table does not name — it does not mean a
-  dialect accepts every type it does not recognize.** The Oracle dialect has its own type table
-  (see [Oracle → Types](#oracle)) and **refuses** a column outside it, at discovery and at
-  ingestion; such a column never silently lands as `TEXT`.
-- **`NUMERIC(18,4)` holds at most 14 digits before the point.** A source column wider than
-  that — a 19-digit snowflake-style id declared `numeric(20,0)` — fails the run with `numeric
-  field overflow`. Expose it as text through a view: `SELECT event_id::text AS event_id, ...`.
-  An id declared `bigint` is not concerned: it lands in `BIGINT`, which holds everything the
-  source column can.
-- <a id="a-time-without-a-time-zone"></a>**A time without a time zone is read as UTC.** A
-  `timestamp` column holds `2026-08-02 23:30:00` with no zone. The hub stores it as
-  `2026-08-02 23:30:00+00`, wherever the hub runs. A `timestamptz` column already holds an
-  instant and keeps it. On a hub running in Paris, read back in UTC:
+- **Oracle has its own list** and refuses a column outside it — see [Oracle](#oracle).
+- **`NUMERIC(18,4)` holds at most 14 digits before the point.** A wider source column — a
+  19-digit id declared `numeric(20,0)` — fails the run with `numeric field overflow`. Expose it
+  as text through a view: `SELECT event_id::text AS event_id, ...`. A `bigint` id is not affected.
+- <a id="a-time-without-a-time-zone"></a>**A time without a time zone is read in the
+  connection's `zone`**, UTC when it declares none, wherever the hub runs. A `timestamptz` keeps
+  its instant. `ordered_at` is a `timestamp` at the source, `paid_at` a `timestamptz` holding the
+  same instants — read on a hub running in Paris, no `zone` declared:
 
     ```
      order_id |       ordered_at       |        paid_at
@@ -334,36 +328,58 @@ The hub types each column from the source's declared JDBC type:
             2 | 2026-01-15 23:30:00+00 | 2026-01-15 23:30:00+00
     ```
 
-    `ordered_at` is a `timestamp` at the source, `paid_at` a `timestamptz` holding the same
-    instants. The published Docker image runs in UTC and always stored them this way. A hub run
-    from the jar on a machine set to another zone used to read a `timestamp` in that zone
-    (`21:30+00` in Paris in summer). A row that already landed keeps its value until its source
-    row changes.
-- **A table the hub already created keeps the types it was created with.** There is no backfill:
-  columns typed `numeric(18,4)` before this stay that way and keep printing four decimals. To
-  retype them, drop the connector (which drops its tables) and re-ingest, or `ALTER` the columns
-  yourself.
-- **A column can still widen, once, in one direction.** Types are decided from the chunk in hand,
-  so a column of whole numbers lands `bigint`; the first later chunk that carries a fractional
-  value for it is widened to `numeric(18,4)` before the insert, and the run continues. The hub
-  log names the columns. `ALTER COLUMN … TYPE` rewrites the table under an exclusive lock, so on
-  a large table that chunk takes noticeably longer — once.
+    An ERP that writes Paris time declares it: `zone: Europe/Paris` under `connection`. Each time
+    is then read at its own offset, UTC+2 in summer, UTC+1 in winter. A `date` keeps its day:
+
+    ```
+     order_id |       ordered_at       |   due_on
+    ----------+------------------------+------------
+            1 | 2026-08-02 21:30:00+00 | 2026-08-02
+            2 | 2026-01-15 22:30:00+00 | 2026-01-15
+    ```
+
+    The zone applies to the rows a run reads. On a table already written, re-apply the
+    connector, then read the table again:
+
+    ```
+    $ lm apply -f erp.yaml
+    {"name":"erp","connectorId":"e99abc0f-33d6-4e9d-99fc-a7240007c0c1","endpointsApplied":1}
+    $ lm endpoint reset-cursor erp/orders
+    $ lm connector run erp
+    run scheduled: a97e7633-c3d3-43f6-8aac-a3dd0711aed7
+    $ lm run list
+    ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+    a97e7633  erp        orders    Completed  2   2    0        0             2026-10-20 15:33  2026-10-20 15:33
+    ```
+
+    Each row it reads again is rewritten in place, at the right instant. Without
+    `reset-cursor`, the run reads only what is new and the old rows keep their time. An unknown
+    zone is refused before anything is written:
+
+    ```
+    $ lm apply -f erp.yaml
+    ✗ erp.yaml — 1 error(s), 0 warning(s)
+
+      ERROR    spec.connection.zone
+              'zone' is not a time zone: "Europe/Pariss" (for example Europe/Paris or UTC)
+    ```
+
+- **A table the hub already created keeps the types it was created with.** To retype it, delete
+  the connector (which drops its tables) and re-ingest, or `ALTER` the columns yourself.
 
 ### Seven reserved column names
 
 `id`, `_row_hash`, `_ingested_at`, `_source`, `_run_id`, `_mapping_version`, `tenant_id` —
-the hub adds these to every table it creates. A source column of one of those names is
-refused at write time, on a new table and an existing one alike, so no run ever drops a
-column's values in silence.
+the hub adds these to every table it creates. A source column of one of those names fails the run:
 
 ```
-$ lm run get 9165490f
+$ lm run get ded8b2ac
 ID        CONNECTOR        ENDPOINT    STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-9165490f  demo-price-list  price_list  Failed  0   0    0        0             2026-09-08 01:19  2026-09-08 01:19
+ded8b2ac  demo-price-list  price_list  Failed  0   0    0        0             2026-10-19 01:41  2026-10-19 01:41
 ✖ run failed: source column 'id' collides with a hub system column (_ingested_at, _mapping_version, _row_hash, _run_id, _source, id, tenant_id); it must reach the hub under another name — jdbc: source.tables[].rename; csv: a map-columns row hook under spec.mapping; kafka: no rename exists, the field must be renamed in the topic payload
 ```
 
-`rename:` is the fix — `id` is the one you will meet, but the seven collide alike:
+`rename:` is the fix:
 
 ```yaml
 --8<-- "docs/connectors/jdbc/30-rename-reserved-column.yaml"
@@ -371,11 +387,11 @@ ID        CONNECTOR        ENDPOINT    STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  S
 
 ```
 $ lm connector run demo-price-list
-run scheduled: 484aea15-ac55-44e6-ab9d-0e7e26189a8a
+run scheduled: ee29d37e-843e-4cd3-8972-9422ea54b36e
 $ lm run list --connector demo-price-list
 ID        CONNECTOR        ENDPOINT    STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-484aea15  demo-price-list  price_list  Completed  3   3    0        0             2026-09-08 01:19  2026-09-08 01:19
-9165490f  demo-price-list  price_list  Failed     0   0    0        0             2026-09-08 01:19  2026-09-08 01:19
+ee29d37e  demo-price-list  price_list  Completed  3   3    0        0             2026-10-19 01:41  2026-10-19 01:41
+ded8b2ac  demo-price-list  price_list  Failed     0   0    0        0             2026-10-19 01:41  2026-10-19 01:41
 ```
 
 ```
@@ -387,128 +403,188 @@ ID        CONNECTOR        ENDPOINT    STATUS     IN  OUT  SKIPPED  DEAD-LETTERS
 ```
 
 - The rename applies **in the hub table only**. Nothing is renamed on the source.
-- Renaming a column *into* one of the seven is refused at `lm validate` — it only moves the
-  collision.
-- Two source columns renamed onto the same hub column are refused for the same reason.
+- `lm validate` refuses a rename *into* one of the seven, and two source columns renamed onto the
+  same hub column.
 
-### One row per version, never an update
+### One row per key — a changed row replaces its version
 
-The hub table has a unique constraint on `_row_hash`, a hash of the row's content:
+The hub table holds one row per `pk_columns` value:
 
-- **A row read again unchanged is skipped**, so re-reading costs nothing but the read.
-- **A row changed at the source lands as a new row**, with its own `_ingested_at`. Both
-  versions stay. That is the time axis — the hub table is a tape, not a mirror.
+- **A row read again unchanged is skipped.** It keeps its `_ingested_at` and `_run_id`.
+- **A row changed at the source replaces its previous version**, with a new `_ingested_at` and
+  the `_run_id` of the run that read the change.
 
-After the five runs above, `t_invoices` holds seven rows for five invoices:
+After the five runs above, `t_invoices` holds five rows for five invoices:
 
 ```
- invoice_id | status |       updated_at       |         _ingested_at
-------------+--------+------------------------+-------------------------------
-       1001 | paid   | 2026-09-01 09:15:00+00 | 2026-09-07 23:18:34.339879+00
-       1002 | open   | 2026-09-01 11:40:00+00 | 2026-09-07 23:18:34.339879+00
-       1002 | paid   | 2026-09-08 07:45:00+00 | 2026-09-07 23:18:56.001046+00
-       1003 | open   | 2026-09-02 08:05:00+00 | 2026-09-07 23:18:34.339879+00
-       1003 | paid   | 2026-09-08 09:10:00+00 | 2026-09-07 23:19:00.384925+00
-       1004 | draft  | 2026-09-02 16:20:00+00 | 2026-09-07 23:18:34.339879+00
-       1005 | open   | 2026-09-08 07:30:00+00 | 2026-09-07 23:18:44.432353+00
+ invoice_id | status |       updated_at
+------------+--------+------------------------
+       1001 | paid   | 2026-09-01 09:15:00+00
+       1002 | paid   | 2026-09-08 07:45:00+00
+       1003 | paid   | 2026-09-08 09:10:00+00
+       1004 | draft  | 2026-09-02 16:20:00+00
+       1005 | open   | 2026-09-08 07:30:00+00
 ```
 
-`_ingested_at` is stored in UTC; the source's own `updated_at` is whatever the source wrote.
+The hub table is the source's current state; it keeps no history. A table written by an older hub
+may still hold one row per version — see [Upgrading](../operations/upgrade.md#a-jdbc-table-now-holds-one-row-per-key).
 
-!!! note "`OUT` counts rows delivered, not rows inserted"
-    `records_out` is the number of source rows handed to the target. Rows the hash skipped
-    are counted there too, which is why a re-read that grows the table by nothing still
-    reports a non-zero `OUT`.
+!!! note "`OUT` counts rows delivered, not rows written"
+    Rows skipped because they did not change are counted in `OUT` too, which is why a re-read
+    that changes nothing still reports a non-zero `OUT`.
 
 ### Deletes are never propagated
 
-A row deleted at the source stays in the hub table, in both modes, forever: neither cursor
-ever sees an absence. To resync from nothing, `lm connector delete` drops the connector's
-`connector.t_*` tables and its RAG chunks, and the next apply plus run starts clean.
+A row deleted at the source stays in the hub table, in both modes. To resync from nothing,
+delete the connector, then apply and run it again.
+
+### Emptying one endpoint on its own
+
+A `jdbc-generic` endpoint cannot be purged on its own. `lm endpoint purge` asks the hub first, so
+the refusal comes with no prompt:
+
+```
+$ lm endpoint purge demo-invoices/invoices
+Error: API error 400: This endpoint writes to a connector table whose rows are not tracked per endpoint, so it cannot be purged on its own. Deleting the connector removes its data, along with its run history.
+```
+
+Delete the connector instead. `--dry-run` states what goes:
+
+```
+$ lm connector delete demo-invoices --dry-run
+Would delete connector demo-invoices (jdbc-generic) — 5 rows of connector.t_invoices, its run history and RAG chunks (dry run, nothing deleted)
+$ lm connector delete demo-invoices --force
+deleted: demo-invoices
+```
+
+- Without `--force`, `lm` asks you to type `delete` first.
+- If an entity (here `invoice`) is built on the table, it blocks the delete, before any question:
+
+    ```
+    $ lm connector delete demo-invoices --dry-run
+    Error: API error 409: table connector.t_invoices feeds entity invoice — remove the entity first (lm entity delete invoice)
+    ```
+
+- The connectors `lm source jdbc add` made share the source's stored credential
+  (`<source>--credential`). It goes with the last of them, and that one's statement names it:
+  `…, credential demo-src--credential, its run history and RAG chunks`.
+- Re-apply the manifest and run it to start clean.
+
+The same holds for `csv-file` and `kafka` endpoints.
+
+### Two connectors reading a table of the same name
+
+Two sites, one ERP: `erp-north` and `erp-south` differ only by `defaults.schema`, and both read
+`customers`. `erp-north` ran first and writes `connector.t_customers`; the run of `erp-south` is
+refused, naming the holder:
+
+```
+$ lm run list --connector erp-south
+ID        CONNECTOR  ENDPOINT   STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+501528ee  erp-south  customers  Failed  0   0    0        0             2026-10-19 01:42  2026-10-19 01:42
+$ lm run get 501528ee
+ID        CONNECTOR  ENDPOINT   STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+501528ee  erp-south  customers  Failed  0   0    0        0             2026-10-19 01:42  2026-10-19 01:42
+✖ run failed: connector.t_customers is already written by connector 'erp-north'; a second connector cannot write it — give this one its own hub table: jdbc: source.tables[].target; csv: the table is named after the connector, rename it; kafka: the endpoint's name
+```
+
+Name the second one's hub table with `target:`, apply, run:
+
+```yaml
+  source:
+    tables:
+      - name: customers
+        target: customers_south
+        mode: full
+        pk_columns: [customer_id]
+```
+
+```
+$ lm apply -f erp-south.yaml
+{"name":"erp-south","connectorId":"dd01bfce-0e5d-46af-8fc2-0ac11c0fb7a8","endpointsApplied":1}
+$ lm connector run erp-south
+run scheduled: bf0b74c8-6132-4df7-b789-3ac960d069ee
+$ lm run list --connector erp-south
+ID        CONNECTOR  ENDPOINT   STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+bf0b74c8  erp-south  customers  Completed  3   3    0        0             2026-10-19 01:42  2026-10-19 01:42
+501528ee  erp-south  customers  Failed     0   0    0        0             2026-10-19 01:42  2026-10-19 01:42
+$ lm data tables | grep -E '^(MAPPING|jdbc:)'
+MAPPING                               SCHEMA     TABLE                      ROWS
+jdbc:customers                        connector  t_customers                2
+jdbc:customers_south                  connector  t_customers_south          3
+```
+
+- **The endpoint keeps the source table's name** — `customers` in `lm run list` and in
+  `lm endpoint reset-cursor erp-south/customers`; only the hub table changes.
+- **Another tenant is not a second connector.** Each tenant's connector writes and reads only
+  its own rows of `connector.t_customers`.
+- **The rule holds across connector types**: a `csv-file` connector named `customers` writes
+  `connector.t_customers` too.
+
+When two connectors of a tenant already both write one hub table, both keep writing it:
+
+- **`lm connector delete` on one removes only its rows**; the table goes with the last of them.
+  `--dry-run` counts those rows.
+- **With different `scopes`, a user bound to only one of the métiers reads the table nowhere** —
+  not in `lm data tables`, not in either métier's chat. A user holding both scopes, or an
+  unscoped one, still reads it.
+- **To separate them**, give the two connectors the same `scopes`, or move one to its own hub
+  table with `target:` (above).
 
 ### Indexes on the hub table
 
-`indexes:` is **per table** for jdbc — that is where the runtime reads it. (`spec.target.indexes`
-at connector level is what [CSV & files](csv.md#target-table) reads. A jdbc manifest carrying a
-`spec.target` block at all is answered with an `unknown key` warning: nothing on this kind reads
-one, so an index declared there would be accepted and then silently dropped.)
+`indexes:` is declared **per table** for jdbc. A `spec.target` block, which [CSV & files](csv.md#target-table)
+reads, gets an `unknown key` warning on a jdbc connector and is ignored.
 
 ```yaml
 indexes:
   - { columns: [customer], unique: false }     # unique defaults to false
 ```
 
-Each entry is `{ columns: [non-empty strings], unique?: bool }`. A malformed entry fails
-validation with its own error rather than being dropped.
+Each entry is `{ columns: [non-empty strings], unique?: bool }`; a malformed entry fails validation.
 
 ## Cursors — resume, restart, reset
 
 A cursor is stored per endpoint, after every chunk. An interrupted run resumes exactly where
 it stopped: no duplicates, no gaps.
 
-A primary-key column of a type JSON cannot carry — `DATE`, `TIMESTAMP`, `TIME` or `UUID` — is stored as text
-with its type recorded beside it (`pkTypes`) and read back as the same type, so it compares against its
-column on the next chunk. A cursor written before that record existed reads as it always did.
-
-- **`mode: watermark`** stores `{col, value, pk}` and resumes with
-  `WHERE (col, pk...) > (value, last_pk...)` — one lexicographic comparison over the watermark
-  followed by every key column. Rows sharing one watermark value cannot straddle a chunk boundary
-  and be lost, or read twice — the key breaks the tie.
-- **`mode: full`** stores the key alone and resumes with `WHERE (pk...) > (last_pk...)`.
+- **`mode: watermark`** resumes past the last watermark value and its row's key. Rows sharing one
+  watermark value are neither lost nor read twice across chunks.
+- **`mode: full`** resumes past the last key.
 
 ### A run reads what the table held when it started
 
-Both modes also carry a **ceiling**: the greatest key row the table held at the moment the run
-started, measured once and added to the same comparison —
-`AND (col, pk...) <= (ceiling...)`. So a row **inserted while the run is in flight** belongs to the
-next run, not this one.
-
-That is what makes a run end on a table that is still being written to. Without the ceiling the
-query paged forward for as long as the inserts continued: on a busy table the run never reached a
-quiet chunk, so it never completed, the run row stayed `Running`, and every scheduled slot behind
-it was skipped by the per-endpoint lock. Nothing was lost — but nothing ever finished either, and
-a `window` fence that only gates a run's *start* was walked straight through by a run that began
-inside it.
-
-Rows whose watermark is `NULL` are read by a **first** pass and never by a resume — the resume
-comparison is unknown for them. That is not the ceiling's doing and the ceiling does not change it:
-it carries `OR <watermark> IS NULL` for exactly that reason. If such rows must be kept current,
-give the column a value or read the table in `mode: full`.
-
-The ceiling costs **one query per run**, `ORDER BY <keys> DESC LIMIT 1` — a backward scan of the
-same index the chunk loop already needs. On a table with no index over `(watermark, pk…)` it is a
-full sort, but so is every chunk the run then reads: the index is the condition for ingesting that
-table at all, not a new requirement this adds.
+- **A row inserted while a run is in flight belongs to the next run.** A run on a busy table still
+  ends.
+- **A row whose watermark is `NULL`** is read by a first pass, never by a resume. To keep such rows
+  current, give the column a value or read the table in `mode: full`.
 
 ### What restarts a table
 
-A cursor belongs to the configuration that wrote it. Changing `mode`, `watermark_column` or
-`pk_columns` — its columns **or their order**, which is the paging order — makes the stored
-cursor foreign: the hub ignores it, logs a WARN naming both, and the table restarts from the
-beginning.
+Changing `mode`, `watermark_column` or `pk_columns` — its columns **or their order** — restarts the
+table from the beginning. The hub log carries a WARN:
 
 ```
-WARN  demo.invoices: ignoring cursor persisted by another configuration (col='', pk=[invoice_id];
-      this reader writes col='updated_at', pk=[invoice_id]) — restarting from the beginning
+demo.invoices: ignoring cursor persisted by another configuration (col='', pk=[invoice_id]; this reader writes col='updated_at', pk=[invoice_id]) — restarting from the beginning
 ```
 
-A restart re-reads the table from the beginning: every row already in the hub table meets its
-own hash and is skipped, so the table does not grow. `IN` and `OUT` count the re-read rows all
-the same — run 69f31e57 above is exactly this.
+Rows the hub table already holds unchanged are skipped, so the table does not grow. `IN` and `OUT`
+count the re-read rows all the same — run 772a43f1 above.
 
 ### Restarting a table on purpose
 
-`lm endpoint reset-cursor <connector>/<endpoint>` drops the stored cursor. For jdbc the
-endpoint name is the table name. It prints nothing; the next run's `IN` is the proof:
+`lm endpoint reset-cursor <connector>/<endpoint>` drops the stored cursor; for jdbc the endpoint is
+the table name. It prints nothing; the next run's `IN` is the proof:
 
 ```
 $ lm endpoint reset-cursor demo-invoices/invoices
 $ lm connector run demo-invoices
-run scheduled: 0935e410-5216-4b0e-8d02-2f0adb1a6ac2
-$ lm run list --connector demo-invoices
+run scheduled: 22607df2-5515-425d-af55-46b9b6c26963
+$ lm run list --connector demo-invoices --limit 2
 ID        CONNECTOR      ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-0935e410  demo-invoices  invoices  Completed  5   5    0        0             2026-09-08 01:20  2026-09-08 01:20
-41823606  demo-invoices  invoices  Completed  0   0    0        0             2026-09-08 01:19  2026-09-08 01:19
+22607df2  demo-invoices  invoices  Completed  5   5    0        0             2026-10-19 01:40  2026-10-19 01:40
+87b4931c  demo-invoices  invoices  Completed  0   0    0        0             2026-10-19 01:40  2026-10-19 01:40
+note: result hit the limit of 2 — there may be more
 ```
 
 ## Scheduling
@@ -526,20 +602,17 @@ spec:
   window may cross midnight.
 - **The end is exclusive.** A nightly `0 6 * * *` needs a window ending later than `06:00`,
   for instance `22:00-07:00`.
-- **A manual `lm connector run` ignores the window.** It is an operator's act.
+- **A manual `lm connector run` ignores the window.**
 - **Re-applying without the key lifts it.** An absent `schedule` unschedules; an absent
   `window` removes the fence.
 
-If the source is a production database, a window is usually the DBA's condition for granting
-the `SELECT` account — see [Sizing & load tests](../operations/sizing.md).
+On a production database, a window is usually the DBA's condition for granting the `SELECT`
+account — see [Sizing & load tests](../operations/sizing.md).
 
 ## Guided flow — `lm source jdbc`
 
-Four commands that reach the same connectors without writing YAML. They need the `lm_admin`
-role, and the password is **never a flag** — there is no `--password`, so it stays out of `ps`
-and out of your shell history.
-
-Where it comes from instead:
+Four commands that create connectors without writing YAML. They need the `lm_admin` role. The
+password is **never a flag**:
 
 | You are | What happens |
 |---|---|
@@ -547,13 +620,9 @@ Where it comes from instead:
 | piping, with `--password-stdin` | the first line of stdin is the password |
 | piping, without the flag | same, plus a warning on stderr naming the flag |
 
-`--password-stdin` is spelled the way `docker login` and `helm registry login` spell it. Declaring
-the pipe matters: `lm source jdbc add … < list.txt` otherwise sends that file's first line to the
-hub as a password, and nothing would say so.
-
-Use it to explore a base you do not know, and to stand up a table quickly. Reach for a
-manifest when you need what it cannot express: `rename`, `indexes`, a view, a composite or
-undiscoverable key, or config you keep in version control.
+Use it to explore a base you do not know, and to stand up a table quickly. Write a manifest
+for `rename`, `indexes`, a view, a composite or undiscoverable key, or config kept in version
+control.
 
 ### `test`
 
@@ -566,8 +635,7 @@ Latency  : 1 ms
 Schemas  : connector, core, demo, ext, identity, information_schema, pg_catalog, platform, public, rag
 ```
 
-`Schemas` lists what this user can see — a schema absent from that line is a missing `USAGE`
-grant, before any manifest is written.
+`Schemas` lists every schema of the database, granted or not.
 
 ### `discover`
 
@@ -576,23 +644,21 @@ $ printf '%s\n' "$DB_PASSWORD" | lm source jdbc discover --password-stdin --url 
 SCHEMA     NAME                            ROWS  COLS PK                   WATERMARK       UNSUPPORTED
 demo       audit_log                          1     3                      -               -
 demo       invoices                           4     5 invoice_id           updated_at      -
+demo       order_lines                      700     3 order_id,line_no     -               -
 demo       price_list                         3     3 id                   id              -
 demo       warehouses                         2     4 warehouse_id         updated_at      -
 ```
 
-- `--schema` defaults to `public`. An ERP in its own schema names it here.
-- `ROWS` is the planner's estimate, `-1` when the table was never analyzed.
-- `PK` empty means no primary key — that table needs a manifest or a view.
-- `WATERMARK` is a **suggestion**, in this order: a column named `updated_at`, `updated`,
-  `modified_at` or `last_modified`; else the first timestamp or date column; else a single
-  numeric primary key. The last case is the trap named [above](#which-one-to-declare) —
-  `price_list` suggests `id`.
-- `UNSUPPORTED` names, as `COLUMN TYPE`, the columns the source's dialect cannot read (`-` when there is
-  none). Such a table is listed, but `add` refuses it by name and the interactive picker marks it `[!]`
-  and will not select it. PostgreSQL reads every column type it reports, so the column stays `-` there.
-- `--include-views` adds views to the listing; `--skip-pattern` replaces the **source dialect's** default
-  exclusions (PostgreSQL: `pg_*,information_schema*,t_*`) — with no flag the CLI sends none and the hub
-  applies the dialect's own; `--output json` prints the whole descriptor, `unsupportedColumns` included.
+| Column / flag | Meaning |
+|---|---|
+| `--schema` | defaults to `public`; an ERP in its own schema names it here |
+| `ROWS` | the planner's estimate, `-1` when the table was never analyzed |
+| `PK` | empty: no primary key — that table needs a manifest or a view |
+| `WATERMARK` | a **suggestion**: a column named `updated_at`, `updated`, `modified_at` or `last_modified`; else the first timestamp or date column; else a single numeric primary key — the trap named [above](#which-one-to-declare) (`price_list` suggests `id`) |
+| `UNSUPPORTED` | the columns the dialect cannot read, as `COLUMN TYPE` (`-` when none). `add` refuses such a table by name; the interactive picker marks it `[!]`. Always `-` on PostgreSQL |
+| `--include-views` | adds views to the listing |
+| `--skip-pattern` | replaces the dialect's default exclusions (PostgreSQL: `pg_*,information_schema*,t_*`) |
+| `--output json` | the whole descriptor, `unsupportedColumns` included |
 
 ### `add`
 
@@ -604,23 +670,28 @@ $ lm source jdbc list-tables demo-src
 TABLE                          CONNECTOR                                STATUS
 warehouses                     demo-src--warehouses                     active
 $ lm connector run demo-src--warehouses
-run scheduled: 110866d1-9926-4c0b-a200-25fb9037f8f2
+run scheduled: b2e594a3-bd79-4944-b50b-1642b5edc066
 $ lm run list --connector demo-src--warehouses
 ID        CONNECTOR             ENDPOINT    STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-110866d1  demo-src--warehouses  warehouses  Completed  2   2    0        0             2026-09-08 01:20  2026-09-08 01:20
+b2e594a3  demo-src--warehouses  warehouses  Completed  2   2    0        0             2026-10-19 01:43  2026-10-19 01:43
 ```
 
 What it creates, per requested table:
 
 - one connector named `<source-name>--<table>`;
-- one Basic credential per source, `<source-name>--credential`, stored encrypted — the
-  password never lands in a file;
-- `mode: watermark` when a watermark column was found or given, `mode: full` otherwise. The
-  hub decides; there is no `--mode`.
-- `--interactive` opens a TUI table picker instead of `--tables`, pre-filled with the
-  discovered suggestions. `--schedule-cron` sets the schedule.
+- one encrypted credential per source, `<source-name>--credential` — the password never lands in
+  a file;
+- `mode: watermark` when a watermark column was found, `mode: full` otherwise. There is no `--mode`.
 
-What it refuses, by name and reason, before anything is persisted:
+Flags:
+
+- `--interactive` opens a TUI table picker instead of `--tables`, pre-filled with the discovered
+  suggestions.
+- `--schedule-cron` sets the schedule, in the 5-field form `schedule:` takes, e.g. `*/30 * * * *`.
+  It is checked like the manifest's: anything else is refused with `invalid cron expression: …`
+  and nothing is created.
+
+What it refuses, by name and reason, before anything is created:
 
 ```
 $ printf '%s\n' "$DB_PASSWORD" | lm source jdbc add --password-stdin demo-src ... --tables audit_log
@@ -629,12 +700,19 @@ $ printf '%s\n' "$DB_PASSWORD" | lm source jdbc add --password-stdin demo-src ..
 Error: API error 400: table demo.nope not found among the base tables of that schema — check the schema and the connection user's SELECT grant; a view is declared in a manifest, not through the guided add
 ```
 
-- a table it cannot find in that schema, and a **view** — a view has no key to discover;
+- a table it cannot find in that schema, and a **view**;
 - a table without a primary key;
-- a table whose name is not a plain identifier — the hub names its table after it;
+- a table whose name is not a plain identifier;
 - `mode: watermark` with no column to watermark on.
 
-A table whose connector already exists is reported as skipped, not re-created.
+A table whose connector already exists is skipped, not re-created:
+
+```
+$ printf '%s\n' "$DB_PASSWORD" | lm source jdbc add --password-stdin demo-src ... --tables warehouses
+Created 0 connectors:
+Skipped 1 (already exist):
+  • demo-src--warehouses
+```
 
 ## Oracle
 
@@ -661,44 +739,29 @@ spec:
           ID: order_id                                 # optional: land a column under another name
 ```
 
-- **Versions.** Oracle 12c and later (the paging uses `FETCH FIRST n ROWS ONLY`). It is tested on Oracle 23ai
-  Free only; other versions are untested. Oracle 11g is not supported.
-- **Connect by service name.** The URL goes to the driver untouched. `@//host:1521/SERVICE`,
-  `@host:1521/SERVICE` and a full `@(DESCRIPTION=…)` descriptor were each checked against a live Oracle 23ai;
-  quote a descriptor in YAML, it contains parentheses. The older **SID** form (`@host:1521:SID`) works on a
-  non-multitenant database, but on a multitenant one it reaches the container root, where a pluggable
-  database's user does not exist (`ORA-01017`) — use the service name there. TCPS and wallets are not tested.
-- **`lm` needs `--schema`.** `lm source jdbc discover` and `add` default to `--schema public`, which is
-  PostgreSQL's; for Oracle pass the owner, e.g. `--schema ERP`, or the listing is empty.
-- **Names are exact.** Oracle folds an unquoted name to upper case; this provider never folds. Write the
-  schema, table and column names exactly as `lm source jdbc discover` lists them (`ORDERS`, not `orders`);
-  they are quoted as given. A mixed-case name created with quotes is written in that case.
-- **On the hub side the labels keep that spelling.** The hub table's columns are the Oracle labels as the
-  driver returns them — quoted, upper-case (`"ID"`, `"UPDATED_AT"`) — next to the hub's own lower-case
-  system columns. Quote them in a view or a query, or use `rename:` to land a given column under another
-  (for instance lower-case) name.
-- **Types.** Supported: `NUMBER`, `FLOAT`, `BINARY_FLOAT`, `BINARY_DOUBLE`, `VARCHAR2`, `NVARCHAR2`,
-  `CHAR`, `NCHAR`, `DATE` (which carries a time part), `TIMESTAMP`, `TIMESTAMP WITH [LOCAL] TIME ZONE`,
-  `CLOB` and `NCLOB` — each lands in the hub column its own value decides, by the same
-  [Column types](#column-types) table every dialect uses. Only `CLOB` and `NCLOB` are read as text; a
-  `NUMBER`, a `DATE` or a `TIMESTAMP [WITH [LOCAL] TIME ZONE]` keeps its own typed JDBC value all the
-  way to the hub column. Any other column type — `BLOB`, `RAW`, `LONG`, `LONG RAW`, `XMLTYPE`, `BFILE`,
-  `ROWID`, object types — is **refused**: `discover` lists the table with the column and its type in
-  the `UNSUPPORTED` column, and `add` refuses it by name. Nothing is ingested wrongly.
-- **Zoned timestamps are read as instants** (`TIMESTAMP WITH [LOCAL] TIME ZONE` lands as `timestamptz`), as
-  PostgreSQL's driver does — which is what lets such a column serve as a watermark.
-- **`DATE` and `TIMESTAMP` carry no time zone**: they are read as UTC, like a PostgreSQL `timestamp`
-  ([A time without a time zone](#a-time-without-a-time-zone)). `DATE '2026-01-02'` lands as
-  `2026-01-02 00:00:00+00`, never as the evening before.
+- **Versions.** Oracle 12c and later; tested on Oracle 23ai Free only. Oracle 11g is not supported.
+- **Connect by service name**: `@//host:1521/SERVICE`, `@host:1521/SERVICE`, or a full
+  `@(DESCRIPTION=…)` descriptor (quote it in YAML). The **SID** form (`@host:1521:SID`) works on a
+  non-multitenant database only; on a multitenant one it fails with `ORA-01017`. TCPS and wallets are not tested.
+- **`lm` needs `--schema`.** `lm source jdbc discover` and `add` default to `--schema public`; for
+  Oracle pass the owner, e.g. `--schema ERP`, or the listing is empty.
+- **Names are exact, never folded.** Write schema, table and column names exactly as
+  `lm source jdbc discover` lists them (`ORDERS`, not `orders`).
+- **The hub columns keep that spelling** — quoted upper-case (`"ID"`, `"UPDATED_AT"`), next to the
+  hub's lower-case system columns. Quote them in a query, or `rename:` them.
 - **Empty string is `NULL`.** Oracle stores `''` as `NULL`; the hub receives `NULL`.
-- **Index `(watermark, key)` on every Oracle table you page.** Without an index starting with the
-  watermark column, every page scans the whole table — the cost grows with the table and gets worse
-  on every later page. One shape stays slower even with the index: a very large group of rows
-  sharing one watermark value pages more slowly within that group than the rest of the table.
-  Measured on Oracle 23ai Free only; other versions and data shapes are not measured.
-- **Watermark ties and `NULL`s** behave exactly as on PostgreSQL: rows tied on the watermark are neither lost
-  nor repeated across chunks, and a row with no watermark is read by a first pass that fits in one chunk
-  (see [A run reads what the table held when it started](#a-run-reads-what-the-table-held-when-it-started)).
+- **Index `(watermark, key)` on every Oracle table you page.** Without it every page scans the whole
+  table. A very large group of rows sharing one watermark value still pages more slowly.
+- **Watermark ties and `NULL`s** behave as on PostgreSQL — see
+  [A run reads what the table held when it started](#a-run-reads-what-the-table-held-when-it-started).
+
+| Oracle type | Lands as |
+|---|---|
+| `NUMBER`, `FLOAT`, `BINARY_FLOAT`, `BINARY_DOUBLE` | by the [Column types](#column-types) table |
+| `VARCHAR2`, `NVARCHAR2`, `CHAR`, `NCHAR`, `CLOB`, `NCLOB` | `TEXT` |
+| `DATE`, `TIMESTAMP` (no time zone) | `TIMESTAMPTZ`, read in the connection's [`zone`](#a-time-without-a-time-zone), UTC without one: `DATE '2026-01-02'` lands as `2026-01-02 00:00:00+00` |
+| `TIMESTAMP WITH [LOCAL] TIME ZONE` | `TIMESTAMPTZ`, the same instant — usable as a watermark |
+| `BLOB`, `RAW`, `LONG`, `LONG RAW`, `XMLTYPE`, `BFILE`, `ROWID`, object types | **refused**: `discover` lists the column under `UNSUPPORTED`, `add` refuses the table by name |
 
 ## Reading a view
 
@@ -713,7 +776,7 @@ métier needs.
 ```
 $ lm run list --connector demo-open-invoices
 ID        CONNECTOR           ENDPOINT         STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-eaee8eaa  demo-open-invoices  v_open_invoices  Completed  2   2    0        0             2026-09-08 01:22  2026-09-08 01:22
+22356ffd  demo-open-invoices  v_open_invoices  Completed  2   2    0        0             2026-10-19 01:42  2026-10-19 01:42
 ```
 
 The columns named in `pk_columns` must be unique together and stable — they are what the
@@ -730,22 +793,30 @@ $ lm validate -f bad-chunk.yaml
   ERROR    spec.source.tables[0].chunk_size
           chunk_size is not a knob — jdbc chunking is fixed at 500 rows per read; remove it
           → The engine reads its chunk size from the connector type, never from the manifest
+
+Fix errors above before running 'lm apply -f bad-chunk.yaml'.
+Error: validation failed: 1 error(s)
 ```
 
 | Rule | Severity | Path |
 |---|---|---|
 | `connection.url` matches `jdbc:<dialect>:...` | ERROR | `spec.connection.url` |
-| Dialect is installed and accepts the URL (PostgreSQL ships by default) | ERROR | `spec.connection.dialect` (declared) or `spec.connection.url` (inferred) |
+| Dialect is installed and accepts the URL | ERROR | `spec.connection.dialect` (declared) or `spec.connection.url` (inferred) |
 | A declared `dialect` matches the URL scheme | ERROR | `spec.connection.dialect` |
 | `connection.user` and `connection.password_env` present | ERROR | `spec.connection.*` |
+| A plain-text `connection.password` | WARNING | `spec.connection.password` |
+| A declared `connection.zone` is a time zone | ERROR | `spec.connection.zone` |
 | `source.tables[]` non-empty | ERROR | `spec.source.tables` |
 | `mode` present and in {watermark, full} | ERROR | `spec.source.tables[i].mode` |
+| `schema` present, on the table or in `defaults` | ERROR | `spec.source.tables[i].schema` |
 | `mode: watermark` declares `watermark_column` | ERROR | `spec.source.tables[i].watermark_column` |
 | `pk_columns` is a non-empty list | ERROR | `spec.source.tables[i].pk_columns` |
 | `chunk_size` is refused — chunking is fixed at 500 | ERROR | `spec.source.tables[i].chunk_size` |
-| No unknown per-table key | ERROR | `spec.source.tables[i]` |
+| No unknown per-table key | WARNING | `spec.source.tables[i].<key>` |
 | `indexes` entries are `{ columns: [...], unique?: bool }` | ERROR | `spec.source.tables[i].indexes[j]` |
 | No duplicate table names | ERROR | `spec.source.tables[i].name` |
+| `target` is a plain identifier | ERROR | `spec.source.tables[i].target` |
+| No two tables of the connector land in one hub table | ERROR | `spec.source.tables[i].name` |
 | `rename` targets are plain identifiers | ERROR | `spec.source.tables[i].rename` |
 | `rename` targets none of the seven reserved names | ERROR | `spec.source.tables[i].rename` |
 | No two `rename` sources hit the same target | ERROR | `spec.source.tables[i].rename` |
@@ -758,15 +829,18 @@ $ lm validate -f bad-chunk.yaml
 
 | Symptom | Cause | Gesture |
 |---|---|---|
-| `password_env '...' is not set in the server environment` | the variable must exist where the **hub** runs, not on your laptop; jdbc does not read `lm secret` | export it where the hub runs, or attach a credential through the guided flow |
+| `password_env '...' is not set in the server environment` | the variable must exist where the **hub** runs; jdbc does not read `lm secret` | export it where the hub runs, or attach a credential through the guided flow |
+| `lm validate`: `required field missing` at `spec.source.tables[i].schema` | no `schema` on the table nor in `defaults` | add `schema:` — see [Per-table keys](#per-table-keys) |
 | `source column 'id' collides with a hub system column` | the source has a column named like one of the seven | add `rename: { id: source_id }` on that table |
+| run `Failed`: `connector.t_… is already written by connector '…'` | another connector of the tenant already writes that hub table | add `target: <name>` on that table — see [Two connectors reading a table of the same name](#two-connectors-reading-a-table-of-the-same-name) |
 | `numeric field overflow` | a numeric value wider than 14 digits before the point | expose the column as text through a view |
 | the run reads 0 rows and nothing is wrong | the cursor is already past everything | expected — change a row at the source, or `lm endpoint reset-cursor` |
 | updated rows never arrive | `mode: full`, or a watermark column the application does not move | switch to `watermark` on a column that moves |
-| a WARN says the cursor was persisted by another configuration | `mode`, `watermark_column` or `pk_columns` changed (its columns or their order) | expected once; the table restarts and the hashes deduplicate |
-| a deleted source row is still in the hub table | by design, in both modes | `lm connector delete` then re-apply, or filter on `_ingested_at` |
+| the hub log says the cursor was persisted by another configuration | `mode`, `watermark_column` or `pk_columns` changed | expected once; the table restarts and unchanged rows are skipped |
+| a deleted source row is still in the hub table | deletes are never propagated | delete the connector, then re-apply and run |
 | a table is in `discover` but `add` refuses it | no primary key, or it is a view | declare `pk_columns` in a manifest |
-| the hub table holds fewer rows than the source, no error anywhere | the declared `pk_columns` is not unique — part of a key, or a plain column that repeats — so a chunk boundary dropped a group | declare the whole primary key — see [Per-table keys](#per-table-keys) |
+| `discover` lists nothing in a schema `test` shows | the wrong `--schema` (default `public`), or no `SELECT` grant on its tables | pass `--schema <name>`; grant `USAGE` on the schema and `SELECT` on its tables |
+| run `Failed`: `pk_columns (…) does not identify one row of …` | the declared `pk_columns` is not unique | declare the whole primary key — see [Per-table keys](#per-table-keys) |
 
 ## See also
 

@@ -3,13 +3,13 @@ package io.lumnik.hub.connector.mapping.hooks.cell;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.mapping.MappingState;
 import io.lumnik.hub.connector.mapping.MappingValidationException;
+import io.lumnik.hub.connector.mapping.Zones;
 import io.lumnik.hub.connector.mapping.hooks.CellHook;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.text.ParsePosition;
 import java.time.LocalDate;
-import java.time.DateTimeException;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -33,14 +33,9 @@ public class ParseDateHook implements CellHook {
 
   @Override
   public void validateParams(JsonNode params) {
-    String zone = zone(params);
-    if (zone == null) return;
-    try {
-      ZoneId.of(zone);
-    } catch (DateTimeException e) {
-      throw new MappingValidationException("parse-date hook: 'zone' is not a time zone: \""
-          + zone + "\" (for example Europe/Paris or UTC)");
-    }
+    Zones.whyNot(zone(params)).ifPresent(why -> {
+      throw new MappingValidationException("parse-date hook: " + why);
+    });
   }
 
   /** The declared zone, or null when there is none: missing, null and blank all count as none, as

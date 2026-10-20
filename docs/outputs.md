@@ -1,10 +1,23 @@
 # Outputs — the roads out
 
-Data comes in so that something can *leave*: a Teams message at 02:01, a mail in the ADV's
-inbox, a row in your n8n flow. [How lumnik breathes](respiration.md) tells that story;
-this page is the manual for wiring it. The wiring commands (`lm integration`, `lm notify`,
-`lm outputs`) are `lm_admin` surface; reading the decision pile (`lm inbox`) is every app
-user's (`lm_user`).
+How to wire what leaves the hub: a webhook to n8n or Teams, a mail, a pull. Why and when:
+[How lumnik breathes](respiration.md). In `lm ui`: `:integrations`, `:notify` and `:outputs`
+([the terminal console](cli/tui.md)).
+
+| Command | Roles needed |
+|---|---|
+| `lm integration`, `lm outputs` | `lm_integrator` **and** `lm_admin` |
+| `lm notify` | `lm_admin` |
+| `lm inbox` | `lm_user` |
+
+```
+$ lm integration list          # as a user holding lm_admin but not lm_integrator
+Error: API error 403: missing role lm_integrator
+```
+
+**Wiring is tenant-wide**: a webhook or an email rule receives every matching event of the tenant.
+An admin holding any `scope:*` role is refused `lm integration`, `lm notify`, `lm outputs` and the
+live event stream with `403 {"error":"scope not granted"}`.
 
 ## The three roads out
 
@@ -31,14 +44,18 @@ lm integration test <ID>          # fires a real POST at the target, result inli
 - `test` fires a catalog event (`--event`, default `org.created`); `decision.*` types are
   dynamic and not testable this way — trigger the rule instead.
 - Forwarding starts **at registration** — nothing is delivered retroactively.
+- Without `--secret-stdin` the hub refuses the registration (`400`) and stores nothing.
+- `list` and `describe` show the target's **scheme and host only**: a webhook URL's path
+  and query are often its credential. `-o json` / `-o yaml` print the hub's body as it is,
+  full URL included — that is the machine contract, and you asked for it.
 
 ```
 $ echo -n "$SIGNING_SECRET" | lm integration add n8n \
     --url https://n8n.example.com/webhook/lumnik --events 'decision.*' --secret-stdin
 registered: n8n (id 1001) — forwards subscribed events from now on
 $ lm integration list
-ID    NAME  URL                                     EVENTS      ENABLED
-1001  n8n   https://n8n.example.com/webhook/lumnik  decision.*  true
+ID    NAME  URL                      EVENTS      ENABLED
+1001  n8n   https://n8n.example.com  decision.*  true
 ```
 
 ### What arrives, and how to verify it
@@ -51,39 +68,39 @@ X-Lumnik-Event-Id: 3639
 X-Lumnik-Signature: sha256=<hex HMAC-SHA256 of the raw request body, keyed with your secret>
 ```
 
-Recompute the HMAC over the **raw body bytes** and compare — reject on mismatch. (n8n and
-Make have ready-made HMAC-verification nodes; point them at the `sha256=`-stripped value.)
-`X-Lumnik-Event-Id` is **not** covered by that signature — it rides alongside the signed
-body, so treat it as best-effort correlation, not as a verified claim. It carries the
-outbox event's own id, the same id `lm inbox` shows and a later ack echoes back as
-`annotation.decision.acked`'s `decision_id` — store a `decision.*` delivery keyed by this
-id and you can resolve its ack without asking lumnik again. A replay of a delivery
-carries the same id as the original attempt.
+- **Verify:** recompute the HMAC over the **raw body bytes** and compare; reject on mismatch.
+  n8n and Make have HMAC-verification nodes — give them the value after `sha256=`.
+- **`X-Lumnik-Event-Id`** is the id `lm inbox` shows, and the `decision_id` a later
+  `annotation.decision.acked` carries. A replay keeps it. It is **not** signed.
 
 ### Delivery semantics
 
 The outbox is swept every **5 s**; a failed delivery is retried by a **30 s** sweep, **3
-attempts in total**, per-endpoint — an endpoint that already succeeded is never
-re-delivered while another one retries. Every attempt lands in the journal:
+attempts in total**, per target — a target that already succeeded is not sent the event again.
+Delivery is at-least-once: a hub stop mid-send can deliver an event twice, so deduplicate on
+`X-Lumnik-Event-Id`.
+
+Every attempt lands in the journal:
 
 ```bash
 lm outputs list                   # deliveries across every integration, failures first
-lm integration describe <ID>      # one target: config + its recent deliveries
+lm integration describe <ID>      # one target's registration; :integrations adds its recent deliveries
 ```
 
 A decision fired while the target was down — the journal says so, failures first:
 
 ```
 $ lm outputs list
-INTEGRATION     EVENT                   STATUS       WHEN              ERROR
-ops-automation  decision.order-on-hold  no response  2026-09-05 05:40  ConnectException: null
+ID  INTEGRATION     EVENT                   STATUS       WHEN              ERROR
+41  ops-automation  decision.order-on-hold  no response  2026-09-05 05:40  ConnectException: null
 ```
-A delivery that exhausted its attempts stays in the journal and can be **replayed**:
-`POST /api/platform/deliveries/{id}/replay`. The journal keeps each delivery's payload and the
-receiver's response for 90 days (`LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS`, purged daily at 05:00,
-`0` = forever): a purged delivery can no longer be replayed. A delivery the retry sweep still owns is
-never purged. The outbox itself is purged daily (04:30,
-`LUMNIK_EVENTS_RETENTION_DAYS`, default 30) — never past what the slowest consumer has seen.
+A delivery that exhausted its attempts can be **replayed**: `lm outputs replay ID` (or `^R` on
+`:outputs` in `lm ui`).
+
+| What | Kept | Setting | Purged |
+|---|---|---|---|
+| delivery journal (payload + receiver's response) | 90 days; `0` = forever | `LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS` | daily, 05:00 — a purged delivery cannot be replayed; one still being retried is kept |
+| events (the outbox) | 30 days | `LUMNIK_EVENTS_RETENTION_DAYS` | daily, 04:30 — never past what the slowest consumer has read |
 
 ## Route events to email
 
@@ -96,9 +113,8 @@ ID    EVENTS      RECIPIENT        TEMPLATE        ENABLED
 ```
 
 One mail per matching event, rendered through a template that can reach into the payload —
-templates, variables and the delivery contract have [their own page](email.md). The short
-version: mocked until the SMTP knobs are set, best-effort by design — when delivery must
-be provable, use the webhook.
+see [Email notifications](email.md). Mocked until the SMTP knobs are set; a failed send is not
+retried — when delivery must be provable, use the webhook.
 
 ## How to…
 
@@ -118,10 +134,8 @@ within seconds, with `X-Lumnik-Event` and the `sha256=` signature ready for an H
 ### Replay a delivery that exhausted its attempts
 
 ```bash
-lm outputs list                       # failures first — note the delivery id
-TOKEN=$(awk '/^ *access:/ {print $2; exit}' ~/.lm/config.yaml)
-curl -s -X POST https://your-hub.example.com/api/platform/deliveries/<id>/replay \
-  -H "Authorization: Bearer $TOKEN"
+lm outputs list                       # failures first — the ID column
+lm outputs replay <ID>
 ```
 
 **Result:** one fresh attempt at the same target with the same payload; the outcome lands
@@ -131,8 +145,8 @@ in the journal like any delivery.
 
 1. **Registered after the event?** Forwarding starts at registration — nothing is
    retroactive. Trigger the event again.
-2. **Watching `data.row.changed` on a REST/GraphQL/SOAP-ingested table?** Those tables are
-   event-silent today ([named limits](respiration.md#named-limits-in-one-place)).
+2. **Watching `data.row.changed` on a REST/GraphQL/SOAP-ingested table?** Those tables emit
+   no events ([named limits](respiration.md#named-limits-in-one-place)).
 3. **Was anything subscribed at ingest time?** `data.row.changed` is only emitted when a
    subscription exists when the row lands — wire first, then re-run the ingestion.
 4. **Is it the pipe or the event?** `lm integration test <ID>` proves the pipe;
@@ -152,10 +166,8 @@ dormancy watches mint them under the enforced `decision.` prefix.
 
 Two emission rules worth planning around:
 
-- **`data.row.changed` is gated**: it is emitted (in the ingestion transaction) only when
-  at least one integration, rule or process subscribes to it — and only for jdbc/CSV/kafka
-  ingestion; REST/GraphQL/SOAP-ingested tables are event-silent today
-  ([named limits](respiration.md#named-limits-in-one-place)).
+- **`data.row.changed`** is emitted only when an integration, rule or process subscribes to it,
+  and only for jdbc, CSV and kafka ingestion ([named limits](respiration.md#named-limits-in-one-place)).
 - **`decision.*` is the métier layer**: minted by [Processes](apps/processes.md) and
   [Workflow dormancy](apps/workflows.md), treated in the [Inbox](apps/inbox.md) —
   `annotation.decision.acked` closes the loop with who and when.

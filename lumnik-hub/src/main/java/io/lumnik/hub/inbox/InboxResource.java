@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.hub.tenant.TenantContextFilter;
 import io.quarkus.agroal.DataSource;
@@ -20,17 +22,20 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
+import java.sql.Array;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 /**
  * The inbox — the human surface over decision.* events (the fruit of declared kind:Process
  * attention rules). A READ of the outbox tail, not a consumer: no cursor. App state at rung 1
  * is a fold over the log: an ack is an {@code annotation.decision.acked} event, never a state
- * row. Tenant-bound (unlike the cross-tenant SSE stream). History is bounded by the outbox
- * retention purge — the inbox shows what retention keeps.
+ * row. Tenant-bound, and métier-bound for a caller holding {@code scope:*} roles (#1209). History
+ * is bounded by the outbox retention purge — the inbox shows what retention keeps.
  */
 @Path("/api/inbox")
 @Produces(MediaType.APPLICATION_JSON)
@@ -47,18 +52,50 @@ public class InboxResource {
     public record InboxEntry(long id, String occurredAt, String type, String process, String message,
                              String entity, String entityKey, boolean acked) {}
 
+    /**
+     * A decision is its métier's (#1209): the scope of the kind:Process ({@code process:<name>}) or
+     * kind:Workflow ({@code workflow:<name>}) that raised it, read from the manifest as it stands. So a
+     * bound caller's inbox is the decisions of these sources — resolved once per request, then one
+     * array test per decision walked. A decision whose manifest is gone is no source's any more: only
+     * an unbound user sees it.
+     */
+    private static final String GRANTED_SOURCES =
+        "SELECT 'process:' || name FROM core.process_manifest WHERE tenant_id = ? AND scope = ANY (?) "
+        + "UNION ALL SELECT 'workflow:' || name FROM core.workflow_manifest WHERE tenant_id = ? AND scope = ANY (?)";
+
+    /** The sources whose decisions the caller may see; null when unbound — every source. */
+    private Set<String> grantedSources(long tenant) {
+        Optional<Set<String>> granted = ScopeGrants.granted();
+        if (granted.isEmpty()) return null;
+        return Set.copyOf(Jdbc.query(adminDs, "InboxResource.grantedSources", GRANTED_SOURCES, ps -> {
+            Array scopes = ps.getConnection().createArrayOf("text", granted.get().toArray());
+            ps.setLong(1, tenant);
+            ps.setArray(2, scopes);
+            ps.setLong(3, tenant);
+            ps.setArray(4, scopes);
+        }, rs -> rs.getString(1)));
+    }
+
+    /** Appended to a read of {@code d}: binds the caller's sources twice ({@code bindGrants}), null when unbound. */
+    private static final String IN_GRANTED_SOURCES = "AND (?::text[] IS NULL OR d.source = ANY (?::text[])) ";
+
     @GET
     public Response list(@QueryParam("limit") @DefaultValue("50") int limit,
                          @QueryParam("all") @DefaultValue("false") boolean all) {
         long tenant = RequireTenant.current();
         int lim = Math.min(Math.max(limit, 1), 200);
+        Set<String> sources = grantedSources(tenant);
         List<InboxEntry> out = Jdbc.query(adminDs, "InboxResource.list", listSql(all),
-            ps -> { ps.setLong(1, tenant); ps.setInt(2, lim); },
+            ps -> {
+                ps.setLong(1, tenant);
+                ScopeGuardedUpsert.bindGrants(ps, 2, sources);
+                ps.setInt(4, lim);
+            },
             this::shape);
         return Response.ok(out).build();
     }
 
-    /** The inbox read (binds: tenant, limit) — package-private so its plan can be pinned. */
+    /** The inbox read (binds: tenant, the caller's sources twice, limit) — package-private so its plan can be pinned. */
     static String listSql(boolean all) {
         // "Acked" is looked up by the key ack() writes: one uq_event_outbox_dedup probe, whose one
         // row then has its type checked, so no other writer's key can ever ack a decision.
@@ -70,6 +107,7 @@ public class InboxResource {
         return "SELECT d.id, d.event_type, d.source, d.entity, d.entity_key, d.payload, d.occurred_at, "
              + ackedExpr + " AS acked "
              + "FROM core.event_outbox d WHERE d.tenant_id = ? AND d.event_type LIKE 'decision.%' "
+             + IN_GRANTED_SOURCES
              + (all ? "" : "AND NOT EXISTS (" + ackMatch + ") ")
              + "ORDER BY d.id DESC LIMIT ?";
     }
@@ -90,12 +128,14 @@ public class InboxResource {
         String by = userId != null ? String.valueOf(userId) : "unknown";
 
         // Verify then emit — two autocommit statements, each its own connection (they never
-        // shared a transaction). Honest verification: the id must be THIS tenant's decision;
-        // a foreign id is indistinguishable from a nonexistent one (no cross-tenant leak).
+        // shared a transaction). Honest verification: the id must be THIS tenant's decision, in a
+        // métier the caller holds; a foreign or out-of-scope id is indistinguishable from a
+        // nonexistent one (no cross-tenant, no cross-métier leak).
+        Set<String> sources = grantedSources(tenant);
         var decision = Jdbc.queryOne(adminDs, "InboxResource.ack.verify",
-            "SELECT entity, entity_key FROM core.event_outbox "
-                + "WHERE id = ? AND tenant_id = ? AND event_type LIKE 'decision.%'",
-            ps -> { ps.setLong(1, id); ps.setLong(2, tenant); },
+            "SELECT entity, entity_key FROM core.event_outbox d "
+                + "WHERE id = ? AND tenant_id = ? AND event_type LIKE 'decision.%' " + IN_GRANTED_SOURCES,
+            ps -> { ps.setLong(1, id); ps.setLong(2, tenant); ScopeGuardedUpsert.bindGrants(ps, 3, sources); },
             rs -> new String[]{rs.getString(1), rs.getString(2)});
         if (decision.isEmpty()) {
             return Response.status(404).entity(Map.of("error",
@@ -137,7 +177,7 @@ public class InboxResource {
         }
         return new InboxEntry(
             rs.getLong("id"),
-            rs.getTimestamp("occurred_at").toInstant().toString(),
+            Jdbc.instant(rs, "occurred_at").toString(),
             type, process, message,
             rs.getString("entity"), rs.getString("entity_key"),
             rs.getBoolean("acked"));

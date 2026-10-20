@@ -9,11 +9,16 @@ import (
 )
 
 func newMigrationCmd() *cobra.Command {
-	m := &cobra.Command{Use: "migration", Short: "Flyway migration status"}
+	m := &cobra.Command{
+		Use:   "migration",
+		Short: "Flyway migration status",
+		Long: "Flyway migration status per schema. The hub applies its migrations at every startup:\n" +
+			"a pending migration applies when the hub next starts.",
+	}
 
 	m.AddCommand(&cobra.Command{
 		Use:   "status",
-		Short: "Show migration status per schema",
+		Short: "Show migration status per schema (pending ones apply when the hub next starts)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
@@ -25,34 +30,13 @@ func newMigrationCmd() *cobra.Command {
 			}
 			format, _ := cmd.Flags().GetString("output")
 			return output.Print(cmd.OutOrStdout(), format,
-				[]string{"SCHEMA", "VERSION", "PENDING"}, ss,
+				[]string{"SCHEMA", "VERSION", "PENDING", "LAST APPLIED"}, ss,
 				func(s types.MigrationStatus) []string {
-					return []string{s.Schema, s.CurrentVersion, fmt.Sprintf("%d", s.Pending)}
+					return []string{s.Schema, s.CurrentVersion, fmt.Sprintf("%d", s.Pending),
+						output.HumanTimeStrOr(s.LastApplied, "—")} // "—": never applied (#1149)
 				})
 		},
 	})
-
-	apply := &cobra.Command{
-		Use:   "apply",
-		Short: "Apply pending migrations for a schema",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			schema, _ := cmd.Flags().GetString("schema")
-			if schema == "" {
-				return cmd.Help()
-			}
-			c, err := ClientFromCmd(cmd)
-			if err != nil {
-				return err
-			}
-			if err := c.MigrationApply(schema); err != nil {
-				return err
-			}
-			cmd.Println("migrations applied for schema:", schema)
-			return nil
-		},
-	}
-	apply.Flags().String("schema", "", "Schema name (core, identity, ...)")
-	m.AddCommand(apply)
 
 	return m
 }

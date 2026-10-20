@@ -12,6 +12,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.util.List;
 import java.util.Map;
+import java.time.ZoneOffset;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -45,7 +46,7 @@ class JdbcSchemaDriftIT {
     JdbcChunkReader r = new JdbcChunkReader(
         PG.getJdbcUrl(), "u", "p", "postgres",
         "public", "t", "updated", List.of("id"),
-        JdbcChunkReader.Mode.WATERMARK, new PostgresDialect(), registry);
+        JdbcChunkReader.Mode.WATERMARK, new PostgresDialect(), registry, ZoneOffset.UTC);
 
     // ── First read: 'note' column does not exist yet ──────────────────────────
     ReadResult<Map<String, Object>> r1 = r.read(10, ConnectorCursor.empty(), null);

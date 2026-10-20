@@ -7,8 +7,10 @@ import io.lumnik.hub.manifest.ManifestKeys;
 import io.lumnik.hub.manifest.ManifestSurface;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -125,7 +127,7 @@ public class ViewManifestParser {
         if (node.size() > MAX_LINKS)
             throw new IllegalArgumentException("spec.links: at most " + MAX_LINKS + " links");
         List<ViewLink> links = new ArrayList<>();
-        Set<String> seen = new java.util.HashSet<>();
+        Set<String> seen = new HashSet<>();
         int i = 0;
         for (JsonNode l : node) {
             String path = "spec.links[" + (i++) + "]";
@@ -149,7 +151,7 @@ public class ViewManifestParser {
     }
 
     private static ViewLink internalLink(JsonNode l, String path, String column, String target, List<String> columns) {
-        String view = target.strip().toLowerCase(java.util.Locale.ROOT);
+        String view = target.strip().toLowerCase(Locale.ROOT);
         if (!VIEW_NAME.matcher(view).matches() || ViewApplyResource.RESERVED_NAMES.contains(view))
             throw new IllegalArgumentException(path + ".targetView: '" + target + "' is not a view name");
         JsonNode f = l.path("filters");

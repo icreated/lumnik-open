@@ -192,7 +192,7 @@ public class SearchIndexManifestParser {
         String raw = optionalText(f, "match", path + ".match");
         if (raw == null) return null;
         if ("phonetic".equals(raw))
-            throw new IllegalArgumentException(path + ".match: 'phonetic' is not supported yet (see #669 D7)");
+            throw new IllegalArgumentException(path + ".match: 'phonetic' is not supported yet");
         return switch (raw) {
             case "exact" -> Match.EXACT;
             case "text" -> Match.TEXT;

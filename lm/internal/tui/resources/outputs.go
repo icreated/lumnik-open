@@ -3,8 +3,8 @@ package resources
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -19,19 +19,21 @@ import (
 type Outputs struct {
 	table    *tview.Table
 	client   *client.Client
+	app      *tview.Application
+	offLoop  offLoop
+	inFlight inFlight // the guard on ^R (#1147)
 	items    []client.Output
-	mu       sync.Mutex
 	onError  func(string)
 	toast    func(string)
 	onSelect func()
 }
 
-func NewOutputs(c *client.Client, onError, toast func(string)) *Outputs {
-	t := tview.NewTable().SetBorders(false).SetSelectable(true, false)
+func NewOutputs(app *tview.Application, c *client.Client, onError, toast func(string)) *Outputs {
+	t := newListTable()
 	t.SetTitle(" :outputs ").SetBorder(true)
 	style.ApplyChrome(t.Box)
 	style.ApplyTableSelection(t)
-	o := &Outputs{table: t, client: c, onError: onError, toast: toast}
+	o := &Outputs{table: t, client: c, app: app, onError: onError, toast: toast}
 	o.setHeader()
 	t.SetInputCapture(o.handleKey)
 	t.SetSelectionChangedFunc(func(row, col int) {
@@ -54,19 +56,23 @@ func (o *Outputs) setHeader() {
 	}
 }
 
+// Refresh lists off the event loop (offLoop), like every page since #1171.
 func (o *Outputs) Refresh() {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	list, err := o.client.OutputList(200)
+	o.offLoop.run(o.app, func() func() {
+		list, err := o.client.OutputList(200)
+		return func() { o.renderList(list, err) }
+	})
+}
+
+func (o *Outputs) renderList(list []client.Output, err error) {
 	if err != nil {
-		if o.onError != nil {
-			o.onError(fmt.Sprintf("outputs: %v", err))
-		}
+		say(o.onError, fmt.Sprintf("outputs: %v", err))
 		return
 	}
-	o.items = list
-	o.render()
+	relist(o.table, &o.items, list, outputKey, o.render, o.onSelect)
 }
+
+func outputKey(it client.Output) string { return strconv.FormatInt(it.ID, 10) }
 
 func (o *Outputs) render() {
 	o.table.Clear()
@@ -126,16 +132,17 @@ func (o *Outputs) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 			}
 			return nil
 		}
-		if err := o.client.OutputReplay(it.ID); err != nil {
-			if o.onError != nil {
-				o.onError(fmt.Sprintf("replay: %v", err))
+		o.inFlight.background(o.app, "^R", o.toast, func() func() {
+			err := o.client.OutputReplay(it.ID)
+			return func() {
+				if err != nil {
+					say(o.onError, fmt.Sprintf("replay: %v", err))
+					return
+				}
+				say(o.toast, "✓ replayed — a new attempt is on record")
+				o.Refresh()
 			}
-			return nil
-		}
-		if o.toast != nil {
-			o.toast("✓ replayed — a new attempt is on record")
-		}
-		o.Refresh()
+		})
 		return nil
 	}
 	if ev.Rune() == 'r' {

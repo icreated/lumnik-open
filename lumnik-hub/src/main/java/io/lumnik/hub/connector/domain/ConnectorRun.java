@@ -59,6 +59,10 @@ public class ConnectorRun extends TenantedEntity {
   @Column(name = "records_skipped", nullable = false)
   private long recordsSkipped = 0;
 
+  /** Rows removed because the source no longer holds them (#1195): outside the conservation identity. */
+  @Column(name = "records_removed", nullable = false)
+  private long recordsRemoved = 0;
+
   @Column(name = "cell_errors", nullable = false)
   private long cellErrors = 0;
 

@@ -3,9 +3,6 @@
 Stand up the whole lumnik stack — hub + PostgreSQL (pgvector) + Keycloak (real OIDC) — on a single
 host with Docker. It runs anywhere Docker runs: a laptop, or a VM on any cloud (GCP, AWS, Azure, Scaleway).
 
-> "Deploy anywhere" needs a portable image on a VM, not per-cloud infrastructure-as-code. That's this.
-> Managed-service / Terraform paths come later, driven by a real deployment's needs.
-
 ## Prerequisites
 
 - Docker + Docker Compose v2 (`docker compose version`).
@@ -25,7 +22,7 @@ host with Docker. It runs anywhere Docker runs: a laptop, or a VM on any cloud (
   ollama pull nomic-embed-text      # embeddings (RAG indexing)
   ollama pull llama3.2              # conversational RAG chat
   ollama pull qwen2.5-coder:7b      # text-to-SQL "ask" (4.7GB — the analytic model)
-  # optional: ollama pull gemma4    # the offline faithfulness @Judge eval
+  # optional: ollama pull gemma4    # used only by an offline evaluation; skip it
   ```
 
   > **Linux host:** `host.docker.internal` resolves to the **docker bridge IP**, never to
@@ -81,9 +78,9 @@ Then point `lm` at the hub (server `http://localhost:8080`, OIDC `http://localho
 
 `up.sh` writes `.env` (gitignored, mode `600` — owner-only) with its secrets: the Postgres and Keycloak
 admin passwords, the two hub encryption keys (`LUMNIK_SECRET_MASTER_KEY`, `LUMNIK_CRYPTO_SECRET_KEY`),
-the entity-resolution fingerprint secret (`LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET`),
-and the per-install passwords for the demo realm users (`HUBADMIN_PASSWORD`, `INTEGRATOR_PASSWORD` —
-no known password ever survives an install).
+the entity-resolution fingerprint secret (`LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET`), the hub's three
+database-role passwords (`LUMNIK_APP_DB_PASSWORD`, `LUMNIK_ADMIN_DB_PASSWORD`, `LUMNIK_READONLY_DB_PASSWORD`),
+and the per-install passwords for the demo realm users (`HUBADMIN_PASSWORD`, `INTEGRATOR_PASSWORD`).
 **Back `.env` up** —
 losing `LUMNIK_SECRET_MASTER_KEY` makes secrets stored by the hub unrecoverable. To pin a specific image
 version instead of the latest `main` build, set `LUMNIK_VERSION` in `.env` (e.g. `LUMNIK_VERSION=1.0.0`
@@ -94,7 +91,7 @@ once a `hub-v*` release is tagged).
 By default the hub (`8080`) and Keycloak (`8180`) bind to `127.0.0.1` — reachable from the host only.
 For a remote host, access them over an SSH tunnel, or see "Going public" below.
 
-## Going public — the TLS façade (shipped)
+## Going public — the TLS façade
 
 To expose lumnik beyond localhost with one HTTPS origin, use the **TLS façade overlay**
 (`deploy/tls/`): a single Caddy origin fronting the hub and path-proxying Keycloak under
@@ -106,12 +103,8 @@ Runbook: [deploy/tls/README.md](../tls/README.md) — also summarized on the
 
 ## Postgres bootstrap user
 
-Fresh installs bootstrap Postgres as superuser **`lumnik`**, and `up.sh` records that
-name in `.env`. The data volume is the authority: on every run the script verifies the
-recorded name against the running database, and when `.env` is silent (older installs)
-or wrong (a regenerated `.env` over an existing volume), it asks the database which name
-the volume was initialized with — `lumnik`, or the legacy `adempiere` on pre-rename
-volumes — and corrects `.env`. No action needed either way.
+Postgres runs with the superuser **`lumnik`**, recorded in `.env`. On every run `up.sh` checks that name
+against the database volume and corrects `.env` if they differ. No action needed.
 
 ## Backup & restore
 
@@ -120,15 +113,9 @@ fresh machine: `backup.sh` / `restore.sh` here — full runbook at
 [docs/operations/backup-restore.md](../../docs/operations/backup-restore.md).
 Back up `.env` separately: it holds the master key.
 
-## Residuals
-
-The hub's internal DB-role passwords (`lumnik_app` / `admin` / `readonly`) use built-in defaults; Postgres
-is not published outside the compose network, so it is internal-only. Making those configurable is a
-tracked follow-up.
-
 ## Switching the AI off (optional)
 
-`LUMNIK_AI_ENABLED=false` in `.env`, then re-run `up.sh`: the chat, the ask and the embeddings
+`LUMNIK_AI_ENABLED=false` in `.env`, then re-run `up.sh` with the flags you installed with: the chat, the ask and the embeddings
 stop, the PWA drops its Chat tab, `lm module list` shows `rag` and `llm` as `INACTIVE`, and the
 data is kept. Exactly `true` or `false`; absent means on. What a switch back on does and does not
 restore: [Switching the AI off](../../docs/rag/models.md#switching-the-ai-off).

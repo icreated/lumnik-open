@@ -62,6 +62,14 @@ final class AskSentences {
                 + "qui ne fait volontairement pas partie du schéma ci-dessus.");
     }
 
+    /** A follow-up the previous question cannot resolve, or whose resolution was not trusted (#1096). */
+    static String followUpUnresolved(String lang) {
+        return pick(lang,
+            "I couldn't tie this question to the previous one. Ask it in full, with the value or the name it refers to.",
+            "Je n'ai pas pu rattacher cette question à la précédente. Posez-la en entier, avec la valeur ou le nom "
+                + "auquel elle renvoie.");
+    }
+
     static String couldNotTranslate(String lang) {
         return pick(lang,
             "I couldn't translate that into a safe query.",

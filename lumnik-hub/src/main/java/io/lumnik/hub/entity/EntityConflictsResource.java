@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.hub.sql.TemporalText;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.narayana.jta.QuarkusTransactionException;
 import jakarta.inject.Inject;
@@ -153,6 +154,8 @@ public class EntityConflictsResource {
       try (var st = c.createStatement()) {
         st.execute("SET LOCAL statement_timeout = " + STATEMENT_TIMEOUT_MS);
       }
+      // A ledger value of a date column is text written in the session's zone: UTC, as every read (#1325).
+      TemporalText.utcSession(c);
     });
   }
 

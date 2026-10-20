@@ -47,7 +47,7 @@ public class ResolutionCoverageStore {
                 "SELECT r.resolution_fence_at FROM connector.connector_run r"
                     + " WHERE r.tenant_id = ? AND r.resolution_fence_at IS NOT NULL" + UNCOVERED
                     + " ORDER BY r.resolution_fence_at LIMIT 1",
-                bind, rs -> rs.getTimestamp(1).toInstant())
+                bind, rs -> Jdbc.instant(rs, 1))
             .map(fence -> new UncoveredBound(false, fence))
             .orElse(UncoveredBound.NONE);
     }

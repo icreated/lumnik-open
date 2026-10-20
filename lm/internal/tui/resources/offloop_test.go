@@ -100,7 +100,7 @@ func TestLiveRefresh_redescribesAnOpenPanel(t *testing.T) {
 	}{
 		"sources":   NewSources(nil, c, nil, nil),
 		"inbox":     NewInbox(nil, c, nil, nil),
-		"processes": NewProcesses(nil, c, nil, nil),
+		"processes": NewManifests(nil, ProcessesSource(c), nil, nil),
 	}
 	for name, p := range pages {
 		described := 0
@@ -126,7 +126,7 @@ func TestLiveRefresh_aFailedListRedescribesTheOpenPanel(t *testing.T) {
 		OnSelectionChange(func())
 	}{
 		"inbox":     NewInbox(nil, c, nil, nil),
-		"processes": NewProcesses(nil, c, nil, nil),
+		"processes": NewManifests(nil, ProcessesSource(c), nil, nil),
 	}
 	for name, p := range pages {
 		described := 0

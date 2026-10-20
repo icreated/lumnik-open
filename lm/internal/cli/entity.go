@@ -14,6 +14,7 @@ import (
 
 func newEntityCmd() *cobra.Command {
 	e := &cobra.Command{Use: "entity", Short: "Manage entity manifests"}
+	e.AddCommand(newEntityListCmd())
 	e.AddCommand(newEntityApplyCmd())
 	e.AddCommand(newEntityDeleteCmd())
 	e.AddCommand(newEntityResolveCmd())
@@ -24,6 +25,29 @@ func newEntityCmd() *cobra.Command {
 	e.AddCommand(newEntityExportCmd())
 	e.AddCommand(newEntityGetCmd())
 	return e
+}
+
+// newEntityListCmd lists the entities the caller may read — the names entity get/export take (#1114).
+func newEntityListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List the entities you may read (a scope-bound user sees only its scopes)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := ClientFromCmd(cmd)
+			if err != nil {
+				return err
+			}
+			list, err := c.EntityList()
+			if err != nil {
+				return err
+			}
+			format, _ := cmd.Flags().GetString("output")
+			return output.Print(cmd.OutOrStdout(), format, []string{"NAME", "SOURCES", "SCOPES", "MODE"}, list,
+				func(e client.EntitySummary) []string {
+					return []string{e.Name, strings.Join(e.Sources, ","), strings.Join(e.Scopes, ","), e.Mode()}
+				})
+		},
+	}
 }
 
 // newEntityResolveCmd replays identity resolution over one entity's whole extent (#620) — for
@@ -195,14 +219,35 @@ func refOrHandle(v string) (ref, handle string) {
 }
 
 func newEntityDeleteCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+	cmd := &cobra.Command{
 		Use:   "delete NAME",
 		Short: "Remove an entity (drops its view, frees the connectors that fed it)",
-		Args:  cobra.ExactArgs(1),
+		Long: "Remove an entity: its view is dropped for every tenant, every search index over it goes\n" +
+			"with it, and the connectors that fed it are freed.\n\n" +
+			"lm names the search index you can see over it and asks you to type 'delete' first;\n" +
+			"--force skips the question in a script.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
 			if err != nil {
 				return err
+			}
+			if !force {
+				indexes, err := c.SearchIndexesDeclared()
+				if err != nil {
+					return err
+				}
+				what := "delete entity " + args[0] + " — its view, for every tenant"
+				for _, ix := range indexes { // a tenant holds at most one index per entity
+					if strings.EqualFold(ix.Entity, args[0]) {
+						what += ", and search index " + ix.Name
+						break
+					}
+				}
+				if err := confirmTyped(cmd, "delete", what); err != nil {
+					return err
+				}
 			}
 			if err := c.EntityDelete(args[0]); err != nil {
 				return err
@@ -211,6 +256,8 @@ func newEntityDeleteCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation")
+	return cmd
 }
 
 func newEntityApplyCmd() *cobra.Command {

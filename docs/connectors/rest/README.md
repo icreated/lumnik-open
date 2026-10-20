@@ -40,12 +40,8 @@ lm connector run acme-partners
 | `91-soap-stop-signals.yaml` | `has_more_path`, the short-page fallback, and the single-element last page |
 | `92-soap-fault.yaml` | a `<soap:Fault>` on 500 **and** on 200 — both must fail, neither is retried |
 | `93-soap-retry.yaml` | a 500 with no Fault: the same status, retried to completion |
-| `94-soap-session.yaml` | `header:` + `{{env:NAME}}` — the credential the `lm secret` registry does not serve |
+| `94-soap-session.yaml` | `header:` + `{{secret:NAME}}` — a credential inside the envelope |
 | `95-soap-watermark.yaml` | `incremental: watermark` over SOAP, and the URL-query seam it lands on |
-
-`94-soap-session.yaml` is the one manifest that needs more than a secret: its
-`{{env:ACME_SESSION_TOKEN}}` resolves from the hub's own process environment, which is what
-`demo/soap-session.override.yml` puts there.
 
 The manifests point at `http://host.docker.internal:8099`, which is how the hub's container
 reaches your machine. Reset the flaky counters between runs with

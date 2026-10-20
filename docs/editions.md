@@ -1,18 +1,18 @@
 # The two editions
 
-lumnik ships as two builds. **`lumnik-open`** (Apache-2.0, the public repository) is the
-full data substrate — ingest, fuse, react, serve the métier — and a real product, not a
-demo. **lumnik Pro** adds the *Ask* extensions (natural-language chat over your
-data) and the external-identity loop. The boundary is architectural: the open build has
-**no door and no stub** where the Ask extensions would be — nothing begs for a license key.
-One honest exception, kept on purpose: [direct Search](search/querying.md) has its doors in
-every build (declare an index, query, status), and without a provider they answer *not installed*
-instead of a silent empty result (see the [Search rows](#feature-by-feature) below).
+lumnik ships as two builds:
 
-One name per axis, and you will meet both: **lumnik Open** is the build behind the free
-**Hub** tier, and **lumnik Pro** is the build behind both paid ones. The commercial ladder
-sits [at the foot of this page](#three-tiers-two-builds); everything between here and
-there describes the builds.
+| Build | Licence | What it does |
+|---|---|---|
+| **`lumnik-open`** | Apache-2.0, public repository | ingest, fuse, react, serve the métier apps |
+| **lumnik Pro** | commercial | adds *Ask* (natural-language chat over your data), model providers and the external-identity loop |
+
+The open build has no Ask door at all: no stub, no licence key. One exception:
+[direct Search](search/querying.md) has its commands in every build, and without a provider
+they answer *not installed* (see [Feature by feature](#feature-by-feature)).
+
+**lumnik Open** is the build behind the free **Hub** tier; **lumnik Pro** is the build behind both
+paid tiers — see [Three tiers, two builds](#three-tiers-two-builds).
 
 ```mermaid
 flowchart LR
@@ -30,13 +30,13 @@ flowchart LR
   end
   subgraph closedx["closed extensions — what lumnik Pro adds"]
     direction TB
-    doors["Chat doors + semantic search<br/>(module <code>rag</code>)"]
-    llm["Model providers — Ollama, …<br/>(module <code>llm</code>)"]
+    doors["Chat + semantic search"]
+    llm["Model providers — Ollama, …"]
     searchp["Search providers — PostgreSQL ·<br/>OpenSearch (opt-in build)"]
     kafka["kafka connector"]
     jit["JIT provisioning + SCIM"]
   end
-  doors -. "CDI seam — Instance lookup" .-> askcore
+  doors -.-> askcore
   llm -. powers .-> doors
   searchp -. "indexes declared entities" .-> sdoors
   kafka -. "one more connector" .-> conn
@@ -63,50 +63,36 @@ flowchart LR
 | [SCIM deprovisioning](security/scim.md) | — | ✓ |
 | Chat [rate-limit buckets](operations/rate-limits.md) | *(no such endpoints)* | ✓ |
 
-One nuance worth knowing: the ask *pipeline* — the SQL translation and its
-[five guards](transparency/ask-honesty.md) — is native to the hub and present in **every**
-build. What the open edition lacks is the **door** onto it (both chat endpoints) and any
-model behind it. The principle ships everywhere; the extensions open the door.
+The five [ask guards](transparency/ask-honesty.md) are in every build; the open edition has no
+chat door onto them and no model behind them.
 
-**Switched off is not absent.** A Pro hub can run with the whole AI family turned off
-(`LUMNIK_AI_ENABLED=false`) without changing the build: the jars stay, the data is kept, and
-`lm module list` shows `rag` and `llm` as `INACTIVE` with the reason, where an Open hub does not list
-them at all. The PWA has no Chat tab in either case. Open and Pro are decided when the hub is built;
-what a Pro hub *offers* is yours to choose afterwards —
+**Switched off is not absent.** A Pro hub can run with the AI switched off
+(`LUMNIK_AI_ENABLED=false`): the data is kept, and `lm module list` shows `rag` and `llm` as
+`INACTIVE`. An Open hub does not list them at all. Neither shows a Chat tab. How to switch it:
 [Choosing what your hub offers](choosing-what-your-hub-offers.md).
 
 ## Which edition am I running?
 
-Ask the hub, not the marketing:
-
-```bash
-lm login
-TOKEN=$(awk '/^ *access:/ {print $2; exit}' ~/.lm/config.yaml)
-curl -s https://your-hub.example.com/api/platform/health \
-  -H "Authorization: Bearer $TOKEN" | jq .modules
+```
+$ lm module list
+NAME      VERSION  SCHEMA              STATUS    REASON
+core      0.1.0    Platform            ACTIVE    
+identity  0.1.0    Identity & Tenancy  ACTIVE    
+llm       0.1.0    Model provider      INACTIVE  disabled:lumnik.ai.enabled
+rag       0.1.0    Platform RAG        INACTIVE  disabled:lumnik.ai.enabled
 ```
 
-An open-edition build answers `core` + `identity`; a chat-carrying build adds `rag` +
-`llm`, always together ([the full answer](security/index.md#which-edition-the-full-answer)); a
-build with a Search provider adds `search_pg` or `search_opensearch`. A module you switched off
-is still listed, marked inactive. `lm module list` prints the same answer as a table, and the
-boot log lists the installed modules too.
+| What you see | Build |
+|---|---|
+| `core` + `identity` only | lumnik Open |
+| plus `rag` + `llm` (always together) | lumnik Pro — `INACTIVE` means the AI is switched off, as above |
+| plus `search_pg` or `search_opensearch` | a build with a Search provider |
 
-## How the boundary is built
-
-The hub consumes every extension through CDI `Instance<>` lookups behind SPI seams
-(`ExtractionSink`, `SearchPort`, `ChatPort`): when a module is absent the hub **degrades
-gracefully** — the PWA shows no Chat tab at all, the API answers `404`, ingestion and
-everything else runs untouched. The open edition is produced from the same monorepo by
-extraction (`-DopenEdition` excludes the pro sources), and the boundary is enforced in CI
-on every pull request (`scripts/check-bounded-contexts.sh`). No license
-flags, no crippleware: what is absent is absent, and what an operator switches off is reported as
-switched off, never passed for absent.
+The hub's boot log lists the installed modules too. More: [the full answer](security/index.md#which-edition-the-full-answer).
 
 ## Three tiers, two builds
 
-The commercial ladder has three rungs; the builds above are two. They do not map
-one-to-one, and the difference is worth holding:
+The commercial ladder has three tiers; the builds are two:
 
 | Tier | Runs the build | Who operates it |
 |---|---|---|
@@ -114,19 +100,12 @@ one-to-one, and the difference is worth holding:
 | **Pro** | lumnik Pro | your integrator, running it for a client |
 | **Enterprise** — on quote | lumnik Pro | your own IT, in your own world |
 
-**Enterprise is not a third build.** It is the same closed build as Pro, sold with what a
-client's own world needs: your identity directory ([external IdP](security/byo-idp.md) and
-[SCIM](security/scim.md) joiners and leavers), a Kubernetes delivery, and service
-commitments. The commercial terms themselves —
-organisations, métiers, SLA — are agreed with you, not encoded in the build.
+**Enterprise is the Pro build**, sold with your identity directory
+([external IdP](security/byo-idp.md), [SCIM](security/scim.md)), a Kubernetes delivery and
+service commitments. These pages mark a capability **"not in the open edition"** — the build
+you can check with [`lm module list`](#which-edition-am-i-running), not the tier.
 
-This is why the pages here mark a capability **"not in the open edition"** rather than
-naming a tier: what a running hub can prove is which *build* it is. Ask it — the gesture
-is [above](#which-edition-am-i-running). The price list is a conversation, and it cannot
-be read from `/api/platform/health`.
-
-Write to **contact@lumnik.fr** — and rehearse everything else first: the open edition is
-the same hub, so an evaluation that starts there loses nothing.
+Prices: **contact@lumnik.fr**. The open edition is the same hub, so an evaluation can start there.
 
 ## See also
 

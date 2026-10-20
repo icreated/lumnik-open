@@ -5,10 +5,12 @@
 #   lm connector run csv-local-simple
 #
 # A file that has not changed since its last run is skipped; one that has changed
-# (replaced in place, or grown) is read again in full, and the table deduplicates
-# by _row_hash — suitable for small reference files that are expected to be fully
-# replaced on each load cycle. after_process: none means the source is never moved
-# or deleted.
+# (replaced in place, or grown) is read again in full, and the table then holds
+# exactly what the file holds: rows the file no longer has are removed — a run that
+# would shrink the table by more than 30% fails instead, unless refresh.max_removed
+# says otherwise (docs/connectors/csv.md, full refresh). Suitable for reference
+# files fully replaced on each load cycle. after_process: none means the source is
+# never moved or deleted.
 
 apiVersion: connectors.lumnik.io/v1
 kind: Connector

@@ -13,16 +13,19 @@ type ViewColumn struct {
 }
 
 // ViewResult is a rendered kind:View: title, ordered columns, and rows aligned to those columns.
+// Truncated is the hub saying its row cap dropped matching rows.
 type ViewResult struct {
-	Title   string       `json:"title"`
-	Columns []ViewColumn `json:"columns"`
-	Rows    [][]string   `json:"rows"`
+	Title     string       `json:"title"`
+	Columns   []ViewColumn `json:"columns"`
+	Rows      [][]string   `json:"rows"`
+	Truncated bool         `json:"truncated"`
 }
 
 type viewWire struct {
-	Title   string                       `json:"title"`
-	Columns []ViewColumn                 `json:"columns"`
-	Rows    []map[string]json.RawMessage `json:"rows"`
+	Title     string                       `json:"title"`
+	Columns   []ViewColumn                 `json:"columns"`
+	Rows      []map[string]json.RawMessage `json:"rows"`
+	Truncated bool                         `json:"truncated"`
 }
 
 // ViewRender posts a kind:View manifest to /api/views/render and returns the rendered surface.
@@ -53,7 +56,7 @@ func (c *Client) ViewRender(yaml []byte, filters []string) (*ViewResult, error) 
 		}
 		rows = append(rows, row)
 	}
-	return &ViewResult{Title: wire.Title, Columns: wire.Columns, Rows: rows}, nil
+	return &ViewResult{Title: wire.Title, Columns: wire.Columns, Rows: rows, Truncated: wire.Truncated}, nil
 }
 
 // DetailSource is one entry of the _conflicts ledger for a column: a source's value, or — for a

@@ -65,7 +65,8 @@ public final class Urls {
     /**
      * A URL — or a bare path — stripped of everything that can carry a credential, for a message
      * or a log line:
-     * userinfo becomes {@code …@}, and the query string and fragment are dropped — an OAuth
+     * userinfo — of an absolute URL or a protocol-relative {@code //host} one — becomes {@code …@},
+     * and the query string and fragment are dropped — an OAuth
      * implicit flow returns its {@code access_token} in the fragment, which is as visible in a log
      * line as a query parameter.
      *
@@ -83,6 +84,13 @@ public final class Urls {
     public static String forDisplay(String url) {
         if (url == null) return null;
         String addressOnly = url.split("[?#]", 2)[0];
-        return addressOnly.replaceFirst("(?<=://)[^/@]*@", "…@");
+        // The authority opens after any "://" — a compound scheme (jdbc:postgresql://) or text before
+        // the URL included — or after a leading "//": a protocol-relative link has a userinfo too
+        // (#1167 review). A "//" further into a path without a scheme is not an authority. Greedy to
+        // the LAST '@' before the path: a password may hold an unescaped '@', and stopping at the
+        // first one left the rest of it on show. Where URI reads a host, its userinfo holds no '@',
+        // so this strips exactly what URI calls the userinfo.
+        return addressOnly.replaceFirst("(?<=://)[^/]*@", "…@")
+            .replaceFirst("^(\\s*//)[^/]*@", "$1…@");
     }
 }

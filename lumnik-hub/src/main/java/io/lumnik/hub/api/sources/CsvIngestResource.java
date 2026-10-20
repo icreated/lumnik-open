@@ -1,5 +1,7 @@
 package io.lumnik.hub.api.sources;
 
+import io.lumnik.hub.api.connector.ConnectorScope;
+import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.source.csv.CsvIngestService;
 import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -32,12 +34,21 @@ import java.util.Map;
 public class CsvIngestResource {
 
     @Inject CsvIngestService service;
+    @Inject AuditRecorder audit;
 
     @POST
     @Path("/ingest")
     @Consumes(MediaType.MULTIPART_FORM_DATA)
     public CsvIngestResult ingest(@BeanParam CsvIngestForm form) {
-        return service.execute(form, RequireTenant.current());
+        // The tags the one-shot will carry — its scope, "system" when none is given — must all be
+        // the caller's (#1212, the apply door's rule); a re-ingest also asks about the tags it replaces.
+        ConnectorScope.refuseUnlessHolds(CsvIngestService.connectorTags(form));
+        CsvIngestResult result = service.execute(form, RequireTenant.current());
+        // The one-shot creates (or, on a breath, rewrites) a dormant connector: a connector write (#1193).
+        audit.record("Connector", result.connectorId().toString(), "APPLY", Map.of(
+            "via", "csv-ingest", "table", result.tableName(), "tags", result.askableScopes(),
+            "refreshed", result.refreshed()));
+        return result;
     }
 
     /**

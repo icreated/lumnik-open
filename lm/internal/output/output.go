@@ -4,12 +4,36 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"text/tabwriter"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/icreated/lumnik-open/lm/internal/textsafe"
+	"github.com/icreated/lumnik-open/lm/internal/types"
 )
+
+// RowCount says "1 row", "N rows": lm endpoint purge, the TUI's Del on :endpoints and the :ask
+// headline count rows for the same human (#1183).
+func RowCount(n int) string {
+	if n == 1 {
+		return "1 row"
+	}
+	return fmt.Sprintf("%d rows", n)
+}
+
+// ConnectorDeleteTakes says what a connector delete takes, from the hub's dry run: lm connector
+// delete and the TUI's Del on :sources ask in the same words (#1218).
+func ConnectorDeleteTakes(takes types.DeleteTakes) string {
+	parts := make([]string, 0, len(takes.Tables)+2)
+	for _, t := range takes.Tables {
+		parts = append(parts, RowCount(t.Rows)+" of "+t.Table)
+	}
+	if takes.Credential != "" {
+		parts = append(parts, "credential "+takes.Credential)
+	}
+	return strings.Join(append(parts, "its run history and RAG chunks"), ", ")
+}
 
 // Print renders items in the requested format.
 //
@@ -43,9 +67,7 @@ func Print[T any](w io.Writer, format string, headers []string, rows []T, toRow 
 		}
 		return tw.Flush()
 	case "json":
-		enc := json.NewEncoder(textsafe.Unwrap(w))
-		enc.SetIndent("", "  ")
-		return enc.Encode(rows)
+		return encodeJSON(w, rows)
 	case "yaml":
 		return yaml.NewEncoder(textsafe.Unwrap(w)).Encode(rows)
 	default:
@@ -62,12 +84,19 @@ func Print[T any](w io.Writer, format string, headers []string, rows []T, toRow 
 func PrintObject(w io.Writer, format string, v any) error {
 	switch format {
 	case "json":
-		enc := json.NewEncoder(textsafe.Unwrap(w))
-		enc.SetIndent("", "  ")
-		return enc.Encode(v)
+		return encodeJSON(w, v)
 	case "yaml":
 		return yaml.NewEncoder(textsafe.Unwrap(w)).Encode(v)
 	default:
 		return fmt.Errorf("unknown output format: %s (want json|yaml)", format)
 	}
+}
+
+// encodeJSON writes v indented, byte for byte what it holds: lm's JSON goes to a terminal or a script, never into an
+// HTML page, so & < > are not escaped (a `<>` in a SQL stays `<>`).
+func encodeJSON(w io.Writer, v any) error {
+	enc := json.NewEncoder(textsafe.Unwrap(w))
+	enc.SetIndent("", "  ")
+	enc.SetEscapeHTML(false)
+	return enc.Encode(v)
 }

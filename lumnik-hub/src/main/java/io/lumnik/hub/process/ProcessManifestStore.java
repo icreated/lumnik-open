@@ -76,13 +76,14 @@ public class ProcessManifestStore {
         }, rs -> rs.getString(1));
     }
 
-    /** Removes one process for good. Existence is the caller's question, answered by findScope. */
-    public void delete(long tenantId, String name) {
+    /** Removes one process for good; true when this call removed it. Existence is the caller's
+     *  question, answered by findScope. */
+    public boolean delete(long tenantId, String name) {
         String sql = "DELETE FROM core.process_manifest WHERE tenant_id = ? AND name = ?";
-        Jdbc.update(adminDs, "ProcessManifestStore.delete", sql, ps -> {
+        return Jdbc.update(adminDs, "ProcessManifestStore.delete", sql, ps -> {
             ps.setLong(1, tenantId);
             ps.setString(2, name);
-        });
+        }) > 0;
     }
 
     /**

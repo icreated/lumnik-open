@@ -48,31 +48,34 @@ func TestMigrationStatus(t *testing.T) {
 	}
 }
 
-func TestMigrationApply(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/platform/migrations/core/apply" {
-			http.NotFound(w, r)
-			return
-		}
-		if r.Method != "POST" {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer srv.Close()
-	setupCfg(t, srv.URL)
+// A schema with no applied migration comes from the hub as "lastApplied": "" (#1149) — and an older
+// or leaner reply may leave the field out. Neither may fail the decode: the whole status is lost
+// exactly on the fresh hub where it matters most. Both render as "never": an em dash.
+func TestMigrationStatus_neverAppliedRendersADash(t *testing.T) {
+	for name, body := range map[string]string{
+		"empty":  `[{"schema":"rag","currentVersion":"","pending":3,"lastApplied":""}]`,
+		"absent": `[{"schema":"rag","currentVersion":"","pending":3}]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+			setupCfg(t, srv.URL)
 
-	cmd := NewRootCmd()
-	buf := new(bytes.Buffer)
-	cmd.SetOut(buf)
-	cmd.SetErr(buf)
-	cmd.SetArgs([]string{"migration", "apply", "--schema", "core"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatal(err)
+			out := runRoot(t, "migration", "status")
+			if !strings.Contains(out, "LAST APPLIED") || !strings.Contains(out, "rag") || !strings.Contains(out, "—") {
+				t.Errorf("want the rag row with LAST APPLIED —, got:\n%s", out)
+			}
+		})
 	}
-	output := buf.String()
-	if !strings.Contains(output, "migrations applied") || !strings.Contains(output, "core") {
-		t.Errorf("unexpected output: %s", output)
+}
+
+// The hub has no door to apply a migration — it runs them at every startup (#1142). The command
+// that POSTed to a door answering 404 is gone: `lm migration apply` is an unknown command now.
+func TestMigrationApply_isNoLongerACommand(t *testing.T) {
+	_, err := execArgs(t, "migration", "apply")
+	if err == nil || !strings.Contains(err.Error(), `unknown command "apply"`) {
+		t.Errorf("lm migration apply: want unknown command, got %v", err)
 	}
 }

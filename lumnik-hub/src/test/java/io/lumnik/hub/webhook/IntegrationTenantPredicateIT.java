@@ -42,7 +42,7 @@ class IntegrationTenantPredicateIT {
     private long createAsOwner() {
         return ((Number) given().headers(TestIdentity.tenantAndUser(OWNER)).contentType("application/json")
             .body("{\"name\":\"predicate-it-" + System.nanoTime() + "\","
-                + "\"targetUrl\":\"http://localhost:9/w\",\"eventTypes\":[\"org.created\"]}")
+                + "\"targetUrl\":\"http://localhost:9/w\",\"secret\":\"s\",\"eventTypes\":[\"org.created\"]}")
             .post("/api/tenants/" + OWNER + "/integrations")
             .then().statusCode(201).extract().path("id")).longValue();
     }

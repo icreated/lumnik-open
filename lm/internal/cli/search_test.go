@@ -86,6 +86,89 @@ func TestSearchStatus_noArgRendersTheListTable(t *testing.T) {
 	}
 }
 
+// invalidIndexJSON is searchIndexJSON for a built index whose declaration an entity re-apply turned invalid.
+func invalidIndexJSON(name string) string {
+	return strings.Replace(searchIndexJSON(name, "ready", 0, "null", lastRebuildJSON(searchRunID, "ready")),
+		`"invalid":false,"invalidReason":null`, `"invalid":true,"invalidReason":"spec.fields[2].name: 'city' is gone"`, 1)
+}
+
+// lineFields is the whitespace-split line of out that starts with first, or nil.
+func lineFields(out, first string) []string {
+	for _, line := range strings.Split(out, "\n") {
+		if f := strings.Fields(line); len(f) > 0 && f[0] == first {
+			return f
+		}
+	}
+	return nil
+}
+
+func TestSearchStatus_anInvalidIndexReadsInvalidInTheListAndKeepsItsBuildState(t *testing.T) {
+	srv := (&searchHub{list: "[" + invalidIndexJSON("customers") + "]"}).serve(t)
+
+	out, _, err := runLm(t, srv, "search", "status")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	row := lineFields(out, "customers")
+	if want := []string{"customers", "invalid", "0", "100", "ready"}; strings.Join(row, " ") != strings.Join(want, " ") {
+		t.Errorf("row = %v, want %v:\n%s", row, want, out)
+	}
+}
+
+func TestSearchStatus_anInvalidIndexReadsInvalidInTheDetail(t *testing.T) {
+	srv := (&searchHub{status: func(int) string { return invalidIndexJSON("customers") }}).serve(t)
+
+	out, _, err := runLm(t, srv, "search", "status", "customers")
+	if err != nil {
+		t.Fatalf("status customers: %v", err)
+	}
+	if got := lineFields(out, "Status"); len(got) != 2 || got[1] != "invalid" {
+		t.Errorf("Status line = %v, want [Status invalid]:\n%s", got, out)
+	}
+	for _, want := range []string{"Last rebuild", "(ready)", "'city' is gone"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("detail lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// withheldIndexJSON is searchIndexJSON for a built index a re-apply narrowed: its build serves a field the
+// declaration no longer holds, so it answers nothing until rebuilt (#1219).
+func withheldIndexJSON(name string) string {
+	return strings.Replace(searchIndexJSON(name, "ready", 0, "null", lastRebuildJSON(searchRunID, "ready")),
+		`"invalid":false,"invalidReason":null`, `"invalid":false,"invalidReason":null,"withheld":true`, 1)
+}
+
+func TestSearchStatus_aWithheldIndexReadsWithheldInTheList(t *testing.T) {
+	srv := (&searchHub{list: "[" + withheldIndexJSON("customers") + "]"}).serve(t)
+
+	out, _, err := runLm(t, srv, "search", "status")
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	row := lineFields(out, "customers")
+	if want := []string{"customers", "withheld", "0", "100", "ready"}; strings.Join(row, " ") != strings.Join(want, " ") {
+		t.Errorf("row = %v, want %v:\n%s", row, want, out)
+	}
+}
+
+func TestSearchStatus_aWithheldIndexSaysHowItServesAgain(t *testing.T) {
+	srv := (&searchHub{status: func(int) string { return withheldIndexJSON("customers") }}).serve(t)
+
+	out, _, err := runLm(t, srv, "search", "status", "customers")
+	if err != nil {
+		t.Fatalf("status customers: %v", err)
+	}
+	if got := lineFields(out, "Status"); len(got) != 2 || got[1] != "withheld" {
+		t.Errorf("Status line = %v, want [Status withheld]:\n%s", got, out)
+	}
+	for _, want := range []string{"Withheld", "until rebuilt", "lm search rebuild customers --wait"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("detail lacks %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestSearchStatus_withNameRendersDetail(t *testing.T) {
 	h := &searchHub{status: func(int) string {
 		return searchIndexJSON("customers", "building", 5, activeRunJSON(searchRunID, "counting"), "null")

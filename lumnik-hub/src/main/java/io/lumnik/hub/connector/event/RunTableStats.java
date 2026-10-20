@@ -16,6 +16,7 @@ public class RunTableStats {
     }
 
     private final Map<UUID, Map<String, Counts>> byRun = new ConcurrentHashMap<>();
+    private final Map<UUID, LongAdder> removedByRun = new ConcurrentHashMap<>();
 
     public void recordCounts(UUID runId, String table, int written, int skipped) {
         if (runId == null) return; // internal/test write paths without a run
@@ -25,9 +26,23 @@ public class RunTableStats {
         c.skipped().add(skipped);
     }
 
+    /** Rows a writer removed while writing (#1196: a jdbc table's move to one row per key). */
+    public void recordRemoved(UUID runId, long rows) {
+        if (runId == null || rows == 0) return;
+        removedByRun.computeIfAbsent(runId, r -> new LongAdder()).add(rows);
+    }
+
+    /** The rows removed since the last call, for the run's counter; 0 when none. */
+    public long takeRemoved(UUID runId) {
+        if (runId == null) return 0;
+        LongAdder removed = removedByRun.remove(runId);
+        return removed == null ? 0 : removed.sum();
+    }
+
     /** Drain-and-clear; idempotent and null-safe (the engine's catch-all may drain on any path). */
     public Map<String, Map<String, Long>> drain(UUID runId) {
         if (runId == null) return Map.of(); // ConcurrentHashMap forbids null keys; mirror recordCounts()
+        removedByRun.remove(runId);
         Map<String, Counts> m = byRun.remove(runId);
         if (m == null) return Map.of();
         Map<String, Map<String, Long>> out = new HashMap<>();

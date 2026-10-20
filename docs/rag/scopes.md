@@ -19,16 +19,14 @@ metadata:
   scopes: [clients]     # ← this IS the scope
 ```
 
-Every table and chunk the connector ingests carries its scopes; the set of scopes in a tenant
-is simply the union across its connectors — and its fused entities, which declare `scopes` the
-same way ([Entities](../entities.md)). `metadata.scopes` is the only place: an older manifest
-that still says `metadata.tags` or `target.tags` is refused at validate, with the line to
-paste. A connector that declares none is valid but not askable in any métier — validate warns.
-
-A scope **name** is lowercase, starts with a letter, then letters, digits, `_` or `-`, at most
-41 characters — the same rule on every door that writes one (connector apply, entity apply,
-`lm connector scope set`), because the name becomes the case-sensitive Keycloak role
-`scope:<name>` and the `--scope` a person types.
+- Every table and chunk the connector ingests carries its scopes. A tenant's scopes are those of
+  its connectors and its [fused entities](../entities.md).
+- `metadata.scopes` is the only place: `metadata.tags` or `target.tags` is refused at validate,
+  with the line to paste instead.
+- A connector that declares none is valid but not askable in any métier; validate warns.
+- A scope **name** is lowercase, starts with a letter, then letters, digits, `_` or `-`, at most
+  41 characters — the same rule on every door that writes one. It becomes the case-sensitive Keycloak
+  role `scope:<name>`.
 
 ## Using scopes
 
@@ -51,19 +49,24 @@ $ lm ask "how many customers are in Lyon?"
 There are 3 customers in Lyon.
   data as of: 2026-09-05T03:40:51.916305Z (last completed run)
 
+…
+  1 row returned
+
   SQL: SELECT COUNT(*)
 FROM connector.t_customers
 WHERE city = 'Lyon'
 LIMIT 500
 ```
 
-`lm scopes` counts what the RAG corpus holds per scope, so a scope appears only once a connector
-has **indexed** content into it: a scope whose connectors are declared but have not run yet — or
-ran and indexed nothing — is not listed. That is deliberate: `lm scopes` answers "what can I ask?",
-not "what is declared". To see a connector's declared scopes before its first run, use
-`lm connector scope ls <connector>`; `lm source schema --scope <tag>` is the view of what is askable.
-The default is a preference, not a grant: a scope-bound user whose default names a scope they
-do not hold is refused exactly as `--scope` would be (`403 scope not granted`).
+- `lm scopes` lists a scope only once a connector has **indexed** content into it: a connector that
+  has not run yet does not show.
+- `lm connector scope ls <connector>` shows a connector's declared scopes, run or not;
+  `lm source schema --scope <tag>` shows what is askable.
+- Moving a connector to another scope moves its tables between the two scopes' schema cards at once
+  ([capture](../quickstart/installer.md#what-makes-a-scope-answerable)). Its indexed chat chunks keep
+  their old scopes until `lm connector scope sync`.
+- The default is a preference, not a grant: a scope-bound user whose default names a scope they do
+  not hold gets `403 scope not granted`.
 
 In the TUI the header shows the session scope — seeded from your default ([TUI](../cli/tui.md)).
 
@@ -95,22 +98,96 @@ A grant is a Keycloak realm role named `scope:<name>` — nothing else to create
 The boundary covers the **whole read surface**, not just the chat: `kind:View`
 render/detail/generate, saved-view discovery (`GET /api/views`), and the fused-entity REST
 read all answer the same uniform `403 {"error":"scope not granted"}` outside the granted
-set.
+set. The decision inbox (`lm inbox`, the PWA's *Décisions* tab) lists only the decisions of the
+granted métiers, and another métier's decision id is a plain `404`. The workflow tape
+(`lm observations list`, `stats`) shows only the workflows of the granted métiers.
 
-**Writing is stricter than reading.** A bound user may *see* a resource holding any one of
-its scopes, but may *publish* one — `lm apply` of a connector, an entity apply — only while
-holding **every** scope it declares; a scopeless manifest is refused too, since its author
-could never see it. Same `403`, same body. End users reach the chat through their own door, `POST /api/rag/chat` (`lm_user`) —
-`/api/platform/rag/chat` stays the integrator surface.
+**Writing is stricter than reading.** A bound user may *see* a resource holding any one of its
+scopes, but may *publish* one (`lm apply`, `lm entity apply`) only while holding **every** scope it
+declares. A scopeless manifest is refused too. Here the caller holds `scope:sales` and the manifest
+declares `scopes: [desk]`:
 
-**Checking *someone else's* grants:** lumnik cannot show you this. The grant is a Keycloak
-realm role, read straight off each request's own JWT into a thread-local
-(`CurrentRolesHolder`, populated by the hub's auth filter) — nothing is persisted or queryable
-on lumnik's side. `GET /api/bff/v1/me` answers for **you**: your tenant, your roles — including your
-`scope:<name>` grants — and the modules you can reach. It has no equivalent for anyone else, and
-no `lm` command or admin endpoint looks up another user's roles. So you can check your own in
-one call; for hers, open Keycloak's own admin console — realm → **Users** → the user →
-**Role mapping** — that is where `scope:<name>` grants actually live.
+```
+$ lm apply -f docs/apps/demo/sources/10-erp.yaml
+Error: access refused (403): scope not granted
+```
+
+**Administering a connector follows the writing rule.** Every connector command (`get`, `apply`,
+`run`, `pause`, `resume`, `delete`, `scope`, and the endpoint commands) acts only on a connector
+whose scopes the bound integrator holds **all** of. `lm connector list` shows only those, so a
+connector of another métier, a connector spanning a métier you do not hold, or a scopeless one
+is simply not found. Moving a connector you hold into a scope you don't hold is refused:
+
+```
+$ lm connector list
+NAME           TYPE         TENANT  SCHED  WINDOW  STATUS  LAST RUN
+orders-ventes  hello-world  1
+$ lm connector pause stock-magasin
+Error: connector "stock-magasin" not found
+$ lm connector scope add orders-ventes magasin
+Error: access refused (403): scope not granted
+$ lm connector scope ls orders-ventes
+ventes
+```
+
+The same hub, listed by an integrator with no `scope:*` role, shows `stock-magasin` too:
+unbound integrators keep administering the whole tenant.
+
+**What a connector left behind follows the same rule.** A run carries counts, table names and
+the error message, and a dead letter carries the rejected row's values. A bound integrator's
+`lm run list` and `lm dlq list` show only the connectors whose scopes they hold all of.
+`lm run get`/`cancel`, `lm dlq get`/`discard`/`replayed`, and `--connector`/`--run` filters
+naming another métier's connector answer `403`.
+
+The `lm source` doors create or reuse connectors, so they follow the writing rule:
+
+- `lm csv ingest` refuses a `--scope` you do not hold. Without `--scope` the one-shot lands in
+  `system`, which you need to hold too.
+- Re-ingesting under the name of another métier's one-shot is refused rather than moving it
+  into yours.
+- `lm source jdbc add` creates its connectors without scopes, so a bound integrator is refused
+  before the source database is contacted. Declare the connector in a manifest with `scopes:`
+  and `lm apply` it instead.
+- `lm source jdbc list-tables` lists only the connectors you hold.
+- `lm source rest probe` answers only for a connector you hold.
+- `lm source rest from-openapi` writes nothing to the hub. It drafts a manifest, and
+  `lm apply` then judges its `scopes:`.
+
+The capture below shows the same hub as above with two csv connectors, `commandes-ventes`
+(`scopes: [ventes]`) and `stock-magasin` (`scopes: [magasin]`), each run once with one malformed
+row. The caller is an integrator holding `scope:ventes`:
+
+```
+$ lm run list
+ID        CONNECTOR         ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+0893cee7  commandes-ventes  default   Completed  2   1    1        1             2026-10-18 15:37  2026-10-18 15:37
+$ lm dlq list
+ID        CONNECTOR         RUN       REASON           ATTEMPTS  MESSAGE
+f8b2118f  commandes-ventes  0893cee7  MalformedSource  1         data/commandes.csv:3 — Record has 3 values but only 2 column…
+$ lm dlq get 95b20b87-d992-43e2-b08b-f50806a4d131
+Error: access refused (403): scope not granted
+$ lm dlq discard 95b20b87-d992-43e2-b08b-f50806a4d131
+Error: access refused (403): scope not granted
+$ lm run get b93a9839-862e-49ea-a397-f13a46751c57
+Error: access refused (403): scope not granted
+$ lm csv ingest inventaire.csv --name inventaire --scope ventes
+Error: access refused (403): scope not granted
+$ lm csv ingest inventaire.csv --name inventaire-bis --scope magasin
+Error: access refused (403): scope not granted
+$ echo "$PGPASSWORD" | lm source jdbc add erp --url jdbc:postgresql://erp-db:5432/erp --user lumnik_reader --tables orders --password-stdin
+Error: access refused (403): scope not granted
+```
+
+The two ids refused above are `stock-magasin`'s dead letter and run, which an unbound
+integrator sees in the same lists. `inventaire` is a `magasin` one-shot. Re-ingesting it under
+`--scope ventes` would have moved it into `ventes`, and its rows with it.
+
+**Checking grants.** lumnik does not store them: a grant is a Keycloak realm role, read from each
+request's token.
+
+- Your own: no `lm` command shows them; `GET /api/bff/v1/me` returns your tenant, roles (with your
+  `scope:<name>` grants) and modules.
+- Someone else's: Keycloak's admin console — realm → **Users** → the user → **Role mapping**.
 
 The same table can live in several métiers: declare `scopes: [achat, compta]` on the connector
 and a `scope:achat` user sees it while a `scope:stock` user does not:

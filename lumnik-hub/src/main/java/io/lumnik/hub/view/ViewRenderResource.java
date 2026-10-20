@@ -7,6 +7,7 @@ import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.ask.ScopeFreshness;
+import io.lumnik.hub.sql.TemporalText;
 import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
@@ -61,12 +62,7 @@ public class ViewRenderResource {
                            @QueryParam("cursor") String cursor, String body) {
         long tenant = RequireTenant.current();
 
-        ViewManifest manifest;
-        try {
-            manifest = parser.parse(body);
-        } catch (IllegalArgumentException e) {
-            return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
-        }
+        ViewManifest manifest = ApiErrors.orBadRequest(() -> parser.parse(body));
 
         if (!ScopeGrants.allows(manifest.scope())) {
             return ApiErrors.scopeNotGranted();
@@ -78,47 +74,50 @@ public class ViewRenderResource {
                 "no schema for scope '" + manifest.scope() + "' — run discovery first")).build();
         }
 
-        ResolvedView rv;
-        List<ViewFilter> viewFilters;
-        try {
-            rv = resolver.resolve(manifest, card.get());
+        ResolvedView rv = ApiErrors.orBadRequest(() -> resolver.resolve(manifest, card.get()));
+        List<ViewFilter> viewFilters = ApiErrors.orBadRequest(() -> {
             SchemaCard.Table table = card.get().tables().stream()
                     .filter(t -> t.name().equals(rv.table())).findFirst()
                     .orElseThrow(() -> new IllegalArgumentException(
                         "resolved table '" + rv.table() + "' is not in the scope's schema"));
-            viewFilters = ViewFilter.resolveAll(filters, rv, table);
-        } catch (IllegalArgumentException e) {
-            return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
-        }
+            return ViewFilter.resolveAll(filters, rv, table);
+        });
 
         String dataAsOf = freshness.lastCompletedRun(tenant, manifest.scope())
             .map(Instant::toString).orElse(null);
         boolean paged = pageSize != null || (cursor != null && !cursor.isBlank());
         if (!paged) {
-            ViewDataReader.ReadResult read;
-            try {
-                read = reader.read(tenant, rv, viewFilters);
-            } catch (IllegalArgumentException e) {
-                return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
-            }
-            return Response.ok(new RenderResponse(rv.title(), rv.columns(), read.rows(), read.truncated(),
+            ViewDataReader.ReadResult read = ApiErrors.orBadRequest(() -> reader.read(tenant, rv, viewFilters));
+            return Response.ok(new RenderResponse(rv.title(), rv.columns(), wired(read.rows()), read.truncated(),
                 dataAsOf, read.truncated(), null, manifest.links())).build();
         }
 
-        ViewDataReader.PageResult page;
-        String next = null;
-        try {
-            int size = ViewPageContract.resolvePageSize(pageSize);
-            boolean hasId = ViewPageContract.relationHasId(rv.table());
-            String binding = ViewPageContract.binding(tenant, manifest.scope(), manifest.name(), rv,
-                ViewPageContract.orderKey(rv, hasId), viewFilters, size);
-            ViewCursor.Boundary after = cursor == null || cursor.isBlank() ? null : cursors.open(binding, cursor);
-            page = reader.readPage(tenant, rv, viewFilters, hasId, new ViewDataReader.Page(size, after));
-            if (page.next() != null) next = cursors.seal(binding, page.next());
-        } catch (IllegalArgumentException e) {
-            return Response.status(400).entity(ApiErrors.error(e.getMessage())).build();
-        }
-        return Response.ok(new RenderResponse(rv.title(), rv.columns(), page.rows(), page.hasMore(),
-            dataAsOf, page.hasMore(), next, manifest.links())).build();
+        SealedPage sealed = ApiErrors.orBadRequest(() -> readPage(tenant, manifest, rv, viewFilters, pageSize, cursor));
+        ViewDataReader.PageResult page = sealed.page();
+        return Response.ok(new RenderResponse(rv.title(), rv.columns(), wired(page.rows()), page.hasMore(),
+            dataAsOf, page.hasMore(), sealed.next(), manifest.links())).build();
+    }
+
+    /**
+     * The rows as JSON writes them: a timestamp as its UTC instant (#1314). The reader keeps the
+     * JDBC types; text is the wire's business.
+     */
+    private static List<Map<String, Object>> wired(List<Map<String, Object>> rows) {
+        rows.forEach(r -> r.replaceAll((column, v) -> TemporalText.wire(v)));
+        return rows;
+    }
+
+    /** One page and the sealed cursor to the next one, null on the last page. */
+    private record SealedPage(ViewDataReader.PageResult page, String next) {}
+
+    private SealedPage readPage(long tenant, ViewManifest manifest, ResolvedView rv, List<ViewFilter> viewFilters,
+                                Integer pageSize, String cursor) {
+        int size = ViewPageContract.resolvePageSize(pageSize);
+        boolean hasId = ViewPageContract.relationHasId(rv.table());
+        String binding = ViewPageContract.binding(tenant, manifest.scope(), manifest.name(), rv,
+            ViewPageContract.orderKey(rv, hasId), viewFilters, size);
+        ViewCursor.Boundary after = cursor == null || cursor.isBlank() ? null : cursors.open(binding, cursor);
+        ViewDataReader.PageResult page = reader.readPage(tenant, rv, viewFilters, hasId, new ViewDataReader.Page(size, after));
+        return new SealedPage(page, page.next() == null ? null : cursors.seal(binding, page.next()));
     }
 }

@@ -5,6 +5,7 @@ import com.cronutils.model.definition.CronDefinitionBuilder;
 import com.cronutils.model.time.ExecutionTime;
 import com.cronutils.parser.CronParser;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.connector.api.types.RunTrigger;
 import io.lumnik.hub.connector.domain.ConnectorRunStatus;
 import io.quarkus.agroal.DataSource;
@@ -131,13 +132,12 @@ public class ConnectorScheduler {
          Statement st = conn.createStatement();
          ResultSet rs = st.executeQuery(SELECT_DUE)) {
       while (rs.next()) {
-        Timestamp last = rs.getTimestamp("last_started");
         result.add(new DueConnector(
             UUID.fromString(rs.getString("id")),
             rs.getString("schedule"),
             rs.getString("run_window"),
-            rs.getTimestamp("created_at").toInstant(),
-            last != null ? last.toInstant() : null));
+            Jdbc.instant(rs, "created_at"),
+            Jdbc.instant(rs, "last_started")));
       }
     } catch (Exception e) {
       throw new RuntimeException("ConnectorScheduler: listDueConnectors failed", e);

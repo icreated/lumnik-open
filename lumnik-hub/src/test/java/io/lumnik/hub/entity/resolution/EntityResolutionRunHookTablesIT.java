@@ -12,6 +12,7 @@ import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.repository.ConnectorRunRepository;
 import io.lumnik.hub.connector.runtime.ConnectorEngine;
 import io.lumnik.hub.connector.runtime.SchemaRefreshSpy;
+import io.lumnik.hub.testsupport.SharedTableFixture;
 import io.lumnik.hub.entity.EntityManifestParser;
 import io.lumnik.hub.entity.EntityRegistry;
 import io.lumnik.hub.event.consumer.SchedulerPausedProfile;
@@ -106,13 +107,15 @@ class EntityResolutionRunHookTablesIT {
     UUID a = csvConnector("res904-a-" + n, shared, "row_id,label\n1,alpha-" + n + "\n2,beta-" + n + "\n");
     UUID b = csvConnector("res904-b-" + n, shared, "row_id,label\n3,gamma-" + n + "\n4,delta-" + n + "\n");
     assertThat(engine.runSync(a, new RunTrigger.Manual(1L))).isInstanceOf(RunStatus.Completed.class);
+    // a sharing that predates #1199's refusal: b is registered for the table before its run
+    Jdbc.update(adminDs, "shareTable", SharedTableFixture.registerAsWriter(b, "t_" + shared), ps -> {});
     assertThat(engine.runSync(b, new RunTrigger.Manual(1L))).isInstanceOf(RunStatus.Completed.class);
     UUID runA = newestRun(a);
     UUID runB = newestRun(b);
 
     assertThat(registryOwners("t_" + shared))
-        .as("the registry names ONE owner for the shared table — asking it would skip the other connector")
-        .containsExactly(a);
+        .as("each writer of the shared table registers it (#1186)")
+        .containsExactlyInAnyOrder(a, b);
 
     String entityType = entity.toLowerCase(Locale.ROOT);
     await().atMost(Duration.ofSeconds(30)).untilAsserted(() -> {

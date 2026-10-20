@@ -68,6 +68,41 @@ class SearchProjectionLookupMarksIT {
         return Arrays.stream(pids).map(p -> MatchKeyEncoding.encode(List.of(p))).sorted().toList();
     }
 
+    /**
+     * #1329: a calendar keyed by day, joined from a key one source holds as a time and another as a day. The reverse
+     * scan of each source must compare as the view does — at the UTC day — or the time source's record is never marked
+     * when its day's calendar row changes (its text {@code 2026-07-01 14:30:00+00} never equals {@code 2026-07-01}).
+     */
+    @Test
+    void a_day_keyed_lookup_marks_the_records_of_that_day_whichever_source_holds_it() throws Exception {
+        long tenant = 1_329_001L;
+        String n = String.valueOf(System.nanoTime());
+        String timed = "t_lm_dt_" + n, days = "t_lm_dd_" + n, cal = "t_lm_cal_" + n;
+        createTable(adminDs, timed, "pid text, due timestamptz");
+        createTable(adminDs, days, "pid text, day date");
+        createTable(adminDs, cal, "day date, label text");
+        String entity = "LkDay" + n;
+        yaml(tenant).body("kind: Entity\nname: " + entity + "\nmatch: [pid]\nscopes: [lk]\nsources:\n"
+                + "  - table: " + timed + "\n    map: { pid: pid, due: due }\n"
+                + "  - table: " + days + "\n    map: { pid: pid, day: due }\n"
+                + "joins:\n  - table: " + cal + "\n    from: due\n    to: day\n    map: { label: day_label }\n")
+            .post("/api/entities/apply").then().statusCode(200);
+        String index = unique("lk-day");
+        yaml(tenant).body(searchIndex(index, entity, "pid")).post("/api/search-indexes/apply").then().statusCode(200);
+        exec(adminDs, "INSERT INTO connector." + timed + " (tenant_id, pid, due) VALUES (" + tenant
+            + ", 'P1', '2026-07-01 14:30+00'), (" + tenant + ", 'P2', '2026-07-02 09:00+00')");
+        exec(adminDs, "INSERT INTO connector." + days + " (tenant_id, pid, day) VALUES (" + tenant + ", 'P3', '2026-07-01')");
+        fireRun(hook, tenant);
+        exec(adminDs, "UPDATE connector." + timed + " SET _ingested_at = now() - interval '1 hour'");
+        exec(adminDs, "UPDATE connector." + days + " SET _ingested_at = now() - interval '1 hour'");
+        exec(adminDs, "DELETE FROM core.search_projection_mark WHERE tenant_id = " + tenant);
+
+        exec(adminDs, "INSERT INTO connector." + cal + " (tenant_id, day, label) VALUES (" + tenant + ", '2026-07-01', 'Day A')");
+        fireRun(hook, tenant);
+
+        assertThat(markedKeys(adminDs, tenant, index, REASON)).containsExactlyElementsOf(keys("P1", "P3"));
+    }
+
     @Test
     void the_first_lookup_row_for_an_absent_key_marks_the_products_holding_it() throws Exception {
         Fx f = fixture(847_111);

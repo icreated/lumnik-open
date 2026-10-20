@@ -31,17 +31,13 @@ class SchemaCardAdminResourceIT {
     @BeforeEach
     void seed() {
         long tenant = 8300L;
-        UUID mappingId = UUID.fromString("00000000-0000-0000-0000-0000000083aa");
         exec("DELETE FROM connector.connector WHERE tenant_id = " + tenant);
-        exec("DELETE FROM connector.connector_mapping WHERE tenant_id = " + tenant);
         exec("DELETE FROM connector.dynamic_table WHERE tenant_id = " + tenant);
         exec("DELETE FROM connector.schema_card WHERE tenant_id = " + tenant);
-        exec("INSERT INTO connector.connector_mapping (id, tenant_id, name, target_entity, spec_format, spec_content) "
-           + "VALUES ('" + mappingId + "', " + tenant + ", 'm_order', 'public.c_order', 'yaml', 'x')");
         UUID connId = UUID.fromString("00000000-0000-0000-0000-0000000083bb");
-        exec("INSERT INTO connector.connector (id, tenant_id, name, type_id, config, mapping_id, enabled, tags, "
+        exec("INSERT INTO connector.connector (id, tenant_id, name, type_id, config, enabled, tags, "
            + "sync_mode, skip_policy) VALUES ('" + connId + "', " + tenant
-           + ", 'src--c_order', 'csv-file', '{}'::jsonb, '" + mappingId + "', true, ARRAY['atelierC'], "
+           + ", 'src--c_order', 'csv-file', '{}'::jsonb, true, ARRAY['atelierC'], "
            + "'Incremental', '{\"type\":\"SkipUpTo\",\"maxSkips\":100}'::jsonb)");
         exec("INSERT INTO connector.dynamic_table (id, tenant_id, mapping_id, table_schema, table_name, schema_inferred, connector_id) "
            + "VALUES (gen_random_uuid(), " + tenant + ", 'jdbc:c_order', 'connector', 't_c_order', "

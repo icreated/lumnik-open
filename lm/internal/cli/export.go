@@ -123,9 +123,9 @@ type waitFlags struct {
 	interval time.Duration
 }
 
-func (w *waitFlags) register(cmd *cobra.Command) {
-	cmd.Flags().BoolVar(&w.wait, "wait", false,
-		"wait until the hub records the run Completed or Failed (exit 1 if it failed)")
+// register declares --wait/--timeout/--interval; ends is what --wait waits for, in the caller's words.
+func (w *waitFlags) register(cmd *cobra.Command, ends string) {
+	cmd.Flags().BoolVar(&w.wait, "wait", false, "wait until "+ends)
 	cmd.Flags().DurationVar(&w.timeout, "timeout", 30*time.Minute,
 		"with --wait: stop waiting after this long, 0 = no limit (the run itself continues on the hub)")
 	cmd.Flags().DurationVar(&w.interval, "interval", 2*time.Second, "with --wait: how often to poll the ledger")
@@ -160,7 +160,7 @@ func newExportRunCmd() *cobra.Command {
 			})
 		},
 	}
-	w.register(cmd)
+	w.register(cmd, "the hub records the run Completed or Failed (exit 1 if it failed)")
 	return cmd
 }
 
@@ -181,7 +181,7 @@ func newExportRetryCmd() *cobra.Command {
 			})
 		},
 	}
-	w.register(cmd)
+	w.register(cmd, "the hub records the run Completed or Failed (exit 1 if it failed)")
 	return cmd
 }
 

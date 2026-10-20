@@ -31,21 +31,20 @@ lm secret set ACME_API_KEY        # demo-key
 
 ```
 $ lm apply -f docs/connectors/rest/demo/70-graphql-relay.yaml
-{"name":"acme-graphql","connectorId":"3d47bfdd-ce56-463b-9669-f528eb9c56af","endpointsApplied":1}
+{"name":"acme-graphql","connectorId":"35e9c66a-ec11-4ea5-a9f8-12cca9829c69","endpointsApplied":1}
 $ lm source rest test acme-graphql
 ENDPOINT  METHOD  STATUS  ITEMS  VERDICT
 partners  POST    200     500    ok
 ```
 
-`METHOD` reads `POST`: the pre-flight composes the request the run composes, so a graphql
-endpoint is knocked on the way a run knocks — one page, 500 nodes, nothing written.
+The pre-flight sends the request a run sends (`POST`): one page, 500 nodes, nothing written.
 
 ```
 $ lm connector run acme-graphql
-run scheduled: dc16e1a2-594c-4609-8116-08d43d1b63ff
+run scheduled: f26868f0-641e-471a-8719-e6c4c2957fee
 $ lm run list --connector acme-graphql
 ID        CONNECTOR     ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
-dc16e1a2  acme-graphql  partners  Completed  2400  2400  0        0             2026-09-10 09:57  2026-09-10 09:57
+f26868f0  acme-graphql  partners  Completed  2400  2400  0        0             2026-10-19 01:45  2026-10-19 01:45
 ```
 
 ## The manifest
@@ -64,12 +63,8 @@ dc16e1a2  acme-graphql  partners  Completed  2400  2400  0        0             
 
 `path` and `method` are implicit — the request is always a POST to `graphql_path`.
 
-In the query document the variable carries its GraphQL sigil (`$after`); `cursor_var: after`
-names that same variable without it. That is where the engine writes `endCursor` for the next
-page.
-
-There is no page-size field: page size lives in the query itself (`first: 500` above), unlike
-SOAP's explicit `page_size`.
+- In the query the variable carries its sigil (`$after`); `cursor_var: after` names it without.
+- There is no page-size field: page size is in the query itself (`first: 500` above).
 
 ## How it works
 
@@ -78,18 +73,13 @@ SOAP's explicit `page_size`.
   `variables.<cursor_var>` for the next request — the Relay Connections convention.
 - `response_path: ...edges[*].node` extracts the node list (a JSONPath projection), so the rows
   that land are the nodes, without the `edges` wrapper.
-- A relay cursor is **opaque**: read it out of `pageInfo` and hand it back untouched. It is not
-  a row id, and a manifest that tries to build one from the data pages wrongly the day the
-  server changes its encoding.
-
-Note the asymmetry with the `cursor` strategy, which unwraps a one-element list from
-`$.data[-1:].id`: `relay` does not — `cursor_path` must resolve to a scalar directly.
+- A relay cursor is **opaque**: point `cursor_path` at `pageInfo.endCursor`; it must resolve
+  to a scalar.
 
 ## The hard rule, and its two refusals
 
 A graphql endpoint must declare `kind: relay` with `cursor_binding: variable`, and that binding
-is valid nowhere else. The reason is mechanical: the binding writes the cursor into the POST
-body's `variables.<cursor_var>`, and a plain GET has no body to write it into.
+is valid nowhere else:
 
 ```
 $ lm apply -f bad-gql.yaml
@@ -108,12 +98,8 @@ see [Cursor binding](rest/pagination.md#cursor-binding).
 
 ## The two ways a GraphQL server says no on HTTP 200
 
-GraphQL does not report a failed query with a status code. A server that cannot resolve a field
-answers `200` with an `errors` array; one whose resolver returned nothing answers `200` with
-`"data": null`. Read as transport, both are successes — which is how a run reading them as data
-would complete having ingested nothing.
-
-Both are refused. `lm source rest test` refuses them before any run is started:
+A GraphQL server may answer `200` with an `errors` array, or with `"data": null`. Both are
+refused — by `lm source rest test` before any run:
 
 ```
 $ lm source rest test acme-graphql-errors
@@ -123,7 +109,7 @@ null-data     POST    200     0      GraphQL response has no errors and null/abs
 Error: 2 of 2 enabled endpoint(s) did not answer with readable data
 ```
 
-and a run that meets them fails, carrying the same sentence:
+and by a run, with the same message:
 
 ```yaml
 --8<-- "docs/connectors/rest/demo/80-graphql-errors.yaml"
@@ -132,38 +118,43 @@ and a run that meets them fails, carrying the same sentence:
 ```
 $ lm run list --connector acme-graphql-errors
 ID        CONNECTOR            ENDPOINT      STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-ef56f596  acme-graphql-errors  null-data     Failed  0   0    0        0             2026-09-10 09:57  2026-09-10 09:57
-2408ee9a  acme-graphql-errors  errors-array  Failed  0   0    0        0             2026-09-10 09:57  2026-09-10 09:57
+2ca12c44  acme-graphql-errors  null-data     Failed  0   0    0        0             2026-10-19 01:45  2026-10-19 01:45
+84f519e9  acme-graphql-errors  errors-array  Failed  0   0    0        0             2026-10-19 01:45  2026-10-19 01:45
 
-$ lm run get 2408ee9a
+$ lm run get 84f519e9
+ID        CONNECTOR            ENDPOINT      STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+84f519e9  acme-graphql-errors  errors-array  Failed  0   0    0        0             2026-10-19 01:45  2026-10-19 01:45
 ✖ run failed: GraphQL response carried 1 error(s); first: Cannot query field 'boom' on type 'Query'
 ```
 
-The refusal is total: no partial ingestion, and nothing is dead-lettered — a query the server
-would not answer produced no rows to quarantine. Fix the query, or the permission it needs, and
-run again.
+Nothing is ingested and nothing is dead-lettered. Fix the query, or the permission it needs,
+and run again.
 
 ## Headers
 
-`spec.headers[]` applies to every request: `{ name, value }` or `{ name, value_env }`, the
-latter resolved from the hub's environment or a JVM system property — **not** from the
-`lm secret` registry, and an unset variable drops the header silently. Auth-injected headers win
-a name clash. Same engine, same rule as [REST request headers](rest.md#request-headers).
+`spec.headers[]` applies to every request, as for [REST request headers](rest.md#request-headers).
 
 ## Incremental does not reach a GraphQL server
 
-`incremental: { mode: watermark }` is accepted on a graphql endpoint and does nothing useful.
-The stored mark travels as a **query parameter**, which is where a REST source expects its
-filter and where a GraphQL server never looks — its arguments are in the body:
+`incremental: { mode: watermark }` is accepted on a graphql endpoint, but the mark is sent as a
+URL **query parameter**, not as a GraphQL variable:
 
 ```
-10/Sep/2026 10:11:09  "POST /graphql?updated_since=2026-01-02T15%3A59%3A00Z HTTP/1.1" 200 -
+19/Oct/2026 07:26:36  "POST /graphql?updated_since=2026-01-02T15%3A59%3A00Z HTTP/1.1" 200 -
 ```
 
-The server answers with everything, the run reads every node again and recomputes the same
-mark. Nothing is lost and nothing is gained: two successive runs of such an endpoint both
-report 2 400 rows. Until a variable-bound watermark exists, filter in the query itself — a
-static `variables:` entry, or a literal argument — and leave `incremental` at `full`.
+A GraphQL server ignores it, so every run reads everything — `acme-graphql` with `incremental`
+added, run twice:
+
+```
+$ lm run list --connector acme-graphql
+ID        CONNECTOR     ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
+df7023ae  acme-graphql  partners  Completed  2400  2400  0        0             2026-10-19 07:26  2026-10-19 07:26
+b108a108  acme-graphql  partners  Completed  2400  2400  0        0             2026-10-19 07:26  2026-10-19 07:26
+```
+
+Filter in the query itself — a static `variables:` entry or a literal argument — and
+leave `incremental` at `full`.
 
 ## Not yet supported
 
@@ -181,8 +172,8 @@ endpoints:
     variables: { locale: fr-FR }   # merged into every request
 ```
 
-**Result:** every request carries `locale: fr-FR` in its GraphQL `variables`, alongside the
-relay cursor the engine injects — a fixed filter the query itself does not parameterize.
+**Result:** every request carries `locale: fr-FR` in its GraphQL `variables`, beside the relay
+cursor.
 
 ### Read a second collection from the same API
 

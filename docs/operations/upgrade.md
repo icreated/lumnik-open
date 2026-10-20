@@ -1,62 +1,143 @@
 # Upgrading the hub
 
-> Forward-only Flyway migrations run at boot in one shared version namespace across
-> `core`/`connector`/`platform` — the pre-upgrade backup is the only rollback there is.
+> Migrations run forward-only at boot. The pre-upgrade backup is the only rollback.
 
 ## The short version
 
-1. **Take a backup first** — [backup-restore.md](backup-restore.md). Migrations are
-   forward-only; the backup IS the rollback.
-2. Point at the new image and restart:
-   - selfhost: set `LUMNIK_VERSION` in `.env` (or pull latest), then
-     `deploy/selfhost/up.sh` — compose recreates the hub container.
-   - Helm: bump `hub.image.tag`, `helm upgrade`.
-3. Flyway migrates at boot. Budget per path: the Helm startup probe allows ~150 s;
-   the selfhost compose healthcheck allows ~210 s (90 s grace + 12×10 s) and only marks
-   the container `unhealthy` — it never restarts it. Watch
-   `docker compose -f docker-compose.selfhost.yml logs -f hub` until healthy.
+1. **Take a backup** — [backup-restore.md](backup-restore.md). The backup is the rollback.
+2. Note the current schema versions:
+
+    ```
+    $ lm migration status
+    SCHEMA    VERSION  PENDING  LAST APPLIED
+    core      75       0        2026-10-19 01:36
+    identity  18       0        2026-10-19 01:36
+    rag       6        0        2026-10-19 01:36
+    ```
+
+3. Point at the new image and restart:
+    - **selfhost:** set `LUMNIK_VERSION` in `.env` (or leave it unset to track `main`), then
+      `deploy/selfhost/up.sh`. On a [TLS-façade install](../deploy.md#one-https-origin-the-tls-facade),
+      re-run the overlay command right after — `up.sh` alone un-stacks it.
+    - **Helm:** bump `hub.image.tag`, then `helm upgrade`.
+4. The hub migrates its database at boot, then reports healthy:
+
+    | Path | Boot budget | On timeout |
+    |---|---|---|
+    | selfhost compose | ~210 s (90 s grace + 12 × 10 s) | the container shows `unhealthy`; it is not restarted |
+    | Helm | ~150 s (startup probe) | Kubernetes restarts the pod |
+
+    Follow the boot with `./deploy/selfhost/logs.sh hub`.
+5. Run `lm migration status` again: a higher `VERSION` and `PENDING 0` on every schema means the
+   migrations are done.
 
 ## Turning on the run queue
 
-`LUMNIK_RUN_QUEUE_ENABLED` (Helm: `runQueue.enabled`) makes the manual connector run and the on-demand export runs queue instead of start at once
-([connectors](../connectors/index.md), [exports](../apps/exports.md#runs-can-queue)). Set it only when **every** hub replica runs a
-release that carries migration V68 and the queue dispatcher: a replica older than that fails when it reads a
-`Queued` run. The setting is global to the deployment, so upgrade all replicas first, then turn it on.
+`LUMNIK_RUN_QUEUE_ENABLED=true` (Helm: `runQueue.enabled`) makes manual connector runs and
+on-demand export runs wait in status `Queued` ([connectors](../connectors/index.md),
+[exports](../apps/exports.md#runs-can-queue)).
 
-To turn it off, set it back. Runs already queued (connector or export) are still started, or ended once they pass
-`LUMNIK_RUN_QUEUE_MAX_AGE`; new manual and on-demand runs are no longer queued but start at once, as before (an export or endpoint that still has a run queued answers 409 or a `Cancelled` run until that one drains), and nothing is left stuck. When another replica starts the run, the
-wait is bounded by `LUMNIK_RUN_QUEUE_POLL_INTERVAL` (default `5s`).
+| Setting | Default | Effect |
+|---|---|---|
+| `LUMNIK_RUN_QUEUE_ENABLED` | `false` | queue manual and on-demand runs |
+| `LUMNIK_RUN_QUEUE_MAX_AGE` | `1h` | a run still queued after this ends: `Cancelled` (connector), `Failed` (export) |
+| `LUMNIK_RUN_QUEUE_POLL_INTERVAL` | `5s` | how often a waiting run is picked up |
+
+The setting is global to the deployment: upgrade **every** hub replica to the same release first,
+then turn it on. Turning it off again:
+
+- runs already queued still start, or end once they pass `LUMNIK_RUN_QUEUE_MAX_AGE`;
+- new manual and on-demand runs start at once, except where a run is still queued: there a new
+  connector run is born `Cancelled` and a new export run answers `409`, until the queued one drains;
+- nothing is left stuck.
+
+## Release notes that need a gesture
+
+Some releases change what existing data means. Each section below says what you see after
+upgrading and what to do.
+
+### Subscriptions are tenant-wide
+
+Webhooks and email rules are refused to an admin bound to a métier (any `scope:*` role) — see
+[Outputs](../outputs.md). Ones a bound admin created earlier keep firing. A tenant-wide admin lists
+them and removes what nobody owns:
+
+```
+$ lm notify list
+ID    EVENTS            RECIPIENT        TEMPLATE            ENABLED
+1000  decision.*        adv@example.com  decision-alert      true
+1001  data.row.changed  ops@example.com  event-notification  true
+$ lm integration list
+ID    NAME            URL                        EVENTS                      ENABLED
+1000  ops-automation  https://hooks.example.com  decision.*,connector.run.*  true
+$ lm notify rm 1001
+removed: 1001
+$ lm notify list
+ID    EVENTS      RECIPIENT        TEMPLATE        ENABLED
+1000  decision.*  adv@example.com  decision-alert  true
+```
+
+A webhook goes the same way: `lm integration rm <ID>`.
+
+### One local csv file is the table's state { #one-local-csv-file-is-now-the-tables-state }
+
+A `csv-file` connector whose local `path` names one file (no `*` or `?`) removes the rows the file
+no longer holds — see [CSV § full refresh](../connectors/csv.md#one-file-is-the-table-full-refresh).
+The first run that reads the file after upgrading (a file is read again only once it changes) also
+counts the older versions of changed rows as removed:
+
+- up to 30 % of the table: they are removed;
+- beyond 30 %: the run fails, removes nothing and names the counts;
+- to keep them, point the connector at a folder (`*.csv`); to let them go, set
+  `refresh.max_removed: off` for that run, then remove the line.
+
+### A jdbc table holds one row per key { #a-jdbc-table-now-holds-one-row-per-key }
+
+A `jdbc-generic` table holds one row per `pk_columns` value
+([JDBC § one row per key](../connectors/jdbc.md#one-row-per-key-a-changed-row-replaces-its-version)).
+The first run after upgrading keeps the newest row per key and removes the older versions, even
+when it reads nothing new:
+
+```
+$ lm connector run demo-invoices
+run scheduled: 13629016-e970-4a1a-92b7-aed86627f3f8
+$ lm run get 13629016
+ID        CONNECTOR      ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+13629016  demo-invoices  invoices  Completed  0   0    0        0             2026-10-18 13:49  2026-10-18 13:49
+• 2 row(s) removed — the source no longer holds them
+```
+
+If one earlier run read the same key twice with two different values, the run fails naming
+`pk_columns` and removes nothing. Declare the source table's whole primary key, apply, run again.
 
 ## Running from source
 
 ```bash
 git pull
-make -C lm install                 # updates the lm CLI in your PATH
-./deploy/selfhost/up.sh --build    # updates the hub
+make -C lm install                 # installs lm into ~/.local/bin (keep it on your PATH)
+./deploy/selfhost/up.sh --build    # rebuilds and restarts the hub
 ```
 
-Both are safe to run every time. Your data is kept; migrations run at the hub's next
-boot (rules and time budgets above).
+Your data is kept; migrations run at the hub's next boot. On a TLS-façade install, re-run the
+overlay command afterwards.
 
 ## Rules the migrations follow
 
-- One shared Flyway version namespace across `core`, `connector` and `platform`
-  (they run in a single session) — a release never reuses a number.
-- Forward-only: there are no down-migrations. Rolling back = restoring the
-  pre-upgrade backup (and losing writes made since — hence step 1).
-- Every migration is checksum-validated at boot (`validateOnMigrate(true)`,
-  `PlatformFlywayRunner.java:41`) — editing an already-applied migration file, not just
-  adding a new one, fails validation before any SQL runs; ship a new migration instead
-  of touching a shipped one.
+- **Forward-only:** there are no down-migrations. Rolling back means restoring the pre-upgrade
+  backup, and losing the writes made since.
+- **Never edit a shipped migration:** every applied migration is checksum-validated at boot, and
+  a changed file stops the boot before any SQL runs.
 
 ## If the boot fails mid-migration
 
-Flyway stops at the failing version; the hub never reports ready and old data is
-untouched by later migrations. Capture `logs hub`, restore the backup if you need
-service back immediately, and report the failing version.
+The migration stops at the failing version; later migrations do not touch your data, and the hub
+does not become healthy.
+
+1. Save the log: `docker compose -f docker-compose.selfhost.yml logs hub > hub-upgrade.log`.
+2. If you need service back now, [restore the backup](backup-restore.md#restore) on the previous image.
+3. Report the failing version — the last `Migrating schema … to version …` line in the log.
 
 ## Known scar
 
-Changing the public origin (TLS façade hostname, port, issuer path) during an upgrade
-orphans JIT identities — see the scar note in
-[backup-restore.md](backup-restore.md#known-scar-issuer-change-orphans-jit-identities).
+Changing the public origin (TLS façade hostname, port, issuer path) during an upgrade orphans JIT
+identities — see [backup-restore.md](backup-restore.md#known-scar-issuer-change-orphans-jit-identities).

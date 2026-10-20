@@ -267,3 +267,48 @@ func TestViewApplyCmd_e2e_printsLinkWarningsOnStderrAndStillSucceeds(t *testing.
 	assert.Contains(t, errOut.String(), "spec.links[0].targetView")
 	assert.Contains(t, errOut.String(), "articles")
 }
+
+// `lm view NAME [KEY]` renders a saved view in one gesture, as :views → Enter does: the stored
+// manifest is fetched and posted to the same render/detail doors -f uses (#1176). It took
+// `lm view get NAME | lm view -f -` before.
+func TestViewCmd_rendersASavedViewByName(t *testing.T) {
+	const stored = "kind: View\nmetadata:\n  name: gold-desk\n"
+	var posted []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/views/gold-desk":
+			_, _ = fmt.Fprint(w, stored)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/views/render":
+			b := new(bytes.Buffer)
+			_, _ = b.ReadFrom(r.Body)
+			posted = append(posted, "render:"+b.String())
+			_, _ = fmt.Fprint(w, `{"title":"Gold desk","columns":[{"name":"code","label":"Code"}],"rows":[{"code":"C-1"}]}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/views/detail":
+			b := new(bytes.Buffer)
+			_, _ = b.ReadFrom(r.Body)
+			posted = append(posted, "detail:"+r.URL.Query().Get("key")+":"+b.String())
+			_, _ = fmt.Fprint(w, `{"title":"Gold desk","key":"C-1","fields":[{"name":"code","label":"Code","value":"C-1"}]}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+	out := runRoot(t, "view", "gold-desk")
+	assert.Contains(t, out, "Gold desk")
+	assert.Contains(t, out, "C-1")
+	runRoot(t, "view", "gold-desk", "C-1")
+	assert.Equal(t, []string{"render:" + stored, "detail:C-1:" + stored}, posted)
+
+	for _, args := range [][]string{{"view"}, {"view", "gold-desk", "C-1", "extra"}} {
+		cmd := NewRootCmd()
+		cmd.SetOut(new(bytes.Buffer))
+		cmd.SetErr(new(bytes.Buffer))
+		cmd.SetArgs(args)
+		err := cmd.Execute()
+		require.Error(t, err, "%v", args)
+		if len(args) == 1 {
+			assert.Contains(t, err.Error(), "-f")
+		}
+	}
+}

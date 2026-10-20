@@ -2,6 +2,7 @@ package io.lumnik.identity.role;
 
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.identity.Require;
+import io.lumnik.identity.TenantInPath;
 import io.lumnik.identity.tenant.TenantRepository;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
@@ -15,6 +16,7 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 
 import java.util.List;
 
+@TenantInPath
 @Path("/api/tenants/{tenantId}/roles")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
@@ -87,12 +89,10 @@ public class RoleResource {
     }
 
     private void requireTenant(Long tenantId) {
-        Require.callerOwnsTenant(tenantId);
         Require.found(tenants, tenantId, "Tenant");
     }
 
     private Role requireRole(Long tenantId, Long id) {
-        Require.callerOwnsTenant(tenantId);
         return Require.owned(roles, id, tenantId, "Role");
     }
 }

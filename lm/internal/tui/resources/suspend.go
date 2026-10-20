@@ -113,3 +113,15 @@ func QueueUpdate(app *tview.Application, f func()) {
 	}
 	app.QueueUpdateDraw(f)
 }
+
+// QueueUpdateAfterResume is QueueUpdate for an update that must not be lost — a follow-up that
+// releases a guard or carries the answer to a gesture: while an editor session holds the terminal
+// it waits for the session to end instead of being dropped. The deferred delivery is drained on the
+// event loop (SuspendEditor's defer), and tview's QueueUpdate blocks until the loop runs f: queued
+// from the loop itself it would wait forever, so it is queued from a goroutine — as the auth-lost
+// modal is (#1155 review).
+func QueueUpdateAfterResume(app *tview.Application, f func()) {
+	if !DeferIfSuspended(func() { go QueueUpdate(app, f) }) {
+		QueueUpdate(app, f)
+	}
+}

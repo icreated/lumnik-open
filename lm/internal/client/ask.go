@@ -1,7 +1,6 @@
 package client
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"strings"
@@ -37,20 +36,68 @@ type AskResult struct {
 	OtherDoors       []string
 	Disputed         []Disputed
 	DisputedTruncated bool
+	// Abstained is the hub's structural mark of a refusal (#915) — a withheld or unwritten answer is
+	// one, and still carries its rows. Never recognised by what the answer's words say.
+	Abstained bool
+	// records are the rows as the hub typed them, which -o json|yaml prints: Rows is their display form.
+	records []EntityRow
 }
 
 // analyticWire mirrors the platform AnalyticResponse JSON
-// ({answer, sql, rowCount, rows:[{...}]}). Rows stay raw so we can recover the
-// column order that unmarshalling into a Go map would discard.
+// ({answer, sql, rowCount, rows:[{...}]}). A row is an EntityRow, which keeps
+// the column order that unmarshalling into a Go map would discard.
 type analyticWire struct {
-	Answer            string            `json:"answer"`
-	SQL               string            `json:"sql"`
-	RowCount          int               `json:"rowCount"`
-	Rows              []json.RawMessage `json:"rows"`
-	DataAsOf          string            `json:"dataAsOf"`
-	OtherDoors        []string          `json:"otherDoors"`
-	Disputed          []Disputed        `json:"disputed"`
-	DisputedTruncated bool              `json:"disputedTruncated"`
+	Answer            string      `json:"answer"`
+	SQL               string      `json:"sql"`
+	RowCount          int         `json:"rowCount"`
+	Rows              []EntityRow `json:"rows"`
+	DataAsOf          string      `json:"dataAsOf"`
+	OtherDoors        []string    `json:"otherDoors"`
+	Disputed          []Disputed  `json:"disputed"`
+	DisputedTruncated bool        `json:"disputedTruncated"`
+	Abstained         bool        `json:"abstained"`
+}
+
+// askDocument is AskResult as -o json|yaml prints it (#1105): the hub's field names in the hub's order,
+// the rows as the hub typed them with their columns added beside them, and an empty list as [] — never
+// null. understoodAs is left out: lm sends no previous question, so the hub never resolves one.
+type askDocument struct {
+	Answer            string      `json:"answer" yaml:"answer"`
+	SQL               string      `json:"sql" yaml:"sql"`
+	RowCount          int         `json:"rowCount" yaml:"rowCount"`
+	Columns           []string    `json:"columns" yaml:"columns"`
+	Rows              []EntityRow `json:"rows" yaml:"rows"`
+	DataAsOf          *string     `json:"dataAsOf" yaml:"dataAsOf"` // null when unknown, as the hub sends it
+	OtherDoors        []string    `json:"otherDoors" yaml:"otherDoors"`
+	Disputed          []Disputed  `json:"disputed" yaml:"disputed"`
+	DisputedTruncated bool        `json:"disputedTruncated" yaml:"disputedTruncated"`
+	Abstained         bool        `json:"abstained" yaml:"abstained"`
+}
+
+func (r AskResult) document() askDocument {
+	var asOf *string
+	if r.DataAsOf != "" {
+		asOf = &r.DataAsOf
+	}
+	return askDocument{
+		Answer: r.Answer, SQL: r.SQL, RowCount: r.RowCount,
+		Columns: orEmpty(r.Columns), Rows: orEmpty(r.records), DataAsOf: asOf,
+		OtherDoors: orEmpty(r.OtherDoors), Disputed: orEmpty(r.Disputed),
+		DisputedTruncated: r.DisputedTruncated, Abstained: r.Abstained,
+	}
+}
+
+// MarshalJSON writes the analytic result document.
+func (r AskResult) MarshalJSON() ([]byte, error) { return jsonText(r.document()) }
+
+// MarshalYAML writes the same document as YAML.
+func (r AskResult) MarshalYAML() (any, error) { return r.document(), nil }
+
+func orEmpty[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }
 
 // RagAsk runs an analytic question over the ingested hub via mode=analytic.
@@ -68,7 +115,7 @@ func (c *Client) RagAsk(question, scope, lang string) (*AskResult, error) {
 	if err := c.POSTSlow("/api/platform/rag/chat", body, &wire); err != nil {
 		return nil, err
 	}
-	cols, rows := parseRows(wire.Rows)
+	cols, rows := flattenRows(wire.Rows)
 	return &AskResult{
 		Answer:            wire.Answer,
 		SQL:               wire.SQL,
@@ -79,66 +126,28 @@ func (c *Client) RagAsk(question, scope, lang string) (*AskResult, error) {
 		OtherDoors:        wire.OtherDoors,
 		Disputed:          wire.Disputed,
 		DisputedTruncated: wire.DisputedTruncated,
+		Abstained:         wire.Abstained,
+		records:           wire.Rows,
 	}, nil
 }
 
-// parseRows flattens the raw JSON row objects into ordered columns + string rows.
-// Column order is taken from the first row (PostgreSQL result order, preserved by
-// the server's LinkedHashMap). Later rows are aligned to those columns by key.
-func parseRows(raw []json.RawMessage) ([]string, [][]string) {
+// flattenRows turns the rows into ordered columns + string rows. Column order is taken
+// from the first row (PostgreSQL result order, preserved by the server's LinkedHashMap).
+// Later rows are aligned to those columns by key.
+func flattenRows(records []EntityRow) ([]string, [][]string) {
 	var cols []string
-	seen := map[string]bool{}
-	out := make([][]string, 0, len(raw))
-	for i, rm := range raw {
-		kvs := decodeObjectOrdered(rm)
-		if i == 0 {
-			for _, p := range kvs {
-				if !seen[p.key] {
-					seen[p.key] = true
-					cols = append(cols, p.key)
-				}
-			}
-		}
-		byKey := make(map[string]string, len(kvs))
-		for _, p := range kvs {
-			byKey[p.key] = p.val
-		}
+	if len(records) > 0 {
+		cols = records[0].Columns()
+	}
+	out := make([][]string, 0, len(records))
+	for _, r := range records {
 		row := make([]string, len(cols))
 		for j, col := range cols {
-			row[j] = byKey[col]
+			row[j] = r.Cell(col)
 		}
 		out = append(out, row)
 	}
 	return cols, out
-}
-
-type orderedPair struct{ key, val string }
-
-// decodeObjectOrdered walks a JSON object preserving key order via the streaming
-// token decoder (json.Unmarshal into a map would randomise order).
-func decodeObjectOrdered(rm json.RawMessage) []orderedPair {
-	dec := json.NewDecoder(bytes.NewReader(rm))
-	tok, err := dec.Token()
-	if err != nil {
-		return nil
-	}
-	if d, ok := tok.(json.Delim); !ok || d != '{' {
-		return nil
-	}
-	var out []orderedPair
-	for dec.More() {
-		kt, err := dec.Token()
-		if err != nil {
-			break
-		}
-		key, _ := kt.(string)
-		var val json.RawMessage
-		if err := dec.Decode(&val); err != nil {
-			break
-		}
-		out = append(out, orderedPair{key, stringifyJSON(val)})
-	}
-	return out
 }
 
 // stringifyJSON renders a scalar JSON value as a plain string: null → "",

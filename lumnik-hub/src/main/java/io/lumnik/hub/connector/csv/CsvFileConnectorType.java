@@ -13,7 +13,9 @@ import io.lumnik.hub.connector.mapping.spec.ErrorPolicy;
 import io.lumnik.hub.connector.mapping.spec.HookInvocation;
 import io.lumnik.hub.connector.mapping.spec.MappingSpec;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget;
+import io.lumnik.hub.connector.mapping.writer.UnseenRowSweeper;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
+import io.lumnik.hub.connector.repository.ConnectorDeadLetterRepository;
 import io.lumnik.hub.connector.transport.FileDescriptor;
 import io.lumnik.hub.connector.transport.FileSource;
 import io.lumnik.hub.connector.transport.FileSourceRegistry;
@@ -64,6 +66,8 @@ public class CsvFileConnectorType implements ConnectorType {
 
   @Inject MappingEngine mappingEngine;
   @Inject FileSourceRegistry fileSourceRegistry;
+  @Inject UnseenRowSweeper sweeper;
+  @Inject ConnectorDeadLetterRepository deadLetters;
 
   @Override
   public String id() { return TYPE_ID; }
@@ -126,7 +130,7 @@ public class CsvFileConnectorType implements ConnectorType {
     // glob patterns can't be pre-checked.
     String kind = String.valueOf(transport.getOrDefault("kind", LOCAL));
     if (LOCAL.equals(kind)) {
-      boolean isGlob = p.contains("*") || p.contains("?");
+      boolean isGlob = CsvGlobResolver.isGlob(p);
       // This message echoes a SERVER-SIDE path, and ConfigValidationException is now dressed as a
       // 400 by ConfigValidationExceptionMapper. It is safe only because nothing in production calls
       // csv's validateConfig — it never reaches a caller. If a future change makes
@@ -195,7 +199,7 @@ public class CsvFileConnectorType implements ConnectorType {
       if (pathObj == null || pathObj.toString().isBlank()) {
         throw new ConfigValidationException("csv-file connector: missing transport.path");
       }
-      return new CsvGlobCursorReader(pathObj.toString(), overrides);
+      return new CsvGlobCursorReader(pathObj.toString(), overrides, CsvFullRefresh.stateFile(ctx.config()).isPresent());
     }
     // Pass the FULL config — the remote reader needs top-level after_process / archive_path
     // (the apply handler stores them as siblings of transport, not inside it).
@@ -222,6 +226,44 @@ public class CsvFileConnectorType implements ConnectorType {
     // mapping block that declares one hoists its embedding out of the write transaction for free
     // through this same seam, exactly like jdbc-generic.
     return mappingEngine.itemWriter(spec);
+  }
+
+  /**
+   * The full refresh (#1195): a run that read the whole of one local file removes the rows the file
+   * no longer holds — see {@link CsvFullRefresh} for when, and for the two guards.
+   */
+  @Override
+  public StreamEnd endOfStream(ConnectorContext ctx) {
+    Optional<String> file = CsvFullRefresh.stateFile(ctx.config());
+    if (file.isEmpty()) return new StreamEnd.Removed(0);
+    // Built here when no read of this run started the file (an unchanged file is not read): no sweep.
+    CsvFullRefresh.Pass pass = ctx.scope().resource(new CsvFullRefresh.PassKey(file.get()),
+        () -> new CsvFullRefresh.Pass(false, null));
+    if (!pass.fromStart) return new StreamEnd.Removed(0);
+    String table = ctx.configValue("name", String.class);
+    MappingTarget.Table spec = tableOf(table, ctx.config(), true);
+    UnseenRowSweeper.Count n = sweeper.count(spec, ctx.tenantId(), sourceOf(table), ctx.runId());
+    // The guards speak only when rows would go: a first run, or one that met every row, has
+    // nothing to remove and nothing to refuse.
+    if (n.unseen() == 0) return new StreamEnd.Removed(0);
+    if (pass.changed) return new StreamEnd.Refused(CsvFullRefresh.CHANGED_WHILE_READ);
+    if (pass.events == 0) return new StreamEnd.Refused(CsvFullRefresh.EMPTY_FILE);
+    long unread = deadLetters.countByRun(ctx.runId());
+    if (unread > 0) return CsvFullRefresh.deadLettered(unread, ctx.runId());
+    double max = CsvFullRefresh.maxRemoved(ctx.config());
+    if (n.shrinksBeyond(max)) return CsvFullRefresh.refused(n, max);
+    return new StreamEnd.Removed(sweeper.remove(spec, ctx.tenantId(), sourceOf(table), ctx.runId()));
+  }
+
+  /** The {@code _source} a csv run stamps: its mapping id, which {@link #buildSpec} names. */
+  static String sourceOf(String table) {
+    return "csv:" + table;
+  }
+
+  /** The hub table a csv connector writes; {@code marksSeen} when its source is one file (#1195). */
+  static MappingTarget.Table tableOf(String table, Map<String, Object> config, boolean marksSeen) {
+    return new MappingTarget.Table("connector", "t_" + table, /* autoSchema */ true,
+        MappingTarget.OnConflict.SKIP, parseIndexes(config), marksSeen);
   }
 
   /**
@@ -254,10 +296,8 @@ public class CsvFileConnectorType implements ConnectorType {
       throw new ConfigValidationException(
           "config key 'name' must be a plain identifier (letters, digits, underscore; not starting with a digit): " + table);
     }
-    MappingTarget.Table tbl = new MappingTarget.Table(
-        "connector", "t_" + table, /* autoSchema */ true,
-        MappingTarget.OnConflict.SKIP, parseIndexes(config));
-    MappingTarget target = new MappingTarget(null, tbl, null, null);
+    MappingTarget target = new MappingTarget(null,
+        tableOf(table, config, CsvFullRefresh.stateFile(config).isPresent()), null, null);
 
     List<HookInvocation> datasetHooks = List.of();
     List<HookInvocation> cellHooks = List.of();
@@ -270,7 +310,7 @@ public class CsvFileConnectorType implements ConnectorType {
       rowHooks  = parseHooks(mappingNode.path("row"));
     }
     return new MappingSpec(
-        "csv:" + table, 1, target, MappingSpec.StreamMode.STREAM,
+        sourceOf(table), 1, target, MappingSpec.StreamMode.STREAM,
         "dump of " + table,
         datasetHooks, rowHooks, cellHooks, ErrorPolicy.soft());
   }
@@ -335,13 +375,20 @@ public class CsvFileConnectorType implements ConnectorType {
      * interface IS the fallback configuration, and the remote wiring reuses the same fork.
      */
     private final FileSource source;
+    /** One plain local file: the run records whether it started that file at its first row (#1195). */
+    private final boolean holdsTheSourceState;
     private List<Path> resolvedFiles;
     private final List<MalformedRecord> malformedBuffer = new ArrayList<>();
 
     CsvGlobCursorReader(String pathPattern, ParserOverrides overrides) {
+      this(pathPattern, overrides, false);
+    }
+
+    CsvGlobCursorReader(String pathPattern, ParserOverrides overrides, boolean holdsTheSourceState) {
       this.pathPattern = pathPattern;
       this.overrides = overrides;
       this.source = new LocalFileSource(pathPattern);
+      this.holdsTheSourceState = holdsTheSourceState;
     }
 
     /** Test-visible: records tokenized across every window this reader has run (O(R) proof). */
@@ -388,8 +435,18 @@ public class CsvFileConnectorType implements ConnectorType {
         }
       }
 
+      // The run's first read decides it, once: a later chunk resumes mid-file by construction.
+      CsvFullRefresh.Pass pass = null;
+      FileDescriptor version = null;
+      if (holdsTheSourceState) {
+        boolean fromStart = start.rowsProcessed() == 0;
+        FileDescriptor first = version = describe(resolvedFiles.get(fileIndex));
+        pass = ctx.scope().resource(new CsvFullRefresh.PassKey(pathPattern), () -> new CsvFullRefresh.Pass(fromStart, first));
+      }
+
       List<Map<String, Object>> chunk = new ArrayList<>(chunkSize);
       Walk walk = fillChunk(chunk, chunkSize, fileIndex, start);
+      if (pass != null) pass.observe(version, describe(resolvedFiles.get(fileIndex)), chunk.size() + malformedBuffer.size());
 
       if (walk.fileIndex() >= resolvedFiles.size()) {
         // The list is read to its end. The run ends here, so it hands over the finished position
@@ -404,14 +461,14 @@ public class CsvFileConnectorType implements ConnectorType {
     }
 
     /** Where the walk stopped: the file it is on, how much of it is consumed, and its last window. */
-    private record Walk(int fileIndex, String file, long consumed, WindowOutcome last, FileDescriptor lastStat) {}
+    record Walk(int fileIndex, String file, long consumed, WindowOutcome last, FileDescriptor lastStat) {}
 
     /**
      * Walks files from {@code fileIndex}, one window at a time, until the chunk is full or the files
      * run out. Good rows stream straight into {@code chunk} and malformed ones into the buffer, so
      * the unread tail of a large file is never parsed or materialized.
      */
-    private Walk fillChunk(List<Map<String, Object>> chunk, int chunkSize, int fileIndex, CsvCursor start) {
+    Walk fillChunk(List<Map<String, Object>> chunk, int chunkSize, int fileIndex, CsvCursor start) {
       String currentFile = start.file();
       long recordsConsumed = start.rowsProcessed();   // events consumed (good + malformed)
       WindowOutcome last = null;
@@ -453,7 +510,7 @@ public class CsvFileConnectorType implements ConnectorType {
      * checkpoint path, the cursor payload — ABSOLUTE anchor, headers, version token. All-null
      * checkpoint fields → the cursor stays legacy-shaped.
      */
-    private record WindowOutcome(long consumed, boolean exhausted,
+    record WindowOutcome(long consumed, boolean exhausted,
                                  Long anchorByte, Long charDelta, Long lineBase,
                                  List<String> headers, CsvCursor.Version version) {}
 

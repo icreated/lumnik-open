@@ -1,6 +1,7 @@
 package io.lumnik.hub.webhook;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.hub.api.TenantWide;
 import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -27,8 +28,11 @@ import java.util.List;
  * by construction since the tid passed IS the context tenant. The delegate's class-level
  * {@code @RequiresPermission("lm_admin")} fires again on the injected call — so this door
  * advertises exactly that role and no more: an annotation promising lm_superadmin here
- * would be refused one layer down.
+ * would be refused one layer down. {@link TenantWide} does NOT fire again: it is a request filter,
+ * bound to the class a request is routed to, and an injected call is not a request — so this door
+ * carries it too (#1207).
  */
+@TenantWide
 @Path("/api/platform/integrations")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)

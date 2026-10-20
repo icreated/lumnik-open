@@ -109,7 +109,7 @@ class RestEndpointReaderChunkingTest {
 
     private ConnectorContext ctx(UUID runId, Map<String, Object> config) {
         return new ConnectorContext(runId, CONNECTOR, ENDPOINT, 1L, "erp", "rest-generic",
-            config, new SyncMode.FullRefresh(), null, null, null, null, null, new OwnedRunScope("test"));
+            config, new SyncMode.FullRefresh(), null, null, null, null, new OwnedRunScope("test"));
     }
 
     private ConnectorContext ctx(Map<String, Object> config) {

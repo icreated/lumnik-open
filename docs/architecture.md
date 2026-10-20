@@ -1,16 +1,13 @@
 # Architecture — the why
 
-Every page in this documentation describes a *what*. This one collects the *whys* —
-the four design commitments everything else hangs from. If you are evaluating lumnik
-for an exacting IT department, this is the page to argue with.
+Every other page describes a *what*. This one lists the design commitments everything else
+hangs from — the page to read when evaluating lumnik.
 
 ## Read-only first
 
-Nobody signs off on an ERP migration; everybody signs off on a read. So ingestion is
-built one-way: there is no write path back to your systems — not behind a flag, not
-for administrators. The hub lands data in its own PostgreSQL and everything else
-(fusion, chat, apps, events) works on that copy. Your system of record stays the
-sole owner of its data.
+Ingestion is one-way: there is no write path back to your systems — not behind a flag, not
+for administrators. The hub lands data in its own PostgreSQL, and fusion, chat, apps and events
+work on that copy. Your system of record stays the sole owner of its data.
 
 The same posture extends downstream: the SQL that answers a chat question executes on
 a **separate, physically read-only database connection** — see the next commitment.
@@ -30,14 +27,13 @@ layer above. Three database roles carry three trust levels:
 The full mechanics — policies, the tenant GUC, what RLS does and does not protect
 against — are on [RLS & database roles](security/rls.md).
 
-## Honesty as architecture, not tone
+## Refusal over guessing
 
-The system prefers a refusal to a plausible guess, and that preference is
-implemented, not promised:
+The system prefers a refusal to a plausible guess:
 
 - on the way **in**, a run's arithmetic always closes — a row is written, benignly
   skipped, or quarantined with its reason
-  ([ingestion honesty](transparency/ingestion-honesty.md));
+  ([seeing what was ingested](transparency/ingestion-honesty.md));
 - on the way **out**, deterministic guards stand between a question and its answer,
   and an empty result is never phrased as a confident "there are none"
   ([the five guards](transparency/ask-honesty.md));
@@ -68,11 +64,12 @@ flowchart LR
   rag -.-> llm
 ```
 
-The hub consumes its extensions through optional interfaces and **degrades
-gracefully** when one is absent: a hub without the chat extension still ingests,
-fuses and serves — nothing half-works: even `lm view generate`, long the one exception,
-now answers an absent chat model with a named abstention instead of raising. That seam is a boundary we enforce in the
-build, not a diagram courtesy.
+A hub without the chat extension still ingests, fuses and serves. What needs a model says so:
+
+```
+$ lm view generate desk "les clients de Lyon" -o lyon.yaml
+Error: API error 400: generation abstained: no chat model is available on this hub — view generation needs one
+```
 
 ---
 
