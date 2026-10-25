@@ -85,7 +85,7 @@ public class SearchResource {
         String facetError = collectFacetFilters(uriInfo, filters);
         if (facetError != null) return ApiErrors.badRequest(facetError);
 
-        // The open app's métier narrows the search (absent = the historical behaviour, for REST and lm).
+        // The open app's scope narrows the search (absent = the historical behaviour, for REST and lm).
         // Refused before the provider is asked: malformed → 400, a bound caller without it → the uniform 403.
         // Read from the raw query: a bare `scope=` reaches a @QueryParam String as null, i.e. as "absent",
         // and an empty scope must be refused, not silently widened to the historical behaviour.

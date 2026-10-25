@@ -46,7 +46,7 @@ func inboxCells(e client.InboxEntry, now time.Time) []string {
 	return []string{fmt.Sprintf("%d", e.ID), inboxWhen(e.OccurredAt, now), e.Process, msg, e.EntityKey}
 }
 
-// Inbox is the observation deck: the decision.* events of the caller's métiers (the whole
+// Inbox is the observation deck: the decision.* events of the caller's scopes (the whole
 // tenant's for a caller with no scope:* role), newest first.
 // `a` acks the selected decision (idempotent server-side); `A` toggles disposed entries.
 type Inbox struct {

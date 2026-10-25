@@ -24,7 +24,7 @@ import java.util.Optional;
  * need is the title and icon of the login screen, which the consumption half of this feature will
  * serve from its own cached registry rather than this door. A public door here would have cost a
  * skip in {@code TenantContextFilter} — a second auth matcher its own javadoc argues against — and
- * served the deployment's whole inventory of métier tags to anyone who asked.
+ * served the deployment's whole inventory of scope tags to anyone who asked.
  */
 @Path("/api/apps")
 @Produces(MediaType.APPLICATION_JSON)

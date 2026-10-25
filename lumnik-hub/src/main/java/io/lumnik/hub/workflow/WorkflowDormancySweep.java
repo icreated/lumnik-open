@@ -165,7 +165,7 @@ public class WorkflowDormancySweep {
         }
     }
 
-    /** Tenant AND workflow: one métier's table vanishing is not another tenant's news. */
+    /** Tenant AND workflow: one scope's table vanishing is not another tenant's news. */
     private static String key(long tenant, WorkflowGraph g) {
         return tenant + ":" + g.name();
     }

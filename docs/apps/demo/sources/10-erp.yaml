@@ -8,7 +8,7 @@ kind: Connector
 metadata:
   name: acme-desk-erp
   connector_type: csv-file
-  scopes: [desk]                  # the métier: every table of the desk is askable, viewable, watchable under it
+  scopes: [desk]                  # the scope: every table of the desk is askable, viewable, watchable under it
 
 spec:
   transport:

@@ -20,7 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The métier scope boundary on the kind:Process surface — kind:View's rule, applied to its sibling.
+ * The scope boundary on the kind:Process surface — kind:View's rule, applied to its sibling.
  * The write door is asserted with NO collaborators wired: a foreign scope must be refused before
  * anything reaches the store or the card, so a null store passing the test IS the proof.
  */
@@ -105,7 +105,7 @@ class ProcessScopeBindingUnitTest {
 
     // ---- the STORED scope: an apply may not re-home what the caller does not hold (#509) ----
 
-    /** The same manifest, same name, declared into the OTHER métier. */
+    /** The same manifest, same name, declared into the OTHER scope. */
     private static final String MAGASIN_PROCESS = CLIENTS_PROCESS.replace("scope: clients", "scope: magasin");
 
     @Test

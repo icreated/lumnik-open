@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { urlKey, kcBase, redirectUri } from '../../main/resources/META-INF/resources/app/src/config.mjs';
 
-test('urlKey: a known métier param passes through', () => {
+test('urlKey: a known app param passes through', () => {
   assert.equal(urlKey('?m=stock'), 'stock');
 });
 
@@ -24,12 +24,12 @@ test('kcBase: plain LAN mode uses port 8180 on the hostname', () => {
   assert.equal(kcBase(loc), 'http://192.168.1.20:8180/realms/lumnik');
 });
 
-test('redirectUri: clients métier has no query string', () => {
+test('redirectUri: clients app has no query string', () => {
   const loc = { origin: 'https://lumnik.example' };
   assert.equal(redirectUri(loc, 'clients'), 'https://lumnik.example/app/');
 });
 
-test('redirectUri: non-clients métier rides ?m= on the redirect', () => {
+test('redirectUri: non-clients app rides ?m= on the redirect', () => {
   const loc = { origin: 'https://lumnik.example' };
   assert.equal(redirectUri(loc, 'stock'), 'https://lumnik.example/app/?m=stock');
 });

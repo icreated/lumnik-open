@@ -42,14 +42,14 @@ export const TABS = [
   },
   {
     id: 'chat', label: 'Chat', icon: '✶',
-    // The conflicts-door button sends the métier to the Fiches: it exists only when that tab does.
+    // The conflicts-door button sends the business user to the Fiches: it exists only when that tab does.
     screen: (ctx) => html`<${Chat} api=${ctx.api} scope=${ctx.scope}
       log=${ctx.chatLog} setLog=${ctx.setChatLog}
       onOpenFiches=${ctx.can('fiches') ? () => ctx.openTab('fiches') : undefined} />`,
   },
   {
     id: 'search', label: 'Recherche', icon: '⌕',
-    // Always sends the app's scope: the hub narrows to this métier and the screen adds nothing of its own.
+    // Always sends the app's scope: the hub narrows to this scope and the screen adds nothing of its own.
     screen: (ctx) => html`<${Search} api=${ctx.api} scope=${ctx.scope} />`,
     // The hub OFFERS this tab when a provider module is active; the probe asks the two doors that
     // say whether it is worth showing for THIS caller (a provider that answers, an index they may read).

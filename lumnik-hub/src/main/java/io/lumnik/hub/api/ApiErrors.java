@@ -14,7 +14,7 @@ import java.util.function.Supplier;
 
 /**
  * The one shape a hub JSON error body takes: {@code {"error": "…"}}. Single-sourced so the
- * métier-scope refusal — a FROZEN cross-language contract the PWA, {@code lm} and the OTK oracle
+ * scope refusal — a FROZEN cross-language contract the PWA, {@code lm} and the OTK oracle
  * branch on — cannot drift by a typo in one of the doors that serve it.
  *
  * The decision and its string live in {@link ScopeGrants} (framework-free); this is just the

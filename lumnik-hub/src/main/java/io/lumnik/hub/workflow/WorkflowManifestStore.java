@@ -66,7 +66,7 @@ public class WorkflowManifestStore {
      * <p>Deliberately NOT scope-filtered — the rule is one lifecycle per column for the TENANT,
      * so a foreign owner must still stop the apply. Its SCOPE rides along because the refusal's
      * wording depends on it: the owner's name is what makes the message actionable, and it is a
-     * name from another métier's card when the caller does not hold that scope (#516). Deciding
+     * name from another scope's card when the caller does not hold that scope (#516). Deciding
      * that is the door's job; handing it what it needs to decide is this method's.
      */
     public Optional<ColumnOwner> findOtherOnColumn(long tenantId, String table, String column, String name) {

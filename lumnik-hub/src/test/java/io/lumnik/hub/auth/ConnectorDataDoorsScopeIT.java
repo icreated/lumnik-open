@@ -28,7 +28,7 @@ import static org.hamcrest.Matchers.equalTo;
 /**
  * #1212: the doors that reach a connector's data without naming it in their path — dead letters,
  * runs and the source doors — ask the rule #1208 put on the by-id doors, {@code allowsAll(tags)}.
- * A list narrows itself to the connectors the caller holds; an id of another métier's is the
+ * A list narrows itself to the connectors the caller holds; an id of another scope's is the
  * uniform 403; a creating door refuses tags the caller does not all hold, an empty list included.
  * An unbound caller administers the whole tenant, as before.
  */
@@ -224,7 +224,7 @@ class ConnectorDataDoorsScopeIT {
 
     refused(as("catalogue").multiPart("file", csv).multiPart("name", n).multiPart("scope", "catalogue")
         .post("/api/platform/sources/csv/ingest"));
-    assertThat(tagsOf(n)).as("the one-shot stays in its métier").isEqualTo("magasin");
+    assertThat(tagsOf(n)).as("the one-shot stays in its scope").isEqualTo("magasin");
   }
 
   @Test

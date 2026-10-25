@@ -38,7 +38,7 @@ import java.util.Set;
  * The inbox — the human surface over decision.* events (the fruit of declared kind:Process
  * attention rules). A READ of the outbox tail, not a consumer: no cursor. App state at rung 1
  * is a fold over the log: an ack is an {@code annotation.decision.acked} event, never a state
- * row. Tenant-bound, and métier-bound for a caller holding {@code scope:*} roles (#1209). History
+ * row. Tenant-bound, and scope-bound for a caller holding {@code scope:*} roles (#1209). History
  * is bounded by the outbox retention purge — the inbox shows what retention keeps.
  */
 @Path("/api/inbox")
@@ -57,7 +57,7 @@ public class InboxResource {
                              String entity, String entityKey, boolean acked) {}
 
     /**
-     * A decision is its métier's (#1209): the scope of the kind:Process ({@code process:<name>}) or
+     * A decision is its scope's (#1209): the scope of the kind:Process ({@code process:<name>}) or
      * kind:Workflow ({@code workflow:<name>}) that raised it, read from the manifest as it stands. So a
      * bound caller's inbox is the decisions of these sources — resolved once per request, then one
      * array test per decision walked. A decision whose manifest is gone is no source's any more: only
@@ -87,7 +87,7 @@ public class InboxResource {
      * {@code process=} and {@code type=} narrow the query, not the page (#1356): filtered after the
      * fact, a page would answer about the tenant's newest N decisions rather than what was asked.
      * {@code process} is what a decision shows as its process — a kind:Process name, or
-     * {@code workflow:<name>} for a kind:Workflow's. The métier binding applies either way.
+     * {@code workflow:<name>} for a kind:Workflow's. The scope binding applies either way.
      */
     @GET
     public Response list(@QueryParam("limit") @DefaultValue("50") int limit,
@@ -152,8 +152,8 @@ public class InboxResource {
 
         // Verify then emit — two autocommit statements, each its own connection (they never
         // shared a transaction). Honest verification: the id must be THIS tenant's decision, in a
-        // métier the caller holds; a foreign or out-of-scope id is indistinguishable from a
-        // nonexistent one (no cross-tenant, no cross-métier leak).
+        // scope the caller holds; a foreign or out-of-scope id is indistinguishable from a
+        // nonexistent one (no cross-tenant, no cross-scope leak).
         Set<String> sources = grantedSources(tenant);
         var decision = Jdbc.queryOne(adminDs, "InboxResource.ack.verify",
             "SELECT entity, entity_key FROM core.event_outbox d "

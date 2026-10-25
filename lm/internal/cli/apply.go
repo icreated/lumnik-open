@@ -80,7 +80,7 @@ func printApplied[T any](cmd *cobra.Command, resp []byte, human func(io.Writer, 
 // renderApplyWarnings prints the advisories a successful apply carried back, and returns nil.
 //
 // Applied, and still worth saying something: "no scopes declared" decides whether anything a
-// connector ingests is askable in any métier, and the hub can only answer it in the body it
+// connector ingests is askable in any scope, and the hub can only answer it in the body it
 // returns (#531). On stderr, because stdout under -o json is the body a script pipes into jq; exit stays
 // 0, as a warning has never failed a validate and a CI gate built on that must not start failing.
 //

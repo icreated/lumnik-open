@@ -8,7 +8,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The métier-scope access boundary. Grant = Keycloak realm role {@code scope:<tag>}.
+ * The scope access boundary. Grant = Keycloak realm role {@code scope:<tag>}.
  * Opt-in semantics (ratified 2026-07-07): a user with zero {@code scope:*} roles is
  * unscoped — tenant-wide, behavior unchanged; a user with at least one is scope-bound —
  * only the granted scopes, {@code all}/blank rewritten to the granted set.

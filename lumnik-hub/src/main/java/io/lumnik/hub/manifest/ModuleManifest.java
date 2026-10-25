@@ -44,7 +44,7 @@ public record ModuleManifest(
         Map<String, String> label
     ) {}
 
-    /** Tab ids this module brings to the métier PWA; offered only while the module is active. */
+    /** Tab ids this module brings to the business-app PWA; offered only while the module is active. */
     public List<String> tabsOrEmpty() {
         return tabs != null ? tabs : List.of();
     }

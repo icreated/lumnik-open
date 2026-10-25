@@ -73,7 +73,7 @@ public class ConnectorRepository implements PanacheRepositoryBase<Connector, UUI
    * {@code SELECT} takes nothing, {@code Connector} has no {@code @Version}, and the
    * {@code UPDATE … SET tags} Hibernate dirty-checks at flush re-checks nothing: a concurrent apply
    * committing in between is silently overwritten, and the authorization that allowed the write was
-   * decided on a state that no longer exists. That is the same cross-métier re-home
+   * decided on a state that no longer exists. That is the same cross-scope re-home
    * {@code ApplyScopeBoundary} exists to refuse (#509), reached through the gap rather than through
    * the door. {@code PESSIMISTIC_WRITE} closes it: the concurrent writer waits for this transaction
    * instead of racing it.

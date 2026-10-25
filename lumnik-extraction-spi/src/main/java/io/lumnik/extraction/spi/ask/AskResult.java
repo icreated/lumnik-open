@@ -17,7 +17,7 @@ import java.util.Map;
  *
  * <p>The dead end's own sentence already states the FACT, and deliberately names no command:
  * the same string is served to {@code lm ask}, to the PWA and to anything else on the API, so a
- * backtick-quoted CLI command would send a métier on a phone to a terminal they do not have. The
+ * backtick-quoted CLI command would send a business user on a phone to a terminal they do not have. The
  * consequence was that the client which COULD act had to be told in prose it cannot parse — which
  * is exactly the string-matching coupling #512 removed from the OTK grader. These tokens are the
  * structured half: each client maps them to its own gesture, or to nothing when it has none

@@ -84,7 +84,7 @@ public class RestDiscoveryResource {
         // SET LOCAL, which is transaction-scoped, so an unwrapped lookup finds nothing on an
         // RLS-enforced hub. Its own and not the method's, so the probe below — up to the
         // HttpClient's 60s — holds no pooled connection. Same shape as IntegrationResource#test.
-        // The connector rule of the by-id doors (#1212): another métier's connector is the uniform 403.
+        // The connector rule of the by-id doors (#1212): another scope's connector is the uniform 403.
         Connector c = QuarkusTransaction.requiringNew().call(() -> ConnectorScope.held(connRepo, cid));
         if (c == null) return ApiErrors.notFound("connector " + cid + " not found");
 

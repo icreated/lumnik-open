@@ -196,7 +196,7 @@ func newSourceRestFromOpenApiCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "connector name (required)")
-	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "métier scope(s) written to the manifest's metadata.scopes (repeatable)")
+	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "scope(s) written to the manifest's metadata.scopes (repeatable)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "write to file instead of stdout")
 	cmd.Flags().BoolVar(&apply, "apply", false, "upsert directly after generation (requires --name)")
 	_ = cmd.MarkFlagRequired("name")

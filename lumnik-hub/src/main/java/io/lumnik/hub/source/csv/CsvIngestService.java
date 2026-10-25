@@ -290,15 +290,15 @@ public class CsvIngestService {
     private PriorOneShot findPrior(long tenantId, String name) {
         // Locked until this ingest commits: the scope decision below is taken on this row, and the
         // ingest that follows is long. Unlocked, a retag committed in between was judged on its old
-        // tags, then overwritten, while the rows landed in the table of the connector's new métier
+        // tags, then overwritten, while the rows landed in the table of the connector's new scope
         // (#1216 review). The apply door holds the same row the same way (byAddressForUpdate).
         Connector c = connectors.byAddressForUpdate(tenantId, name)
             .filter(found -> !found.isDeleted())
             .orElse(null);
         if (c == null) return null;
         // A breath rewrites the one-shot's config, writes its table and replaces its tags: the
-        // caller must hold the scopes it lives in, or they take over another métier's (#1212).
-        // Before the 409 below, so a name of another métier answers with the uniform refusal.
+        // caller must hold the scopes it lives in, or they take over another scope's (#1212).
+        // Before the 409 below, so a name of another scope answers with the uniform refusal.
         ConnectorScope.refuseUnlessHolds(c.getTags());
         boolean dormantOneShot = "csv-file".equals(c.getTypeId()) && !c.isEnabled()
             && Boolean.TRUE.equals(c.getConfig().get("dormant"));
@@ -654,7 +654,7 @@ public class CsvIngestService {
             CsvIngestForm sub = buildSubForm(form, descriptor, temp);
             return executeLocalFile(sub, tenantId, temp.toFile());
         } catch (HookScriptRefusedException | WebApplicationException | MalformedRow e) {
-            // A refused pre_process script_ref, a re-ingest of another métier's one-shot (#1212), or a
+            // A refused pre_process script_ref, a re-ingest of another scope's one-shot (#1212), or a
             // malformed row (#1248) — preserve as-is so it keeps mapping to a clean 4xx at the HTTP
             // boundary, instead of being wrapped into an unmapped 500 below.
             throw e;

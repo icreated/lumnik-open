@@ -1,4 +1,4 @@
-# 20-desk.yaml — the demo desk as a métier app: Clients ACME, for anyone holding scope:desk.
+# 20-desk.yaml — the demo desk as a business app: Clients ACME, for anyone holding scope:desk.
 # Open it at /app/?m=desk once the desk's views are applied.
 kind: App
 apiVersion: apps.lumnik.io/v1

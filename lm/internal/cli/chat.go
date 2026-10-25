@@ -13,7 +13,7 @@ import (
 
 type chatSession struct {
 	corpus string
-	// scope is the métier this REPL is aimed at — the `scope` field of POST
+	// scope is the scope tag this REPL is aimed at — the `scope` field of POST
 	// /api/platform/rag/chat. Empty hands the question back to the server, which
 	// falls back to the user's default (`lm scope set`), then to 'system'.
 	scope string
@@ -76,7 +76,7 @@ func handleSlash(cmd *cobra.Command, s *chatSession, line string) (exit bool) {
 	case ":help", ":h":
 		fmt.Fprintln(cmd.OutOrStdout(), `Commands:
   :corpus NAME     Scope chat to a corpus (or 'all' / '*' for all)
-  :scope TAG       Bind chat to one métier scope (or 'default' for your own)
+  :scope TAG       Bind chat to one scope (or 'default' for your own)
   :topK N          Set retrieval top-K
   :clear           Clear screen
   :help / :h       Show this help

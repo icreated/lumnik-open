@@ -86,7 +86,7 @@ class AbstentionSignpostTest {
     void a_raw_table_named_like_a_view_is_not_a_fused_entity() {
         // The fused-entity signal is the connector.v_ prefix EntityViewCompiler writes, not the
         // letter v: a connector table called t_v_customer fuses nothing and has no ledger. Telling
-        // a métier a conflicts ledger exists for a table that has none is a signpost to a dead end
+        // a business user a conflicts ledger exists for a table that has none is a signpost to a dead end
         // — worse than no signpost.
         String answer = guard.cannotAnswer(null, false, guard.hasAFusedEntity(cardOf("connector.t_v_customer"))).answer();
 
@@ -160,7 +160,7 @@ class AbstentionSignpostTest {
     @Test
     void no_signpost_names_a_client_specific_gesture() {
         // The hub serves this prose verbatim to every client. The PWA renders `answer` as PLAIN
-        // TEXT in its amber refusal bubble and posts mode:'analytic' with no toggle, so a métier on
+        // TEXT in its amber refusal bubble and posts mode:'analytic' with no toggle, so a business user on
         // a phone has neither a terminal for an `lm` command nor a semantic door to be sent to.
         // The signposts state the FACT; each client renders its own gesture for it.
         for (String signpost : List.of(AbstentionGuard.LIFECYCLE_SIGNPOST,

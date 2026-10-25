@@ -214,7 +214,7 @@ func hitCells(h client.SearchHit) []string {
 }
 
 // indexErr says integrator-only for the 403 the index doors (/api/platform/*) give an lm_user. A
-// query's 403 is another refusal — the métier scope — so it goes through searchErr alone.
+// query's 403 is another refusal — the scope — so it goes through searchErr alone.
 func indexErr(err error) error {
 	var api *client.APIError
 	if errors.As(err, &api) && api.Status == 403 {

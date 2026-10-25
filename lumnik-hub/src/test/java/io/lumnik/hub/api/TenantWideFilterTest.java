@@ -16,7 +16,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
-/** #1207: a tenant-wide door refuses a caller bound to a métier, and only that caller. */
+/** #1207: a tenant-wide door refuses a caller bound to a scope, and only that caller. */
 class TenantWideFilterTest {
 
   @AfterEach

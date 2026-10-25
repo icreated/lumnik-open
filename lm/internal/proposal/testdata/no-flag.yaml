@@ -26,7 +26,7 @@ kind: Workflow
 metadata:
   # name: yours to choose (a-z, 0-9, -); apply updates the workflow of this name
 spec:
-  # scope: yours to choose; the métier scope that may read this lifecycle
+  # scope: yours to choose; the scope that may read this lifecycle
   provenance: declared
   on:
     # table: the document table, as in connector.t_orders

@@ -68,7 +68,7 @@ func (c *Client) RagSearch(query string, topK int, corpus string) (*RagSearchRes
 	}
 	var out RagSearchResponse
 	if err := c.POST("/api/platform/rag/search", body, &out); err != nil {
-		return nil, err
+		return nil, c.askAbsent(err)
 	}
 	return &out, nil
 }
@@ -89,12 +89,12 @@ func (c *Client) RagChat(question string, corpus string, topK int) (*RagChatResp
 func (c *Client) RagCorpora() ([]RagCorpus, error) {
 	var out []RagCorpus
 	if err := c.GET("/api/platform/rag/corpora", &out); err != nil {
-		return nil, err
+		return nil, c.askAbsent(err)
 	}
 	return out, nil
 }
 
-// RagScope summarizes one métier scope's RAG coverage: how many connectors feed
+// RagScope summarizes one scope's RAG coverage: how many connectors feed
 // it, how many chunks are indexed, and when it was last indexed.
 type RagScope struct {
 	Scope       string `json:"scope"`
@@ -103,17 +103,17 @@ type RagScope struct {
 	LastIndexed string `json:"lastIndexed,omitempty"`
 }
 
-// RagScopes lists every métier scope's RAG coverage via
+// RagScopes lists every scope's RAG coverage via
 // GET /api/platform/rag/scopes.
 func (c *Client) RagScopes() ([]RagScope, error) {
 	var out []RagScope
 	if err := c.GET("/api/platform/rag/scopes", &out); err != nil {
-		return nil, err
+		return nil, c.askAbsent(err)
 	}
 	return out, nil
 }
 
-// GetMyScope fetches the caller's default métier scope via
+// GetMyScope fetches the caller's default scope via
 // GET /api/platform/users/me/scope.
 func (c *Client) GetMyScope() (string, error) {
 	var out struct {
@@ -125,14 +125,14 @@ func (c *Client) GetMyScope() (string, error) {
 	return out.DefaultScope, nil
 }
 
-// SetMyScope sets the caller's default métier scope via
+// SetMyScope sets the caller's default scope via
 // PUT /api/platform/users/me/scope.
 func (c *Client) SetMyScope(scope string) error {
 	body := map[string]any{"defaultScope": scope}
 	return c.PUT("/api/platform/users/me/scope", body, nil)
 }
 
-// RagChatScoped asks a natural-language question restricted to one métier scope
+// RagChatScoped asks a natural-language question restricted to one scope
 // via POST /api/platform/rag/chat, so the answer draws only from that scope's
 // corpus.
 func (c *Client) RagChatScoped(question, corpus, scope string, topK int) (*RagChatResponse, error) {
@@ -145,7 +145,7 @@ func (c *Client) RagChatScoped(question, corpus, scope string, topK int) (*RagCh
 	}
 	var out RagChatResponse
 	if err := c.POSTSlow("/api/platform/rag/chat", body, &out); err != nil {
-		return nil, err
+		return nil, c.askAbsent(err)
 	}
 	return &out, nil
 }

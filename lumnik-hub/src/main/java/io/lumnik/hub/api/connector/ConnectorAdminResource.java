@@ -270,7 +270,7 @@ public class ConnectorAdminResource {
    * Postgres refuses {@code DROP TABLE} while a view depends on the connector's dynamic table — the
    * audit's anonymous 500. Ask the physical dependency graph which view blocks the drop (drift-free —
    * never a stale in-memory guess), and refuse first with a named 409, rather than a silent CASCADE
-   * that would take the view out from under a métier surface without warning. The registry is
+   * that would take the view out from under a business app without warning. The registry is
    * consulted only to word the message: a {@code v_<name>} that is one of ours points at the
    * resolution ({@code lm entity delete}); a foreign view (a DBA's own over the same table) is named
    * as a view to drop, not a dead-end entity gesture.

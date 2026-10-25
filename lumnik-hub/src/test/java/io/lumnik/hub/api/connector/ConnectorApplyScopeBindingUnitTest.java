@@ -20,13 +20,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The métier scope boundary on the kind:Connector write door — the twin of
+ * The scope boundary on the kind:Connector write door — the twin of
  * {@code EntityApplyScopeBindingUnitTest}, on the door that had none.
  *
  * <p>{@code metadata.scopes} became the one declared, validated field the connector's scopes come
  * from (#388), which is exactly the seam a write gate belongs on: a bound user must hold EVERY
  * scope they publish into ({@code ScopeGrants.allowsAll}), or applying {@code scopes: [magasin]}
- * makes tables askable in a métier they were never granted. Reads accept an overlap; writes may
+ * makes tables askable in a scope they were never granted. Reads accept an overlap; writes may
  * not — {@code ScopeGrants} calls the asymmetry "the whole point".
  *
  * <p>Asserted with NO collaborators wired beyond the JSON mapper: the refusal must land before
@@ -167,7 +167,7 @@ class ConnectorApplyScopeBindingUnitTest {
     void apply_may_not_narrow_a_connector_out_of_a_scope_the_caller_does_not_hold() {
         // The incoming list is a subset the caller fully holds, so allowsAll passes on it. The
         // stored tags are [clients, magasin]; re-applying as [clients] drops magasin and the
-        // connector's tables stop being askable in a métier this user was never granted.
+        // connector's tables stop being askable in a scope this user was never granted.
         bindTo("clients");
 
         assertThatThrownBy(() -> resource(Optional.of(List.of("clients", "magasin"))).apply(CLIENTS_CONNECTOR))

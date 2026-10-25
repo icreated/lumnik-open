@@ -14,7 +14,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.not;
 
 /**
- * {@code GET /api/search?scope=} under real bearer JWTs: the app's métier narrows the search, and a
+ * {@code GET /api/search?scope=} under real bearer JWTs: the app's scope narrows the search, and a
  * malformed or ungranted scope is refused BEFORE the provider is asked — so these cases hold on a hub
  * with no Search provider at all (the allowed-set arithmetic itself is {@link SearchResourceScopeTest}).
  */

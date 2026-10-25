@@ -17,7 +17,7 @@ kind: Connector
 metadata:
   name: csv-local-simple          # unique connector name within the workspace
   connector_type: csv-file        # selects the CSV-file connector implementation
-  scopes: [demo]                  # the métier(s) this table is askable in — a scope-bound user needs scope:demo
+  scopes: [demo]                  # the scope(s) this table is askable in — a scope-bound user needs scope:demo
 
 spec:
   transport:

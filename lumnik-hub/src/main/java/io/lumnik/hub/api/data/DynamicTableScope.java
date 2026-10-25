@@ -14,7 +14,7 @@ import java.util.Optional;
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
 
 /**
- * The métier scope of a dynamic table's rows, for every door that reads one table's rows (#1201,
+ * The scope of a dynamic table's rows, for every door that reads one table's rows (#1201,
  * #1204): a table holds the rows of every connector writing it, so a caller bound to
  * {@code scope:<tag>} roles reads it only when each of those connectors carries one of its tags
  * ({@code allowsAny}, as an entity read). A table one scopeless or gone writer registers is

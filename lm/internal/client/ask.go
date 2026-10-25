@@ -126,7 +126,7 @@ func (c *Client) RagAsk(question, scope, lang, previous string) (*AskResult, err
 	}
 	var wire analyticWire
 	if err := c.POSTSlow("/api/platform/rag/chat", body, &wire); err != nil {
-		return nil, err
+		return nil, c.askAbsent(err)
 	}
 	cols, rows := flattenRows(wire.Rows)
 	return &AskResult{

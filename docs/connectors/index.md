@@ -142,8 +142,8 @@ $ lm validate -f noscopes.yaml
 ! noscopes.yaml — 0 error(s), 1 warning(s)
 
   WARN     metadata.scopes
-          no scopes declared — the connector's tables will not be askable in any scope
-          → Add: scopes: [compta]  (users need the scope:compta role)
+          no scopes declared — a user bound to a scope will not see this connector, its runs or its dead letters
+          → Add: scopes: [compta]  (a user must hold the role scope:compta)
 ```
 
 `lm apply` prints the same warnings, and applies. A warning never fails `lm validate` or

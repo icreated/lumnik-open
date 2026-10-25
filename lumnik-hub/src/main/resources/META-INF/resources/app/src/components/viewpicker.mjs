@@ -1,6 +1,6 @@
 import { html } from '../html.mjs';
 
-// B1: reachable at boot when the métier has >1 views, and again later via the ⇄ switch chip
+// B1: reachable at boot when the app has >1 views, and again later via the ⇄ switch chip
 // in fiches.mjs — same list either way. Reuses the existing card look (.card/.top/.title/.key)
 // rather than inventing new CSS: title big (the view's title), name mono small (the view's
 // technical name, same treatment as a fiche's key).

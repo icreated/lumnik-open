@@ -79,7 +79,7 @@ public class ViewApplyResource {
 
     // …and the NAME is the other half of the address. SavedViewStore.upsert conflicts on (name) and
     // sets scope = EXCLUDED.scope, so declaring into a scope you hold under a name that belongs to
-    // one you do not would re-home that view: the métier that owned the screen stops seeing it.
+    // one you do not would re-home that view: the scope that owned the screen stops seeing it.
     // Same words as the check above, so the two refusals are indistinguishable (#509).
     //
     // ORDERED — read, then write — which a race can jump; the store re-asks atomically and
@@ -103,7 +103,7 @@ public class ViewApplyResource {
         store.upsert(name, manifest.scope(), rv.title(), body, ScopeGrants.granted().orElse(null)));
 
     // Audit P4: the upsert goes through raw JDBC, outside every Hibernate listener — this
-    // explicit capture is the only record of who changed which métier screen when.
+    // explicit capture is the only record of who changed which scope's screen when.
     audit.record("SavedView", name, "APPLY", Map.of(
         "scope", manifest.scope(),
         "manifest_sha256", AuditRecorder.sha256(body)));

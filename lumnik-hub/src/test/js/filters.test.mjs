@@ -56,7 +56,7 @@ test('buildFilter: no client-side referee — text is passed verbatim, even quot
   assert.equal(buildFilter(col('city', 'text'), '~', 'a>b=c'), 'city~a>b=c');
 });
 
-test('chipLabel: métier label + operator word + value; unknown filters stay raw', () => {
+test('chipLabel: business label + operator word + value; unknown filters stay raw', () => {
   const cols = [col('amount', 'numeric', [], 'Montant'), col('city', 'text', [], 'Ville')];
   assert.equal(chipLabel('amount>=10', cols), 'Montant ≥ 10');
   assert.equal(chipLabel('city~Lyon', cols), 'Ville contient Lyon');

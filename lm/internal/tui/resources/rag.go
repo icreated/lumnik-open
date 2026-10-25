@@ -14,7 +14,7 @@ import (
 // lumnik.ai.enabled=false (its manifest's enabled_by).
 const aiSwitchedOff = "disabled:lumnik.ai.enabled"
 
-// Rag is the :rag page — `lm rag status` and `lm rag reindex` (#1135): the chunks indexed per métier
+// Rag is the :rag page — `lm rag status` and `lm rag reindex` (#1135): the chunks indexed per
 // scope, the platform corpus' last indexing, and R to rebuild that corpus. Whether there is a RAG at
 // all comes from the module registry first: switched off is not absent, and the page says which.
 //

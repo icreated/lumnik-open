@@ -38,7 +38,7 @@ import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
  * tenant policy. The {@code tenant_id} predicates stay as a second wall, and the registry row is
  * looked up for the caller's tenant only — a mapping registered for another tenant is a 404.
  *
- * <p>Métier scope bounds them too ({@link DynamicTableScope}): a table a caller may not read is left
+ * <p>Scope bounds them too ({@link DynamicTableScope}): a table a caller may not read is left
  * out of the list, and reading its rows is the uniform {@code 403 scope not granted}.
  */
 @Path("/api/platform/data/tables")

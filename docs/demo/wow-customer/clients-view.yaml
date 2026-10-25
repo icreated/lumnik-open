@@ -1,4 +1,4 @@
-# The first per-métier app surface: a list over the fused Customer entity (scope: clients).
+# The first per-scope app surface: a list over the fused Customer entity (scope: clients).
 # Read-only, card-backed — every column must exist in the clients SchemaCard or the render is refused.
 apiVersion: apps.lumnik.io/v1
 kind: View

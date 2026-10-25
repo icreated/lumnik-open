@@ -266,10 +266,10 @@ func newConnectorCmd() *cobra.Command {
 		},
 	})
 
-	// The scope is the métier boundary a bound user must hold (scope:<name>) to read what the
+	// The scope is the boundary a bound user must hold (scope:<name>) to read what the
 	// connector ingests — declared as metadata.scopes in the manifest. The wire keeps the field
 	// name `tags` (GET/PUT /connectors/{id}/tags), so an older lm keeps talking to a newer hub.
-	scope := &cobra.Command{Use: "scope", Short: "Manage the connector's métier scopes"}
+	scope := &cobra.Command{Use: "scope", Short: "Manage the connector's scopes"}
 
 	scope.AddCommand(&cobra.Command{
 		Use:   "ls NAME",

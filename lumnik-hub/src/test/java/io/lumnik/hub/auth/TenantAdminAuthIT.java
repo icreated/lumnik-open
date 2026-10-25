@@ -28,7 +28,7 @@ class TenantAdminAuthIT {
 
     /**
      * Pins the shape of a role refusal on the wire, because the documentation teaches readers to
-     * tell three different 403s apart by their body: this one is EMPTY, a métier-scope refusal
+     * tell three different 403s apart by their body: this one is EMPTY, a scope refusal
      * carries {@code {"error":"scope not granted"}}, and {@code /api/platform/*} answers the plain
      * text {@code missing role lm_integrator} from {@code PlatformApiAuthFilter}. All three are
      * now measured in this package — the second by {@code ScopeRefusalOnTheWireIT}, the third by

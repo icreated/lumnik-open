@@ -7,7 +7,7 @@ import java.util.Set;
 
 /**
  * The sentence an overdue decision carries (#1448). A workflow may declare its own in
- * {@code spec.due.message}, in its métier's language, over what the sweep knows; without one the
+ * {@code spec.due.message}, in its business domain's language, over what the sweep knows; without one the
  * sentence is English. Either way it says what the data says — a date passed in a state — never
  * why. Same {@code {placeholder}} grammar as a dormancy or Process message.
  */

@@ -91,13 +91,13 @@ public class WorkflowApplyResource {
         // …and the NAME is the other half of the address. store.upsert conflicts on
         // (tenant_id, name) and sets scope = EXCLUDED.scope, so declaring into a scope you hold
         // under a name that belongs to one you do not would re-home that lifecycle — manifest,
-        // chunk and observation ledger — into a métier its owner does not hold. Same words as the
+        // chunk and observation ledger — into a scope its owner does not hold. Same words as the
         // check above, so the two refusals are indistinguishable (#509).
         //
         // ORDERED — read, then write — which a race can jump; the store re-asks atomically and
         // refuseUnlessApplied below is that second answer. This earlier one is kept because it
         // refuses BEFORE the 404 further down names a scope and before the refusal below names
-        // another métier's owner, and a caller refused for the NAME must not read either (#582).
+        // another scope's owner, and a caller refused for the NAME must not read either (#582).
         ApplyScopeBoundary.refuseUnlessCallerHoldsScope(store.findScope(tenant, m.name()));
 
         // The scope must be a real, discovered scope. A typo'd `scope: demoo` used to be
@@ -116,9 +116,9 @@ public class WorkflowApplyResource {
                 "no schema for scope '" + m.scope() + "' — run discovery first")).build();
         }
 
-        // …and the table must not belong to a métier this caller does not hold. The scope check
+        // …and the table must not belong to a scope this caller does not hold. The scope check
         // above answers "may you declare INTO this scope"; it says nothing about which table you
-        // then point at, so a scope-bound integrator could name another métier's ingest table and
+        // then point at, so a scope-bound integrator could name another scope's ingest table and
         // read up to LIMIT distinct values of any column of it out of the data-truth report below.
         // The sibling door already refuses this — ViewResolver.findTable resolves the table against
         // the scope's card — and a workflow had no equivalent.
@@ -130,7 +130,7 @@ public class WorkflowApplyResource {
         if (!card.get().tableNames().contains(m.table())
                 && cards.findOtherScopeAdvertising(tenant, m.scope(), m.table()).isPresent()) {
             return Response.status(400).entity(ApiErrors.error(
-                "spec.on.table " + m.table() + " belongs to another métier's scope — a workflow may "
+                "spec.on.table " + m.table() + " belongs to another scope — a workflow may "
                     + "only watch a table of its own scope. Declare it in the scope that owns the "
                     + "table, or point at a table of '" + m.scope() + "'")).build();
         }
@@ -210,21 +210,21 @@ public class WorkflowApplyResource {
      * may say.
      *
      * <p>The NAME is what makes this actionable ("re-apply under that name to update it"), and it
-     * is also a name out of another métier's card when the caller does not hold the owner's scope.
+     * is also a name out of another scope's card when the caller does not hold the owner's scope.
      * {@code WorkflowManifestStore.findOtherOnColumn} says why the lookup itself cannot be
      * scope-filtered; the consequence is that the boundary is drawn here, in the wording (#516).
      * Reaching it at all takes a table advertised in BOTH cards: the check just above refuses a
      * table that belongs only to another scope.
      *
-     * <p>The foreign branch still says the column is taken and by a métier the caller does not
+     * <p>The foreign branch still says the column is taken and by a scope the caller does not
      * hold, because a refusal that named nothing would send an integrator to guess the name and
-     * meet a 403 there instead. Naming "another métier's scope" is the same disclosure the table
+     * meet a 403 there instead. Naming "another scope" is the same disclosure the table
      * check above already makes at this very door.
      */
     private static String columnTaken(WorkflowManifest m, WorkflowManifestStore.ColumnOwner owner) {
         String head = "column " + m.table() + "." + m.column() + " already has a declared lifecycle";
         if (!ScopeGrants.allows(owner.scope())) {
-            return head + ", in a métier you do not hold — a column has exactly one lifecycle; "
+            return head + ", in a scope you do not hold — a column has exactly one lifecycle; "
                 + "ask the integrator who owns that scope, or watch another column";
         }
         return head + ": workflow '" + owner.name() + "' — a column has exactly one lifecycle; "

@@ -5,7 +5,7 @@ package io.lumnik.hub.app;
  * declare that is able to make text illegible.
  *
  * <p>{@code --accent} is not only a text colour in {@code styles.css}: {@code .bubble.me} paints it
- * as the BACKGROUND of the métier's own chat messages, with a fixed {@code #17122e} foreground. A
+ * as the BACKGROUND of the business app's own chat messages, with a fixed {@code #17122e} foreground. A
  * hex-format check alone accepts {@code #101010} there, and the app ships with invisible text.
  */
 public final class WcagContrast {

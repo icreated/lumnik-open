@@ -46,7 +46,7 @@ public final class TenantRlsScope {
      *
      * <p>{@code SET LOCAL search_path = ''} forces fully-qualified table refs: a BARE
      * table name does NOT resolve to a connector table, so an unqualified name cannot
-     * bypass LeakGuard (which inspects schema-qualified refs) to read another métier's
+     * bypass LeakGuard (which inspects schema-qualified refs) to read another scope's
      * table via the search path. {@code pg_catalog} functions still resolve (implicitly
      * searched), and qualified {@code connector.x} refs work.
      *

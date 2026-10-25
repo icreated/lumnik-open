@@ -8,7 +8,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** The métier-scope grant primitive — opt-in semantics ratified 2026-07-07 (PR #131). */
+/** The scope grant primitive — opt-in semantics ratified 2026-07-07 (PR #131). */
 class ScopeGrantsTest {
 
   @AfterEach

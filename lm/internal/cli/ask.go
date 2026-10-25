@@ -57,7 +57,7 @@ func newAskCmd() *cobra.Command {
 			return nil
 		},
 	}
-	ask.Flags().String("scope", "", "The métier scope whose fused data to query")
+	ask.Flags().String("scope", "", "The scope whose fused data to query")
 	ask.Flags().String("previous", "", "The question this one continues, so a follow-up like \"Et SUP-004 ?\" resolves against it")
 	ask.Flags().String("lang", "", "Two-letter answer language (default: from LC_ALL, LC_MESSAGES or LANG; none: the question's own)")
 	return ask

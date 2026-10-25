@@ -83,7 +83,7 @@ func TestAskMultiWordQuestion(t *testing.T) {
 // An abstention that names another door renders THIS client's gesture for it.
 //
 // The hub's sentence deliberately names no command: the same string reaches `lm ask`, the PWA and
-// anything else on the API, so a backtick-quoted CLI command would send a métier on a phone to a
+// anything else on the API, so a backtick-quoted CLI command would send a business user on a phone to a
 // terminal they do not have (#494/#495). The structured `otherDoors` is what lets each client
 // render its own — here, the two commands that exist in this binary (#515).
 func TestAsk_anAbstentionRendersTheGestureThisClientHas(t *testing.T) {

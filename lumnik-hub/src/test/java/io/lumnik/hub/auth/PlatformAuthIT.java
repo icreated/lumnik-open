@@ -65,7 +65,7 @@ class PlatformAuthIT {
      * The third of three confusable 403s, and the only one nothing held in place (#517).
      *
      * <p>The documentation teaches a reader to tell them apart BY THEIR BODY: a
-     * {@code @RequiresPermission} refusal is body-less ({@code TenantAdminAuthIT}), a métier-scope
+     * {@code @RequiresPermission} refusal is body-less ({@code TenantAdminAuthIT}), a scope
      * refusal carries {@code {"error":"scope not granted"}} off the socket
      * ({@code ScopeRefusalOnTheWireIT}), and this one is the plain sentence
      * {@code missing role lm_integrator}. It is the one LEAST like its siblings — text where they

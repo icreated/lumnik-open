@@ -25,7 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 
 /**
- * The métier-scope refusal, measured ON THE WIRE, by a caller who is actually BOUND.
+ * The scope refusal, measured ON THE WIRE, by a caller who is actually BOUND.
  *
  * <p>Every scope refusal in the hub was pinned at the unit level — the door returns or throws a 403
  * carrying {@code {"error":"scope not granted"}} — and nothing pinned the conversion to an HTTP
@@ -127,7 +127,7 @@ class ScopeRefusalOnTheWireIT {
     /**
      * The one refusal, byte for byte off the socket — and both shapes come through here, so a caller
      * cannot tell a declared-scope refusal from a stored-scope one. That is the point: the difference
-     * is which métier owns the name, the single bit the refusal withholds.
+     * is which scope owns the name, the single bit the refusal withholds.
      *
      * <p>The bytes are written out rather than read from {@link ScopeGrants#REFUSAL}, deliberately:
      * {@code lm}'s client, the OTK oracle and the PWA hardcode this literal, so a hub-side test that
@@ -154,14 +154,14 @@ class ScopeRefusalOnTheWireIT {
             .then().statusCode(200);
     }
 
-    /** A bound caller publishing into its own métier is not refused — the boundary is not a wall. */
+    /** A bound caller publishing into its own scope is not refused — the boundary is not a wall. */
     @Test
     void boundCaller_publishesIntoTheScopeItHolds() {
         apply(boundToMagasin(), name("wire-own"), "magasin")
             .then().statusCode(200);
     }
 
-    /** The RETURNED refusal: the caller declares a métier it does not hold. */
+    /** The RETURNED refusal: the caller declares a scope it does not hold. */
     @Test
     void boundCaller_declaringAScopeItDoesNotHold_isRefused() {
         assertRefused(apply(boundToMagasin(), name("wire-declared"), "clients"));

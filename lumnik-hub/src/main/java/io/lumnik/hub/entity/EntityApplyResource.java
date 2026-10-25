@@ -67,7 +67,7 @@ public class EntityApplyResource {
     // …and the NAME is the other half of the address. EntityViewCompiler.apply conflicts on (name)
     // and sets scopes = EXCLUDED.scopes, so a caller who holds every scope they DECLARE can still
     // rewrite a manifest that lives in scopes they do not — re-homing it, or simply narrowing it out
-    // of a métier by re-applying a subset. Same words as the check above (#509).
+    // of a scope by re-applying a subset. Same words as the check above (#509).
     //
     // ORDERED — read, then write — which a race can jump; the compiler re-asks atomically and
     // refuseUnlessApplied below is that second answer. This earlier one is kept because it refuses

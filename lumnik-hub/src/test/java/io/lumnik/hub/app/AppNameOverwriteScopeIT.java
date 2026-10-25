@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * <p>{@code AppApplyResource} calls {@code findScope(name)} and then {@code upsert} — two
  * connections, two transactions, and a window in between where another transaction can take that
  * name under a scope the caller does not hold. The unconditional {@code ON CONFLICT … DO UPDATE}
- * would then re-home it, which is exactly the cross-métier write {@code ApplyScopeBoundary} exists
+ * would then re-home it, which is exactly the cross-scope write {@code ApplyScopeBoundary} exists
  * to refuse. The property that survives that race is not "the door refuses" but <b>the store
  * refuses on its own</b>, so {@code upsert} is called directly here, as if the ordered check had
  * been jumped entirely — which is precisely what the race does.

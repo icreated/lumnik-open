@@ -58,7 +58,7 @@ class AppWriteResourceIT {
 
         assertThat(store.find("salon-a-supprimer")).isEmpty();
         assertThat(latestAuditChanges("salon-a-supprimer"))
-            .as("who removed which métier's screen")
+            .as("who removed which scope's screen")
             .isNotNull();
     }
 

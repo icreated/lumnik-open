@@ -130,7 +130,7 @@ public class ModuleManifestRegistry {
         return active;
     }
 
-    /** What this hub offers the métier PWA: the sorted union of the tabs of the active modules. */
+    /** What this hub offers the business-app PWA: the sorted union of the tabs of the active modules. */
     public List<String> offeredTabs() {
         return offeredTabs;
     }

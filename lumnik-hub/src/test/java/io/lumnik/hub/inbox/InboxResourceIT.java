@@ -299,7 +299,7 @@ class InboxResourceIT {
     @ParameterizedTest(name = "all={0}, bound={1}")
     @CsvSource({"false,false", "true,false", "false,true", "true,true"})
     void theInboxReadIsTwoIndexPaths(boolean all, boolean bound) throws Exception {
-        // bound: a caller held to their métiers' sources (#1209) walks the same index, one array test a row
+        // bound: a caller held to their scopes' sources (#1209) walks the same index, one array test a row
         List<JsonNode> plan = plan(all, bound);
         // Only the walk's predicate implies the partial index's (a bitmap scan names it on an alias-less node).
         Assertions.assertThat(plan).as("the walk reads no row event: %s", plan.get(0))

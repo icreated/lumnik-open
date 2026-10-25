@@ -97,7 +97,7 @@ public class ConnectorApplyResource {
             "manifest_sha256", AuditRecorder.sha256(body)));
         // The advisories the validator produced above ride the success body: on this path they
         // have no other way out, and the one they warn about most — no scopes, so nothing the
-        // connector ingests is askable in any métier — is silent everywhere else (#531).
+        // connector ingests is askable in any scope — is silent everywhere else (#531).
         return Response.ok(result.withWarnings(vr.warnings())).build();
     }
 

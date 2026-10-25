@@ -108,7 +108,7 @@ class WorkflowNameOverwriteScopeIT {
 
     @Test
     void aBoundCallerMayOverwriteANameInsideItsGrants() {
-        // The guard must not refuse the ordinary case it exists to permit: the same métier updating
+        // The guard must not refuse the ordinary case it exists to permit: the same scope updating
         // its own workflow. Without this, "refuse everything" would pass the three tests above.
         given("wf-sien-582", "statut_sien");
 

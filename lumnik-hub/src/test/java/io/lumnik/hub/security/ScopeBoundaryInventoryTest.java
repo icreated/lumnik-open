@@ -28,7 +28,7 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The métier scope boundary, enforced as an INVENTORY rather than as a habit.
+ * The scope boundary, enforced as an INVENTORY rather than as a habit.
  *
  * <p>Every door was already supposed to check {@code ScopeGrants}; the four kind:View doors did and
  * the kind:Process, kind:Workflow and kind:Entity doors did not. Nothing said so out loud, so the
@@ -36,7 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * fail the build, and it is deliberately anchored on a signal from the PRODUCTION source rather than
  * on a hand-kept list of resources:
  *
- * <p><b>A door that touches a métier scope's schema — by loading its card, or by refreshing it —
+ * <p><b>A door that touches a scope's schema — by loading its card, or by refreshing it —
  * is operating inside that scope, and must decide whether the caller holds it.</b>
  *
  * <p>Both directions break the build. A new resource that loads a card without consulting
@@ -56,7 +56,7 @@ class ScopeBoundaryInventoryTest {
   private static final SourceTree HUB_SOURCES = SourceTree.of("lumnik-hub", "io/lumnik/hub");
 
   /**
-   * Touching any of these means the door is working inside a métier scope. The first two are
+   * Touching any of these means the door is working inside a scope. The first two are
    * the scope's SCHEMA; the third is the scope's DECLARATION — a door that reads
    * {@code metadata.scopes} off a manifest is about to stamp those scopes on something, and
    * the connector apply door did exactly that for months without asking. Its scope side-effect
@@ -75,12 +75,12 @@ class ScopeBoundaryInventoryTest {
    * the webhook door by injection counts too: a request filter does not follow an injected call.
    *
    * <p>The last is the connector itself: it lives in the scopes its tags name, so a door that loads
-   * one acts inside them — changes, runs or deletes another métier's ingestion, or reads what it
+   * one acts inside them — changes, runs or deletes another scope's ingestion, or reads what it
    * left behind (#1208). The CSV one-shot service loads and retags one by name on its caller's
    * behalf, so naming it counts too.
    *
    * <p>A kind:Workflow lives in its {@code spec.scope}: its graph and the tape of the documents it
-   * watches are that métier's. The read door over them answered the whole tenant (#1254).
+   * watches are that scope's. The read door over them answered the whole tenant (#1254).
    */
   private static final List<String> SCOPE_TOUCHING =
       List.of("SchemaCardStore", "DiscoveryService", "ApplyUpsert.scopes(",
@@ -117,7 +117,7 @@ class ScopeBoundaryInventoryTest {
 
     assertThat(sweep.unguarded())
         .as("""
-            These doors work inside a métier scope's schema but never ask whether the caller holds \
+            These doors work inside a scope's schema but never ask whether the caller holds \
             that scope. Either call ScopeGrants (403 "%s", the uniform refusal), or add the file to \
             EXEMPT with a reason a reader can check.""".formatted("scope not granted"))
         .isEmpty();
@@ -143,7 +143,7 @@ class ScopeBoundaryInventoryTest {
         .isEmpty();
   }
 
-  /** Does this door work inside one métier scope's schema? Comments do not count as code. */
+  /** Does this door work inside one scope's schema? Comments do not count as code. */
   static boolean touchesAScope(String javaSource) {
     return ScopeBoundaryRule.touches(SCOPE_TOUCHING, javaSource);
   }
@@ -167,7 +167,7 @@ class ScopeBoundaryInventoryTest {
    * The first sweep asks whether a door consults {@code ScopeGrants} at all. All five apply doors
    * did — and all five were wrong anyway, because they asked about the scope the caller DECLARES
    * and never about the scope the row they were overwriting already lives in. A bound admin could
-   * post a manifest named after another métier's and the upsert re-homed it, silently (#509).
+   * post a manifest named after another scope's and the upsert re-homed it, silently (#509).
    *
    * <p>So: a door that applies a manifest must also consult {@link ApplyScopeBoundary}. That is a
    * different question from the first sweep's — "consults the guard" and "consults it about the
@@ -194,7 +194,7 @@ class ScopeBoundaryInventoryTest {
             These doors apply a manifest and upsert it on its NAME, but only ever ask whether the \
             caller holds the scope the manifest DECLARES. Call \
             ApplyScopeBoundary.refuseUnlessCallerHolds(…) on the STORED scope too, or the apply \
-            re-homes a manifest out of a métier its owner holds and nothing is said.""")
+            re-homes a manifest out of a scope its owner holds and nothing is said.""")
         .isEmpty();
   }
 

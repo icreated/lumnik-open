@@ -70,7 +70,7 @@ public class SchemaCardRefresher {
     /**
      * A connector delete changes which writers its shared tables have, and a card shows a table only
      * while every writer carries its scope (#1186): rebuild these scopes' cards once the delete has
-     * committed, so the remaining writers' métiers see the table again. Best-effort, as after a run.
+     * committed, so the remaining writers' scopes see the table again. Best-effort, as after a run.
      */
     public void afterCommit(long tenantId, List<String> scopes) {
         if (scopes.isEmpty()) return;

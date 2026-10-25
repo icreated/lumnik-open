@@ -19,8 +19,8 @@ import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * #1209: a decision belongs to the métier of the Process or Workflow that raised it. A user bound
- * to one métier sees, and acknowledges, only that métier's decisions — another's dormant documents
+ * #1209: a decision belongs to the scope of the Process or Workflow that raised it. A user bound
+ * to one scope sees, and acknowledges, only that scope's decisions — another's dormant documents
  * and process messages answer as if they did not exist. An unbound user keeps the whole pile.
  */
 @QuarkusTest

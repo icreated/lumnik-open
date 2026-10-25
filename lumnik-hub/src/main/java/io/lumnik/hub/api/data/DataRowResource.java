@@ -26,7 +26,7 @@ import java.util.Optional;
  * Drill-down from a citation hash to the source row in the dynamic table.
  *
  * <p>Lookup: {@link CitationLocator} (row_hash → mapping_id, the chunk store's seam) →
- * dynamic_table.table_schema+table_name → row. Bounded by métier scope as the table's rows are
+ * dynamic_table.table_schema+table_name → row. Bounded by scope as the table's rows are
  * ({@link DynamicTableScope}): a hash read from a citation, a log or a colleague does not widen it.
  */
 @Path("/api/platform/data/row/{hash}")
@@ -56,7 +56,7 @@ public class DataRowResource {
     }
     String mappingId = mapping.get();
 
-    // 2. The registered table, and whether its rows' métier scope is granted (#1201).
+    // 2. The registered table, and whether its rows' scope is granted (#1201).
     // 3. SELECT * from it, on the same connection. Schema/table come from the system's own
     // connector.dynamic_table registry, quoted the way the writer created them.
     //

@@ -2,7 +2,7 @@ import { html, useState } from '../html.mjs';
 import { Refusal } from './refusal.mjs';
 import { kindOf, operatorsFor, inputTypeFor, buildFilter, chipLabel, resolveOp } from '../filters.mjs';
 
-// B5: a typed filter bar — pick a column (métier label), an operator its kind offers, and a value
+// B5: a typed filter bar — pick a column (business label), an operator its kind offers, and a value
 // control matching the kind (text, number, date/time, or a selection from allowedValues). The
 // control only composes the hub grammar (filters.mjs); there is no client-side validation, the hub
 // is the one honest referee for what a filter means (see views.mjs's header comment). A bad filter

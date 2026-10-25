@@ -141,8 +141,8 @@ $ cat bad-connector.yaml | lm validate -f -
           → none
 
   WARN     metadata.scopes
-          no scopes declared — the connector's tables will not be askable in any scope
-          → Add: scopes: [compta]  (users need the scope:compta role)
+          no scopes declared — a user bound to a scope will not see this connector, its runs or its dead letters
+          → Add: scopes: [compta]  (a user must hold the role scope:compta)
 
 Fix the errors above in what produced this manifest.
 Error: validation failed: 2 error(s)

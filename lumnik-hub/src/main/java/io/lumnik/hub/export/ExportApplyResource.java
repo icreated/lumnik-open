@@ -79,7 +79,7 @@ public class ExportApplyResource {
         // It runs HERE, before the entity is even resolved, for ViewApplyResource's own reason:
         // the cross-checks below name the entity's declared scopes and its canonical columns, and
         // the entity registry is deployment-global — so a caller refused for the NAME must not
-        // read another métier's entity shape on the way out (#582). It also refuses before the
+        // read another scope's entity shape on the way out (#582). It also refuses before the
         // audit record below and any future side effect this one cannot roll back (#509).
         ApplyScopeBoundary.refuseUnlessCallerHoldsScope(store.findScope(tenant, name));
 

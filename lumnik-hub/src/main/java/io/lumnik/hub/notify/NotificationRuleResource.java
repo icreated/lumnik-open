@@ -36,7 +36,7 @@ import java.util.Map;
  *
  * <p>Tenant-implicit (the InboxResource pattern — lm carries no numeric tenant), lm_admin (a rule
  * is a tenant-admin subscription, like a webhook), and {@link TenantWide}: an admin bound to a
- * métier is refused, a rule receiving every métier's events (#1207). The tenant is read FIRST on every door, so a
+ * scope is refused, a rule receiving every scope's events (#1207). The tenant is read FIRST on every door, so a
  * malformed body cannot be answered before the 401, and the tenant filter is explicit on every
  * read/write — belt and braces over RLS.
  */

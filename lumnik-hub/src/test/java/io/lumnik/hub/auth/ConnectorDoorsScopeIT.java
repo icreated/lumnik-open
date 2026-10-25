@@ -35,8 +35,8 @@ import static org.hamcrest.Matchers.equalTo;
 /**
  * #1208: a connector lives in the scopes its tags name, and every door acting on one by id asks
  * {@code allowsAll(connector.tags)} — the write rule, because each of them can change, run or delete
- * it. A caller bound to {@code scope:*} roles is refused a connector of another métier, a connector
- * spanning a métier they do not hold, and a scopeless one; the list shows only the connectors they
+ * it. A caller bound to {@code scope:*} roles is refused a connector of another scope, a connector
+ * spanning a scope they do not hold, and a scopeless one; the list shows only the connectors they
  * hold. An unbound caller administers the whole tenant, as before.
  */
 @QuarkusTest
@@ -156,7 +156,7 @@ class ConnectorDoorsScopeIT {
   @Test
   void the_tags_door_answers_for_the_connector_before_judging_the_body() throws Exception {
     // #1213 review: the tag names were validated first, so a malformed body answered 400 where the
-    // id alone decides — another métier's connector is the uniform 403, an unknown one a 404
+    // id alone decides — another scope's connector is the uniform 403, an unknown one a 404
     String malformed = "[\"Not A Scope\"]";
     refused(as("magasin").body(malformed).put("/api/platform/connectors/" + connector("catalogue") + "/tags"));
     as("magasin").body(malformed).put("/api/platform/connectors/" + UUID.randomUUID() + "/tags")
@@ -173,7 +173,7 @@ class ConnectorDoorsScopeIT {
   }
 
   /**
-   * #1224: the name's holder is named by a 409 only to a caller who holds it. Another métier's
+   * #1224: the name's holder is named by a 409 only to a caller who holds it. Another scope's
    * holder is the uniform refusal — the one bit the manifest door already gives (ApplyScopeBoundary),
    * never its id.
    */

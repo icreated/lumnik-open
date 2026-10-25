@@ -82,7 +82,7 @@ public class AppApplyResource {
 
         // …and the NAME is the other half of the address. upsert conflicts on (name) and sets
         // scope = EXCLUDED.scope, so declaring into a scope you hold under a name belonging to one
-        // you do not would re-home that app: the métier that owned the screen stops seeing it.
+        // you do not would re-home that app: the scope that owned the screen stops seeing it.
         // Same words as the check above, so the two refusals are indistinguishable (#509).
         //
         // ORDERED, like the default-holder check below and porous the same way: findScope reads on
@@ -112,7 +112,7 @@ public class AppApplyResource {
 
         // …and the DEFAULT FLAG is a third address this apply writes to, unique to kind:App — no
         // other manifest kind has a deployment-global singleton. Taking the flag demotes whoever
-        // holds it, so a caller bound to one métier could silently rewrite a row in a scope they
+        // holds it, so a caller bound to one scope could silently rewrite a row in a scope they
         // cannot even READ. Same question, same frozen words as the two checks above.
         //
         // This single check also closes the disclosure: `demotedDefault` is echoed in the response
@@ -165,7 +165,7 @@ public class AppApplyResource {
         };
 
         // Audit P4: the upsert goes through raw JDBC, outside every Hibernate listener — this
-        // explicit capture is the only record of who changed which métier's identity, and of the
+        // explicit capture is the only record of who changed which app's identity, and of the
         // app that silently lost the default flag because of it.
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("scope", stored.scope());

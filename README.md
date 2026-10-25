@@ -5,7 +5,7 @@
 Your ERP knows everything and tells you nothing. **lumnik** ingests the data trapped inside
 legacy systems — Siebel, AS/400, homegrown SQL, CSV drops, SOAP and REST and GraphQL
 backends — and un-freezes it into something people can actually use: fused entities, live
-per-métier views, and honest APIs over a multi-tenant PostgreSQL hub.
+per-scope views, and honest APIs over a multi-tenant PostgreSQL hub.
 
 **The name:** `lum` (light) + the Slavic agent suffix `-nik` — *the one who brings light into
 the frozen ERP*. The CLI binary is `lm` (the lumen symbol).
@@ -32,8 +32,8 @@ before that word goes away.
   with webhook delivery, GDPR export/erase.
 - **`lm`** — a k9s-style terminal UI and CLI driving connectors, runs, views and inbox,
   with an OIDC device-flow login.
-- **The métier PWA** at `/app/` — Preact without a bundler, phone=cards / tablet=table /
-  display=rail; server-side `kind:View` manifests scoped per métier.
+- **The business-app PWA** at `/app/` — Preact without a bundler, phone=cards / tablet=table /
+  display=rail; server-side `kind:View` manifests bound to a scope.
 - **Self-host in one command** — `deploy/selfhost/up.sh`: hub + PostgreSQL + Keycloak on a
   VM, optional TLS façade with automatic Let's Encrypt.
 
@@ -72,8 +72,8 @@ not be public.
 ## lumnik Pro
 
 The open edition is the complete defrost substrate. **lumnik Pro** adds the reasoning and
-industrialisation layers on top: **Ask** (natural-language chat over your data, per-métier
-scoped, text-to-SQL behind five honesty guards), **Kafka / Event Hubs inbound streams**, and
+industrialisation layers on top: **Ask** (natural-language chat over your data, bound to
+a scope, text-to-SQL behind five honesty guards), **Kafka / Event Hubs inbound streams**, and
 the external-identity loop (external IdP, JIT provisioning, SCIM deprovisioning). A
 Kubernetes delivery — Helm, sealed secrets, managed PostgreSQL — comes with it.
 

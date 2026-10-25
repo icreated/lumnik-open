@@ -94,7 +94,7 @@ func All() []KindTemplate {
 		{"Entity", "Fuse sources into one canonical entity", entity, "docs/demo/wow-customer/customer-entity.yaml", "sources"},
 		{"Process", "React to rows: emit decision.* events", process, "docs/demo/wow-customer/lyon-process.yaml", "inbox"},
 		{"Workflow", "Declare a document lifecycle: states, aliases, transitions", workflow, "docs/demo/wow-customer/commande-workflow.yaml", "observations"},
-		{"App", "A métier app's identity: title, scope, icon, theme, tabs", app, "docs/apps/demo/apps/10-lumilait.yaml", "apps"},
+		{"App", "A business app's identity: title, scope, icon, theme, tabs", app, "docs/apps/demo/apps/10-lumilait.yaml", "apps"},
 		{"View", "A saved list over an entity, served to the PWA", view, "docs/demo/wow-customer/clients-view.yaml", "views"},
 		{"Export", "A scheduled file of an entity, to SFTP or S3", export, "docs/apps/exports/10-sftp-daily.yaml", "entities"},
 		{"SearchIndex", "Which columns of an entity a Search provider indexes", searchIndex, "docs/search/search-indexes/10-customers.yaml", "entities"},

@@ -10,7 +10,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The entities one search may read: visible to the caller, narrowed to the app's métier when the
+ * The entities one search may read: visible to the caller, narrowed to the app's scope when the
  * request names one. The grants are an argument (the resource passes {@code ScopeGrants.granted()}),
  * so no case depends on the global roles holder.
  */

@@ -7,7 +7,13 @@ lumnik ships as two builds:
 | **`lumnik-open`** | Apache-2.0, public repository | ingest, fuse, react, serve the business apps |
 | **lumnik Pro** | commercial | adds *Ask* (natural-language chat over your data), model providers and the external-identity loop |
 
-The open build has no chat and no `lm ask`: no stub, no licence key.
+The open hub has no chat and no Ask: no stub, no licence key. `lm` is one binary for both editions; on an
+open hub its Ask commands (`lm ask`, `lm chat`, `lm rag search`, `lm scopes`) say so:
+
+```text
+$ lm ask "how many customers?"
+Error: this hub's build has no Ask: lumnik Open has no chat, no lm ask and no semantic search (lm module list shows no rag module); Ask ships in lumnik Pro
+```
 
 **lumnik Open** is the build behind the free **Hub** tier. **lumnik Pro** is the build behind both
 paid tiers — see [Three tiers, two builds](#three-tiers-two-builds).

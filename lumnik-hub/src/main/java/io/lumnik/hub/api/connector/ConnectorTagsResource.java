@@ -38,7 +38,7 @@ public class ConnectorTagsResource {
   public Response set(@PathParam("id") UUID id, List<String> tags) {
     if (tags == null) tags = List.of();
     // The connector answers first (404, then the uniform 403), as on every connector door: a
-    // refusal of the body must not be what tells another métier's caller the id exists.
+    // refusal of the body must not be what tells another scope's caller the id exists.
     var c = ConnectorScope.heldForUpdate(repo, id);
     if (c == null) return ApiErrors.notFound("connector " + id + " not found");
     // The same rule the manifest declares under (ScopesValidator) and kind:Entity enforces —

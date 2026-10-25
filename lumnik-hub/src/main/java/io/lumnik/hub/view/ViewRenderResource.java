@@ -26,7 +26,7 @@ import java.util.Optional;
 /**
  * Renders a kind:View: parse the manifest, resolve it against the scope's SchemaCard (honesty —
  * an unknown column is refused), read the rows read-only under the caller's tenant. The first
- * per-métier app surface. Tenant comes only from the auth context (never a client header).
+ * per-scope app surface. Tenant comes only from the auth context (never a client header).
  */
 @Path("/api/views")
 @Produces(MediaType.APPLICATION_JSON)

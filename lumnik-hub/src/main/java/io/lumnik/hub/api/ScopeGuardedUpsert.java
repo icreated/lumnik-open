@@ -12,9 +12,9 @@ import java.util.Set;
  * <p>{@code ApplyScopeBoundary} is the door's ordered check: read the scope stored on the name, then
  * write. It is correct single-threaded and POROUS under concurrency — the read takes its own
  * autocommit connection and the upsert runs later on another, against whichever row occupies that
- * name at THAT instant. Between the two, a concurrent apply can put the name in a métier the caller
+ * name at THAT instant. Between the two, a concurrent apply can put the name in a scope the caller
  * does not hold, and the unguarded {@code ON CONFLICT (…) DO UPDATE} would re-home it: the exact
- * cross-métier write the boundary exists to refuse (#509, #582).
+ * cross-scope write the boundary exists to refuse (#509, #582).
  *
  * <p>The fix is to carry the caller's grants into the write's own {@code WHERE}, so check and write
  * are one atomic statement. This type is what the store then reports back; every store that answers
@@ -31,14 +31,14 @@ public sealed interface ScopeGuardedUpsert {
 
     /**
      * Nothing written. The name is already taken by a row whose scope is outside the caller's
-     * grants, so the upsert's conflict arm would have re-homed another métier's manifest.
+     * grants, so the upsert's conflict arm would have re-homed another scope's manifest.
      *
      * <p><b>Not a refusal RESPONSE</b> — access control lives in the resources, and these stores
      * keep that posture. It reports a FACT about the write: the statement met a row it was not
      * permitted to touch, and nothing was committed.
      *
      * <p><b>The record is empty on purpose.</b> Carrying the refused row's scope would name the
-     * métier that owns the name — the one bit {@code ApplyScopeBoundary}'s javadoc is careful to
+     * scope that owns the name — the one bit {@code ApplyScopeBoundary}'s javadoc is careful to
      * withhold — and such a field sits one careless {@code put} away from an audit snapshot or a
      * response body.
      */

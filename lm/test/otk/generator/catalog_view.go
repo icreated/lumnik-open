@@ -2,7 +2,7 @@ package generator
 
 import "fmt"
 
-// viewVariant is an adversarial variant for the per-métier view surface
+// viewVariant is an adversarial variant for the per-scope view surface
 // (POST /api/views/render). The view render is card-backed: a column not in the
 // scope's SchemaCard, an unknown scope, a malformed filter — each is refused before
 // any row is read. These probe that the honesty line holds at the app layer and

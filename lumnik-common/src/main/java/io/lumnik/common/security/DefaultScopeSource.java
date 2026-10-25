@@ -3,7 +3,7 @@ package io.lumnik.common.security;
 import java.util.Optional;
 
 /**
- * The authenticated user's default métier scope, for the chat door when a request names none.
+ * The authenticated user's default scope, for the chat door when a request names none.
  *
  * <p>A <b>preference</b>, never a grant: whatever this returns is treated exactly as if the caller
  * had named it, and then held to {@link ScopeGrants} like any named scope — a bound user whose

@@ -8,7 +8,7 @@ import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriInfo;
 
 /**
- * The métier PWA is served as static resources under {@code /app/} only, so the bare, slash-less
+ * The business-app PWA is served as static resources under {@code /app/} only, so the bare, slash-less
  * path users actually type or share fell through to the API's not-found mapper. #572.
  *
  * <p>The redirect target is written as a bare, path-only string — never through

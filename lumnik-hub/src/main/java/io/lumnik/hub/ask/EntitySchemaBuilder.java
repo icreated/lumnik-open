@@ -19,7 +19,7 @@ import java.util.Map;
 
 /**
  * Discovery source for fused ENTITY views. Entities live in connector.entity_manifest (global,
- * not per-connector) and declare which métier scopes can see them. For a scope, emit one
+ * not per-connector) and declare which scopes can see them. For a scope, emit one
  * SchemaCard.Table per matching entity, pointing at its connector.v_&lt;name&gt; view with the
  * manifest's canonical columns. The columns come from the manifest, their types from the compiled view.
  */

@@ -25,13 +25,13 @@ public class AbstentionGuard {
 
     /**
      * What the scope holds that this door structurally cannot read. Appended to
-     * {@link #CANNOT_ANSWER_MESSAGE} so a métier is told the answer EXISTS, not merely that SQL
+     * {@link #CANNOT_ANSWER_MESSAGE} so a business user is told the answer EXISTS, not merely that SQL
      * could not find it.
      *
      * <p><b>Facts, not gestures.</b> An earlier draft named {@code lm chat} and
      * {@code lm conflicts list}. This prose is served verbatim to every client: the PWA renders
      * {@code answer} as plain text in its amber refusal bubble ({@code chat.mjs}), and it posts
-     * {@code mode: 'analytic'} with no toggle — so a métier on a phone would have been sent, in
+     * {@code mode: 'analytic'} with no toggle — so a business user on a phone would have been sent, in
      * backticks, to two commands they have no terminal for and one door their build does not expose.
      * Naming the fact keeps the sentence true on both surfaces; each client already has its own
      * gesture for it (the PWA shows a fused record's conflicts on its detail view, {@code lm} has

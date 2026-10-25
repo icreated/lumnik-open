@@ -13,7 +13,7 @@ import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 
 /**
- * #1207: a subscription receives the whole tenant's events — another métier's row activity, the
+ * #1207: a subscription receives the whole tenant's events — another scope's row activity, the
  * documents its workflows find dormant, its connectors' runs — and mails or POSTs them where its
  * author chose. So subscriptions are tenant-wide: a caller bound to {@code scope:*} roles is refused
  * every door of both channels, notification rules and webhooks, with the uniform refusal.

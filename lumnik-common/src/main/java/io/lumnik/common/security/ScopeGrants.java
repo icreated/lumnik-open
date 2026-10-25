@@ -7,7 +7,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * The métier-scope grant primitive. Grant = Keycloak realm role {@code scope:<tag>}
+ * The scope grant primitive. Grant = Keycloak realm role {@code scope:<tag>}
  * (flows JWT groups → {@link CurrentRolesHolder} via the hub's auth filter).
  *
  * Opt-in semantics (ratified 2026-07-07, PR #131): a user with ZERO {@code scope:*}

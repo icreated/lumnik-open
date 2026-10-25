@@ -116,7 +116,7 @@ public class JdbcSourceResource {
   public Response add(AddRequest req) {
     // The guided add creates its connectors with no tags — scopeless, tenant-wide — which a
     // scope-bound caller may not create (#1212, the apply door's rule). Asked before anything else:
-    // the existing-connector lookup below answers with another métier's connector ids.
+    // the existing-connector lookup below answers with another scope's connector ids.
     ConnectorScope.refuseUnlessHolds(List.of());
     Long tenantId = Objects.requireNonNullElse(TenantContextFilter.current(), 0L);
 

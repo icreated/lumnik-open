@@ -3,7 +3,7 @@ package io.lumnik.hub.app;
 import java.util.List;
 
 /**
- * A parsed kind:App manifest — one métier app's identity, declared at runtime instead of compiled
+ * A parsed kind:App manifest — one business app's identity, declared at runtime instead of compiled
  * into the PWA's METIERS map. The theme fields are never null: {@link AppManifestParser} fills in
  * today's shipped values when the manifest declares none, so every reader downstream sees a colour
  * and none of them has to know who chose it.

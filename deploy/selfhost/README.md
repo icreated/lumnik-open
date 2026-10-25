@@ -86,6 +86,10 @@ losing `LUMNIK_SECRET_MASTER_KEY` makes secrets stored by the hub unrecoverable.
 version instead of the latest `main` build, set `LUMNIK_VERSION` in `.env` (e.g. `LUMNIK_VERSION=1.0.0`
 once a `hub-v*` release is tagged).
 
+If `.env` is gone but the stack's volumes are still there, `up.sh` stops and writes nothing. The
+volumes keep the passwords of the `.env` that created them. Put that `.env` back from your backup, or
+remove the volumes with the `docker compose … down -v` line it prints. That deletes the hub's data.
+
 ## Ports
 
 By default the hub (`8080`) and Keycloak (`8180`) bind to `127.0.0.1` — reachable from the host only.

@@ -86,7 +86,7 @@ first. A hub confirmation or refutation is reported as carried by the dossier, n
 		},
 	}
 	draft.Flags().StringVar(&t.Name, "name", "", "metadata.name — yours to choose (a-z, 0-9, -); apply updates the workflow of this name")
-	draft.Flags().StringVar(&t.Scope, "scope", "", "spec.scope — the métier scope that may read the lifecycle")
+	draft.Flags().StringVar(&t.Scope, "scope", "", "spec.scope — the scope that may read the lifecycle")
 	draft.Flags().StringVar(&t.Table, "table", "", "spec.on.table, as in connector.t_orders")
 	draft.Flags().StringVar(&t.Column, "column", "", "spec.on.column — the status column")
 	draft.Flags().StringVar(&t.Key, "key", "", "spec.on.key — the column that identifies one document (needed for a dormancy)")

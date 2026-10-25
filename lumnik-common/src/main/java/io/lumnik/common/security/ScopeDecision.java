@@ -6,7 +6,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a public static method as a métier-scope AUTHORIZATION decision — a door that calls it
+ * Marks a public static method as a scope AUTHORIZATION decision — a door that calls it
  * is asking whether the caller holds a scope, and a caller outside their grant gets refused.
  *
  * <p>{@code ScopeBoundaryRule.decidingCalls} reflects over annotated methods, not every public

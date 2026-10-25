@@ -411,7 +411,8 @@ POST /api/platform/rag/reindex    (lm_admin)    lm rag reindex
 |---|---|---|
 | `400` | `{"error": "question is required"}` (chat), `{"error": "query is required"}` (search), `{"error": "scope is required"}` (schema) | missing/blank required field |
 | `400` | `{"error": "previous must be at most 1000 characters"}`, `{"error": "previous is only read in analytic mode"}` | a [follow-up](#follow-up-questions) `previous` over the bound, or sent without `mode: analytic` |
-| `404` | no body | chat, search, scopes or corpora on lumnik Open, or with the AI switched off (`lm` prints `Error: API error 404 (no details from the server)`) |
+| `404` | `{"error": "Unable to find matching target resource method"}` under `/api/platform/rag/`, `{"error": "HTTP 404 Not Found"}` on `/api/rag/chat` | chat, search, scopes or corpora on lumnik Open: the hub has no such door. `lm` prints `this hub's build has no Ask: …` |
+| `404` | no body | the same doors on lumnik Pro with the AI switched off. `lm` prints `this hub has Ask switched off (LUMNIK_AI_ENABLED=false): …` |
 | `401` | plain text `authentication required` + `WWW-Authenticate: Bearer` header | no/invalid token on `/api/platform/*` — note: **not** JSON |
 | `401` | `{"error": "no tenant in security context"}` | analytic ask/schema call whose token resolves no usable tenant |
 | `403` | plain text `missing role lm_integrator` | authenticated but not an integrator, on `/api/platform/*` |

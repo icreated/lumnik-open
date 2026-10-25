@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The métier scope boundary on the kind:Entity write door. {@code EntityReadResource} already binds
+ * The scope boundary on the kind:Entity write door. {@code EntityReadResource} already binds
  * reads with {@code allowsAny(m.scopes())}; apply did not, so a bound admin could fuse data into a
  * scope they cannot read back.
  *
@@ -137,7 +137,7 @@ class EntityApplyScopeBindingUnitTest {
     void apply_may_not_rehome_an_entity_that_lives_in_scopes_the_caller_does_not_hold() {
         // Holding magasin passes the incoming check. `customer` is already fused for clients, and
         // EntityViewCompiler.apply conflicts on (name) setting scopes = EXCLUDED.scopes: the clients
-        // entity would be re-homed into magasin and its view recompiled under someone else's métier.
+        // entity would be re-homed into magasin and its view recompiled under someone else's scope.
         bindTo("magasin");
 
         assertThatThrownBy(() -> resource(Optional.of(List.of("clients")))
@@ -152,7 +152,7 @@ class EntityApplyScopeBindingUnitTest {
     void apply_may_not_narrow_an_entity_out_of_a_scope_the_caller_does_not_hold() {
         // The subtler half: the incoming list is a SUBSET the caller fully holds, so allowsAll
         // passes on it. The stored row says [clients, magasin]; re-applying as [clients] drops
-        // magasin, and the entity vanishes from a métier this user was never granted.
+        // magasin, and the entity vanishes from a scope this user was never granted.
         bindTo("clients");
 
         assertThatThrownBy(() -> resource(Optional.of(List.of("clients", "magasin")))

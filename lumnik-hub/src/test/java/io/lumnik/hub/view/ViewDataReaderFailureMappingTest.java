@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * Registry case: the 5 s statement timeout used to surface as a bare 500
  * ("ViewDataReader.read: …") instead of a spoken refusal — a view must never
- * fail without saying why in métier language.
+ * fail without saying why in business language.
  */
 class ViewDataReaderFailureMappingTest {
 

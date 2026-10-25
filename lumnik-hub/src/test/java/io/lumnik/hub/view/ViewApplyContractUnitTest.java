@@ -131,7 +131,7 @@ class ViewApplyContractUnitTest {
 
   @Test
   void a_successful_apply_is_recorded_in_the_audit_trail() {
-    // Audit P4: 'who changed which métier screen when' was unrecoverable — SavedViewStore
+    // Audit P4: 'who changed which scope's screen when' was unrecoverable — SavedViewStore
     // upserts through raw JDBC, outside every Hibernate listener, and nothing recorded the
     // apply. The recorder must capture actor-attributable facts: name, scope, manifest hash.
     RecordingStore store = new RecordingStore();
@@ -265,7 +265,7 @@ class ViewApplyContractUnitTest {
   void apply_may_not_rehome_a_view_that_lives_in_a_scope_the_caller_does_not_hold() {
     // Holding magasin passes the incoming check. `clients-desk` is taken by clients, and
     // SavedViewStore.upsert conflicts on (name) setting scope = EXCLUDED.scope: the clients desk
-    // would become a magasin view, and the métier that owned it would stop seeing its own screen.
+    // would become a magasin view, and the scope that owned it would stop seeing its own screen.
     CurrentRolesHolder.set(Set.of("lm_integrator", "scope:magasin"));
     RecordingStore store = new RecordingStore();
     store.storedScope = "clients";

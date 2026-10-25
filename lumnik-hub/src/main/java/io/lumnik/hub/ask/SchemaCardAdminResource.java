@@ -36,7 +36,7 @@ import jakarta.ws.rs.core.Response;
  * <p>{@code DiscoveryPort} is implemented here, in this module, so there is no absent-extension
  * branch left to write — the {@code Instance<>} guard and its 503 went with the move.
  *
- * <p><b>The move closed a hole.</b> Every door working inside a métier scope must decide whether
+ * <p><b>The move closed a hole.</b> Every door working inside a scope must decide whether
  * the caller holds it, and {@code ScopeBoundaryInventoryTest} makes forgetting fail the build —
  * but it walks the HUB's resources, so this one, sitting in {@code lumnik-rag}, was outside its
  * sweep and had never asked. A scope-bound admin could read, or rebuild, the card of a scope they

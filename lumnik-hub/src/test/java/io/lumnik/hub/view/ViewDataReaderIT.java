@@ -62,7 +62,7 @@ class ViewDataReaderIT {
         exec("INSERT INTO connector.t_view_baddate VALUES ('X','2026-02-30')");  // shape-valid, calendar-invalid
     }
 
-    // Registry case: the 1000-row cap used to cut silently — a métier user seeing exactly
+    // Registry case: the 1000-row cap used to cut silently — a business user seeing exactly
     // 1000 rows could not tell a full result from a truncated one ("a view never lies").
     @Transactional
     @Test void beyondTheCap_rowsCutAndTheResponseSaysSo() {

@@ -43,8 +43,8 @@ import java.util.regex.Pattern;
  * {@code @RequiresPermission("lm_superadmin")} that passes a cross-tenant marker to {@link
  * #fetchSince}; do NOT widen this per-tenant door, which every {@code lm_integrator} can reach.
  *
- * <p>{@link TenantWide}: the stream carries every métier's events — what a webhook receives, pulled
- * instead of pushed — so a caller bound to a métier is refused it, as the subscriptions are (#1207).
+ * <p>{@link TenantWide}: the stream carries every scope's events — what a webhook receives, pulled
+ * instead of pushed — so a caller bound to a scope is refused it, as the subscriptions are (#1207).
  *
  * Path: GET /api/platform/events/stream?topic=connector.run.*
  */

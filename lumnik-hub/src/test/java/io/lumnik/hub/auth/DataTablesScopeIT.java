@@ -19,7 +19,7 @@ import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.not;
 
 /**
- * #1115 security review: a dynamic table's raw rows are bounded by the métier scope of the
+ * #1115 security review: a dynamic table's raw rows are bounded by the scope of the
  * connector that landed them, as an entity's rows are by the entity's — a caller bound to another
  * scope neither lists the table nor reads it (the uniform {@code scope not granted}). Real signed
  * JWTs (NoBypassOidcProfile), because a header identity cannot carry a scope binding.

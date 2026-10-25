@@ -6,7 +6,7 @@ kind: Connector
 metadata:
   name: siebel-customers
   connector_type: rest-generic
-  scopes: [demo]                  # the same métier as its CSV sibling: one bound user, both sources
+  scopes: [demo]                  # the same scope as its CSV sibling: one bound user, both sources
 spec:
   # fake-siebel.py runs on the HOST. From the hub container (self-host stack) reach it via
   # host.docker.internal; if you run the hub with `quarkus:dev` on the host, use localhost:8077.

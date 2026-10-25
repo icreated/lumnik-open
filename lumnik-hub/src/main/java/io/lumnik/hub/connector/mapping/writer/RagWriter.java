@@ -340,7 +340,7 @@ public class RagWriter {
    * One batched INSERT for the chunk — the addBatch/executeBatch shape DynamicTableWriter uses.
    *
    * <p>Tags bind as a real text[] parameter (createArrayOf — the ChunkRetagService pattern),
-   * never a hand-rolled "{a,b}" literal: a métier tag is free text, so a comma inside one
+   * never a hand-rolled "{a,b}" literal: a scope tag is free text, so a comma inside one
    * would be stored as two tags and a brace would corrupt the array. runWithConnection stays on the
    * session's connection, so the caller's transaction (and its RLS tenant) still applies.
    */

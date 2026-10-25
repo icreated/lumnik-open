@@ -14,7 +14,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * A door that touches a métier scope's data must decide whether the caller holds it — stated
+ * A door that touches a scope's data must decide whether the caller holds it — stated
  * once, here, so hub and rag are held to the same shape even though each names its own axis (what
  * "touches a scope" means for that module's doors) and its own decider (the primitive a door must
  * call to ask). Each module runs its own copy of the sweep, from its own {@link SourceTree}, the

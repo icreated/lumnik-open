@@ -286,7 +286,7 @@ func ProcessesSource(c *client.Client) ManifestSource {
 	}
 }
 
-// AppsSource is :apps — kind:App, the métier apps the PWA offers. The hub keeps no app manifest
+// AppsSource is :apps — kind:App, the business apps the PWA offers. The hub keeps no app manifest
 // text: e rebuilds one from the app's fields, which are the whole of a kind:App (#1176).
 func AppsSource(c *client.Client) ManifestSource {
 	return ManifestSource{

@@ -63,13 +63,13 @@ public class AppRegistrationStore {
 
         /**
          * Nothing written — rolled back. The default flag is held by a row whose scope is outside
-         * the caller's grants, so demoting it would have been a cross-métier write.
+         * the caller's grants, so demoting it would have been a cross-scope write.
          */
         record DefaultHeldOutOfScope() implements Upserted {}
 
         /**
          * Nothing written — rolled back. The name is already taken by a row whose scope is outside
-         * the caller's grants, so the upsert's conflict arm would have re-homed another métier's
+         * the caller's grants, so the upsert's conflict arm would have re-homed another scope's
          * app.
          */
         record NameHeldOutOfScope() implements Upserted {}
@@ -239,7 +239,7 @@ public class AppRegistrationStore {
      * concurrency: they read on their own autocommit connection, while the statements below run
      * later in a different transaction and hit whichever row occupies that address at THAT instant.
      * Between the two, another transaction can promote — or create under this name — an app in a
-     * métier the caller does not hold, and the write would then rewrite a row it can neither read
+     * scope the caller does not hold, and the write would then rewrite a row it can neither read
      * nor write. Carrying the caller's grants into each statement's own WHERE makes check and write
      * one atomic act, so the window has nothing to open onto. Do not "simplify" the predicates away
      * because the resource already asked: the resource asks earlier, these ask at the moment of

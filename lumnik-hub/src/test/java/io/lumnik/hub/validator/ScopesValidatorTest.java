@@ -134,8 +134,10 @@ class ScopesValidatorTest {
         assertEquals(1, w.size());
         assertEquals("metadata.scopes", w.get(0).path());
         assertEquals(Severity.WARNING, w.get(0).severity());
-        assertTrue(w.get(0).message().contains("askable") || w.get(0).message().contains("scope"),
-            () -> "the advice says what is lost: " + w.get(0).message());
+        // What is lost on every edition (#1582): a bound caller is refused a scopeless connector
+        // (ScopeGrants.allowsAll needs one tag). Ask is not in the open edition, so not named.
+        assertEquals("no scopes declared — a user bound to a scope will not see this connector, its runs or its dead letters",
+            w.get(0).message());
     }
 
     @Test

@@ -11,7 +11,7 @@ import {
 // The Search tab: one input, an explicit submit (the hub rate-limits search and q is 1-200
 // characters: no type-ahead), ranked hits with the matched words marked, the facets the hub returns
 // as chips, more results by cursor, and a hit that opens a read-only record sheet. All the decisions
-// live in src/search.mjs; this draws them. `scope` is the open app's métier: every search carries it.
+// live in src/search.mjs; this draws them. `scope` is the open app's scope: every search carries it.
 export function Search({ api, scope }) {
   const [q, setQ] = useState('');
   const [facets, setFacets] = useState({});

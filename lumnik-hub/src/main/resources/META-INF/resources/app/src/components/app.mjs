@@ -101,7 +101,7 @@ export function App() {
         // Phase 2: the authoritative registry. A failure here (network blip, CORS, a 5xx)
         // is 'offline' — the app cannot know its own scope, so it must not guess its way
         // into tabs. A refusal (unknown tag, or out-of-scope — the server does not
-        // distinguish the two) is 'refused', never a fallthrough to another métier.
+        // distinguish the two) is 'refused', never a fallthrough to another app.
         let resolved, plan;
         try {
           // Both doors in phase 2: the landing tab needs to know what the hub offers BEFORE the first

@@ -15,7 +15,7 @@ cd "$ROOT"
 missing=""
 # The full inventory of external commands this script calls (grep-audited) — the
 # claim "checked up front" must be true, not approximate.
-for tool in docker curl python3 openssl awk grep sed cut mv cp chmod sleep seq dirname basename; do
+for tool in docker curl python3 openssl awk grep sed cut tr mv cp chmod sleep seq dirname basename; do
   command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
 done
 if [[ -n "$missing" ]]; then
@@ -72,6 +72,9 @@ fi
 
 # 1) ensure .env with secrets (never overwrite an existing one)
 if [[ ! -f .env ]]; then
+  # shellcheck source=deploy/selfhost/volumes.sh
+  source deploy/selfhost/volumes.sh
+  refuse_fresh_env_over_volumes
   echo "==> no .env found — generating one with fresh random secrets"
   [[ -f .env.example ]] || { echo "!! .env.example not found — run this from the lumnik repo (the template is at the root)" >&2; exit 1; }
   umask 077  # any file created below (.env.tmp holding the real secrets) is owner-only from the start

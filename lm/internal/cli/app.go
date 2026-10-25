@@ -84,7 +84,7 @@ func exactNumbers(v any) any {
 func newAppListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List the declared apps (the registry the métier PWA reads)",
+		Short: "List the declared apps (the registry the business-app PWA reads)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			c, err := ClientFromCmd(cmd)
@@ -165,7 +165,7 @@ func newAppApplyCmd() *cobra.Command {
 	var file string
 	cmd := &cobra.Command{
 		Use:   "apply",
-		Short: "Apply an app manifest (YAML) — the métier PWA's title, scope, icon and theme",
+		Short: "Apply an app manifest (YAML) — the business-app PWA's title, scope, icon and theme",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			body, err := readManifest(cmd, file)
 			if err != nil {

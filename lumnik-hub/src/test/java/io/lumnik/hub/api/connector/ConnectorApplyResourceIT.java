@@ -64,7 +64,7 @@ class ConnectorApplyResourceIT {
      * A successful apply carries the validator's advisories. The resource computed the
      * ValidationResult, refused on errors — and then dropped {@code warnings} on the floor: an
      * integrator on the documented one-command path was never told that a scopeless connector is
-     * askable in no métier, while one who ran {@code lm validate} first was (#531).
+     * askable in no scope, while one who ran {@code lm validate} first was (#531).
      */
     @Test
     void apply_carries_validator_warnings_on_the_success_path() {
@@ -83,7 +83,7 @@ class ConnectorApplyResourceIT {
             .body("warnings.size()", equalTo(1))
             .body("warnings[0].path", equalTo("metadata.scopes"))
             .body("warnings[0].severity", equalTo("WARNING"))
-            .body("warnings[0].message", containsString("not be askable"))
+            .body("warnings[0].message", containsString("will not see this connector"))
             .body("warnings[0].recommendations", not(empty()));
     }
 

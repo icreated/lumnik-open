@@ -88,7 +88,7 @@ func newCsvIngestCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "connector name; a globbed sftp/s3 source must match a single file (default = filename basename)")
-	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "métier scope(s) the ingested table is askable in (repeatable; the first is the one the rows carry; default: system)")
+	cmd.Flags().StringSliceVar(&scopes, "scope", nil, "scope(s) the ingested table is askable in (repeatable; the first is the one the rows carry; default: system)")
 	cmd.Flags().IntVar(&limit, "limit", -1, "max rows (default: all)")
 
 	// SFTP flags

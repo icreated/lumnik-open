@@ -63,7 +63,7 @@ public class SchemaCardStore {
      *
      * <p>It exists for the apply doors: a scope-bound integrator may legitimately declare over a
      * table no card knows yet (declaring before ingesting is a supported order of operations), but
-     * never over one that belongs to a métier they do not hold. Callers must first check their OWN
+     * never over one that belongs to a scope they do not hold. Callers must first check their OWN
      * card — a table may appear in several scopes, and this answers about the others only.
      */
     public Optional<String> findOtherScopeAdvertising(long tenantId, String scope, String table) {

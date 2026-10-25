@@ -7,14 +7,14 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * The half of the métier boundary an apply door forgets: the scope the manifest ALREADY lives in.
+ * The half of the scope boundary an apply door forgets: the scope the manifest ALREADY lives in.
  *
  * <p>Every apply door asks {@code ScopeGrants} about the scope the caller declares — may you publish
- * INTO this métier. None of them asked about the row they were about to overwrite. Each store upserts
+ * INTO this scope. None of them asked about the row they were about to overwrite. Each store upserts
  * on the NAME ({@code ON CONFLICT (tenant_id, name) DO UPDATE SET … scope = EXCLUDED.scope}, and its
  * four siblings), so a bound admin holding only {@code scope:magasin} could post a manifest named
  * after one that belongs to {@code scope:clients}, declare it under magasin, and the upsert rewrote
- * the row — name, scope and all. The clients manifest was gone, re-homed into a métier its owner does
+ * the row — name, scope and all. The clients manifest was gone, re-homed into a scope its owner does
  * not hold, and no refusal was spoken.
  *
  * <p>The name is half the address. This class answers the other half, with the same words as the
@@ -52,7 +52,7 @@ public final class ApplyScopeBoundary {
      * {@code ConfigValidationException}, {@code BusinessException}), so JAX-RS serves the attached
      * response as given. {@code EntityApplyResource} has raised this same refusal by throwing since
      * before the four other doors did. <b>That last inch is measured</b>, by
-     * {@code ScopeRefusalOnTheWireIT}: a caller bound to one métier posts the name of a manifest
+     * {@code ScopeRefusalOnTheWireIT}: a caller bound to one scope posts the name of a manifest
      * living in another and reads back {@code 403 {"error":"scope not granted"}}, byte-identical to
      * the refusal the four returning doors serve.
      *
@@ -97,7 +97,7 @@ public final class ApplyScopeBoundary {
      * <p><b>This does not replace the ordered check; it backs it.</b> Both are kept because they
      * refuse at different moments, and the earlier moment is the one that keeps other refusals from
      * talking: an apply door goes on to answer {@code 404 "no schema for scope 'x'"} and to name the
-     * métier that owns a table, and a caller who must be refused for the NAME must not read those
+     * scope that owns a table, and a caller who must be refused for the NAME must not read those
      * first. The ordered check also refuses before side effects this one can only roll back (the
      * entity compiler's DROP/CREATE VIEW) or could not (the audit record, the RAG index).
      *

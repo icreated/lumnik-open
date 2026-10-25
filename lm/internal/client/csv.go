@@ -14,7 +14,7 @@ import (
 )
 
 // CsvIngestOpts controls a one-shot CSV ingest: the destination connector name
-// and métier scope, tags to apply, whether RAG indexing is enabled, and an
+// and scope, tags to apply, whether RAG indexing is enabled, and an
 // optional cap on rows read.
 type CsvIngestOpts struct {
 	Name       string

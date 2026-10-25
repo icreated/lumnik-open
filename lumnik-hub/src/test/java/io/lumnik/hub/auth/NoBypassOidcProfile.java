@@ -16,7 +16,7 @@ import java.util.Set;
 /**
  * Shared real-JWT harness for ITs that need an authenticated caller with {@code
  * lumnik.security.dev-bypass} off — {@code @RequiresPermission} role gates, and equally the
- * {@code scope:<tag>} grants a métier-bound caller carries ({@code ScopeRefusalOnTheWireIT}).
+ * {@code scope:<tag>} grants a scope-bound caller carries ({@code ScopeRefusalOnTheWireIT}).
  * Whatever goes into {@code groups} here is what the request is: this profile is not limited to
  * roles. Extracted from {@code TenantAdminAuthIT} (Task 1 of the
  * 2026-08-11 security audit) once a second IT ({@code IdentityAdminAuthIT}) needed the identical

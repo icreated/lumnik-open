@@ -72,7 +72,7 @@ func Draft(d *Dossier, t Target) (string, []string, error) {
 	b.WriteString("apiVersion: apps.lumnik.io/v1\nkind: Workflow\nmetadata:\n")
 	setting(&b, 1, "name", t.Name, "yours to choose (a-z, 0-9, -); apply updates the workflow of this name")
 	b.WriteString("spec:\n")
-	setting(&b, 1, "scope", t.Scope, "yours to choose; the métier scope that may read this lifecycle")
+	setting(&b, 1, "scope", t.Scope, "yours to choose; the scope that may read this lifecycle")
 	b.WriteString("  provenance: declared\n  on:\n")
 	setting(&b, 2, "table", t.Table, "the document table, as in connector.t_orders")
 	setting(&b, 2, "column", t.Column, "the status column")

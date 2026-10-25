@@ -24,7 +24,7 @@ public class WorkflowResource {
 
     @Inject WorkflowManifestStore manifests;
 
-    /** Every read here is a métier's: a bound caller reads the workflows of the scopes it holds. */
+    /** Every read here is a scope's: a bound caller reads the workflows of the scopes it holds. */
     @GET
     public List<WorkflowGraph> list() {
         return registry.all(RequireTenant.current(), ScopeGrants::allows);
@@ -34,7 +34,7 @@ public class WorkflowResource {
      *  {@code /{name}}, so a workflow literally named "observations" cannot be fetched by
      *  name here — accepted and documented. Tenant comes from the request context, never a
      *  parameter (the store is admin-DS with explicit tenant binding). {@code workflow=} narrows
-     *  the query, not the page (#1361); another métier's name is the refusal {@link #one} gives. */
+     *  the query, not the page (#1361); another scope's name is the refusal {@link #one} gives. */
     @GET @Path("/observations")
     public Response observations(@QueryParam("limit") @DefaultValue("200") int limit, @Context UriInfo uri) {
         long tenant = RequireTenant.current();
@@ -67,7 +67,7 @@ public class WorkflowResource {
         return observationStore.stats(RequireTenant.current(), ScopeGrants.granted().orElse(null));
     }
 
-    /** Another métier's workflow is the uniform 403, as on {@code /api/workflows/{name}/manifest} —
+    /** Another scope's workflow is the uniform 403, as on {@code /api/workflows/{name}/manifest} —
      *  decided on the stored scope, before the parse, like {@link #list}. */
     @GET @Path("/{name}")
     public Response one(@PathParam("name") String name) {
@@ -80,7 +80,7 @@ public class WorkflowResource {
             .orElseGet(() -> ApiErrors.notFound("workflow " + name + " not found"));
     }
 
-    /** Whether the caller's métiers reach this workflow; an unknown name is not refused here — it is a 404 or an empty tape. */
+    /** Whether the caller's scopes reach this workflow; an unknown name is not refused here — it is a 404 or an empty tape. */
     private boolean held(long tenant, String name) {
         return manifests.findScope(tenant, name).map(ScopeGrants::allows).orElse(true);
     }

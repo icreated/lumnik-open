@@ -15,7 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>{@code AppApplyResource} checks the default holder's scope and then calls {@code upsert} —
  * two connections, two transactions, and a window in between where an unscoped integrator can
- * promote a different métier's app. The bound caller's demote would then land on a row it can
+ * promote a different scope's app. The bound caller's demote would then land on a row it can
  * neither read nor write. The property that survives that race is not "the door refuses" but
  * <b>the store refuses on its own</b>, so that is what is measured here: {@code upsert} is called
  * directly, as if the ordered check had been jumped entirely — which is precisely what the race

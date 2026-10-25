@@ -41,7 +41,7 @@ export function checkQuery(q) {
 
 /**
  * The query string of one search. The app's scope is always sent when there is one: the hub then
- * narrows to this métier, and this client never widens. Throws on a query checkQuery refuses.
+ * narrows to this scope, and this client never widens. Throws on a query checkQuery refuses.
  */
 export function queryString({ q, scope, facets, cursor, limit }) {
   const refusal = checkQuery(q);

@@ -17,7 +17,7 @@ type SchemaTable struct {
 	Columns []SchemaColumn `json:"columns"`
 }
 
-// SchemaCard is the discovered schema for one métier scope: every table the RAG
+// SchemaCard is the discovered schema for one scope: every table the RAG
 // text-to-SQL guard is allowed to reference, mirroring the JSON of
 // io.lumnik.rag.ask.SchemaCard.
 type SchemaCard struct {

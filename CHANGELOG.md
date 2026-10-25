@@ -7,10 +7,33 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.10.1 — 2026-10-25
+
+Fixes for a first install and for clearer messages. No migration, nothing to do before upgrading:
+status codes and JSON shapes are unchanged, only some English wording.
+
+### Fixed
+- **`deploy/selfhost/up.sh` no longer writes a fresh `.env` over an earlier install's volumes.**
+  The volumes keep the passwords of the `.env` that created them; new secrets used to leave Keycloak's
+  admin and the realm accounts locked. It now stops, writes nothing, names the volumes, and prints
+  two ways out: put back the old `.env`, or `docker compose -p <project> … down -v`, which deletes
+  the data. If Docker cannot list the volumes, it stops too.
+- **`lm ask`, `lm chat`, `lm rag search` and `lm scopes` say why Ask is not there.** On this edition:
+  `this hub's build has no Ask: lumnik Open has no chat, no lm ask and no semantic search (lm module
+  list shows no rag module); Ask ships in lumnik Pro`. Before, they printed
+  `API error 404: Unable to find matching target resource method`.
+- **The no-scopes warning says what is lost on this edition**: `no scopes declared — a user bound to
+  a scope will not see this connector, its runs or its dead letters`.
+- **English text says "scope", "business app" or "business user"**, not the French "métier": hub
+  messages, `lm` and TUI help, docs. Two `kind:Workflow` apply refusals now read
+  `belongs to another scope` and `in a scope you do not hold`.
+- The v1.10.0 notes said a mapping naming "a column the file does not hold" is refused. It is refused
+  only when the columns are declared (a headerless file with `columns:`, or `parser.lines: true`).
+
 ## v1.10.0 — 2026-10-25
 
 A manifest that would fail a run is now refused when you validate it: a hook that does not exist, a
-parameter it does not read, a column the file does not hold, a wrong shape. Events are no longer
+parameter it does not read, a column outside the declared ones, a wrong shape. Events are no longer
 missed when database transactions end out of order. Processes say when they have read a run.
 Workflows alert on due dates. New hooks read EDIFACT, fixed-width files and Windows mojibake.
 
@@ -26,7 +49,8 @@ Workflows alert on due dates. New hooks read EDIFACT, fixed-width files and Wind
 - **Run `lm validate` on every manifest.** Each of these used to pass and now is refused:
   - in a csv-file mapping: an unknown hook, a parameter the hook does not read
     (`upper hook: unknown parameter 'colums' — accepted: columns`), parameters that are not a map,
-    a tier that is not a list, an unknown key under `spec.mapping`, a column that does not exist,
+    a tier that is not a list, an unknown key under `spec.mapping`, a column that is not declared
+    (a headerless file with `columns:`, or `parser.lines: true`; a header read at run time is not checked),
     a value outside a knob's allowed values, two `regex-extract` writing the same column;
   - a boolean written `yes`, `no`, `on` or `off`: write `true` or `false`;
   - a `mapping:` block on `jdbc-generic` or `rest-generic`: those rows land as the source holds

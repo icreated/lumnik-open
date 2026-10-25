@@ -265,7 +265,7 @@ public class ViewDataReader {
     }
 
     /**
-     * A view must never fail without saying why in métier language: date-shaped garbage and the
+     * A view must never fail without saying why in business language: date-shaped garbage and the
      * statement-timeout cancel (57014, from {@code setQueryTimeout}) ride the honest-refusal
      * channel (400); anything else stays a genuine failure.
      */

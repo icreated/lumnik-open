@@ -80,7 +80,7 @@ class AppRegistryAuthIT {
     }
 
     /**
-     * Taking the default flag is a WRITE to whoever holds it. An integrator bound to one métier
+     * Taking the default flag is a WRITE to whoever holds it. An integrator bound to one scope
      * would otherwise demote an app in a scope they cannot even read — and learn its name from
      * {@code demotedDefault} on the way. The refusal is the frozen one, and the registry is
      * unmoved afterwards: the deployment-wide landing app is not something a bound caller takes.
@@ -108,7 +108,7 @@ class AppRegistryAuthIT {
     }
 
     /**
-     * Deleting an app in a métier the caller does not hold must not tell them whether the name
+     * Deleting an app in a scope the caller does not hold must not tell them whether the name
      * exists at all — the same frozen refusal {@link #anAppOutsideTheCallersScopeRefusesInTheFrozenWords}
      * proves for the read door.
      */

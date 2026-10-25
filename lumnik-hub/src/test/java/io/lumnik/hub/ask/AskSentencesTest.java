@@ -93,7 +93,7 @@ class AskSentencesTest {
     void leak() {
         assertThat(AskSentences.leak(null, "x.y", List.of("connector.a", "connector.b"))).isEqualTo(
             "I won't run this: 'x.y' is not a table in this scope (declared: connector.a, connector.b). "
-                + "The query may not read data outside this métier's declared scope.");
+                + "The query may only read the tables this scope declares.");
         assertThat(AskSentences.leak("fr", "x.y", List.of("connector.a", "connector.b"))).isEqualTo(
             "Je n'exécuterai pas cette requête : « x.y » n'est pas une table de ce périmètre "
                 + "(déclarées : connector.a, connector.b). "

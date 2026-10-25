@@ -216,7 +216,7 @@ test('the search entry carries a probe; the others do not', () => {
 });
 
 // The search screen is handed the app's own scope, so every search it sends carries it: the hub then
-// narrows to this métier and the PWA never widens (queryString always forwards a scope it is given).
+// narrows to this scope and the PWA never widens (queryString always forwards a scope it is given).
 test('the search entry hands its screen the open app\'s scope and api, nothing else', () => {
   const api = { json: async () => ({}) };
   const node = TABS.find((t) => t.id === 'search').screen({ api, scope: 'stock', can: () => true });

@@ -5,7 +5,7 @@ kind: Entity
 name: Customer
 description: "A customer, fused from the Siebel CRM and the nightly CSV export."
 match: [customer_code]
-scopes: [clients]               # the métier(s) whose chat can ask about this entity
+scopes: [clients]               # the scope(s) whose chat can ask about this entity
 columns:                        # grounding fed to the chat + human labels a kind:View renders
   customer_code:
     label: "Code client"        # shown by kind:View instead of the raw canonical name

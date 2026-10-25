@@ -86,7 +86,7 @@ button.primary {
 }
 .filterbar-chips { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px 8px; }
 .filterbar-chips .chip { cursor: pointer; }
-/* ---- view switch chip (B1, fiches.mjs — reopen the picker when a métier has >1 views) ---- */
+/* ---- view switch chip (B1, fiches.mjs — reopen the picker when an app has >1 views) ---- */
 .switch-chip {
   display: inline-block; margin-bottom: 12px; background: var(--card); border: 1px solid var(--edge);
   color: var(--dim); border-radius: 10px; font-size: 13px; padding: 6px 12px; cursor: pointer;

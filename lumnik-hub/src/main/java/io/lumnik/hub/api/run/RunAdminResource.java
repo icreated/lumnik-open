@@ -54,7 +54,7 @@ public class RunAdminResource {
     // ?endpoint= is the finer half of the same address: a connector fans out and writes one row per
     // endpoint, so ?connector= cannot answer "this table's runs" — which is what a drill-down asks.
     // A scope-bound caller sees the runs of the connectors they hold (#1212): a named connector of
-    // another métier is the uniform 403, and the query itself is narrowed to their reach.
+    // another scope is the uniform 403, and the query itself is narrowed to their reach.
     UUID cid = filterId(connectorId);
     if (cid != null) ConnectorScope.held(connectors, cid);
     var page = repo.findRecent(TenantContextFilter.current(), cid, filterId(endpointId),

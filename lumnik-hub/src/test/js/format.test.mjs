@@ -43,7 +43,7 @@ test('cell(): a string value passes through as a String()', () => {
   assert.equal(cell('x'), 'x');
 });
 
-test('dataAsOfLabel: names the freshness in métier words, absent stays absent', () => {
+test('dataAsOfLabel: names the freshness in business words, absent stays absent', () => {
   const now = Date.parse('2026-08-25T12:00:00Z');
   // P6: the dial the meeting question needed — relative, in the PWA's voice.
   assert.equal(dataAsOfLabel('2026-08-25T09:00:00Z', now), 'données : il y a 3 h');

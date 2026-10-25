@@ -127,12 +127,12 @@ const helpBody = `[yellow]Global keys[white]
                      R      rebuild the index
                      c      cancel its rebuild
                      Del    delete the index (asks first)
-  :scopes         per-métier scopes (connector tags)
+  :scopes         per-scope access (connector tags)
                      Enter  set the active scope (used by :ask)
   :views          the saved views the hub serves the PWA
                      Enter  render it in :view · e  edit its stored manifest in :new
                      Del    delete it (asks first)
-  :apps           the métier apps the PWA offers (title, scope, default, tabs)
+  :apps           the business apps the PWA offers (title, scope, default, tabs)
                      e      edit its manifest in :new (rebuilt from the app's fields)
                      Del    delete one (asks first)
   :workflows      the declared document lifecycles

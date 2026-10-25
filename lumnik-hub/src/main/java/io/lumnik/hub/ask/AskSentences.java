@@ -134,7 +134,7 @@ final class AskSentences {
         String declared = listed(lang, declaredTables);
         return pick(lang,
             "I won't run this: '" + table + "' is not a table in this scope (declared: " + declared
-                + "). The query may not read data outside this métier's declared scope.",
+                + "). The query may only read the tables this scope declares.",
             "Je n'exécuterai pas cette requête : « " + table + " » n'est pas une table de ce périmètre (déclarées : "
                 + declared + "). La requête ne peut pas lire de données hors du périmètre déclaré de ce métier.");
     }

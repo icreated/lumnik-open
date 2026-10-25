@@ -9,7 +9,7 @@ import java.util.Set;
 
 /**
  * The sentence a dormancy decision carries (#1363). A workflow may declare its own in
- * {@code spec.dormancy.message}, in its métier's language, over what the sweep knows; without one
+ * {@code spec.dormancy.message}, in its business domain's language, over what the sweep knows; without one
  * the sentence is English. Either way it says what lumnik observed — a document unmoved since a
  * day — never what it cannot know ("stuck"). Same {@code {placeholder}} grammar as a Process message.
  */

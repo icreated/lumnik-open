@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * The métier scope boundary on the kind:Workflow surface — the same #131 rule kind:View already
+ * The scope boundary on the kind:Workflow surface — the same #131 rule kind:View already
  * holds. A bound user (≥1 {@code scope:} role) may declare, list and read back only the lifecycles
  * of scopes they hold; an unscoped user is untouched. Uniform refusal: 403 "scope not granted".
  *
@@ -175,9 +175,9 @@ class WorkflowScopeBindingUnitTest {
     };
 
     /**
-     * The one-lifecycle-per-column refusal must not read another métier's card aloud.
+     * The one-lifecycle-per-column refusal must not read another scope's card aloud.
      *
-     * <p>It used to stop it by NAME: "workflow 'facture-compta'", a name from a métier the
+     * <p>It used to stop it by NAME: "workflow 'facture-compta'", a name from a scope the
      * {@code scope:} roles were drawing a boundary around (#516). Narrow, and real: reaching it
      * takes a table advertised in both cards, which the check above lets through.
      */
@@ -192,7 +192,7 @@ class WorkflowScopeBindingUnitTest {
 
         assertThat(r.getStatus()).isEqualTo(400);
         assertThat(errorOf(r))
-            .as("the column is taken, and that is all a caller outside that métier may learn")
+            .as("the column is taken, and that is all a caller outside that scope may learn")
             .contains("already has a declared lifecycle")
             .doesNotContain("facture-compta")
             .doesNotContain("compta");
@@ -209,7 +209,7 @@ class WorkflowScopeBindingUnitTest {
 
         assertThat(r.getStatus()).isEqualTo(400);
         assertThat(errorOf(r))
-            .as("inside the métier the name is what makes the refusal actionable")
+            .as("inside the scope the name is what makes the refusal actionable")
             .contains("commande-v1").contains("re-apply under the name");
     }
 

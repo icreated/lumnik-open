@@ -21,7 +21,7 @@ export function ledgerValue(v) {
   return v === null || v === undefined ? '(empty)' : String(v);
 }
 
-// #874 — the fused records an answer filtered on while their sources disagree, in métier French.
+// #874 — the fused records an answer filtered on while their sources disagree, in business French.
 // Pure, so the wording is tested here and the component only lays it out.
 export function disputedBlock(disputed, truncated) {
   if (!disputed || disputed.length === 0) return null;
@@ -42,13 +42,13 @@ export function disputedBlock(disputed, truncated) {
 // The wording is what the button DOES: it opens the fiches. The disagreements are shown on each
 // fiche's own detail, one tap further, so "voir les désaccords" would promise a screen this
 // button does not reach. `lifecycle` gets nothing at all — the PWA has no lifecycle surface, and
-// the sentence in `answer` has already told the métier the declaration exists.
+// the sentence in `answer` has already told the business user the declaration exists.
 export function doorGesture(door) {
   if (door === DOOR_CONFLICTS) return 'Ouvrir les fiches — les désaccords sont sur chaque fiche';
   return null;
 }
 
-// P6 — the freshness dial, in métier words. Absent input -> null: the surface stays
+// P6 — the freshness dial, in business words. Absent input -> null: the surface stays
 // silent rather than showing a fabricated age (the server already states absence by
 // omitting dataAsOf when the scope has no completed run).
 export function dataAsOfLabel(iso, now = Date.now()) {

@@ -55,10 +55,10 @@ func TestHandleSlash_userTextStaysGuarded(t *testing.T) {
 	}
 }
 
-// `:scope TAG` — the REPL's half of the métier boundary.
+// `:scope TAG` — the REPL's half of the scope boundary.
 //
 // The HTTP door takes a `scope` field and `lm ask` has `--scope`, but the chat REPL offered only
-// `:corpus` and `:topK`: the sole way to aim it at a métier was `lm scope set <tag>` BEFORE
+// `:corpus` and `:topK`: the sole way to aim it at a scope was `lm scope set <tag>` BEFORE
 // starting, and with no default it printed "(no default scope — fallback to 'system')" and there
 // was nothing to do about it from inside (#493).
 func TestHandleSlash_scopeSetsAndShowsTheMetier(t *testing.T) {

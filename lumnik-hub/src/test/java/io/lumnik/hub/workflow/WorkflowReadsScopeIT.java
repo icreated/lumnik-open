@@ -24,7 +24,7 @@ import static org.hamcrest.Matchers.equalTo;
 /**
  * #1254: the workflow reads under {@code /api/platform/workflows} — the graphs, one graph, the
  * tape and its stats — show a bound caller only the workflows of the scopes it holds; another
- * métier's graph by name is the uniform 403. An unbound caller reads the tenant.
+ * scope's graph by name is the uniform 403. An unbound caller reads the tenant.
  */
 @QuarkusTest
 @TestProfile(NoBypassOidcProfile.class)
@@ -111,7 +111,7 @@ class WorkflowReadsScopeIT {
         as().get("/api/platform/workflows/" + STOCK).then().statusCode(200);
     }
 
-    /** #1361: naming another métier's workflow in the filter is the same refusal as by name. */
+    /** #1361: naming another scope's workflow in the filter is the same refusal as by name. */
     @Test
     void another_metiers_workflow_as_a_tape_filter_is_refused() {
         as("sales").get("/api/platform/workflows/observations?workflow=" + STOCK).then().statusCode(403)
@@ -135,7 +135,7 @@ class WorkflowReadsScopeIT {
             .containsExactlyInAnyOrder(SALES, STOCK);
     }
 
-    /** #1368: the journal is narrowed like the tape, and another métier's name is the same refusal. */
+    /** #1368: the journal is narrowed like the tape, and another scope's name is the same refusal. */
     @Test
     void a_bound_caller_reads_only_the_transitions_of_its_scopes() {
         assertThat(names(as("sales"), "/api/platform/workflows/observations/transitions?limit=1000", "workflow"))

@@ -78,7 +78,7 @@ func TestApply_successWithWarnings_rendersThemOnStderr_exitZero(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"name":"orders","connectorId":"487ed9d1-58d5-4120-969c-dc448910e1f2",` +
 			`"endpointsApplied":1,"warnings":[{"path":"metadata.scopes","severity":"WARNING",` +
-			`"message":"no scopes declared — the connector's tables will not be askable in any métier",` +
+			`"message":"no scopes declared — a user bound to a scope will not see this connector, its runs or its dead letters",` +
 			`"recommendations":["Add: scopes: [compta]"]}]}`))
 	}))
 	defer srv.Close()
@@ -96,7 +96,7 @@ func TestApply_successWithWarnings_rendersThemOnStderr_exitZero(t *testing.T) {
 		t.Errorf("stdout must stay the applied line alone: %q", out)
 	}
 	for _, want := range []string{"orders.yaml", "1 warning(s)", "WARN", "metadata.scopes",
-		"not be askable", "Add: scopes: [compta]"} {
+		"will not see this connector", "Add: scopes: [compta]"} {
 		if !strings.Contains(errOut, want) {
 			t.Errorf("stderr missing %q, got: %s", want, errOut)
 		}

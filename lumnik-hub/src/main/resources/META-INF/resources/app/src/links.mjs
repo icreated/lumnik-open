@@ -62,7 +62,7 @@ export function resolveLink(link, row) {
 
 /**
  * Where a resolved view link goes: the target is looked up ONLY among the views this app was given
- * (the hub lists the open métier's views and nothing else). Not found → a refusal, never an open
+ * (the hub lists the open app's views and nothing else). Not found → a refusal, never an open
  * without its filters.
  */
 export function followView(resolved, viewList) {

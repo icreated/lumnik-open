@@ -17,7 +17,7 @@ import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
 
 /**
- * #846: a join does not widen a métier scope. The entity's scopes bound the entity as a whole, the
+ * #846: a join does not widen a scope. The entity's scopes bound the entity as a whole, the
  * joined columns included — a caller bound to another scope is refused with the uniform
  * {@code scope not granted}, and one bound to the right scope reads the enriched row. Real signed
  * JWTs (NoBypassOidcProfile), because a header identity cannot carry a scope binding.

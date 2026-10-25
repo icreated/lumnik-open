@@ -270,7 +270,7 @@ class AppApplyResourceIT {
             .when().post("/api/apps/apply").then().statusCode(200);
 
         assertThat(latestAuditChanges("salon-audit"))
-            .as("who changed which métier's identity, and which bytes they applied")
+            .as("who changed which app's identity, and which bytes they applied")
             .isNotNull()
             .contains("\"scope\": \"salon\"")
             .contains("manifest_sha256")

@@ -83,7 +83,7 @@ class SavedViewNameOverwriteScopeIT {
 
   @Test
   void aBoundCallerMayOverwriteANameInsideItsGrants() {
-    // The guard must not refuse the ordinary case it exists to permit: the same métier updating
+    // The guard must not refuse the ordinary case it exists to permit: the same scope updating
     // its own view. Without this, "refuse everything" would pass the three tests above.
     given("vue-sienne-582");
     ScopeGuardedUpsert promote =

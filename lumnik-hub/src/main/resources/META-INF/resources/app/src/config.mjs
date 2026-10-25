@@ -18,7 +18,7 @@ export function kcBase(loc) {
     : `http://${loc.hostname}:8180/realms/lumnik`;
 }
 
-// the OAuth round-trip must come back to THIS métier — ?m rides the redirect_uri (mirrors spike REDIRECT)
+// the OAuth round-trip must come back to THIS app — ?m rides the redirect_uri (mirrors spike REDIRECT)
 export function redirectUri(loc, metierKey) {
   return loc.origin + '/app/' + (metierKey === 'clients' ? '' : `?m=${encodeURIComponent(metierKey)}`);
 }

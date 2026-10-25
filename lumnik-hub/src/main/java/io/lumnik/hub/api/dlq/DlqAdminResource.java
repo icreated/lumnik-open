@@ -46,7 +46,7 @@ public class DlqAdminResource {
     // ?connector= = pending queue only (unresolved entries for that connector).
     int capped = Math.min(Math.max(limit, 1), 200); // >=1: page(0,0) would throw; limit<=0 is a nonsense request
     // A dead letter carries the rejected row's values, so each branch asks the connector rule (#1212):
-    // a named run or connector of another métier is the uniform 403, the unfiltered list narrows to
+    // a named run or connector of another scope is the uniform 403, the unfiltered list narrows to
     // the connectors the caller holds.
     List<ConnectorDeadLetter> entries;
     if (runId != null) {

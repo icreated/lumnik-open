@@ -16,7 +16,7 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The métier scope boundary on the schema-card admin doors — kind:View's rule, applied to the pair
+ * The scope boundary on the schema-card admin doors — kind:View's rule, applied to the pair
  * that was outside it.
  *
  * <p>These two endpoints spent their life as {@code RagSchemaResource} in {@code lumnik-rag}, where

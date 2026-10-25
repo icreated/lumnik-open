@@ -201,7 +201,7 @@ class WorkflowApplyIT {
 
     /**
      * The scope check answers "may you declare INTO this scope"; it says nothing about which table
-     * you then point at. Without this refusal a scope-bound integrator could name another métier's
+     * you then point at. Without this refusal a scope-bound integrator could name another scope's
      * ingest table and read its values back out of the data-truth report — up to LIMIT distinct
      * values of any column, with row counts, on a 200. Intra-tenant, and refused everywhere else:
      * `kind:Process` requires its trigger table to be in the card, `kind:View` resolves columns
@@ -219,7 +219,7 @@ class WorkflowApplyIT {
             .when().post("/api/workflows/apply")
             .then().statusCode(400)
             .body("error", containsString(OTHER_TABLE))
-            .body("error", containsString("another métier"));
+            .body("error", containsString("another scope"));
     }
 
     /**

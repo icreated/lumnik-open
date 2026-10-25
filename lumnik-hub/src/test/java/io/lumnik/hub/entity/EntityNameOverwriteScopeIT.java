@@ -35,7 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>The refusal must also undo the DDL. {@code apply} runs the guarded upsert and DROP/CREATE VIEW
  * in ONE transaction, so a refusal that left the view rebuilt would have published a foreign
- * métier's fusion under this caller's shape while claiming nothing was written.
+ * scope's fusion under this caller's shape while claiming nothing was written.
  */
 @QuarkusTest
 class EntityNameOverwriteScopeIT {

@@ -11,7 +11,7 @@ import java.util.StringJoiner;
 /**
  * The scope has one home: {@code metadata.scopes}.
  *
- * <p>It is a property of the connector — the métier boundary a bound user must hold to read what
+ * <p>It is a property of the connector — the scope boundary a bound user must hold to read what
  * it ingests ({@link ScopeGrants}) — not of where its rows land. Before this it lived in two
  * places that merged, {@code metadata.tags} and {@code spec.target.tags}, and the second never
  * reached the merge for REST at all: its {@code target} is per endpoint, the merge read the root.
@@ -70,8 +70,8 @@ public final class ScopesValidator {
         JsonNode scopes = manifest.path("metadata").path("scopes");
         if (scopes.isArray() && scopes.size() > 0) return List.of();
         return List.of(new ValidationError(SCOPES, Severity.WARNING,
-            "no scopes declared — the connector's tables will not be askable in any métier",
-            List.of("Add: scopes: [compta]  (the métier a user must hold as scope:compta)")));
+            "no scopes declared — a user bound to a scope will not see this connector, its runs or its dead letters",
+            List.of("Add: scopes: [compta]  (a user must hold the role scope:compta)")));
     }
 
     /**
