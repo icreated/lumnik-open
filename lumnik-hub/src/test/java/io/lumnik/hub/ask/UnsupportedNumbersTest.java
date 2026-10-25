@@ -142,4 +142,102 @@ class UnsupportedNumbersTest {
             .isEmpty();
         assertThat(UnsupportedNumbers.in("There are 9999 orders.", rows)).containsExactly("9999");
     }
+
+    private static final List<Map<String, Object>> SEVEN_ORDERS = List.of(
+        Map.of("po_number", "PO-2025-0013"), Map.of("po_number", "PO-2025-0022"), Map.of("po_number", "PO-2025-0061"),
+        Map.of("po_number", "PO-2025-0071"), Map.of("po_number", "PO-2025-0078"), Map.of("po_number", "PO-2025-0155"),
+        Map.of("po_number", "PO-2025-0192"));
+
+    @Test
+    void the_threshold_the_query_filtered_on_is_backed() {
+        // #1391, the live phrasing: "15 000" is the query's own figure, not a claim about the rows.
+        String sql = "SELECT \"po_number\" FROM \"connector\".\"v_purchase_order\" "
+            + "WHERE \"supplier_id\" = 'SUP-003' AND \"amount_eur\" > 15000 LIMIT 500";
+        assertThat(UnsupportedNumbers.in(
+            "Il y a 7 commandes du fournisseur SUP-003 qui dépassent 15 000 euros.", SEVEN_ORDERS, sql)).isEmpty();
+    }
+
+    @Test
+    void the_year_of_a_date_the_query_filtered_on_is_backed() {
+        String sql = "SELECT SUM(amount_eur) AS total FROM \"connector\".\"v_purchase_order\" "
+            + "WHERE order_date >= '2025-01-01' AND order_date < '2026-01-01' LIMIT 500";
+        List<Map<String, Object>> rows = List.of(Map.of("total", new BigDecimal("2073513.54")));
+        assertThat(UnsupportedNumbers.in("En 2025, le montant total commandé est de 2073513.54 euros.", rows, sql))
+            .isEmpty();
+    }
+
+    @Test
+    void the_limit_and_the_offset_back_nothing() {
+        // They bound how many rows came back; that count is the row count, already backed.
+        String sql = "SELECT \"po_number\" FROM \"connector\".\"v_purchase_order\" LIMIT 9999 OFFSET 40";
+        assertThat(UnsupportedNumbers.in("There are 9999 orders after the first 40.", SEVEN_ORDERS, sql))
+            .containsExactly("9999", "40");
+    }
+
+    @Test
+    void both_bounds_of_a_between_are_backed() {
+        String sql = "SELECT \"po_number\" FROM \"connector\".\"v_purchase_order\" "
+            + "WHERE \"amount_eur\" BETWEEN 10000 AND 20000 LIMIT 500";
+        assertThat(UnsupportedNumbers.in("7 commandes entre 10 000 et 20 000 euros.", SEVEN_ORDERS, sql)).isEmpty();
+    }
+
+    @Test
+    void a_literal_the_query_does_not_compare_against_backs_nothing() {
+        // A rounding, a column position: a made-up "2 orders" must not pass on them.
+        String sql = "SELECT \"supplier_id\", ROUND(SUM(amount_eur), 2) AS total FROM \"connector\".\"v_purchase_order\" "
+            + "GROUP BY 1 ORDER BY 2 DESC LIMIT 500";
+        assertThat(UnsupportedNumbers.in("There are 2 suppliers, the first 1.", SEVEN_ORDERS, sql))
+            .containsExactly("2", "1");
+    }
+
+    @Test
+    void a_literal_compared_with_no_column_backs_nothing() {
+        // Review of #1392: both pass SqlGuard, and neither compares the figure with the data.
+        List<Map<String, Object>> rows = List.of(Map.of("count", 3L));
+        assertThat(UnsupportedNumbers.in("There are 9999 orders.", rows,
+            "SELECT COUNT(*) FROM \"connector\".\"v_purchase_order\" WHERE 9999 = 9999 LIMIT 500")).containsExactly("9999");
+        assertThat(UnsupportedNumbers.in("There are 9999 orders.", rows,
+            "SELECT COUNT(*) FROM \"connector\".\"v_purchase_order\" WHERE amount_eur > 0 OR NULL = 9999 LIMIT 500"))
+            .containsExactly("9999");
+    }
+
+    @Test
+    void a_value_keyword_is_no_column() {
+        // Second review of #1392: current_date lexes as a name, and Postgres reads it as today's date.
+        List<Map<String, Object>> rows = List.of(Map.of("count", 3L));
+        assertThat(UnsupportedNumbers.in("There were 2025 orders.", rows,
+            "SELECT COUNT(*) FROM \"connector\".\"v_purchase_order\" WHERE current_date = '2025-01-01' LIMIT 500"))
+            .containsExactly("2025");
+    }
+
+    @Test
+    void a_negative_threshold_is_backed_with_its_sign() {
+        // Copilot on #1392: the lexer reads the sign as an operator of its own.
+        String sql = "SELECT \"po_number\" FROM \"connector\".\"v_purchase_order\" "
+            + "WHERE \"amount_eur\" < -100 OR \"amount_eur\" BETWEEN -50 AND -10 LIMIT 500";
+        assertThat(UnsupportedNumbers.in("7 avoirs sous -100 euros, ou entre -50 et -10.", SEVEN_ORDERS, sql)).isEmpty();
+        assertThat(UnsupportedNumbers.in("100 avoirs.", SEVEN_ORDERS, sql)).containsExactly("100");
+    }
+
+    @Test
+    void a_date_the_query_does_not_compare_with_a_column_backs_nothing() {
+        String sql = "SELECT '2025-01-01' AS marker, COUNT(*) FROM \"connector\".\"v_purchase_order\" LIMIT 500";
+        List<Map<String, Object>> rows = List.of(Map.of("marker", "2025-01-01", "count", 3L));
+        assertThat(UnsupportedNumbers.in("There were 2025 orders.", rows, sql)).containsExactly("2025");
+    }
+
+    @Test
+    void a_figure_the_asker_wrote_that_the_query_did_not_use_stays_unbacked() {
+        // "Y a-t-il 50 commandes annulées ?" — the asker's guess is no fact because the asker wrote it.
+        String sql = "SELECT COUNT(*) FROM \"connector\".\"v_purchase_order\" WHERE \"status\" = 'cancelled' LIMIT 500";
+        List<Map<String, Object>> rows = List.of(Map.of("count", 26L));
+        assertThat(UnsupportedNumbers.in("Oui, 50 commandes ont été annulées.", rows, sql)).containsExactly("50");
+    }
+
+    @Test
+    void a_number_inside_a_text_literal_backs_nothing() {
+        String sql = "SELECT COUNT(*) FROM \"connector\".\"v_purchase_order\" WHERE \"note\" = 'batch 9999' LIMIT 500";
+        List<Map<String, Object>> rows = List.of(Map.of("count", 3L));
+        assertThat(UnsupportedNumbers.in("There are 9999 orders.", rows, sql)).containsExactly("9999");
+    }
 }

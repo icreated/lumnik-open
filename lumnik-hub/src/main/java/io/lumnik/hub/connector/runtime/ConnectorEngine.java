@@ -17,6 +17,8 @@ import io.lumnik.hub.connector.event.ConnectorEvents;
 import io.lumnik.hub.connector.event.ConnectorRunCompleted;
 import io.lumnik.hub.connector.event.RunTableStats;
 import io.lumnik.hub.connector.registry.ConnectorTypeRegistry;
+import io.lumnik.hub.event.EventOutboxRow;
+import io.lumnik.hub.process.ProcessManifestStore;
 import io.lumnik.hub.scheduler.TenantScope;
 import io.lumnik.hub.connector.repository.ConnectorCursorEntityRepository;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
@@ -90,6 +92,8 @@ public class ConnectorEngine {
     @Inject Event<ConnectorRunCompleted> runCompleted;
     @Inject ObjectMapper mapper;
     @Inject @DataSource("admin") AgroalDataSource adminDs;
+    @Inject AgroalDataSource appDs;
+    @Inject ProcessManifestStore processes;
     @Inject IngestionMetrics ingestionMetrics;
     @Inject RunQueueSettings runQueue;
 
@@ -781,7 +785,8 @@ public class ConnectorEngine {
      * Requests cancellation of {@code runId}. Cooperative: the flag is read once, at the top of the
      * chunk loop, so an in-flight chunk always finishes before the run ends — nothing here claims
      * the run IS cancelled, only that cancellation was requested and takes effect at the next chunk
-     * boundary.
+     * boundary. A reader that fetches many pages inside one chunk (SOAP) also reads it between two
+     * pages, through its {@code RunScope}, and stops there (#1444).
      *
      * <p>Atomic against the run ending concurrently: {@code computeIfPresent} only flags an entry
      * that is still present, so a run whose chunk loop already exited (and removed itself from
@@ -794,6 +799,11 @@ public class ConnectorEngine {
     public boolean cancel(UUID runId) {
         if (runId == null) return false;
         return liveRuns.computeIfPresent(runId, (k, v) -> Boolean.TRUE) != null;
+    }
+
+    /** What {@link #cancel} recorded: read at the top of the chunk loop, and by a reader through its run scope. */
+    private boolean cancelRequested(UUID runId) {
+        return Boolean.TRUE.equals(liveRuns.get(runId));
     }
 
     /**
@@ -869,6 +879,8 @@ public class ConnectorEngine {
         run.setStatus(ConnectorRunStatus.RUNNING.sqlValue());
         run.setSyncMode(syncModeName(c.getSyncMode()));
         run.setStartedAt(Instant.now());
+        // Before any row: a process changed after this read changes the fingerprint (#1351).
+        run.setProcessSet(processes.processSet(c.getTenantId()).fingerprint());
         run.setTriggeredBy(triggerName(trigger));
         run.setTriggeredMeta(mapper.valueToTree(trigger));
         ConnectorCursorEntity cursorEnt = cursors.findByEndpoint(endpoint.getId());
@@ -909,6 +921,11 @@ public class ConnectorEngine {
         r.setStatus(status.sqlValue());
         ingestionMetrics.recordRunFinished(status.sqlValue());
         r.setEndedAt(endedAt);
+        // The chunks committed their row events before this ending: the mark is at or above each one
+        // (#1351). Read on this transaction's own connection: no second checkout under the row lock.
+        EventOutboxRow.Position highWater = EventOutboxRow.highWater(appDs, "ConnectorEngine.outboxHighWater", r.getTenantId());
+        r.setOutboxHighWaterXact(highWater.xact());
+        r.setOutboxHighWater(highWater.id());
         if (errorMessage != null) r.setErrorMessage(errorMessage);
         if (errorStack != null)   r.setErrorStack(throwableToString(errorStack));
         ConnectorCursorEntity cursorEnt = r.getEndpointId() != null
@@ -1064,7 +1081,7 @@ public class ConnectorEngine {
 
         // Created BEFORE runStart and passed in: ChunkExecutor rebuilds the ConnectorContext for every chunk (and once
         // for runStart), so a scope built there would be a new one each time. Closed in the finally below (#898).
-        OwnedRunScope scope = new OwnedRunScope(runId);
+        OwnedRunScope scope = new OwnedRunScope(runId, () -> cancelRequested(runId));
         Throwable escaping = null;
         liveRuns.put(runId, Boolean.FALSE);
         try {
@@ -1091,7 +1108,7 @@ public class ConnectorEngine {
                 LOG.infof("run %s target: %s", runId, bound.describe());
             }
             while (true) {
-                if (Boolean.TRUE.equals(liveRuns.get(runId))) {
+                if (cancelRequested(runId)) {
                     return cancelRun(runId);
                 }
 
@@ -1133,6 +1150,9 @@ public class ConnectorEngine {
                         return partialRun(c, endpoint, runId, run,
                                 Stream.concat(start.lostAtStart().stream(), Stream.of(st.detail()))
                                         .collect(Collectors.joining("; ")));
+                    }
+                    case ChunkResult.Cancelled cancelled -> {
+                        return cancelRun(runId);
                     }
                     case ChunkResult.Failure f -> {
                         return failRun(runId, f);
@@ -1326,7 +1346,7 @@ public class ConnectorEngine {
                     if (e == null || e.getCursorValue() == null || e.getCursorValue().isNull()) {
                         return ConnectorCursor.empty();
                     }
-                    return new ConnectorCursor(e.getCursorValue(), e.getCapturedAt());
+                    return new ConnectorCursor(e.getCursorValue(), e.getCapturedAt(), e.getMappingCarry());
                 })
         );
     }

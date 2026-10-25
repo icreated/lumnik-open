@@ -160,6 +160,25 @@ class S3FileSourceIT {
         }
     }
 
+    /** #1382: the same key two nights running is archived twice — a copy onto an existing key would replace it. */
+    @Test
+    void move_archives_each_night_under_its_own_name() {
+        FileSource source = statSource(ACCESS, SECRET);
+        S3Client admin = client(ACCESS, SECRET);
+        Map<String, Object> cfg = Map.of("archive_prefix", "nightly-archive/");
+        for (int night = 1; night <= 2; night++) {
+            admin.putObject(b -> b.bucket(BUCKET).key("stat/nightly.csv"), RequestBody.fromString("id\n1\n", StandardCharsets.UTF_8));
+            FileDescriptor read = source.stat("stat/nightly.csv").orElseThrow();
+            source.markProcessed(new FileDescriptor(read.path(), read.size(), read.lastModified().plusSeconds(night * 86400L),
+                read.etag()), AfterProcessAction.MOVE, cfg);
+        }
+        List<String> archived = admin.listObjectsV2(b -> b.bucket(BUCKET).prefix("nightly-archive/")).contents()
+            .stream().map(o -> o.key()).sorted().toList();
+        assertEquals(2, archived.size(), "two nights, two archives: " + archived);
+        assertTrue(archived.stream().allMatch(k -> k.matches("nightly-archive/nightly\\.\\d{8}T\\d{6}(\\.\\d{3}|\\.\\d{9})?Z\\.csv")), archived.toString());
+        assertTrue(source.stat("stat/nightly.csv").isEmpty(), "the source key is gone");
+    }
+
     private static void assertStatAgreesWithListing(FileSource source) {
         Map<String, FileDescriptor> listed = source.listSince(Instant.EPOCH)
             .collect(Collectors.toMap(FileDescriptor::path, d -> d));

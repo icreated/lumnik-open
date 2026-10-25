@@ -1,13 +1,12 @@
 # 65-sasl.yaml — SASL/PLAIN credentials, by name.
 #
 # Neither the username nor the password is in this file: `username_env` and `password_env`
-# name registry entries (`lm secret set ACME_KAFKA_USER`, `lm secret set ACME_KAFKA_PW`).
-# `security_protocol` picks the wire: SASL_SSL is the default, SASL_PLAINTEXT is for a
-# broker that authenticates without TLS. Both land verbatim in the consumer's config.
+# name secrets (`lm secret set ACME_KAFKA_USER`, `lm secret set ACME_KAFKA_PW`).
+# `security_protocol`: SASL_SSL (the default), or SASL_PLAINTEXT for a broker without TLS.
 #
-# The demo broker authenticates nobody, so this manifest cannot complete against it — it is
-# here for the two refusals worth seeing: the one an unresolved name gets before any
-# connection, and the one a broker that speaks no SASL gives after.
+# The demo broker authenticates nobody, so this manifest cannot complete against it. It shows
+# two refusals: an unresolved secret name, before any connection; a broker that speaks no SASL,
+# after.
 
 apiVersion: connectors.lumnik.io/v1
 kind: Connector

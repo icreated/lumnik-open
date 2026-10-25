@@ -45,6 +45,7 @@ class WorkflowReadsScopeIT {
     void seed() throws Exception {
         try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
             st.execute("DELETE FROM core.workflow_observation WHERE tenant_id = " + TENANT + " AND workflow_name LIKE 'wf-scope-%'");
+            st.execute("DELETE FROM core.workflow_transition WHERE tenant_id = " + TENANT + " AND workflow_name LIKE 'wf-scope-%'");
             st.execute("DELETE FROM core.workflow_manifest WHERE tenant_id = " + TENANT + " AND name LIKE 'wf-scope-%'");
         }
         declare(SALES, "sales");
@@ -52,6 +53,8 @@ class WorkflowReadsScopeIT {
         Instant now = Instant.now();
         tape.insertNew(TENANT, SALES, "WFSCOPE-S1", "A", now.minusSeconds(60));
         tape.insertNew(TENANT, STOCK, "WFSCOPE-K1", "A", now.minusSeconds(3600));
+        tape.recordTransition(TENANT, SALES, "WFSCOPE-S1", "A", "B", now.minusSeconds(30));
+        tape.recordTransition(TENANT, STOCK, "WFSCOPE-K1", "A", "B", now.minusSeconds(30));
     }
 
     private void declare(String name, String scope) {
@@ -108,6 +111,14 @@ class WorkflowReadsScopeIT {
         as().get("/api/platform/workflows/" + STOCK).then().statusCode(200);
     }
 
+    /** #1361: naming another métier's workflow in the filter is the same refusal as by name. */
+    @Test
+    void another_metiers_workflow_as_a_tape_filter_is_refused() {
+        as("sales").get("/api/platform/workflows/observations?workflow=" + STOCK).then().statusCode(403)
+            .body("error", equalTo("scope not granted"));
+        as("sales").get("/api/platform/workflows/observations?workflow=" + SALES).then().statusCode(200);
+    }
+
     @Test
     void a_bound_caller_reads_only_the_tape_of_its_scopes() {
         assertThat(names(as("sales"), "/api/platform/workflows/observations?limit=1000", "workflow"))
@@ -122,5 +133,16 @@ class WorkflowReadsScopeIT {
             .containsExactly(SALES);
         assertThat(names(as(), "/api/platform/workflows/observations/stats", "workflow"))
             .containsExactlyInAnyOrder(SALES, STOCK);
+    }
+
+    /** #1368: the journal is narrowed like the tape, and another métier's name is the same refusal. */
+    @Test
+    void a_bound_caller_reads_only_the_transitions_of_its_scopes() {
+        assertThat(names(as("sales"), "/api/platform/workflows/observations/transitions?limit=1000", "workflow"))
+            .containsExactly(SALES);
+        assertThat(names(as(), "/api/platform/workflows/observations/transitions?limit=1000", "workflow"))
+            .containsExactlyInAnyOrder(SALES, STOCK);
+        as("sales").get("/api/platform/workflows/observations/transitions?workflow=" + STOCK).then().statusCode(403)
+            .body("error", equalTo("scope not granted"));
     }
 }

@@ -3,6 +3,7 @@ package client
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/icreated/lumnik-open/lm/internal/config"
@@ -24,7 +25,7 @@ func TestObservationList_decodesTapeAndNullAlert(t *testing.T) {
 	defer srv.Close()
 
 	c := New(config.Context{Server: srv.URL, Token: "static"})
-	got, err := c.ObservationList(200)
+	got, err := c.ObservationList(200, "")
 	require.NoError(t, err)
 	assert.Equal(t, "/api/platform/workflows/observations?limit=200", gotPath)
 	require.Len(t, got, 2)
@@ -33,6 +34,20 @@ func TestObservationList_decodesTapeAndNullAlert(t *testing.T) {
 	assert.Equal(t, 2026, got[0].Since.Year())
 	assert.Equal(t, "CMD-1", got[0].DocKey)
 	assert.Equal(t, "draft", got[0].State)
+}
+
+// #1361: one workflow's documents, the name escaped.
+func TestObservationList_sendsTheWorkflow(t *testing.T) {
+	var got url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.Query()
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+	_, err := New(config.Context{Server: srv.URL, Token: "static"}).ObservationList(50, "scenario-freezer-door-c")
+	require.NoError(t, err)
+	assert.Equal(t, "scenario-freezer-door-c", got.Get("workflow"))
+	assert.Equal(t, "50", got.Get("limit"))
 }
 
 func TestObservationStats_decodesAndNullMedian(t *testing.T) {

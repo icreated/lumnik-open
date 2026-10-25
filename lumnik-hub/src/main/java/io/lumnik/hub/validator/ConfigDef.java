@@ -113,6 +113,25 @@ public final class ConfigDef {
         return this;
     }
 
+    /**
+     * Every field of {@code other} not declared here yet, declared optional: same type, check, hint and sub-def, never
+     * required; on a name both declare, the first declaration wins. For a block of defaults over another block's key set ({@code spec.defaults} of rest-generic, #1461) —
+     * reusing that set rather than copying it.
+     */
+    public ConfigDef optionalAll(ConfigDef other) {
+        for (FieldSpec f : other.fields()) {
+            fields.putIfAbsent(f.name(), new FieldSpec(f.name(), f.type(), f.importance(), f.doc(), f.defaultValue(),
+                false, f.validator(), null, f.recommendations(), f.nested()));
+        }
+        return this;
+    }
+
+    /** Undeclares {@code names} — for a key set built from another's ({@link #optionalAll}) that keeps only part of it. */
+    public ConfigDef without(Collection<String> names) {
+        fields.keySet().removeAll(names);
+        return this;
+    }
+
     public Collection<FieldSpec> fields() { return fields.values(); }
 
     private boolean closed;

@@ -1,10 +1,8 @@
 # kind: Export — deliver an entity as CSV
 
-> A `kind: Export` manifest is a stored delivery contract: **one canonical entity, the columns
-> you pick (renamed and formatted for the receiver if you want), one CSV, one destination**, on
-> demand or on a cron. Each execution is a **managed
-> run**, recorded from claim to receipt. The file is published atomically and **never
-> overwrites** anything.
+> A `kind: Export` delivers **one entity as one CSV file, to one destination** (SFTP or S3), on
+> demand or on a schedule. You pick the columns, and can rename and format them for the partner.
+> Each run leaves a receipt. A delivered file is **never overwritten**.
 
 | | |
 |---|---|
@@ -107,8 +105,7 @@ destination:
   fingerprint from a machine you trust:
   `ssh-keyscan -p 22 sftp.partner.example | ssh-keygen -lf -`.
 - The directory in `path` must exist. The hub does not create it.
-- The file is written to `customers-2026-09-24.csv.<uuid>.part` in the same directory, then
-  renamed to the final name. The rename refuses to replace an existing file.
+- The partner never sees a half-written file. An existing file is never replaced.
 
 ### S3
 
@@ -120,10 +117,9 @@ destination:
   `customers/x.csv`. A leading `/` is refused.
 - `region` defaults to `eu-west-3`. Set `endpoint` only for S3-compatible stores (MinIO, R2…).
 - `access_key_env` / `secret_key_env` default to `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
-- The object is committed with `If-None-Match: *`, so an existing key is never replaced. The store
-  must support conditional writes. AWS S3 does.
-- The upload is multipart above 8 MiB. Until it completes, nothing is visible under the key.
-- A write-only bucket works: a `403` on the pre-check is treated as "absent".
+- An existing object is never replaced. The store must support conditional writes: AWS S3 does.
+- Nothing is visible under the key until the upload completes.
+- A write-only bucket works.
 
 ### File-name tokens
 
@@ -141,11 +137,10 @@ anything more frequent.
 
 ## Scope and tenant
 
-- **An export belongs to its tenant.** Another tenant never sees it, even under the same name.
-  Rows are read through RLS for that tenant only.
+- **An export belongs to its tenant.** Another tenant never sees it, nor its rows.
 - **`spec.scope` binds it.** To apply, the scope must be one the entity declares. If you are bound
   to scopes, it must also be one of yours. To list, read or run an export, you need that scope too;
-  otherwise you get the uniform `403 {"error":"scope not granted"}`. See [Scopes](../rag/scopes.md).
+  otherwise `Error: access refused (403): scope not granted`. See [Scopes](../rag/scopes.md).
 - **A scheduled run has no user.** Its tenant and scope come from the stored manifest.
 - **Every run checks the definition again** before any byte moves. If the entity was dropped,
   the scope was removed from it or a column is gone, the run fails with `definition`. That is the
@@ -164,12 +159,13 @@ anything more frequent.
 | Header | the `spec.columns` names in order, when `header: true` |
 | No rows | a file with only the header, or a 0-byte file with `header: false`. It is still published |
 
-With `delimiter: ";"`, two rows where the second has no city (each line ends in `\r\n`):
+The desk's customers, as `lm entity export` writes them with the same rules (each line ends in
+`\r\n`; P-1001 has no email):
 
 ```
-"code";"name";"city"
-"P-1000";"HYDRAULIQUE RHONE";"Lyon"
-"P-1005";"ATELIERS DU ""NORD""";
+"code","name","city","segment","credit_limit","email"
+"P-1000","Hydraulique Lyon 1000","Lyon","GOLD","500","contact@hydraulique-lyon.example"
+"P-1001","Roulements Bruxelles 1001","Bruxelles","SILVER","637",
 ```
 
 Values are the canonical text in the entity view, as-is, unless the column declares
@@ -224,13 +220,11 @@ columns:
 - `order` and `filter` always use the entity's names (`segment`, not `CAT`), and sort or filter on
   the entity's values, before any formatting.
 - An empty cell stays empty. No formatter touches it.
-- A [date column](../entities.md#dates-across-sources) is written in UTC, `2026-07-01 00:00:00+00`
+- A [date column](../entities-types.md) is written in UTC, `2026-07-01 00:00:00+00`
   or `2026-07-01`, whatever zone the hub runs in; `format-date` gives it the partner's shape. It sorts
   by date, and a `filter` on it with dates is equal as an instant: `equals: "2026-07-01"` keeps the
   rows at that day's midnight UTC, as in a view.
-- The same data still gives the same file and the same SHA-256, so you can compare a retry. One
-  exception: after a hub upgrade, a `format-date` with a `zone` can move an hour if that zone's
-  daylight-saving rules changed.
+- The same data gives the same file and the same SHA-256, so you can compare a retry.
 
 ### Keep only some rows
 
@@ -364,25 +358,18 @@ an empty cell never reaches the formatter, so it stays empty in the file.
 
 `format-date` fails the same way on a value that is not a date, `2019-02-30` included: it is
 never moved to a valid day. It also fails when `pattern` asks for a field the value lacks
-(`HH:mm` on a date). `format-number` fails on a value that is not a number, or one with more
-than 1 000 digits on either side of the separator.
+(`HH:mm` on a date). `format-number` fails on a value that is not a number.
 
 `lm entity export` (the one-shot download) never formats or filters: it always gives every
 column, as the entity holds it.
 
 ## Ordering and the receipt
 
-- **The order is deterministic.** Rows are sorted by `spec.order`, then by the remaining
-  `spec.columns` in their declared order. Each column is compared byte-wise (`COLLATE "C"`),
-  with NULLs last.
-- **The same data gives the same bytes and the same SHA-256.** A retry over unchanged data can be
-  checked against the failed attempt's target, byte for byte.
-- A completed run's receipt contains `rowCount`, `byteCount`, `sha256` and `location`. S3 adds
-  `etag` and `versionId` (versioned bucket only).
-- **The ETag is not a checksum.** It identifies the object and nothing more. Always compare the
-  `sha256`.
-- **There is no sidecar file.** The receipt lives in the run ledger (`lm export status`). A
-  single-part S3 object (≤ 8 MiB) also carries the checksum as `x-amz-meta-lumnik-sha256`.
+- **The order never changes:** `spec.order`, then the other columns in their declared order,
+  empty values last.
+- **The same data gives the same bytes and the same SHA-256.**
+- The receipt (`lm export status`) gives the rows, the bytes, the SHA-256 and the location. To
+  check a delivery, compare the SHA-256 — not an S3 ETag.
 
 ## Managed export vs one-shot download
 
@@ -403,9 +390,8 @@ Error: customers.csv already exists — refusing to overwrite it (use --force to
 $ lm entity export AcmeCustomer -o - | head -3
 ```
 
-- The download goes to a hidden `.customers.csv.*.part` and gets its final name only once the
-  whole body has arrived. An interrupted download leaves nothing behind.
-- An existing file is never replaced without `--force`. The file is created `0600`.
+- An interrupted download leaves nothing behind.
+- An existing file is never replaced without `--force`.
 - With `-o -`, bytes already written to stdout cannot be taken back. On failure the command
   still exits non-zero.
 
@@ -467,8 +453,7 @@ Reason        SFTP destination: /inbound/customers-2026-09-24.csv already exists
 ✖ export run c7d0e913-… failed (collision): … — retry with: lm export retry customers-daily c7d0e913
 ```
 
-**What a retry does.** It creates a new run with `retryOf` set and `attempt` + 1. It regenerates the file
-**from byte 0**, since there is no resume. It keeps the original artifact time, so it aims at the
+**What a retry does.** It is a new run, `ATTEMPT 2`. It writes the whole file again, under the
 **same file name**. So:
 
 - A retry is always safe: it can never overwrite. At worst it ends in `collision`.
@@ -488,35 +473,20 @@ Reason        SFTP destination: /inbound/customers-2026-09-24.csv already exists
 - **Only one run is in flight per export.** A second trigger gets `409 … already has a run in flight`.
   A slot that is due while a manual run is going is picked up on a later tick, if it is still the latest.
 - **With several hub replicas, a slot is still delivered only once.**
-- When several slots are due, the one owed longest starts first. A due slot that finds no free
-  place is picked up on a later tick, if it is still the latest.
 
-| Property (environment variable) | Default | Bounds |
+| Setting | Default | Says |
 |---|---|---|
-| `lumnik.export.max-concurrent-scheduled-runs` (`LUMNIK_EXPORT_MAX_CONCURRENT_SCHEDULED_RUNS`) | 2 | scheduled runs in flight per hub instance. With the run queue off, `lm export run` and `retry` do not count |
-| `quarkus.datasource."admin".jdbc.max-size` | 20 | the `admin` pool; each run holds one connection for its whole life — raise it with the bound above |
-| `lumnik.export.snapshot.timeout-seconds` | 1800 | the time a run has to generate its snapshot |
+| `LUMNIK_EXPORT_MAX_CONCURRENT_SCHEDULED_RUNS` | 2 | scheduled runs in flight per hub. Each takes one connection of the `admin` pool for its whole run |
+| `lumnik.export.snapshot.timeout-seconds` | 1800 | the time a run has to write its file |
 
 ### Runs can queue
 
-With `LUMNIK_RUN_QUEUE_ENABLED=true` (off by default; read
-[Turning on the run queue](../operations/upgrade.md#turning-on-the-run-queue) first):
+With the run queue on ([Turning on the run queue](../operations/upgrade.md#turning-on-the-run-queue)),
+`lm export run` and `retry` leave the run `Queued` until a place frees. `--wait` waits through it.
 
-- `lm export run` and `lm export retry` leave a run in status `Queued`; the hub starts it as a
-  slot frees, on the `LUMNIK_EXPORT_MAX_CONCURRENT_SCHEDULED_RUNS` budget.
-- `lm export runs` lists it `Queued`, with no start time yet.
-- `--wait` waits through `Queued` to the outcome.
-
-- A queued manual run's `${date}` and `${timestamp}` file-name tokens are fixed when the hub accepts it, not when it
-  starts: a run queued at 23:59 and started after midnight keeps the previous day's name.
-- An export holds at most one queued-or-running run: a second request gets `409 … already has a run in flight`,
-  naming the queued run.
-- A run not started within `LUMNIK_RUN_QUEUE_MAX_AGE` (default `1h`) ends `Failed`, failure `interrupted`, "expired in
-  queue". One whose manifest was re-applied while it waited ends `Failed`, failure `definition`.
-- There is no export cancel door: a queued run cannot be cancelled and leaves the queue by starting, by failing on
-  its definition, or by expiring.
-- While a queue stands, it can win the permit race against a due scheduled slot. That slot is skipped, tried again
-  on the next tick, and dropped when the next occurrence replaces it (there is no back-fill).
+- A queued run's file name is fixed when the hub accepts it: queued at 23:59, it keeps that day's
+  `${date}`.
+- A run not started within an hour ends `Failed`, `interrupted`.
 
 ## Recovering from a crash
 

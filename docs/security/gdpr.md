@@ -13,10 +13,10 @@ advice.
   runtime (Ollama). Once you configure a cloud LLM provider, questions and grounding chunks are
   sent to it.
 - **lumnik is a read-only mirror.** Ingestion never writes back. Ask-to-SQL runs under a
-  read-only database role behind [five guards](../transparency/ask-honesty.md). The hub keeps no
+  read-only database role behind [its guards](../transparency/ask-honesty.md). The hub keeps no
   conversation history.
 - **Isolation is enforced in the database.** PostgreSQL Row-Level Security per tenant
-  ([RLS](rls.md)); chat, search and entity reads are also bound per métier scope.
+  ([RLS](rls.md)); chat, search and entity reads are also bound per business scope.
 
 ## Where personal data can live
 
@@ -25,7 +25,7 @@ advice.
 | `identity` schema | user accounts: login, display name, email | archive or soft-delete; the row stays until an operator deletes it |
 | `connector.t_*` mirror tables | whatever your sources contain | kept until the connector is deleted; see the per-type list below |
 | `rag.chunk` corpus | text chunks and embeddings derived from ingested rows | a changed row adds a chunk, the old one stays; deleting the connector removes every chunk it produced |
-| Dead letters | the raw payload of rows that failed mapping | kept with the connector; `lm dlq discard` marks an entry handled and keeps the payload |
+| Dead letters | the raw payload of rows a run set aside, for any reason | kept with the connector; `lm dlq discard` marks an entry handled and keeps the payload |
 | Event outbox | entity name, a key hash, the operation | purged nightly past `LUMNIK_EVENTS_RETENTION_DAYS` (default 30) |
 | Audit trail | the acting user and what they wrote, read or exported. [What it records](index.md#the-audit-trail) | purged nightly past `LUMNIK_AUDIT_RETENTION_DAYS` (default 365, `0` = forever). No per-row erasure |
 | Webhook payloads | the column values a `kind: Process` template references, posted to the tenant's target URL (n8n, Make, your endpoint); HMAC-signed when a secret is set, otherwise protected only by that URL's TLS | leaves lumnik; retention is the receiver's |
@@ -38,14 +38,16 @@ How a change at the source reaches the mirror tables:
 | Connector | Changed row | Row deleted at the source |
 |---|---|---|
 | `jdbc-generic` | replaced by source key | stays in the mirror |
-| `csv-file` reading one local file (no glob) | upserted | removed by the next run that reads the whole file; a run that would remove more than 30 % of the rows is refused |
-| every other type | upserted by content | stays in the mirror |
+| `rest-generic` (GraphQL, SOAP included) | replaced by its `unique_key` | stays in the mirror |
+| `csv-file` reading one local file (no glob) | replaced: the old version is removed by the next run that reads the whole file; a run that would remove more than 30 % of the rows is refused | removed the same way |
+| `csv-file` reading a folder, a glob, SFTP or S3; `kafka` | **added as a new row; the old version stays** | stays in the mirror |
 
 ## The rights, in practice
 
 **Access and portability**
 
-- `lm entity get` gives structured access to one person's rows; read-only SQL covers the rest.
+- `lm entity get` gives structured access to one person's rows;
+  [read-only SQL](../recipes/analyze-the-database.md) covers the rest.
 
     ```
     $ lm entity get Customer --filter email=jeanne.martin@example.com
@@ -57,7 +59,9 @@ How a change at the source reaches the mirror tables:
 
 **Rectification**
 
-- Fix the data in the source; the mirror follows on the next run.
+- Fix the data in the source. On a `jdbc-generic`, `rest-generic` or one-file `csv-file`
+  connector, the mirror follows on the next run. On the others, **the old value stays** in the
+  mirror next to the new one: erase it as below.
 - The corpus gains a chunk for the corrected row **and keeps the chunk carrying the old value**
   until the connector is deleted and re-ingested (below).
 - Ingested rows cannot be edited in lumnik.
@@ -73,14 +77,15 @@ flowchart LR
   d --> r["3. re-apply,<br/>re-ingest"]
 ```
 
-1. Erase in the source first; it is the system of record.
+1. Erase in the source first; it is the system of record. **Save the entity and SearchIndex
+   manifests** you will re-apply in step 3: no `lm` command gives them back once deleted.
 2. Delete every entity that reads the connector's tables (`lm connector delete` names it), then
    delete the connector.
 3. Re-apply the connector, the entity and its SearchIndex, then re-ingest.
 
 !!! danger "An entity is shared by every tenant"
     Deleting it drops its view and every SearchIndex over it **in all tenants**, until step 3
-    re-applies them. Views, app screens and Search over that entity are empty in the meantime.
+    re-applies them. A SearchIndex belongs to one tenant: each tenant re-applies its own. Views, app screens and Search over that entity are empty in the meantime.
 
 ```
 $ lm connector delete erp-customers --dry-run

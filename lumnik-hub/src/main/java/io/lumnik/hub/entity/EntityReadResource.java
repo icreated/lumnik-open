@@ -30,11 +30,9 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.Types;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
 
@@ -99,7 +97,10 @@ public class EntityReadResource {
     }
 
     List<String> cols = new ArrayList<>(m.canonicalColumns()); // union of all sources' canonical columns
-    List<ColumnFilter> filters = filtersFrom(uriInfo, new HashSet<>(cols));
+    // A resolution entity's rows also filter by _entity_id: the key a search hit's link names them by.
+    List<String> filterable = new ArrayList<>(cols);
+    if (m.resolution() != null) filterable.add("_entity_id");
+    List<ColumnFilter> filters = ApiErrors.orBadRequest(() -> filtersFrom(uriInfo, m.name(), filterable));
 
     // ?identity=true (#1116): a resolution entity's rows also name their identity — _handle is the
     // SOURCE:ID an assertion takes. Opt-in, so the default read every client knows stays
@@ -109,7 +110,8 @@ public class EntityReadResource {
     // session's zone, the hub JVM's; a date operand is read in it too: read in UTC, as a view does
     // (#1304, #1323).
     em.unwrap(Session.class).doWork(TemporalText::utcSession);
-    Query q = em.createNativeQuery(selectSql(m, cols, extra, filters, filters.isEmpty() ? Set.of() : temporalColumns(m)));
+    Query q = em.createNativeQuery(selectSql(m, cols, extra, filters, filters.isEmpty() ? Map.of()
+        : em.unwrap(Session.class).doReturningWork(c -> EntityViewCompiler.viewColumnKinds(c, m.name()))));
     for (int i = 0; i < filters.size(); i++) q.setParameter(i + 1, filters.get(i).value());
     q.setMaxResults(Math.min(Math.max(limit, 1), 1000));
     q.setFirstResult(Math.max(offset, 0));
@@ -148,24 +150,20 @@ public class EntityReadResource {
     }
   }
 
-  /** The view's columns that hold a date or a timestamp (#1325), read in the read's own transaction. */
-  private Set<String> temporalColumns(EntityManifest m) {
-    Map<String, String> types = em.unwrap(Session.class)
-        .doReturningWork(c -> EntityViewCompiler.viewColumnTypes(c, m.name()));
-    Set<String> temporal = new HashSet<>();
-    types.forEach((column, type) -> {
-      if (ColumnKind.ofType(type).temporal()) temporal.add(column);
-    });
-    return temporal;
-  }
-
-  /** Query params that name a canonical column; anything else (including {@code _conflicts}) is ignored. */
-  private static List<ColumnFilter> filtersFrom(UriInfo uriInfo, Set<String> allowed) {
+  /**
+   * Query params besides the paging controls and {@code identity}, each naming a filterable column. Any
+   * other key (including {@code _conflicts}) is refused: ignoring it answered every row under a filter
+   * that selected none of them (#1519).
+   */
+  private static List<ColumnFilter> filtersFrom(UriInfo uriInfo, String entity, List<String> filterable) {
     List<ColumnFilter> filters = new ArrayList<>();
     for (Map.Entry<String, List<String>> e : uriInfo.getQueryParameters().entrySet()) {
       String key = e.getKey();
       if ("limit".equals(key) || "offset".equals(key) || "identity".equals(key)) continue;
-      if (!allowed.contains(key)) continue;
+      if (!filterable.contains(key)) {
+        throw new IllegalArgumentException("filter " + key + " is not a column of " + entity
+            + "; filterable columns: " + String.join(", ", filterable));
+      }
       List<String> v = e.getValue();
       if (v == null || v.isEmpty()) continue;
       filters.add(new ColumnFilter(key, v.get(0)));
@@ -179,7 +177,7 @@ public class EntityReadResource {
    * canonical values need not be unique, and offset paging only holds over a total order.
    */
   static String selectSql(EntityManifest m, List<String> cols, List<String> extra,
-                                  List<ColumnFilter> filters, Set<String> temporal) {
+                                  List<ColumnFilter> filters, Map<String, ColumnKind> typed) {
     StringBuilder sql = new StringBuilder("SELECT ");
     for (int i = 0; i < cols.size(); i++) {
       if (i > 0) sql.append(", ");
@@ -192,9 +190,13 @@ public class EntityReadResource {
       sql.append(i == 0 ? " WHERE " : " AND ");
       ColumnFilter f = filters.get(i);
       // A date against a date or a timestamp column is equal as an instant, a date-only one being its
-      // midnight UTC — the view's `=` (#1310, #1325); anything else is the exact text.
-      if (temporal.contains(f.column()) && ViewFilter.isTemporal(f.value())) {
+      // midnight UTC — the view's `=` (#1310, #1325); a number against a number column by value, 1500.00 being
+      // 1500 (#1338); anything else is the exact text.
+      ColumnKind kind = typed.getOrDefault(f.column(), ColumnKind.TEXT);
+      if (kind.temporal() && ViewFilter.isTemporal(f.value())) {
         sql.append(quoteIdent(f.column())).append("::timestamptz = CAST(?").append(i + 1).append(" AS timestamptz)");
+      } else if (kind.number() && ViewFilter.isNumeric(f.value())) {
+        sql.append(quoteIdent(f.column())).append("::numeric = CAST(?").append(i + 1).append(" AS numeric)");
       } else {
         sql.append(quoteIdent(f.column())).append("::text = ?").append(i + 1);
       }
@@ -216,7 +218,7 @@ public class EntityReadResource {
     for (Object r : rows) {
       Object[] arr = (Object[]) r; // always >= 2 selected columns (canonical [+ identity] + _conflicts)
       Map<String, Object> row = new LinkedHashMap<>();
-      for (int i = 0; i < cols.size(); i++) row.put(cols.get(i), TemporalText.wire(arr[i]));
+      for (int i = 0; i < cols.size(); i++) row.put(cols.get(i), TemporalText.entityWire(arr[i]));
       for (int i = 0; i < extra.size(); i++) row.put(extra.get(i), arr[cols.size() + i]);
       row.put("_conflicts", arr[cols.size() + extra.size()]); // JSON text, "{}" when no conflict
       out.add(row);

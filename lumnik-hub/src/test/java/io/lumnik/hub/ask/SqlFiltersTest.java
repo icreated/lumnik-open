@@ -5,11 +5,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 class SqlFiltersTest {
 
@@ -78,6 +81,48 @@ class SqlFiltersTest {
   @Test
   void skips_a_numeric_rhs() {
     assertThat(filters("WHERE col = 5")).isEmpty();
+  }
+
+  // ── #1338: a number literal, for the guards that read a number column ───────
+
+  private static List<SqlFilters.Filter> numbers(String sql) {
+    return SqlFilters.columnNumberFilters(SqlLexer.tokenize(sql));
+  }
+
+  @Test
+  void a_number_filter_is_read_in_its_canonical_text() {
+    assertThat(numbers("WHERE code = 5")).singleElement()
+        .extracting(SqlFilters.Filter::column, SqlFilters.Filter::values).containsExactly("code", List.of("5"));
+    assertThat(numbers("WHERE code = 5.0")).singleElement()
+        .extracting(SqlFilters.Filter::values).isEqualTo(List.of("5"));
+    assertThat(numbers("WHERE amount <> 12.50")).singleElement()
+        .extracting(SqlFilters.Filter::values).isEqualTo(List.of("12.5"));
+    assertThat(numbers("WHERE code IN (1, 2.0, 100)")).singleElement()
+        .extracting(SqlFilters.Filter::values).isEqualTo(List.of("1", "2", "100"));
+    assertThat(numbers("WHERE code NOT IN (7)")).singleElement()
+        .extracting(SqlFilters.Filter::values).isEqualTo(List.of("7"));
+  }
+
+  /**
+   * The literal is the model's, so a user's question can put any number there. An exponent bomb must not become a
+   * billion-digit string (toPlainString): only a plain decimal within 38 digits each side is read; anything else is
+   * null — the guards' fail-open, never an OutOfMemoryError. (The lexer splits {@code 1e9} into {@code 1} and a name,
+   * so the bomb reaches this only as a quoted string: DisputedRowsPlanTest pins that path.)
+   */
+  @ParameterizedTest
+  @ValueSource(strings = {"1e999999999", "1E-999999999", "9e2147483647",
+      "1.5e3", "1234567890123456789012345678901234567890"})
+  void a_number_that_is_not_a_bounded_plain_decimal_is_not_read(String literal) {
+    assertThat(assertTimeoutPreemptively(Duration.ofSeconds(1),
+        () -> SqlFilters.canonicalNumber(literal))).isNull();
+  }
+
+  @Test
+  void a_number_reader_skips_strings_mixed_lists_and_the_string_reader_skips_numbers() {
+    assertThat(numbers("WHERE code = '5'")).isEmpty();
+    assertThat(numbers("WHERE code IN (1, '2')")).isEmpty();
+    assertThat(numbers("WHERE lower(code) = 5")).isEmpty();
+    assertThat(filters("WHERE code IN (1, 2)")).isEmpty();
   }
 
   @Test

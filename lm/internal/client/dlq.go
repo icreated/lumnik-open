@@ -37,14 +37,10 @@ func (c *Client) DlqDiscard(id string) error {
 	return c.POST("/api/platform/dlq/"+id+"/discard", map[string]any{}, nil)
 }
 
-// DlqReplayed marks an entry replayed; a non-empty newRunID rides the hub's optional
-// ?newRunId= query param, linking the entry to the run that replayed it.
+// DlqReplayed marks an entry replayed by newRunID, the run that carried the row again: the hub
+// requires it (#1377).
 func (c *Client) DlqReplayed(id, newRunID string) error {
-	path := "/api/platform/dlq/" + id + "/replayed"
-	if newRunID != "" {
-		path += "?newRunId=" + url.QueryEscape(newRunID)
-	}
-	return c.POST(path, map[string]any{}, nil)
+	return c.POST("/api/platform/dlq/"+id+"/replayed?newRunId="+url.QueryEscape(newRunID), map[string]any{}, nil)
 }
 
 // DlqGet fetches one dead-letter entry by id via GET /api/platform/dlq/{id}.

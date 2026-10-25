@@ -3,7 +3,9 @@ package io.lumnik.hub.connector.csv;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
 import io.lumnik.hub.connector.api.types.RunScope;
+import io.lumnik.hub.connector.api.types.StreamEnd;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
+import io.lumnik.hub.connector.mapping.writer.UnseenRowSweeper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -30,6 +32,14 @@ class CsvFullRefreshTest {
   @CsvSource({"30%, 0.30", "50%, 0.50", "0%, 0.0", "100%, 1.0", "off, 1.0", "OFF, 1.0", "12.5%, 0.125"})
   void max_removed_reads_a_percentage_or_off(String declared, double fraction) {
     assertThat(CsvFullRefresh.maxRemoved(Map.of("refresh", Map.of("max_removed", declared)))).isEqualTo(fraction);
+  }
+
+  @Test
+  void the_refusal_counts_the_rows_lost_not_the_versions_replaced() {
+    // #1544: four rows lost and two changed — six old versions unmet, but the file holds six rows
+    // where the table held ten: four would be lost.
+    var refused = (StreamEnd.Refused) CsvFullRefresh.refused(new UnseenRowSweeper.Count(10, 6, 6), 0.30);
+    assertThat(refused.reason()).startsWith("4 of 10 rows would be removed: the file holds 6 where the table held 10");
   }
 
   @Test

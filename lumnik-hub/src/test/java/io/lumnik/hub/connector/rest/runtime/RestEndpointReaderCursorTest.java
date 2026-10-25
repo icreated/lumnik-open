@@ -20,6 +20,7 @@ import io.lumnik.hub.connector.rest.pagination.EndpointConfig;
 import io.lumnik.hub.connector.rest.pagination.PaginationFactory;
 import io.lumnik.hub.connector.rest.pagination.PaginationStrategy;
 import io.lumnik.hub.connector.rest.reliability.RateLimiterRegistry;
+import io.lumnik.hub.connector.secret.SecretRefs;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -81,7 +82,9 @@ class RestEndpointReaderCursorTest {
                     return pages.get(Math.min(page, pages.size() - 1));
                 }
                 @Override public RestRequest next(RestResponse resp, RestRequest current) {
-                    return ++page < pages.size() ? current : null;
+                    // Each page its own request, as every real strategy does: the reader never sends
+                    // the same request twice in a run (#1387).
+                    return ++page < pages.size() ? RestRequest.get("https://erp.test/orders?page=" + page) : null;
                 }
             };
         }
@@ -111,7 +114,7 @@ class RestEndpointReaderCursorTest {
 
     private RestEndpointReader reader() {
         return new RestEndpointReader(endpoint, new PassThroughAuth(), pagination,
-            new RateLimiterRegistry(), http, mapper);
+            new RateLimiterRegistry(), http, mapper, SecretRefs.environmentOnly(name -> null));
     }
 
     private ConnectorContext ctx(Map<String, Object> config) {
@@ -208,7 +211,7 @@ class RestEndpointReaderCursorTest {
     void a_redirect_is_refused_loudly_instead_of_completing_as_a_silent_empty_run() {
         pagination.pages = List.of(List.of(item("2026-01-01")));
         RestEndpointReader reader = new RestEndpointReader(endpoint, new PassThroughAuth(),
-            pagination, new RateLimiterRegistry(), new RedirectingHttp(), mapper);
+            pagination, new RateLimiterRegistry(), new RedirectingHttp(), mapper, SecretRefs.environmentOnly(name -> null));
 
         var e = assertThrows(ConnectorException.class,
             () -> reader.read(100, null, ctx(Map.of("base_url", "https://erp.test"))));
@@ -259,7 +262,7 @@ class RestEndpointReaderCursorTest {
                 Map.<String, Object>of("base_url", "https://erp.test"),
                 Map.<String, Object>of("base_url", "https://erp.test", "pagination", Map.of("kind", "soap")))) {
             RestEndpointReader reader = new RestEndpointReader(endpoint, new PassThroughAuth(),
-                pagination, new RateLimiterRegistry(), new ThrowingHttp(thrown), mapper);
+                pagination, new RateLimiterRegistry(), new ThrowingHttp(thrown), mapper, SecretRefs.environmentOnly(name -> null));
 
             var e = assertThrows(SourceCallException.class, () -> reader.read(100, null, ctx(cfg)));
 
@@ -276,7 +279,7 @@ class RestEndpointReaderCursorTest {
     void our_own_refusal_passes_through_unchanged() {
         ConnectorException ours = new ConnectorException("upstream returned HTTP 401 (permanent)");
         RestEndpointReader reader = new RestEndpointReader(endpoint, new PassThroughAuth(),
-            pagination, new RateLimiterRegistry(), new ThrowingHttp(ours), mapper);
+            pagination, new RateLimiterRegistry(), new ThrowingHttp(ours), mapper, SecretRefs.environmentOnly(name -> null));
 
         assertSame(ours, assertThrows(ConnectorException.class,
             () -> reader.read(100, null, ctx(Map.of("base_url", "https://erp.test")))));

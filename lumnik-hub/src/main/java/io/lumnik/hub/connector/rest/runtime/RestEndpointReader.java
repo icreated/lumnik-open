@@ -7,8 +7,10 @@ import io.lumnik.hub.connector.api.ItemReader;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
+import io.lumnik.hub.connector.api.types.RunScope;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
+import io.lumnik.hub.connector.exceptions.RunCancelledException;
 import io.lumnik.hub.connector.exceptions.SourceCallException;
 import io.lumnik.hub.connector.rest.RestHttpClient;
 import io.lumnik.hub.connector.rest.RestRequest;
@@ -22,6 +24,7 @@ import io.lumnik.hub.connector.rest.pagination.JsonPathExtractor;
 import io.lumnik.hub.connector.rest.pagination.PaginationFactory;
 import io.lumnik.hub.connector.rest.pagination.PaginationStrategy;
 import io.lumnik.hub.connector.rest.pagination.PaginationSupport;
+import io.lumnik.hub.connector.rest.pagination.VariableCursorBinding;
 import io.lumnik.hub.connector.rest.RequestHeaders;
 import io.lumnik.hub.connector.rest.reliability.GraphQlResponseValidator;
 import io.lumnik.hub.connector.rest.reliability.NoopResponseValidator;
@@ -32,13 +35,22 @@ import io.lumnik.hub.connector.rest.reliability.RetryExecutor;
 import io.lumnik.hub.connector.rest.reliability.RetryPolicy;
 import io.lumnik.hub.connector.rest.soap.SoapFaultValidator;
 import io.lumnik.hub.connector.rest.soap.XmlBodyParser;
+import io.lumnik.hub.connector.secret.SecretRefs;
 
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.OptionalLong;
+import java.util.regex.Matcher;
+import java.util.function.UnaryOperator;
+import java.util.regex.Pattern;
 
 /**
  * ConnectorEngine bridge reader for {@code rest-generic} connectors.
@@ -86,7 +98,8 @@ import java.util.OptionalLong;
  * <ul>
  *   <li>{@code full} — no watermark; re-reads everything each run.</li>
  *   <li>{@code watermark} — the stored watermark is sent on the first request as the query param
- *       named by {@code incremental.param} (e.g. {@code ?updated_since=<watermark>}); the new
+ *       named by {@code incremental.param} (e.g. {@code ?updated_since=<watermark>}) — on a graphql
+ *       endpoint, as the GraphQL variable of that name in the POST body; the new
  *       watermark is the MAX value of {@code incremental.watermark_path} (a JsonPath) across the
  *       fetched items (string compare; ISO timestamps / monotonic ids). No items → keep prior.
  *       <p><b>Staged promotion under chunking.</b> {@code watermark} is what the NEXT run's first
@@ -116,6 +129,16 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
     private static final int MAX_PAGES = 10_000;
     private static final String WATERMARK = "watermark";
     private static final String WATERMARK_CANDIDATE = "watermarkCandidate";
+    /** When this run began, on the hub's clock — mid-run cursors carry it so the last chunk knows the run's length. */
+    private static final String RUN_STARTED_AT = "runStartedAt";
+    /** How long the run that set the mark took: the next run asks from that far before it (#1397). */
+    private static final String RUN_SECONDS = "runSeconds";
+    /** Added to the run's length: clocks drift, and a change committed as the run ended may carry a later stamp. */
+    private static final long LOOKBACK_MARGIN_SECONDS = 60;
+    private static final Pattern LOOKBACK = Pattern.compile("(\\d{1,6})([smh])");
+    private static final Pattern INTEGER_MARK = Pattern.compile("-?\\d+");
+    /** The fraction of a second as the mark wrote it: {@code .378}, {@code .378123}, or none. */
+    private static final Pattern FRACTION = Pattern.compile("T\\d{2}:\\d{2}:\\d{2}(?:\\.(\\d{1,9}))?");
     private static final String EMITTED_BY_RUN = "emittedByRun";
     private static final String RESUME = "resume";
     private static final String PAGES = "pages";
@@ -142,19 +165,23 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
     private final RateLimiterRegistry rateRegistry;
     private final RestHttpClient http;
     private final ObjectMapper mapper;
+    /** What a header's {@code value_env} resolves to — the auth fields' rule: lm secret, then environment. */
+    private final SecretRefs secrets;
 
     public RestEndpointReader(ConnectorEndpoint endpoint,
                               AuthProviderRegistry authReg,
                               PaginationFactory paginationFactory,
                               RateLimiterRegistry rateRegistry,
                               RestHttpClient http,
-                              ObjectMapper mapper) {
+                              ObjectMapper mapper,
+                              SecretRefs secrets) {
         this.endpoint = endpoint;
         this.authReg = authReg;
         this.paginationFactory = paginationFactory;
         this.rateRegistry = rateRegistry;
         this.http = http;
         this.mapper = mapper;
+        this.secrets = secrets;
     }
 
     /**
@@ -176,6 +203,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         }
 
         Map<String, Object> cfg = ctx.config();
+        Instant readStarted = now(ctx);
 
         // Endpoint method + path live on the endpoint entity, not in the merged config.
         ConnectorEndpoint ep = endpoint;
@@ -187,7 +215,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         // Lifted out of the strategies for the same reason cursorHeaderName is: reading a JsonPath
         // out of a response body does not vary by pagination shape, so nothing here is per-strategy.
         String totalPath = str(pagCfg.get("total_path"));
-        AuthProvider auth = authReg.build(authSpecFor(cfg));
+        AuthProvider auth = authReg.build(authSpecFor(cfg, new AuthSpec.Owner(ctx.tenantId(), ctx.connectorId())));
         auth.probe();
 
         RateLimiter rl = rateRegistry.forConnector(ctx.connectorId(),
@@ -201,14 +229,14 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
             // fetch when incremental is on — dropping it to null (as an earlier PR-B revision did)
             // made every SOAP+watermark run re-fetch the same window forever. Computed over ALL
             // items exactly as the pre-PR-B single fetch did, since a SOAP fetch is never partial.
-            RestRequest req = firstRequest(pag, cfg, ep, inc, parsed);
-            List<Map<String, Object>> all = fetchAllPages(auth, rl, retry, pag, req, bodyParser);
+            RestRequest req = firstRequest(pag, cfg, ep, inc, parsed, secrets::lookup);
+            List<Map<String, Object>> all = fetchAllPages(auth, rl, retry, pag, req, bodyParser, ctx.scope());
             // maxWatermark carries the prior watermark through when the path is null or no item
             // matches (see its own guard), so a path-less watermark misconfig preserves the prior
             // value instead of nulling it — matching the chunking branch and pre-PR-B single fetch.
             // No extra path!=null guard here: adding one reintroduced the re-fetch-forever drop.
             String wm = inc.enabled() ? maxWatermark(all, inc.path(), parsed.watermark) : null;
-            return new ReadResult.HasMore<>(all, cursor(wm, runId));
+            return new ReadResult.HasMore<>(all, cursor(wm, runId, secondsSince(readStarted, ctx)));
         }
 
         // Full AND watermark modes share the page-granular chunk loop. A resume cursor from THIS
@@ -216,8 +244,9 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         // starts from page 1 (FULL re-reads everything; watermark filters by whatever `watermark`
         // that dead run left behind, since it never got to promote its candidate).
         boolean resuming = parsed.resume != null && runId.equals(parsed.emittedByRun);
-        RestRequest start = resuming ? resumeRequest(parsed.resume, cfg, ctx)
-                                     : firstRequest(pag, cfg, ep, inc, parsed);
+        Instant runStarted = resuming && parsed.runStartedAt != null ? parsed.runStartedAt : readStarted;
+        RestRequest start = resuming ? resumeRequest(parsed.resume, cfg, ep, secrets::lookup)
+                                     : firstRequest(pag, cfg, ep, inc, parsed, secrets::lookup);
         PageWindow window = fetchPageWindow(auth, rl, retry, pag, start, bodyParser,
             chunkSize, resuming ? parsed.pages : 0,
             resuming ? parsed.declaredTotal : DeclaredTotal.NONE, totalPath);
@@ -231,7 +260,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         // line sits, so the next mode that starts filtering has to answer it instead of inheriting
         // the guard by falling past a branch.
         if (!inc.filtersRows() && window.next() == null) {
-            reconcileWithDeclaredTotal(ctx, emitted, window.total());
+            reconcileWithDeclaredTotal(ep, emitted, window.total());
         }
 
         if (inc.enabled()) {
@@ -244,7 +273,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
                 ? maxWatermark(window.items(), inc.path(), priorCandidate) : priorCandidate;
             return new ReadResult.HasMore<>(window.items(),
                 watermarkCursor(runId, parsed.watermark, candidate, window.next(), window.pages(),
-                    cursorHeaderName(pagCfg)));
+                    cursorHeaderName(pagCfg), runStarted, ctx));
         }
 
         return new ReadResult.HasMore<>(window.items(),
@@ -252,7 +281,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
     }
 
     /** The incremental block, reduced to what the runtime honours; {@code api_cursor} is deferred → full. */
-    private record Incremental(boolean enabled, String param, String path) {
+    private record Incremental(boolean enabled, String param, String path, Duration lookback) {
         /**
          * Whether this read NARROWS what the source returns — the one case where the source's own
          * total is not a number this run can be measured against. {@code api_cursor} is deferred to
@@ -265,19 +294,71 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
     private static Incremental incremental(Map<String, Object> cfg) {
         Map<String, Object> inc = mapConfig(cfg, "incremental");
         String mode = String.valueOf(inc.getOrDefault("mode", "full"));
-        return new Incremental(WATERMARK.equals(mode), (String) inc.get("param"), (String) inc.get("watermark_path"));
+        return new Incremental(WATERMARK.equals(mode), (String) inc.get("param"), (String) inc.get("watermark_path"),
+            lookback(inc.get("lookback")));
+    }
+
+    /** {@code incremental.lookback}: {@code 90s}, {@code 10m}, {@code 2h}, {@code 0s}; absent means "the run's own length". */
+    public static Duration lookback(Object declared) {
+        if (declared == null) return null;
+        Matcher m = LOOKBACK.matcher(String.valueOf(declared).strip());
+        if (!m.matches()) {
+            throw new ConnectorException("incremental.lookback must be a number of s, m or h (e.g. 10m, 0s)");
+        }
+        long n = Long.parseLong(m.group(1));
+        return switch (m.group(2)) {
+            case "s" -> Duration.ofSeconds(n);
+            case "m" -> Duration.ofMinutes(n);
+            default -> Duration.ofHours(n);
+        };
     }
 
     /**
      * Declarative headers first, then the stored watermark. Pagination preserves headers across pages
      * (withQuery/withBody copy the header map) and auth is applied per page on top, so auth headers
-     * win on a name clash.
+     * win on a name clash. On a graphql endpoint the mark is the GraphQL variable {@code param}: a
+     * GraphQL server reads no URL parameter, and the relay loop keeps the body's variables page to page.
      */
     private static RestRequest firstRequest(PaginationStrategy pag, Map<String, Object> cfg,
-                                            ConnectorEndpoint ep, Incremental inc, Parsed parsed) {
-        RestRequest req = firstRequest(pag, cfg, ep);
+                                            ConnectorEndpoint ep, Incremental inc, Parsed parsed,
+                                            UnaryOperator<String> secrets) {
+        RestRequest req = firstRequest(pag, cfg, ep, secrets);
         boolean canSend = inc.enabled() && parsed.watermark != null && inc.param() != null;
-        return canSend ? req.withQuery(inc.param(), parsed.watermark) : req;
+        if (!canSend) return req;
+        String mark = sentWatermark(parsed.watermark, inc.lookback(), parsed.runSeconds);
+        return isGraphQlEndpoint(cfg) ? new VariableCursorBinding(inc.param()).bind(req, mark)
+                                      : req.withQuery(inc.param(), mark);
+    }
+
+    /**
+     * What the next run asks from (#1397). A REST source pages in its own order: a row changed after its page was
+     * read but before a later page carries a newer one falls behind the new mark, and no later run would ever ask
+     * for it. Anything that changed during the run that set the mark is stamped at or after its start — at or
+     * after {@code mark − run length} — so the run asks from there, plus a margin. Rows read again are upserted on
+     * their key. Only an instant can be moved back, and it is written as the mark was — its offset, its fraction
+     * width — so an API that reads its own format reads it; any other mark is sent as stored, and so is a
+     * declared lookback of {@code 0s}. The stored mark never moves back: the window is applied here.
+     */
+    static String sentWatermark(String mark, Duration declared, Long runSeconds) {
+        if (instantOf(mark) == null) return mark;
+        Duration back = declared != null ? declared
+            : Duration.ofSeconds((runSeconds == null ? 0 : runSeconds) + LOOKBACK_MARGIN_SECONDS);
+        if (back.isZero()) return mark;
+        Matcher fraction = FRACTION.matcher(mark);
+        int digits = fraction.find() && fraction.group(1) != null ? fraction.group(1).length() : 0;
+        String offset = mark.endsWith("Z") || mark.endsWith("z") ? "'Z'" : "xxx";
+        return DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss" + (digits > 0 ? "." + "S".repeat(digits) : "") + offset,
+                Locale.ROOT)   // a wire format: ASCII digits whatever the JVM's locale
+            .format(OffsetDateTime.parse(mark).minus(back));
+    }
+
+    /** The mark as an instant when it is one — with a zone or an offset — else null. */
+    private static Instant instantOf(String mark) {
+        try {
+            return OffsetDateTime.parse(mark).toInstant();
+        } catch (RuntimeException notAnInstant) {
+            return null;
+        }
     }
 
     /**
@@ -286,9 +367,10 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * them. Shared with {@link RestPreflight}: a pre-flight that composed its own request would be
      * reporting on a door the run never knocks at.
      */
-    static RestRequest firstRequest(PaginationStrategy pag, Map<String, Object> cfg, ConnectorEndpoint ep) {
+    static RestRequest firstRequest(PaginationStrategy pag, Map<String, Object> cfg, ConnectorEndpoint ep,
+                                    UnaryOperator<String> secrets) {
         EndpointConfig ec = new EndpointConfig((String) cfg.get("base_url"), ep.getMethod(), ep.getPath(), cfg);
-        return RequestHeaders.apply(pag.first(ec, null), cfg.get(HEADERS), RequestHeaders.ENV);
+        return RequestHeaders.apply(pag.first(ec, null), cfg.get(HEADERS), secrets);
     }
 
     /**
@@ -342,23 +424,36 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         return "soap".equals(cfg.get("kind"));
     }
 
-    /** Follow the pagination chain (signing + rate-limiting + retrying each request) up to MAX_PAGES. */
+    /**
+     * One page request: signed by the credential, which may sign it again after a 401 (#1393), and each send
+     * rate-limited and retried. The request handed in stays unsigned.
+     */
+    private RestResponse send(AuthProvider auth, RateLimiter rl, RetryExecutor retry, RestRequest req) throws Exception {
+        return auth.send(req, signed -> {
+            rl.acquire();
+            return retry.execute(() -> http.exchange(signed, retry.validator()));
+        });
+    }
+
+    /**
+     * Follow the pagination chain (signing + rate-limiting + retrying each request) up to MAX_PAGES. The whole fetch
+     * is one chunk, so the run's cancel is read here before each page, as the engine reads it before each chunk: a
+     * cancelled fetch throws what it read away, never written (#1444).
+     */
     private List<Map<String, Object>> fetchAllPages(AuthProvider auth, RateLimiter rl, RetryExecutor retry,
                                                     PaginationStrategy pag, RestRequest first,
-                                                    BodyParser bodyParser) {
+                                                    BodyParser bodyParser, RunScope scope) {
         List<Map<String, Object>> all = new ArrayList<>();
         RestRequest req = first;
         int pages = 0;
         try {
             while (req != null && pages < MAX_PAGES) {
-                RestRequest signed = auth.apply(req);
-                rl.acquire();
-                final RestRequest finalReq = signed;
-                RestResponse resp = retry.execute(() -> http.execute(finalReq));
+                if (scope.cancelRequested()) throw new RunCancelledException();
+                RestResponse resp = send(auth, rl, retry, req);
                 ResponseStatusGuard.refuseNonSuccess(resp);   // a non-2xx must never read as an empty page
                 resp = bodyParser.reparse(resp);   // SOAP: XML→JSON; JSON/GraphQL: identity
                 all.addAll(pag.items(resp));
-                req = pag.next(resp, signed);
+                req = advancing(req, pag.next(resp, req));   // unsigned, as in fetchPageWindow: next never inherits auth
                 pages++;
             }
         } catch (InterruptedException ie) {
@@ -409,6 +504,15 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
     }
 
     /**
+     * NEXT, unless it is the request just SENT: the same request brings the same page back, so asking
+     * again only re-reads it up to {@link #MAX_PAGES} — a SOAP body with no paging placeholder, a
+     * cursor the source repeats (#1387).
+     */
+    private static RestRequest advancing(RestRequest sent, RestRequest next) {
+        return sent.equals(next) ? null : next;
+    }
+
+    /**
      * The shared full/watermark chunk loop: follow the pagination chain (signing + rate-limiting +
      * retrying each request) until the accumulated items reach {@code chunkSize} — the page that
      * crosses the boundary is finished, never split — pagination ends, or the run-wide
@@ -427,15 +531,12 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         DeclaredTotal total = carriedTotal;
         try {
             while (req != null && pages < MAX_PAGES && items.size() < chunkSize) {
-                RestRequest signed = auth.apply(req);
-                rl.acquire();
-                final RestRequest finalReq = signed;
-                RestResponse resp = retry.execute(() -> http.execute(finalReq));
+                RestResponse resp = send(auth, rl, retry, req);
                 ResponseStatusGuard.refuseNonSuccess(resp);   // a non-2xx must never read as an empty page
                 resp = bodyParser.reparse(resp);   // SOAP: XML→JSON; JSON/GraphQL: identity
                 items.addAll(pag.items(resp));
                 total = total.observe(PaginationSupport.declaredItems(resp.json(), totalPath));
-                req = pag.next(resp, req);
+                req = advancing(req, pag.next(resp, req));
                 pages++;
             }
         } catch (InterruptedException ie) {
@@ -460,11 +561,12 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * re-applied per page by the loop. A resume state missing its method or url is unusable and
      * refused loudly — silently restarting from page 1 would double-ingest everything before it.
      */
-    private static RestRequest resumeRequest(JsonNode resume, Map<String, Object> cfg, ConnectorContext ctx) {
+    private static RestRequest resumeRequest(JsonNode resume, Map<String, Object> cfg, ConnectorEndpoint ep,
+                                             UnaryOperator<String> secrets) {
         String method = text(resume, METHOD);
         String url = text(resume, URL);
         if (method == null || url == null) {
-            throw new ConnectorException("Endpoint " + ctx.endpointId()
+            throw new ConnectorException(named(ep)
                 + ": pagination resume state is unusable — re-run the connector to restart the extract");
         }
         Map<String, String> query = new HashMap<>();
@@ -473,7 +575,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
             q.fields().forEachRemaining(e -> query.put(e.getKey(), e.getValue().asText()));
         }
         RestRequest req = RequestHeaders.apply(new RestRequest(method, url, Map.of(), query, text(resume, BODY)),
-            cfg.get(HEADERS), RequestHeaders.ENV);
+            cfg.get(HEADERS), secrets);
         JsonNode h = resume.get(HEADERS);
         if (h != null && h.isObject()) {
             for (var it = h.fields(); it.hasNext(); ) {
@@ -492,7 +594,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * the one exception is the header-bound pagination token, which is resume state, not a secret.
      */
     private ConnectorCursor fullCursor(String runId, PageWindow window, long emitted, String cursorHeader) {
-        if (window.next() == null) return cursor(null, runId);
+        if (window.next() == null) return cursor(null, runId, null);
         ObjectNode node = mapper.createObjectNode();
         node.putNull(WATERMARK);
         node.put(EMITTED_BY_RUN, runId);
@@ -520,11 +622,19 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * layer down: a run that reports success over a partial extract is the failure mode being
      * fought, and a green-but-short run is indistinguishable from "nothing changed upstream".
      */
-    private static void reconcileWithDeclaredTotal(ConnectorContext ctx, long emitted, DeclaredTotal total) {
+    private static void reconcileWithDeclaredTotal(ConnectorEndpoint ep, long emitted, DeclaredTotal total) {
         if (!total.usable() || emitted == total.value()) return;
-        throw new ConnectorException("Endpoint " + ctx.endpointId() + ": the source declared "
+        throw new ConnectorException(named(ep) + ": the source declared "
             + total.value() + " rows but this run returned " + emitted
             + " — refusing to report a partial extract as a complete one");
+    }
+
+    /**
+     * The endpoint as the manifest names it — the manifest's {@code id}, stored as {@code name}, not the
+     * row's internal UUID: the name an integrator can look up (#1373).
+     */
+    private static String named(ConnectorEndpoint ep) {
+        return "Endpoint '" + ep.getName() + "'";
     }
 
     /**
@@ -533,18 +643,21 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * watermark} is written back UNCHANGED (the pre-run value {@code firstRequest} will read on the
      * next run) and {@code watermarkCandidate} carries the running max. There is no code path here
      * that writes {@code candidate} into the {@code watermark} field — promotion only happens once
-     * pagination is exhausted, via the plain {@link #cursor(String, String)} legacy shape, which has
+     * pagination is exhausted, via the plain {@link #cursor(String, String, Long)} legacy shape, which has
      * no candidate field at all. That is what makes early promotion structurally impossible: the
      * field {@code firstRequest} filters by and the field this method updates are never the same
      * field until exhaustion switches which cursor-builder runs.
      */
     private ConnectorCursor watermarkCursor(String runId, String watermark, String candidate,
-                                            RestRequest next, int pages, String cursorHeader) {
-        if (next == null) return cursor(candidate, runId);   // exhausted: promote candidate → watermark
+                                            RestRequest next, int pages, String cursorHeader,
+                                            Instant runStarted, ConnectorContext ctx) {
+        // exhausted: promote candidate → watermark, with the run's length the next run looks back by
+        if (next == null) return cursor(candidate, runId, secondsSince(runStarted, ctx));
         ObjectNode node = mapper.createObjectNode();
         if (watermark == null) node.putNull(WATERMARK); else node.put(WATERMARK, watermark);
         if (candidate == null) node.putNull(WATERMARK_CANDIDATE); else node.put(WATERMARK_CANDIDATE, candidate);
         node.put(EMITTED_BY_RUN, runId);
+        node.put(RUN_STARTED_AT, runStarted.toString());
         writeResume(node, next, pages, cursorHeader);
         return new ConnectorCursor(node, Instant.now());
     }
@@ -567,7 +680,11 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         return node.hasNonNull(field) ? node.get(field).asText() : null;
     }
 
-    /** MAX of {@code watermark_path} over the items (string compare); prior watermark if no items. */
+    /**
+     * MAX of {@code watermark_path} over the items; prior watermark if no items. Compared by what the values are
+     * (#1397): two instants by time — offsets may differ — two integers by value, so {@code 10} passes {@code 9};
+     * anything else as text.
+     */
     private String maxWatermark(List<Map<String, Object>> items, String path, String prior) {
         if (path == null || items.isEmpty()) return prior;
         String max = prior;
@@ -575,17 +692,51 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
             Object v = JsonPathExtractor.readParsed(item, path);
             if (v == null) continue;
             String s = String.valueOf(v);
-            if (max == null || s.compareTo(max) > 0) max = s;
+            if (max == null || compareMarks(s, max) > 0) max = s;
         }
         return max;
     }
 
+    static int compareMarks(String a, String b) {
+        Instant ia = instantOf(a);
+        Instant ib = instantOf(b);
+        if (ia != null && ib != null) return ia.compareTo(ib);
+        if (INTEGER_MARK.matcher(a).matches() && INTEGER_MARK.matcher(b).matches()) {
+            return compareIntegers(a, b);
+        }
+        return a.compareTo(b);
+    }
+
+    /**
+     * Two whole numbers of any length compared by value without parsing them: sign, then digit count once leading
+     * zeros are gone, then the digits. A source writes the mark, so its length is not ours to bound — and a
+     * million-digit value must not cost a million-digit number per item.
+     */
+    private static int compareIntegers(String a, String b) {
+        boolean negA = a.startsWith("-");
+        boolean negB = b.startsWith("-");
+        String da = stripZeros(negA ? a.substring(1) : a);
+        String db = stripZeros(negB ? b.substring(1) : b);
+        if (da.equals("0")) negA = false;
+        if (db.equals("0")) negB = false;
+        if (negA != negB) return negA ? -1 : 1;
+        int magnitude = da.length() != db.length() ? Integer.compare(da.length(), db.length()) : da.compareTo(db);
+        return negA ? -magnitude : magnitude;
+    }
+
+    private static String stripZeros(String digits) {
+        int i = 0;
+        while (i < digits.length() - 1 && digits.charAt(i) == '0') i++;
+        return digits.substring(i);
+    }
+
     private record Parsed(String watermark, String watermarkCandidate, String emittedByRun,
-                          JsonNode resume, int pages, long emitted, DeclaredTotal declaredTotal) {}
+                          JsonNode resume, int pages, long emitted, DeclaredTotal declaredTotal,
+                          Instant runStartedAt, Long runSeconds) {}
 
     private Parsed parse(ConnectorCursor cursor) {
         if (cursor == null || cursor.isEmpty()) {
-            return new Parsed(null, null, null, null, 0, 0, DeclaredTotal.NONE);
+            return new Parsed(null, null, null, null, 0, 0, DeclaredTotal.NONE, null, null);
         }
         JsonNode v = cursor.value();
         String wm = v.hasNonNull(WATERMARK) ? v.get(WATERMARK).asText() : null;
@@ -599,14 +750,27 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         DeclaredTotal declaredTotal = new DeclaredTotal(
             v.hasNonNull(DECLARED_TOTAL) ? v.get(DECLARED_TOTAL).asLong() : null,
             v.hasNonNull(TOTAL_DISPUTED) && v.get(TOTAL_DISPUTED).asBoolean());
-        return new Parsed(wm, wmCandidate, run, resume, pages, emitted, declaredTotal);
+        Instant runStartedAt = v.hasNonNull(RUN_STARTED_AT) ? Instant.parse(v.get(RUN_STARTED_AT).asText()) : null;
+        Long runSeconds = v.hasNonNull(RUN_SECONDS) ? v.get(RUN_SECONDS).asLong() : null;
+        return new Parsed(wm, wmCandidate, run, resume, pages, emitted, declaredTotal, runStartedAt, runSeconds);
     }
 
-    private ConnectorCursor cursor(String watermark, String emittedByRun) {
+    private ConnectorCursor cursor(String watermark, String emittedByRun, Long runSeconds) {
         ObjectNode node = mapper.createObjectNode();
         if (watermark == null) node.putNull(WATERMARK); else node.put(WATERMARK, watermark);
         node.put(EMITTED_BY_RUN, emittedByRun);
+        if (runSeconds != null) node.put(RUN_SECONDS, runSeconds);
         return new ConnectorCursor(node, Instant.now());
+    }
+
+    private static Instant now(ConnectorContext ctx) {
+        return (ctx.clock() != null ? ctx.clock() : Clock.systemUTC()).instant();
+    }
+
+    /** Whole seconds from {@code start} to now, rounded up: a window is never shorter than the run. */
+    private static long secondsSince(Instant start, ConnectorContext ctx) {
+        long millis = Math.max(0, Duration.between(start, now(ctx)).toMillis());
+        return (millis + 999) / 1000;
     }
 
     private static String str(Object o) { return o == null ? null : String.valueOf(o); }
@@ -621,17 +785,17 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * was being spelled out at three call sites, so the {@code "auth"} key and the {@code none}
      * default travelled with each copy.
      */
-    public static AuthSpec authSpecFor(Map<String, Object> cfg) {
-        return toAuthSpec(mapConfig(cfg, "auth"));
+    public static AuthSpec authSpecFor(Map<String, Object> cfg, AuthSpec.Owner owner) {
+        return toAuthSpec(mapConfig(cfg, "auth"), owner);
     }
 
-    /** Builds the {@link AuthSpec} from the connector's auth config block. */
-    static AuthSpec toAuthSpec(Map<String, Object> raw) {
+    /** Builds the {@link AuthSpec} from the connector's auth config block, for the connector it authenticates. */
+    static AuthSpec toAuthSpec(Map<String, Object> raw, AuthSpec.Owner owner) {
         String kind = raw.containsKey("kind") ? String.valueOf(raw.get("kind")) : "none";
         Map<String, String> cfg = new HashMap<>();
         raw.forEach((k, v) -> {
             if (!"kind".equals(k) && v != null) cfg.put(k, String.valueOf(v));
         });
-        return new AuthSpec(kind, cfg, List.of());
+        return new AuthSpec(kind, cfg, List.of(), owner);
     }
 }

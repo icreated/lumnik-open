@@ -49,14 +49,13 @@ Lag               0s
 Last rebuild      aa7b5014-3dbe-4f0d-8960-133950183b7c (ready)
 ```
 
-`rebuild --wait` makes the index answer; declaring it only stores the declaration. Without `--wait`
-the command returns once the run is claimed, and a query right away gets the
+The hub builds a new index on its own, within a minute. `rebuild --wait` builds it now, and returns
+when it answers. Without `--wait`, a query right away may get the
 [answer for an index that is not built yet](#when-the-answer-is-not-no-results).
 
 `lm search status customers` prints the same card at any time: status, documents, `Lag` behind the
-data, and the last error if the build failed. When the database refused a step, the last error
-gives only the database's error code (its SQLSTATE), because the database's own message can quote
-stored values. The full message is in the hub's log, on the warning that names the index.
+data, and the last error if the build failed. If the error shows only `SQLSTATE …`, the hub log has
+the full message, on the line naming the index.
 
 Now ask. `--entity` narrows the search to one entity; without it, every entity you may read is
 searched and the hits of several entities come back mixed (the first column says which is which).
@@ -153,10 +152,8 @@ other *Hydraulique* second. Read the score, not only the presence.
 
 How several words combine **depends on the provider**:
 
-| Provider | Words of a `text` field | Words of a `fuzzy` field | Words of a `prefix` field |
-|---|---|---|---|
-| PostgreSQL (these screens) | all must be present — an added word **narrows** | ranked by resemblance | all must be present |
-| OpenSearch | any may match — an added word can **widen** | any may match | all must be present |
+- **PostgreSQL** (these screens): on a `text` field, every word must be present. A word added narrows.
+- **OpenSearch**: any word may match. A word added can widen.
 
 Check a query on the provider you run before relying on it. On PostgreSQL, two cities cannot both be
 a customer's city:
@@ -261,12 +258,14 @@ segment   GOLD (1)  SILVER (1)
 
 **A cursor is not a snapshot.** If the indexes being searched change between two pages — one is rebuilt,
 one finishes building, one is removed — the hub refuses the old cursor rather than mix two states in one
-list. The message talks about the *set of indexes*; what it means is "start this search over":
+list. Run the search again without `--cursor`; the refusal says so:
 
 ```
 $ lm search query hydraulique --entity AcmeCustomer --limit 1 --cursor <cursor>
-Error: API error 400: eligible SearchIndex set changed since this cursor was issued
+Error: API error 400: eligible SearchIndex set changed since this cursor was issued; run the search again without cursor
 ```
+
+A malformed cursor, or one from another search, gets the same advice.
 
 ## In a script
 
@@ -352,18 +351,15 @@ SearchIndex "customers" over AcmeCustomer is declared but not built yet: lm sear
 failed rather than "not built yet". Quoted (`…` stands for the cause):
 
 ```
-SearchIndex "customers" over AcmeCustomer has nothing built: its last build failed: IllegalStateException: entity 'AcmeCustomer' cannot be indexed: … — read it with `lm search status customers`, fix the cause, then lm search rebuild customers --wait
+SearchIndex "customers" over AcmeCustomer has nothing built: its last build failed: entity 'AcmeCustomer' cannot be indexed: … — read it with `lm search status customers`, fix the cause, then lm search rebuild customers --wait
 ```
-
-The error above (no `_canonical_key` column) is fixed as in
-[An entity applied before Search](search-indexes.md#an-entity-applied-before-search).
 
 Three more answers:
 
 | You see | It means | Do |
 |---|---|---|
 | `search is not installed on this hub — no Search provider is built into it …` | the hub has no Search provider; this is **not** an empty result | build the hub with one: `deploy/selfhost/up.sh --search` (PostgreSQL) or `--search-cluster` (OpenSearch), closed edition |
-| `search is degraded: <reason> — retry in 60s` | the provider is installed but failing. Reasons: `backend_unreachable` (cannot be reached), `backend_auth_failed` (refused the hub's credentials), `backend_error` (answered with an error), `unsupported_distribution` (not a supported distribution), `cluster_red` (red cluster health) | fix the backend named by the reason; ingestion goes on meanwhile |
+| `search is degraded: <reason> — retry in 60s` | the provider is installed but failing; the reason says how | fix the backend; ingestion goes on meanwhile |
 | `SearchIndex "NAME" over ENTITY is invalid: <reason>` | an entity was re-applied without a column the index declares | fix the manifest and apply it again |
 
 Only an integrator is told *not built* or *being built*; any user is told the other cases.
@@ -379,7 +375,7 @@ For an application. The CLI sends one request:
 | `limit` | 1 to 100, default 20; outside the range is refused with `400` |
 | `cursor` | the `nextCursor` of the previous page |
 | `facet.<field>` | a filter on a declared facet field; at most 10 fields, each once |
-| `scope` | a métier scope: keep only the entities that carry it, among those you may read (what the PWA sends). See below |
+| `scope` | a business scope: keep only the entities that carry it, among those you may read (what the PWA sends). See below |
 
 `scope=` in detail:
 
@@ -391,11 +387,13 @@ For an application. The CLI sends one request:
 
 ```
 $ curl -s -H "Authorization: Bearer $TOKEN" \
-    "$LUMNIK_URL/api/search?q=hydraulique&entity=AcmeCustomer&limit=1" | jq
+    "$LUMNIK_URL/api/search?q=hydraulique&entity=AcmeCustomer&limit=1&scope=desk" | jq
 {
   "hits": [
     {
       "entity": "AcmeCustomer",
+      "title": null,
+      "titleField": null,
       "key": {
         "code": "P-1000"
       },
@@ -414,17 +412,17 @@ $ curl -s -H "Authorization: Bearer $TOKEN" \
       "canonicalLink": "/api/entities/AcmeCustomer?code=P-1000"
     }
   ],
+  "fieldLabels": {
+    "AcmeCustomer": {
+      "code": "Code client",
+      "name": "Raison sociale",
+      "city": "Ville",
+      "segment": "Segment",
+      "credit_limit": "Encours autorisé",
+      "email": "Email"
+    }
+  },
   "facets": {
-    "segment": [
-      {
-        "value": "GOLD",
-        "count": 1
-      },
-      {
-        "value": "SILVER",
-        "count": 1
-      }
-    ],
     "city": [
       {
         "value": "Lyon",
@@ -434,10 +432,20 @@ $ curl -s -H "Authorization: Bearer $TOKEN" \
         "value": "Milano",
         "count": 1
       }
+    ],
+    "segment": [
+      {
+        "value": "GOLD",
+        "count": 1
+      },
+      {
+        "value": "SILVER",
+        "count": 1
+      }
     ]
   },
-  "nextCursor": "eyJzY29yZSI6MC41NDU0NTQ1NjE3MTAzNTc3LCJzZWFyY2hJbmRleCI6ImN1c3RvbWVycyIsImRvY3VtZW50SWQiOiIxfDY6UC0xMDAwIiwiZmluZ2VycHJpbnQiOiJzaGEyNTY6MzllODY0N2M5N2NjMzFkMDQyMGJmZjNmM2U1MDcwN2YxMTU4ODYyMDJjODY5MWJlMTBkOTk4ZTc1MmZkZTBiMSIsImVsaWdpYmxlIjp7ImN1c3RvbWVycyI6MTh9fQ",
-  "asOf": "2026-10-06T06:49:57.211808Z"
+  "nextCursor": "eyJzY29yZSI6MC41NDU0NTQ1NjE3MTAzNTc3LCJzZWFyY2hJbmRleCI6ImN1c3RvbWVycyIsImRvY3VtZW50SWQiOiIxfDY6UC0xMDAwIiwiZmluZ2VycHJpbnQiOiJzaGEyNTY6MzllODY0N2M5N2NjMzFkMDQyMGJmZjNmM2U1MDcwN2YxMTU4ODYyMDJjODY5MWJlMTBkOTk4ZTc1MmZkZTBiMSIsImVsaWdpYmxlIjp7ImN1c3RvbWVycyI6MX19",
+  "asOf": "2026-10-24T22:15:38.030639Z"
 }
 ```
 
@@ -483,7 +491,7 @@ the `stock` app only ever shows the entities that carry `stock`, even to a user 
 
 ## In the PWA
 
-The [métier PWA](../apps/pwa.md#recherche-search-the-business-data) has a Recherche tab that asks this same door, for its own métier, and shows the results to people who never open a terminal.
+The [PWA](../apps/pwa.md#search) has a Search tab that calls this endpoint for the app's scope and shows the results to people who never open a terminal.
 
 ## See also
 

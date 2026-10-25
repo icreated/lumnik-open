@@ -56,6 +56,37 @@ class PlatformIntegrationsIT {
             .body("find { it.name == 'n8n-it' }", nullValue());
     }
 
+    @Test @Order(3)
+    void create_with_an_unknown_key_is_refused_by_name() {
+        // `url` for `targetUrl`: the door must name the key, not store a target without a URL.
+        asAdmin()
+            .body("{\"name\":\"n8n-misspelt\",\"url\":\"http://localhost:9/webhook\","
+                + "\"eventTypes\":[\"decision.*\"],\"secret\":\"s3cret\"}")
+            .post("/api/platform/integrations")
+        .then().statusCode(400)
+            .contentType("application/json")
+            .body("error", containsString("unknown key: url —"))
+            .body("error", containsString("targetUrl"))
+            .body("error", not(containsString("s3cret")))
+            .body("error", not(containsString("localhost:9")));
+        asAdmin().get("/api/platform/integrations")
+        .then().body("find { it.name == 'n8n-misspelt' }", nullValue());
+    }
+
+    @Test @Order(3)
+    void update_with_an_unknown_key_is_refused_by_name() {
+        // An integration has no entity filter on this door: dropping the key would answer 200
+        // and leave the target receiving every table's events.
+        asAdmin()
+            .body("{\"enabled\":false,\"entityFilter\":\"connector.t_orders\"}")
+            .put("/api/platform/integrations/" + createdId)
+        .then().statusCode(400)
+            .body("error", containsString("unknown key: entityFilter —"))
+            .body("error", containsString("eventTypes"));
+        asAdmin().get("/api/platform/integrations/" + createdId)
+        .then().statusCode(200).body("enabled", is(true));
+    }
+
     @Test @Order(4)
     void delete_via_platform_path_is_204() {
         asAdmin().delete("/api/platform/integrations/" + createdId)

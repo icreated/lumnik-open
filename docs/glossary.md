@@ -30,27 +30,27 @@ two-table source writes two run rows, and each names the endpoint it read. Each 
 its arithmetic in a ledger: records in, records out, records skipped.
 [`lm run list`](cli/lm-reference.md).
 
-**Conservation invariant** — `records in = records out + records skipped`, on every
+**IN = OUT + SKIPPED** — `records in = records out + records skipped`, on every
 run, always. A row is never silently lost; it arrives, is skipped with a counted
 reason, or lands in the DLQ (a declared filter is a counted skip, not a DLQ entry).
 [Seeing what was ingested](transparency/ingestion-honesty.md).
 
 **DLQ (dead-letter queue)** — where a quarantined row waits, carrying its reason and the
-offending payload, until you close it: `discard`, or `replayed` to record that you re-sent it
-yourself. The hub never re-reads a dead letter. [`lm dlq`](cli/lm-reference.md).
+offending payload, until you close it: `discard`, or `replayed` naming the run that carried the
+row again. The hub never re-reads a dead letter. [`lm dlq`](cli/lm-reference.md).
 
 **Raw table (`t_*`)** — the dynamic table a `csv-file`, `jdbc-generic` or `kafka`
-connector creates in schema `connector`, one per endpoint, stamped with the tenant. The
-untouched landing zone the rest of the system builds on. The `rest-generic` engine (so
-GraphQL and SOAP too) is the exception: its hybrid tables take the name the manifest
-declares, no `t_` prefix — the WOW demo's `connector.cust_siebel` is one.
+connector creates in schema `connector`, one per endpoint. The rest of the system builds on it.
+A `rest-generic` connector (GraphQL and SOAP too) names its table in the manifest, without
+`t_`: the WOW's `connector.cust_siebel` is one. A one-shot `lm csv ingest` lands in
+`ext.<name>`.
 
-**Transformer** — a per-cell repair applied at ingestion — mojibake, legacy date
-formats — declared in the manifest, at the door. [Transformers](connectors/transformers.md).
+**Transformer** — a repair applied at ingestion — broken accents, legacy date formats —
+declared in the manifest. `csv-file` connectors only. [Transformers](connectors/transformers.md).
 
-**Hook** — a Kotlin script (`.kts`) running inside the mapping pipeline at dataset,
-row or cell level, for the cases declarative transformers can't express.
-[Kotlin escape hatch](connectors/transformers.md#kotlin-escape-hatch).
+**Hook** — a Kotlin script (`.kts`) for the cases transformers cannot express. `csv-file`
+connectors only.
+[Kotlin hooks](connectors/kotlin-hooks.md).
 
 **Watermark** — the incremental mode of the JDBC connector: a declared column whose
 persisted high-water mark lets the next run fetch only what changed.
@@ -75,7 +75,7 @@ and no chunks are stored.
 
 **Analytic mode** — the chat translates your question to SQL and runs it read-only
 over the live hub, fenced by the guards. [`lm ask`](cli/lm-reference.md), TUI `:ask`,
-the PWA chat. [The five guards](transparency/ask-honesty.md).
+the PWA chat. [When Ask refuses](transparency/ask-honesty.md).
 
 **Semantic mode** — retrieval-only chat: it cites ingested chunks and never generates
 SQL. [HTTP API](rag/http-api.md).
@@ -86,7 +86,7 @@ store, scoped, and citable as a source. [Models & providers](rag/models.md).
 **Guard** — one of five deterministic checks standing between your question and the
 answer. Four refuse — with a what-to-do-next — rather than guess; the fifth reframes
 an empty result instead of letting it become a confident *"there are none"*.
-[The five guards](transparency/ask-honesty.md).
+[When Ask refuses](transparency/ask-honesty.md).
 
 **Asymmetry of harm** — the principle behind the guards: a refusal costs you a retry;
 a confident wrong answer — especially a confident *"there are none"* — costs you a
@@ -94,15 +94,15 @@ business decision. [Ask honesty](transparency/ask-honesty.md).
 
 ## Act — the app ladder
 
-**View (`kind: View`)** — a saved, server-side description of what a métier sees: a
+**View (`kind: View`)** — a saved, server-side description of what one scope sees: a
 table, its columns, filters. The PWA and `lm` discover views from the hub — writes are
 curated, reads are scope-bound. [Views](apps/views.md).
 
-**App (`kind: App`)** — a métier application's own identity, declared instead of compiled: its
+**App (`kind: App`)** — an application's own identity, declared instead of compiled: its
 title, the scope it reads through, one identifier from the curated icon set, and its accent/background
 theme. Applied with `lm app apply` and discovered by the PWA at login. At most one app carries the
 default flag — the one a bare `/app/` opens; once set, it can only be moved to another app.
-[The métier PWA](apps/pwa.md).
+[The PWA](apps/pwa.md).
 
 **Process (`kind: Process`)** — a declarative reaction: when data matching a
 condition arrives, notify. Refusable by design, like everything on the ladder.
@@ -128,8 +128,8 @@ past the declared threshold raises a `decision.dormant.<workflow>` alert.
 **Outputs / deliveries** — the journal of what the hub sent out (webhooks) and whether
 it arrived — failures first, replayable. [`lm outputs list`](cli/lm-reference.md).
 
-**PWA** — the métier app served at `/app/`: installable on a phone, scope-bound,
-discovering its views from the hub. [The métier PWA](apps/pwa.md).
+**PWA** — the business app served at `/app/`: installable on a phone, scope-bound,
+discovering its views from the hub. [The PWA](apps/pwa.md).
 
 ## Operate — the integrator's side
 
@@ -138,10 +138,10 @@ runs, DLQ, ask, views, workflows — has its counterpart there.
 [CLI & TUI reference](cli/lm-reference.md).
 
 **Integrator** — the person who wields `lm`: applies manifests, runs connectors,
-manages scopes. Role `lm_integrator`; métier users carry `lm_user`.
+manages scopes. Role `lm_integrator`; business users carry `lm_user`.
 [Roles & permissions](security/role-management.md).
 
-**TLS façade** — the optional Caddy overlay putting hub, PWA and Keycloak behind one
+**TLS proxy** — the optional Caddy overlay putting hub, PWA and Keycloak behind one
 https origin — one issuer for every device. [Deploy](deploy.md).
 
 ## Security & tenancy
@@ -153,10 +153,8 @@ every query is filtered by the tenant the connection declares.
 **RLS (Row-Level Security)** — the PostgreSQL mechanism enforcing that filter on every
 row of every tenant-stamped table. [RLS & database roles](security/rls.md).
 
-**Métier** — the trade a scope serves — *magasinier*, *comptable* — and the register
-the whole product speaks: per-métier chat, per-métier apps.
-
 **Scope** — an opt-in boundary inside a tenant, carried as Keycloak roles
 (`scope:<tag>`). No scope roles = tenant-wide access; one or more = bound to exactly
-those. The uniform refusal is `403 {"error":"scope not granted"}`.
+those scopes. Chat, search, views, workflows, and the inbox all enforce it. `lm` prints the
+refusal as `Error: access refused (403): scope not granted`.
 [Scopes](rag/scopes.md).

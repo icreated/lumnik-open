@@ -1,9 +1,11 @@
 package io.lumnik.hub.event;
 
+import io.lumnik.common.sql.Jdbc;
 import jakarta.persistence.*;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+import javax.sql.DataSource;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
@@ -15,6 +17,44 @@ import java.util.Objects;
 @Entity
 @Table(schema = "core", name = "event_outbox")
 public class EventOutboxRow {
+
+    /**
+     * The predicate of a reader that cannot skip (#1570): a row is read once its transaction is older
+     * than the oldest one still open. An id is assigned at INSERT and visible at COMMIT, so a cursor on
+     * id alone moves past a lower id that a long transaction commits later; below this horizon every
+     * transaction is decided and no row can still appear. Evaluated in the reading statement's own
+     * snapshot, so the horizon and the rows it lets through agree.
+     */
+    public static final String DECIDED = "xact_id < pg_snapshot_xmin(pg_current_snapshot())::text::bigint";
+
+    /** {@link #DECIDED}'s horizon on its own: the oldest transaction still open, or the next one. */
+    public static final String HORIZON = "SELECT pg_snapshot_xmin(pg_current_snapshot())::text::bigint";
+
+    /**
+     * A place in the log, in the order every reader follows: the inserting transaction, then the id
+     * (V85). Rows written before V85 carry transaction 1.
+     */
+    public record Position(long xact, long id) implements Comparable<Position> {
+        public static final Position ORIGIN = new Position(0, 0);
+
+        @Override
+        public int compareTo(Position o) {
+            int byXact = Long.compare(xact, o.xact);
+            return byXact != 0 ? byXact : Long.compare(id, o.id);
+        }
+    }
+
+    /**
+     * The tenant's last event in reading order, {@link Position#ORIGIN} when it has none — served by
+     * {@code (tenant_id, xact_id, id)} (V85). A run's ending records it (#1351): a reader that has
+     * reached it has read every row the run wrote.
+     */
+    public static Position highWater(DataSource ds, String label, long tenantId) {
+        return Jdbc.queryOne(ds, label,
+                "SELECT xact_id, id FROM core.event_outbox WHERE tenant_id = ? ORDER BY xact_id DESC, id DESC LIMIT 1",
+                ps -> ps.setLong(1, tenantId), rs -> new Position(rs.getLong(1), rs.getLong(2)))
+            .orElse(Position.ORIGIN);
+    }
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -50,6 +90,10 @@ public class EventOutboxRow {
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
+
+    /** The inserting transaction (V85): the database's default writes it, never the application. */
+    @Column(name = "xact_id", insertable = false, updatable = false)
+    private Long xactId;
 
     protected EventOutboxRow() {}
 
@@ -96,4 +140,5 @@ public class EventOutboxRow {
     public String getDedupKey()   { return dedupKey; }
     public Instant getOccurredAt(){ return occurredAt; }
     public Instant getCreatedAt() { return createdAt; }
+    public Long getXactId()       { return xactId; }
 }

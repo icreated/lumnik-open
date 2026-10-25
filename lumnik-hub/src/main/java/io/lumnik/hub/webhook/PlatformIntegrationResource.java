@@ -3,6 +3,8 @@ package io.lumnik.hub.webhook;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.hub.api.TenantWide;
 import io.lumnik.hub.tenant.RequireTenant;
+import io.lumnik.identity.KnownKeysOnly;
+import io.quarkus.resteasy.reactive.jackson.CustomDeserialization;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -53,11 +55,13 @@ public class PlatformIntegrationResource {
     }
 
     @POST
+    @CustomDeserialization(KnownKeysOnly.class)
     public Response create(IntegrationCreate in) {
         return delegate.create(RequireTenant.current(), in);
     }
 
     @PUT @Path("/{id}")
+    @CustomDeserialization(KnownKeysOnly.class)
     public IntegrationDto update(@PathParam("id") Long id, IntegrationUpdate in) {
         return delegate.update(RequireTenant.current(), id, in);
     }

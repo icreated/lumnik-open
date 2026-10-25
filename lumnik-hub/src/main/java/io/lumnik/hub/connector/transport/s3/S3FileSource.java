@@ -113,8 +113,9 @@ public class S3FileSource implements FileSource, SeekableSource {
             case MOVE -> {
                 String archiveBucket = (String) cfg.getOrDefault("archive_bucket", bucket);
                 String archivePrefix = (String) cfg.getOrDefault("archive_prefix", "archive/");
-                String name = file.path().substring(file.path().lastIndexOf('/') + 1);
-                String newKey = archivePrefix + name;
+                // Its own name and mtime (#1382): a copy onto an existing key replaces it, so a name that comes
+                // back every night would overwrite the earlier night's archive in silence.
+                String newKey = archivePrefix + file.archivedName();
                 s3.copyObject(b -> b
                     .sourceBucket(bucket).sourceKey(file.path())
                     .destinationBucket(archiveBucket).destinationKey(newKey));

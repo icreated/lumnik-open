@@ -3,11 +3,15 @@ package io.lumnik.hub.connector.mapping.hooks.cell;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.mapping.MappingState;
 import io.lumnik.hub.connector.mapping.MappingValidationException;
+import io.lumnik.hub.connector.mapping.ScalarParams;
 import io.lumnik.hub.connector.mapping.hooks.CellHook;
+import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import jakarta.enterprise.context.ApplicationScoped;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -33,6 +37,10 @@ import java.util.UUID;
  * it is the outcome the <em>integrator declared</em>. That is the same line {@code LookupHook}
  * draws for its own {@code keep}. Note it is NOT "the value changed" — {@code FixMojibakeHook}
  * and {@code SplitHook} both count while handing the source value back untouched.
+ *
+ * <p><b>{@code generate-from: <column>}</b> (#1423): a random id is a new one on every run, so the next night's export
+ * gave the same supplier another id — and the run reported its row removed. A minted id is then a name-based UUID of
+ * that column's value: the same code, the same id, every night. An empty source column mints nothing, counted.
  */
 @ApplicationScoped
 @HookId("to-uuid")
@@ -43,7 +51,8 @@ public class ToUuidHook implements CellHook {
     NULL, GENERATE, KEEP;
 
     static OnInvalid of(JsonNode params) {
-      String raw = params.path("on-invalid").asText("null");
+      // A list or a map is refused by its shape, not as got '' (#1468).
+      String raw = ScalarParams.optionalText("to-uuid hook", "on-invalid", params.path("on-invalid"), "null");
       return switch (raw) {
         case "null" -> NULL;
         case "generate" -> GENERATE;
@@ -59,18 +68,32 @@ public class ToUuidHook implements CellHook {
     // A misspelt on-invalid mode is a manifest error, refused once per spec before any row —
     // never on the first row that happens to carry an unreadable id.
     OnInvalid.of(params);
+    // #1486: "yes" or a list read as false — an empty id left empty, in silence.
+    ScalarParams.optionalBoolean("to-uuid hook", "generate", params.path("generate"), false);
+    JsonNode from = params.path("generate-from");
+    if (from.isMissingNode() || from.isNull()) return;
+    if (!from.isTextual() || from.asText().isBlank() || from.asText().equals(params.path("column").asText())) {
+      String got = from.isTextual() ? "'" + from.asText() + "'" : MappingValidationException.typeName(from);
+      throw new MappingValidationException(
+          "to-uuid hook: 'generate-from' must name a column other than the id column (got " + got + ")");
+    }
   }
 
   @Override
   public void apply(Map<String, Object> row, JsonNode params, MappingState s) {
     String col = params.path("column").asText();
     OnInvalid onInvalid = OnInvalid.of(params);
+    String from = params.path("generate-from").isTextual() ? params.path("generate-from").asText() : null;
 
     Object v = row.get(col);
     if (v == null) {
       // An absence is what `generate` declares it will handle: the hook doing its job, not
       // failing at it, so nothing is counted.
-      if (params.path("generate").asBoolean(false)) row.put(col, UUID.randomUUID().toString());
+      if (params.path("generate").asBoolean(false) || from != null) {
+        String minted = mint(row, from, col);
+        row.put(col, minted);
+        if (minted == null) s.counters().cellErrors().incrementAndGet();   // nothing to derive it from
+      }
       return;
     }
 
@@ -80,10 +103,19 @@ public class ToUuidHook implements CellHook {
     // whether it counts. A statement switch would let it fall through to the increment in silence.
     boolean counted = switch (onInvalid) {
       case NULL -> { row.put(col, null); yield true; }
-      case GENERATE -> { row.put(col, UUID.randomUUID().toString()); yield true; }
+      case GENERATE -> { row.put(col, mint(row, from, col)); yield true; }
       case KEEP -> false;               // the source value is still exactly there
     };
     if (counted) s.counters().cellErrors().incrementAndGet();
+  }
+
+  /** A random id, or with {@code generate-from} the same id for the same value; null when that value is empty. */
+  private static String mint(Map<String, Object> row, String from, String col) {
+    if (from == null) return UUID.randomUUID().toString();
+    Object seed = row.get(from);
+    if (seed == null || seed.toString().isBlank()) return null;
+    // The id column's name is in the seed: two id columns derived from the same codes do not share ids.
+    return UUID.nameUUIDFromBytes((col + ":" + seed).getBytes(StandardCharsets.UTF_8)).toString();
   }
 
   /**
@@ -102,5 +134,19 @@ public class ToUuidHook implements CellHook {
     } catch (IllegalArgumentException notAUuid) {
       return false;
     }
+  }
+
+  @Override
+  public Set<String> params() {
+    return Set.of("column", "on-invalid", "generate", "generate-from");
+  }
+
+  @Override
+  public ColumnEffect columns(JsonNode params) {
+    // An absent id column is minted only with `generate` or `generate-from`; otherwise the hook reads it, and one
+    // that does not exist would leave it doing nothing.
+    ColumnEffect.Builder b = ColumnEffect.builder().reads("generate-from", params.path("generate-from"));
+    boolean mints = params.path("generate").asBoolean(false) || params.path("generate-from").isTextual();
+    return (mints ? b.adds(params.path("column")) : b.reads("column", params.path("column"))).build();
   }
 }

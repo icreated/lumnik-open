@@ -47,3 +47,22 @@ func TestNotificationRules_createListDelete(t *testing.T) {
 	assert.Contains(t, paths, "GET /api/notifications")
 	assert.Contains(t, paths, "DELETE /api/notifications/3")
 }
+
+// The hub refuses a key its rule body does not declare (400), so every key lm can send must be one
+// of them — checked with every field set, omitempty included.
+func TestNotificationRuleCreate_sendsOnlyKeysTheHubAccepts(t *testing.T) {
+	assertKeysWithin(t, NotificationRuleCreate{EventPattern: "e", EntityFilter: "f", Recipient: "r", Template: "t"},
+		"eventPattern", "entityFilter", "recipient", "template", "enabled")
+}
+
+// assertKeysWithin marshals v and fails on any JSON key outside accepted.
+func assertKeysWithin(t *testing.T, v any, accepted ...string) {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	require.NoError(t, err)
+	var keys map[string]any
+	require.NoError(t, json.Unmarshal(raw, &keys))
+	for k := range keys {
+		assert.Contains(t, accepted, k)
+	}
+}

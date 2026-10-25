@@ -39,9 +39,18 @@ public class UnseenRowSweeper {
    */
   public record Count(long before, long met, long unseen) {
 
+    /**
+     * How much the table shrinks: the rows the source lost (#1544). A changed row is one of the
+     * {@code unseen} versions but no loss — its new version was met. Without a key, a row lost beside
+     * a row added reads as a change: this is the loss the counts prove, never more.
+     */
+    public long lost() {
+      return Math.max(0, before - met);
+    }
+
     /** Would the table shrink by more than {@code maxRemoved} of what it held? 1 lifts the limit. */
     public boolean shrinksBeyond(double maxRemoved) {
-      return maxRemoved < 1 && before - met > before * maxRemoved;
+      return maxRemoved < 1 && lost() > before * maxRemoved;
     }
   }
 

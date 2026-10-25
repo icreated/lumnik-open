@@ -3,6 +3,8 @@ package io.lumnik.hub.api.event;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.api.TenantWide;
+import io.lumnik.hub.event.EventOutboxRow;
+import io.lumnik.hub.event.EventOutboxRow.Position;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.quarkus.agroal.DataSource;
 import io.smallrye.common.annotation.Blocking;
@@ -24,7 +26,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
 /**
@@ -68,30 +70,31 @@ public class EventStreamResource {
     // ThreadLocal is unset, so it cannot resolve it itself. (Why the predicate is the isolation —
     // BYPASSRLS datasource — is on fetchSince, next to the WHERE.)
     long tenant = RequireTenant.current();
-    // Start AFTER the events that already exist, so the stream is a LIVE tail (as created_at > now()
-    // used to be) — but keyed on id, resolved eagerly here on the request thread so an event arriving
-    // before the first tick is still delivered. currentMaxId returns -1 (UNINITIALISED) if it can't
-    // resolve — NOT 0, which would be "id > 0" and replay the whole history to a live client.
-    AtomicLong lastId = new AtomicLong(currentMaxId(tenant));
+    // Start at the horizon (#1570), resolved eagerly here on the request thread so an event settling
+    // before the first tick is still delivered: what was decided before the subscription is history,
+    // what is still settling is shown when it settles — a few events committed a moment earlier may
+    // show with it. A null start (UNINITIALISED) means the horizon could not be read: never ORIGIN,
+    // which would replay the tenant's whole history to a live client.
+    AtomicReference<Position> cursor = new AtomicReference<>(startingPoint());
 
     return Multi.createFrom().ticks().every(Duration.ofSeconds(1))
         .onOverflow().drop()
         .flatMap(tick -> {
-          long since = lastId.get();
-          if (since < 0) {
+          Position since = cursor.get();
+          if (since == null) {
             // Eager resolve failed (transient DB error): retry it, still tailing from "now", never
-            // from 0. Emit nothing until it succeeds, then the next tick tails from that id.
-            lastId.set(currentMaxId(tenant));
+            // from the origin. Emit nothing until it succeeds, then the next tick tails from there.
+            cursor.set(startingPoint());
             return Multi.createFrom().empty();
           }
           Poll poll = fetchSince(tenant, since, patterns);
-          lastId.set(poll.cursor());
+          cursor.set(poll.cursor());
           return Multi.createFrom().iterable(poll.events());
         });
   }
 
-  /** A poll's matching events and the cursor to resume from — the max id actually scanned. */
-  private record Poll(List<Map<String, Object>> events, long cursor) {}
+  /** A poll's matching events and the cursor to resume from — the last row actually scanned. */
+  private record Poll(List<Map<String, Object>> events, Position cursor) {}
 
   /**
    * Compile a client-supplied topic glob to an anchored regex. Only {@code *} is a wildcard; every
@@ -112,50 +115,47 @@ public class EventStreamResource {
   }
 
   /**
-   * The current highest event id for the tenant — the live tail's starting point — or {@code -1} if
-   * it could not be resolved. The caller treats -1 as UNINITIALISED and retries; it must NOT be 0,
-   * which as {@code id > 0} would replay the tenant's whole history to a live subscriber.
+   * The live tail's starting point — every transaction below the horizon is decided — or {@code null}
+   * if it could not be resolved. The caller treats null as UNINITIALISED and retries; it must NOT be
+   * {@link Position#ORIGIN}, which would replay the tenant's whole history to a live subscriber.
    */
-  private long currentMaxId(long tenant) {
+  private Position startingPoint() {
     try {
-      return Jdbc.queryOne(dataSource, "EventStreamResource.currentMaxId",
-          "SELECT COALESCE(MAX(id), 0) FROM core.event_outbox WHERE tenant_id = ?",
-          ps -> ps.setLong(1, tenant),
-          rs -> rs.getLong(1)).orElse(0L);
+      return Jdbc.queryOne(dataSource, "EventStreamResource.startingPoint", EventOutboxRow.HORIZON,
+              ps -> {}, rs -> new Position(rs.getLong(1), 0)).orElse(null);
     } catch (RuntimeException e) {
       // Could not resolve a starting point — return the UNINITIALISED sentinel so the loop retries and
-      // keeps tailing from "now", rather than starting from 0 (a full replay) or crashing the
+      // keeps tailing from "now", rather than starting from the origin (a full replay) or crashing the
       // subscription. (Jdbc.queryOne rethrows SQL failures as runtime.)
-      LOG.debugf(e, "event stream: could not resolve starting id for tenant %d, will retry next tick", tenant);
-      return -1L;
+      LOG.debugf(e, "event stream: could not resolve its starting point, will retry next tick");
+      return null;
     }
   }
 
-  private Poll fetchSince(long tenant, long sinceId, List<Pattern> patterns) {
+  private Poll fetchSince(long tenant, Position since, List<Pattern> patterns) {
     List<Map<String, Object>> out = new ArrayList<>();
-    // event_outbox schema (V24): id, tenant_id, org_id, event_type, source, entity, entity_key,
-    // payload, dedup_key, occurred_at, created_at. Cursor by id, not created_at: created_at is the
-    // TRANSACTION time (now()), so a whole transaction's rows share it and a wall-clock cursor that
-    // reached that instant would skip the tied siblings forever. id is BIGSERIAL — unique and
-    // monotonic — the same key the durable spine uses (core.event_consumer.last_event_id), and it
-    // rides V36's (tenant_id, id DESC) index. tenant_id FIRST: this runs on the admin (BYPASSRLS)
-    // datasource, so the predicate — not RLS — is what isolates tenants.
+    // event_outbox schema (V24, V85): id, tenant_id, org_id, event_type, source, entity, entity_key,
+    // payload, dedup_key, occurred_at, created_at, xact_id. Never a wall-clock cursor: created_at is
+    // the TRANSACTION time (now()), so a whole transaction's rows share it and a cursor that reached
+    // that instant would skip the tied siblings forever. tenant_id FIRST: this runs on the admin
+    // (BYPASSRLS) datasource, so the predicate — not RLS — is what isolates tenants.
     //
-    // Best-effort by nature: id is assigned at INSERT but a row becomes visible at COMMIT, so a long
-    // transaction can commit a lower id after a higher one, and a live poll may miss the late one.
-    // That is acceptable for a LIVE view (the TUI); DURABLE delivery is the consumer-position model's
-    // job, not this tail's — closing the commit-order window here (overlap + dedup) is a separate lot.
-    String sql = "SELECT id, event_type, payload, created_at FROM core.event_outbox " +
-                 "WHERE tenant_id = ? AND id > ? ORDER BY id LIMIT 500";
-    long maxId = sinceId;
+    // id is assigned at INSERT but a row becomes visible at COMMIT, so a long transaction can commit a
+    // lower id after a higher one: an id cursor moved past it and the tail never showed it (#1570). The
+    // cursor is now (xact_id, id), the order the durable consumers read too, and a poll reads only
+    // what is decided (EventOutboxRow.DECIDED) — rides V85's (tenant_id, xact_id, id) index.
+    String sql = "SELECT id, xact_id, event_type, payload, created_at FROM core.event_outbox " +
+                 "WHERE tenant_id = ? AND " + EventOutboxRow.DECIDED + " AND (xact_id, id) > (?, ?) " +
+                 "ORDER BY xact_id, id LIMIT 500";
+    Position last = since;
     try (Connection c = dataSource.getConnection();
          PreparedStatement ps = c.prepareStatement(sql)) {
       ps.setLong(1, tenant);
-      ps.setLong(2, sinceId);
+      ps.setLong(2, since.xact());
+      ps.setLong(3, since.id());
       try (ResultSet rs = ps.executeQuery()) {
         while (rs.next()) {
-          long id = rs.getLong("id");
-          if (id > maxId) maxId = id;   // advance over EVERY scanned row, matching or not
+          last = new Position(rs.getLong("xact_id"), rs.getLong("id"));  // advance over EVERY scanned row
           String eventType = rs.getString("event_type");
           if (!patterns.isEmpty() && patterns.stream().noneMatch(p -> p.matcher(eventType).matches())) {
             continue;
@@ -168,12 +168,12 @@ public class EventStreamResource {
         }
       }
     } catch (SQLException e) {
-      // Transient DB error — return an empty batch and DON'T advance the cursor (maxId stays
-      // sinceId), so the next tick retries the same window. Logged at debug so a persistent failure
-      // is diagnosable without spamming a line every second, and without crashing the stream.
-      LOG.debugf(e, "event stream: poll failed for tenant %d, empty batch (cursor held at %d)", tenant, sinceId);
-      return new Poll(List.of(), sinceId);
+      // Transient DB error — return an empty batch and DON'T advance the cursor, so the next tick
+      // retries the same window. Logged at debug so a persistent failure is diagnosable without
+      // spamming a line every second, and without crashing the stream.
+      LOG.debugf(e, "event stream: poll failed for tenant %d, empty batch (cursor held at %s)", tenant, since);
+      return new Poll(List.of(), since);
     }
-    return new Poll(out, maxId);
+    return new Poll(out, last);
   }
 }

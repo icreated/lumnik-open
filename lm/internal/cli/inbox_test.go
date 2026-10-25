@@ -13,13 +13,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// The ages speak English, like the rest of lm (#1336).
 func TestHumanizeAge(t *testing.T) {
 	now := time.Date(2026, 7, 5, 12, 0, 0, 0, time.UTC)
-	assert.Equal(t, "à l'instant", humanizeAge(now.Add(-30*time.Second), now))
+	assert.Equal(t, "just now", humanizeAge(now.Add(-30*time.Second), now))
 	assert.Equal(t, "5min", humanizeAge(now.Add(-5*time.Minute), now))
 	assert.Equal(t, "2h", humanizeAge(now.Add(-2*time.Hour), now))
-	assert.Equal(t, "hier", humanizeAge(now.Add(-30*time.Hour), now))
-	assert.Equal(t, "3j", humanizeAge(now.Add(-72*time.Hour), now))
+	assert.Equal(t, "yesterday", humanizeAge(now.Add(-30*time.Hour), now))
+	assert.Equal(t, "3d", humanizeAge(now.Add(-72*time.Hour), now))
 }
 
 func TestQuandOf(t *testing.T) {
@@ -40,9 +41,9 @@ func TestInboxRow_ackedMarker(t *testing.T) {
 	row := inboxRow(e, now)
 	// columns: ID(0) WHEN(1) PROCESS(2) MESSAGE(3) ENTITY_KEY(4)
 	assert.Equal(t, "4212", row[0]) // the ID column
-	assert.Contains(t, row[3], "[traité]")
+	assert.Equal(t, "Nouveau client à Lyon [acked]", row[3]) // marked with the gesture's own word
 	e.Acked = false
-	assert.NotContains(t, inboxRow(e, now)[3], "traité")
+	assert.Equal(t, "Nouveau client à Lyon", inboxRow(e, now)[3])
 }
 
 // An English header in an English CLI: WHEN, as on :outputs (#1175).

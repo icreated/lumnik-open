@@ -39,6 +39,9 @@ type AskResult struct {
 	// Abstained is the hub's structural mark of a refusal (#915) — a withheld or unwritten answer is
 	// one, and still carries its rows. Never recognised by what the answer's words say.
 	Abstained bool
+	// UnderstoodAs is the question the hub answered when it resolved a follow-up against the previous
+	// one (#1096); "" otherwise.
+	UnderstoodAs string
 	// records are the rows as the hub typed them, which -o json|yaml prints: Rows is their display form.
 	records []EntityRow
 }
@@ -56,11 +59,12 @@ type analyticWire struct {
 	Disputed          []Disputed  `json:"disputed"`
 	DisputedTruncated bool        `json:"disputedTruncated"`
 	Abstained         bool        `json:"abstained"`
+	UnderstoodAs      string      `json:"understoodAs"`
 }
 
 // askDocument is AskResult as -o json|yaml prints it (#1105): the hub's field names in the hub's order,
 // the rows as the hub typed them with their columns added beside them, and an empty list as [] — never
-// null. understoodAs is left out: lm sends no previous question, so the hub never resolves one.
+// null.
 type askDocument struct {
 	Answer            string      `json:"answer" yaml:"answer"`
 	SQL               string      `json:"sql" yaml:"sql"`
@@ -72,18 +76,15 @@ type askDocument struct {
 	Disputed          []Disputed  `json:"disputed" yaml:"disputed"`
 	DisputedTruncated bool        `json:"disputedTruncated" yaml:"disputedTruncated"`
 	Abstained         bool        `json:"abstained" yaml:"abstained"`
+	UnderstoodAs      *string     `json:"understoodAs" yaml:"understoodAs"` // null when no follow-up was resolved
 }
 
 func (r AskResult) document() askDocument {
-	var asOf *string
-	if r.DataAsOf != "" {
-		asOf = &r.DataAsOf
-	}
 	return askDocument{
 		Answer: r.Answer, SQL: r.SQL, RowCount: r.RowCount,
-		Columns: orEmpty(r.Columns), Rows: orEmpty(r.records), DataAsOf: asOf,
+		Columns: orEmpty(r.Columns), Rows: orEmpty(r.records), DataAsOf: orNil(r.DataAsOf),
 		OtherDoors: orEmpty(r.OtherDoors), Disputed: orEmpty(r.Disputed),
-		DisputedTruncated: r.DisputedTruncated, Abstained: r.Abstained,
+		DisputedTruncated: r.DisputedTruncated, Abstained: r.Abstained, UnderstoodAs: orNil(r.UnderstoodAs),
 	}
 }
 
@@ -92,6 +93,14 @@ func (r AskResult) MarshalJSON() ([]byte, error) { return jsonText(r.document())
 
 // MarshalYAML writes the same document as YAML.
 func (r AskResult) MarshalYAML() (any, error) { return r.document(), nil }
+
+// orNil is null for an empty string, as the hub sends an absent value.
+func orNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
 
 func orEmpty[T any](s []T) []T {
 	if s == nil {
@@ -102,14 +111,18 @@ func orEmpty[T any](s []T) []T {
 
 // RagAsk runs an analytic question over the ingested hub via mode=analytic.
 // scope is sent only when non-empty (the backend defaults it to "system"); lang, the answer
-// language, likewise — absent, the hub follows the question's own language (#879).
-func (c *Client) RagAsk(question, scope, lang string) (*AskResult, error) {
+// language, likewise — absent, the hub follows the question's own language (#879). previous, the
+// question this one continues (#1405), likewise — absent, the question stands alone.
+func (c *Client) RagAsk(question, scope, lang, previous string) (*AskResult, error) {
 	body := map[string]any{"question": question, "mode": "analytic"}
 	if scope != "" {
 		body["scope"] = scope
 	}
 	if lang != "" {
 		body["lang"] = lang
+	}
+	if previous != "" {
+		body["previous"] = previous
 	}
 	var wire analyticWire
 	if err := c.POSTSlow("/api/platform/rag/chat", body, &wire); err != nil {
@@ -127,6 +140,7 @@ func (c *Client) RagAsk(question, scope, lang string) (*AskResult, error) {
 		Disputed:          wire.Disputed,
 		DisputedTruncated: wire.DisputedTruncated,
 		Abstained:         wire.Abstained,
+		UnderstoodAs:      wire.UnderstoodAs,
 		records:           wire.Rows,
 	}, nil
 }

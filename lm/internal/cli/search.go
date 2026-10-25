@@ -19,7 +19,7 @@ import (
 func newSearchCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "search",
-		Short: "Declare search indexes, inspect and drive the projection pipeline (#703)",
+		Short: "Declare search indexes, inspect and drive the projection pipeline",
 	}
 	cmd.AddCommand(newSearchApplyCmd(), newSearchRmCmd(), newSearchQueryCmd(), newSearchStatusCmd(), newSearchRebuildCmd(), newSearchCancelCmd())
 	return cmd

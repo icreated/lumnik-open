@@ -1,6 +1,7 @@
 package io.lumnik.identity.role;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.identity.IdentityErrors;
 import io.lumnik.identity.Require;
 import io.lumnik.identity.TenantInPath;
 import io.lumnik.identity.tenant.TenantRepository;
@@ -48,8 +49,7 @@ public class RoleResource {
     @Operation(summary = "Create a role")
     public Response create(@PathParam("tenantId") Long tenantId, @Valid RoleCommands.Create cmd) {
         requireTenant(tenantId);
-        if (roles.nameExists(cmd.name()))
-            throw new ClientErrorException("Role name already exists: " + cmd.name(), Response.Status.CONFLICT);
+        roles.holderOfName(tenantId, cmd.name()).ifPresent(holder -> { throw nameTaken(holder); });
 
         UserLevel level = cmd.userLevel() != null
             ? UserLevel.fromCode(cmd.userLevel())
@@ -72,9 +72,12 @@ public class RoleResource {
     public RoleDto update(@PathParam("tenantId") Long tenantId, @PathParam("id") Long id,
                           @Valid RoleCommands.Update cmd) {
         Role r = requireRole(tenantId, id);
-        if (!r.getName().equals(cmd.name()) && roles.nameExists(cmd.name()))
-            throw new ClientErrorException("Role name already exists: " + cmd.name(), Response.Status.CONFLICT);
-        r.setName(cmd.name());
+        // Stripped as a create stores it: a padded rename onto a taken name is refused, onto its own
+        // name it changes nothing — never a second role whose name differs only by spaces.
+        String name = cmd.name().strip();
+        if (!r.getName().equals(name))
+            roles.holderOfName(tenantId, name).ifPresent(holder -> { throw nameTaken(holder); });
+        r.setName(name);
         r.setDescription(cmd.description());
         return RoleDto.from(r);
     }
@@ -94,5 +97,10 @@ public class RoleResource {
 
     private Role requireRole(Long tenantId, Long id) {
         return Require.owned(roles, id, tenantId, "Role");
+    }
+
+    private static ClientErrorException nameTaken(Role holder) {
+        return IdentityErrors.conflict(
+            "role name " + holder.getName() + " is already held by role " + holder.getId());
     }
 }

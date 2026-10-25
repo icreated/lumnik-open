@@ -129,11 +129,19 @@ func newEntityAmbiguousCmd() *cobra.Command {
 	return cmd
 }
 
-var historyHeaders = []string{"OCCURRED_AT", "OUTCOME", "RULE", "PROVIDER", "CANDIDATES", "SET_ASIDE", "DECIDED_BY", "RUN_ID"}
+var historyHeaders = []string{"OCCURRED_AT", "OUTCOME", "RULE", "PROVIDER", "CANDIDATES", "SET_ASIDE", "DECIDED_BY", "RUN_ID", "ASSERTED_BY", "REASON"}
 
 func historyRow(e client.EvidenceEvent) []string {
 	return []string{output.HumanTimeSeconds(&e.OccurredAt), e.Outcome, e.RuleDeclaredID, e.Provider,
-		strings.Join(e.Candidates, ","), setAsideIDs(e.SetAside), e.DecidedBy, e.RunID}
+		strings.Join(e.Candidates, ","), setAsideIDs(e.SetAside), e.DecidedBy, e.RunID, assertedBy(e), optStr(e.Reason)}
+}
+
+// assertedBy names the reviewer by login when the hub knows it, else by the stored id (#1347).
+func assertedBy(e client.EvidenceEvent) string {
+	if e.AssertedByLogin != nil {
+		return *e.AssertedByLogin
+	}
+	return optStr(e.AssertedBy)
 }
 
 // setAsideIDs lists the entities an event set aside (#920); the reason and rule are in `-o json`.

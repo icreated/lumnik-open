@@ -2,11 +2,14 @@ package io.lumnik.hub.connector.runtime;
 
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.exceptions.SourceCallException;
+import io.lumnik.hub.connector.exceptions.SourceUnreachableException;
+import io.lumnik.hub.connector.mapping.hooks.cell.ScriptFailedException;
 import io.lumnik.hub.connector.rest.RestHttpClient;
 import io.lumnik.hub.connector.rest.RestRequest;
 import org.junit.jupiter.api.Test;
 
 import java.net.ConnectException;
+import java.net.UnknownHostException;
 import java.sql.SQLException;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -86,6 +89,16 @@ class ChunkFailureMessageTest {
     assertQuotesNothingOfTheSource(msg);
   }
 
+  /** A source that is gone, said by a chunk: the sentence is the whole account, its host never appended (#1389). */
+  @Test
+  void a_source_that_is_unreachable_is_stored_as_its_sentence_alone() {
+    String sentence = "could not reach public.workorder (SQLSTATE 08001): host not resolved (UnknownHostException)";
+    String msg = messageFor(new SourceUnreachableException(sentence,
+        new SQLException("The connection attempt failed.", "08001", new UnknownHostException("zombie-cmms-gone"))));
+
+    assertThat(msg).isEqualTo(sentence);
+  }
+
   /**
    * A real JDK refusal, thrown before any I/O: a space in the composed URL makes {@code URI.create}
    * inside the real client refuse it. Its message and its cause's both carried the whole URL; the
@@ -108,5 +121,28 @@ class ChunkFailureMessageTest {
     // same sentence twice on the one line an operator reads.
     String msg = messageFor(new IllegalStateException("upstream returned HTTP 500 (transient)"));
     assertThat(msg).isEqualTo("upstream returned HTTP 500 (transient)");
+  }
+
+  /**
+   * #1434: a failure whose message the hub wrote whole is stored as written — not followed by its cause's, which
+   * #1432 keeps out: a Kotlin script's toInt() quotes the cell it could not read.
+   */
+  @Test
+  void an_authored_failure_is_stored_without_its_cause_message() {
+    String msg = messageFor(new ScriptFailedException(
+        "kotlin hook hooks:quantity.kts failed: NumberFormatException at line 5",
+        new NumberFormatException("For input string: \"env. 4 kg\"")));
+
+    assertThat(msg).isEqualTo("kotlin hook hooks:quantity.kts failed: NumberFormatException at line 5");
+  }
+
+  /** #1434: wherever it sits in the chain — a wrapper around the hook's failure must not bring the cell back. */
+  @Test
+  void an_authored_failure_under_a_wrapper_is_still_stored_as_written() {
+    String msg = messageFor(new RuntimeException("chunk transform failed", new ScriptFailedException(
+        "kotlin hook hooks:quantity.kts failed: NumberFormatException at line 5",
+        new NumberFormatException("For input string: \"env. 4 kg\""))));
+
+    assertThat(msg).isEqualTo("kotlin hook hooks:quantity.kts failed: NumberFormatException at line 5");
   }
 }

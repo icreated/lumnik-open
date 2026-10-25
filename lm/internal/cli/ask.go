@@ -25,12 +25,13 @@ func newAskCmd() *cobra.Command {
 			question := strings.Join(args, " ")
 			scope, _ := cmd.Flags().GetString("scope")
 			lang, _ := cmd.Flags().GetString("lang")
+			previous, _ := cmd.Flags().GetString("previous")
 			// An ask costs a model call: a format this command cannot print is refused before it is paid for.
 			format := outputFormat(cmd)
 			if format != "table" && format != "json" && format != "yaml" {
 				return fmt.Errorf("unknown output format: %s (want table|json|yaml)", format)
 			}
-			res, err := c.RagAsk(question, scope, client.AnswerLang(lang))
+			res, err := c.RagAsk(question, scope, client.AnswerLang(lang), previous)
 			if err != nil {
 				return err
 			}
@@ -39,6 +40,9 @@ func newAskCmd() *cobra.Command {
 				return output.PrintObject(out, format, res)
 			}
 			fmt.Fprintln(out, res.Answer)
+			if res.UnderstoodAs != "" {
+				fmt.Fprintf(out, "  understood as: %s\n", res.UnderstoodAs)
+			}
 			if res.DataAsOf != "" {
 				fmt.Fprintf(out, "  data as of: %s (last completed run)\n", res.DataAsOf)
 			}
@@ -54,6 +58,7 @@ func newAskCmd() *cobra.Command {
 		},
 	}
 	ask.Flags().String("scope", "", "The métier scope whose fused data to query")
+	ask.Flags().String("previous", "", "The question this one continues, so a follow-up like \"Et SUP-004 ?\" resolves against it")
 	ask.Flags().String("lang", "", "Two-letter answer language (default: from LC_ALL, LC_MESSAGES or LANG; none: the question's own)")
 	return ask
 }

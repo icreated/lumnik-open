@@ -58,9 +58,15 @@ public record EntityManifest(String kind, String name, String label,
    * the SchemaCard) shows instead of the raw canonical name; it flows to {@code SchemaCard.Column.label}
    * (null/blank falls back to the canonical name). The rest feeds the SQL-generation prompt so the model
    * stops guessing: a business {@code description}, an {@code example} value, and the allowed {@code values}
-   * domain (enforced by the DomainGuard — a filter on a value not in this set is refused).
+   * domain (enforced by the DomainGuard — a filter on a value not in this set is refused). {@code prefer} names
+   * the source table that goes first for this column's value (#1379): each system is the reference for its own
+   * fields; the other sources keep the declared order, and the {@code _conflicts} ledger keeps the same
+   * entries, the preferred source's first. {@code conflicts: false} (#1449) says the column's sources progress rather
+   * than disagree — a stage each flow stamps — so its value follows the same order and it is never compared: no
+   * {@code _conflicts} entry, no disputed row. Null means compared.
    */
-  public record ColumnMeta(String label, String description, String example, List<String> values) {
+  public record ColumnMeta(String label, String description, String example, List<String> values, String prefer,
+                           Boolean conflicts) {
     public ColumnMeta {
       values = values == null ? List.of() : values;
     }

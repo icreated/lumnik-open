@@ -9,13 +9,13 @@ Which restart is safe, and what each one costs: the [on-call runbook](../operati
 | Symptom | First move |
 |---|---|
 | The hub won't start, or 500s everywhere | `curl -s http://localhost:8080/q/health` (no `lm` command reads it), then [the hub logs](logs.md) |
-| `lumnik.secret.master-key is still the placeholder` at boot | `LUMNIK_SECRET_MASTER_KEY` is not set — generate one with `openssl rand -base64 32` ([quickstart table](../quickstart/installer.md#troubleshooting)) |
+| `required variable LUMNIK_SECRET_MASTER_KEY is missing a value` when the stack starts | the key is missing from `.env` — on a fresh install, generate one with `openssl rand -base64 32`; on an existing one, restore it from your backup ([the master key](../security/rls.md#secrets-at-rest-the-master-key)) |
 | `lumnik.secret.master-key is too short (< 16 chars)` at boot | the key is shorter than 16 characters — same fix |
 | First boot seems stuck | migrations run at first boot — give it a minute, watch `./deploy/selfhost/logs.sh hub` |
 | `up.sh` refuses to start, naming missing tools | its preflight — the message shows the exact install line; run it, re-run `up.sh` ([Windows walkthrough, step 3](../deploy-windows.md#step-3-get-lumnik-in-ubuntu-5-min)) |
-| `!! could not obtain a Keycloak admin token` at the end of `up.sh` — then logins fail | Keycloak was still finishing its first start (up.sh retries ~25 s, then warns) — re-run `up.sh`; if it persists, `./deploy/selfhost/logs.sh keycloak` |
+| `!! could not obtain a Keycloak admin token (check KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD in .env)` at the end of `up.sh` — then logins fail | either Keycloak was still starting: re-run `up.sh`; or `KEYCLOAK_ADMIN_PASSWORD` in `.env` no longer matches the console's: set the same value in both. Still failing: `./deploy/selfhost/logs.sh keycloak` |
 | Anything on a Windows PC | the dedicated page: [Deploy on Windows → Troubleshooting](../deploy-windows.md#troubleshooting-windows-edition) |
-| https / certificate trouble | the TLS façade — caddy logs, [Deploy](../deploy.md#one-https-origin-the-tls-facade) |
+| https / certificate trouble | the TLS proxy — caddy logs, [Deploy](../deploy.md#one-https-origin-the-tls-proxy) |
 
 ## Login and identity
 
@@ -24,7 +24,7 @@ Which restart is safe, and what each one costs: the [on-call runbook](../operati
 | `401` with `tenant_id`, `subject/issuer` or claim errors | the claim wiring — [BYO IdP troubleshooting](../security/byo-idp.md#troubleshooting) has the full table |
 | `403` on every endpoint despite a valid login | the `groups` claim doesn't carry `lm_*` role names — [BYO IdP](../security/byo-idp.md#troubleshooting) |
 | `403 {"error":"user is deactivated"}` | the identity was archived (SCIM departure) — [SCIM](../security/scim.md#troubleshooting) |
-| Login broke after moving to TLS or a new hostname | the issuer changed and orphaned the JIT identity — [BYO IdP](../security/byo-idp.md#troubleshooting) |
+| Login broke after moving to TLS or a new hostname | the issuer changed — [Keep the same public address](../security/byo-idp.md#keep-the-same-public-address) |
 | SCIM calls misbehave | [SCIM troubleshooting](../security/scim.md#troubleshooting) — the issuer-mismatch `404` is the classic |
 | `lm` prints `API error 403 (forbidden): no details from the server — your account may lack the required role` (raw HTTP: `403` with an empty body) | a required role is missing — [Roles & permissions](../security/role-management.md#troubleshooting) |
 | `API error 403: missing role lm_integrator` | the `/api/platform/*` gate: the account lacks `lm_integrator` — same page |
@@ -33,10 +33,10 @@ Which restart is safe, and what each one costs: the [on-call runbook](../operati
 
 | Symptom | What it is |
 |---|---|
-| `access refused (403): scope not granted` (raw HTTP: `403 {"error":"scope not granted"}`) | the métier boundary: your user holds scope roles and this resource is outside them. It covers every read surface (PWA lists, chat, views), so several going quiet at once points here. [Scopes](../rag/scopes.md#binding-users-to-scopes-opt-in) |
+| `access refused (403): scope not granted` (raw HTTP: `403 {"error":"scope not granted"}`) | the business-scope boundary: your user holds scope roles and this resource is outside them. It covers every read surface (PWA lists, chat, views), so several going quiet at once points here. [Scopes](../rag/scopes.md#binding-users-to-scopes-opt-in) |
 | The chat says "I can't answer that…" or "I won't run this…" | a [guard](../transparency/ask-honesty.md) refused rather than guess; the message says what to do next |
 | "The query returned no rows. That can mean…" | an empty result — check the SQL shown before concluding there are none |
-| `409 {"error":"no schema discovered for scope '…'"}` on an ask | nothing was applied to the scope yet, or its last connector was deleted or moved — apply an entity (the message says so), then ask again |
+| `Error: API error 409: no schema discovered for scope '…' — apply an entity or run discovery first` | nothing was applied to the scope yet, or its last connector was deleted or moved — apply an entity (the message says so), then ask again |
 | The ask answers *"I have no data declared for this scope yet…"* although you ingested into that scope | the scope's schema card declares no tables — see below |
 | `429` on chat, search, or view-generate — not a connector run | the hub's own inbound limit — [Rate limits](../operations/rate-limits.md#troubleshooting). A vendor throttling a connector is the `429` under [Ingestion](#ingestion) |
 
@@ -64,13 +64,13 @@ The ask is Pro only; `lm source schema` and `rediscover` exist on both editions.
 |---|---|
 | A run failed, or rows are missing | the dedicated recipe: [Diagnosing a failed run](diagnose-a-run.md) |
 | `run scheduled` looked fine, but `lm run list` says **Failed** | "scheduled" only means *queued*. Failed at 0/0 usually means the source did not answer — `lm run get <id>` prints why ([Diagnosing a failed run](diagnose-a-run.md)) |
-| A run says **Completed** but `IN=0 OUT=0` | the connector found nothing to read — for file connectors, the path or mount does not exist where the hub looks (the [WOW walkthrough's ✔ checks](../demo/wow-customer/README.md#replay-it-by-hand-on-the-self-host-stack) catch it) |
+| A run says **Completed** but `IN=0 OUT=0` | the connector found nothing to read — for file connectors, the path or mount does not exist where the hub looks (the [WOW's ✔ checks](../wow.md#before-you-start) catch it) |
 | `lm entity apply` errors naming a relation that `does not exist` | a source connector never landed rows — check `lm run list` |
 | An applied entity never shows up in `lm ask`/chat | the manifest declares no `scopes:` — [Entities troubleshooting](../entities.md#troubleshooting) |
 | `429 Too Many Requests` from a REST vendor | lower `default_rate_limit` — [REST troubleshooting](../connectors/rest.md#troubleshooting) |
 | SFTP auth, host-key, or S3 `403` errors | [CSV & files troubleshooting](../connectors/csv.md#troubleshooting) |
 | `Bearer token unavailable (env=…)` — REST connectors only | the secret was never set — `lm secret set`, [quickstart table](../quickstart/installer.md#troubleshooting) |
-| jdbc run fails: `password_env '<NAME>' is not set in the server environment` | jdbc does not read `lm secret` — the variable must exist in the **hub's** environment — [JDBC troubleshooting](../connectors/jdbc.md#troubleshooting) |
+| jdbc run fails: `password_env '<NAME>' is neither in the server environment nor in lm secret` | `lm secret set <NAME>`, or set it in the **hub's** environment — [JDBC troubleshooting](../connectors/jdbc.md#troubleshooting) |
 | A cursor seems stuck in the past | `lm endpoint reset-cursor <connector>/<endpoint>` — next run is a full refresh |
 
 ## Outputs and apps
@@ -78,14 +78,14 @@ The ask is Pro only; `lm source schema` and `rediscover` exist on both editions.
 | Symptom | First move |
 |---|---|
 | A webhook never arrived | `lm outputs list` (failures first), then `lm outputs replay <ID>` — or `^R` in the TUI `:outputs` ([Outputs](../admin-console-guide.md#watch-deliveries-and-replay-a-failure)) |
-| The Fiches list on a phone looks empty | see the table below |
+| The Records list on a phone looks empty | see the table below |
 | The PWA shows an old version | the service worker re-installs only when `sw.js` changes — [the shell-cache note](../apps/pwa.md) |
 | `lm view -f v.yaml` (the list), `lm view KEY -f v.yaml` (one record) or `lm view apply` refused | a manifest field/column mismatch, or a missing scope role — [Views troubleshooting](../apps/views.md#troubleshooting) |
 | `lm process apply` refused, or a declared process never fires | a manifest/schema mismatch, or its trigger table broke at runtime — [Processes troubleshooting](../apps/processes.md#troubleshooting) |
 | `lm workflow apply` refused | an unknown field, a lifecycle collision, or dormancy declared without `on.key` — [Workflows troubleshooting](../apps/workflows.md#troubleshooting) |
 | A workflow alert didn't fire | dormancy is observation-relative and needs `on.key` + `dormancy.after` — [Workflows](../apps/workflows.md#dormancy-the-memory-of-the-breathing) |
 
-An empty Fiches list on the phone:
+An empty Records list on the phone:
 
 | You see | Meaning | Where to look |
 |---|---|---|

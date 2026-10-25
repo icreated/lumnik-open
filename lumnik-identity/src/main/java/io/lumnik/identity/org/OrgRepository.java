@@ -27,12 +27,12 @@ public class OrgRepository implements PanacheRepository<Organization> {
     }
 
     /**
-     * The tenant is in the query: an org code is unique per tenant — {@code UNIQUE (tenant_id, code)}.
-     * Stripped, as {@link Organization}'s constructor stores it: a padded duplicate must meet the
-     * 409 here, not the constraint.
+     * The org holding {@code code} in any lifecycle state. The tenant is in the query: an org code is
+     * unique per tenant — {@code UNIQUE (tenant_id, code)}. Stripped, as {@link Organization}'s
+     * constructor stores it: a padded duplicate must meet the 409 here, not the constraint.
      */
-    public boolean codeExists(Long tenantId, String code) {
-        return count("tenantId = ?1 and code = ?2", tenantId, code.strip()) > 0;
+    public Optional<Organization> holderOfCode(Long tenantId, String code) {
+        return find("tenantId = ?1 and code = ?2", tenantId, code.strip()).firstResultOptional();
     }
 
     public List<Organization> findChildren(Long tenantId, Long parentOrgId) {

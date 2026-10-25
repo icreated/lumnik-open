@@ -6,6 +6,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Test-only RowHook that emits nothing for every row WITHOUT recording a drop in
@@ -20,5 +21,15 @@ public class TestSilentDropRowHook implements RowHook {
   @Override
   public List<Map<String, Object>> apply(Map<String, Object> row, JsonNode params, MappingState state) {
     return List.of();
+  }
+
+  @Override
+  public Set<String> params() {
+    return Set.of();
+  }
+
+  @Override
+  public ColumnEffect columns(JsonNode params) {
+    return ColumnEffect.NONE;
   }
 }

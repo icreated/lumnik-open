@@ -112,7 +112,8 @@ public class LocalFileSource implements FileSource, SeekableSource {
                 case DELETE -> Files.deleteIfExists(p);
                 case MOVE -> {
                     String archive = (String) cfg.getOrDefault("archive_path", baseDir.resolve("archive").toString());
-                    Path dest = Paths.get(archive).resolve(file.name());
+                    // Its own name and mtime, as sftp and s3 (#1382): REPLACE_EXISTING would overwrite an earlier one.
+                    Path dest = Paths.get(archive).resolve(file.archivedName());
                     Files.createDirectories(dest.getParent());
                     Files.move(p, dest, StandardCopyOption.REPLACE_EXISTING);
                 }

@@ -10,9 +10,12 @@ import io.lumnik.hub.connector.rest.auth.AuthConfigException;
 import io.lumnik.hub.connector.rest.auth.AuthProvider;
 import io.lumnik.hub.connector.rest.auth.AuthProviderRegistry;
 import io.lumnik.hub.connector.rest.auth.AuthSpec;
+import io.lumnik.hub.connector.secret.SecretRefs;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -40,6 +43,7 @@ class RestProberTest {
     RestProberTest() {
         prober.inference = new JsonStructureInference();
         prober.llm = new LlmManifestAugmenter();
+        prober.secrets = SecretRefs.environmentOnly(name -> null);
         prober.authReg = new AuthProviderRegistry() {
             @Override public AuthProvider build(AuthSpec spec) {
                 presented = spec;
@@ -64,6 +68,28 @@ class RestProberTest {
         c.setTypeId("rest-generic");
         c.setConfig(config);
         return c;
+    }
+
+    /**
+     * #1395: a source that writes the credential it received into its refusal — the probe's failure quotes that
+     * body (ResponseStatusGuard), so it reaches the caller without the credential.
+     */
+    @Test
+    void aRefusalThatEchoesTheCredentialFailsTheProbeWithoutIt() {
+        prober.authReg = new AuthProviderRegistry() {
+            @Override public AuthProvider build(AuthSpec spec) {
+                return request -> request.withHeader("Authorization", "Bearer probe-tok-a1b2c3");
+            }
+        };
+        prober.http = new RestHttpClient() {
+            @Override public RestResponse execute(RestRequest req) {
+                return RestResponse.of(401, Map.of(), "{\"seen\":\"" + req.headers().get("Authorization") + "\"}");
+            }
+        };
+
+        assertThatThrownBy(() -> prober.probe(connector(Map.of("base_url", "http://erp.invalid")), "/partners", "draft"))
+            .hasMessageContaining("Bearer <redacted>")
+            .satisfies(e -> assertThat(e.getMessage()).doesNotContain("probe-tok-a1b2c3"));
     }
 
     /** The connection block a declarative manifest keeps its base URL in — nothing in the body. */
@@ -99,6 +125,37 @@ class RestProberTest {
         assertThat(presented.kind()).isEqualTo("basic");
         assertThat(presented.config()).containsEntry("username", "erp")
                                       .containsEntry("password_env", "ERP_PW");
+    }
+
+    /**
+     * The connector's declared headers go out on the probe too, a {@code value_env} read like the
+     * run reads it — lm secret first. A source gated on a header answered the probe 401 otherwise.
+     */
+    @Test
+    void theConnectorsDeclaredHeadersAreSent() throws Exception {
+        prober.secrets = new SecretRefs(name -> "CLIENT_ID".equals(name) ? Optional.of("from-registry") : Optional.empty(),
+                                        name -> "from-env");
+
+        prober.probe(connector(Map.of("base_url", "http://erp.invalid", "headers", List.of(
+                         Map.of("name", "X-Api-Version", "value", "2026-01"),
+                         Map.of("name", "X-Client-Id", "value_env", "CLIENT_ID")))),
+                     "/partners", "draft");
+
+        assertThat(sent.headers()).containsEntry("X-Api-Version", "2026-01")
+                                  .containsEntry("X-Client-Id", "from-registry");
+    }
+
+    /** A header reference nothing holds is refused by name, before anything is sent. */
+    @Test
+    void aHeaderThatDoesNotResolveIsRefusedBeforeAnythingIsSent() {
+        prober.secrets = SecretRefs.environmentOnly(name -> null);
+
+        assertThatThrownBy(() -> prober.probe(connector(Map.of("base_url", "http://erp.invalid", "headers",
+                                                  List.of(Map.of("name", "X-Client-Id", "value_env", "CLIENT_ID")))),
+                                              "/partners", "draft"))
+            .isInstanceOf(AuthConfigException.class)
+            .hasMessage("Header X-Client-Id unavailable (env=CLIENT_ID)");
+        assertThat(sent).isNull();
     }
 
     /** No auth block means none — the run's default. Not an empty bearer sent to every source. */

@@ -2,19 +2,19 @@
 
 > The same hub can show a warehouse team two tabs and a sales team four, run with the AI
 > switched off for a client who forbids a model, or carry Search when it was built in.
-> Four questions, asked in order, decide what a métier app shows — and each has one gesture.
+> Four questions, asked in order, decide what a business app shows — and each has one gesture.
 
 | | |
 |---|---|
 | **Who** | the integrator installing or tuning a hub |
-| **Gestures** | the image you deploy, one environment variable, one line in a `kind: App` manifest — and, for Recherche, a `kind: SearchIndex` |
+| **Gestures** | the image you deploy, one environment variable, one line in a `kind: App` manifest — and, for Search, a `kind: SearchIndex` |
 | **See the result** | `lm module list`, then the app itself |
 | **Edition** | both — what differs is which answers are possible ([Open vs Pro](editions.md)) |
 
 ## The four questions
 
 Questions 1 to 3 decide whether a tab is on an app. Question 4 decides whether it is worth showing:
-Recherche checks it before it appears, while Fiches opens anyway and says what is missing. Read them top to
+Search checks it before it appears, while Records opens anyway and says what is missing. Read them top to
 bottom; the first *no* is your answer when something is missing.
 
 ```mermaid
@@ -27,17 +27,17 @@ flowchart LR
 |---|---|---|---|---|
 | 1 | **Is it in the build?** | the image you deploy | pick Open or Pro; add a Search provider when you build the hub | `lm module list` |
 | 2 | **Is it switched on?** | the operator | `LUMNIK_AI_ENABLED=false` turns the AI family off; absent means on | `lm module list` |
-| 3 | **Does the app ask for it?** | the métier's `kind: App` | `spec.tabs: [...]`; leave it out to take everything the hub offers | `lm app apply` |
-| 4 | **Is it ready to be used?** | the feature itself | for Recherche, declare a search index the user may read | the tab, and `lm search status` |
+| 3 | **Does the app ask for it?** | the app's `kind: App` manifest | `spec.tabs: [...]`; leave it out to take everything the hub offers | `lm app apply` |
+| 4 | **Is it ready to be used?** | the feature itself | for Search, declare a search index the user may read | the tab, and `lm search status` |
 
 The tabs and who brings them:
 
 | Tab | Shown as | Brought by | Needs |
 |---|---|---|---|
-| `fiches` | Fiches | every hub | a saved view for the app's scope (without one the tab opens and says so) |
-| `inbox` | Décisions | every hub | — |
+| `fiches` | Records | every hub | a saved view for the app's scope (without one the tab opens and says so) |
+| `inbox` | Inbox | every hub | — |
 | `chat` | Chat | Pro (`rag` + `llm`) | the AI switched on |
-| `search` | Recherche | a Search provider (`search_pg` or `search_opensearch`) | a search index the user may read |
+| `search` | Search | a Search provider (`search_pg` or `search_opensearch`) | a search index the user may read |
 
 ## 1. Is it in the build?
 
@@ -118,7 +118,7 @@ Search exactly as it was.
 
 ## 3. Does the app ask for it?
 
-Each métier app is a `kind: App` manifest. Without `tabs` it shows everything the hub offers (and
+Each business app is a `kind: App` manifest. Without `tabs` it shows everything the hub offers (and
 whatever a later release adds). To show fewer tabs, or to change their order, list them:
 
 ```yaml
@@ -162,10 +162,10 @@ Hiding a tab hides it, nothing more: who may read what is still decided by roles
 
 | Tab | Ready when | Check |
 |---|---|---|
-| Fiches | a saved view exists for the app's scope (otherwise the tab opens and says so) | `lm view list --scope <app scope>` |
-| Recherche | the user may read a search index (otherwise the tab is not shown) | `lm search status` |
+| Records | a saved view exists for the app's scope (otherwise the tab opens and says so) | `lm view list --scope <app scope>` |
+| Search | the user may read a search index (otherwise the tab is not shown) | `lm search status` |
 
-Recherche's full checklist: [Enabling Recherche for an app](apps/pwa.md#enabling-recherche-for-an-app).
+Search's full checklist: [Enabling Search for an app](apps/pwa.md#enabling-search-for-an-app).
 
 Whether Search is installed: the TUI's `:search` page says so in its banner, and a query on a hub
 without a provider is refused, never answered with an empty list:
@@ -184,18 +184,18 @@ manifest, then `lm app apply -f`. The other apps keep their Chat.
 app loses its Chat tab at once, no manifest changes, and the rest of the hub (including Oracle, SCIM and
 Search) is untouched.
 
-**One métier searching, the others not** (questions 3 and 4, here for the `stock` app):
+**Search in one app, but not the others** (questions 3 and 4, here for the `stock` app):
 
 1. In the `stock` app's manifest, list `search` in `tabs`; `lm app apply -f`.
 2. In each `kind: Entity` to search, set `scopes: [stock]` (the entity's `scopes` list — not the app's
    `scope`, not the users' `scope:<tag>` role); `lm entity apply -f`.
 3. Declare a search index over those entities: `lm search apply -f`.
-4. Give every *other* app a `tabs` list without `search`. An app that leaves `tabs` out shows Recherche
+4. Give every *other* app a `tabs` list without `search`. An app that leaves `tabs` out shows Search
    to any user who may read some index.
 
-!!! warning "*Aucun résultat* on every search"
-    An app whose scope has nothing indexed still shows Recherche when its users can read another scope's
-    index — and every search answers *Aucun résultat*. Check `lm search status` when a métier expects hits.
+!!! warning "*No results* on every search"
+    An app whose scope has nothing indexed still shows Search when its users can read another scope's
+    index — and every search answers *No results*. Check `lm search status` when a team expects hits.
 
 ## When a tab is missing
 
@@ -204,10 +204,10 @@ Go down the questions; stop at the first one that answers *no*.
 | What you see | Look at | Likely answer |
 |---|---|---|
 | No Chat tab on any app | `lm module list` | `llm` and `rag` missing: this is an Open build. Listed `INACTIVE` with `disabled:lumnik.ai.enabled`: [switch the AI back on](deploy.md#switch-the-ai-off). |
-| No Recherche tab on any app | `lm module list` | no `search_pg` / `search_opensearch`: the hub was built without a Search provider. |
-| No Recherche tab, yet `search_pg` is `ACTIVE` | `lm search status` | no `kind: SearchIndex` is declared yet (the list is empty), or the users may read none of the entities the indexes cover. |
-| Recherche missing on one app only | that app's manifest | `tabs` leaves out `search`; or its users hold scopes that read none of the indexed entities (compare each entity's `scopes` with their `scope:<tag>` roles). |
-| Recherche there, but always *Aucun résultat* | `lm search status` | the index is not built yet (`STATUS`, `DOCUMENTS`). |
+| No Search tab on any app | `lm module list` | no `search_pg` / `search_opensearch`: the hub was built without a Search provider. |
+| No Search tab, yet `search_pg` is `ACTIVE` | `lm search status` | no `kind: SearchIndex` is declared yet (the list is empty), or the users may read none of the entities the indexes cover. |
+| Search missing on one app only | that app's manifest | `tabs` leaves out `search`; or its users hold scopes that read none of the indexed entities (compare each entity's `scopes` with their `scope:<tag>` roles). |
+| Search there, but always *No results* | `lm search status` | the index is not built yet (`STATUS`, `DOCUMENTS`). |
 | … and `STATUS` reads `invalid` | `lm search status` | an entity re-apply removed a column the index declares — [re-apply the index](search/search-indexes.md#when-the-entity-changes). |
 | … and `STATUS` reads `withheld` | `lm search status` | an index re-apply removed or changed a field — [it serves again once rebuilt](search/search-indexes.md#removing-a-field-from-an-index). |
 | … and the index is ready | `lm search status` | no index covers the entities of the app's scope. |
@@ -217,6 +217,6 @@ Go down the questions; stop at the first one that answers *no*.
 ## See also
 
 - [The two editions](editions.md) — what Open and Pro each carry
-- [The métier PWA](apps/pwa.md) — the tabs, from the user's side
+- [The PWA](apps/pwa.md) — the tabs, from the user's side
 - [Switching the AI off](rag/models.md#switching-the-ai-off) — the full effect, and what it restores
 - [Declare a search index](search/search-indexes.md) · [Query it](search/querying.md)

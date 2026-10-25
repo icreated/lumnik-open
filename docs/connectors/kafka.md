@@ -10,8 +10,8 @@
 | **Type** | `kafka` |
 | **Protocol** | Kafka wire, JSON messages |
 | **Target** | `connector.t_<name>` |
-| **Offsets** | hub-owned, per partition — no consumer group on the broker |
-| **Delivery** | at-least-once into a table deduplicated by content hash |
+| **Position** | kept by the hub, per partition — nothing to set up on the broker |
+| **Delivery** | a message read twice lands once |
 | **Schedulable** | cron |
 | **Edition** | Pro — the type is absent from the open edition, where a `kafka` manifest is refused at validate |
 
@@ -35,7 +35,7 @@
 $ lm validate -f docs/connectors/kafka/demo/10-quickstart.yaml
 ✓ 10-quickstart.yaml — valid
 $ lm apply -f docs/connectors/kafka/demo/10-quickstart.yaml
-{"name":"acme-kafka-partners","connectorId":"78b94d8a-72ca-46e4-9080-f025f3100298","endpointsApplied":1}
+Applied connector "acme-kafka-partners" — 1 endpoint
 $ lm connector run acme-kafka-partners
 run scheduled: c5fc42d2-87f9-4328-acd2-b29213562a54
 ```
@@ -67,7 +67,7 @@ What landed in `connector.t_acme_partners` — each top-level JSON field became 
 (4 rows)
 ```
 
-- **No schema to declare.** Column types come from the first chunk, in the message's field order:
+- **No schema to declare.** Each column takes its type from the first messages that carry the field:
 
     | JSON value | Column type |
     |---|---|
@@ -92,7 +92,7 @@ spec:
   topic: erp.events                 # required — one topic per connector
   format: json                      # the only value in v1: one JSON object per message
   poll_timeout_ms: 2000             # optional, [100, 60000]; what one poll may wait for the broker
-  max_poll_records: 500             # optional, ≥ 1; clamped to the 500-row chunk
+  max_poll_records: 500             # optional; leave it at its default
   auth:                             # optional; omitted = no SASL handshake
     kind: sasl-plain                # none | sasl-plain
     username_env: KAFKA_USER        # names, never values
@@ -108,47 +108,7 @@ as they are. Three more keys belong to the [Event Hubs preset](#azure-event-hubs
 
 ### Configuration reference
 
-`lm describe connector-type kafka` prints every key with its type and meaning:
-
-```
-$ lm describe connector-type kafka
-Connector type: kafka
-
-name                 REQUIRED  [STRING, HIGH]
-  Logical connector/table name (target table connector.t_<name>)
-brokers              optional  [STRING, HIGH]
-  Comma-separated bootstrap servers
-brokers_env          optional  [STRING, HIGH]
-  Env var holding the bootstrap servers
-topic                REQUIRED  [STRING, HIGH]
-  Kafka topic to consume
-format               optional  [STRING, MEDIUM]
-  Record value format (default json)
-poll_timeout_ms      optional  [LONG, LOW]
-  Consumer poll timeout in ms [100, 60000]
-max_poll_records     optional  [LONG, LOW]
-  Max records per poll (positive integer; clamped to the engine chunk size)
-auth                 optional  [NESTED, MEDIUM]
-  Broker authentication (kind: none | sasl-plain)
-  kind                 optional  [STRING, HIGH]
-    Authentication method (none | sasl-plain)
-  username_env         optional  [STRING, HIGH]
-    SASL username source: lm secret name, else env var
-  password_env         optional  [STRING, HIGH]
-    SASL password source: lm secret name, else env var
-  security_protocol    optional  [STRING, MEDIUM]
-    Wire protocol for sasl-plain (SASL_SSL | SASL_PLAINTEXT)
-schedule             optional  [STRING, MEDIUM]
-  Cron expression for recurring catch-up runs — the hub scheduler fires it, evaluated in UTC
-window               optional  [STRING, MEDIUM]
-  Fence scheduled runs to a UTC time window, HH:MM-HH:MM (a manual run bypasses it)
-preset               optional  [STRING, LOW]
-  Vendor source preset expanded at apply time (e.g. event-hubs)
-namespace            optional  [STRING, LOW]
-  Input of the event-hubs preset: the Azure Event Hubs namespace
-connection_string_env optional  [STRING, LOW]
-  Input of the event-hubs preset: env var holding the namespace connection string
-```
+`lm describe connector-type kafka` prints every key with its meaning. The rules:
 
 | Key | Default | Rule |
 |---|---|---|
@@ -157,12 +117,12 @@ connection_string_env optional  [STRING, LOW]
 | `topic` | — | must match `[a-zA-Z0-9._-]+` |
 | `format` | `json` | the only accepted value; Avro and Protobuf are [not yet supported](#limitations) |
 | `poll_timeout_ms` | `2000` | integer in `[100, 60000]` |
-| `max_poll_records` | `500` | integer ≥ 1; a value above the chunk size is clamped to it — see [Chunks](#chunks-and-the-two-poll-knobs) |
+| `max_poll_records` | `500` | integer ≥ 1; leave it at its default |
 | `auth.kind` | `none` | `none` or `sasl-plain`; `sasl-plain` requires `username_env` and `password_env`, and refuses a blank one |
-| `auth.security_protocol` | `SASL_SSL` | lands verbatim in the consumer's `security.protocol`; it is not validated at apply |
+| `auth.security_protocol` | `SASL_SSL` | `SASL_SSL` or `SASL_PLAINTEXT`. A wrong value is not caught by `lm validate`: the run fails when it connects |
 | `schedule` | — | five-field cron, validated at apply, evaluated in UTC |
 | `window` | — | `HH:MM-HH:MM`, UTC, end exclusive, may cross midnight; a manual run ignores it |
-| `metadata.scopes` | — | the métier scope(s) the table is askable in; the validator warns when none is declared |
+| `metadata.scopes` | — | the business scope(s) the table is askable in; the validator warns when none is declared |
 
 `lm validate` and `lm apply` enforce every rule above. Five mistakes in one file, all named at once:
 
@@ -200,8 +160,9 @@ Error: validation failed: 5 error(s)
 
 Read the warning: **the key list is closed**, inside `auth` too.
 
-- A misspelled key (`poll_timeout`), or `target`/`mapping` copied from another manifest, is named
-  and ignored; the manifest still applies.
+- A misspelled key (`poll_timeout`), or a `target` copied from another manifest, is named and
+  ignored; the manifest still applies.
+- A `mapping` block is **refused**: a check declared there would never run.
 - A misspelled `security_protocol` leaves the default `SASL_SSL` in place: a plaintext SASL
   broker then fails in the TLS handshake.
 
@@ -222,26 +183,10 @@ ID        CONNECTOR          ENDPOINT  STATUS     IN     OUT    SKIPPED  DEAD-LE
 3463bf93  acme-kafka-orders  default   Completed  24000  24000  0        0             2026-09-13 02:21  2026-09-13 02:21
 ```
 
-The stored position after that run, checked in the database:
-
-```sql
-SELECT c.cursor_value FROM connector.connector_cursor c
-  JOIN connector.connector k ON k.id = c.connector_id
- WHERE k.name = 'acme-kafka-orders';
-```
-
-```
-                                              cursor_value
---------------------------------------------------------------------------------------------------------
- {"type": "KafkaOffset", "offsets": {"0": 3880, "1": 3770, "2": 3930, "3": 4120, "4": 4190, "5": 4110}}
-(1 row)
-```
-
-- One key per partition, each the **next offset to read**; they sum to 24 000.
-- A partition with no stored offset (first run, or a partition added since) is read from its
-  beginning: **the first run reads everything the topic still retains**.
-- No consumer group, no offset commit on the broker: nothing to provision or clean up there, and
-  each connector keeps its own position.
+- Each partition keeps its own position. The next run starts where each one stopped.
+- The first run reads everything the topic still retains. A partition added later is read
+  from its beginning.
+- Nothing is set up on the broker: no consumer group, and each connector keeps its own position.
 
 ### The head is the target
 
@@ -271,24 +216,14 @@ The first run read the 1 313 messages present at its start and completed while t
 still writing; the second read the 2 673 that arrived since. Together 3 986, the feeder's count.
 
 A run is reported **`Partial`** in two cases only (a run that simply ends below the head stays
-`Completed` — see [An empty poll](#an-empty-poll-and-what-it-does-not-prove)):
+`Completed` — see [An empty poll](kafka/when-the-topic-misbehaves.md#an-empty-poll-and-what-it-does-not-prove)):
 
 - the broker had already deleted offsets the stored position pointed to
-  ([A log that moved under the cursor](#a-log-that-moved-under-the-cursor));
-- the topic fed only unparsable messages until the chunk budget ran out
-  ([Poison messages](#poison-messages-the-per-message-dlq)).
+  ([A log that moved under the cursor](kafka/when-the-topic-misbehaves.md#a-log-that-moved-under-the-cursor));
+- a long run of unreadable messages stopped the run early; the next run continues after them
+  ([Poison messages](kafka/when-the-topic-misbehaves.md#poison-messages-the-per-message-dlq)).
 
 `Partial` is the status to alert on — see [Observability](../operations/observability.md).
-
-### Chunks and the two poll knobs
-
-A run writes in **500-row chunks**, each committed with its cursor. Two knobs shape the polls
-that fill a chunk:
-
-| Knob | Default | Effect |
-|---|---|---|
-| `max_poll_records` | 500 | records per poll; a larger value is clamped to 500, a smaller one gives more chunks (`100` → 25 chunks for 2 400 messages) |
-| `poll_timeout_ms` | 2000 | how long one poll waits; on a slow link, 100 ms can [read nothing and end the run](#an-empty-poll-and-what-it-does-not-prove) |
 
 A run on a topic that has not moved completes at once with `IN 0`.
 
@@ -303,14 +238,11 @@ cursor to the head of that moment:
 
 ```
 $ lm apply -f docs/connectors/kafka/demo/30-cadence.yaml
-{"name":"acme-kafka-cadence","connectorId":"a0f0d035-9e11-4443-b87f-f1fe86c2c274","endpointsApplied":1}
+Applied connector "acme-kafka-cadence" — 1 endpoint
 $ lm connector list
 NAME                TYPE   TENANT  SCHED        WINDOW       STATUS  LAST RUN
 acme-kafka-cadence  kafka  1       */5 * * * *  06:00-22:00
 ```
-
-(Other connectors, such as `acme-kafka-partners` from the Quickstart, list too, with their last
-run.)
 
 - **Evaluated in UTC** by the hub's scheduler. A re-apply without `schedule` unschedules the
   connector.
@@ -326,52 +258,29 @@ twice, apply a second connector on the same topic with a different `name`.
 
 ## Storage layout
 
-Nothing to set up: the first run with a row to write creates the table.
+Nothing to set up: the first run with a row to write creates `connector.t_<name>`.
+
+- Each top-level JSON field is a column, in the message's order.
+- **A message read twice is one row**: a producer retry, or a re-read after
+  `lm endpoint reset-cursor`. Processes and webhooks fire for new rows only.
+- Each tenant sees only its own rows.
+
+`OUT` counts every message read, even one the table already held. Re-read the whole topic, then
+compare with the table's row count:
 
 ```
-                                       Table "connector.t_acme_partners"
-      Column      |           Type           | Collation | Nullable |                        Default
-------------------+--------------------------+-----------+----------+-------------------------------------------------------
- id               | bigint                   |           | not null | nextval('connector.t_acme_partners_id_seq'::regclass)
- _row_hash        | text                     |           | not null |
- _ingested_at     | timestamp with time zone |           | not null | now()
- _source          | text                     |           |          |
- _run_id          | uuid                     |           |          |
- _mapping_version | integer                  |           |          |
- tenant_id        | bigint                   |           | not null |
- partner_id       | bigint                   |           |          |
- name             | text                     |           |          |
- city             | text                     |           |          |
- country          | text                     |           |          |
- credit_limit     | bigint                   |           |          |
- updated_at       | text                     |           |          |
-Indexes:
-    "t_acme_partners_pkey" PRIMARY KEY, btree (id)
-    "t_acme_partners_idx_tenant_id" btree (tenant_id)
-    "t_acme_partners_tenant_id__row_hash_key" UNIQUE CONSTRAINT, btree (tenant_id, _row_hash)
-Policies:
-    POLICY "tenant_isolation"
-      USING ((tenant_id = (NULLIF(current_setting('app.current_tenant'::text, true), ''::text))::bigint))
+$ lm endpoint reset-cursor acme-kafka-partners/default
+$ lm connector run acme-kafka-partners
+$ lm run list --connector acme-kafka-partners
+ID        CONNECTOR            ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
+39b5d5bd  acme-kafka-partners  default   Completed  2400  2400  0        0             2026-10-24 22:36  2026-10-24 22:36
+b80f7cda  acme-kafka-partners  default   Completed  2400  2400  0        0             2026-10-24 22:35  2026-10-24 22:35
+$ lm data tables
+MAPPING                               SCHEMA     TABLE                      ROWS
+kafka:acme_partners                   connector  t_acme_partners            2400
 ```
 
-- **The first seven columns** are the hub's, on every `connector.t_*` table. The rest come from
-  the messages, in their field order.
-- **`_row_hash` is the dedup**, unique within a tenant: a message read twice (a producer retry, a
-  cursor reset) is one row. `data.row.changed` events ([Processes](../apps/processes.md), webhooks,
-  notification rules) fire for new rows only.
-- **The row-level security policy** is what keeps one tenant's rows invisible to another.
-- **`records_out` counts writes, including the ones the table refused.** Reset the cursor and run
-  again:
-
-    ```
-    $ lm endpoint reset-cursor acme-kafka-partners/default
-    $ lm connector run acme-kafka-partners
-    $ lm run list --connector acme-kafka-partners
-    ID        CONNECTOR            ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
-    dc41ba74  acme-kafka-partners  default   Completed  2400  2400  0        0             2026-09-13 02:25  2026-09-13 02:25
-    ```
-
-    `OUT 2400`, and the table still holds 2 400 rows: check the row count, not `SKIPPED`.
+`OUT 2400` twice, and the table still holds 2 400 rows.
 
 !!! warning "Deleting a kafka connector deletes its data"
     - `lm connector delete` removes the connector's rows from `connector.t_<name>`, its cursor
@@ -417,13 +326,11 @@ ID        CONNECTOR         ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTE
 
 - **A new field becomes a new column** during the run. Rows written before it hold `NULL`; a field
   that disappears leaves its column `NULL` for later rows.
-- **The new column is typed from the chunk that introduces it**, like the first chunk (a field
-  that is `null` in every message of that chunk lands `text`). New columns come after the existing
-  ones.
-- The hub log names each added column and its type, in an `INFO` line
-  `… column(s) added mid-run, typed from this chunk: <column> <type>, …`.
-- To re-type after the producer has settled: `lm endpoint reset-cursor`, then a re-read.
-- The scope's schema card is refreshed, so the chat knows the new column.
+- **The new column takes its type from the first messages that carry it.** If they all hold
+  `null`, it lands as text.
+- **A column keeps its type.** To change it once the producer has settled: delete the connector,
+  apply it again, run. The table is created again.
+- The chat knows the new column after the run (Pro).
 
 ### Names the producer chose stay — and stay askable
 
@@ -463,10 +370,8 @@ There are 500 rows in connector.t_acme_partners_raw. The largest MONTANT_€ is 
   SQL: SELECT COUNT(*), MAX("MONTANT_€") AS max_montant_eur FROM "connector"."t_acme_partners_raw"
 ```
 
-`address` and `tags` landed as `jsonb`, values intact, but **object key order** is not kept
-(`{"street", "city"}` comes back `{"city", "street"}`). A
-[`kind:Workflow`](../apps/workflows.md#names-the-source-chose) can be declared over such a column
-as it is; see also [Names the source chose](../transparency/ask-honesty.md#names-the-source-chose).
+`address` and `tags` landed as `jsonb`, values intact. The order of an object's keys is not
+kept: `{"street", "city"}` comes back `{"city", "street"}`.
 
 ### Seven column names are reserved
 
@@ -488,164 +393,8 @@ There is **no rename on kafka**: the producer must send the field under another 
 
 ## When the topic misbehaves
 
-What goes wrong is the **topic** (a bad message, a deletion, a missing name) or **time** (a log
-start that moved, a poll that came back empty).
-
-### Poison messages — the per-message DLQ
-
-`acme.partners-poison` holds 1 000 messages of which 143 are not a JSON object — a truncated
-object, a JSON array, a JSON scalar:
-
-```yaml
---8<-- "docs/connectors/kafka/demo/40-poison.yaml"
-```
-
-```
-$ lm run get bd4d3df9
-ID        CONNECTOR          ENDPOINT  STATUS     IN    OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-bd4d3df9  acme-kafka-poison  default   Completed  1000  857  143      143           2026-09-13 02:21  2026-09-13 02:21
-⚠ 143 rows quarantined — see: lm dlq list --run bd4d3df9-a25b-4844-9a46-d25ef97d5dab
-$ lm dlq list --run bd4d3df9-a25b-4844-9a46-d25ef97d5dab
-ID        CONNECTOR          RUN       REASON           ATTEMPTS  MESSAGE
-4d3fb883  acme-kafka-poison  bd4d3df9  MalformedSource  1         acme.partners-poison:0:997:997 — message value is not a JS…
-844d1f31  acme-kafka-poison  bd4d3df9  MalformedSource  1         acme.partners-poison:0:990:990 — invalid JSON: Unexpected …
-c1a2e423  acme-kafka-poison  bd4d3df9  MalformedSource  1         acme.partners-poison:0:983:983 — message value is not a JS…
-$ lm dlq get 844d1f31
-ID:        844d1f31-5a15-401e-8f5b-4564bd89f89f
-Connector: acme-kafka-poison (98bea7c4-7052-4186-838a-79110ffa58e2)
-Run:       bd4d3df9-a25b-4844-9a46-d25ef97d5dab
-Reason:    MalformedSource
-Attempts:  1
-Message:   acme.partners-poison:0:990:990 — invalid JSON: Unexpected end-of-input within/between Object entries
-Payload:   {"raw":["{\"broken\": "],"file":"acme.partners-poison:0:990","line":990}
-```
-
-- `IN 1000 = OUT 857 + SKIPPED 143`, and the table holds 857 rows.
-- The coordinate is `topic:partition:offset`; the raw value travels with it (up to 8 192
-  characters).
-- **Offsets advance**: a poison message is dead-lettered once and never re-read. A topic feeding
-  only poison ends the run `Partial` when the chunk budget runs out; the next run resumes past it.
-- Inspect entries with [`lm dlq`](../cli/lm-reference.md) — `list`, `get`, then `discard`, or
-  `replayed` to record that you re-sent the message yourself (the hub never re-reads it); watch the
-  queue in the TUI under `:dlq`.
-
-### Tombstones — a deletion is not garbage
-
-On a compacted topic, a record with a **null value** is how a producer says *"this key is
-deleted"*; log compaction keeps it as the deletion marker. `acme.partners-compacted` holds 1 000
-partners, then 300 tombstones:
-
-```yaml
---8<-- "docs/connectors/kafka/demo/45-compacted.yaml"
-```
-
-```
-$ lm run get e6d58e37
-ID        CONNECTOR             ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
-e6d58e37  acme-kafka-compacted  default   Completed  1300  1000  300      300           2026-09-13 02:21  2026-09-13 02:21
-⚠ 300 rows quarantined — see: lm dlq list --run e6d58e37-3c4f-4f3f-aef7-906d79812a2a
-$ lm dlq get 42d8ea82
-ID:        42d8ea82-9207-4f38-b8dc-cf06706676f3
-Connector: acme-kafka-compacted (4448919e-1cef-432b-844a-dd9d78f76571)
-Run:       e6d58e37-3c4f-4f3f-aef7-906d79812a2a
-Reason:    MalformedSource
-Attempts:  1
-Message:   acme.partners-compacted:0:1299:1299 — Kafka tombstone (key '1299'): the message value is null — the producer deleted that key, and append-only ingestion dead-letters the marker rather than applying it as a delete
-Payload:   {"raw":[],"file":"acme.partners-compacted:0:1299","line":1299}
-```
-
-Ingestion is **append-only**: a tombstone becomes one DLQ entry naming the deleted **key**, counted
-as a skip (`1300 = 1000 + 300`); the rows around it land. A deletion that must reach the table has
-to travel **as data**, in a field the producer sets.
-
-### A topic that does not exist
-
-```yaml
---8<-- "docs/connectors/kafka/demo/60-absent.yaml"
-```
-
-```
-$ lm run get c1008671
-ID        CONNECTOR          ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-c1008671  acme-kafka-absent  default   Failed  0   0    0        0             2026-09-13 02:21  2026-09-13 02:21
-✖ run failed: kafka topic 'acme.absent' does not exist on the broker: it reports no partition for that name, so there is nothing to read. Check spec.topic for a typo, or create the topic on the broker. The hub never creates one (an ingestion run must not write to its source).
-```
-
-- The hub never creates a topic, even on a broker that allows automatic creation.
-- On an endpoint that already has a stored position, the message says the topic was read before:
-  it was deleted or renamed on the broker, or the manifest's topic was edited.
-
-### A log that moved under the cursor
-
-Retention, compaction or a trim moves a partition's log start forward, past a stored position.
-Replay it on the demo broker:
-
-```yaml
---8<-- "docs/connectors/kafka/demo/70-trimmed.yaml"
-```
-
-```
-$ lm connector run acme-kafka-trimmed                                    # run 1
-$ python3 docs/connectors/kafka/demo/acme-topics.py feed --topic acme.partners-trimmed --rate 500 --seconds 2
-  ▪ fed 607 messages at 500.0/s into acme.partners-trimmed
-$ python3 docs/connectors/kafka/demo/acme-topics.py trim 5500
-  ✓ acme.partners-trimmed now starts at offset 5500 (high watermark 5607): offsets 0..5499 are gone
-$ lm connector run acme-kafka-trimmed                                    # run 2
-$ lm run list --connector acme-kafka-trimmed
-ID        CONNECTOR           ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
-49b90bd6  acme-kafka-trimmed  default   Partial    107   107   0        0             2026-09-13 02:22  2026-09-13 02:22
-c30cf76f  acme-kafka-trimmed  default   Completed  5000  5000  0        0             2026-09-13 02:22  2026-09-13 02:22
-$ lm run get 49b90bd6 > /dev/null
-• run partial: acme.partners-trimmed[0]: the stored position is offset 5000 but the broker's log now starts at 5500 — offsets 5000..5499 are no longer on the broker (retention, compaction or a trim removed them) and can never be read; resuming at 5500
-```
-
-- Run 2 read the 107 messages left and ended **`Partial`**, naming the lost range (5000..5499).
-  Those messages cannot be recovered.
-- A **first** run (or one after `lm endpoint reset-cursor`) on a topic whose start moved completes
-  normally: nothing was lost for this connector.
-- When it repeats: raise the topic's retention, or run more often.
-
-### An empty poll, and what it does not prove
-
-A run ends when a poll returns nothing. On a slow link with a short `poll_timeout_ms`, a poll can
-time out before the first fetch and end the run with less than the topic holds.
-
-- The run stays **`Completed`**; only the hub log carries a `WARN` starting
-  `<topic>: the poll returned no record within N ms and the position is below the high watermark`.
-- When a green run ingested less than expected, search the hub log for the topic's name, and raise
-  `poll_timeout_ms`.
-
-An empty topic, with no such line:
-
-```
-$ lm run list --connector acme-kafka-empty
-ID        CONNECTOR         ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-2b7a9ee6  acme-kafka-empty  default   Completed  0   0    0        0             2026-09-13 02:21  2026-09-13 02:21
-```
-
-### A broker that does not answer
-
-An address that does not answer, or refuses the connection, fails the run after about **60 s** —
-here `brokers: 10.255.255.1:9092`:
-
-```
-$ lm run get ffb91ec8
-ID        CONNECTOR        ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-ffb91ec8  acme-kafka-down  default   Failed  0   0    0        0             2026-10-19 07:28  2026-10-19 07:29
-✖ run failed: the kafka broker did not answer within the client's metadata timeout (10.255.255.1:9092, topic acme.partners) — check the broker is up and reachable from the hub
-```
-
-A broker that comes back is picked up by the next scheduled slot.
-
-A host name the hub cannot resolve (`brokers: no-such-host:9092`) fails at once, and every slot
-repeats it until the manifest is fixed:
-
-```
-$ lm run get 38327a21
-ID        CONNECTOR          ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-38327a21  acme-kafka-nohost  default   Failed  0   0    0        0             2026-10-19 07:28  2026-10-19 07:28
-✖ run failed: Failed to construct kafka consumer — No resolvable bootstrap urls given in bootstrap.servers
-```
+A bad message, a deletion, a missing topic, a log that moved, a broker that does not answer:
+each case, as `lm` shows it, in [When the topic misbehaves](kafka/when-the-topic-misbehaves.md).
 
 ## Auth and secrets
 
@@ -714,7 +463,7 @@ password the namespace connection string. `preset: event-hubs` writes that confi
 
 ```
 $ lm apply -f docs/connectors/kafka/20-event-hubs.yaml
-{"name":"event-hubs-telemetry","connectorId":"55016bf3-406b-43ee-86c8-92da12ca26f3","endpointsApplied":1}
+Applied connector "event-hubs-telemetry" — 1 endpoint
 $ lm connector get event-hubs-telemetry
 id: 55016bf3-406b-43ee-86c8-92da12ca26f3
 tenantId: 1
@@ -820,10 +569,10 @@ A tombstone's entry names the deleted key; a poison message's entry carries the 
 
 ### Read the same topic into two tables
 
-Apply a second manifest with the same `topic` and a different `name`. Each connector has its own
-cursor and its own table; the broker sees two independent readers.
+Apply a second manifest with the same `topic` and a different `name`. Each connector keeps its
+own position and its own table.
 
-**Result:** two connectors over one topic, useful when two métiers need the same events under
+**Result:** two connectors over one topic, useful when two teams need the same events under
 two scopes.
 
 ### Move to Event Hubs
@@ -837,21 +586,22 @@ and set the two secrets. **Result:** the same run ledger, the same table; see
 | Symptom | Cause | Gesture |
 |---|---|---|
 | first run ingests far more than expected | no stored position yet — a full-retention read, by design | let it complete; later runs are incremental |
-| run completes with `IN 0` on a topic that has data, and the hub log says `the poll returned no record within N ms` | the first poll timed out before its first fetch — or those offsets hold no readable record | raise `poll_timeout_ms`; if it repeats on a compacted or transactional topic that is genuinely caught up, it is the watermark, not the run |
-| a run ends `Partial` | it stopped below the head it found at start: the broker deleted offsets the stored position was entitled to, or the topic fed only unparsable messages up to the chunk budget | `lm run get` names which; for the first, nothing can be recovered — check `retention.ms` against your cadence |
+| a green run read less than expected | the broker answered slowly | raise `poll_timeout_ms` |
+| a run ends `Partial` | the broker deleted messages before they were read, or a long run of unreadable messages stopped the run | `lm run get` names which. Deleted messages cannot be recovered: raise the topic's retention, or run more often |
 | run fails: `kafka topic '…' does not exist on the broker` | no partition reported under that name, and the hub never creates one | first read: check `spec.topic` or create the topic; stored position: the topic was deleted or renamed on the broker |
 | run fails: `'NAME' (brokers_env) resolves to nothing` | neither the registry nor the hub's environment holds it | `lm secret set NAME`, or export it where the hub runs |
 | run fails: `Unexpected handshake request with client mechanism PLAIN` | the listener does not speak SASL/PLAIN — wrong port, or `auth` on a plaintext broker | check the broker's listener; drop `auth` for a plaintext one |
 | run fails after ~60 s: `the kafka broker did not answer within the client's metadata timeout` | the bootstrap address answers nothing — wrong host, wrong listener, or a broker that is down | from the hub's container, prove the address; on Docker, `host.docker.internal`, not `localhost` |
 | run fails at once: `No resolvable bootstrap urls given in bootstrap.servers` | the hub cannot resolve the broker host name (e.g. `host.docker.internal` on a hub not running in Docker) | use a host name the hub resolves |
 | run fails: `connector.t_… is already written by connector '…'` | another connector of the tenant already writes `connector.t_<name>` | give this endpoint another `name` — see [JDBC](jdbc.md#two-connectors-reading-a-table-of-the-same-name) |
-| run fails: `source column 'id' collides with a hub system column` | a top-level field shares one of the seven reserved names | the producer must emit it under another name — no rename exists on kafka |
-| messages missing from the table, `DEAD-LETTERS` > 0 | not a JSON object — dead-lettered per message, offsets advance | `lm dlq list --run <id>`; fix the producer and re-send, then `lm dlq replayed` or `discard` |
+| run fails: `source column 'id' collides with a hub system column` | a top-level field shares a reserved name (`id`, `tenant_id`…) | the producer must emit it under another name — no rename exists on kafka |
+| messages missing from the table, `DEAD-LETTERS` > 0 | not a JSON object — dead-lettered per message, offsets advance | `lm dlq list --run <id>`; fix the producer and re-send, then `lm dlq replayed ID --new-run-id RUN` (the run that read it again) or `discard` |
 | rows missing, `lm dlq get` says `a Kafka tombstone (key '…')` | the producer deleted that key; ingestion is append-only | nothing to repair — if deletions must reach the table, send them as data |
 | a scheduled slot shows `Cancelled: skipped: another run is already active` | the previous catch-up was still running | nothing — the next slot catches up; widen the cadence if it repeats |
-| a column is `NULL` for the first N rows and filled after | the producer added the field mid-topic — [schema evolution](#schema-evolution) | expected; reset the cursor to re-read if the early rows carry it on the broker now |
-| `lm validate` warns `unknown key` on `target` or `mapping` | copied from a jdbc or csv manifest; kafka has neither | remove the block |
-| `lm validate` refuses the manifest: the connector type `kafka` is unknown to the hub | the hub is the open edition | Kafka is a Pro connector |
+| a column is `NULL` for the first N rows and filled after | the producer added the field mid-topic — [schema evolution](#schema-evolution) | expected: the early messages never carried it |
+| `lm validate` warns `unknown key` on `target` | copied from a jdbc or csv manifest; kafka has none | remove the block |
+| `lm validate` refuses `spec.mapping`: `kafka has no mapping block` | copied from a csv manifest; no hook runs on kafka | remove the block; rename the field in the topic's payload |
+| `unknown connector type: kafka` | the hub is the open edition | Kafka is a Pro connector |
 
 ## See also
 

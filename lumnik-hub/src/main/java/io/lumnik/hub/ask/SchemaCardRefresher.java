@@ -5,9 +5,11 @@ import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.event.ConnectorRunCompleted;
 import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
+import io.lumnik.hub.scheduler.TenantScope;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Event;
 import jakarta.enterprise.event.ObservesAsync;
 import jakarta.inject.Inject;
 import jakarta.transaction.Status;
@@ -43,7 +45,12 @@ public class SchemaCardRefresher {
     @Inject @DataSource("admin") AgroalDataSource adminDs;
     @Inject DiscoveryService discovery;
     @Inject DynamicTableRegistry dynamicTables;
+    @Inject SchemaCardStore store;
     @Inject TransactionSynchronizationRegistry txSync;
+    @Inject Event<EntityCardsStale> entityCardsStale;
+
+    /** Other tenants' cards an entity apply or delete left stale, rebuilt after the request. */
+    public record EntityCardsStale(String entityName, Set<SchemaCardStore.Held> cards) {}
 
     void onRunCompleted(@ObservesAsync ConnectorRunCompleted ev) {
         try {
@@ -96,6 +103,52 @@ public class SchemaCardRefresher {
         changed.addAll(after);
         changed.removeIf(s -> was.contains(s) && after.contains(s));
         afterCommit(tenantId, List.copyOf(changed));
+    }
+
+    /**
+     * An entity was applied or deleted. An entity is shared by every tenant, so its view changes the
+     * cards of every tenant that lists it, not only the caller's (#1538): the caller's cards of the
+     * entity's scopes (created when absent), and every stored card, in any tenant, that lists the view
+     * or describes one of those scopes — the scope a re-apply left included. Each rebuild runs as the
+     * card's own tenant, so its credentials resolve under its own RLS. Best-effort: the entity is
+     * committed, a failure is logged.
+     *
+     * <p>The caller's cards are rebuilt before the request answers, so Ask sees the entity at once.
+     * Another tenant's are handed to {@link #onEntityCardsStale}, after the request: rebuilding one
+     * can read that tenant's source again, and its source being slow or down must not hold the
+     * caller's apply.
+     *
+     * @param callerTenant the tenant of the request, or null for a system caller (no card created)
+     * @param scopes       the entity's scopes now, or before its delete
+     */
+    public void afterEntityChanged(String entityName, Long callerTenant, List<String> scopes) {
+        Set<SchemaCardStore.Held> now = new LinkedHashSet<>();
+        Set<SchemaCardStore.Held> later = new LinkedHashSet<>();
+        if (callerTenant != null) scopes.forEach(s -> now.add(new SchemaCardStore.Held(callerTenant, s)));
+        try {
+            for (SchemaCardStore.Held card : store.cardsListingOrIn(EntitySchemaBuilder.cardTableName(entityName), scopes)) {
+                (callerTenant != null && card.tenantId() == callerTenant ? now : later).add(card);
+            }
+        } catch (RuntimeException e) {
+            LOG.warnf(e, "entity %s: listing the cards to refresh failed", entityName);
+        }
+        rebuild(entityName, now);
+        if (!later.isEmpty()) entityCardsStale.fireAsync(new EntityCardsStale(entityName, Set.copyOf(later)));
+    }
+
+    void onEntityCardsStale(@ObservesAsync EntityCardsStale ev) {
+        rebuild(ev.entityName(), ev.cards());
+    }
+
+    private void rebuild(String entityName, Set<SchemaCardStore.Held> cards) {
+        for (SchemaCardStore.Held card : cards) {
+            try {
+                TenantScope.get(card.tenantId(), () -> discovery.rediscover(card.tenantId(), card.scope()));
+            } catch (RuntimeException e) {
+                LOG.warnf(e, "entity %s: card refresh failed for scope %s (tenant %d)",
+                    entityName, card.scope(), card.tenantId());
+            }
+        }
     }
 
     private boolean schemaChangedDuring(ConnectorRunCompleted ev) {

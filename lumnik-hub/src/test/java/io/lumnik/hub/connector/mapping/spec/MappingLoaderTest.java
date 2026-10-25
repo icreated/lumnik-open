@@ -22,6 +22,14 @@ class MappingLoaderTest {
     assertThat(spec.mode()).isEqualTo(MappingSpec.StreamMode.STREAM);
   }
 
+  /** #1489: YAML 1.1's yes/no/on/off are text, as in YAML 1.2 — a column named no, a value list [yes, no]. */
+  @Test
+  void yaml_1_1_boolean_words_stay_text() {
+    String yaml = "id: t\nversion: 1\ntarget: foo\ndataset:\n  - filter-where: { column: no, in: [yes, no, On, OFF] }\n";
+    assertThat(MappingLoader.load(yaml).dataset().get(0).params().toString())
+      .isEqualTo("{\"column\":\"no\",\"in\":[\"yes\",\"no\",\"On\",\"OFF\"]}");
+  }
+
   @Test
   void rejects_a_malformed_hook_entry() {
     // A hook entry that is not a single-key object. MappingLoader always threw; the point of the
@@ -30,6 +38,15 @@ class MappingLoaderTest {
     assertThatThrownBy(() -> MappingLoader.load(yaml))
       .isInstanceOf(MappingValidationException.class)
       .hasMessageContaining("each hook must be an object with one key");
+  }
+
+  /** #1464: a tier written as a map ran no hooks; the run now fails by name instead. */
+  @Test
+  void rejects_a_tier_written_as_a_map() {
+    String yaml = "id: t\nversion: 1\ntarget: foo\ncell:\n  upper: { columns: [name] }\n";
+    assertThatThrownBy(() -> MappingLoader.load(yaml))
+      .isInstanceOf(MappingValidationException.class)
+      .hasMessageStartingWith("cell must be a list of hooks");
   }
 
   @Test
@@ -47,7 +64,7 @@ class MappingLoaderTest {
       version: 1
       target: foo
       dataset:
-        - { skip-empty-rows: true }
+        - { skip-empty-rows: {} }
       row:
         - { validate-row: { required: [email] } }
       cell:
@@ -70,6 +87,31 @@ class MappingLoaderTest {
       """;
     MappingSpec spec = MappingLoader.load(yaml);
     assertThat(spec.mode()).isEqualTo(MappingSpec.StreamMode.SORTED_STREAM);
+  }
+
+  /**
+   * #1482: a `mode` that is not one of the two words was already refused — a list or a map as the blank "unknown
+   * mode: "; now by its shape, and an unknown word by the words it may be. A bare `mode:` is the default.
+   */
+  @Test
+  void rejects_a_mode_that_is_not_a_word_it_knows() {
+    assertThatThrownBy(() -> MappingLoader.load("id: t\nversion: 1\ntarget: foo\nmode: [stream]\n"))
+        .isInstanceOf(MappingValidationException.class)
+        .hasMessage("mapping: 'mode' must be text, a number or a boolean (got array)");
+    assertThatThrownBy(() -> MappingLoader.load("id: t\nversion: 1\ntarget: foo\nmode: sorted\n"))
+        .isInstanceOf(MappingValidationException.class)
+        .hasMessage("mapping: 'mode' must be \"stream\" or \"sorted-stream\"");
+    assertThat(MappingLoader.load("id: t\nversion: 1\ntarget: foo\nmode:\n").mode())
+        .isEqualTo(MappingSpec.StreamMode.STREAM);
+  }
+
+  /** #1482: a description is text; a list read as "" in silence. A bare one is no description. */
+  @Test
+  void a_description_is_text() {
+    assertThatThrownBy(() -> MappingLoader.load("id: t\nversion: 1\ntarget: foo\ndescription: [a]\n"))
+        .isInstanceOf(MappingValidationException.class)
+        .hasMessage("mapping: 'description' must be text, a number or a boolean (got array)");
+    assertThat(MappingLoader.load("id: t\nversion: 1\ntarget: foo\ndescription:\n").description()).isEmpty();
   }
 
   @Test

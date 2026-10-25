@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
@@ -45,16 +44,9 @@ func newEntityGetCmd() *cobra.Command {
 			}
 			var cols, headers []string
 			if len(rows) > 0 {
+				// A filter naming no column never gets here: the hub refuses it and names the
+				// filterable columns.
 				cols = rows[0].Columns()
-				for _, f := range filters {
-					// The hub ignores a filter naming no canonical column and returns every row. A
-					// returned row lacking the column proves it was ignored: never print that page as
-					// though the filter had selected it. (An empty page is the same either way.)
-					if !slices.Contains(cols, f.Column) {
-						return fmt.Errorf("--filter %s: %q is not a column of %s (the hub ignores unknown filters and would return every row)",
-							f.Column, f.Column, args[0])
-					}
-				}
 				for _, col := range cols {
 					headers = append(headers, strings.ToUpper(col))
 				}

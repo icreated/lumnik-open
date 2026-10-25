@@ -7,6 +7,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * One runtime filter on a kind:View list or a kind:Process when-condition:
@@ -179,6 +180,19 @@ public record ViewFilter(String column, String op, String value) {
     /** Whether the value is a date or date-time, whatever the operator. */
     public boolean temporalOperand() {
         return isTemporal(value);
+    }
+
+    /** {@link #NUMERIC_SHAPE} with JoinKeys' bound: at most 38 digits each side of the point. */
+    private static final Pattern NUMERIC = Pattern.compile("^\\s*-?[0-9]{1,38}([.][0-9]{1,38})?\\s*$");
+
+    /**
+     * The one rule by which {@code =} compares a number by value (#1338) — a view, an entity read, an export, and
+     * Ask's canonical text ({@code SqlFilters.canonicalNumber}): a plain decimal of at most 38 digits each side of
+     * the point. A longer value would cost the database a cast and, past numeric's own range, fail the read instead of
+     * matching nothing; it keeps the exact-text comparison.
+     */
+    public static boolean isNumeric(String value) {
+        return value != null && NUMERIC.matcher(value).matches();
     }
 
     /** The shape first, so nothing absurd reaches the parser, then the parser: a date or a date-time. */

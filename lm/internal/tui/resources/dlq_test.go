@@ -121,11 +121,12 @@ func TestDLQ_aFullPageSaysItIsCapped(t *testing.T) {
 }
 
 // ^R names the run that carried the replay (#1127): it offers the letter's connector's latest run,
-// Enter takes it, "-" records the replay with no run, and anything else is the run typed.
+// Enter takes it, anything else is the run typed; "-" is no longer "none" (#1377), just a run id the
+// hub will not find.
 func TestDLQ_replayNamesTheRun(t *testing.T) {
 	for _, c := range []struct{ answer, want string }{
 		{"", "newRunId=run-latest"},
-		{"-", ""},
+		{"-", "newRunId=-"},
 		{"run-typed", "newRunId=run-typed"},
 	} {
 		var replayed string
@@ -152,5 +153,27 @@ func TestDLQ_replayNamesTheRun(t *testing.T) {
 		if replayed != c.want {
 			t.Errorf("answer %q: replayed with %q, want %q", c.answer, replayed, c.want)
 		}
+	}
+}
+
+// #1377: no run offered and none typed — ^R marks nothing and says to discard instead.
+func TestDLQ_replayWithoutARunIsNotSent(t *testing.T) {
+	var replayed bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		replayed = replayed || strings.HasSuffix(r.URL.Path, "/replayed")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+	var said string
+	d := NewDLQ(nil, client.New(config.Context{Server: srv.URL}), func(msg string) { said = msg })
+	d.SetAsk(func(_ string, _ bool, done func(string)) { done("") })
+	d.renderList([]types.DeadLetter{{ID: "dl1", ConnectorID: "c1"}}, nil)
+	d.table.Select(1, 0)
+	d.handleKey(tcell.NewEventKey(tcell.KeyCtrlR, 0, tcell.ModNone))
+	if replayed {
+		t.Error("a replay with no run reached the hub")
+	}
+	if !strings.Contains(said, "^D discards it") {
+		t.Errorf("said %q, want the pointer to ^D", said)
 	}
 }

@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -60,9 +61,13 @@ class FileSourceCursorReaderArchiveTest {
         @Override public InputStream open(FileDescriptor file) {
             return new ByteArrayInputStream("id,name\n1,a\n".getBytes(StandardCharsets.UTF_8));
         }
+        /** The move fails; with {@code vanish}, the file is gone from the source anyway (moved by someone else). */
+        boolean fail, vanish;
+
         @Override public void markProcessed(FileDescriptor file, AfterProcessAction action, Map<String, Object> cfg) {
             marked.add(file.path());
-            files.removeIf(f -> f.path().equals(file.path()));   // archive = gone from listing
+            if (vanish || !fail) files.removeIf(f -> f.path().equals(file.path()));   // archive = gone from listing
+            if (fail) throw new IllegalStateException("move refused");
         }
     }
 
@@ -122,5 +127,27 @@ class FileSourceCursorReaderArchiveTest {
         new FileSourceCursorReader(config, overrides, registry).read(500, c1, ctx());
 
         assertThat(source.marked).isEmpty();
+    }
+
+    // #1386 review: a failed move counts the file as "not archived" only when it is still there as read — one
+    // gone (or rewritten) between the check and the move is not said as staying in the source folder.
+    @Test
+    void a_failed_move_is_counted_only_when_the_file_is_still_there() {
+        assertThat(notArchivedAfterAFailedMove(false)).containsExactly("/in/a.csv");
+        assertThat(notArchivedAfterAFailedMove(true)).isEmpty();
+    }
+
+    private Set<String> notArchivedAfterAFailedMove(boolean vanish) {
+        scope.close();
+        scope = new OwnedRunScope("test");
+        source.files.clear();
+        source.marked.clear();
+        source.fail = true;
+        source.vanish = vanish;
+        source.files.add(new FileDescriptor("/in/a.csv", 12, T1, null));
+        var r1 = newReader().read(500, ConnectorCursor.empty(), ctx());
+        newReader().read(500, ((ReadResult.HasMore<Map<String, Object>>) r1).nextCursor(), ctx());
+        assertThat(source.marked).containsExactly("/in/a.csv");
+        return scope.resource(new FileSourceCursorReader.NotArchivedKey(), FileSourceCursorReader.NotArchived::new).paths;
     }
 }

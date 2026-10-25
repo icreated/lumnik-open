@@ -2,6 +2,7 @@ package io.lumnik.hub.process;
 
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.HashMap;
@@ -41,6 +42,15 @@ class MessageTemplateTest {
     }
 
     /** #1303: a timestamp renders as {@code TemporalText.render} shows it, tested there. */
+    /** #1357: a numeric column is stored at the table's scale, NUMERIC(18,4); the message shows the number. */
+    @Test
+    void rendersANumericWithoutTheTablesTrailingZeros() {
+        Map<String, Object> row = Map.of("kw", new BigDecimal("18.7000"), "cap", new BigDecimal("10.0000"),
+                "zero", new BigDecimal("0.0000"), "big", new BigDecimal("1200.0000"));
+        assertThat(MessageTemplate.render("{kw} kW, cap {cap}, {zero}, {big}", row))
+                .isEqualTo("18.7 kW, cap 10, 0, 1200");
+    }
+
     @Test
     void rendersATimestampAsItsInstant() {
         Map<String, Object> row = Map.of("at", Timestamp.from(Instant.parse("2026-07-01T00:00:00Z")));

@@ -32,7 +32,16 @@ class EntityViewCompilerTypingTest {
       "timestamptz, date,        timestamptz",   // an ERP DATE-as-timestamp beside a parsed CSV day
       "timestamp,   date,        timestamptz",   // a naive timestamp: wall clock read as UTC
       "timestamptz, '',          text",          // one source text: a written date is not guessed
-      "'',          '',          text"})
+      "'',          '',          text",
+      // #1338: numbers keep a number type too
+      "int8,        int8,        bigint",
+      "int4,        int8,        bigint",        // every source whole: bigint
+      "int8,        numeric,     numeric",       // one decimal source: numeric
+      "numeric,     numeric,     numeric",
+      "float8,      int8,        numeric",
+      "int8,        '',          text",          // one source text: a written number is not guessed
+      "int8,        date,        text",          // a number and a date are not one family
+      "numeric,     timestamptz, text"})
   void theSourcesDecide(String erp, String csv, String fused) {
     assertThat(EntityViewCompiler.fusedType(M, sources(erp, csv), "d")).isEqualTo(fused);
   }
@@ -61,6 +70,36 @@ class EntityViewCompilerTypingTest {
     assertThat(EntityViewCompiler.matchKeyExpressions(M, sources, "t_erp")).containsExactly("\"no\"");
     assertThat(EntityViewCompiler.matchKeyExpressions(M, sources, "t_csv"))
         .containsExactly("(\"code\"::timestamp AT TIME ZONE 'UTC')");
+  }
+
+  /**
+   * #1338: a decimal column is its value without trailing zeros, so 7 and 7.0000 are one value — in the
+   * fusion, the key and the ledger alike, as a join key already is (#1329). Whole numbers need no trimming.
+   */
+  @Test
+  void aDecimalIsTrimmedOfItsScaleAndAWholeNumberIsABigint() {
+    String decimal = String.join("\n", new EntityViewCompiler().buildStatements(M, sources("int8", "numeric")));
+    assertThat(decimal).contains("trim_scale(\"d\"::numeric) AS \"d\"")
+        .contains("trim_scale(\"day\"::numeric) AS \"d\"")
+        .doesNotContain("\"d\"::text AS \"d\"");
+    String whole = String.join("\n", new EntityViewCompiler().buildStatements(M, sources("int8", "int4")));
+    assertThat(whole).contains("\"d\" AS \"d\"").contains("\"day\"::bigint AS \"d\"")
+        .doesNotContain("trim_scale");
+  }
+
+  @Test
+  void aNumericMatchKeyIsSaidAsTheViewGroupsIt() {
+    Map<String, Map<String, String>> types = Map.of("t_erp", Map.of("no", "int8"), "t_csv", Map.of("code", "numeric"));
+    EntityViewCompiler.Sources sources = new EntityViewCompiler.Sources(Set.of(), types);
+    assertThat(EntityViewCompiler.fusedType(M, sources, "no")).isEqualTo("numeric");
+    assertThat(EntityViewCompiler.matchKeyExpressions(M, sources, "t_erp")).containsExactly("trim_scale(\"no\"::numeric)");
+    assertThat(EntityViewCompiler.matchKeyExpressions(M, sources, "t_csv")).containsExactly("trim_scale(\"code\"::numeric)");
+  }
+
+  @Test
+  void aNumberDisagreesByValueAndItsLedgerSaysItsCanonicalText() {
+    String sql = String.join("\n", new EntityViewCompiler().buildStatements(M, sources("int8", "numeric")));
+    assertThat(sql).contains("CASE WHEN count(DISTINCT \"d\") > 1 THEN jsonb_agg(jsonb_build_object('src', _src, 'value', \"d\"::text)");
   }
 
   @Test

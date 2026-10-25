@@ -34,14 +34,19 @@ public final class ProcessConditionResolver {
         return out;
     }
 
+    /** Apply-time honesty for spec.emit.fields (#1365): every declared field is a trigger table column. */
+    public static void validateFields(List<String> fields, SchemaCard.Table table) {
+        for (String f : fields) requireColumn(f, table, "spec.emit.fields names " + f);
+    }
+
     /** Apply-time honesty for the emit.message template: every {placeholder} must be a column
      *  of the trigger table — a typo is caught at declare time, never discovered silently. */
     public static void validateMessage(String message, SchemaCard.Table table) {
-        for (String ph : MessageTemplate.placeholders(message)) {
-            boolean known = table.columns().stream().anyMatch(c -> c.name().equals(ph));
-            if (!known)
-                throw new IllegalArgumentException(
-                    "message references {" + ph + "} — not a column of " + table.name());
-        }
+        for (String ph : MessageTemplate.placeholders(message)) requireColumn(ph, table, "message references {" + ph + "}");
+    }
+
+    private static void requireColumn(String name, SchemaCard.Table table, String what) {
+        if (table.columns().stream().noneMatch(c -> c.name().equals(name)))
+            throw new IllegalArgumentException(what + " — not a column of " + table.name());
     }
 }

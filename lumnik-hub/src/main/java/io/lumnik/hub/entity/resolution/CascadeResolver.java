@@ -21,6 +21,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -599,7 +600,11 @@ public class CascadeResolver {
       UUID eventAssertedPartnerRef = !sameAssertionResolved.isPresent() ? null
           : assertionMovesRow ? assertedPartnerRef.orElse(null)
               : carriedPartnerRef(c, tenantId, entityType, existing.get().identityRef(), priorEvidence);
-      events.add(new RuleEvent(null, null, null, List.of(naturalEntityId), List.of(),
+      // A carried-forward decision keeps its rule too, not only its decided_by (#1344): unchanged data
+      // must leave the same ledger line and the same rule tally, whichever partner is reprocessed first.
+      boolean carried = carriedForward && priorEvidence != null;
+      events.add(new RuleEvent(carried ? priorEvidence.ruleDeclaredId() : null,
+          carried ? priorEvidence.ruleVersion() : null, null, List.of(naturalEntityId), List.of(),
           EntityResolutionState.RESOLVED, eventAssertedPartnerRef));
     } else if (naturalState == EntityResolutionState.UNRESOLVED_NO_RULE) {
       events.add(new RuleEvent(null, null, null, List.of(), EntityResolutionState.UNRESOLVED_NO_RULE));
@@ -639,6 +644,16 @@ public class CascadeResolver {
       repository.deleteKey(c, tenantId, entityType, source, sourceId, staleRuleId);
     }
 
+    // Who asserted and why, copied onto the ledger now (#1520): an assertion is one row per pair, upserted
+    // by every later correction, so read later it would rewrite this line. Named, like decided_by, for the
+    // whole call — only when one assertion is provably behind it: the partner of a same-assertion decision,
+    // or the pair whose retraction authorized the split. Several distinct vetoes name nobody.
+    UUID assertionPartnerRef = !ASSERTED.equals(decidedBy) ? null
+        : explicitlyRetracted ? priorEvidence.assertedPartnerRef()
+        : events.stream().map(RuleEvent::assertedPartnerRef).filter(Objects::nonNull).findFirst().orElse(null);
+    EntityIdentityRepository.Assertion assertion = assertionPartnerRef == null ? null
+        : repository.assertionOf(c, tenantId, entityType, identityRef, assertionPartnerRef).orElse(null);
+
     // The set-aside belongs to the call's decision, not to one rule: the last event is that decision.
     String setAsideJson = toJson(setAside, "setAsideJson");
     for (RuleEvent event : events) {
@@ -646,7 +661,7 @@ public class CascadeResolver {
           event.ruleDeclaredId(), event.ruleVersion(), event.provider(),
           toJson(event.candidates(), "candidatesJson"), toJson(event.discarded(), "discardedCandidatesJson"),
           event == events.get(events.size() - 1) ? setAsideJson : "[]",
-          event.outcome(), decidedBy, runId, event.assertedPartnerRef());
+          event.outcome(), decidedBy, runId, event.assertedPartnerRef(), assertion);
     }
 
     boolean newlyMinted = freshMintCandidate && finalState == EntityResolutionState.RESOLVED;

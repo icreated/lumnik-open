@@ -299,10 +299,11 @@ func TestDlqReplayed_sendsNewRunId(t *testing.T) {
 	}
 }
 
-func TestDlqReplayed_withoutFlag_omitsNewRunId(t *testing.T) {
-	var rawQuery string
+// #1377: there is no replay without the run that carried the row — lm refuses before any request.
+func TestDlqReplayed_withoutFlag_isRefused(t *testing.T) {
+	var called bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rawQuery = r.URL.RawQuery
+		called = true
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
@@ -312,11 +313,12 @@ func TestDlqReplayed_withoutFlag_omitsNewRunId(t *testing.T) {
 	cmd.SetOut(new(bytes.Buffer))
 	cmd.SetErr(new(bytes.Buffer))
 	cmd.SetArgs([]string{"dlq", "replayed", "d4200000-0000-0000-0000-000000000042"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatal(err)
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "new-run-id") {
+		t.Fatalf("err = %v, want the missing --new-run-id named", err)
 	}
-	if strings.Contains(rawQuery, "newRunId") {
-		t.Errorf("newRunId must be omitted when the flag is absent, got query %q", rawQuery)
+	if called {
+		t.Error("the hub was called without a run")
 	}
 }
 
@@ -407,5 +409,42 @@ func TestDlqList_showsResolution(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "RESOLUTION") || !strings.Contains(out, "REPLAYED") {
 		t.Errorf("the list must show what was done with an entry: %s", out)
+	}
+}
+
+// #1375: the card says how a letter was closed — by which run, when — and that an open one is open.
+func TestDlqGet_showsResolution(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want string
+	}{
+		{"open", map[string]any{"id": "d1"}, "Resolution: open"},
+		{"replayed", map[string]any{"id": "d1", "resolution": "REPLAYED",
+			"resolvedRunId": "b4b1bbc9-0000-0000-0000-000000000000", "resolvedAt": "2026-10-22T13:40:00Z"},
+			"Resolution: REPLAYED by run b4b1bbc9-0000-0000-0000-000000000000, "},
+		{"discarded", map[string]any{"id": "d1", "resolution": "DISCARDED", "resolvedAt": "2026-10-22T13:40:00Z"},
+			"Resolution: DISCARDED, "},
+		{"older hub, no resolvedAt", map[string]any{"id": "d1", "resolution": "DISCARDED"},
+			"Resolution: DISCARDED\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(tc.body)
+			}))
+			defer srv.Close()
+			setupCfg(t, srv.URL)
+			cmd := NewRootCmd()
+			buf := new(bytes.Buffer)
+			cmd.SetOut(buf)
+			cmd.SetErr(buf)
+			cmd.SetArgs([]string{"dlq", "get", "d3000000-0000-0000-0000-000000000003"})
+			if err := cmd.Execute(); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(buf.String(), tc.want) {
+				t.Errorf("missing %q in: %s", tc.want, buf.String())
+			}
+		})
 	}
 }

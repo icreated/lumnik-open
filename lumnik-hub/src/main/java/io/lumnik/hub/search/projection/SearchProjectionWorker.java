@@ -736,13 +736,14 @@ public class SearchProjectionWorker {
     }
 
     /** What {@code Last error} shows: the failure itself, not the transaction wrapper around it — and, for
-     *  a raw database failure, only what {@link SqlFailureText#rootMessage} lets an API caller read (#1299). */
+     *  a raw database failure, only what {@link SqlFailureText#rootMessage} lets an API caller read (#1299).
+     *  The message alone: the exception's class is the engine's word, and the log keeps it. */
     static String shortDiagnostic(Exception e) {
         List<Throwable> chain = Throwables.causeChain(e);
         Throwable t = chain.stream().filter(c -> !(c instanceof QuarkusTransactionException)).findFirst()
             .orElse(chain.getLast());
         String message = t instanceof SQLException ? SqlFailureText.rootMessage(t) : t.getMessage();
-        return t.getClass().getSimpleName() + ": " + (message == null ? "" : message);
+        return message == null || message.isBlank() ? "no detail — see the hub log" : message;
     }
 
     /** Feeds documents to {@code sink.upsert} for a full rebuild's scan (§5b step 4); the real

@@ -16,5 +16,11 @@ public interface ItemReader<T> {
    */
   default List<MalformedRecord> drainMalformed() { return List.of(); }
 
+  /**
+   * Whether the most recent {@link #read} began at a source's first record (#1452): a mapping that carries values from
+   * row to row starts that chunk empty. Default: a reader with no notion of a file never starts one.
+   */
+  default boolean startsAFile() { return false; }
+
   default void close() {}
 }

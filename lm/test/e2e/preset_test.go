@@ -49,10 +49,10 @@ spec:
       target: { kind: hybrid, table: e2e_drf_items, unique_key: "$.id", tags: [e2e] }
 `
 	out := applyManifest(t, yaml)
-	// Assert the stable success shape: apply returns the connector's connectorId. (A non-zero exit
+	// Assert the stable success shape: apply says it applied the connector. (A non-zero exit
 	// is already caught in applyManifest; checking a success token avoids false negatives.)
-	if !strings.Contains(out, "connectorId") {
-		t.Errorf("drf-page apply did not return a connectorId: %s", out)
+	if !strings.Contains(out, "Applied connector") {
+		t.Errorf("drf-page apply did not say it applied the connector: %s", out)
 	}
 }
 
@@ -70,7 +70,7 @@ spec:
       target: { kind: hybrid, table: e2e_spring_items, unique_key: "$.id", tags: [e2e] }
 `
 	out := applyManifest(t, yaml)
-	if !strings.Contains(out, "connectorId") {
-		t.Errorf("spring-page apply did not return a connectorId: %s", out)
+	if !strings.Contains(out, "Applied connector") {
+		t.Errorf("spring-page apply did not say it applied the connector: %s", out)
 	}
 }

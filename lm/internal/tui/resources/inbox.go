@@ -37,11 +37,11 @@ func inboxWhen(occurredAt string, now time.Time) string {
 	}
 }
 
-// inboxCells maps one decision to its table row; disposed entries carry the [traité] mark.
+// inboxCells maps one decision to its table row; disposed entries carry the [acked] mark.
 func inboxCells(e client.InboxEntry, now time.Time) []string {
 	msg := e.Message
 	if e.Acked {
-		msg += " [traité]"
+		msg += " [acked]"
 	}
 	return []string{fmt.Sprintf("%d", e.ID), inboxWhen(e.OccurredAt, now), e.Process, msg, e.EntityKey}
 }
@@ -90,7 +90,7 @@ func (i *Inbox) toggleAll() { i.showAll.Store(!i.showAll.Load()) }
 // (#891).
 func (i *Inbox) Refresh() {
 	i.offLoop.run(i.app, func() func() {
-		items, err := i.client.InboxList(50, i.showAll.Load())
+		items, err := i.client.InboxList(client.InboxQuery{Limit: 50, All: i.showAll.Load()})
 		return func() { i.renderList(items, err) }
 	})
 }

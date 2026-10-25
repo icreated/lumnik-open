@@ -159,15 +159,32 @@ func TestEntityGet_refusesBeforeAskingTheHub(t *testing.T) {
 	}
 }
 
-// The hub silently ignores a filter that names no canonical column and returns EVERY row — a
-// typo would read as "the whole entity matches". A returned row that lacks the column proves it.
-func TestEntityGet_refusesAFilterTheHubIgnored(t *testing.T) {
-	out, _, err := runEntityGet(t, serveRows(twoRows), "E", "--filter", "prodct_id=1")
-	if err == nil || !strings.Contains(err.Error(), "prodct_id") {
-		t.Fatalf("err = %v", err)
+// The hub refuses a filter that names no column, and says which columns filter: that message is
+// the answer, word for word.
+func TestEntityGet_hubRefusalOfAnUnknownFilterReachesTheUser(t *testing.T) {
+	const why = "filter prodct_id is not a column of E; filterable columns: product_id, name, category"
+	out, _, err := runEntityGet(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprintf(w, `{"error":%q}`, why)
+	}, "E", "--filter", "prodct_id=1")
+	if err == nil || !strings.Contains(err.Error(), why) {
+		t.Fatalf("err = %v, want the hub's %q", err, why)
 	}
 	if out != "" {
-		t.Errorf("rows the filter did not select must not be printed: %q", out)
+		t.Errorf("a refused read prints no rows: %q", out)
+	}
+}
+
+// A resolution entity filters by _entity_id, the key a search hit names its row by; the default
+// read does not return that column, and the row the hub selected is still the answer.
+func TestEntityGet_aFilterOnAColumnTheRowsDoNotShowPrintsTheRow(t *testing.T) {
+	out, _, err := runEntityGet(t, serveRows(`[{"product_id":"1024944","name":"Pool pump","_conflicts":"{}"}]`),
+		"E", "--filter", "_entity_id=5b0f2a9e-1111-4c1d-9a3e-000000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Pool pump") {
+		t.Errorf("out = %q, want the selected row", out)
 	}
 }
 

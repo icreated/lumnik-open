@@ -1,8 +1,12 @@
 package io.lumnik.hub.connector.api;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
+import io.lumnik.hub.connector.api.types.ScriptVersion;
 import io.lumnik.hub.connector.api.types.WriteOutcome;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.SequencedSet;
 
 public interface ItemWriter<T> {
   WriteOutcome write(List<T> items, ConnectorContext ctx);
@@ -20,6 +24,18 @@ public interface ItemWriter<T> {
   default void prepare(List<T> records, ConnectorContext ctx) {}
 
   /**
+   * {@link #prepare(List, ConnectorContext)} for a writer whose mapping carries values from one row to the next
+   * (#1452): {@code carryIn} is what the previous chunk of this source left on the cursor, {@code startsAFile} whether
+   * this chunk begins at a file's first record. Returns what the mapping carries after the last record, which the
+   * engine stores with the position once the write is accepted. Default: the carry means nothing to this writer, and
+   * nothing carried clears what was stored.
+   */
+  default JsonNode prepare(List<T> records, ConnectorContext ctx, JsonNode carryIn, boolean startsAFile) {
+    prepare(records, ctx);
+    return null;
+  }
+
+  /**
    * Cell-level parse failures the most recent {@link #write} pass nulled — a cell hook
    * (parse-date, parse-number, parse-email, parse-phone, lookup) that could not parse a value
    * writes {@code null} into that cell and lets the row through rather than dropping it. Counts
@@ -30,6 +46,12 @@ public interface ItemWriter<T> {
    * <p>No-op by default: only a mapping-backed writer has a cell tier to report from.
    */
   default long drainCellErrors() { return 0; }
+
+  /**
+   * The versions of the Kotlin scripts the most recent {@link #write} ran (#1430), in the order first run, drained
+   * like {@link #drainCellErrors}: the engine folds them into the run, which keeps each version once.
+   */
+  default SequencedSet<ScriptVersion> drainScripts() { return new LinkedHashSet<>(); }
 
   default void close() {}
 }

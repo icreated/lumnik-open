@@ -17,7 +17,7 @@ This page is the operating manual for that. Four habits of `lm` make the loop po
 | In git | Never in git | Rebuilt, not stored |
 |---|---|---|
 | `kind: Connector`, `Entity`, `View`, `App`, `Process`, `Workflow`, `Export`, `SearchIndex` manifests | secret **values** — manifests carry the *name* (`password_env`, `token_env`, `key_env`), never the credential | the dynamic tables under schema `connector` (ingestion writes them) |
-| hook scripts (`META-INF/hooks.yaml`, deployed with the extension — not applied through `lm`) | the OIDC token in `~/.lm/config.yaml` | the RAG corpus (re-indexed from what was ingested) |
+| Kotlin scripts (`.kts`) — the operator copies them into the hub's [hooks directory](deploy.md#offer-kotlin-scripts-to-the-integrators); `lm hook scripts` lists them | the OIDC token in `~/.lm/config.yaml` | the RAG corpus (re-indexed from what was ingested) |
 | the apply order (below) — a `Makefile` or a numbered prefix | ingested rows, dead letters, run history | discovered schema cards (`lm source rediscover`) |
 
 Credentials are referenced by name and resolved where the **hub** runs — its environment or
@@ -70,7 +70,7 @@ lm run list --connector ad_user -o json     # verify: the ledger, as data
 
 ```
 $ lm apply -f docs/apps/demo/sources/10-erp.yaml
-{"name":"acme-desk-erp","connectorId":"6c8d0ce5-8686-493d-a05d-bdc950281707","endpointsApplied":1}
+Applied connector "acme-desk-erp" — 1 endpoint
 ```
 
 !!! warning "`lm validate` covers `kind: Connector` only"
@@ -141,8 +141,8 @@ $ cat bad-connector.yaml | lm validate -f -
           → none
 
   WARN     metadata.scopes
-          no scopes declared — the connector's tables will not be askable in any métier
-          → Add: scopes: [compta]  (the métier a user must hold as scope:compta)
+          no scopes declared — the connector's tables will not be askable in any scope
+          → Add: scopes: [compta]  (users need the scope:compta role)
 
 Fix the errors above in what produced this manifest.
 Error: validation failed: 2 error(s)
@@ -155,12 +155,17 @@ $ echo $?
 `lm validate` exits **1** when the manifest carries at least one error, **0** otherwise — so
 it is a gate with no wrapper:
 
+A fresh runner has no `lm` context. Create one first: the URL and the token alone are not
+enough.
+
 ```yaml
 # .github/workflows/manifests.yml
+- name: Point lm at staging
+  run: |
+    lm config set-context ci --server "${{ secrets.LUMNIK_STAGING_URL }}" \
+        --token "${{ secrets.LUMNIK_STAGING_TOKEN }}"
+    lm config use-context ci
 - name: Validate every connector manifest
-  env:
-    LUMNIK_URL: ${{ secrets.LUMNIK_STAGING_URL }}
-    LUMNIK_TOKEN: ${{ secrets.LUMNIK_STAGING_TOKEN }}
   run: |
     for f in 10-connectors/*.yaml; do
       lm validate -f "$f"

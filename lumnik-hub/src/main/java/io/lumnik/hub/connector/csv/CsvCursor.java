@@ -7,6 +7,7 @@ import io.lumnik.hub.connector.transport.FileDescriptor;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.function.Supplier;
 
 /**
  * Resume cursor for the CSV file connector.
@@ -39,10 +40,19 @@ public record CsvCursor(String file, long rowsProcessed,
    * forever (a permanent, silent fallback).
    */
   @JsonInclude(JsonInclude.Include.NON_NULL)
-  public record Version(long size, String lastModified, String etag) {
+  public record Version(long size, String lastModified, String etag, String sha256) {
+
+    public Version(long size, String lastModified, String etag) {
+      this(size, lastModified, etag, null);
+    }
 
     public static Version of(FileDescriptor d) {
-      return new Version(d.size(), d.lastModified().toString(), d.etag());
+      return of(d, null);
+    }
+
+    /** The token of a file read to its end, with its content's fingerprint (#1371; null when unreadable). */
+    public static Version of(FileDescriptor d, String sha256) {
+      return new Version(d.size(), d.lastModified().toString(), d.etag(), sha256);
     }
 
     /** True when {@code current} still has the bytes this token was taken against. */
@@ -56,6 +66,15 @@ public record CsvCursor(String file, long rowsProcessed,
       }
       // Delegate to the single truth for "same bytes" (size + mtime + etag-when-both-present).
       return new FileDescriptor(current.path(), size, lm, etag).sameVersion(current);
+    }
+
+    /**
+     * {@link #matches(FileDescriptor)}, and the same bytes when this token carries a fingerprint (#1371):
+     * size and mtime survive a copy that keeps them. {@code sha256} is asked only once the stat matches;
+     * a token from before fingerprints carries none and is judged on its stat alone.
+     */
+    public boolean matches(FileDescriptor current, Supplier<String> currentSha256) {
+      return matches(current) && (sha256 == null || sha256.equals(currentSha256.get()));
     }
   }
 

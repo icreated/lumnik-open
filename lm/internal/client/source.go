@@ -34,30 +34,30 @@ type JdbcDiscoverRequest struct {
 // JdbcColumn is one discovered JDBC column: name, JDBC type name, size, and
 // nullability.
 type JdbcColumn struct {
-	Name     string `json:"name"`
-	JdbcType string `json:"jdbcType"`
-	Size     int    `json:"size"`
-	Nullable bool   `json:"nullable"`
+	Name     string `json:"name" yaml:"name"`
+	JdbcType string `json:"jdbcType" yaml:"jdbcType"`
+	Size     int    `json:"size" yaml:"size"`
+	Nullable bool   `json:"nullable" yaml:"nullable"`
 }
 
 // JdbcTable is one discovered JDBC table: its primary key and columns, a
 // server-suggested watermark column (nil if none fits), and an approximate row
 // count.
 type JdbcTable struct {
-	Schema             string       `json:"schema"`
-	Name               string       `json:"name"`
-	PrimaryKey         []string     `json:"primaryKey"`
-	Columns            []JdbcColumn `json:"columns"`
-	SuggestedWatermark *string      `json:"suggestedWatermark"`
-	RowEstimate        int64        `json:"rowEstimate"`
+	Schema             string       `json:"schema" yaml:"schema"`
+	Name               string       `json:"name" yaml:"name"`
+	PrimaryKey         []string     `json:"primaryKey" yaml:"primaryKey"`
+	Columns            []JdbcColumn `json:"columns" yaml:"columns"`
+	SuggestedWatermark *string      `json:"suggestedWatermark" yaml:"suggestedWatermark"`
+	RowEstimate        int64        `json:"rowEstimate" yaml:"rowEstimate"`
 	// UnsupportedColumns lists, as "NAME TYPE", the columns the source's dialect cannot read. Such a
 	// table is listed but cannot be added: the hub refuses it by name.
-	UnsupportedColumns []string `json:"unsupportedColumns"`
+	UnsupportedColumns []string `json:"unsupportedColumns" yaml:"unsupportedColumns"`
 }
 
 // JdbcDiscoverResponse wraps the tables found by JdbcDiscover.
 type JdbcDiscoverResponse struct {
-	Tables []JdbcTable `json:"tables"`
+	Tables []JdbcTable `json:"tables" yaml:"tables"`
 }
 
 // JdbcAddTable names one discovered table to onboard, with the watermark column

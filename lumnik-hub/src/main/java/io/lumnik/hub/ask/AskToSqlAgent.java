@@ -287,7 +287,7 @@ public class AskToSqlAgent implements AskPort {
         // #912: a phrased number the rows cannot back is withheld — no prompt fence holds in
         // production call order (#922). The rows and the SQL stay: they are the answer. The log
         // carries the count only — the numbers are tenant data, like the question and the SQL.
-        int unsupported = UnsupportedNumbers.in(answer, rows).size();
+        int unsupported = UnsupportedNumbers.in(answer, rows, safeSql).size();
         boolean withheld = unsupported > 0;
         if (withheld) {
             LOG.warnf("ask answer withheld: %d number(s) its rows do not back (scope %s)", unsupported, scope);

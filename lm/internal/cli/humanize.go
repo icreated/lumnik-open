@@ -12,15 +12,15 @@ func humanizeAge(t, now time.Time) string {
 	d := now.Sub(t)
 	switch {
 	case d < time.Minute:
-		return "à l'instant"
+		return "just now"
 	case d < time.Hour:
 		return fmt.Sprintf("%dmin", int(d.Minutes()))
 	case d < 24*time.Hour:
 		return fmt.Sprintf("%dh", int(d.Hours()))
 	case d < 48*time.Hour:
-		return "hier"
+		return "yesterday"
 	default:
-		return fmt.Sprintf("%dj", int(d.Hours()/24))
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
 	}
 }
 

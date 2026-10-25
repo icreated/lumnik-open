@@ -17,8 +17,6 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -49,8 +47,6 @@ import static io.quarkus.scheduler.Scheduled.ConcurrentExecution.SKIP;
 public class WorkflowDormancySweep {
 
     private static final Logger LOG = Logger.getLogger(WorkflowDormancySweep.class);
-    private static final DateTimeFormatter DAY =
-        DateTimeFormatter.ISO_LOCAL_DATE.withZone(ZoneOffset.UTC);
     /** core.event_outbox.entity_key / dedup_key are VARCHAR(200) (V24). */
     private static final int OUTBOX_KEY_MAX = 200;
 
@@ -236,9 +232,16 @@ public class WorkflowDormancySweep {
         // reappear with different casing/whitespace on a later ingest ("EN LITIGE" vs
         // "en litige ") — that is dirty data, not movement, and must not reset `since`
         // or clear the alert flag. The stored value itself stays whatever was observed.
-        if (!norm(obs.state()).equals(norm(state))) {
-            observations.recordTransition(tenant, g.name(), key, obs.state(), state, now);
+        // And compare under the CURRENT declaration (#1367): a raw value the integrator has
+        // since declared as an alias is a new meaning, not a movement — relabel, keep the clock.
+        String held = resolve(g, obs.state());
+        if (!norm(held).equals(norm(state))) {
+            observations.recordTransition(tenant, g.name(), key, held, state, now);
             return;
+        }
+        if (!held.equals(obs.state())) {
+            observations.relabel(tenant, g.name(), key, held);
+            obs = obs.withState(held);
         }
         boolean terminal = terminalByNorm.containsKey(norm(state));
         boolean overdue = now.isAfter(obs.since().plus(g.dormancy().duration()));
@@ -251,7 +254,7 @@ public class WorkflowDormancySweep {
     /** The raw column value resolved to its declared code via trim+lowercase aliases;
      *  kept raw when undeclared — an undeclared value cannot be terminal, so a document
      *  sleeping in an unknown state is detectable. That is the sickest dossier there is. */
-    private static String resolve(WorkflowGraph g, String raw) {
+    static String resolve(WorkflowGraph g, String raw) {
         String n = norm(raw);
         for (WorkflowGraph.StateDto s : g.states()) {
             if (norm(s.code()).equals(n)) return s.code();
@@ -318,10 +321,7 @@ public class WorkflowDormancySweep {
     }
 
     private void emit(long tenant, WorkflowGraph g, WorkflowObservationStore.Observation obs) {
-        String message = String.format(
-            "%s : observé immobile en « %s » depuis le %s (première observation %s) — seuil déclaré %s dans %s",
-            obs.docKey(), obs.state(), DAY.format(obs.since()),
-            DAY.format(obs.firstObservedAt()), g.dormancy().after(), g.name());
+        String message = DormancyMessage.render(g, obs);
         String payload;
         try {
             Map<String, Object> p = new LinkedHashMap<>();

@@ -35,6 +35,7 @@ class SealedTypesTest {
       case ChunkResult.Success s        -> "success:" + s.processed();
       case ChunkResult.PartialSuccess p -> "partial:" + p.skipped();
       case ChunkResult.ShortOfTarget s  -> "short:" + s.detail();
+      case ChunkResult.Cancelled c      -> "cancelled";
       case ChunkResult.Failure f        -> "failed";
     };
     assertThat(summary).isEqualTo("short:stopped short");

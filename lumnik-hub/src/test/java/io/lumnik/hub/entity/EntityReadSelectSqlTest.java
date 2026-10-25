@@ -4,7 +4,6 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -21,13 +20,13 @@ class EntityReadSelectSqlTest {
   @Test
   void an_identity_read_breaks_canonical_ties_on_the_identity() {
     String sql = EntityReadResource.selectSql(M, List.of("code"),
-        List.of("_entity_id", "_resolution", "_handle"), List.of(), Set.of());
+        List.of("_entity_id", "_resolution", "_handle"), List.of(), Map.of());
     assertThat(sql).endsWith("ORDER BY \"code\", \"_entity_id\", \"_handle\"");
   }
 
   @Test
   void the_default_read_orders_as_before() {
-    assertThat(EntityReadResource.selectSql(M, List.of("code"), List.of(), List.of(), Set.of()))
+    assertThat(EntityReadResource.selectSql(M, List.of("code"), List.of(), List.of(), Map.of()))
         .endsWith("ORDER BY \"code\"");
   }
 }

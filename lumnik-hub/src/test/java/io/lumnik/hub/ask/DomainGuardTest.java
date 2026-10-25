@@ -30,6 +30,23 @@ class DomainGuardTest {
     assertThat(v.get().message()).contains("not a declared value").contains("GOLD").contains("manifest");
   }
 
+  /**
+   * #1338: a code column whose sources are numbers is now typed as one, so the model writes {@code code = 4},
+   * not {@code code = '4'}. The domain must still hold — read in canonical text, {@code 2.0} being {@code 2}.
+   */
+  @Test
+  void a_number_outside_a_declared_domain_is_flagged_too() {
+    SchemaCard card = new SchemaCard("ops", List.of(
+        new SchemaCard.Table("connector.v_ticket", "ticket", List.of(
+            new SchemaCard.Column("code", "bigint", "code", null, null, List.of("1", "2", "3"))),
+            null)));
+    Optional<DomainGuard.Violation> v = guard.check("SELECT count(*) FROM connector.v_ticket WHERE code = 4", card);
+    assertThat(v).isPresent();
+    assertThat(v.get().value()).isEqualTo("4");
+    assertThat(guard.check("SELECT count(*) FROM connector.v_ticket WHERE code = 2.0", card)).isEmpty();
+    assertThat(guard.check("SELECT count(*) FROM connector.v_ticket WHERE code IN (1, 3)", card)).isEmpty();
+  }
+
   @Test
   void a_pattern_match_is_not_an_equality_so_no_domain_applies() {
     assertThat(guard.check("SELECT 1 FROM connector.v_customer WHERE segment ILIKE '%plat%'", cardWithSegment())).isEmpty();

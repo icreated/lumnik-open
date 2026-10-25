@@ -3,10 +3,12 @@ package io.lumnik.hub.connector.mapping.hooks.cell;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.mapping.MappingState;
 import io.lumnik.hub.connector.mapping.hooks.CellHook;
+import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Converts curly/typographic Unicode punctuation (from Word, Excel) to plain ASCII equivalents.
@@ -36,5 +38,15 @@ public class ReplaceSmartQuotesHook implements CellHook {
         .replace('—', '-')    // EM DASH
         .replace("…", "...")  // HORIZONTAL ELLIPSIS
         .replace('\u00A0', ' ');   // NON-BREAKING SPACE
+  }
+
+  @Override
+  public Set<String> params() {
+    return Set.of("columns");
+  }
+
+  @Override
+  public ColumnEffect columns(JsonNode params) {
+    return ColumnEffect.readsColumns(params);
   }
 }

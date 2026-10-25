@@ -33,4 +33,14 @@ public interface RunScope {
    * (out of memory, stack overflow, internal error) propagates. Absent key: nothing happens.
    */
   void invalidate(Object key);
+
+  /**
+   * Whether {@code lm run cancel} was asked for this run — the flag the engine reads between chunks. A reader that
+   * fetches many pages inside ONE chunk reads it between two of them and stops by throwing
+   * {@link io.lumnik.hub.connector.exceptions.RunCancelledException}; the run then ends {@code Cancelled} (#1444).
+   * {@code false} for a scope with no run around it.
+   */
+  default boolean cancelRequested() {
+    return false;
+  }
 }

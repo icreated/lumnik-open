@@ -1,22 +1,10 @@
-# 92-soap-fault.yaml — the run that MUST fail, and the twin of 80-graphql-errors.yaml.
+# 92-soap-fault.yaml — the run that must fail.
 #
-# SOAP, like GraphQL, has an error channel that is not the HTTP status — and stacks use it two
-# different ways:
+# A SOAP service says "no" with a <soap:Fault>, sent with HTTP 500 or with HTTP 200. Both fail
+# the run, naming the faultstring. A Fault is the service's answer: it is never retried.
+# Compare 93, the same status with a retry.
 #
-#   HTTP 500 + <soap:Fault>   what the SOAP 1.1 book prescribes
-#   HTTP 200 + <soap:Fault>   what a good many gateways and .NET services actually send
-#
-# Both must fail the run. The second is the dangerous one: an engine that trusts the status
-# reads a body with no rows in it and reports a clean, empty, successful sync.
-#
-# ── And the part that is NOT symmetric with a plain 5xx ───────────────────────────────────
-# A Fault is a BUSINESS error: the service answered, and its answer is "no". Retrying it is
-# waiting for a different answer to the same wrong question. So the fault check runs INSIDE the
-# retry boundary and refuses first — a fault is never retried, even though it arrives on the
-# 500 the shared policy calls transient. Read this file against 93, which is the same status
-# from the same server with the opposite handling.
-#
-# Expect: BOTH endpoints Failed, 0 records_out, the run message naming the faultstring.
+# Expect: BOTH endpoints Failed, 0 rows written, the run message naming the faultstring.
 
 apiVersion: connectors.lumnik.io/v1
 kind: Connector

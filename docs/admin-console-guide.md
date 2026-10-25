@@ -47,41 +47,8 @@ $ curl -s http://localhost:8080/api/bff/v1/me -H "Authorization: Bearer $TOKEN" 
 
 ## Send events out to another system
 
-Register a webhook target (here a test receiver on port 18955). Always pass the signing
-secret with `--secret-stdin`:
-
-```
-$ printf '%s' "$WEBHOOK_SECRET" | lm integration add ops-hook \
-    --url http://localhost:18955/hook --events 'connector.run.*' --secret-stdin
-registered: ops-hook (id 1001) — forwards subscribed events from now on
-
-$ lm integration list
-ID    NAME      URL                     EVENTS           ENABLED
-1001  ops-hook  http://localhost:18955  connector.run.*  true
-
-$ lm integration test 1001
-delivered in 11ms (HTTP 200)
-```
-
-- `--events` takes exact types or a prefix ending in `.*`; the default is `decision.*`.
-- `test` fires a catalog event (`--event`, default `org.created`). `decision.*` types are not in
-  the catalog and cannot be tested this way: verify them with a real decision.
-- Only events fired after registration are delivered.
-- Delivery is at-least-once: a hub stop mid-send can deliver an event twice. Deduplicate on
-  `X-Lumnik-Event-Id`.
-- `lm integration describe ID` shows one registration; `lm integration rm ID` removes it
-  (the delivery history is kept, pending retries stop).
-- In `lm ui`, `:integrations`: `n` registers, `T` tests, `Del` removes, `d` shows recent deliveries.
-
-Without `--secret-stdin`, the hub refuses the registration and stores nothing:
-
-```
-$ lm integration add erp-out --url https://erp.example.com/hook --events org.created
-Error: API error 400: HMAC mode needs a secret (lm integration add: --secret-stdin)
-```
-
-What the receiver gets (headers, the HMAC signature, retries, retention):
-[Outputs](outputs.md#wire-a-webhook).
+Register, test and remove a webhook target with `lm integration`: [Outputs — wire a webhook](outputs.md#wire-a-webhook).
+In `lm ui`, `:integrations`: `n` registers, `T` tests, `Del` removes, `d` shows recent deliveries.
 
 ### Settings `lm` does not expose
 
@@ -154,7 +121,6 @@ In `lm ui`, `:outputs` shows the same list; `^R` replays the selected delivery.
 | `ERROR` column | Meaning | Gesture |
 |---|---|---|
 | `connection failed (ConnectException)` | the receiver did not answer | bring it back, then `lm outputs replay ID` |
-| `HMAC mode but no secret configured` | the target was registered without a secret, before the hub refused that (`Bearer mode but no token configured`: same, in `BEARER` mode) | set a secret (`PUT` above) or re-register with `--secret-stdin`, then replay |
 | `endpoint gone, unsubscribed, or entity_filter no longer matches — retries stopped` | the target was removed, disabled, or no longer subscribes to that event | re-enable or re-subscribe, then replay; a removed target accepts no replay (`404`) |
 
 ## Find the event types you can subscribe to
@@ -187,20 +153,7 @@ subscription matches them when they fire. What each type means:
 
 ## Watch ingestion: runs, dead letters, live events
 
-| Gesture | What it does |
-|---|---|
-| `lm run list [--connector NAME]` | recent runs, newest first: IN, OUT, SKIPPED, DEAD-LETTERS |
-| `lm run get ID` | one run, with its failure reason or quarantine warning |
-| `lm run cancel ID` | asks an in-flight run to stop |
-| `lm dlq list --run ID` / `--connector NAME` | the quarantined rows, with their reason and RESOLUTION (`REPLAYED`/`DISCARDED`, empty while open) |
-| `lm dlq get ID` | one entry, with the row as the source sent it |
-| `lm dlq replayed ID --new-run-id RUN` · `lm dlq discard ID` | mark an entry handled |
-
-`--connector` lists only the entries still pending; `--run` lists the run's full history, handled
-entries included.
-Every run id in these gestures (`--run`, `--new-run-id`) takes the 8 characters `lm run list` shows.
-
-The full walk, with captures: [Diagnosing a failed run](recipes/diagnose-a-run.md).
+Runs and dead letters, step by step: [Diagnosing a failed run](recipes/diagnose-a-run.md).
 
 In `lm ui`, `:runs`, `:dlq`, `:sources` and `:endpoints` update by themselves while runs happen.
 They follow the live event stream, which your own tooling can read too:
@@ -210,7 +163,8 @@ They follow the live event stream, which your own tooling can read too:
 | Door | `GET /api/platform/events/stream?topic=connector.run.*` (`Accept: text/event-stream`) |
 | `topic` | repeatable; `*` is a wildcard over the event type; none = every event |
 | Each element | `{"topic": "<type>", "payload": "<JSON as a string>", "capturedAt": "<ISO-8601>"}` |
-| Scope-bound caller | `403 {"error":"scope not granted"}`; in `lm ui` the footer says `live events: …` and views refresh only when opened |
+| Order | an event shows once the transactions older than it have ended, so a late commit is never missed |
+| Scope-bound caller | refused (`scope not granted`); in `lm ui` the views then refresh only when opened |
 
 ## Keep a connector credential: the secret store
 
@@ -288,18 +242,9 @@ An Open build lists no `llm` or `rag` line.
 No `lm` command manages identity; use the HTTP doors. Deletes archive, never erase. The gestures
 in context (onboarding, offboarding): [Identity administration](security/identity-admin.md).
 
-| Method | Path | Contract |
-|---|---|---|
-| `GET` | `/api/tenants` | active tenants (`lm_superadmin`) |
-| `POST` | `/api/tenants` | create `{code, name, description?}`; `201`, `409` on a duplicate code |
-| `PUT` · `DELETE` | `/api/tenants/{id}` | update name/description · deactivate (`204`) |
-| `GET` · `POST` | `/api/tenants/{tid}/orgs` | list · create (`409` on a duplicate code) |
-| `GET` | `/api/tenants/{tid}/orgs/tree?root=&depth=` | the org tree (default depth 3) |
-| `PUT` · `DELETE` | `/api/tenants/{tid}/orgs/{id}` | update · deactivate |
-| `GET` · `POST` | `/api/tenants/{tid}/users` | list · create `{login, name, email?, description?}` (`409` on a duplicate login) |
-| `PUT` · `DELETE` | `/api/tenants/{tid}/users/{id}` | update profile · deactivate (`204`) |
-| `POST` | `/api/tenants/{tid}/users/{id}/unlock` | unlock a locked account |
-| | `/api/tenants/{tid}/roles`, `…/users/{uid}/roles/{roleId}`, `…/roles/{roleId}/orgs/{orgId}` | tenant roles, their assignment, their org access |
+The doors, under `/api/tenants` and `/api/tenants/{tid}/…`: tenants (`lm_superadmin`), orgs,
+users and tenant roles (`lm_admin`, your own tenant). Their full contract is in your hub's
+`/q/openapi` ([Test the API](recipes/test-the-api.md)).
 
 Org changes emit `org.created`, `org.updated`, `org.moved`, `org.archived`. lumnik stores no
 passwords: users sign in through Keycloak or your IdP. On Pro, a user's hub record is created at
@@ -312,7 +257,6 @@ first login.
 - It switches the tenant, never the roles: the roles in the token are the ones checked.
 - A token carrying the claim without `lm_superadmin` is refused:
   `403 {"error": "lm_superadmin required to impersonate a tenant"}`.
-- The `X-Impersonate-Tenant` header works only with `lumnik.security.dev-bypass=true`.
 
 ## Harden the deployment
 
@@ -336,11 +280,10 @@ first login.
 | `API error 400: HMAC mode needs a secret …` on `lm integration add` | no `--secret-stdin` | pass the secret on stdin — see [Send events out](#send-events-out-to-another-system) |
 | A failed delivery is no longer retried | it used its 3 attempts | `lm outputs replay ID` |
 | `lm outputs replay ID` answers `404` for an id in your list | the target was removed with `lm integration rm` | register the target again; new events reach it |
-| `X-Impersonate-Tenant` changes nothing | the header works only with dev-bypass | use the `acting_as_tenant` claim |
 
 ## If none of that is it
 
 - Your hub serves its live API contract at `/q/openapi` and a try-it console at `/q/swagger-ui/`:
   [Test the API](recipes/test-the-api.md).
 - Security reports: `contact@lumnik.fr` (acknowledged within 72 hours). It is not a support
-  channel; for configuration questions, ask your integrator.
+  channel.

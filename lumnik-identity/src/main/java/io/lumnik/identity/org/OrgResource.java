@@ -2,6 +2,7 @@ package io.lumnik.identity.org;
 
 import io.lumnik.common.eventing.DomainEventPublisher;
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.identity.IdentityErrors;
 import io.lumnik.identity.Require;
 import io.lumnik.identity.TenantInPath;
 import io.lumnik.identity.geo.AddressInput;
@@ -65,8 +66,10 @@ public class OrgResource {
         // They run before the transaction on purpose (see below), so they open their own: read
         // outside one, every parent was a 404 and a duplicate code reached the unique constraint.
         QuarkusTransaction.requiringNew().run(() -> {
-            if (orgs.codeExists(tenantId, cmd.code()))
-                throw new ClientErrorException("Org code already exists: " + cmd.code(), Response.Status.CONFLICT);
+            orgs.holderOfCode(tenantId, cmd.code()).ifPresent(holder -> {
+                throw IdentityErrors.conflict(
+                    "org code " + holder.getCode() + " is already held by org " + holder.getId());
+            });
             if (cmd.parentOrgId() != null) {
                 requireOrg(tenantId, cmd.parentOrgId());
             }

@@ -19,6 +19,7 @@ func observationRow(o client.Observation) []string {
 
 func newObservationsCmd() *cobra.Command {
 	root := &cobra.Command{Use: "observations", Short: "Inspect the workflow tape"}
+	var workflow string
 	list := &cobra.Command{
 		Use:   "list",
 		Short: "List watched documents, the stillest first",
@@ -27,7 +28,7 @@ func newObservationsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			items, err := c.ObservationList(pageLimit(cmd))
+			items, err := c.ObservationList(pageLimit(cmd), workflow)
 			if err != nil {
 				return err
 			}
@@ -35,6 +36,7 @@ func newObservationsCmd() *cobra.Command {
 		},
 	}
 	addPageLimitFlag(list, 200, client.ObservationsPageCap, "max observations to list")
+	list.Flags().StringVar(&workflow, "workflow", "", "Only this workflow's documents")
 	root.AddCommand(list)
 	stats := &cobra.Command{
 		Use:   "stats",
@@ -53,7 +55,37 @@ func newObservationsCmd() *cobra.Command {
 		},
 	}
 	root.AddCommand(stats)
+	var doc string
+	transitions := &cobra.Command{
+		Use:   "transitions",
+		Short: "List the workflow journal, newest first: each move and the seconds spent in the state it left",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := ClientFromCmd(cmd)
+			if err != nil {
+				return err
+			}
+			items, err := c.ObservationTransitions(pageLimit(cmd), workflow, doc)
+			if err != nil {
+				return err
+			}
+			return printPage(cmd, transitionHeaders, items, transitionRow)
+		},
+	}
+	addPageLimitFlag(transitions, 200, client.ObservationsPageCap, "max moves to list")
+	transitions.Flags().StringVar(&workflow, "workflow", "", "Only this workflow's moves")
+	transitions.Flags().StringVar(&doc, "doc", "", "Only this document's moves")
+	root.AddCommand(transitions)
 	return root
+}
+
+var transitionHeaders = []string{"WORKFLOW", "DOC", "FROM", "TO", "ENTERED", "OBSERVED", "IN_FROM_S"}
+
+// IN_FROM_S is raw seconds, like MEDIAN_DETECTION_S; for a document's first move it counts from its
+// first observation, so it is a lower bound.
+func transitionRow(t client.Transition) []string {
+	in := int64(t.ObservedAt.Sub(t.EnteredFromAt).Seconds())
+	return []string{t.Workflow, t.DocKey, t.From, t.To, output.HumanTime(&t.EnteredFromAt),
+		output.HumanTime(&t.ObservedAt), fmt.Sprintf("%d", in)}
 }
 
 var statsHeaders = []string{"WORKFLOW", "WATCHED", "DORMANT", "MEDIAN_DETECTION_S"}

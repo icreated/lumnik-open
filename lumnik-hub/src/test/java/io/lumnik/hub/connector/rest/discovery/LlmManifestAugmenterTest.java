@@ -36,4 +36,11 @@ class LlmManifestAugmenterTest {
             ConfigDefRunner.run(EndpointsBlockValidator.perEndpointDef(), seq.get(0), "spec.endpoints[]");
         assertTrue(errs.isEmpty(), () -> "the hub rejects the prober's own endpoint: " + errs);
     }
+
+    /** The integrator reads the first line: it names the gesture and asks for a review, never an engine class. */
+    @Test void the_block_opens_with_a_neutral_header() {
+        String block = new LlmManifestAugmenter().augment(
+            "demo", "/v1/things", JsonStructureInference.PaginationKind.PAGE, "$.id", List.of());
+        assertEquals("# Drafted by lm source rest probe — review before applying", block.lines().findFirst().orElseThrow());
+    }
 }

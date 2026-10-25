@@ -13,6 +13,7 @@ import io.lumnik.hub.validator.JsonNodes;
 import io.lumnik.hub.validator.ValidationError;
 import io.lumnik.hub.validator.ValidationError.Severity;
 import io.lumnik.hub.validator.common.CronField;
+import io.lumnik.hub.validator.common.NoMappingBlock;
 import io.lumnik.hub.validator.common.TargetBlockValidator;
 import io.lumnik.hub.validator.common.WindowField;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -50,6 +51,8 @@ public class JdbcConnectorValidator implements ConnectorValidator {
             // schedule's twin, read by the SHARED apply preamble (ApplyUpsert); declared and
             // checked through WindowField, which owns both wordings for all four connector types.
             .optional("window", Type.STRING, Importance.MEDIUM, WindowField.DOC, null)
+            // Declared to be refused, like chunk_size: an "unknown key" warning let a declared check vanish (#1437).
+            .optional("mapping", Type.NESTED, Importance.LOW, NoMappingBlock.DOC, null)
             // No `target` block: nothing on this kind reads spec.target — JdbcGenericConnectorApplyHandler
             // never touches it, and a jdbc connector's indexes live on source.tables[].indexes. Declaring it
             // accepted `target.indexes` and dropped it in silence; undeclared, the closed sweep names it
@@ -60,6 +63,7 @@ public class JdbcConnectorValidator implements ConnectorValidator {
     @Override
     public List<ValidationError> validateCrossField(JsonNode spec) {
         List<ValidationError> errs = new ArrayList<>();
+        NoMappingBlock.refuse("jdbc-generic", spec.path("mapping"), "Rename a column with source.tables[].rename", errs);
         validateDialect(spec.path("connection"), errs);
         adviseAgainstInlinePassword(spec.path("connection"), errs);
         validateTables(spec.path("defaults"), spec.path("source").path("tables"), errs);
@@ -88,8 +92,8 @@ public class JdbcConnectorValidator implements ConnectorValidator {
         if (JsonNodes.blankOrNull(conn.path("password"))) return;
         errs.add(new ValidationError("spec.connection.password", Severity.WARNING,
             "plain-text password in the manifest — it takes precedence over password_env, "
-                + "so the secret that env var names is never read",
-            List.of("Remove it: password_env already names the env var the hub reads",
+                + "so the secret password_env names is never read",
+            List.of("Remove it: password_env already names the secret the hub reads",
                 "Keep it only in a manifest that is never committed — dev/test")));
     }
 

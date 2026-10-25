@@ -26,7 +26,6 @@ class AggregatorHookTest {
   void emits_group_on_key_change() throws Exception {
     var hook = catalog.row("aggregator");
     var params = yaml("""
-      group-by: [incident_id]
       emit-on-change: incident_id
       keep-first: [incident_id, title]
       merge:
@@ -45,7 +44,6 @@ class AggregatorHookTest {
   void flush_emits_last_buffered_group() throws Exception {
     var hook = catalog.row("aggregator");
     var params = yaml("""
-      group-by: [k]
       emit-on-change: k
       merge:
         vals: { collect: v, into: array }
@@ -62,7 +60,6 @@ class AggregatorHookTest {
   void buffer_persists_across_chunks_via_state() throws Exception {
     var hook = catalog.row("aggregator");
     var params = yaml("""
-      group-by: [k]
       emit-on-change: k
       merge:
         v: { collect: v, into: array }
@@ -81,7 +78,6 @@ class AggregatorHookTest {
   void merge_into_csv_with_separator() throws Exception {
     var hook = catalog.row("aggregator");
     var params = yaml("""
-      group-by: [k]
       emit-on-change: k
       merge:
         tags: { collect: t, into: csv, sep: '|' }
@@ -97,7 +93,6 @@ class AggregatorHookTest {
   void merge_with_dedup_removes_duplicates() throws Exception {
     var hook = catalog.row("aggregator");
     var params = yaml("""
-      group-by: [k]
       emit-on-change: k
       merge:
         vals: { collect: v, into: array, dedup: true }

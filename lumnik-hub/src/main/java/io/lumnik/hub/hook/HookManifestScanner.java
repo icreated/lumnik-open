@@ -7,6 +7,7 @@ import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
 import com.networknt.schema.SpecVersion;
 import com.networknt.schema.ValidationMessage;
+import io.lumnik.hub.manifest.HubYaml;
 import io.quarkus.runtime.Startup;
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -26,7 +27,7 @@ public class HookManifestScanner {
 
     private static final Logger LOG = Logger.getLogger(HookManifestScanner.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final YAMLMapper YAML_MAPPER = new YAMLMapper();
+    private static final YAMLMapper YAML_MAPPER = HubYaml.mapper();
 
     @Inject HookRegistry registry;
 

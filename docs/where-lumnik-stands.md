@@ -2,12 +2,7 @@
 
 **beta.** Nobody outside the lumnik team has run lumnik in production yet.
 
-The latest release (`v1.8.0`) added:
-
-- [entity resolution](entities-resolution.md), one identity across systems that never shared a key;
-- [managed exports](apps/exports.md), lumnik's first outbound path;
-- [queued runs](operations/upgrade.md#turning-on-the-run-queue);
-- views read page by page beyond 1 000 rows ([Views](apps/views.md#rendering)).
+What each release adds: the [release notes](https://github.com/icreated/lumnik-open/releases).
 
 ## What is deliberately not there
 
@@ -33,19 +28,15 @@ Kafka and SCIM are in the Pro build only: see [The two editions](editions.md).
 
 ## What is not finished
 
-Known, and not yet closed — **you may meet them**:
-
-- **A few `409` refusals do not name what holds the name** — e.g. which integration took it.
-- **The live event tail can miss an event** when transactions run long. Webhooks and the inbox do not.
-- **`lm secret rm` frees the name, but the stored row stays**, encrypted.
+Nothing known today. A defect found from here on is listed here until it is fixed.
 
 ## When `beta` goes away
 
-When **What is not finished** is empty and someone outside the lumnik team has run lumnik in
-production. To be that first outside run, start with [the guided path](parcours.md).
+When someone outside the lumnik team has run lumnik in production, with this list still empty.
+To be that first outside run, start with [the guided path](parcours.md).
 
 ## See also
 
 - [The two editions](editions.md) — what each build contains
-- [Parcours — the guided path](parcours.md) — the three half-days
+- [Guided path](parcours.md) — the three half-days
 - [How lumnik works](how-it-works.md) — the mechanism behind all of it

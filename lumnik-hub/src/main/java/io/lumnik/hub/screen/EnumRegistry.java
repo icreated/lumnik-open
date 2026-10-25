@@ -2,7 +2,7 @@ package io.lumnik.hub.screen;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import io.lumnik.hub.manifest.HubYaml;
 import io.lumnik.hub.manifest.ModuleManifest;
 import io.lumnik.hub.manifest.ModuleManifestRegistry;
 import io.quarkus.runtime.StartupEvent;
@@ -26,7 +26,7 @@ public class EnumRegistry {
 
     @Inject ModuleManifestRegistry manifestRegistry;
 
-    private final ObjectMapper yaml = new ObjectMapper(new YAMLFactory())
+    private final ObjectMapper yaml = HubYaml.mapper()
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     private Map<String, EnumDefinition> enums = Map.of();

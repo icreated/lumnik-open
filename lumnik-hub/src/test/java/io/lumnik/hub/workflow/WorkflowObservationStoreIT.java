@@ -79,13 +79,13 @@ class WorkflowObservationStoreIT {
         store.insertNew(1L, "wf-a", "LSTALL-NEW", "paid",  now.minusSeconds(60));
         store.insertNew(2L, "wf-a", "LSTALL-T2",  "draft", now.minusSeconds(7200)); // other tenant
 
-        var rows = store.listAll(1L, null, 10).stream()
+        var rows = store.listAll(1L, null, null, 10).stream()
             .filter(r -> r.docKey().startsWith("LSTALL-")).toList();
         Assertions.assertThat(rows)
             .extracting(WorkflowObservationStore.ObservationRow::docKey)
             .containsExactly("LSTALL-OLD", "LSTALL-MID", "LSTALL-NEW"); // since ASC, no tenant-2 row
 
-        var limited = store.listAll(1L, null, 1);
+        var limited = store.listAll(1L, null, null, 1);
         Assertions.assertThat(limited).hasSize(1);
     }
 }

@@ -13,6 +13,7 @@ import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
 import io.lumnik.hub.connector.rest.pagination.PaginationFactory;
 import io.lumnik.hub.connector.rest.reliability.RateLimiterRegistry;
+import io.lumnik.hub.connector.secret.SecretRefs;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -86,13 +87,14 @@ class RestEndpointReaderDeclaredTotalTest {
     private final OffsetHttp http = new OffsetHttp();
 
     {
+        endpoint.setName("partners");
         endpoint.setMethod("GET");
         endpoint.setPath("/partners");
     }
 
     private RestEndpointReader reader() {
         return new RestEndpointReader(endpoint, new RestEndpointReaderChunkingTest.PassThroughAuth(),
-            new PaginationFactory(), new RateLimiterRegistry(), http, mapper);
+            new PaginationFactory(), new RateLimiterRegistry(), http, mapper, SecretRefs.environmentOnly(name -> null));
     }
 
     private ConnectorContext ctx(Map<String, Object> config) {
@@ -155,6 +157,9 @@ class RestEndpointReaderDeclaredTotalTest {
 
         assertTrue(e.getMessage().contains("10") && e.getMessage().contains("20"),
             "the refusal must name BOTH numbers so the operator can see the gap: " + e.getMessage());
+        // #1373: the endpoint as the manifest names it, not the hub's internal id
+        assertTrue(e.getMessage().startsWith("Endpoint 'partners': ") && !e.getMessage().contains(ENDPOINT.toString()),
+            "the refusal must name the endpoint by its manifest id: " + e.getMessage());
     }
 
     @Test

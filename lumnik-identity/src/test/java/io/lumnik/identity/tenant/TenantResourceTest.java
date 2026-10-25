@@ -52,11 +52,29 @@ class TenantResourceTest {
         String body = """
             {"code": "DUPTEST", "name": "Dup Tenant"}
             """;
-        given().contentType(ContentType.JSON).body(body)
-            .when().post("/api/tenants").then().statusCode(201);
+        String holder = given().contentType(ContentType.JSON).body(body)
+            .when().post("/api/tenants").then().statusCode(201)
+            .extract().path("id").toString();
 
         given().contentType(ContentType.JSON).body(body)
-            .when().post("/api/tenants").then().statusCode(409);
+            .when().post("/api/tenants").then().statusCode(409)
+            .contentType(ContentType.JSON)
+            .body("error", equalTo("tenant code DUPTEST is already held by tenant " + holder));
+    }
+
+    /** The door stores the code stripped: a padded duplicate is the same code, and meets the 409. */
+    @Test
+    void aPaddedDuplicateCodeIsRejectedLikeAnyOther() {
+        String holder = given().contentType(ContentType.JSON).body("""
+            {"code": "DUPTEST", "name": "Dup Tenant"}
+            """).when().post("/api/tenants").then().statusCode(201)
+            .extract().path("id").toString();
+
+        given().contentType(ContentType.JSON).body("""
+            {"code": " DUPTEST ", "name": "Dup Tenant"}
+            """).when().post("/api/tenants").then().statusCode(409)
+            .contentType(ContentType.JSON)
+            .body("error", equalTo("tenant code DUPTEST is already held by tenant " + holder));
     }
 
     @Test

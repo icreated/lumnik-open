@@ -22,10 +22,10 @@ import io.lumnik.hub.connector.mapping.MapColumnsRules;
 import io.lumnik.hub.connector.mapping.writer.DynamicTableWriter;
 import io.lumnik.hub.connector.mapping.writer.SourceKeyIndex;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
+import io.lumnik.hub.secret.SecretResolver;
 import io.lumnik.hub.sql.SqlIdentifiers;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import javax.sql.DataSource;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -47,6 +47,7 @@ public class JdbcConnectorType implements ConnectorType {
   @Inject HikariPoolRegistry  poolRegistry;
   @Inject MappingEngine       mappingEngine;
   @Inject SourceKeyIndex      keyIndex;
+  @Inject SecretResolver      secrets;
 
   @Override public String id() { return TYPE_ID; }
 
@@ -158,8 +159,8 @@ public class JdbcConnectorType implements ConnectorType {
     }
     String probe = new JdbcQueryBuilder(w.dialect())
         .buildCeilingProbe(w.schema(), w.table(), w.watermark(), w.pk(), w.mode().forQuery());
-    DataSource ds = poolRegistry.acquire(w.url(), w.user(), w.password(), ctx.tenantId(), w.dialect());
-    try (Connection conn = ds.getConnection();
+    try (Connection conn = poolRegistry.acquire(w.url(), w.user(), w.password(), ctx.tenantId(), w.dialect())
+             .getConnection();
          PreparedStatement ps = conn.prepareStatement(probe);
          ResultSet rs = ps.executeQuery()) {
       // An empty table has no ceiling, and needs none: the first chunk reads nothing and the run
@@ -169,16 +170,15 @@ public class JdbcConnectorType implements ConnectorType {
       List<Object> values = new ArrayList<>(keys.size());
       for (int i = 1; i <= keys.size(); i++) values.add(rs.getObject(i));
       return new RunStart(new JdbcRunBound(keys, values), List.of());
-    } catch (SQLException e) {
+    } catch (SQLException | RuntimeException e) {
       // A connection-class failure (SQLSTATE 08…) is the one the READER cannot survive either: no
       // pool hands out a connection to a database that is down, so degrading to an unbounded run
       // only buys a second connect timeout for the same sentence — #486's shape, on the other type
       // that measures a target. Everything else keeps the forgiving path: a probe that fails on
       // permissions or on a missing column says nothing certain about the reader's own query.
-      if (e.getSQLState() != null && e.getSQLState().startsWith("08")) {
-        throw new SourceUnreachableException("could not reach " + w.schema() + "." + w.table()
-            + " to measure the run's target: " + e.getMessage(), e);
-      }
+      SourceUnreachableException unreachable = JdbcUnreachable.of(w.schema() + "." + w.table(), e);
+      if (unreachable != null) throw unreachable;
+      if (e instanceof RuntimeException r) throw r;
       throw new RuntimeException("could not measure the run's target on "
           + w.schema() + "." + w.table() + ": " + e.getMessage(), e);
     }
@@ -356,15 +356,19 @@ public class JdbcConnectorType implements ConnectorType {
   /**
    * Extracts the JDBC password from the context.
    *
-   * <p>Two sources are supported (in priority order):
+   * <p>Three sources are supported (in priority order):
    * <ol>
    *   <li>{@code "_credentialId"} in config — a UUID written by {@link
    *       io.lumnik.hub.connector.domain.EffectiveConfig} from {@code Connector.credentialId}. Resolved via {@link io.lumnik.hub.connector.api.helpers.CredentialResolver}
    *       and cast to {@link ResolvedCredential.Basic} to extract the password.</li>
    *   <li>{@code "password"} in config — plain-text fallback for dev/test environments.</li>
+   *   <li>{@code "password_env"} — the hub's environment, then the tenant's {@code lm secret}
+   *       registry (#1349). Environment first, unlike {@link io.lumnik.hub.connector.secret.SecretRefs}:
+   *       a name that resolved before still resolves to the same value; only one that failed now
+   *       finds the tenant's secret.</li>
    * </ol>
    */
-  private static String resolvePassword(ConnectorContext ctx) {
+  String resolvePassword(ConnectorContext ctx) {
     Object credId = ctx.config().get("_credentialId");
     if (credId != null && ctx.credentials() != null) {
       // Safe with no ambient transaction of our own: CredentialResolver opens its own. That
@@ -378,14 +382,13 @@ public class JdbcConnectorType implements ConnectorType {
     // Plain-text password in config (dev/test only).
     String pw = ctx.configValue("password", String.class, "");
     if (!pw.isEmpty()) return pw;
-    // Declarative manifest: 'password_env' names an environment variable holding the secret
-    // (so it is never committed in the manifest).
+    // Declarative manifest: 'password_env' names the secret, so it is never committed in the manifest.
     Object envName = ctx.config().get("password_env");
     if (envName instanceof String e && !e.isBlank()) {
       String v = EnvSecrets.lookup(e);
       if (v != null && !v.isEmpty()) return v;
-      throw new ConfigValidationException(
-          "password_env '" + e + "' is not set in the server environment");
+      return secrets.resolve(e).filter(s -> !s.isEmpty()).orElseThrow(() -> new ConfigValidationException(
+          "password_env '" + e + "' is neither in the server environment nor in lm secret"));
     }
     return "";
   }

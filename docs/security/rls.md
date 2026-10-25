@@ -29,7 +29,7 @@ Created at install by the PostgreSQL init script, outside the migrations:
 |---|---|---|---|
 | `lumnik_app` | read and write rows, **under RLS** | bypass a policy; own a table | every request the hub serves |
 | `lumnik_readonly` | `SELECT`, **under RLS**; the session is read-only | write anything; resolve an unqualified table name | ask-to-SQL, `kind:View` render and detail, workflow data checks, the Search projection, export runs, `lm entity export` |
-| `lumnik_admin` | everything; **bypasses RLS**; owns every table | be enlisted in a request transaction by accident | migrations, dynamic table DDL, GDPR purge, secret resolution, the workflow dormancy sweep |
+| `lumnik_admin` | everything; **bypasses RLS**; owns every table | be enlisted in a request transaction by accident | migrations, dynamic table DDL, retention purges, connector delete, secret resolution, the workflow dormancy sweep |
 
 - `lumnik_app` owns nothing. PostgreSQL lets a table's owner bypass its own policies; that rule
   never applies to a request.
@@ -65,8 +65,10 @@ USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::bigi
 
 - All three passwords are generated **per install** and injected as environment variables:
   `LUMNIK_APP_DB_PASSWORD`, `LUMNIK_ADMIN_DB_PASSWORD`, `LUMNIK_READONLY_DB_PASSWORD`.
-- **Self-host rotation**: put the new value in `.env`, re-run `deploy/selfhost/up.sh`. Every run
-  sets the three roles' passwords to the `.env` values.
+- **Self-host rotation**: put the new value in `.env`, re-run `deploy/selfhost/up.sh` with the
+  flags you installed with. Every run sets the three roles' passwords to the `.env` values. On a
+  TLS install, run the [overlay command](../deploy.md#one-https-origin-the-tls-proxy) again
+  afterwards.
 - **Helm**: the release Secret carries the three values. On a cluster with an existing volume,
   rotate at the database (`ALTER ROLE … PASSWORD`) and upgrade with the matching values.
 
@@ -80,10 +82,11 @@ USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::bigi
 
 ## Secrets at rest: the master key
 
-!!! danger "One key. No rotation. No recovery."
-    Back up **`LUMNIK_SECRET_MASTER_KEY`** somewhere safe, today. It is not in the backup
-    script. **Change it** and every stored secret becomes undecryptable. **Lose it** and they
-    are unrecoverable. A key change means re-entering every secret by hand.
+!!! danger "Two keys. No rotation. No recovery."
+    Back up **`LUMNIK_SECRET_MASTER_KEY`** and **`LUMNIK_CRYPTO_SECRET_KEY`** somewhere safe,
+    today: both live in `.env`, which the backup script does not copy. **Change one** and the
+    secrets it protects become undecryptable. **Lose one** and they are unrecoverable. A key
+    change means re-entering every secret by hand.
 
 | | |
 |---|---|
@@ -91,11 +94,11 @@ USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::bigi
 | **How** | pgcrypto `pgp_sym_encrypt`, AES-256 |
 | **The key** | `LUMNIK_SECRET_MASTER_KEY`, generated at install with `openssl rand -base64 32` |
 | **Refuses to boot on** | a blank, placeholder, or short (< 16 characters) key |
-| **Rotating one secret's value** | supported: re-apply it, `rotated_at` is stamped |
-| **Rotating the master key** | not supported |
+| **Changing one secret's value** | supported: `lm secret set NAME` again prints `Updated secret "NAME"` |
+| **Changing a key** | not supported |
 
-- A second key, `LUMNIK_CRYPTO_SECRET_KEY`, protects connector and webhook credentials with the
-  same algorithm. It cannot be rotated either.
+- The second key, `LUMNIK_CRYPTO_SECRET_KEY`, protects connector and webhook credentials the
+  same way.
 
 ```
 $ lm secret set SFTP_ERP_PASSWORD
@@ -119,7 +122,7 @@ SFTP_ERP_PASSWORD              -
 
 ```mermaid
 flowchart LR
-  b["browser · lm · IdP"] ==>|"HTTPS"| edge["TLS edge<br/>Caddy façade · your proxy · k8s Gateway"]
+  b["browser · lm · IdP"] ==>|"HTTPS"| edge["TLS edge<br/>Caddy proxy · your proxy · k8s Gateway"]
   edge -->|"HTTP"| hub["hub :8080"]
   hub -->|"JDBC, no sslmode"| pg[("PostgreSQL")]
   hub -->|"HTTP"| ollama["Ollama"]
@@ -127,24 +130,25 @@ flowchart LR
 ```
 
 - The hub itself speaks plain HTTP on port 8080. There is no `https://` origin in the application.
-- **Self-host**: the optional [TLS façade](../deploy.md#one-https-origin-the-tls-facade)
+- **Self-host**: the optional [TLS proxy](../deploy.md#one-https-origin-the-tls-proxy)
   terminates HTTPS and proxies to the hub and Keycloak over the compose network. Skip it and the
   hub answers in the clear on whatever you exposed port 8080 to.
 - **Kubernetes**: the Gateway terminates TLS from a secret (self-signed by `up.sh` unless you
   supply your own); Gateway→pod is plain HTTP inside the cluster.
-- **Behind the edge nothing is encrypted**: hub↔PostgreSQL, hub↔Ollama, façade↔hub. Keep the
+- **Behind the edge nothing is encrypted**: hub↔PostgreSQL, hub↔Ollama, proxy↔hub. Keep the
   database and model ports on a private network; that is the operator's job.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Hub refuses to boot: `lumnik.secret.master-key is not set` / `is still the placeholder` / `is too short (< 16 chars)` | The master key is blank, the placeholder, or under 16 characters | `openssl rand -base64 32`, export it as `LUMNIK_SECRET_MASTER_KEY` |
+| `docker compose` refuses to start: `required variable LUMNIK_SECRET_MASTER_KEY is missing a value` (or `LUMNIK_CRYPTO_SECRET_KEY`) | The key is missing from `.env` | `openssl rand -base64 32`, put it in `.env` — only on a fresh install; on an existing one, restore the original key |
+| Hub refuses to boot: `lumnik.secret.master-key is too short (< 16 chars)` | The key is under 16 characters | Same fix |
 | A secret fails at runtime: `SecretResolver failed for name=… tenant=…` | The master key changed or was lost since the secret was encrypted | Restore the original key from your backup; there is no re-encryption path |
 | A query as `lumnik_app` or `lumnik_readonly` returns zero rows, `lumnik_admin` shows the data | `app.current_tenant` was never set on that connection (a manual `psql` session) | `SET LOCAL app.current_tenant = '<id>'` inside a transaction, as in [the live check](index.md#verify-it-yourself-in-five-minutes) |
 
 ## See also
 
 - [Roles & permissions](role-management.md): the application-layer RBAC above this.
-- [Scopes](../rag/scopes.md): the métier boundary layered on top of tenant isolation.
+- [Scopes](../rag/scopes.md): the business-scope boundary layered on top of tenant isolation.
 - [Security overview](index.md): the auditor's grid and the gap register.

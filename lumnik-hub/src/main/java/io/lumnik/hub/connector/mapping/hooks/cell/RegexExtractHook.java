@@ -3,12 +3,15 @@ package io.lumnik.hub.connector.mapping.hooks.cell;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.mapping.MappingState;
 import io.lumnik.hub.connector.mapping.MappingValidationException;
+import io.lumnik.hub.connector.mapping.ScalarParams;
 import io.lumnik.hub.connector.mapping.hooks.CellHook;
+import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.RegexParams;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -36,6 +39,9 @@ import java.util.regex.Pattern;
  * quiet by default for the same reason. {@code cell_errors} is ONE scalar for the whole run,
  * shared by every hook in the mapping: a hook that counts on a normal condition does not merely
  * misreport itself, it buries the {@code parse-date} failure sitting beside it.
+ *
+ * <p>Unless the integrator says otherwise: {@code required: true} (#1417), like {@code lookup}'s {@code on-missing},
+ * declares that this column has no optional rows, and a miss on a non-empty cell then counts.
  *
  * <p>What the operator gets instead is structural: every column {@code groups} names exists on
  * every row — matched, missed, or never attempted because the cell was empty — so an all-null
@@ -65,12 +71,23 @@ public class RegexExtractHook implements CellHook {
     // per row. That retires the old split where key-shape ran on every row (empty cell included, so
     // an all-null column could not smuggle a bad manifest past it) and the range check was deferred
     // to the first non-null row to avoid a per-row compile: compiling once here costs nothing per row.
+    // `required` is a boolean or absent — asBoolean() would read "yes" as false and quietly mean the default.
+    ScalarParams.optionalBoolean("regex-extract hook", "required", params.path("required"), false);
     String patternStr = RegexParams.patternText("regex-extract", "pattern", params.path("pattern"));
     if (patternStr.isEmpty()) return;
     JsonNode groups = params.path("groups");
     if (groups.isMissingNode() || groups.isNull()) return;   // nothing declared to extract into
     requireKeysAreNumbers(groups);
     requireKeysAreWithinRangeOf(groups, compile(patternStr));
+    // #1505: a miss writes null — over the column it reads, that erases the value read.
+    String read = params.path("column").asText();
+    groups.fields().forEachRemaining(g -> {
+      if (g.getValue().asText().equals(read)) {
+        throw new MappingValidationException("regex-extract hook: group " + g.getKey() + " writes '" + read
+            + "', the column it reads — a miss would write null over it. Write the group to a column of its own; "
+            + "to rewrite a value in place, use regex-replace");
+      }
+    });
   }
 
   @Override
@@ -81,6 +98,7 @@ public class RegexExtractHook implements CellHook {
 
     JsonNode groups = params.path("groups");
     if (groups.isMissingNode() || groups.isNull()) return;   // nothing declared to extract into
+    refuseColumnsAlreadyInTheRow(row, groups);
 
     Object v = row.get(params.path("column").asText());
     if (v == null) {
@@ -105,9 +123,29 @@ public class RegexExtractHook implements CellHook {
     // Walk the DECLARED groups, not what matched — SplitHook's rule. This is the third and last
     // route to the same promise: matched here, missed here, and an empty cell handled above.
     // Validated above, so parseInt cannot fail and group(idx) cannot be out of range.
+    // #1417: quiet by default (above); `required: true` is the integrator saying this column has no optional rows,
+    // so a non-empty cell the pattern cannot read is a cell not delivered — and on-error decides its row.
+    if (matched == null && params.path("required").asBoolean(false)) {
+      s.counters().cellErrors().incrementAndGet();
+    }
     Matcher result = matched;
     groups.fields().forEachRemaining(e -> row.put(e.getValue().asText(),
         result == null ? null : result.group(Integer.parseInt(e.getKey()))));
+  }
+
+  /**
+   * #1505: a group writes its column on every row, null where the pattern misses — over a column the row already
+   * holds (the file's, its own {@code column}, an earlier hook's) that would erase a value and count nothing. The
+   * validator refuses it when the columns are known; with a header read at run time, the run fails here, by name.
+   */
+  private static void refuseColumnsAlreadyInTheRow(Map<String, Object> row, JsonNode groups) {
+    for (JsonNode column : groups) {
+      if (row.containsKey(column.asText())) {
+        throw new MappingValidationException("regex-extract: column '" + column.asText() + "' is already in the row "
+            + "— the file or an earlier hook writes it; this hook would write null over it on every row it does not "
+            + "match. Write the group to a column of its own");
+      }
+    }
   }
 
   private Pattern compile(String patternStr) {
@@ -132,7 +170,10 @@ public class RegexExtractHook implements CellHook {
           + "groups: { \"1\": year }");
     }
     for (var entries = groups.fields(); entries.hasNext(); ) {
-      String key = entries.next().getKey();
+      var entry = entries.next();
+      String key = entry.getKey();
+      // The value names the column the group lands in: a list would name the column "", a null the column "null".
+      ScalarParams.text("regex-extract hook", "groups." + key, entry.getValue());
       int idx;
       try {
         idx = Integer.parseInt(key);
@@ -169,5 +210,17 @@ public class RegexExtractHook implements CellHook {
             + "pattern, which has " + available + " (0 is the whole match)");
       }
     }
+  }
+
+  @Override
+  public Set<String> params() {
+    return Set.of("column", "pattern", "groups", "required");
+  }
+
+  @Override
+  public ColumnEffect columns(JsonNode params) {
+    ColumnEffect.Builder b = ColumnEffect.builder().reads("column", params.path("column"));
+    params.path("groups").forEach(b::adds);
+    return b.build();
   }
 }

@@ -19,23 +19,45 @@ public record HookInvocation(
    * step with it. One owner, one behaviour: an entry that is not a single-key object
    * ({@code - [a, b]}, {@code - {a: 1, b: 2}}) is refused, both sides.
    *
-   * <p>The hook's VALUE (its params) is intentionally NOT shape-checked here: {@code skip-empty-rows:
-   * true} carries a boolean, {@code map-columns: {…}} an object, {@code parse-date:} a null (no
-   * knobs). Each hook reads its own params — a hook that requires a map refuses a non-map in its own
-   * {@code validateParams}, where the expected shape is known; a blanket "must be a map" here would
-   * reject the legitimate scalar-flag hooks.
+   * <p>The hook's VALUE (its params) is intentionally NOT shape-checked here: the parser splits entries;
+   * {@code HookCatalog.refuseUnknownParams} refuses a block that is neither a map nor bare (#1492).
    */
-  public static List<HookInvocation> parseList(JsonNode arr) {
-    if (arr == null || !arr.isArray()) return List.of();
+  public static List<HookInvocation> parseList(JsonNode mapping, String tier) {
+    JsonNode arr = requireList(mapping, tier);
+    if (!arr.isArray()) return List.of();
     List<HookInvocation> out = new ArrayList<>(arr.size());
-    for (JsonNode entry : arr) {
-      if (!entry.isObject() || entry.size() != 1) {
-        throw new MappingValidationException(
-            "each hook must be an object with one key, got: " + entry);
-      }
-      var field = entry.fields().next();
-      out.add(new HookInvocation(field.getKey(), field.getValue()));
-    }
+    for (int i = 0; i < arr.size(); i++) out.add(parse(arr.get(i), tier, i));
     return out;
+  }
+
+  /**
+   * #1464: a tier is a list of hooks, or absent. Written as a map ({@code cell: { upper: … }}) or a scalar it used to
+   * read as no hooks, at apply and at run time alike — the manifest applied clean and no hook ran. Absent and
+   * {@code cell:} written empty stay allowed. Read by {@link #parseList} and by the csv-file validator.
+   *
+   * @return the tier's node: an array, missing or null
+   */
+  public static JsonNode requireList(JsonNode mapping, String tier) {
+    JsonNode node = mapping.path(tier);
+    if (node.isMissingNode() || node.isNull() || node.isArray()) return node;
+    throw new MappingValidationException(tier + " must be a list of hooks, e.g. - upper: { columns: [name] } (got "
+        + MappingValidationException.typeName(node) + ")");
+  }
+
+  /**
+   * Entry {@code index} of {@code tier} — what {@link #parseList} reads, also read alone by the csv-file validator
+   * (#1403). A refusal names the place and the shape, never the entry's content (#1474): constants and table
+   * literals live there, and the message reaches {@code lm validate} and the run.
+   */
+  public static HookInvocation parse(JsonNode entry, String tier, int index) {
+    if (!entry.isObject() || entry.size() != 1) {
+      String shape = entry.isObject()
+          ? "object with " + entry.size() + " keys"
+          : MappingValidationException.typeName(entry);
+      throw new MappingValidationException(
+          "each hook must be an object with one key (" + tier + "[" + index + "]: got " + shape + ")");
+    }
+    var field = entry.fields().next();
+    return new HookInvocation(field.getKey(), field.getValue());
   }
 }

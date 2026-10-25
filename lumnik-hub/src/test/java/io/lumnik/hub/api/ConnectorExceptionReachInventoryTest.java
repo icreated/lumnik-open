@@ -83,6 +83,9 @@ class ConnectorExceptionReachInventoryTest {
       // RestEndpointReader raises it inside a run, where ChunkExecutor turns it into the run's failure
       // text (#1166); the pre-flight and the probe call the client themselves and never see it
       "SourceCallException", Verdict.NO_GLOBAL_MAPPER,
+      // RestEndpointReader raises it inside a run, only when the engine's run scope reports a cancel;
+      // ChunkExecutor turns it into ChunkResult.Cancelled (#1444). A scope with no run never reports one
+      "RunCancelledException", Verdict.NO_GLOBAL_MAPPER,
       // a complete-looking vestige: declared, never raised. Not dead weight this guard may remove on
       // its own, but weight a reader should be told about
       "MappingException", Verdict.NEVER_THROWN);

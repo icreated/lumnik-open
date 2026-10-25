@@ -126,7 +126,7 @@ func newSecretRmCmd() *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
 		Use:   "rm <NAME>",
-		Short: "Soft-delete a secret",
+		Short: "Delete a secret and its stored value",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !force {

@@ -3,18 +3,23 @@ package io.lumnik.hub.ask;
 import io.lumnik.extraction.spi.ask.SqlLexer;
 import io.lumnik.extraction.spi.ask.SqlLexer.Kind;
 import io.lumnik.extraction.spi.ask.SqlLexer.Token;
+import io.lumnik.hub.view.ViewFilter;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Extracts the lexical shapes the ask pipeline reasons about — the bare-column filters that
  * {@link DomainGuard} and
  * {@link UndocumentedColumnGuard} both inspect: {@code col = 'v'} / {@code col <> 'v'} /
  * {@code col != 'v'} / {@code col IN ('a','b')} / {@code col NOT IN ('a','b')}. Purely LEXICAL — no policy: the guards apply their own
- * semantic checks (declared? in-domain? a niladic keyword?). A numeric RHS, a qualified or cast column,
- * a function-wrapped column, and a non-clean IN list never yield a filter (the deliberate fail-opens).
+ * semantic checks (declared? in-domain? a niladic keyword?). A numeric RHS never yields a LITERAL filter —
+ * {@link #columnNumberFilters} reads those apart (#1338); a qualified or cast column, a function-wrapped
+ * column, and a non-clean IN list never yield a filter (the deliberate fail-opens).
  * A QUOTED name is not among them: {@code SchemaCard} renders every column quoted, since that is the only
  * form a model can copy for a name carrying a dot, a space or a currency sign — so excluding quoted
  * identifiers would blind both guards to the filters the model actually writes.
@@ -69,10 +74,36 @@ final class SqlFilters {
 
     /** Every literal filter the domain guard can enforce. (S3776: a guard chain plus two shapes.) */
     static List<Filter> columnLiteralFilters(List<Token> tokens) {
+        return filters(tokens, Kind.STRING);
+    }
+
+    /**
+     * Every filter against number literals (#1338) — {@code col = 5}, {@code col IN (1, 2.0)} — its values in
+     * the canonical text a fused number column is written in ({@link #canonicalNumber}). Kept apart from
+     * {@link #columnLiteralFilters}: a number on the right is as often an aggregate alias ({@code HAVING n = 3})
+     * as a column, so only a reader that checks a DECLARED column's domain may use these.
+     */
+    static List<Filter> columnNumberFilters(List<Token> tokens) {
+        return filters(tokens, Kind.NUMBER);
+    }
+
+    /**
+     * A number literal as a fused number column writes it — {@code trim_scale} in the view: {@code 7.0} is
+     * {@code 7}, {@code 12.50} is {@code 12.5}. Null when it is not a number by {@link ViewFilter#isNumeric}, the rule
+     * every {@code =} shares (a bounded plain decimal): the literal is the model's, so a question can put
+     * {@code 1e999999999} there, which {@code toPlainString} would spell out in a billion digits. Null is the guards'
+     * fail-open — no filter read — never an exhausted heap.
+     */
+    static String canonicalNumber(String literal) {
+        if (!ViewFilter.isNumeric(literal)) return null;
+        return new BigDecimal(literal.strip()).stripTrailingZeros().toPlainString();
+    }
+
+    private static List<Filter> filters(List<Token> tokens, Kind literal) {
         List<Filter> filters = new ArrayList<>();
         for (int i = 0; i < tokens.size(); i++) {
             if (!isColumnRef(tokens, i)) continue;
-            filterAt(tokens, i).ifPresent(filters::add);
+            filterAt(tokens, i, literal).ifPresent(filters::add);
         }
         return filters;
     }
@@ -111,7 +142,7 @@ final class SqlFilters {
      * needs nothing else. Function-wrapping stays excluded, but by the token that FOLLOWS the name
      * ({@code lower(col)} is followed by {@code )}, never by an operator), not by this predicate.
      */
-    private static boolean isColumnRef(List<Token> tokens, int i) {
+    static boolean isColumnRef(List<Token> tokens, int i) {
         Token col = tokens.get(i);
         if (col.kind() != Kind.IDENT) return false;
         if (!col.quoted() && col.text().equalsIgnoreCase("not")) return false;
@@ -119,27 +150,40 @@ final class SqlFilters {
         return prev == null || !(isPunct(prev, ".") || isOp(prev, "::"));
     }
 
-    /** {@code col = 'lit'} (or {@code <>}, {@code !=}), or {@code col IN ('a', 'b', …)}. */
-    private static Optional<Filter> filterAt(List<Token> tokens, int i) {
+    /** {@code col = 'lit'} (or {@code <>}, {@code !=}), or {@code col IN ('a', 'b', …)} — literals of one kind. */
+    private static Optional<Filter> filterAt(List<Token> tokens, int i, Kind literal) {
         if (i + 1 >= tokens.size()) return Optional.empty();
         Token col = tokens.get(i);
         Token op = tokens.get(i + 1);
         if (isComparison(op)) {
-            if (i + 2 < tokens.size() && tokens.get(i + 2).kind() == Kind.STRING) {
-                return Optional.of(new Filter(col.text(), List.of(tokens.get(i + 2).text()), col.quoted()));
+            if (i + 2 < tokens.size() && tokens.get(i + 2).kind() == literal) {
+                return Optional.ofNullable(valueOf(tokens.get(i + 2))).map(v -> new Filter(col.text(), List.of(v), col.quoted()));
             }
             return Optional.empty();
         }
         if (isKeyword(op, "in") && i + 2 < tokens.size() && isPunct(tokens.get(i + 2), "(")) {
-            return cleanStringList(tokens, i + 3).map(values -> new Filter(col.text(), values, col.quoted()));
+            return cleanList(tokens, i + 3, literal).map(values -> new Filter(col.text(), values, col.quoted()));
         }
         // `col NOT IN ('a','b')` — the same filter, negated. The guards treat it like `<>` already does:
         // a value outside a declared domain is a value the model invented, whichever way the test runs.
         if (isKeyword(op, "not") && i + 3 < tokens.size() && isKeyword(tokens.get(i + 2), "in")
                 && isPunct(tokens.get(i + 3), "(")) {
-            return cleanStringList(tokens, i + 4).map(values -> new Filter(col.text(), values, col.quoted()));
+            return cleanList(tokens, i + 4, literal).map(values -> new Filter(col.text(), values, col.quoted()));
         }
         return Optional.empty();
+    }
+
+    // SQL niladic value keywords that can appear bare on the left of an operator but are NOT columns
+    // (incl. bare `user`, a synonym of current_user). BARE is the operative word: Postgres promotes no
+    // quoted token to a keyword, so `"user"` names a column, and the card hands the model every name quoted.
+    private static final Set<String> VALUE_KEYWORDS = Set.of(
+        "true", "false", "null", "user", "current_user", "session_user", "current_role",
+        "current_catalog", "current_schema", "current_date", "current_time", "current_timestamp",
+        "localtime", "localtimestamp");
+
+    /** A name that, written bare, is a value — {@code current_date}, {@code null} — and not a column. */
+    static boolean isValueKeyword(String name, boolean quoted) {
+        return !quoted && VALUE_KEYWORDS.contains(name.toLowerCase(Locale.ROOT));
     }
 
     static boolean isKeyword(Token t, String word) {
@@ -151,15 +195,21 @@ final class SqlFilters {
             && (op.text().equals("=") || op.text().equals("<>") || op.text().equals("!="));
     }
 
-    /** From the token after {@code (}, read {@code STRING (, STRING)* )} — the values, or empty if not a
-     *  clean string list (any non-string element, or unterminated). */
-    private static Optional<List<String>> cleanStringList(List<Token> tokens, int start) {
+    /** A string literal's text, or a number literal's canonical text. */
+    private static String valueOf(Token t) {
+        return t.kind() == Kind.NUMBER ? canonicalNumber(t.text()) : t.text();
+    }
+
+    /** From the token after {@code (}, read {@code LIT (, LIT)* )} with every LIT of {@code literal}'s kind — the
+     *  values, or empty if not a clean list (another kind, a mix, or unterminated). */
+    private static Optional<List<String>> cleanList(List<Token> tokens, int start, Kind literal) {
         List<String> values = new ArrayList<>();
         int i = start;
         while (i < tokens.size()) {
             Token t = tokens.get(i);
-            if (t.kind() != Kind.STRING) return Optional.empty();
-            values.add(t.text());
+            String value = t.kind() == literal ? valueOf(t) : null;
+            if (value == null) return Optional.empty();
+            values.add(value);
             i++;
             if (i >= tokens.size()) return Optional.empty();
             Token sep = tokens.get(i);

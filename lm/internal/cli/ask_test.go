@@ -343,7 +343,7 @@ func TestAsk_jsonAndYamlAreOneDocument(t *testing.T) {
 		"dataAsOf": "2026-10-16T08:00:00Z", "otherDoors": []string{"conflicts"}, "abstained": true,
 		"disputed": []map[string]any{{"key": "P-1", "column": "city", "label": "Ville", "matched": "Lyon",
 			"retained": "Lyon", "counted": true, "sources": []map[string]any{{"src": "t_erp", "value": "Lyon"}}}},
-		"disputedTruncated": false,
+		"disputedTruncated": false, "understoodAs": "Quoi pour A-1 ?",
 	}
 	t.Run("json", func(t *testing.T) {
 		askServer(t, payload)
@@ -386,7 +386,8 @@ func TestAsk_jsonAndYamlAreOneDocument(t *testing.T) {
     }
   ],
   "disputedTruncated": false,
-  "abstained": true
+  "abstained": true,
+  "understoodAs": "Quoi pour A-1 ?"
 }
 `, stdout)
 		assert.Empty(t, stderr)
@@ -423,6 +424,7 @@ disputed:
           value: Lyon
 disputedTruncated: false
 abstained: true
+understoodAs: Quoi pour A-1 ?
 `, stdout)
 		assert.Empty(t, stderr)
 	})
@@ -477,4 +479,38 @@ func TestAsk_aNullFreshnessIsUnknownNotAnError(t *testing.T) {
 	out := askWith(t, map[string]any{"answer": "1.", "sql": "SELECT 1", "rowCount": 1, "dataAsOf": nil,
 		"rows": []json.RawMessage{json.RawMessage(`{"n":1}`)}}, "combien ?")
 	assert.NotContains(t, out, "data as of")
+}
+
+// askSent runs lm ask against a hub that answers reply, and returns what lm printed and the body it sent.
+func askSent(t *testing.T, reply map[string]any, args ...string) (string, map[string]any) {
+	t.Helper()
+	var sent map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&sent)
+		_ = json.NewEncoder(w).Encode(reply)
+	}))
+	t.Cleanup(srv.Close)
+	setupCfg(t, srv.URL)
+	stdout, stderr, code := runCmd(t, append([]string{"ask"}, args...)...)
+	require.Zero(t, code, stderr)
+	return stdout, sent
+}
+
+// #1405: --previous sends the question before this one, and the table names the question the hub answered.
+func TestAsk_aFollowUpSendsThePreviousQuestionAndShowsWhatWasUnderstood(t *testing.T) {
+	out, sent := askSent(t, map[string]any{"answer": "4.", "sql": "SELECT 1", "rowCount": 1,
+		"rows": []map[string]any{{"count": 4}},
+		"understoodAs": "Combien de commandes du fournisseur SUP-004 ont été annulées ?"},
+		"--previous", "Combien de commandes ont été annulées ?", "Et SUP-004 ?")
+	assert.Equal(t, "Combien de commandes ont été annulées ?", sent["previous"])
+	assert.Equal(t, "Et SUP-004 ?", sent["question"])
+	assert.True(t, strings.HasPrefix(out,
+		"4.\n  understood as: Combien de commandes du fournisseur SUP-004 ont été annulées ?\n"), out)
+}
+
+func TestAsk_withoutPreviousNothingIsSentAndNothingIsUnderstood(t *testing.T) {
+	out, sent := askSent(t, map[string]any{"answer": "26.", "sql": "SELECT 1", "rowCount": 1,
+		"rows": []map[string]any{{"count": 26}}, "understoodAs": nil}, "combien ?")   // the hub sends null
+	assert.NotContains(t, sent, "previous")
+	assert.NotContains(t, out, "understood as")
 }

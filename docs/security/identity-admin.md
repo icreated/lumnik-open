@@ -1,6 +1,6 @@
 # Tenants, users & scopes
 
-> Identity lives in Keycloak, not in lumnik. Creating a human, granting a role, fencing a métier
+> Identity lives in Keycloak, not in lumnik. Creating a user, granting a role, and assigning a scope
 > are console gestures; the hub follows the token. `lm` has no command for users, roles or
 > tenants.
 
@@ -12,7 +12,7 @@ lumnik trusts four claims from the access token:
 |---|---|
 | `aud` | identifies the intended API — must contain `lumnik-backend` |
 | `tenant_id` | which tenant the user belongs to |
-| `groups` | the realm roles: `lm_*` open surfaces, `scope:*` fence métiers |
+| `groups` | the realm roles: `lm_*` open surfaces, `scope:*` limit data access |
 | `user_id` | optional — binds the token to an existing hub row |
 
 The bundled realm `lumnik` already maps the `tenant_id` and `user_id` user attributes onto those
@@ -30,9 +30,15 @@ For an external IdP, see [Bring your own IdP](byo-idp.md) and [SCIM](scim.md).
 - Brute-force detection is **on**: temporary lockout at Keycloak's defaults. Tune it under
   *Realm settings → Security defenses*.
 - **Local only.** The compose pins Keycloak to `127.0.0.1`, and the
-  [TLS façade](../deploy.md#one-https-origin-the-tls-facade) proxies only the OIDC endpoints,
-  never the admin console. On a remote host, use an SSH tunnel:
+  [TLS proxy](../deploy.md#one-https-origin-the-tls-proxy) proxies login, tokens and the
+  account page, never the admin console. On a remote host, use an SSH tunnel:
   [reach the hub from another machine](../deploy.md#reach-the-hub-from-another-machine).
+
+!!! warning "Helm (cloud edition): the bundled Keycloak keeps nothing"
+    With `auth.mode=oidc`, the chart's Keycloak re-imports its realm at every pod start. Users,
+    roles, attributes and *Enabled: off* set in the console **disappear at the next restart**.
+    On Helm, manage users in your own IdP (`auth.mode=oidc-external`,
+    [Bring your own IdP](byo-idp.md)).
 
 ## How to…
 
@@ -55,7 +61,7 @@ For an external IdP, see [Bring your own IdP](byo-idp.md) and [SCIM](scim.md).
 `POST /api/tenants/{tid}/users` creates a **hub row, not a login**: nobody can authenticate as
 it until a Keycloak account points at it.
 
-### Grant (or revoke) a métier scope
+### Grant (or revoke) a business scope
 
 Scope roles are created on demand. The shipped realm has none: zero `scope:*` roles means
 unscoped, tenant-wide.
@@ -69,7 +75,7 @@ From their next token the user is **bound**:
 
 - chat, search, views and entity reads answer only inside granted scopes; anything else is
   `403 {"error":"scope not granted"}`;
-- the decision inbox lists only the granted métiers' decisions; another métier's id is a `404`;
+- the decision inbox lists only decisions in the granted scopes; an id from another scope is a `404`;
 - an integrator administers only the connectors whose scopes they hold all of.
   [What they see](role-management.md#troubleshooting)
 

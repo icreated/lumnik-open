@@ -144,7 +144,7 @@ public class ViewApplyResource {
     String t = pgType == null ? "" : pgType.toLowerCase(Locale.ROOT).strip();
     return t.startsWith("text") || t.startsWith("char") || t.startsWith("varchar") || t.startsWith("bpchar")
         || t.startsWith("character") || t.equals("integer") || t.equals("int") || t.equals("int2")
-        || t.equals("int4") || t.equals("smallint") || t.equals("uuid") || t.equals("boolean")
+        || t.equals("int4") || t.equals("smallint") || t.equals("bigint") || t.equals("int8") || t.equals("uuid") || t.equals("boolean")
         || t.equals("bool");
   }
 

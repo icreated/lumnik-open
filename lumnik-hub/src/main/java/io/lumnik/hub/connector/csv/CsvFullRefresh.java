@@ -98,7 +98,7 @@ public final class CsvFullRefresh {
 
   /** The refusal a sweep over the ratio becomes: the counts, the limit, and the gesture. */
   static StreamEnd refused(UnseenRowSweeper.Count r, double max) {
-    return new StreamEnd.Refused(r.unseen() + " of " + r.before() + " rows would be removed: the file holds "
+    return new StreamEnd.Refused(r.lost() + " of " + r.before() + " rows would be removed: the file holds "
         + r.met() + " where the table held " + r.before() + ", more than refresh.max_removed ("
         + percent(max) + ") allows — nothing was removed. If the file really lost them, raise "
         + "refresh.max_removed (or set it to off) and run again.");

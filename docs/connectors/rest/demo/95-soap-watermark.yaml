@@ -1,28 +1,20 @@
-# 95-soap-watermark.yaml — incremental over SOAP, and the seam it lands on.
+# 95-soap-watermark.yaml — incremental over SOAP.
 #
-# `incremental: watermark` is not a REST-only block: the engine sends the stored mark on the
-# FIRST request of a run, under the parameter named by `incremental.param`, and computes the new
-# one as the MAX of `watermark_path` over everything the run read.
-#
-# ── The seam, and it is worth knowing before you promise a customer an incremental SOAP feed ─
-# The request here is a POST whose payload is a templated XML body — and the mark does NOT go
-# into that body. There is no {{watermark}} placeholder: the template knows four, and those are
-# page_size, cursor, secret:NAME and env:NAME. The mark rides in the URL QUERY STRING, bolted
-# onto the POST:
+# `incremental: watermark` sends the last mark on the first request of a run, under the
+# parameter named by `incremental.param`. On SOAP, that parameter goes in the URL's query
+# string, not in the body:
 #
 #   POST /siebel/start.swe?updated_since=2026-01-02T15:59:00Z
 #
-# which is what the demo service reads. A real SOAP service would almost certainly want that
-# filter as an element inside the body, and this release gives no way to put it there. A body
-# carrying <UpdatedSince>{{watermark}}</UpdatedSince> APPLIES cleanly — the validator does not
-# inspect templates — and then fails every run with `unknown placeholder: watermark`.
+# The body template has no {{watermark}} placeholder: `lm apply` refuses one. A service that
+# wants the filter inside the body cannot be read incrementally today.
 #
 #   lm connector run acme-soap-incremental      # run 1 — the full 2 400
-#   lm connector run acme-soap-incremental      # run 2 — only what shares the maximal instant
+#   lm connector run acme-soap-incremental      # run 2 — only what changed
 #   lm endpoint reset-cursor acme-soap-incremental/partners
 #
-# Expect: run 1 = 2 400 in / 2 400 out. Run 2 = 1 in / 1 out — the boundary is inclusive, so the
-# row holding the maximal instant comes back and is re-upserted on its unique key.
+# Expect: run 1 = 2 400 in / 2 400 out. Run 2 = 1 in / 1 out: the row holding the latest
+# instant comes back, and replaces itself.
 
 apiVersion: connectors.lumnik.io/v1
 kind: Connector

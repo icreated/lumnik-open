@@ -128,4 +128,68 @@ class ToUuidHookTest {
         .isInstanceOf(MappingValidationException.class)
         .hasMessageContaining("on-invalid");
   }
+
+  /** #1468: a list or a map on-invalid read as {@code ""} and was refused as {@code got ''}; its shape is named. */
+  @Test
+  void a_list_or_map_on_invalid_is_refused_naming_its_shape() throws Exception {
+    assertThatThrownBy(() -> catalog.cell("to-uuid").validateParams(
+        YAML.readTree("column: customer_id\non-invalid: [keep]\n")))
+        .isInstanceOf(MappingValidationException.class)
+        .hasMessage("to-uuid hook: 'on-invalid' must be text, a number or a boolean (got array)");
+    assertThatThrownBy(() -> catalog.cell("to-uuid").validateParams(
+        YAML.readTree("column: customer_id\non-invalid: { mode: keep }\n")))
+        .isInstanceOf(MappingValidationException.class)
+        .hasMessage("to-uuid hook: 'on-invalid' must be text, a number or a boolean (got object)");
+  }
+
+  /**
+   * #1423: {@code generate} minted a random id, a new one on every run — the next night's export gave the same
+   * supplier another id, and the run reported its row removed. {@code generate-from} derives the id from a column.
+   */
+  @Test
+  void generate_from_mints_the_same_id_for_the_same_value_on_every_run() throws Exception {
+    JsonNode params = YAML.readTree("column: ext_id\ngenerate-from: code\non-invalid: generate");
+    var hook = catalog.cell("to-uuid");
+    var night1 = new HashMap<String, Object>();
+    night1.put("code", "F0004");
+    night1.put("ext_id", null);
+    var night2 = new HashMap<String, Object>(night1);
+    var other = new HashMap<String, Object>(night1);
+    other.put("code", "F0007");
+    var junk = new HashMap<String, Object>(night1);
+    junk.put("ext_id", "N/A");
+    var state = new MappingState();
+
+    hook.apply(night1, params, state);
+    hook.apply(night2, params, state);
+    hook.apply(other, params, state);
+    hook.apply(junk, params, state);
+
+    assertThat((String) night1.get("ext_id")).matches(UUID_SHAPE).isEqualTo(night2.get("ext_id"))
+        .isNotEqualTo(other.get("ext_id")).isEqualTo(junk.get("ext_id"));
+    assertThat(state.counters().cellErrors().get()).as("only the junk value counts").isEqualTo(1);
+  }
+
+  @Test
+  void generate_from_an_empty_column_mints_nothing_and_counts() throws Exception {
+    JsonNode params = YAML.readTree("column: ext_id\ngenerate-from: code");
+    var row = new HashMap<String, Object>();
+    row.put("code", " ");
+    row.put("ext_id", null);
+    var state = new MappingState();
+
+    catalog.cell("to-uuid").apply(row, params, state);
+
+    assertThat(row.get("ext_id")).isNull();
+    assertThat(state.counters().cellErrors().get()).isEqualTo(1);
+  }
+
+  @Test
+  void generate_from_must_name_another_column() {
+    var hook = catalog.cell("to-uuid");
+    assertThatThrownBy(() -> hook.validateParams(YAML.readTree("column: ext_id\ngenerate-from: ext_id")))
+        .isInstanceOf(MappingValidationException.class).hasMessageContaining("'generate-from'");
+    assertThatThrownBy(() -> hook.validateParams(YAML.readTree("column: ext_id\ngenerate-from: [code]")))
+        .isInstanceOf(MappingValidationException.class).hasMessageContaining("'generate-from'");
+  }
 }

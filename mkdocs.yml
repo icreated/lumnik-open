@@ -65,7 +65,7 @@ markdown_extensions:
       base_path: ['.']
       check_paths: true
 
-# Internal working docs never ship on the installateur site.
+# Internal working docs never ship on the integrator site.
 exclude_docs: |
   superpowers/
   snapshot/
@@ -73,34 +73,34 @@ exclude_docs: |
   # Anchored: this is docs/demo/, the internal WOW harness — NOT docs/connectors/rest/demo/,
   # the bench the REST page tells the reader to run, which has to ship with the site.
   /demo/
-  !/demo/wow-customer/README.md
   dev-setup.md
   connectors/csv/README.md
   connectors/rest/README.md
 
 nav:
   - Home: index.md
-  - Parcours — the guided path: parcours.md
-  - The two editions: editions.md
-  - Choosing what your hub offers: choosing-what-your-hub-offers.md
-  - Where lumnik stands: where-lumnik-stands.md
-  - Deploy lumnik: deploy.md
-  - Deploy on Windows: deploy-windows.md
-  - Prerequisites — prepare the ground: quickstart/prerequisites.md
-  - Quickstart: quickstart/installer.md
-  - How lumnik works: how-it-works.md
-  - How lumnik breathes: respiration.md
-  - Outputs — the roads out: outputs.md
-  - Email notifications: email.md
-  - Cheat sheet: cheat-sheet.md
-  - The WOW, step by step: wow.md
-  - The WOW, hands-on: demo/wow-customer/README.md
+  - Start here:
+    - Guided path: parcours.md
+    - Prerequisites: quickstart/prerequisites.md
+    - Deploy lumnik: deploy.md
+    - Deploy on Windows: deploy-windows.md
+    - Quickstart: quickstart/installer.md
+    - Other first sources: quickstart/other-sources.md
+    - The WOW: wow.md
+    - Cheat sheet: cheat-sheet.md
+  - Understand:
+    - The two editions: editions.md
+    - How lumnik works: how-it-works.md
+    - How lumnik breathes: respiration.md
+    - Glossary: glossary.md
   - Connectors:
     - Overview: connectors/index.md
-    - CSV & files (SFTP/S3): connectors/csv.md
+    - CSV & files:
+      - CSV & files (SFTP/S3): connectors/csv.md
+      - One file, one command: connectors/csv-quick-look.md
     - JDBC:
       - JDBC: connectors/jdbc.md
-      - Writing a provider: connectors/jdbc/writing-a-provider.md
+      - Oracle: connectors/jdbc/oracle.md
     - REST:
       - REST: connectors/rest.md
       - Pagination: connectors/rest/pagination.md
@@ -109,10 +109,18 @@ nav:
       - SOAP: connectors/soap.md
     - Kafka:
       - Kafka: connectors/kafka.md
+      - When the topic misbehaves: connectors/kafka/when-the-topic-misbehaves.md
       - The demo broker: connectors/kafka/demo-broker.md
-    - Transformers: connectors/transformers.md
-  - Entities — fuse: entities.md
-  - Entities — resolve: entities-resolution.md
+    - Transformers:
+      - Repair the data: connectors/transformers.md
+      - Reference: connectors/transformers-reference.md
+      - Kotlin hooks: connectors/kotlin-hooks.md
+    - Reading a run: transparency/ingestion-honesty.md
+  - Entities:
+    - Fuse: entities.md
+    - Dates and numbers: entities-types.md
+    - Joins: entities-joins.md
+    - Resolve: entities-resolution.md
   - Search:
     - Declare an index: search/search-indexes.md
     - Query it: search/querying.md
@@ -121,22 +129,23 @@ nav:
     - The TUI: cli/tui.md
     - Integration as code: integration-as-code.md
   - Ask your data:
-    - The five guards: transparency/ask-honesty.md
+    - When Ask refuses: transparency/ask-honesty.md
+    - The rules, in detail: transparency/ask-rules.md
     - Scopes: rag/scopes.md
     - Models & providers: rag/models.md
-    - Advanced provider configuration: rag/providers-advanced.md
     - HTTP API: rag/http-api.md
   - Apps (the ladder):
     - Views — see: apps/views.md
     - Processes — react: apps/processes.md
     - Workflows — declare: apps/workflows.md
+    - Proposal dossiers: apps/proposal-dossier.md
     - Inbox — decide: apps/inbox.md
     - Exports — managed runs: apps/exports.md
-    - The métier PWA: apps/pwa.md
+    - The PWA: apps/pwa.md
     - The demo desk: apps/demo-desk.md
-  - Honesty & transparency: transparency/ingestion-honesty.md
-  - Architecture — the why: architecture.md
-  - Reversibility & exit: reversibility.md
+    - Outputs — the roads out: outputs.md
+    - Email notifications: email.md
+  - Choosing what your hub offers: choosing-what-your-hub-offers.md
   - Security:
     - Overview: security/index.md
     - Roles & permissions: security/role-management.md
@@ -145,20 +154,25 @@ nav:
     - Bring your own IdP: security/byo-idp.md
     - SCIM deprovisioning: security/scim.md
     - Offboarding the integrator: security/offboarding.md
+    - Credentials a source writes back: security/echoed-credentials.md
     - GDPR & personal data: security/gdpr.md
-  - Recipes:
+  - Operations:
     - Troubleshooting, by symptom: recipes/troubleshooting.md
     - Diagnosing a failed run: recipes/diagnose-a-run.md
     - Reading the logs: recipes/logs.md
-    - Test the API (Postman): recipes/test-the-api.md
-    - Analyze the database directly: recipes/analyze-the-database.md
-  - Operations:
     - On-call runbook: operations/oncall-runbook.md
     - Backup & restore: operations/backup-restore.md
     - Upgrade: operations/upgrade.md
     - Observability: operations/observability.md
     - Rate limits: operations/rate-limits.md
     - Sizing & load tests: operations/sizing.md
+  - Recipes:
+    - Test the API (Postman): recipes/test-the-api.md
+    - Analyze the database directly: recipes/analyze-the-database.md
   - Advanced:
-    - Admin API: admin-console-guide.md
-  - Glossary: glossary.md
+    - Admin tasks: admin-console-guide.md
+    - Writing a JDBC provider: connectors/jdbc/writing-a-provider.md
+  - Background:
+    - Where lumnik stands: where-lumnik-stands.md
+    - Architecture — the why: architecture.md
+    - Reversibility & exit: reversibility.md

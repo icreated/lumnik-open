@@ -44,6 +44,10 @@ public class WorkflowObservationStore {
             return new Observation(rs.getString(first), rs.getString(first + 1),
                 Jdbc.instant(rs, first + 2), Jdbc.instant(rs, first + 3), Jdbc.instant(rs, first + 4));
         }
+
+        Observation withState(String newState) {
+            return new Observation(docKey, newState, since, firstObservedAt, alertedAt);
+        }
     }
 
     /** One tape row for the read surface — the flattened, cross-workflow view. */
@@ -57,19 +61,21 @@ public class WorkflowObservationStore {
      *  dormant — never a zero that would read as "detected instantly". */
     public record StatsRow(String workflow, long watched, long dormant, Long medianDetectionSeconds) {}
 
-    /** Appended to a read of {@code o}: the tape of the workflows declared in the caller's scopes.
-     *  Binds the granted scopes twice ({@code bindGrants}; null when unbound — every workflow), then
-     *  the tenant again. */
-    private static final String IN_GRANTED_WORKFLOWS = "AND (?::text[] IS NULL OR o.workflow_name IN "
-        + "(SELECT m.name FROM core.workflow_manifest m WHERE m.scope = ANY (?::text[]) "
-        + "AND m.tenant_id = ?)) ";
+    /** Appended to a read of table alias {@code alias}: the rows of the workflows declared in the
+     *  caller's scopes. Binds the granted scopes twice ({@code bindGrants}; null when unbound — every
+     *  workflow), then the tenant again. */
+    private static String inGrantedWorkflows(String alias) {
+        return "AND (?::text[] IS NULL OR " + alias + ".workflow_name IN "
+            + "(SELECT m.name FROM core.workflow_manifest m WHERE m.scope = ANY (?::text[]) "
+            + "AND m.tenant_id = ?)) ";
+    }
 
     public List<StatsRow> stats(long tenantId, Set<String> granted) {
         String sql = "SELECT workflow_name, COUNT(*) AS watched, "
             + "COUNT(*) FILTER (WHERE alerted_at IS NOT NULL) AS dormant, "
             + "percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (alerted_at - since))) "
             + "  FILTER (WHERE alerted_at IS NOT NULL) AS median_detection_seconds "
-            + "FROM core.workflow_observation o WHERE o.tenant_id = ? " + IN_GRANTED_WORKFLOWS
+            + "FROM core.workflow_observation o WHERE o.tenant_id = ? " + inGrantedWorkflows("o")
             + "GROUP BY workflow_name ORDER BY workflow_name";
         List<StatsRow> out = new ArrayList<>();
         try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
@@ -92,17 +98,21 @@ public class WorkflowObservationStore {
     }
 
     /** The tape, flattened across workflows: tenant-bound, stillest first, bounded in SQL.
-     *  This is the read path; {@code granted} narrows it to the caller's scopes, null reads them all. */
-    public List<ObservationRow> listAll(long tenantId, Set<String> granted, int limit) {
+     *  This is the read path; {@code granted} narrows it to the caller's scopes, null reads them all;
+     *  {@code workflow} to one workflow's documents (#1361), null to every workflow. */
+    public List<ObservationRow> listAll(long tenantId, Set<String> granted, String workflow, int limit) {
         String sql = "SELECT workflow_name, doc_key, state, since, first_observed_at, alerted_at "
-            + "FROM core.workflow_observation o WHERE o.tenant_id = ? " + IN_GRANTED_WORKFLOWS
+            + "FROM core.workflow_observation o WHERE o.tenant_id = ? " + inGrantedWorkflows("o")
+            + "AND (?::text IS NULL OR o.workflow_name = ?) "
             + "ORDER BY since ASC, workflow_name, doc_key LIMIT ?";
         List<ObservationRow> out = new ArrayList<>();
         try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setLong(1, tenantId);
             ScopeGuardedUpsert.bindGrants(ps, 2, granted);
             ps.setLong(4, tenantId);
-            ps.setInt(5, limit);
+            ps.setString(5, workflow);
+            ps.setString(6, workflow);
+            ps.setInt(7, limit);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     out.add(new ObservationRow(rs.getString(1), rs.getString(2), rs.getString(3),
@@ -111,6 +121,51 @@ public class WorkflowObservationStore {
             }
         } catch (Exception e) {
             throw new RuntimeException("WorkflowObservationStore.listAll: " + e.getMessage(), e);
+        }
+        return out;
+    }
+
+    /** One move of the journal (#1368). {@code enteredFromAt}: when the document entered {@code from} —
+     *  its previous move, or its first observation for its first one (a lower bound, like since). */
+    public record TransitionRow(String workflow, String docKey, String from, String to,
+                                Instant enteredFromAt, Instant observedAt) {}
+
+    /** The transition journal, newest first, tenant-bound, narrowed like {@link #listAll}; {@code doc}
+     *  to one document, null to every one. A move whose ledger row is missing is left out rather than
+     *  served without an entry time. The previous-move lookup is one index probe per kept row; the
+     *  newest-first sort reads the workflow's (or tenant's) whole journal — fine for an on-demand read
+     *  capped at 1000, an index on (tenant_id, observed_at) if journals grow large. */
+    public List<TransitionRow> transitions(long tenantId, Set<String> granted, String workflow, String doc,
+                                           int limit) {
+        String sql = "SELECT t.workflow_name, t.doc_key, t.from_state, t.to_state, "
+            + "COALESCE(p.observed_at, o.first_observed_at), t.observed_at "
+            + "FROM core.workflow_transition t "
+            + "LEFT JOIN LATERAL (SELECT q.observed_at FROM core.workflow_transition q "
+            + "  WHERE q.tenant_id = t.tenant_id AND q.workflow_name = t.workflow_name AND q.doc_key = t.doc_key "
+            + "  AND (q.observed_at, q.id) < (t.observed_at, t.id) ORDER BY q.observed_at DESC, q.id DESC LIMIT 1) p ON TRUE "
+            + "JOIN core.workflow_observation o ON o.tenant_id = t.tenant_id "
+            + "  AND o.workflow_name = t.workflow_name AND o.doc_key = t.doc_key "
+            + "WHERE t.tenant_id = ? " + inGrantedWorkflows("t")
+            + "AND (?::text IS NULL OR t.workflow_name = ?) AND (?::text IS NULL OR t.doc_key = ?) "
+            + "ORDER BY t.observed_at DESC, t.id DESC LIMIT ?";
+        List<TransitionRow> out = new ArrayList<>();
+        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setLong(1, tenantId);
+            ScopeGuardedUpsert.bindGrants(ps, 2, granted);
+            ps.setLong(4, tenantId);
+            ps.setString(5, workflow);
+            ps.setString(6, workflow);
+            ps.setString(7, doc);
+            ps.setString(8, doc);
+            ps.setInt(9, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    out.add(new TransitionRow(rs.getString(1), rs.getString(2), rs.getString(3),
+                        rs.getString(4), Jdbc.instant(rs, 5), Jdbc.instant(rs, 6)));
+                }
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("WorkflowObservationStore.transitions failed", e);
         }
         return out;
     }
@@ -183,6 +238,20 @@ public class WorkflowObservationStore {
             }
         } catch (Exception e) {
             throw new RuntimeException("WorkflowObservationStore.recordTransition: " + e.getMessage(), e);
+        }
+    }
+
+    /** A declaration now names what the ledger held raw (#1367): the label changes; since, the alert
+     *  flag and the journal do not — nothing moved. */
+    public void relabel(long tenantId, String workflow, String docKey, String state) {
+        String sql = "UPDATE core.workflow_observation SET state = ?, updated_at = NOW() "
+            + "WHERE tenant_id = ? AND workflow_name = ? AND doc_key = ?";
+        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, state);
+            ps.setLong(2, tenantId); ps.setString(3, workflow); ps.setString(4, docKey);
+            ps.executeUpdate();
+        } catch (Exception e) {
+            throw new RuntimeException("WorkflowObservationStore.relabel: " + e.getMessage(), e);
         }
     }
 

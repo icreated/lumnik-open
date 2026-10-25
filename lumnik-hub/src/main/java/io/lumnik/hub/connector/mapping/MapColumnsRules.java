@@ -1,12 +1,15 @@
 package io.lumnik.hub.connector.mapping;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.lumnik.hub.connector.mapping.hooks.HookDescriptor.Tier;
+import io.lumnik.hub.connector.mapping.spec.HookInvocation;
 import io.lumnik.hub.connector.mapping.writer.DynamicTableWriter;
 import io.lumnik.hub.sql.SqlIdentifiers;
 
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 
@@ -81,20 +84,29 @@ public final class MapColumnsRules {
    * / {@code JdbcConnectorType.validateRename} — after the first row is already lost. This is the
    * write-time twin of those run-time backstops; the apply-time validators keep their own
    * accumulate-all, indexed-path renderings, which a first-fail door does not need.
+   *
+   * <p>A mapping tier that is not a list is refused too (#1475), with the message
+   * {@link HookInvocation#requireList} gives the validator and the run.
    */
   public static Optional<Violation> firstStoredConfigViolation(JsonNode config) {
     if (config == null) return Optional.empty();
     List<Violation> topRename = checkRename(config.path("rename"));
     if (!topRename.isEmpty()) return Optional.of(topRename.get(0));
-    JsonNode rows = config.path("mapping").path("row");
-    if (rows.isArray()) {
-      for (JsonNode hook : rows) {
-        JsonNode mc = hook.path("map-columns");
-        if (mc.isMissingNode()) continue;
-        List<Violation> v = checkRename(mc.path("rename"));
-        if (v.isEmpty()) v = checkDrop(mc.path("drop"));
-        if (!v.isEmpty()) return Optional.of(v.get(0));
+    JsonNode mapping = config.path("mapping");
+    for (Tier t : Tier.values()) {
+      String tier = t.name().toLowerCase(Locale.ROOT);
+      try {
+        HookInvocation.requireList(mapping, tier);
+      } catch (MappingValidationException e) {
+        return Optional.of(new Violation("mapping." + tier, e.getMessage()));
       }
+    }
+    for (JsonNode hook : mapping.path("row")) {   // an array, missing or null: checked just above
+      JsonNode mc = hook.path("map-columns");
+      if (mc.isMissingNode()) continue;
+      List<Violation> v = checkRename(mc.path("rename"));
+      if (v.isEmpty()) v = checkDrop(mc.path("drop"));
+      if (!v.isEmpty()) return Optional.of(v.get(0));
     }
     return Optional.empty();
   }

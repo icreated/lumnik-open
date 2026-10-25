@@ -3,9 +3,11 @@ package io.lumnik.hub.api;
 import io.lumnik.common.security.ScopeGrants;
 import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.MultivaluedMap;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Supplier;
@@ -145,6 +147,22 @@ public final class ApiErrors {
         } catch (IllegalArgumentException e) {
             throw new BadRequestException(badRequest("invalid UUID: " + s));
         }
+    }
+
+    /**
+     * A single-valued filter read from the raw query: absent is null; repeated or blank is an
+     * {@link IllegalArgumentException} for {@link #orBadRequest}. Raw, because a bare {@code x=}
+     * reaches a {@code @QueryParam} as null — "absent" — and would widen the read in silence; once,
+     * because a second value would otherwise be dropped. The inbox and the workflow tape (#1356, #1361).
+     */
+    public static String once(MultivaluedMap<String, String> query, String key) {
+        return switch (query.get(key)) {
+            case null -> null;
+            case List<String> v when v.size() > 1 -> throw new IllegalArgumentException(key + " may be given once");
+            case List<String> v when v.getFirst() == null || v.getFirst().isBlank() ->
+                throw new IllegalArgumentException(key + " must not be blank");
+            case List<String> v -> v.getFirst();
+        };
     }
 
     /** The {@code {"error": message}} body. */

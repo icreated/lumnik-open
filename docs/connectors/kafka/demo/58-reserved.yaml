@@ -1,6 +1,6 @@
 # 58-reserved.yaml — a top-level `id` in the message.
 #
-# This is the REST demo's partner record verbatim, `id` included. `id` is one of the seven
+# This is the REST demo's partner record verbatim, `id` included. `id` is one of the
 # columns the hub adds to every connector.t_* table, and a kafka manifest has no mapping hook
 # to rename a field — so the run is refused at write time, on a message that names all seven
 # and says what each connector family can do about it.

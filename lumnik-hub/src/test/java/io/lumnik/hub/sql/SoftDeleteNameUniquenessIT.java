@@ -36,13 +36,14 @@ class SoftDeleteNameUniquenessIT {
 
     /**
      * The tables a production door soft-deletes AND whose unique rule must therefore be scoped to
-     * live rows. These are three of the four call sites that stamp {@code deleted_at} anywhere in
-     * {@code src/main}: {@code SecretResource.delete} (native UPDATE), {@code EndpointResource} and
-     * {@code IntegrationResource} ({@code softDelete()}). The fourth is {@code ScimUserService} —
-     * see {@code identity.app_user} below, which is the exception that makes the rule readable.
+     * live rows. These are two of the three call sites that stamp {@code deleted_at} anywhere in
+     * {@code src/main}: {@code EndpointResource} and {@code IntegrationResource} ({@code softDelete()}).
+     * The third is {@code ScimUserService} — see {@code identity.app_user} below, which is the
+     * exception that makes the rule readable. {@code platform.secret} left this list when
+     * {@code SecretResource.delete} started deleting the row (V84); its rule keeps V44's scope, and a
+     * scoped rule needs no entry below.
      */
     private static final Set<String> MUST_BE_SCOPED_TO_LIVE_ROWS = Set.of(
-        "platform.secret",
         "connector.connector_endpoint",
         "core.webhook_endpoint");
 
@@ -64,7 +65,7 @@ class SoftDeleteNameUniquenessIT {
         entry("identity.tenant", "no door stamps deleted_at on a tenant"),
         entry("identity.scim_token", "no door stamps deleted_at on a token — rotation replaces the hash"),
         entry("identity.app_user",
-            "DELIBERATE, and the opposite of the three above: SCIM deprovision DOES soft-delete, and the "
+            "DELIBERATE, and the opposite of the two above: SCIM deprovision DOES soft-delete, and the "
           + "tombstone must keep holding the key. Both doors resolve an external identity in ANY state "
           + "(UserRepository.findByExternalIdentityAnyState) and act on what they find — a login is "
           + "refused with 403 (JitUserProvisioner, guardActive=true), a SCIM re-POST REVIVES that same "

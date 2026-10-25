@@ -30,6 +30,11 @@ public class RetryExecutor {
     // S3776: a retry state machine — the four outcomes (transient-failure retry, status-based retry,
     // network-error retry, non-retryable rethrow) read most clearly inline; extracting them would force
     // sentinel returns across method boundaries. Delay/retry-after/sleep are already factored out.
+    /** What says whether a 2xx is data — read by the caller too, which redacts a refused body more (#1393). */
+    public ResponseValidator validator() {
+        return validator;
+    }
+
     @SuppressWarnings("java:S3776")
     public RestResponse execute(Call call) throws Exception {
         Exception lastEx = null;

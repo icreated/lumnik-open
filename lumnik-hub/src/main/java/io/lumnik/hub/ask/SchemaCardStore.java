@@ -11,6 +11,7 @@ import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
+import java.util.List;
 import java.util.Optional;
 
 /** Persists/loads SchemaCard JSONB in connector.schema_card via the admin datasource. */
@@ -75,6 +76,26 @@ public class SchemaCardStore {
             ps.setString(2, scope);
             ps.setString(3, table);
         }, rs -> rs.getString(1));
+    }
+
+    /** One stored card's address: whose it is and which scope it describes. */
+    public record Held(long tenantId, String scope) {}
+
+    /**
+     * Every card, in EVERY tenant, that lists this table or describes one of these scopes. Across
+     * tenants on purpose: an entity is shared by every tenant, so a re-apply or a delete changes the
+     * cards of tenants that never applied it. It reads addresses only; each rebuild that follows
+     * runs as the card's own tenant.
+     */
+    public List<Held> cardsListingOrIn(String table, List<String> scopes) {
+        String sql = "SELECT tenant_id, scope FROM connector.schema_card "
+                   + "WHERE scope = ANY(?) "
+                   + "   OR card -> 'tables' @> jsonb_build_array(jsonb_build_object('name', ?::text)) "
+                   + "ORDER BY tenant_id, scope";
+        return Jdbc.query(adminDs, "SchemaCardStore.cardsListingOrIn", sql, ps -> {
+            ps.setArray(1, ps.getConnection().createArrayOf("text", scopes.toArray()));
+            ps.setString(2, table);
+        }, rs -> new Held(rs.getLong(1), rs.getString(2)));
     }
 
     /**

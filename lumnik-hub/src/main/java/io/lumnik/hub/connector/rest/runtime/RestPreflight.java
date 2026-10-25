@@ -11,10 +11,13 @@ import io.lumnik.hub.connector.rest.RestResponse;
 import io.lumnik.hub.connector.rest.Snippets;
 import io.lumnik.hub.connector.rest.Urls;
 import io.lumnik.hub.connector.rest.auth.AuthProvider;
+import io.lumnik.hub.connector.rest.auth.AuthConfigException;
 import io.lumnik.hub.connector.rest.auth.AuthProviderRegistry;
 import io.lumnik.hub.connector.rest.auth.AuthSpec;
 import io.lumnik.hub.connector.rest.pagination.PaginationFactory;
 import io.lumnik.hub.connector.rest.pagination.PaginationStrategy;
+import io.lumnik.hub.connector.rest.reliability.ResponseValidator;
+import io.lumnik.hub.connector.secret.SecretRefs;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -45,6 +48,7 @@ public class RestPreflight {
     @Inject PaginationFactory pagination;
     @Inject AuthProviderRegistry authReg;
     @Inject RestHttpClient http;
+    @Inject SecretRefs secrets;
 
     /**
      * What one endpoint answered. {@code ok} means the request a run would send came back readable:
@@ -83,33 +87,36 @@ public class RestPreflight {
 
         AuthProvider auth;
         try {
-            auth = authReg.build(authSpec(cfg));
+            auth = authReg.build(authSpec(cfg, owner(c)));
             auth.probe();
         } catch (Exception refused) {
             // The credential is what failed, and the request was already composed: report the shape
             // a run would have sent. Falling back to the endpoint row here would print GET for a
             // GraphQL endpoint this very command POSTs to — the gap this class exists to close,
             // on the one path an operator reaches by asking "is my token valid?".
-            return new Verdict(ep.getName(), req.method(), req.url(), 0, false, 0, describe(refused), "");
+            return refused(ep, req, refused);
         }
 
-        RestRequest signed = auth.apply(req);
         RestResponse resp;
         try {
-            resp = http.execute(signed);
+            ResponseValidator validator = RestEndpointReader.validatorFor(cfg);
+            resp = auth.send(req, signed -> http.exchange(signed, validator));
         } catch (InterruptedException cancelled) {
             throw interrupted(cancelled);
+        } catch (AuthConfigException refused) {
+            // A credential renewed after the source's 401 and refused in turn (#1393): its sentence is ours.
+            return refused(ep, req, refused);
         } catch (Exception unreachable) {
             // The kind, never the message: a JDK message can quote the URL, credential included
             // (#1164). The other three catches keep describe(): their messages are ours.
-            return new Verdict(ep.getName(), signed.method(), signed.url(), 0, false, 0,
+            return new Verdict(ep.getName(), req.method(), req.url(), 0, false, 0,
                 OutboundFailure.describe(unreachable), "");
         }
 
         String sample = Snippets.bound(resp.body());
         boolean http2xx = resp.status() / 100 == 2;
         if (!http2xx) {
-            return new Verdict(ep.getName(), signed.method(), signed.url(), resp.status(),
+            return new Verdict(ep.getName(), req.method(), req.url(), resp.status(),
                 false, 0, "HTTP " + resp.status(), sample);
         }
 
@@ -117,30 +124,39 @@ public class RestPreflight {
             RestEndpointReader.validatorFor(cfg).validate(resp);
             RestResponse parsed = RestEndpointReader.bodyParserFor(cfg).reparse(resp);
             int items = pagination.build(RestEndpointReader.mapConfig(cfg, "pagination")).items(parsed).size();
-            return new Verdict(ep.getName(), signed.method(), signed.url(), resp.status(),
+            return new Verdict(ep.getName(), req.method(), req.url(), resp.status(),
                 true, items, "", sample);
         } catch (Exception unreadable) {
             // 2xx, and still not data: a GraphQL errors[] envelope, a SOAP fault, an HTML page
             // served with 200. The run would fail the chunk here; the pre-flight says so first.
-            return new Verdict(ep.getName(), signed.method(), signed.url(), resp.status(),
+            return new Verdict(ep.getName(), req.method(), req.url(), resp.status(),
                 false, 0, describe(unreadable), sample);
         }
+    }
+
+    /** The credential refused: no status, the request a run would have sent, the refusal in our own words. */
+    private static Verdict refused(ConnectorEndpoint ep, RestRequest req, Exception refused) {
+        return new Verdict(ep.getName(), req.method(), req.url(), 0, false, 0, describe(refused), "");
     }
 
     /** The first request of a read — the run's, composed by the run's own code. */
     RestRequest request(Map<String, Object> cfg, ConnectorEndpoint ep) {
         PaginationStrategy pag = pagination.build(RestEndpointReader.mapConfig(cfg, "pagination"));
-        return RestEndpointReader.firstRequest(pag, cfg, ep);
+        return RestEndpointReader.firstRequest(pag, cfg, ep, secrets::lookup);
     }
 
     /** The credential a run would present — same rule, same default ({@code none} when undeclared). */
-    AuthSpec authSpec(Map<String, Object> cfg) {
-        return RestEndpointReader.authSpecFor(cfg);
+    AuthSpec authSpec(Map<String, Object> cfg, AuthSpec.Owner owner) {
+        return RestEndpointReader.authSpecFor(cfg, owner);
     }
 
     // Entity-level overloads: the whole chain from the two rows an operator names, merge included.
     RestRequest request(Connector c, ConnectorEndpoint ep) { return request(EffectiveConfig.of(c, ep), ep); }
-    AuthSpec authSpec(Connector c, ConnectorEndpoint ep)   { return authSpec(EffectiveConfig.of(c, ep)); }
+    AuthSpec authSpec(Connector c, ConnectorEndpoint ep)   { return authSpec(EffectiveConfig.of(c, ep), owner(c)); }
+
+    private static AuthSpec.Owner owner(Connector c) {
+        return new AuthSpec.Owner(c.getTenantId(), c.getId());
+    }
 
     /**
      * An interrupt is a cancelled request, not an answer about the upstream: reported as a verdict

@@ -26,6 +26,22 @@ class ViewManifestParserTest {
         assertThat(m.columns()).containsExactly("customer_code", "name", "city");
     }
 
+    /** #1489: YAML 1.1's yes/no/on/off are text through the app-ladder surface, as in YAML 1.2. */
+    @Test
+    void columnsNamedLikeYaml11BooleansAreColumnNames() {
+        String yaml = """
+            apiVersion: apps.lumnik.io/v1
+            kind: View
+            metadata:
+              name: orders-desk
+            spec:
+              scope: orders
+              table: connector.v_order
+              columns: [no, on, OFF, Yes]
+            """;
+        assertThat(new ViewManifestParser().parse(yaml).columns()).containsExactly("no", "on", "OFF", "Yes");
+    }
+
     @Test
     void scopeIsNormalizedAtTheThreshold() {
         // Accidental whitespace in spec.scope must not leak into authorization

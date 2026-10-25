@@ -63,10 +63,16 @@ public class EntityIdentityRepository {
   }
 
   /** One append-only ledger row, typed for a caller rather than the raw JSON/text {@link
-   *  #insertEvidence} writes — {@link #evidenceHistory} is the query that produces it (#622). */
+   *  #insertEvidence} writes — {@link #evidenceHistory} is the query that produces it (#622).
+   *  {@code assertedBy}/{@code reason} name the human correction behind an asserted decision
+   *  (#1343), null on every other event — copied onto the row when the event was written (#1520),
+   *  so a later correction of the same pair never rewrites them. {@code assertedBy} is the stored
+   *  user id; {@code assertedByLogin} is that user's login read now (#1347), null when the id no
+   *  longer names a user of the tenant — never stored, so renaming a user rewrites no audit line. */
   public record EvidenceEvent(String ruleDeclaredId, String ruleVersion, String provider,
       List<UUID> candidates, List<ProposedCandidate> discardedCandidates, List<SetAside> setAside,
-      EntityResolutionState outcome, String decidedBy, UUID runId, OffsetDateTime occurredAt) {}
+      EntityResolutionState outcome, String decidedBy, UUID runId, OffsetDateTime occurredAt,
+      String assertedBy, String assertedByLogin, String reason) {}
 
   /** Runs {@code work} in one transaction; committed on return, rolled back and rethrown on failure. */
   public <T> T inTransaction(Function<Connection, T> work) {
@@ -94,18 +100,19 @@ public class EntityIdentityRepository {
    * it used to be; the ledger is what keeps that refusal effective across every later replay, not
    * just the one call that made it.
    */
-  public record LastResolvedEvidence(UUID entityId, String decidedBy, UUID assertedPartnerRef) {}
+  public record LastResolvedEvidence(UUID entityId, String decidedBy, UUID assertedPartnerRef,
+      String ruleDeclaredId, String ruleVersion) {}
 
   private static LastResolvedEvidence evidenceRow(ResultSet rs) throws SQLException {
     String idText = rs.getString(1);
     if (idText == null) return null;
     return new LastResolvedEvidence(
-        UUID.fromString(idText), rs.getString(2), (UUID) rs.getObject(3));
+        UUID.fromString(idText), rs.getString(2), (UUID) rs.getObject(3), rs.getString(4), rs.getString(5));
   }
 
   public Optional<LastResolvedEvidence> lastResolvedEvidence(
       Connection c, long tenantId, String entityType, String source, String sourceId) {
-    String sql = "SELECT candidates ->> 0, decided_by, asserted_partner_ref "
+    String sql = "SELECT candidates ->> 0, decided_by, asserted_partner_ref, rule_declared_id, rule_version "
         + "FROM core.entity_resolution_evidence "
         + "WHERE tenant_id = ? AND entity_type = ? AND source = ? AND source_id = ? "
         + "AND outcome = 'resolved' ORDER BY occurred_at DESC, id DESC LIMIT 1";
@@ -123,7 +130,7 @@ public class EntityIdentityRepository {
    */
   public Optional<LastResolvedEvidence> lastResolvedEvidenceOfRef(
       Connection c, long tenantId, String entityType, UUID identityRef) {
-    String sql = "SELECT candidates ->> 0, decided_by, asserted_partner_ref "
+    String sql = "SELECT candidates ->> 0, decided_by, asserted_partner_ref, rule_declared_id, rule_version "
         + "FROM core.entity_resolution_evidence "
         + "WHERE tenant_id = ? AND entity_type = ? AND (source, source_id) = "
         + "(SELECT source, source_id FROM core.entity_identity WHERE tenant_id = ? AND entity_type = ? "
@@ -355,16 +362,23 @@ public class EntityIdentityRepository {
    * mutually-asserted rows happens to be reprocessed first.
    */
   public Optional<String> verdictOf(Connection c, long tenantId, String entityType, UUID refA, UUID refB) {
-    String sql = "SELECT verdict FROM core.entity_assertion WHERE tenant_id = ? AND entity_type = ? "
+    return assertionOf(c, tenantId, entityType, refA, refB).map(Assertion::verdict);
+  }
+
+  /** The assertion recorded between exactly this pair, as it stands now: its verdict, who made it and why. */
+  public record Assertion(String verdict, String assertedBy, String reason) {}
+
+  public Optional<Assertion> assertionOf(Connection c, long tenantId, String entityType, UUID refA, UUID refB) {
+    String sql = "SELECT verdict, asserted_by, reason FROM core.entity_assertion WHERE tenant_id = ? AND entity_type = ? "
         + "AND left_identity_ref = LEAST(?::uuid, ?::uuid) AND right_identity_ref = GREATEST(?::uuid, ?::uuid)";
-    return Jdbc.queryOne(c, "EntityIdentityRepository.verdictOf", sql, ps -> {
+    return Jdbc.queryOne(c, "EntityIdentityRepository.assertionOf", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
       ps.setObject(3, refA);
       ps.setObject(4, refB);
       ps.setObject(5, refA);
       ps.setObject(6, refB);
-    }, rs -> rs.getString(1));
+    }, rs -> new Assertion(rs.getString(1), rs.getString(2), rs.getString(3)));
   }
 
   /** "These two source identities are the same" — the positive assertion (#619). */
@@ -426,16 +440,19 @@ public class EntityIdentityRepository {
    * 'asserted'} when a human assertion (#619) produced it — the CHECK constraint on this column
    * restricts it to exactly those two values. {@code assertedPartnerRef} is non-null only for the
    * one event a {@code sameAssertionResolved} decision produces (icreated/lumnik#737); every other
-   * event passes {@code null}.
+   * event passes {@code null}. {@code assertion} is the correction an asserted decision acted on, its
+   * {@code assertedBy}/{@code reason} stored on the row as they stand now (#1520); null when no single
+   * assertion is behind the decision.
    */
   public void insertEvidence(Connection c, long tenantId, String entityType, String source, String sourceId,
       UUID identityRef, String ruleDeclaredId, String ruleVersion, String provider,
       String candidatesJson, String discardedCandidatesJson, String setAsideJson, EntityResolutionState outcome,
-      String decidedBy, UUID runId, UUID assertedPartnerRef) {
+      String decidedBy, UUID runId, UUID assertedPartnerRef, Assertion assertion) {
     String sql = "INSERT INTO core.entity_resolution_evidence "
         + "(tenant_id, entity_type, source, source_id, identity_ref, rule_declared_id, rule_version, "
         + "provider, candidates, discarded_candidates, set_aside, outcome, decided_by, run_id, "
-        + "asserted_partner_ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?, ?, ?, ?)";
+        + "asserted_partner_ref, asserted_by, assertion_reason) "
+        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?, ?, ?, ?, ?, ?)";
     Jdbc.update(c, "EntityIdentityRepository.insertEvidence", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
@@ -452,6 +469,8 @@ public class EntityIdentityRepository {
       ps.setString(13, decidedBy);
       ps.setObject(14, runId, Types.OTHER);
       ps.setObject(15, assertedPartnerRef, Types.OTHER);
+      ps.setString(16, assertion == null ? null : assertion.assertedBy());
+      ps.setString(17, assertion == null ? null : assertion.reason());
     });
   }
 
@@ -541,11 +560,13 @@ public class EntityIdentityRepository {
    */
   public List<EvidenceEvent> evidenceHistory(
       Connection c, long tenantId, String entityType, String source, String sourceId) {
-    String sql = "SELECT rule_declared_id, rule_version, provider, candidates::text, "
-        + "discarded_candidates::text, set_aside::text, outcome, decided_by, run_id, occurred_at "
-        + "FROM core.entity_resolution_evidence "
-        + "WHERE tenant_id = ? AND entity_type = ? AND source = ? AND source_id = ? "
-        + "ORDER BY occurred_at, id";
+    String sql = "SELECT e.rule_declared_id, e.rule_version, e.provider, e.candidates::text, "
+        + "e.discarded_candidates::text, e.set_aside::text, e.outcome, e.decided_by, e.run_id, e.occurred_at, "
+        + "e.asserted_by, u.login, e.assertion_reason "
+        + "FROM core.entity_resolution_evidence e "
+        + "LEFT JOIN identity.app_user u ON u.tenant_id = e.tenant_id AND u.id::text = e.asserted_by "
+        + "WHERE e.tenant_id = ? AND e.entity_type = ? AND e.source = ? AND e.source_id = ? "
+        + "ORDER BY e.occurred_at, e.id";
     return Jdbc.query(c, "EntityIdentityRepository.evidenceHistory", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, entityType);
@@ -555,7 +576,7 @@ public class EntityIdentityRepository {
         rs.getString(1), rs.getString(2), rs.getString(3),
         parseUuidList(rs.getString(4)), parseProposedCandidates(rs.getString(5)),
         parseSetAside(rs.getString(6)), EntityResolutionState.fromSql(rs.getString(7)), rs.getString(8),
-        (UUID) rs.getObject(9), rs.getObject(10, OffsetDateTime.class)));
+        (UUID) rs.getObject(9), rs.getObject(10, OffsetDateTime.class), rs.getString(11), rs.getString(12), rs.getString(13)));
   }
 
   private static List<UUID> parseUuidList(String json) {

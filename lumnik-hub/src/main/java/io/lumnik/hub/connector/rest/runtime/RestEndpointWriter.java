@@ -27,6 +27,7 @@ import java.util.UUID;
 public class RestEndpointWriter implements ItemWriter<Map<String, Object>> {
 
     private final MultiTargetWriter writer;
+    private long cellErrors;
 
     public RestEndpointWriter(MultiTargetWriter writer) {
         this.writer = writer;
@@ -45,10 +46,18 @@ public class RestEndpointWriter implements ItemWriter<Map<String, Object>> {
             new MappingTarget.HybridJsonb(spec.table(), spec.uniqueKeyPath(), spec.promote(), ctx.endpointId()));
 
         UUID runId = ctx.runId() != null ? ctx.runId() : UUID.randomUUID();
-        writer.write(target, items, ctx.tenantId(), runId,
+        cellErrors += writer.write(target, items, ctx.tenantId(), runId,
             "rest:" + ctx.connectorName(), 1, "rest", ctx.connectorId(), List.of());
 
         return new WriteOutcome.AllWritten(items.size());
+    }
+
+    /** Promoted values that did not read as their column's type: the row is written, the cell NULL (#1398). */
+    @Override
+    public long drainCellErrors() {
+        long n = cellErrors;
+        cellErrors = 0;
+        return n;
     }
 
     /** Parses the {@link HybridJsonbSpec} (table / unique key / promote) from the endpoint target config. */

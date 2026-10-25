@@ -52,6 +52,18 @@ class SoapPaginationStrategyTest {
     }
 
     @Test
+    void next_advances_the_page_number_while_not_last_page() throws Exception {
+        SoapPaginationStrategy s = strat();
+        RestRequest first = s.first(cfgWithBody("<In><page>{{page}}</page></In>"), null);
+        assertThat(first.body()).contains("<page>1</page>");
+        assertThat(s.next(converted(false), null).body()).contains("<page>2</page>");
+    }
+
+    private EndpointConfig cfgWithBody(String body) {
+        return new EndpointConfig("http://h", "POST", "/svc", Map.of("body", body, "soap_action", "A"));
+    }
+
+    @Test
     void next_stops_on_the_last_page() throws Exception {
         SoapPaginationStrategy s = strat();
         s.first(cfg(), null);

@@ -2,17 +2,21 @@ package io.lumnik.hub.api.validator;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
+import io.lumnik.hub.manifest.HubYaml;
 import io.lumnik.hub.validator.*;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import org.yaml.snakeyaml.Yaml;
 
 import java.util.*;
 
 @Path("/api/platform/validator")
 public class ConnectorValidatorResource {
+
+    /** The apply door's reader (#1489): SnakeYAML read YAML 1.1, so validate and apply could disagree. */
+    private static final YAMLMapper YAML = HubYaml.mapper();
 
     @Inject ConnectorValidationService service;
     @Inject ObjectMapper json;
@@ -24,8 +28,8 @@ public class ConnectorValidatorResource {
     public Response validate(String body, @HeaderParam("Content-Type") String contentType) {
         JsonNode manifest;
         try {
-            manifest = (contentType != null && contentType.contains("yaml"))
-                ? json.valueToTree(new Yaml().load(body))
+            manifest = (contentType != null && contentType.toLowerCase(Locale.ROOT).contains("yaml"))   // a media type has no case
+                ? YAML.readTree(body)
                 : json.readTree(body);
         } catch (Exception e) {
             return Response.ok(new ValidationResult(

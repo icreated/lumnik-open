@@ -13,6 +13,8 @@ public record DlqAdminDto(
     String errorMessage,
     int attempts,
     String resolution,
+    UUID resolvedRunId,
+    Instant resolvedAt,
     Instant capturedAt,
     String payload,
     String skipDetail
@@ -22,7 +24,7 @@ public record DlqAdminDto(
     return new DlqAdminDto(
         d.getId(), d.getConnectorId(), connectorName, d.getRunId(),
         d.getSkipReason(), d.getErrorMessage(),
-        d.getAttempts(), d.getResolution(),
+        d.getAttempts(), d.getResolution(), d.getResolvedRunId(), d.getResolvedAt(),
         d.getCapturedAt(),
         d.getPayload() != null ? d.getPayload().toString() : null,
         d.getSkipDetail() != null ? d.getSkipDetail().toString() : null

@@ -10,6 +10,7 @@ import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.repository.ConnectorRunRepository;
 import io.lumnik.hub.connector.runtime.ConnectorEngine;
 import io.lumnik.hub.connector.runtime.ConnectorRunDispatcher;
+import io.lumnik.hub.process.RunEvaluation;
 import io.lumnik.hub.tenant.TenantContextFilter;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -38,6 +39,7 @@ public class RunAdminResource {
   @Inject ConnectorEndpointRepository endpoints;
   @Inject ConnectorEngine engine;
   @Inject ConnectorRunDispatcher dispatcher;
+  @Inject RunEvaluation evaluation;
 
   @GET
   @Transactional
@@ -67,9 +69,10 @@ public class RunAdminResource {
         page.stream().map(ConnectorRun::getEndpointId).filter(Objects::nonNull).distinct().toList());
     // One grouped COUNT for the whole page: it used to be one per run, up to 200 on each refresh (#892).
     var deadLetters = dlq.countByRuns(page.stream().map(ConnectorRun::getId).toList());
+    var evaluated = evaluation.snapshot(TenantContextFilter.current());
     return page.stream()
         .map(r -> RunAdminDto.from(r, deadLetters.get(r.getId()), names.get(r.getConnectorId()),
-            r.getEndpointId() == null ? null : endpointNames.get(r.getEndpointId())))
+            r.getEndpointId() == null ? null : endpointNames.get(r.getEndpointId()), evaluated))
         .toList();
   }
 
@@ -85,7 +88,7 @@ public class RunAdminResource {
     var endpointName = r.getEndpointId() == null ? null
         : endpoints.namesById(List.of(r.getEndpointId())).get(r.getEndpointId());
     return Response.ok(RunAdminDto.from(r, dlq.countByRun(r.getId()),
-        names.get(r.getConnectorId()), endpointName)).build();
+        names.get(r.getConnectorId()), endpointName, evaluation.snapshot(TenantContextFilter.current()))).build();
   }
 
   /**

@@ -1,118 +1,53 @@
 # Models — configuring the LLMs
 
-> Three separately-chosen chat models plus one embedding model, the exact env var for each, and
-> the one number — the embedding dimension — that turns a model swap into a migration instead of
-> a restart.
+> **lumnik Pro.** Three models do three jobs: the chat, the ask, the embeddings. Each one is an
+> environment variable. The default provider is **Ollama, on your machine**: nothing leaves it
+> unless you point it elsewhere.
 
-lumnik uses one model each for conversational chat, text-to-SQL, offline evaluation and
-embeddings, each swappable through an environment variable. This page says which model does what,
-the knobs, and how to swap one on Ollama. Property names and OpenAI are on
-[Advanced provider configuration](providers-advanced.md).
+## Which model does what
 
-The default provider is **Ollama, local**. Nothing leaves your machine unless you point it
-elsewhere.
+| Job | Default | Variable | Notes |
+|---|---|---|---|
+| Chat: `lm chat`, answers from your indexed data | `llama3.2` | `RAG_CHAT_MODEL` | a conversational model; it writes no SQL |
+| Ask: `lm ask`, the PWA's Chat, `lm view generate` | `qwen2.5-coder:7b` | `ASK_SQL_MODEL` | must write SQL: a coding model. ~4.7 GB |
+| Embeddings: indexing and semantic search | `nomic-embed-text` | `RAG_EMBEDDING_MODEL` | its dimension is load-bearing: [below](#embeddings-model-and-dimension-travel-together) |
 
-## Three chat models, on purpose
-
-The three jobs need different models, and the judge must not share the generator's blind spots.
-
-### Chat — conversational RAG (`llama3.2`)
-
-The default chat model answers semantic questions over indexed chunks (`lm chat`,
-`POST /api/rag/chat`). It is a general conversational model, chosen lighter/faster — it phrases answers from
-retrieved context, it does not write SQL. Override with `RAG_CHAT_MODEL`.
-
-### Analytic — text-to-SQL ask (`qwen2.5-coder:7b`)
-
-The analytic model translates a question into one read-only SQL query
-([the five guards](../transparency/ask-honesty.md) veto anything unsafe), and also writes
-`kind: View` manifests on `POST /api/views/generate`. It needs a code/SQL-capable model —
-a general conversational model is not one. It is ~4.7 GB (`ollama pull qwen2.5-coder:7b`).
-Override with `ASK_SQL_MODEL`.
-
-The answer is written from the first rows that fit **6000 characters** (about fifty catalogue rows);
-the whole result stays in the answer — see
-[A long result](../transparency/ask-honesty.md#a-long-result-what-the-answer-is-written-from). A wider
-sample on a strong host, or a narrower one on a small model:
-
-```
-LUMNIK_ASK_ANSWER_BUDGET_CHARS=12000
-```
-
-The hub declares the analytic model's context at **32768 tokens**, so a long prompt is never silently truncated;
-set `ASK_SQL_NUM_CTX` lower on a host short of memory.
-
-- It writes **at most 1024 tokens** per call (`ASK_SQL_NUM_PREDICT`). A reply that reaches the bound is
-  a failure and is never run. Raise it if you generate views or ask over very wide tables and meet it.
-- A call that times out is reported, not retried.
-- It runs at **temperature 0**, so the same question answers the same way in practice.
-
-### Judge — faithfulness eval (`gemma4`)
-
-The judge scores whether generated SQL faithfully answers the question — **offline/eval only,
-never in the request path**.
-
-| | |
-|---|---|
-| **Default model** | `gemma4` |
-| **Independent from** | the analytic generator — kept distinct so the judge has different blind spots |
-| **Why gemma4** | of four models compared, the lightest that reliably catches an INNER join where the question's "each X" implies LEFT, without over-flagging |
-| **Production use** | optional — pull it only if you run the eval harness |
-| **Override** | `JUDGE_MODEL` |
-
-## Embeddings — model and dimension travel together
-
-Semantic indexing and search embed text through one embedding model — default
-`nomic-embed-text`, which produces **768-dimensional** vectors. That number is load-bearing:
-
-- `RAG_EMBEDDING_DIM` (default `768`) must match the model;
-- the `rag.chunk` table's `embedding` column is `VECTOR(768)`.
-
-**A model with a different dimension is a migration, not an env-var flip.** No supported command
-does it; rehearse the sequence on a copy first. Back up (`./deploy/selfhost/backup.sh`), then:
-
-1. As the database owner, empty the chunks, change the column and rebuild the index:
-
-    ```sql
-    DELETE FROM rag.chunk;
-    DROP INDEX rag.chunk_embedding_idx;
-    ALTER TABLE rag.chunk ALTER COLUMN embedding TYPE VECTOR(<n>);
-    CREATE INDEX chunk_embedding_idx ON rag.chunk USING hnsw (embedding vector_cosine_ops);
-    ```
-
-2. Set `RAG_EMBEDDING_MODEL` and `RAG_EMBEDDING_DIM` to match, and recreate the hub as in
-   [Swapping a model](#swapping-a-model-on-ollama).
-3. `lm rag reindex` for the platform corpus; re-run every connector, re-apply every
-   `kind: Workflow` and re-ingest every `lm csv ingest` file, so their chunks are re-embedded.
+The three `ollama pull` lines: [Prerequisites](../quickstart/prerequisites.md#the-ai-layer-ollama).
+`JUDGE_MODEL` (`gemma4`) serves an offline evaluation only: a running hub never calls it. Skip it.
 
 ## The knobs
 
-All model choices are runtime environment variables. The self-host compose forwards them from the
-root `.env` (template lines in `.env.example`); the Helm chart renders all nine from the `llm:`
-values block (`deploy/helm/up.sh` fills it from `LUMNIK_`-prefixed variables). Unset means the
-default applies.
+All are environment variables. Self-host: set them in the root `.env`, then re-run `up.sh` with
+your flags. Helm (cloud edition): the same names, prefixed `LUMNIK_` when you run `up.sh`.
 
-| Env var | Default | What it drives |
+| Variable | Default | Drives |
 |---|---|---|
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Where **all three** Ollama clients connect |
-| `RAG_CHAT_MODEL` | `llama3.2` | Conversational RAG chat |
-| `ASK_SQL_MODEL` | `qwen2.5-coder:7b` | Text-to-SQL ask + view generation |
-| `ASK_SQL_NUM_CTX` | `32768` | Context window of the analytic model, in tokens — see [Analytic](#analytic-text-to-sql-ask-qwen25-coder7b) |
-| `ASK_SQL_NUM_PREDICT` | `1024` | Most tokens the analytic model may write per call (a SQL statement, a rewrite, an answer, a generated view) |
-| `LUMNIK_ASK_ANSWER_BUDGET_CHARS` | `6000` | Characters of result rows the answer is written from; the rows beyond stay in the result |
-| `JUDGE_MODEL` | `gemma4` | Offline faithfulness eval |
-| `RAG_EMBEDDING_MODEL` | `nomic-embed-text` | Chunk + query embeddings |
-| `RAG_EMBEDDING_DIM` | `768` | Must match the model **and** the `VECTOR(768)` column — see [above](#embeddings-model-and-dimension-travel-together) |
+| `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` (self-host) | where the hub finds Ollama — [another machine](../deploy.md#point-the-hub-at-an-ollama-on-another-machine) |
+| `RAG_CHAT_MODEL` | `llama3.2` | the chat |
+| `ASK_SQL_MODEL` | `qwen2.5-coder:7b` | the ask and view generation |
+| `ASK_SQL_NUM_CTX` | `32768` | the ask model's context, in tokens. Lower it on a host short of memory |
+| `ASK_SQL_NUM_PREDICT` | `1024` | the most tokens the ask model writes per call. Raise it if view generation or wide tables hit it |
+| `LUMNIK_ASK_ANSWER_BUDGET_CHARS` | `6000` | how many characters of rows the answer is written from (about fifty catalogue rows). Every row is still returned |
+| `RAG_EMBEDDING_MODEL` | `nomic-embed-text` | the embeddings |
+| `RAG_EMBEDDING_DIM` | `768` | must match the embedding model — change it only with [the migration](#embeddings-model-and-dimension-travel-together) |
 
-The self-host compose's own default for `OLLAMA_BASE_URL` is `http://host.docker.internal:11434`,
-not `localhost` — the containerized hub reaches out to the host machine unless you set it; see
-[Point the hub at an Ollama that is not on this machine](../deploy.md#point-the-hub-at-an-ollama-that-is-not-on-this-machine).
+- The ask model runs at temperature 0: the same question gets the same SQL, in practice.
+- A call that takes more than 120 seconds is reported, not retried: [timeouts](#timeouts).
+- `lm rag status` shows the embedding provider and model the hub really uses.
 
-- Timeouts are `120s` for all three Ollama clients; to change one, see
-  [Property mapping](providers-advanced.md#property-mapping).
-- The analytic and judge temperatures are fixed at `0`; chat keeps the provider's default.
-- `lm rag status` shows the **live** embedding provider and model. Chat and analytic models are
-  checked in the hub's environment ([below](#swapping-a-model-on-ollama)).
+## Swapping a model on Ollama
+
+1. Pull it on the Ollama host: `ollama pull mistral`.
+2. Set `RAG_CHAT_MODEL=mistral` in the root `.env`. Edit the line if it exists: do not add a second.
+3. Re-run `up.sh` with the flags you installed with.
+
+A misspelt variable is ignored without a word, and the old model keeps answering. Check:
+
+```bash
+docker compose -f docker-compose.selfhost.yml exec hub env | grep RAG_CHAT_MODEL
+```
+
+The same for `ASK_SQL_MODEL`. For `RAG_EMBEDDING_MODEL`, see the dimension below.
 
 ## Switching the AI off
 
@@ -127,7 +62,7 @@ What you see once it is off:
 - **The PWA has no Chat tab.** The other tabs are untouched.
 - **`lm module list`** shows `rag` and `llm` as `INACTIVE`, reason `disabled:lumnik.ai.enabled`.
   In the [Open edition](../editions.md) they are not listed at all.
-- **`lm ask`, `lm rag search`, `lm scopes`** and a question in `lm chat` answer `404`.
+- **`lm ask`, `lm rag search`, `lm scopes`** and a question in `lm chat` answer `Error: API error 404 (no details from the server)`.
 - **`lm view generate`** answers that no chat model is available.
 - **`lm rag status`** says `provider: none` and `indexed: false`; `lm rag reindex` has nothing to
   index with.
@@ -154,54 +89,71 @@ llm       0.1.0    Model provider      INACTIVE  disabled:lumnik.ai.enabled
 rag       0.1.0    Platform RAG        INACTIVE  disabled:lumnik.ai.enabled
 ```
 
-What does not change: the images, the `rag` schema and the data in it. Scope moves still re-tag
-chunks (`lm connector scope sync`), a disabled or deleted workflow still leaves the corpus, and a
-deleted connector's descriptor chunk still goes. Search does not depend on this setting.
+What does not change: the images and the data already indexed. Search does not depend on this
+setting.
 
 **Switching it back on** brings back the data you had. What needed indexing while the AI was off (a
 workflow applied, a table ingested, a connector re-described) is absent: re-apply the workflow or
 the connector, or re-ingest the file.
 `lm rag reindex` rebuilds only the platform corpus.
 
-## Swapping a model on Ollama
+## Embeddings — model and dimension travel together
 
-Three steps, no rebuild:
+`nomic-embed-text` writes 768-number vectors, and the index stores 768. **A model with another
+dimension is a migration, not a variable flip.** No `lm` command does it. Try it on a copy first.
 
-1. Pull the model on the Ollama host: `ollama pull mistral`.
-2. Add or update `RAG_CHAT_MODEL=mistral` in the root `.env` — an `echo >>` risks a duplicate
-   definition if the key is already there.
-3. Re-run `up.sh` with the flags you installed with, as for [Switch the AI off](../deploy.md#switch-the-ai-off).
+1. Back up: `./deploy/selfhost/backup.sh`.
+2. As the database owner, empty the index and give it the new size `<n>`:
 
-Verify the swap took — a wrong variable name fails **silently** (the old model keeps answering):
+    ```sql
+    DELETE FROM rag.chunk;
+    DROP INDEX rag.chunk_embedding_idx;
+    ALTER TABLE rag.chunk ALTER COLUMN embedding TYPE VECTOR(<n>);
+    CREATE INDEX chunk_embedding_idx ON rag.chunk USING hnsw (embedding vector_cosine_ops);
+    ```
+
+3. Set `RAG_EMBEDDING_MODEL` and `RAG_EMBEDDING_DIM=<n>` in `.env`, then re-run `up.sh`.
+4. Index again: `lm rag reindex`, then run every connector, re-apply every workflow and reload
+   every `lm csv ingest` file.
+
+## Advanced
+
+### Timeouts
+
+Each model call times out at 120 seconds. Raise one for a slow model, in the hub's environment:
 
 ```bash
-docker compose -f docker-compose.selfhost.yml exec hub env | grep RAG_CHAT_MODEL
+QUARKUS_LANGCHAIN4J_OLLAMA_ANALYTIC_TIMEOUT=300s     # the ask model; …_OLLAMA_TIMEOUT for the chat
 ```
 
-The same pattern applies to `ASK_SQL_MODEL`, `JUDGE_MODEL` and `RAG_EMBEDDING_MODEL` — with the
-dimension caveat above for the embedding model. The three default pulls are documented once, in
-[Prerequisites → The AI layer](../quickstart/prerequisites.md#the-ai-layer-ollama) — this page
-doesn't duplicate them.
+The self-host compose passes only the variables it lists: add the line to the hub's
+`environment:` in `docker-compose.selfhost.yml`.
 
-## Pointing at OpenAI
+### Pointing at OpenAI
 
-Ollama is the default. OpenAI means editing the module's configuration and rebuilding the hub image
-(`up.sh --build`), not an env var, and changes the embedding provider (a migration, above). See
-[Pointing at OpenAI](providers-advanced.md#pointing-at-openai).
+Not a variable: the provider is chosen when the hub is built.
 
-## Traps
+1. In `lumnik-llm-langchain/src/main/resources/application.properties`, switch the providers you
+   want:
 
-!!! warning "Changing the embedding dimension = migrate + re-index"
-    `RAG_EMBEDDING_DIM` alone changes nothing on disk: the `rag.chunk` column stays `VECTOR(768)`.
-    Follow [the migration steps](#embeddings-model-and-dimension-travel-together).
+    ```properties
+    quarkus.langchain4j.chat-model.provider=openai
+    quarkus.langchain4j.embedding-model.provider=openai
+    quarkus.langchain4j.analytic.chat-model.provider=openai
+    ```
+
+2. Set `quarkus.langchain4j.openai.api-key` and the model names
+   (`quarkus.langchain4j.openai.*-model.model-name`, `…openai.analytic.*`). Set `temperature=0` on
+   the analytic model: OpenAI's default is 1.0.
+3. Rebuild: `./deploy/selfhost/up.sh --build`.
+4. OpenAI's embeddings have another dimension (1536 for `text-embedding-3-small`):
+   [migrate](#embeddings-model-and-dimension-travel-together).
+5. Check with `lm rag status`: it names the provider and model in use.
+
+You can mix providers: OpenAI for the chat, the local model for the SQL.
 
 ## See also
 
-- [Prerequisites — the AI layer](../quickstart/prerequisites.md#the-ai-layer-ollama) — the three
-  `ollama pull`s.
-- [Point the hub at a remote Ollama](../deploy.md#point-the-hub-at-an-ollama-that-is-not-on-this-machine) —
-  `OLLAMA_BASE_URL`, `.env` handling, the open-edition exception.
-- [Ask honesty — the five guards](../transparency/ask-honesty.md) — what wraps the analytic
-  model's output.
-- [Scopes](scopes.md) — the boundary every model answers within.
-- [Advanced provider configuration](providers-advanced.md) — property mapping, timeouts, OpenAI.
+- [Prerequisites — the AI layer](../quickstart/prerequisites.md#the-ai-layer-ollama): the `ollama pull`s.
+- [When Ask refuses](../transparency/ask-honesty.md): what wraps the ask model's output.
+- [Scopes](scopes.md): the boundary every model answers within.

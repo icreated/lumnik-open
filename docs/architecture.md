@@ -36,7 +36,7 @@ The system prefers a refusal to a plausible guess:
   ([seeing what was ingested](transparency/ingestion-honesty.md));
 - on the way **out**, deterministic guards stand between a question and its answer,
   and an empty result is never phrased as a confident "there are none"
-  ([the five guards](transparency/ask-honesty.md));
+  ([its guards](transparency/ask-honesty.md));
 - disagreements between sources are preserved in a ledger instead of silently
   resolved ([entities](entities.md)).
 

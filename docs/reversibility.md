@@ -36,6 +36,7 @@ Fetch the configuration back as YAML while the hub runs:
 | App | `lm app get NAME` |
 | Export | `lm export get NAME` |
 | Process | no `lm process get` — the TUI's `:processes`, `e` on the row, opens the stored manifest |
+| SearchIndex | no `lm` command returns the manifest; it is in the dump |
 
 ```
 $ lm entity export AcmeCustomer -o customers.csv
@@ -64,7 +65,11 @@ The exit artifact is the backup you already take.
 1. `./deploy/selfhost/backup.sh` one last time — `lumnik.dump` is your data, complete.
 2. Keep the manifests you version in git where they live; guided-flow config is in the
    dump (or fetch it back as YAML while the hub still runs).
-3. `pg_restore` the dump wherever your next tool reads PostgreSQL — or just keep it as
-   the archived, queryable record of what the mirror held.
+3. Restore the dump wherever your next tool reads PostgreSQL, or keep it as the archived record
+   of what the mirror held. Without lumnik's database roles there, skip them:
+
+    ```bash
+    pg_restore --no-owner --no-privileges -d <your-database> lumnik.dump
+    ```
 4. Decommission the stack. Your source system never noticed lumnik arriving; it will not notice it
    leaving.

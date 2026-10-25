@@ -12,9 +12,11 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteTable;
@@ -45,6 +47,7 @@ public class ViewDataReader {
         List<Map<String,Object>> out = new ArrayList<>();
         try (Connection c = readonlyDs.getConnection()) {
             TenantRlsScope.applyTo(c, tenantId);
+            refuseColumnsTheTableLost(c, rv);
             try (PreparedStatement ps = c.prepareStatement(sql)) {
                 ps.setQueryTimeout(TIMEOUT_S);
                 // Fetch one row beyond the cap: the only way to tell a full 1000-row result
@@ -94,6 +97,7 @@ public class ViewDataReader {
         List<Long> ids = new ArrayList<>();
         try (Connection c = readonlyDs.getConnection()) {
             TenantRlsScope.applyTo(c, tenantId);
+            refuseColumnsTheTableLost(c, rv);
             if (relationHasId && page.after() != null && !boundaryRowExists(c, rv, q.boundaryParams().get(0)))
                 throw new IllegalArgumentException(ViewCursor.REFUSAL);
             try (PreparedStatement ps = c.prepareStatement(q.sql())) {
@@ -139,6 +143,31 @@ public class ViewDataReader {
                 return rs.next();
             }
         }
+    }
+
+    /**
+     * #1523: a view resolves against its scope's card, and a card can be older than the table. An entity re-applied
+     * without a column rebuilds only the cards of the scopes it names, for the tenant that applied it. A column the
+     * table no longer has is refused here, by name — the read would fail in SQL, a bare 500. A table this lookup cannot
+     * find is left to the read. Shared by the list, its pages and the detail.
+     */
+    static void refuseColumnsTheTableLost(Connection c, ResolvedView rv) throws SQLException {
+        Set<String> present = new HashSet<>();
+        try (PreparedStatement ps = c.prepareStatement("SELECT attname FROM pg_catalog.pg_attribute "
+                + "WHERE attrelid = pg_catalog.to_regclass(?) AND attnum > 0 AND NOT attisdropped")) {
+            ps.setQueryTimeout(TIMEOUT_S);
+            ps.setString(1, quoteTable(rv.table()));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) present.add(rs.getString(1));
+            }
+        }
+        if (present.isEmpty()) return;
+        List<String> lost = rv.columns().stream().map(ResolvedView.Column::name)
+            .filter(name -> !present.contains(name)).map(name -> "'" + name + "'").toList();
+        if (lost.isEmpty()) return;
+        throw new IllegalArgumentException((lost.size() == 1 ? "column " : "columns ") + String.join(", ", lost)
+            + (lost.size() == 1 ? " is" : " are") + " not in " + rv.table()
+            + " — the entity changed since this view was written");
     }
 
     /** Binds every filter value after index {@code last}; returns the last index used. */
@@ -289,11 +318,12 @@ public class ViewDataReader {
      *  ({@link ColumnKind#orders(String)}) and builds the SQL, so the two cannot drift.
      *
      *  <p>A cast on the LEFT-hand side makes any btree index on that column unusable, so equality
-     *  drops it when the column is ALREADY text — same semantics, index preserved. The narrowing is
-     *  deliberately opt-in and stops there: casting the parameter instead ({@code col = ?::numeric})
-     *  would make the other types index-friendly too, but a filter value that does not parse would
-     *  then raise 22P02 where today it simply matches nothing, and the view has no honest refusal
-     *  for that. ILIKE keeps its cast because it genuinely needs text semantics — and a
+     *  drops it when the column is ALREADY text — same semantics, index preserved. A number against a
+     *  number column (#1338) is equal by value, natively ({@code col::numeric = ?::numeric}, a float
+     *  {@code col = ?::float8}): the numeric form is chosen only for a value {@link ViewFilter#isNumeric} reads —
+     *  the rule every reader's {@code =} shares — and the column is already a number, so no cast can fail;
+     *  any other value keeps the exact-text comparison and matches nothing, no 22P02.
+     *  ILIKE keeps its cast because it genuinely needs text semantics — and a
      *  {@code %value%} pattern cannot use a plain btree anyway, so there is nothing to win. */
     private static String sqlFor(ViewFilter f, String pgType) {
         String col = quoteIdent(f.column());
@@ -303,6 +333,9 @@ public class ViewDataReader {
             ColumnKind kind = ColumnKind.ofType(pgType);
             if (f.temporalOperand() && kind.temporal())
                 return kind.orderingSql(col, "=", ViewFilter.OperandType.TEMPORAL);
+            // A number against a number column is equal by value, natively: 12.0 finds 12 (#1338).
+            if (kind.number() && ViewFilter.isNumeric(f.value()))
+                return kind == ColumnKind.FLOAT ? col + " = ?::float8" : col + "::numeric = ?::numeric";
             return ColumnKind.isTextual(pgType) ? col + " = ?" : col + "::text = ?";
         }
         if (!f.ordering() || f.operandType() == null)

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/icreated/lumnik-open/lm/internal/types"
@@ -34,6 +35,37 @@ func newHookCmd() *cobra.Command {
 	})
 
 	h.AddCommand(&cobra.Command{
+		Use:   "scripts",
+		Short: "List the Kotlin scripts a manifest can name as `script: hooks:<name>.kts`",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := ClientFromCmd(cmd)
+			if err != nil {
+				return err
+			}
+			hs, err := c.HookScripts()
+			if err != nil {
+				return err
+			}
+			format, _ := cmd.Flags().GetString("output")
+			if format != "table" {
+				return output.PrintObject(cmd.OutOrStdout(), format, hs)
+			}
+			switch {
+			case !hs.Directory:
+				cmd.PrintErrln("This hub has no hooks directory: its operator sets LUMNIK_HOOKS_DIR to offer hooks: scripts.")
+				return nil
+			case len(hs.Scripts) == 0:
+				cmd.PrintErrln("The hooks directory holds no scripts.")
+				return nil
+			}
+			return output.Print(cmd.OutOrStdout(), format, []string{"NAME", "SIZE", "SHA256"}, hs.Scripts,
+				func(s types.HookScript) []string {
+					return []string{s.Name, strconv.FormatInt(s.Size, 10), s.SHA256}
+				})
+		},
+	})
+
+	h.AddCommand(&cobra.Command{
 		Use:   "get NAME",
 		Short: "Show a hook (YAML)",
 		Args:  cobra.ExactArgs(1),
@@ -58,37 +90,43 @@ func newHookCmd() *cobra.Command {
 		},
 	})
 
+	// apply, delete, reload and generate do nothing: hidden from --help, still callable so a script
+	// that calls one reads why instead of "unknown command".
 	h.AddCommand(&cobra.Command{
-		Use:   "apply",
-		Short: "(stub) Apply is not implemented — hooks come from deployment manifests",
+		Use:    "apply",
+		Short:  "Not available — hooks come from deployment manifests",
+		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return hookMutationNotImplemented("apply")
 		},
 	})
 
 	h.AddCommand(&cobra.Command{
-		Use:   "delete NAME",
-		Short: "(stub) Delete is not implemented — hooks come from deployment manifests",
-		Args:  cobra.ExactArgs(1),
+		Use:    "delete NAME",
+		Short:  "Not available — hooks come from deployment manifests",
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return hookMutationNotImplemented("delete")
 		},
 	})
 
 	h.AddCommand(&cobra.Command{
-		Use:   "reload NAME",
-		Short: "(stub) Reload is not implemented — hooks come from deployment manifests",
-		Args:  cobra.ExactArgs(1),
+		Use:    "reload NAME",
+		Short:  "Not available — hooks come from deployment manifests",
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return hookMutationNotImplemented("reload")
 		},
 	})
 
 	h.AddCommand(&cobra.Command{
-		Use:   "generate",
-		Short: "(stub) Hook scaffold generation — re-implemented in v1.x",
+		Use:    "generate",
+		Short:  "Not available — write the hook script yourself",
+		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("`lm hook generate` is not yet implemented in Go — use Plan 2+ scaffold")
+			return fmt.Errorf("`lm hook generate` is not available: write the .kts script yourself; `lm hook scripts` lists the ones this hub offers")
 		},
 	})
 

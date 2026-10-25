@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/output"
@@ -31,8 +32,9 @@ func newProcessCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.OutOrStdout(), string(resp))
-			return nil
+			return printApplied(cmd, resp, func(w io.Writer, a processApplied) {
+				fmt.Fprintf(w, "Applied process \"%s\" → table %s, emits %s\n", a.Name, a.Table, a.Emit)
+			})
 		},
 	}
 	apply.Flags().StringVarP(&file, "file", "f", "", "kind:Process YAML manifest, or - for stdin (required)")
@@ -80,6 +82,13 @@ func newProcessCmd() *cobra.Command {
 		toggleCmd("process", "enable", true, "Turn a process back on", processSetEnabled),
 		toggleCmd("process", "disable", false, "Stop a process firing, keeping its manifest", processSetEnabled))
 	return cmd
+}
+
+// processApplied is the hub's answer to a kind:Process apply.
+type processApplied struct {
+	Name  string `json:"name"`
+	Table string `json:"table"`
+	Emit  string `json:"emit"`
 }
 
 func processSetEnabled(c *client.Client, name string, enabled bool) (string, bool, error) {

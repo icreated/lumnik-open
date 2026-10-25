@@ -92,6 +92,10 @@ class HookRefusalInventoryTest {
             "{\"column\":\"c\",\"columns\":[\"c\"],\"pattern\":\"[\"}"),
         Map.entry("a valid regex with a dangling group reference",
             "{\"column\":\"c\",\"columns\":[\"c\"],\"pattern\":\"e\",\"replacement\":\"$\"}"),
+        // #1338: parse-number's `integer` is the first boolean flag a hook refuses when it is not
+        // a boolean; the shape is here so the next flag is swept for it too.
+        Map.entry("a boolean flag written as a string",
+            "{\"column\":\"c\",\"columns\":[\"c\"],\"integer\":\"yes\"}"),
         Map.entry("an empty formats list",
             "{\"column\":\"c\",\"columns\":[\"c\"],\"formats\":[]}"),
         Map.entry("a scalar where an object is expected",
@@ -143,7 +147,7 @@ class HookRefusalInventoryTest {
         for (String name : sets) {
           DatasetHook hook = catalog.dataset(name);
           run(crashed, "dataset", name, params, value,
-              () -> hook.apply(new ArrayList<>(List.of(rowWith(value))), node, new MappingState()));
+              () -> { hook.validateParams(node); hook.apply(new ArrayList<>(List.of(rowWith(value))), node, new MappingState()); });
         }
       }
     }

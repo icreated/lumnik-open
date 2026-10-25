@@ -9,6 +9,7 @@ import io.lumnik.hub.connector.api.ItemWriter;
 import io.lumnik.hub.connector.api.types.*;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.mapping.MappingEngine;
+import io.lumnik.hub.connector.mapping.carry.StaleCarryException;
 import io.lumnik.hub.connector.mapping.spec.ErrorPolicy;
 import io.lumnik.hub.connector.mapping.spec.HookInvocation;
 import io.lumnik.hub.connector.mapping.spec.MappingSpec;
@@ -31,6 +32,8 @@ import java.io.InputStream;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.*;
 
@@ -167,8 +170,13 @@ public class CsvFileConnectorType implements ConnectorType {
     @SuppressWarnings("unchecked")
     List<String> nullValues = parser.get("null_values") instanceof List<?> n
         ? (List<String>) n : List.of("", "NULL", "null", "#N/A");
-    Character delimiter = (delim != null && !delim.toString().isEmpty()) ? delim.toString().charAt(0) : null;
     Charset charset = enc != null ? Charset.forName(enc.toString()) : null;
+    // #1415: one line = one row, one column (`line` unless renamed); the validator refuses the keys this replaces.
+    if (Boolean.TRUE.equals(parser.get("lines"))) {
+      return new ParserOverrides(CsvFileReader.Config.LINES, charset, false, bomStrip, nullValues,
+          columns != null && !columns.isEmpty() ? columns : List.of("line"));
+    }
+    Character delimiter = (delim != null && !delim.toString().isEmpty()) ? delim.toString().charAt(0) : null;
     return new ParserOverrides(delimiter, charset, hasHeader, bomStrip, nullValues, columns);
   }
 
@@ -199,7 +207,11 @@ public class CsvFileConnectorType implements ConnectorType {
       if (pathObj == null || pathObj.toString().isBlank()) {
         throw new ConfigValidationException("csv-file connector: missing transport.path");
       }
-      return new CsvGlobCursorReader(pathObj.toString(), overrides, CsvFullRefresh.stateFile(ctx.config()).isPresent());
+      // #1452: a mapping whose cell hooks carry values row to row is reset at each file, so it reads one per chunk.
+      JsonNode mapping = mappingOf(ctx.config());
+      boolean oneFilePerChunk = mapping != null && mappingEngine.carriesState(HookInvocation.parseList(mapping, "cell"));
+      return new CsvGlobCursorReader(pathObj.toString(), overrides, CsvFullRefresh.stateFile(ctx.config()).isPresent(),
+          oneFilePerChunk);
     }
     // Pass the FULL config — the remote reader needs top-level after_process / archive_path
     // (the apply handler stores them as siblings of transport, not inside it).
@@ -234,6 +246,15 @@ public class CsvFileConnectorType implements ConnectorType {
    */
   @Override
   public StreamEnd endOfStream(ConnectorContext ctx) {
+    // A file skipped as unchanged was not read: nothing to sweep, only something to say (#1371).
+    long unchanged = ctx.scope().resource(new UnchangedKey(), Unchanged::new).files;
+    if (unchanged > 0) return new StreamEnd.Unchanged(unchanged);
+    // A remote file read and left where it was (#1382): a remote transport removes no rows, nothing else to say.
+    // Exclusive with Unchanged by transport: only the local reader counts unchanged files, only a remote one
+    // archives (a local connector's after_process is refused).
+    long notArchived = ctx.scope().resource(new FileSourceCursorReader.NotArchivedKey(),
+        FileSourceCursorReader.NotArchived::new).paths.size();
+    if (notArchived > 0) return new StreamEnd.NotArchived(notArchived);
     Optional<String> file = CsvFullRefresh.stateFile(ctx.config());
     if (file.isEmpty()) return new StreamEnd.Removed(0);
     // Built here when no read of this run started the file (an unchanged file is not read): no sweep.
@@ -252,7 +273,9 @@ public class CsvFileConnectorType implements ConnectorType {
     if (unread > 0) return CsvFullRefresh.deadLettered(unread, ctx.runId());
     double max = CsvFullRefresh.maxRemoved(ctx.config());
     if (n.shrinksBeyond(max)) return CsvFullRefresh.refused(n, max);
-    return new StreamEnd.Removed(sweeper.remove(spec, ctx.tenantId(), sourceOf(table), ctx.runId()));
+    // Every unseen version goes; the run reports the rows the source lost, not the versions replaced (#1544).
+    long deleted = sweeper.remove(spec, ctx.tenantId(), sourceOf(table), ctx.runId());
+    return new StreamEnd.Removed(Math.min(deleted, n.lost()));
   }
 
   /** The {@code _source} a csv run stamps: its mapping id, which {@link #buildSpec} names. */
@@ -285,6 +308,11 @@ public class CsvFileConnectorType implements ConnectorType {
     return out;
   }
 
+  /** The connector's {@code mapping} block, or null without one — read the same way by the writer's spec and the reader. */
+  private static JsonNode mappingOf(Map<String, Object> config) {
+    return config.get("mapping") instanceof Map<?, ?> mapping ? M.valueToTree(mapping) : null;
+  }
+
   @SuppressWarnings("unchecked")
   static MappingSpec buildSpec(String table, Map<String, Object> config) {
     // DDL-injection boundary (layer 2, alongside the escaping fix in RlsDdl): `table` is prefixed
@@ -302,30 +330,56 @@ public class CsvFileConnectorType implements ConnectorType {
     List<HookInvocation> datasetHooks = List.of();
     List<HookInvocation> cellHooks = List.of();
     List<HookInvocation> rowHooks  = List.of();
-    Object mappingObj = config.get("mapping");
-    if (mappingObj instanceof Map<?, ?> mappingMap) {
-      JsonNode mappingNode = M.valueToTree(mappingMap);
-      datasetHooks = parseHooks(mappingNode.path("dataset"));
-      cellHooks = parseHooks(mappingNode.path("cell"));
-      rowHooks  = parseHooks(mappingNode.path("row"));
+    ErrorPolicy onError = ErrorPolicy.soft();
+    JsonNode mappingNode = mappingOf(config);
+    if (mappingNode != null) {
+      // Shared with MappingLoader so csv and manifest/jdbc mappings refuse a malformed hook the same
+      // way (this used to silently DROP a bad entry, where MappingLoader threw).
+      datasetHooks = HookInvocation.parseList(mappingNode, "dataset");
+      cellHooks = HookInvocation.parseList(mappingNode, "cell");
+      rowHooks  = HookInvocation.parseList(mappingNode, "row");
+      onError = ErrorPolicy.parse(mappingNode.path("on-error"));
     }
     return new MappingSpec(
         sourceOf(table), 1, target, MappingSpec.StreamMode.STREAM,
         "dump of " + table,
-        datasetHooks, rowHooks, cellHooks, ErrorPolicy.soft());
-  }
-
-  /** Parses a JSON array of single-key hook objects into {@link HookInvocation} list. */
-  private static List<HookInvocation> parseHooks(JsonNode arr) {
-    // Shared with MappingLoader so csv and manifest/jdbc mappings refuse a malformed hook the same
-    // way (this used to silently DROP a bad entry, where MappingLoader threw).
-    return HookInvocation.parseList(arr);
+        datasetHooks, rowHooks, cellHooks, onError);
   }
 
   // -----------------------------------------------------------------------
 
   /** What the run's scope keys the folder listing by: one pattern, one listing. */
   record LocalListingKey(String pathPattern) {}
+
+  /** The run-scope key of {@link Unchanged}: one per run, the read counts and endOfStream reports. */
+  record UnchangedKey() {}
+
+  /** One file's bytes, as its identity names them: a write changes the ctime, whatever a copy restores (#1452). */
+  record ContentKey(String path, long size, String lastModified, String changed) {}
+
+  /** A file's SHA-256, kept for the run. */
+  static final class Content implements AutoCloseable {
+    final String sha256;
+
+    Content(String sha256) {
+      this.sha256 = sha256;
+    }
+
+    @Override
+    public void close() {
+      // holds no resource
+    }
+  }
+
+  /** Files the run did not read because they had not changed since they were read to the end (#1371). */
+  static final class Unchanged implements AutoCloseable {
+    long files;
+
+    @Override
+    public void close() {
+      // holds no resource; the run scope only keeps AutoCloseables
+    }
+  }
 
   /** The folder as the run's first chunk found it. Holds no resource; the scope only keeps {@code AutoCloseable}s. */
   record LocalListing(List<Path> files) implements AutoCloseable {
@@ -377,6 +431,12 @@ public class CsvFileConnectorType implements ConnectorType {
     private final FileSource source;
     /** One plain local file: the run records whether it started that file at its first row (#1195). */
     private final boolean holdsTheSourceState;
+    /** #1452: a mapping that carries values row to row gets one file per chunk — it cannot see a file end inside one. */
+    private final boolean oneFilePerChunk;
+    /** Whether the last {@link #read} began at a file's first record. */
+    private boolean startsAFile;
+    /** The run's scope, where a carrying mapping's content fingerprints are kept. */
+    private RunScope scope;
     private List<Path> resolvedFiles;
     private final List<MalformedRecord> malformedBuffer = new ArrayList<>();
 
@@ -385,10 +445,21 @@ public class CsvFileConnectorType implements ConnectorType {
     }
 
     CsvGlobCursorReader(String pathPattern, ParserOverrides overrides, boolean holdsTheSourceState) {
+      this(pathPattern, overrides, holdsTheSourceState, false);
+    }
+
+    CsvGlobCursorReader(String pathPattern, ParserOverrides overrides, boolean holdsTheSourceState,
+                        boolean oneFilePerChunk) {
       this.pathPattern = pathPattern;
       this.overrides = overrides;
       this.source = new LocalFileSource(pathPattern);
       this.holdsTheSourceState = holdsTheSourceState;
+      this.oneFilePerChunk = oneFilePerChunk;
+    }
+
+    @Override
+    public boolean startsAFile() {
+      return startsAFile;
     }
 
     /** Test-visible: records tokenized across every window this reader has run (O(R) proof). */
@@ -409,6 +480,8 @@ public class CsvFileConnectorType implements ConnectorType {
      */
     @Override
     public ReadResult<Map<String, Object>> read(int chunkSize, ConnectorCursor cursor, ConnectorContext ctx) {
+      startsAFile = false;
+      scope = ctx.scope();
       resolveFiles(ctx);
       if (resolvedFiles.isEmpty()) return new ReadResult.EndOfStream<>(List.of());
 
@@ -426,8 +499,12 @@ public class CsvFileConnectorType implements ConnectorType {
         // read, go on with the next file. Anything else (replaced in place, grown, unreadable):
         // read it again in full — the table deduplicates, and a replaced file must not be
         // resumed at a row count that belonged to its previous content.
-        FileDescriptor now = describe(resolvedFiles.get(fileIndex));
-        if (start.version() != null && start.version().matches(now)) {
+        // Size and mtime survive a copy that keeps them (docker cp, cp -p, rsync -t): with no etag,
+        // the content's fingerprint decides (#1371). A token from before it carries none.
+        Path file = resolvedFiles.get(fileIndex);
+        FileDescriptor now = describe(file);
+        if (start.version() != null && start.version().matches(now, () -> sha256(file))) {
+          ctx.scope().resource(new UnchangedKey(), Unchanged::new).files++;
           if (++fileIndex >= resolvedFiles.size()) return new ReadResult.EndOfStream<>(List.of());
           start = new CsvCursor(resolvedFiles.get(fileIndex).toString(), 0L);
         } else {
@@ -435,11 +512,16 @@ public class CsvFileConnectorType implements ConnectorType {
         }
       }
 
+      // #1452: a chunk that begins at a file's first record starts a carrying mapping empty; one that resumes mid-way
+      // does so on the same bytes only.
+      startsAFile = start.rowsProcessed() == 0;
+      if (oneFilePerChunk && !startsAFile) refuseChangedBytes(start, resolvedFiles.get(fileIndex));
+
       // The run's first read decides it, once: a later chunk resumes mid-file by construction.
       CsvFullRefresh.Pass pass = null;
       FileDescriptor version = null;
       if (holdsTheSourceState) {
-        boolean fromStart = start.rowsProcessed() == 0;
+        boolean fromStart = startsAFile;
         FileDescriptor first = version = describe(resolvedFiles.get(fileIndex));
         pass = ctx.scope().resource(new CsvFullRefresh.PassKey(pathPattern), () -> new CsvFullRefresh.Pass(fromStart, first));
       }
@@ -455,9 +537,10 @@ public class CsvFileConnectorType implements ConnectorType {
         if (chunk.isEmpty() && malformedBuffer.isEmpty()) return new ReadResult.EndOfStream<>(chunk);
         return new ReadResult.EndOfStream<>(chunk,
             wrap(CsvCursor.finished(walk.file(), walk.consumed(),
-                walk.lastStat() == null ? null : CsvCursor.Version.of(walk.lastStat()))));
+                walk.lastStat() == null ? null
+                    : CsvCursor.Version.of(walk.lastStat(), sha256(Path.of(walk.file()))))));
       }
-      return new ReadResult.HasMore<>(chunk, encodeCursor(walk.file(), walk.consumed(), walk.last()));
+      return new ReadResult.HasMore<>(chunk, encodeCursor(walk.file(), walk.consumed(), walk.last(), walk.lastStat()));
     }
 
     /** Where the walk stopped: the file it is on, how much of it is consumed, and its last window. */
@@ -491,6 +574,12 @@ public class CsvFileConnectorType implements ConnectorType {
           if (fileIndex < resolvedFiles.size()) {
             currentFile = resolvedFiles.get(fileIndex).toString();
             recordsConsumed = 0;
+            // #1452: the next file starts the next chunk — unless this one gave no row: an empty chunk reads as the
+            // end of the run, so the chunk goes on into the next file, whose first row is then its first.
+            if (oneFilePerChunk) {
+              if (!chunk.isEmpty()) break;
+              startsAFile = true;
+            }
           } else {
             // the list is done: the walk reports the last file and its row count
             currentFile = file.toString();
@@ -632,6 +721,21 @@ public class CsvFileConnectorType implements ConnectorType {
       }
     }
 
+    /**
+     * The file's content fingerprint, hex; null when it cannot be read. A finished token then carries
+     * none and is judged on its stat; at a skip check, an unreadable file counts as changed and is read.
+     */
+    private static String sha256(Path p) {
+      try (InputStream in = Files.newInputStream(p)) {
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
+        byte[] buf = new byte[64 * 1024];
+        for (int n; (n = in.read(buf)) > 0; ) md.update(buf, 0, n);
+        return HexFormat.of().formatHex(md.digest());
+      } catch (IOException | NoSuchAlgorithmException unreadable) {
+        return null;
+      }
+    }
+
     /** The version-token source: stat the file. Null (→ fallback) when the stat fails. */
     private static FileDescriptor describe(Path p) {
       try {
@@ -712,13 +816,65 @@ public class CsvFileConnectorType implements ConnectorType {
      * proved the fast path can honour it — it ran on a seekable, allowlist-charset stream and
      * named a resume point. Every other window keeps writing the legacy two-field shape.
      */
-    private ConnectorCursor encodeCursor(String file, long rowsProcessed, WindowOutcome last) {
+    private ConnectorCursor encodeCursor(String file, long rowsProcessed, WindowOutcome last, FileDescriptor stat) {
       CsvCursor out = (last != null && last.anchorByte() != null && last.charDelta() != null
               && last.lineBase() != null && last.headers() != null && last.version() != null)
           ? new CsvCursor(file, rowsProcessed, last.anchorByte(), last.charDelta(),
               last.lineBase(), last.headers(), last.version())
           : new CsvCursor(file, rowsProcessed);
-      return wrap(out);
+      return wrap(witnessed(out, stat));
+    }
+
+    /**
+     * #1452: a position mid-file resumes by its checkpoint or by row count — on the bytes its stat says, and a stat
+     * (size, mtime) survives a same-length copy that keeps the mtime. For a carrying mapping the position records the
+     * file's content fingerprint too, so a resume can refuse bytes its carried values were not taken from. Every other
+     * cursor keeps its shape.
+     */
+    private CsvCursor witnessed(CsvCursor c, FileDescriptor stat) {
+      if (!oneFilePerChunk || c.rowsProcessed() == 0) return c;
+      CsvCursor.Version v = c.version() != null ? c.version()
+          : stat != null && stat.path().equals(c.file()) ? CsvCursor.Version.of(stat) : null;
+      if (v == null) return c;   // nothing to witness: the resume is refused
+      CsvCursor.Version fingerprinted =
+          new CsvCursor.Version(v.size(), v.lastModified(), v.etag(), contentHash(Path.of(c.file())));
+      return new CsvCursor(c.file(), c.rowsProcessed(), c.anchorByte(), c.charDelta(), c.lineBase(), c.headers(),
+          fingerprinted);
+    }
+
+    /**
+     * #1452: a carrying mapping resumes a file mid-way only on the bytes its stored position and carried values were
+     * taken from — a file replaced between two chunks would hand the old file's context to the new file's rows.
+     */
+    private void refuseChangedBytes(CsvCursor start, Path file) {
+      CsvCursor.Version v = start.version();
+      if (v == null || v.sha256() == null || !v.matches(describe(file), () -> contentHash(file))) {
+        throw new StaleCarryException("csv-file: " + file + " is resumed mid-way, but it is no longer the file its "
+            + "stored position and carried values were taken from; " + StaleCarryException.RESET);
+      }
+    }
+
+    /**
+     * The file's SHA-256 (#1452), kept for the run under the file's identity: size, mtime and ctime. A copy can restore
+     * a size and an mtime (`cp -p`), never a ctime — every write moves it — so bytes replaced between two chunks miss
+     * the kept fingerprint and are hashed again. A carrying mapping thus reads an unchanged file a second time per run,
+     * not once per chunk. Where the system names no ctime, nothing proves the bytes kept: hashed at every resume.
+     */
+    private String contentHash(Path file) {
+      FileDescriptor now = describe(file);
+      String changed = changeTime(file);
+      if (now == null || changed == null) return sha256(file);
+      return scope.resource(new ContentKey(file.toString(), now.size(), now.lastModified().toString(), changed),
+          () -> new Content(sha256(file))).sha256;
+    }
+
+    /** The file's ctime, or null where the file system does not expose one. */
+    private static String changeTime(Path file) {
+      try {
+        return String.valueOf(Files.getAttribute(file, "unix:ctime"));
+      } catch (UnsupportedOperationException | IllegalArgumentException | IOException noCtime) {
+        return null;
+      }
     }
 
     private ConnectorCursor wrap(CsvCursor out) {

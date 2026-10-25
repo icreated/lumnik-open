@@ -4,44 +4,13 @@ lumnik ships as two builds:
 
 | Build | Licence | What it does |
 |---|---|---|
-| **`lumnik-open`** | Apache-2.0, public repository | ingest, fuse, react, serve the métier apps |
+| **`lumnik-open`** | Apache-2.0, public repository | ingest, fuse, react, serve the business apps |
 | **lumnik Pro** | commercial | adds *Ask* (natural-language chat over your data), model providers and the external-identity loop |
 
-The open build has no Ask door at all: no stub, no licence key. One exception:
-[direct Search](search/querying.md) has its commands in every build, and without a provider
-they answer *not installed* (see [Feature by feature](#feature-by-feature)).
+The open build has no chat and no `lm ask`: no stub, no licence key.
 
-**lumnik Open** is the build behind the free **Hub** tier; **lumnik Pro** is the build behind both
+**lumnik Open** is the build behind the free **Hub** tier. **lumnik Pro** is the build behind both
 paid tiers — see [Three tiers, two builds](#three-tiers-two-builds).
-
-```mermaid
-flowchart LR
-  subgraph open["lumnik-open — the open edition (Apache-2.0)"]
-    direction TB
-    conn["Connectors — CSV · JDBC ·<br/>REST / GraphQL / SOAP"]
-    tables[("Multi-tenant hub —<br/>RLS on every row")]
-    ent["Entities — fused,<br/>conflicts kept"]
-    apps["Views · Apps · Processes ·<br/>Workflows · Inbox · PWA"]
-    out["Outputs — webhooks ·<br/>email · event registry"]
-    sdoors["Search doors — declare · query<br/>answer <i>not installed</i> without a provider"]
-    askcore["Ask pipeline + five guards —<br/>native, <b>no door onto it</b>"]
-    conn --> tables --> ent --> apps
-    tables --> out
-  end
-  subgraph closedx["closed extensions — what lumnik Pro adds"]
-    direction TB
-    doors["Chat + semantic search"]
-    llm["Model providers — Ollama, …"]
-    searchp["Search providers — PostgreSQL ·<br/>OpenSearch (opt-in build)"]
-    kafka["kafka connector"]
-    jit["JIT provisioning + SCIM"]
-  end
-  doors -.-> askcore
-  llm -. powers .-> doors
-  searchp -. "indexes declared entities" .-> sdoors
-  kafka -. "one more connector" .-> conn
-  jit -. "external-IdP logins" .-> tables
-```
 
 ## Feature by feature
 
@@ -49,22 +18,18 @@ flowchart LR
 |---|---|---|
 | Connectors: CSV (SFTP/S3), JDBC, REST + GraphQL/SOAP shapes | ✓ | ✓ |
 | Connector: [kafka](connectors/kafka.md) | — | ✓ |
-| JDBC dialect: [Oracle](connectors/jdbc.md#oracle) (driver included) | — | ✓ |
+| JDBC dialect: [Oracle](connectors/jdbc/oracle.md) (driver included) | — | ✓ |
 | Fusion: [entities](entities.md), `_conflicts` ledger | ✓ | ✓ |
-| Apps ladder: [views](apps/views.md), [processes](apps/processes.md), [workflows](apps/workflows.md), [inbox](apps/inbox.md), [métier PWA](apps/pwa.md) | ✓ | ✓ |
+| Apps ladder: [views](apps/views.md), [processes](apps/processes.md), [workflows](apps/workflows.md), [inbox](apps/inbox.md), [PWA](apps/pwa.md) | ✓ | ✓ |
 | [Outputs](outputs.md): webhooks (signed, journaled, replay), [email notifications](email.md) | ✓ | ✓ |
 | `lm` CLI / TUI, manifests, the whole integrator surface | ✓ | ✓ |
-| Multi-tenancy & RLS, audit trail, [backup](operations/backup-restore.md), rate-limited `view-generate` | ✓ | ✓ |
-| [Search](search/search-indexes.md): declare an index (`kind: SearchIndex`), the `search` and `capability` doors — a hub without a provider answers *not installed* | ✓ | ✓ |
-| Search [provider](search/search-indexes.md#choosing-a-provider): PostgreSQL (`-Psearch`) or OpenSearch / Elasticsearch (`-Psearch-cluster`) — built in on request, **never in the published image**; it also brings the PWA's Recherche tab | — | ✓ opt-in build |
-| **Ask**: [chat & analytic text-to-SQL doors](rag/http-api.md), semantic search, `rag.chunk` store | — | ✓ |
+| Multi-tenancy & RLS, audit trail, [backup](operations/backup-restore.md) | ✓ | ✓ |
+| [Search](search/search-indexes.md): declare an index (`kind: SearchIndex`). Querying needs a provider: without one, `lm search query` answers *not installed* | ✓ | ✓ |
+| Search [provider](search/search-indexes.md#choosing-a-provider): PostgreSQL (`up.sh --search`) or OpenSearch / Elasticsearch (`up.sh --search-cluster`). Never in the published image. It also brings the PWA's Search tab | — | ✓ opt-in build |
+| **Ask**: [chat and `lm ask`](rag/http-api.md), semantic search, `lm view generate` (the AI writes a view) | — | ✓ |
 | Model providers ([Ollama & friends](rag/models.md)) | — | ✓ |
 | [JIT provisioning](security/byo-idp.md) for external IdPs | — | ✓ |
 | [SCIM deprovisioning](security/scim.md) | — | ✓ |
-| Chat [rate-limit buckets](operations/rate-limits.md) | *(no such endpoints)* | ✓ |
-
-The five [ask guards](transparency/ask-honesty.md) are in every build; the open edition has no
-chat door onto them and no model behind them.
 
 **Switched off is not absent.** A Pro hub can run with the AI switched off
 (`LUMNIK_AI_ENABLED=false`): the data is kept, and `lm module list` shows `rag` and `llm` as

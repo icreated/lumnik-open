@@ -105,6 +105,62 @@ class CsvFullRefreshIT {
         return out;
     }
 
+    /** records_in and files_unchanged of the connector's latest run. */
+    private long[] latestRun(UUID id) {
+        try (Connection c = adminDs.getConnection(); Statement st = c.createStatement();
+             ResultSet rs = st.executeQuery("SELECT records_in, files_unchanged FROM connector.connector_run "
+                 + "WHERE connector_id = '" + id + "' ORDER BY ended_at DESC NULLS LAST, started_at DESC LIMIT 1")) {
+            rs.next();
+            return new long[] {rs.getLong(1), rs.getLong(2)};
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** records_removed of the connector's latest run: what `lm run get` reports as removed. */
+    private long removed(UUID id) {
+        try (Connection c = adminDs.getConnection(); Statement st = c.createStatement();
+             ResultSet rs = st.executeQuery("SELECT records_removed FROM connector.connector_run "
+                 + "WHERE connector_id = '" + id + "' ORDER BY ended_at DESC NULLS LAST, started_at DESC LIMIT 1")) {
+            rs.next();
+            return rs.getLong(1);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** #1371: a copy that keeps the mtime (docker cp, cp -p, rsync -t) and the size — the bytes decide. */
+    @Test
+    void a_file_replaced_with_the_same_size_and_mtime_is_read_again(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("ref.csv");
+        FileTime kept = FileTime.from(Instant.parse("2026-02-01T00:00:00Z"));
+        Files.writeString(file, "code,label\nA1,x\n");
+        Files.setLastModifiedTime(file, kept);
+        String table = "refresh_same_stat_" + Long.toHexString(System.nanoTime());
+        UUID id = seed(file.toString(), table, null);
+        assertThat(run(id)).isInstanceOf(RunStatus.Completed.class);
+
+        Files.writeString(file, "code,label\nA1,y\n");
+        Files.setLastModifiedTime(file, kept);
+        assertThat(run(id)).isInstanceOf(RunStatus.Completed.class);
+
+        assertThat(latestRun(id)[0]).isEqualTo(1);
+        assertThat(codes("t_" + table)).containsExactly("A1=y");
+    }
+
+    /** #1371: a run that reads nothing because the file did not change says so. */
+    @Test
+    void an_unchanged_file_is_counted_on_the_run_that_skipped_it(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("ref.csv");
+        write(file, rows(3).toArray(String[]::new));
+        UUID id = seed(file.toString(), "refresh_counted_" + Long.toHexString(System.nanoTime()), null);
+        assertThat(run(id)).isInstanceOf(RunStatus.Completed.class);
+        assertThat(latestRun(id)).containsExactly(3, 0);
+
+        assertThat(run(id)).isInstanceOf(RunStatus.Completed.class);
+        assertThat(latestRun(id)).containsExactly(0, 1);
+    }
+
     @Test
     void a_row_removed_from_the_file_leaves_the_table(@TempDir Path dir) throws Exception {
         Path file = dir.resolve("ref.csv");
@@ -117,6 +173,41 @@ class CsvFullRefreshIT {
         assertThat(run(id)).isInstanceOf(RunStatus.Completed.class);
 
         assertThat(codes("t_refresh_removed")).hasSize(9).doesNotContain("C09=v");
+        assertThat(removed(id)).isEqualTo(1);
+    }
+
+    @Test
+    void a_changed_value_is_not_reported_as_a_removed_row(@TempDir Path dir) throws Exception {
+        // #1544: a changed row is one version met and one unmet. The old version goes, but the source
+        // still holds the row: the run must not say it lost one.
+        Path file = dir.resolve("ref.csv");
+        write(file, rows(10).toArray(String[]::new));
+        UUID id = seed(file.toString(), "refresh_one_changed", null);
+        assertThat(run(id)).isInstanceOf(RunStatus.Completed.class);
+
+        List<String> changed = new ArrayList<>(rows(10));
+        changed.set(3, "C03,w");
+        write(file, changed.toArray(String[]::new));
+        assertThat(run(id)).isInstanceOf(RunStatus.Completed.class);
+
+        assertThat(codes("t_refresh_one_changed")).hasSize(10).contains("C03=w").doesNotContain("C03=v");
+        assertThat(removed(id)).isZero();
+    }
+
+    @Test
+    void a_row_lost_beside_a_changed_one_counts_once(@TempDir Path dir) throws Exception {
+        Path file = dir.resolve("ref.csv");
+        write(file, rows(10).toArray(String[]::new));
+        UUID id = seed(file.toString(), "refresh_lost_and_changed", null);
+        run(id);
+
+        List<String> next = new ArrayList<>(rows(10).subList(0, 9));
+        next.set(3, "C03,w");
+        write(file, next.toArray(String[]::new));
+        assertThat(run(id)).isInstanceOf(RunStatus.Completed.class);
+
+        assertThat(codes("t_refresh_lost_and_changed")).hasSize(9).contains("C03=w").doesNotContain("C09=v");
+        assertThat(removed(id)).isEqualTo(1);
     }
 
     @Test
@@ -168,6 +259,7 @@ class CsvFullRefreshIT {
         assertThat(run(id)).isInstanceOf(RunStatus.Completed.class);
 
         assertThat(codes("t_refresh_churn")).hasSize(10).allMatch(c -> c.endsWith("=w"));
+        assertThat(removed(id)).isZero();
     }
 
     @Test

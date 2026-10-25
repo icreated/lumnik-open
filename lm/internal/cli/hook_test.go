@@ -144,3 +144,74 @@ func TestHookApplyDeleteReload_notImplemented_neverTouchTheHub(t *testing.T) {
 		})
 	}
 }
+
+// hookScriptsStub sends what HookScriptResource sends (#1402).
+func hookScriptsStub(directory bool, scripts ...map[string]any) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/platform/hooks/scripts" {
+			http.NotFound(w, r)
+			return
+		}
+		if scripts == nil {
+			scripts = []map[string]any{}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"directory": directory, "scripts": scripts})
+	}
+}
+
+func runHook(t *testing.T, handler http.HandlerFunc, args ...string) (string, string, error) {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	return runLm(t, srv, append([]string{"hook"}, args...)...)
+}
+
+func TestHookScriptsListsTheHooksDirectoryWithTheFingerprint(t *testing.T) {
+	sha := strings.Repeat("ab", 32)
+	out, _, err := runHook(t, hookScriptsStub(true, map[string]any{"name": "ean-check.kts", "size": 812, "sha256": sha}), "scripts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"NAME", "SIZE", "SHA256", "ean-check.kts", "812", sha} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestHookScriptsSaysWhenTheHubHasNoHooksDirectory(t *testing.T) {
+	out, errOut, err := runHook(t, hookScriptsStub(false), "scripts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, "no hooks directory") || !strings.Contains(errOut, "LUMNIK_HOOKS_DIR") {
+		t.Errorf("stderr should say the operator sets none, got: %q", errOut)
+	}
+	if strings.Contains(out, "NAME") {
+		t.Errorf("no table for a directory that does not exist, got:\n%s", out)
+	}
+}
+
+func TestHookScriptsSaysWhenTheDirectoryIsEmpty(t *testing.T) {
+	_, errOut, err := runHook(t, hookScriptsStub(true), "scripts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, "no scripts") {
+		t.Errorf("stderr should say the directory holds no script, got: %q", errOut)
+	}
+}
+
+func TestHookScriptsJsonKeepsTheDirectoryFlag(t *testing.T) {
+	out, _, err := runHook(t, hookScriptsStub(false), "scripts", "-o", "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, out)
+	}
+	if got["directory"] != false {
+		t.Errorf("directory flag lost: %s", out)
+	}
+}

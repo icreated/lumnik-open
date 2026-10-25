@@ -208,4 +208,12 @@ class OwnedRunScopeTest {
         assertThatThrownBy(() -> scope.resource(null, () -> tracked("a"))).isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> scope.resource("a", () -> null)).isInstanceOf(NullPointerException.class);
     }
+
+    /** A missing cancel flag is refused where it is passed, not when a reader first asks for it mid-fetch (#1444). */
+    @Test
+    void a_null_cancel_flag_is_refused_at_construction() {
+        assertThatThrownBy(() -> new OwnedRunScope("run", null))
+            .isInstanceOf(NullPointerException.class)
+            .hasMessage("a run scope needs its run's cancel flag");
+    }
 }

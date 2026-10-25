@@ -113,7 +113,7 @@ func newCsvIngestCmd() *cobra.Command {
 
 func printCsvIngestSummary(w io.Writer, r *client.CsvIngestResult) {
 	if r.Refreshed {
-		fmt.Fprintf(w, "Re-ingested %s into %s — one more breath (rows dedup by key)\n", r.SourceFile, r.TableName)
+		fmt.Fprintf(w, "Re-ingested %s into %s — refreshed, rows deduplicated by key\n", r.SourceFile, r.TableName)
 	} else {
 		fmt.Fprintf(w, "Ingested %s into %s\n", r.SourceFile, r.TableName)
 	}

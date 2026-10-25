@@ -8,6 +8,7 @@ import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.runtime.QueuedRunFixtures.RunRow;
 import io.lumnik.hub.connector.runtime.QueuedRunFixtures.Seeded;
 import io.lumnik.hub.event.consumer.SchedulerPausedProfile;
+import io.lumnik.hub.process.ProcessManifestStore;
 import io.lumnik.hub.run.RunLock;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.quarkus.agroal.DataSource;
@@ -45,6 +46,7 @@ class ConnectorRunDispatcherIT {
     @Inject ConnectorEndpointRepository endpoints;
     @Inject UserTransaction utx;
     @Inject @DataSource("admin") AgroalDataSource adminDs;
+    @Inject ProcessManifestStore processes;
 
     private int permitsAtRest;
 
@@ -94,6 +96,10 @@ class ConnectorRunDispatcherIT {
         assertThat(row.recordsOut()).isEqualTo(3);
         assertThat(row.startedAt()).as("set once, on leaving the queue").isAfterOrEqualTo(accepted);
         assertThat(row.queuedAt()).isCloseTo(accepted, within(1, ChronoUnit.MILLIS));
+        assertThat(Jdbc.queryOne(adminDs, "process_set", "SELECT process_set FROM connector.connector_run WHERE id = ?",
+                ps -> ps.setObject(1, run), rs -> rs.getString(1)))
+            .as("the start records the tenant's processes as the run starts under them (#1351)")
+            .contains(processes.processSet(1L).fingerprint());
         await().atMost(Duration.ofSeconds(30)).until(() -> lockIsFree(s.endpointIds().get(0)));
     }
 

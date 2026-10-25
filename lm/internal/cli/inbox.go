@@ -11,6 +11,7 @@ import (
 
 func newInboxCmd() *cobra.Command {
 	var all bool
+	var process, typ string
 	cmd := &cobra.Command{
 		Use:   "inbox",
 		Short: "What needs you — the tenant's recent decision.* events, newest first",
@@ -19,7 +20,7 @@ func newInboxCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			entries, err := c.InboxList(pageLimit(cmd), all)
+			entries, err := c.InboxList(client.InboxQuery{Limit: pageLimit(cmd), All: all, Process: process, Type: typ})
 			if err != nil {
 				return err
 			}
@@ -30,7 +31,9 @@ func newInboxCmd() *cobra.Command {
 		},
 	}
 	addPageLimitFlag(cmd, 50, client.InboxPageCap, "How many recent decisions to list (1-200)")
-	cmd.Flags().BoolVar(&all, "all", false, "Include disposed (acked) decisions, marked [traité]")
+	cmd.Flags().BoolVar(&all, "all", false, "Include disposed (acked) decisions, marked [acked]")
+	cmd.Flags().StringVar(&process, "process", "", "Only this process's decisions (as PROCESS shows it: a name, or workflow:NAME)")
+	cmd.Flags().StringVar(&typ, "type", "", "Only decisions of this type (decision.…)")
 
 	ack := &cobra.Command{
 		Use:   "ack ID",
@@ -56,11 +59,11 @@ func newInboxCmd() *cobra.Command {
 	return cmd
 }
 
-// inboxRow maps one entry to the table row: ID first, MESSAGE suffixed [traité] when disposed.
+// inboxRow maps one entry to the table row: ID first, MESSAGE suffixed [acked] when disposed.
 func inboxRow(e client.InboxEntry, now time.Time) []string {
 	msg := e.Message
 	if e.Acked {
-		msg += " [traité]"
+		msg += " [acked]"
 	}
 	return []string{strconv.FormatInt(e.ID, 10), quandOf(e.OccurredAt, now), e.Process, msg, e.EntityKey}
 }

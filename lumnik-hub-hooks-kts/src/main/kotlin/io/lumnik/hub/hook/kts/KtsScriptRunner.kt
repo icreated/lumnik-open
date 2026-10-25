@@ -41,16 +41,19 @@ class KtsScriptRunner {
     class Compiled internal constructor(private val ctor: Constructor<*>) {
         /** Runs the script body against [bindings]; a script failure surfaces as its own exception. */
         fun evaluate(bindings: Bindings) {
-            instantiate(bindings)
+            newInstance(bindings)
         }
 
         /**
          * Runs the script body and returns the running [Script] — for scripts that DEFINE top-level
          * functions (members of the instance) rather than act on [bindings].
          */
-        fun instantiate(bindings: Bindings): Script {
+        fun instantiate(bindings: Bindings): Script = Script(newInstance(bindings))
+
+        /** One run of the body; [evaluate] builds no [Script], whose member lookup a cell hook never uses. */
+        private fun newInstance(bindings: Bindings): Any {
             try {
-                return Script(ctor.newInstance(bindings))
+                return ctor.newInstance(bindings)
             } catch (e: InvocationTargetException) {
                 throw e.targetException
             } catch (e: ReflectiveOperationException) {

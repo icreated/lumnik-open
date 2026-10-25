@@ -260,7 +260,8 @@ class CsvSftpConnectorIT {
         // from /upload/mv and present under /upload/archive.
         var srcGone = sftp.execInContainer("sh", "-c", "test ! -e /home/" + USER + "/upload/mv/move.csv && echo GONE || echo PRESENT");
         assertThat(srcGone.getStdout().trim()).as("source file removed from /upload/mv after MOVE").isEqualTo("GONE");
-        var archived = sftp.execInContainer("sh", "-c", "test -e /home/" + USER + "/upload/archive/move.csv && echo YES || echo NO");
+        // Archived under its name and its mtime (#1382): a name that comes back every night never collides.
+        var archived = sftp.execInContainer("sh", "-c", "ls /home/" + USER + "/upload/archive/move.*Z.csv >/dev/null 2>&1 && echo YES || echo NO");
         assertThat(archived.getStdout().trim()).as("source file relocated under /upload/archive").isEqualTo("YES");
     }
 
@@ -343,6 +344,148 @@ class CsvSftpConnectorIT {
         assertThat(status).isInstanceOf(RunStatus.Completed.class);
         // BOTH files (1 row each) must land in a single run — proves inclusive listSince + dedup.
         assertThat(scalar("SELECT count(*) FROM connector.t_c1b_sftp_eq")).isEqualTo(2L);
+    }
+
+    // -------------------------------------------------------------------------
+    // #1381: a file rewritten under the same name with the SAME size and a newer mtime is a new
+    // version — an sftp file has no etag, so only its mtime tells it apart. It was taken as
+    // already read: the run ended Completed with IN 0.
+    // -------------------------------------------------------------------------
+
+    @Test
+    @Order(45)
+    void sftp_same_name_same_size_rewritten_later_is_read_again() throws Exception {
+        String dir = "/home/" + USER + "/upload/rw";
+        sftp.execInContainer("sh", "-c", "mkdir -p " + dir + " && printf 'row_id,email\\n1,a@x\\n' > " + dir + "/day.csv"
+            + " && touch -d '2021-01-01 00:00:00' " + dir + "/day.csv");
+
+        Map<String, Object> transport = Map.of(
+            "kind", "sftp", "host", sftp.getHost(), "port", sftp.getMappedPort(22),
+            "user", USER, "path", "/upload/rw/*.csv", "password_env", "C1B_SFTP_PASSWORD",
+            "strict_host_key", false);
+
+        UUID id = TenantContext.callAsSystem(() -> {
+            try {
+                utx.begin();
+                var c = new Connector();
+                c.setTenantId(1L); c.setName("c1b-sftp-rw-" + System.nanoTime()); c.setTypeId("csv-file");
+                c.setConfig(Map.of("kind", "csv-file", "transport", transport,
+                    "parser", Map.of("has_header", true)));
+                connectors.persist(c); connectors.flush();
+                var ep = new ConnectorEndpoint();
+                ep.setConnectorId(c.getId()); ep.setTenantId(1L); ep.setName("default");
+                ep.setMethod("GET"); ep.setPath("/upload/rw/*.csv"); ep.setEnabled(true);
+                ep.setConfig(Map.of("name", "c1b_sftp_rw"));
+                endpoints.persist(ep);
+                utx.commit();
+                return c.getId();
+            } catch (Exception e) { throw new RuntimeException(e); }
+        });
+
+        assertThat(engine.runSync(id, new RunTrigger.Manual(1L))).isInstanceOf(RunStatus.Completed.class);
+        assertThat(scalar("SELECT count(*) FROM connector.t_c1b_sftp_rw")).isEqualTo(1L);
+
+        // The next day's export: the same name, the same byte count, another row.
+        sftp.execInContainer("sh", "-c", "printf 'row_id,email\\n2,b@x\\n' > " + dir + "/day.csv"
+            + " && touch -d '2021-01-02 00:00:00' " + dir + "/day.csv");
+
+        assertThat(engine.runSync(id, new RunTrigger.Manual(1L))).isInstanceOf(RunStatus.Completed.class);
+        assertThat(scalar("SELECT count(*) FROM connector.t_c1b_sftp_rw"))
+            .as("the rewritten file is read again, not taken as already processed").isEqualTo(2L);
+    }
+
+    // -------------------------------------------------------------------------
+    // #1382: a carrier drops the same name every night. Each night is archived under its own name,
+    // and a file that cannot be archived (here: an archive folder the user cannot write) is said on
+    // the run instead of a WARN in the hub's log only.
+    // -------------------------------------------------------------------------
+
+    @Test
+    @Order(46)
+    void sftp_the_same_name_every_night_is_archived_each_time_and_a_failed_archive_is_said() throws Exception {
+        String home = "/home/" + USER + "/upload";
+        sftp.execInContainer("sh", "-c", "mkdir -p " + home + "/night " + home + "/night-archive && "
+            + "chown " + USER + " " + home + "/night " + home + "/night-archive && "
+            + "printf 'row_id,email\\n1,a@x\\n' > " + home + "/night/day.csv && touch -d '2021-01-01 00:00:00' " + home + "/night/day.csv");
+
+        UUID id = moveConnector("night", "/upload/night-archive", "c1b_sftp_night");
+        assertThat(engine.runSync(id, new RunTrigger.Manual(1L))).isInstanceOf(RunStatus.Completed.class);
+
+        sftp.execInContainer("sh", "-c", "printf 'row_id,email\\n2,b@x\\n3,c@x\\n' > " + home + "/night/day.csv"
+            + " && touch -d '2021-01-02 00:00:00' " + home + "/night/day.csv");
+        assertThat(engine.runSync(id, new RunTrigger.Manual(1L))).isInstanceOf(RunStatus.Completed.class);
+
+        assertThat(sftp.execInContainer("sh", "-c", "ls " + home + "/night-archive | wc -l").getStdout().trim())
+            .as("both nights archived, each under its own name").isEqualTo("2");
+        assertThat(sftp.execInContainer("sh", "-c", "ls " + home + "/night | wc -l").getStdout().trim())
+            .as("the drop folder is empty").isEqualTo("0");
+        assertThat(lastRun(id, "files_not_archived")).isZero();
+
+        // The archive folder becomes read-only: the next night is read, stays, and the run says so.
+        sftp.execInContainer("sh", "-c", "chown root " + home + "/night-archive && chmod 555 " + home + "/night-archive && "
+            + "printf 'row_id,email\\n4,d@x\\n' > " + home + "/night/day.csv && touch -d '2021-01-03 00:00:00' " + home + "/night/day.csv");
+        assertThat(engine.runSync(id, new RunTrigger.Manual(1L))).isInstanceOf(RunStatus.Completed.class);
+        assertThat(scalar("SELECT count(*) FROM connector.t_c1b_sftp_night")).isEqualTo(4L);
+        assertThat(lastRun(id, "files_not_archived")).as("the file left in the drop folder is said").isEqualTo(1L);
+    }
+
+    // #1385: a night whose archive failed stays "to archive" in the cursor; the next night dropped under
+    // the same name must be read — the archive sweep moved it by path, unread, and the run read nothing.
+    @Test
+    @Order(47)
+    void sftp_a_new_file_under_the_name_of_one_not_archived_is_read_not_archived_away() throws Exception {
+        String home = "/home/" + USER + "/upload";
+        sftp.execInContainer("sh", "-c", "mkdir -p " + home + "/again " + home + "/again-archive && "
+            + "chown " + USER + " " + home + "/again " + home + "/again-archive && "
+            + "printf 'row_id,email\\n1,a@x\\n' > " + home + "/again/day.csv && touch -d '2021-02-01 00:00:00' " + home + "/again/day.csv");
+        UUID id = moveConnector("again", "/upload/again-archive", "c1b_sftp_again");
+        assertThat(engine.runSync(id, new RunTrigger.Manual(1L))).isInstanceOf(RunStatus.Completed.class);
+
+        // Night 2 is read, but the archive folder is read-only: it stays, "to archive".
+        sftp.execInContainer("sh", "-c", "chown root " + home + "/again-archive && chmod 555 " + home + "/again-archive && "
+            + "printf 'row_id,email\\n2,b@x\\n' > " + home + "/again/day.csv && touch -d '2021-02-02 00:00:00' " + home + "/again/day.csv");
+        assertThat(engine.runSync(id, new RunTrigger.Manual(1L))).isInstanceOf(RunStatus.Completed.class);
+        assertThat(lastRun(id, "files_not_archived")).isEqualTo(1L);
+
+        // The carrier fixes its folder and drops night 3 under the same name.
+        sftp.execInContainer("sh", "-c", "chown " + USER + " " + home + "/again-archive && chmod 755 " + home + "/again-archive && "
+            + "printf 'row_id,email\\n3,c@x\\n30,cc@x\\n' > " + home + "/again/day.csv && touch -d '2021-02-03 00:00:00' " + home + "/again/day.csv");
+        assertThat(engine.runSync(id, new RunTrigger.Manual(1L))).isInstanceOf(RunStatus.Completed.class);
+
+        assertThat(lastRun(id, "records_in")).as("night 3 is read, not archived away unread").isEqualTo(2L);
+        assertThat(scalar("SELECT count(*) FROM connector.t_c1b_sftp_again")).isEqualTo(4L);
+        assertThat(sftp.execInContainer("sh", "-c", "ls " + home + "/again-archive").getStdout())
+            .as("night 1 and night 3 archived under their own names").contains("day.20210201T000000Z.csv", "day.20210203T000000Z.csv");
+        assertThat(sftp.execInContainer("sh", "-c", "ls " + home + "/again | wc -l").getStdout().trim()).isEqualTo("0");
+    }
+
+    private UUID moveConnector(String dir, String archive, String table) {
+        Map<String, Object> transport = Map.of(
+            "kind", "sftp", "host", sftp.getHost(), "port", sftp.getMappedPort(22),
+            "user", USER, "path", "/upload/" + dir + "/*.csv", "password_env", "C1B_SFTP_PASSWORD",
+            "strict_host_key", false);
+        return TenantContext.callAsSystem(() -> {
+            try {
+                utx.begin();
+                var c = new Connector();
+                c.setTenantId(1L); c.setName("c1b-sftp-" + dir + "-" + System.nanoTime()); c.setTypeId("csv-file");
+                c.setConfig(Map.of("kind", "csv-file", "transport", transport, "parser", Map.of("has_header", true),
+                    "after_process", "move", "archive_path", archive));
+                connectors.persist(c); connectors.flush();
+                var ep = new ConnectorEndpoint();
+                ep.setConnectorId(c.getId()); ep.setTenantId(1L); ep.setName("default");
+                ep.setMethod("GET"); ep.setPath("/upload/" + dir + "/*.csv"); ep.setEnabled(true);
+                ep.setConfig(Map.of("name", table));
+                endpoints.persist(ep);
+                utx.commit();
+                return c.getId();
+            } catch (Exception e) { throw new RuntimeException(e); }
+        });
+    }
+
+    private long lastRun(UUID connector, String column) {
+        return scalar("SELECT " + column + " FROM connector.connector_run WHERE connector_id = '" + connector
+            + "' ORDER BY started_at DESC LIMIT 1");
     }
 
     // -------------------------------------------------------------------------

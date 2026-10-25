@@ -8,6 +8,7 @@ import io.lumnik.identity.tenant.TenantRepository;
 import io.lumnik.identity.user.User;
 import io.lumnik.identity.user.UserRepository;
 import io.quarkus.test.junit.QuarkusTest;
+import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import org.junit.jupiter.api.AfterEach;
@@ -73,7 +74,9 @@ class UserRoleResourceTest {
             .then().statusCode(201);
 
         given().when().post("/api/tenants/" + tenantId + "/users/" + userId + "/roles/" + roleId)
-            .then().statusCode(409);
+            .then().statusCode(409)
+            .contentType(ContentType.JSON)
+            .body("error", equalTo("role " + roleId + " is already assigned to user " + userId));
     }
 
     @Test

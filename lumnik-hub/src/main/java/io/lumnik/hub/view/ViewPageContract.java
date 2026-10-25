@@ -15,7 +15,7 @@ import java.util.List;
 public final class ViewPageContract {
 
     /** Bumped whenever the order key or the binding changes: a cursor of another version is stale. */
-    public static final int VERSION = 1;
+    public static final int VERSION = 2;   // 2: an entity's numbers order as numbers (#1338)
     public static final int DEFAULT_PAGE_SIZE = 50;
     public static final int MAX_PAGE_SIZE = 200;
 

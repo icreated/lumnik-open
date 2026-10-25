@@ -9,6 +9,7 @@ import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.rest.pagination.preset.PaginationPresetRegistry;
 import io.lumnik.hub.validator.JsonNodes;
+import io.lumnik.hub.validator.rest.EndpointsBlockValidator;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -51,19 +52,19 @@ public class RestConnectorApplyHandler implements ConnectorApplyHandler {
 
     private Map<String, Object> buildConnectorConfig(Connector conn, JsonNode meta, JsonNode spec) {
         Map<String, Object> connCfg = new HashMap<>(conn.getConfig() != null ? conn.getConfig() : Map.of());
+        // Every key an endpoint reads is dropped first, then written again from this manifest (#1481): the stored
+        // config cannot tell which of them yesterday's defaults or spec-level knobs wrote, so a key the new manifest
+        // no longer writes used to survive and run. The defaults block is a PASSTHROUGH — it stores its fields, never
+        // itself. Copied FIRST, so every checked spec-level key put below wins over it (#1471) — validation refuses
+        // those keys in defaults, and this keeps a manifest stored before that from overriding spec.
+        connCfg.keySet().removeAll(EndpointsBlockValidator.ENDPOINT_KEYS);
+        spec.path(DEFAULTS).fields().forEachRemaining(
+            e -> connCfg.put(e.getKey(), JSON.convertValue(e.getValue(), Object.class)));
         connCfg.put("kind", meta.path("connector_type").asText(KIND_REST_GENERIC));
         if (!spec.path(BASE_URL).isMissingNode()) {
             connCfg.put(BASE_URL, spec.path(BASE_URL).asText());
         }
         ApplyUpsert.putOrRemove(connCfg, AUTH, spec.path(AUTH), Map.class);
-        // NOT the shape above, and the guard it used to carry is gone rather than fixed: this block
-        // is a PASSTHROUGH — it stores its fields, never itself, so there is no `defaults` key to
-        // remove and `fields()` is already empty on a missing or null node. Its own omission half
-        // stays open and is named in #551: the handler cannot tell which of today's top-level keys
-        // it flattened yesterday, so deleting the block leaves them behind. Closing that means
-        // changing what the runtime reads, which is a different change.
-        spec.path(DEFAULTS).fields().forEachRemaining(
-            e -> connCfg.put(e.getKey(), JSON.convertValue(e.getValue(), Object.class)));
         // Only a real, non-blank string — an explicit null would persist NullNode.asText() == "null"
         // and build base_url + "null" at runtime.
         String graphqlPath = JsonNodes.textOrNull(spec.path("graphql_path"));

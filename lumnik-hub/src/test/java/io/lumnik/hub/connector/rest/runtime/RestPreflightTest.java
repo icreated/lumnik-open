@@ -9,7 +9,10 @@ import io.lumnik.hub.connector.rest.RestResponse;
 import io.lumnik.hub.connector.rest.auth.AuthProvider;
 import io.lumnik.hub.connector.rest.auth.AuthProviderRegistry;
 import io.lumnik.hub.connector.rest.auth.AuthSpec;
+import io.lumnik.hub.connector.rest.auth.OAuth2AuthProviderFactory;
+import io.lumnik.hub.connector.rest.auth.OAuth2Tokens;
 import io.lumnik.hub.connector.rest.pagination.PaginationFactory;
+import io.lumnik.hub.connector.secret.SecretRefs;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -22,6 +25,7 @@ import java.net.ConnectException;
 import java.net.http.HttpTimeoutException;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -47,6 +51,7 @@ class RestPreflightTest {
 
     RestPreflightTest() {
         preflight.pagination = new PaginationFactory();
+        preflight.secrets = SecretRefs.environmentOnly(name -> null);
     }
 
     private static ConnectorEndpoint endpoint(String name, String method, String path,
@@ -116,6 +121,37 @@ class RestPreflightTest {
         RestRequest req = preflight.request(c, offsetEndpoint());
 
         assertThat(req.headers()).containsEntry("X-Api-Version", "2024-10");
+    }
+
+    /** A header's {@code value_env} resolves the way the run resolves it: lm secret first, then the environment. */
+    @Test
+    void resolvesAHeaderReferenceThroughTheSecretRegistry() {
+        preflight.secrets = new SecretRefs(
+            name -> "CLIENT_ID".equals(name) ? Optional.of("from-registry") : Optional.empty(), name -> "from-env");
+        Connector c = connector(Map.of(
+            "base_url", "http://erp.invalid",
+            "headers", List.of(Map.of("name", "X-Client-Id", "value_env", "CLIENT_ID"))));
+
+        RestRequest req = preflight.request(c, offsetEndpoint());
+
+        assertThat(req.headers()).containsEntry("X-Client-Id", "from-registry");
+    }
+
+    /** A header reference nothing holds is the verdict, named, and nothing is sent. */
+    @Test
+    void anUnresolvedHeaderReferenceIsTheVerdict() {
+        preflight.authReg = noAuth();
+        preflight.http = new RestHttpClient() {
+            @Override public RestResponse execute(RestRequest req) { throw new AssertionError("nothing may be sent"); }
+        };
+        Connector c = connector(Map.of(
+            "base_url", "http://erp.invalid",
+            "headers", List.of(Map.of("name", "X-Client-Id", "value_env", "CLIENT_ID"))));
+
+        RestPreflight.Verdict refused = preflight.check(c, offsetEndpoint());
+
+        assertThat(refused.ok()).isFalse();
+        assertThat(refused.detail()).isEqualTo("Header X-Client-Id unavailable (env=CLIENT_ID)");
     }
 
     /**
@@ -331,5 +367,37 @@ class RestPreflightTest {
 
         assertThat(spec.kind()).isEqualTo("basic");
         assertThat(spec.config()).containsEntry("username", "demo-user").doesNotContainKey("kind");
+    }
+
+    /**
+     * Review of #1394: a source that echoes the Authorization header in its 401 body. After the renewal the second
+     * 401 carried the fresh bearer into the verdict's sample — what `lm source rest test` prints.
+     */
+    @Test
+    void anOAuth2TokenEchoedInARefusalNeverReachesTheSample() {
+        OAuth2Tokens tokens = new OAuth2Tokens();
+        RestHttpClient echoing = new RestHttpClient() {
+            int issued;
+            @Override public RestResponse execute(RestRequest r) {
+                if (r.url().endsWith("/oauth/token")) {
+                    issued++;
+                    return RestResponse.of(200, Map.of(), "{\"access_token\":\"tok-" + issued + "-abcdef\"}");
+                }
+                return RestResponse.of(401, Map.of(), "{\"authorization\":\"" + r.headers().get("Authorization") + "\"}");
+            }
+        };
+        OAuth2AuthProviderFactory oauth2 =
+            new OAuth2AuthProviderFactory(SecretRefs.environmentOnly(n -> "s3cret"), tokens, echoing);
+        preflight.authReg = new AuthProviderRegistry() {
+            @Override public AuthProvider build(AuthSpec spec) { return oauth2.build(spec); }
+        };
+        preflight.http = echoing;
+        Connector c = connector(Map.of("base_url", "http://erp.invalid", "auth", Map.of("kind", "oauth2",
+            "token_url", "http://erp.invalid/oauth/token", "client_id", "lumnik", "client_secret_env", "S")));
+
+        RestPreflight.Verdict verdict = preflight.check(c, offsetEndpoint());
+
+        assertThat(verdict.status()).isEqualTo(401);
+        assertThat(verdict.sample()).contains("Bearer <redacted>").doesNotContain("tok-1-abcdef", "tok-2-abcdef");
     }
 }

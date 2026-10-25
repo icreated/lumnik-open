@@ -36,6 +36,21 @@ class EntityManifestParserTest {
     assertThat(m.canonicalColumns()).containsExactly("id", "name", "segment");
   }
 
+  /** #1489: a column named no or on is text — YAML 1.1's boolean words are not booleans here. */
+  @Test
+  void yaml_1_1_boolean_words_are_column_names() {
+    EntityManifest m = new EntityManifestParser().parse("""
+        kind: Entity
+        name: Order
+        match: [no]
+        sources:
+          - table: t_order_src
+            map: { no: no, ON: on }
+        """);
+    assertThat(m.match()).containsExactly("no");
+    assertThat(m.sources().get(0).map()).containsExactly(entry("no", "no"), entry("ON", "on"));
+  }
+
   @Test
   void parses_column_metadata_and_table_description() {
     EntityManifest m = new EntityManifestParser().parse("""
@@ -80,6 +95,92 @@ class EntityManifestParserTest {
     EntityManifest m = new EntityManifestParser().parse(CUSTOMER_YAML);
     assertThat(m.columns()).isEmpty();
     assertThat(m.description()).isNull();
+  }
+
+  // #1379: each system is the reference for its own fields — a column names the source that goes first for it.
+  private static String preferring(String column, String table) {
+    return """
+        kind: Entity
+        name: Member
+        match: [member_no]
+        columns:
+          %s:
+            prefer: %s
+        sources:
+          - table: t_gestion
+            map: { no: member_no, formule: plan, rue: street }
+          - table: t_portail
+            map: { no: member_no, formule: plan, rue: street, mail: email }
+        """.formatted(column, table);
+  }
+
+  @Test
+  void prefer_names_the_source_that_goes_first_for_one_column() {
+    EntityManifest m = new EntityManifestParser().parse(preferring("street", "t_portail"));
+    assertThat(m.columns().get("street").prefer()).isEqualTo("t_portail");
+  }
+
+  @Test
+  void prefer_refuses_a_table_that_is_not_a_source() {
+    assertThatThrownBy(() -> new EntityManifestParser().parse(preferring("street", "t_crm")))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("column 'street' prefers 't_crm', which is not one of sources[] (t_gestion, t_portail)");
+  }
+
+  @Test
+  void prefer_refuses_a_source_that_does_not_map_the_column() {
+    assertThatThrownBy(() -> new EntityManifestParser().parse(preferring("email", "t_gestion")))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("column 'email' prefers 't_gestion', which does not map it");
+  }
+
+  @Test
+  void prefer_refuses_a_match_column() {
+    assertThatThrownBy(() -> new EntityManifestParser().parse(preferring("member_no", "t_portail")))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("column 'member_no' is a match column: every source holds the same value, there is nothing to prefer");
+  }
+
+  // #1449: a stage stamped by each flow progresses across sources; it is not a disagreement.
+  private static String uncompared(String column) {
+    return """
+        kind: Entity
+        name: OrderLine
+        match: [line_id]
+        columns:
+          %s:
+            conflicts: false
+        sources:
+          - table: t_bl
+            map: { line_id: line_id, stage: stage }
+          - table: t_cc
+            map: { line_id: line_id, stage: stage, order_no: order_no }
+        joins:
+          - table: t_ca
+            from: order_no
+            to: order_no
+            map: { po: acknowledged_po }
+        """.formatted(column);
+  }
+
+  @Test
+  void conflicts_false_marks_a_column_the_sources_do_not_dispute() {
+    EntityManifest m = new EntityManifestParser().parse(uncompared("stage"));
+    assertThat(m.columns().get("stage").conflicts()).isFalse();
+  }
+
+  @Test
+  void conflicts_false_is_refused_on_a_match_column() {
+    assertThatThrownBy(() -> new EntityManifestParser().parse(uncompared("line_id")))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("column 'line_id' is a match column: every source holds the same value, there is nothing to compare");
+  }
+
+  @Test
+  void conflicts_false_is_refused_on_a_joined_column() {
+    assertThatThrownBy(() -> new EntityManifestParser().parse(uncompared("acknowledged_po")))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("column 'acknowledged_po' is mapped by no source: only fused columns are compared, conflicts: false says nothing");
   }
 
   @Test

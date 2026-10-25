@@ -17,10 +17,17 @@ public record WorkflowGraph(
     String key, WorkflowManifest.DormancyDef dormancy,
     List<StateDto> states,
     String initialState,
-    List<TransitionDto> transitions
+    List<TransitionDto> transitions,
+    WorkflowManifest.DueDef due        // nullable — a watched due date (#1448)
 ) {
     public record StateDto(String code, String label, List<String> aliases, boolean terminal) {}
     public record TransitionDto(List<String> from, String to) {}
+
+    /** The declared label of {@code state}, or the code itself when it has none (or is undeclared). */
+    public String labelOf(String state) {
+        return states.stream().filter(s -> s.code().equals(state) && s.label() != null)
+            .map(StateDto::label).findFirst().orElse(state);
+    }
 
     public static WorkflowGraph from(WorkflowManifest m) {
         return new WorkflowGraph(
@@ -32,6 +39,7 @@ public record WorkflowGraph(
             m.initialState(),
             m.transitions().stream()
                 .map(t -> new TransitionDto(t.from(), t.to()))
-                .toList());
+                .toList(),
+            m.due());
     }
 }

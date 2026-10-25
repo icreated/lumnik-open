@@ -4,10 +4,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.mapping.MappingState;
 import io.lumnik.hub.connector.mapping.MappingValidationException;
 import io.lumnik.hub.connector.mapping.hooks.CellHook;
+import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.Map;
+import java.util.Set;
 
 /** Masks a cell value, optionally keeping a prefix and/or suffix of clear characters. */
 @ApplicationScoped
@@ -47,5 +49,15 @@ public class MaskHook implements CellHook {
     for (int i = keepFirst; i < str.length() - keepLast; i++) sb.append(maskChar);
     if (keepLast > 0) sb.append(str, str.length() - keepLast, str.length());
     row.put(col, sb.toString());
+  }
+
+  @Override
+  public Set<String> params() {
+    return Set.of("column", "keep-first", "keep-last", "mask-char");
+  }
+
+  @Override
+  public ColumnEffect columns(JsonNode params) {
+    return ColumnEffect.readsColumn(params);
   }
 }

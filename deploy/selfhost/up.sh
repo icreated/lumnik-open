@@ -40,7 +40,7 @@ for arg in "$@"; do
     --build) BUILD=1 ;;
     --search) SEARCH=1 ;;
     --search-cluster) SEARCH_CLUSTER=1 ;;
-    -h|--help) echo "Usage: $(basename "$0") [--build] [--search | --search-cluster]   (--build compiles the hub from source instead of pulling; --search is closed-edition only and builds in the PostgreSQL Search provider; --search-cluster, also closed-edition only, builds in the OpenSearch one; both imply --build and exclude each other)"; exit 0 ;;
+    -h|--help) echo "Usage: $(basename "$0") [--build] [--search | --search-cluster]   (--build compiles the hub from source instead of pulling; --search is closed-edition only and builds in the PostgreSQL Search provider; --search-cluster, also closed-edition only, builds in the OpenSearch one; both imply --build and exclude each other; a running stack keeps the overlays it was started with, TLS façade included)"; exit 0 ;;
     *) echo "unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -102,6 +102,12 @@ else
     fi
   done
 fi
+
+# A running stack keeps the overlays it was started with (TLS façade, Search, the WOW mount…): the base file
+# alone would recreate hub and keycloak without them. Needs .env, so it runs here.
+# shellcheck source=deploy/selfhost/overlays.sh
+source deploy/selfhost/overlays.sh
+keep_running_overlays
 
 if [[ "$SEARCH_CLUSTER" -eq 1 ]]; then
   echo "==> preparing the search cluster (secrets and per-install TLS)"

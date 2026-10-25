@@ -115,7 +115,7 @@ class ProcessConsumerIT {
         // replay safety: a second identical trigger event (same original id can't repeat, so
         // simulate a re-delivery by re-inserting the SAME dedup target via the consumer path:
         // rewind the cursor and let it re-sweep)
-        exec("UPDATE core.event_consumer SET last_event_id = 0 WHERE consumer_name = 'process'");
+        exec("UPDATE core.event_consumer SET last_xact_id = 0, last_event_id = 0 WHERE consumer_name = 'process'");
         // wait for the rewound cursor to be re-swept past these events; the count must STAY 1
         // (dedup_key blocks the double emit). Ceiling matches the old 12s sleep for slow machines.
         long maxId = maxEventId();

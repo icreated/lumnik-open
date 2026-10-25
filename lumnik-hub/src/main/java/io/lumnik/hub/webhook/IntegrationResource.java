@@ -1,5 +1,6 @@
 package io.lumnik.hub.webhook;
 
+import io.lumnik.identity.KnownKeysOnly;
 import io.lumnik.identity.Require;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -9,6 +10,7 @@ import io.lumnik.hub.event.EventRegistry;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.hub.tenant.TenantContextFilter;
 import io.quarkus.narayana.jta.QuarkusTransaction;
+import io.quarkus.resteasy.reactive.jackson.CustomDeserialization;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import jakarta.ws.rs.*;
@@ -53,6 +55,7 @@ public class IntegrationResource {
 
     @POST
     @Transactional
+    @CustomDeserialization(KnownKeysOnly.class)
     public Response create(@PathParam("tid") Long tid, IntegrationCreate in) {
         requireTenant(tid);
         requireNameFree(tid, in.name(), null);
@@ -73,6 +76,7 @@ public class IntegrationResource {
 
     @PUT @Path("/{id}")
     @Transactional
+    @CustomDeserialization(KnownKeysOnly.class)
     public IntegrationDto update(@PathParam("tid") Long tid, @PathParam("id") Long id,
                                  IntegrationUpdate in) {
         requireTenant(tid);

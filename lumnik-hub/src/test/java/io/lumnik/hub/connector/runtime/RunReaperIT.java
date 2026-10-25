@@ -207,6 +207,19 @@ class RunReaperIT {
             .isEqualTo("1");
     }
 
+    /** #1351: the ending records the outbox mark every row event (data.row.changed) the run wrote sits at or under. */
+    @Test
+    void an_ending_records_the_outbox_high_water_mark() {
+        UUID run = seedConnectorWithRun("reaper_mark_" + System.nanoTime(), RUNNING.sqlValue());
+        long before = Long.parseLong(query("SELECT COALESCE(MAX(id), 0) FROM core.event_outbox WHERE tenant_id = " + TENANT));
+
+        engine.finalizeRun(run, COMPLETED, null, null, Instant.now());
+
+        assertThat(Long.parseLong(query(
+                "SELECT outbox_high_water FROM connector.connector_run WHERE id = '" + run + "'")))
+            .isGreaterThanOrEqualTo(before);
+    }
+
     @Test
     void a_terminal_run_is_never_moved_by_finalizeRun() {
         UUID done = seedConnectorWithRun("reaper_final_" + System.nanoTime(), COMPLETED.sqlValue());

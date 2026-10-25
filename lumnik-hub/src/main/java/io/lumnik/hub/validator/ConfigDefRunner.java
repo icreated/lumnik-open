@@ -11,6 +11,9 @@ import java.util.List;
 
 public final class ConfigDefRunner {
 
+    /** The closed sweep's warning for a key no declaration names. */
+    public static final String UNKNOWN_KEY = "unknown key — ignored by the runtime";
+
     private ConfigDefRunner() {}
 
     public static List<ValidationError> run(ConfigDef def, JsonNode block, String pathPrefix) {
@@ -29,7 +32,7 @@ public final class ConfigDefRunner {
                 if (!def.declares(k)) {
                     String full = (pathPrefix == null || pathPrefix.isEmpty()) ? k : pathPrefix + "." + k;
                     out.add(new ValidationError(full, Severity.WARNING,
-                        "unknown key — ignored by the runtime",
+                        UNKNOWN_KEY,
                         List.of("Remove it, or check the spelling")));
                 }
             });

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.mapping.MapColumnsRules;
 import io.lumnik.hub.connector.mapping.MappingState;
 import io.lumnik.hub.connector.mapping.MappingValidationException;
+import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import io.lumnik.hub.connector.mapping.hooks.RowHook;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -13,6 +14,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Renames columns, then drops them — both optional, and drop runs LAST. So a {@code drop} entry
@@ -136,5 +138,21 @@ public class MapColumnsHook implements RowHook {
       var v = violations.get(0);
       throw new MappingValidationException("map-columns hook: '" + v.path() + "' " + v.reason());
     }
+  }
+
+  @Override
+  public Set<String> params() {
+    return Set.of("rename", "drop");
+  }
+
+  @Override
+  public ColumnEffect columns(JsonNode params) {
+    // In apply's order: each rename in turn (its source read, then moved), then the drops.
+    ColumnEffect.Builder b = ColumnEffect.builder();
+    params.path("rename").fields().forEachRemaining(e -> b.reads("rename." + e.getKey(), e.getKey())
+        .removes(e.getKey()).adds(e.getValue()));
+    JsonNode drop = params.path("drop");
+    for (int i = 0; i < drop.size(); i++) b.reads("drop[" + i + "]", drop.get(i)).removes(drop.get(i).asText());
+    return b.build();
   }
 }

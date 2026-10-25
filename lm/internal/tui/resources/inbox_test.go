@@ -38,8 +38,8 @@ func TestInboxCells(t *testing.T) {
 		}
 	}
 	e.Acked = true
-	if got := inboxCells(e, now); got[3] != "Nouveau client Claire à Lyon [traité]" {
-		t.Errorf("acked message = %q, want ' [traité]' suffix", got[3])
+	if got := inboxCells(e, now); got[3] != "Nouveau client Claire à Lyon [acked]" {
+		t.Errorf("acked message = %q, want ' [acked]' suffix (#1336)", got[3])
 	}
 }
 

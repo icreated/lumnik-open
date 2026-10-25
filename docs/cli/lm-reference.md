@@ -48,8 +48,8 @@ First run? The [deploy page](../deploy.md) walks through standing up a hub and p
 | Setting | Where | Effect |
 |---|---|---|
 | `LUMNIK_URL` | env var | replaces the current context's server, per run |
-| `LUMNIK_TOKEN` | env var | replaces the current context's Bearer token, per run — no `lm login` needed in CI |
-| `ca-file: /path/to/root.crt` | `~/.lm/config.yaml`, by hand | trust an internal CA (the TLS façade's LAN certificate) |
+| `LUMNIK_TOKEN` | env var | the Bearer token, per run — for CI. Used only when the context holds no `lm login` session; `--token` always wins |
+| `ca-file: /path/to/root.crt` | `~/.lm/config.yaml`, by hand | trust an internal CA (the TLS proxy's LAN certificate) |
 | `insecure-skip-verify: true` | `~/.lm/config.yaml`, by hand | disable TLS verification; `ca-file` wins when both are set |
 | `tenant:` / `user:` | `~/.lm/config.yaml` | dev-bypass hubs only; a real hub ignores them |
 
@@ -61,17 +61,17 @@ The env vars need an existing current context: create it once with
 | Command | What it does |
 |---|---|
 | `lm validate -f FILE` | validate a `kind: Connector` manifest without applying it — field-by-field errors, exit code 1 on error. Other kinds are checked by their own `apply` |
-| `lm apply -f FILE` | apply a `kind: Connector` manifest — upserts by `metadata.name`, so re-applying an edited file updates it. Not `lm connector apply`, which takes the flat stored fields |
+| `lm apply -f FILE` | apply a `kind: Connector` manifest — upserts by `metadata.name`, so re-applying an edited file updates it. Prints `Applied connector "NAME" — 1 endpoint`; `-o json` prints the hub's answer, the connector id included. Not `lm connector apply`, which takes the flat stored fields |
 | `lm entity apply -f FILE` | apply a `kind: Entity` fusion manifest |
 | `lm entity delete NAME` | remove an entity and its view (`lm_admin`). Names the view and the search indexes over it, then asks you to type `delete` (`--force` skips the question). This is what frees a connector blocked by the `409` below |
 | `lm entity list` | the entities you may read — name, sources, scopes, `match` or `resolution` |
-| `lm entity get NAME [--filter COLUMN=VALUE]… [--limit N] [--offset N]` | one page of an entity's canonical rows ([Read API](../entities.md#read-api)). `--filter` is an exact match — a date on a [date column](../entities.md#dates-across-sources) is equal as an instant — repeatable; `--limit` is 1..1000 (default 100); a full page is announced on stderr |
+| `lm entity get NAME [--filter COLUMN=VALUE]… [--limit N] [--offset N]` | one page of an entity's canonical rows ([Read API](../entities.md#read-api)). `--filter` is an exact match — a date on a [date column](../entities-types.md) is equal as an instant — repeatable; `--limit` is 1..1000 (default 100); a full page is announced on stderr |
 | `lm entity resolve NAME` | resolve a [`resolution:` entity](../entities-resolution.md) over every row now (`lm_admin`); prints what was resolved, ambiguous and unresolved |
 | `lm entity ambiguous NAME [--limit N] [--offset N]` | the rows a `resolution:` entity could not decide, with their candidates |
 | `lm entity history NAME SOURCE ID` | every decision about one source row: outcome, rule, candidates, `automatic` or `asserted` |
 | `lm entity assert-same\|assert-distinct NAME --left SOURCE:ID --right SOURCE:ID [--reason TEXT]` | a correction that outranks every rule, applied at the next resolve (`lm_admin`) |
 | `lm entity export NAME -o FILE [--force]` | download the entity's canonical CSV through the [one-shot door](../apps/exports.md#managed-export-vs-one-shot-download). An existing file is refused without `--force`; `-o -` streams to stdout |
-| `lm app apply -f FILE` | declare a [`kind: App`](../apps/pwa.md) métier app — title, scope, icon and theme |
+| `lm app apply -f FILE` | declare a [`kind: App`](../apps/pwa.md) business app — title, scope, icon and theme |
 | `lm app list` / `lm app get NAME` | the declared apps; one app as an applyable manifest (`lm app get NAME > app.yaml`, edit, re-apply) |
 | `lm app rm NAME` | delete a declared app for good (no prompt); the last default app is refused |
 | `lm view apply -f FILE` / `lm view list` / `lm view get NAME` / `lm view rm NAME` | saved [`kind: View`](../apps/views.md) manifests: store, list, fetch, delete (no prompt) |
@@ -83,8 +83,7 @@ The env vars need an existing current context: create it once with
 | `lm workflow enable/disable NAME` | serve a workflow again, or stop serving it — the manifest stays stored |
 | `lm workflow rm NAME` | delete a workflow for good (no prompt) |
 | `lm export apply -f FILE` | declare a [`kind: Export`](../apps/exports.md) |
-| `lm search apply -f FILE` | declare a [`kind: SearchIndex`](../search/search-indexes.md) |
-| `lm proposal draft DOSSIER` | write a draft [`kind: Workflow`](../apps/workflows.md#drafting-a-manifest-from-a-dossier) from a proposal dossier (`-` for stdin); flags `--name --scope --table --column --key --after -o`. Offline, never applies; `-o FILE` refuses an existing file |
+| `lm proposal draft DOSSIER` | write a draft [`kind: Workflow`](../apps/proposal-dossier.md#draft-a-workflow-from-a-dossier) from a proposal dossier (`-` for stdin); flags `--name --scope --table --column --key --after -o`. Offline, never applies; `-o FILE` refuses an existing file |
 | `lm describe connector-type KIND` | field reference for a connector kind |
 
 ```
@@ -111,21 +110,20 @@ app lumilait deleted
 | Command | What it does |
 |---|---|
 | `lm connector list` / `get NAME` | the connector instances; one connector's flat stored fields |
-| `lm connector apply -f FILE` | create or edit a connector from its **flat** stored fields (`name`, `typeId`, `schedule`, `enabled`, `config`) — the shape `lm connector get` prints. Creates `csv-file` and `hello-world` only — see [Creating from flat fields](#creating-from-flat-fields). A `kind: Connector` manifest is refused here, naming `lm apply -f` |
-| `lm connector delete NAME` | **erases the connector's data**: its tables, run history and RAG chunks — the [erasure gesture](../security/gdpr.md#the-rights-in-practice). States what goes and asks you to type `delete`; `--dry-run` stops there, `--force` skips the question; with no keyboard (a script) and no `--force`, nothing is deleted: `aborted: no confirmation read`. A table an entity reads blocks it with a `409` |
+| `lm connector apply -f FILE` | edit a connector from the file `lm connector get` prints — [Editing a connector's stored fields](#editing-a-connectors-stored-fields) |
+| `lm connector delete NAME` | **erases the connector's data**: tables, run history, RAG chunks ([erasure](../security/gdpr.md#the-rights-in-practice)). Says what goes, then asks you to type `delete`. `--dry-run` stops there; `--force` skips the question. A table an entity reads blocks it (capture below) |
 | `lm connector run NAME` | trigger an immediate run |
-| `lm connector pause/resume NAME` | stop/restart scheduling |
-| `lm connector scope ls/set/add/rm/sync` | manage the connector's métier scopes; `sync` re-stamps its already-indexed chunks |
+| `lm connector pause/resume NAME` | stop/restart scheduling; `lm connector list` shows a paused connector's cron followed by `(paused)`, and `lm connector run` still runs it |
+| `lm connector scope ls/set/add/rm/sync` | manage the connector's business scopes; `sync` re-stamps its already-indexed chunks |
 | `lm endpoint enable/disable/reset-cursor C/E` | per-endpoint scheduler and cursor |
 | `lm endpoint purge C/E` | delete one endpoint's rows after stating how many and asking you to type `purge` (`--dry-run` only counts, `--force` skips the question). For `rest-generic` endpoints and one-shot `lm csv ingest` tables; refused for `jdbc-generic`, `csv-file` and `kafka` — see [Emptying one endpoint](../connectors/jdbc.md#emptying-one-endpoint-on-its-own) |
 | `lm source rest test C` | pre-flight every enabled endpoint — the request a run would send, nothing written; non-zero exit if one fails |
 | `lm source rest probe C --endpoint PATH` | sample one path with the connector's connection and credential; drafts the endpoint fragment to paste under `spec.endpoints` |
-| `lm source rest from-openapi URL --name N` | generate a manifest (`--scope` repeatable, `-o FILE`, `--apply` upserts it). `lm source rest run` is a stub — use `lm connector run` |
+| `lm source rest from-openapi URL --name N` | generate a manifest (`--scope` repeatable, `-o FILE`, `--apply` upserts it) |
 | `lm source jdbc test/discover/add` | open a JDBC source directly; the password is prompted without echo, or piped with `--password-stdin`. There is no `--password` |
 | `lm source jdbc list-tables NAME` | the tables registered under a source the hub already holds |
 | `lm source schema --scope TAG` / `lm source rediscover --scope TAG` | show / rebuild the scope's schema card (`--scope` is required) |
-| `lm csv ingest FILE\|sftp://…\|s3://…` | one-shot CSV ingest into an `ext.*` table, no run recorded — flags on [CSV & files](../connectors/csv.md#connector-runs-vs-one-shot-lm-csv-ingest) |
-| `lm source csv ingest …` | the same command, same flags |
+| `lm csv ingest FILE\|sftp://…\|s3://…` | one-shot CSV ingest into an `ext.*` table, no run recorded — flags on [CSV & files](../connectors/csv-quick-look.md). `lm source csv ingest` is the same command |
 
 ```
 $ lm connector delete orders --dry-run
@@ -134,7 +132,7 @@ $ lm connector delete acme-desk-erp --dry-run
 Error: API error 409: table connector.t_acme_desk_erp feeds entity acmecustomer — remove the entity first (lm entity delete acmecustomer)
 ```
 
-A one-shot ingest, on a hub with the AI on:
+A one-shot ingest:
 
 ```
 $ lm csv ingest stock.csv --scope retail --name stock-count
@@ -150,78 +148,34 @@ Ingested stock.csv into ext.stock_count
 A dormant connector is registered — see `lm connector list`.
 ```
 
-With the AI switched off, the last two lines read:
+With the AI off, the `askable` line is replaced by: `A one-shot: no run recorded, nothing indexed for chat.`
 
-```
-A one-shot: no run recorded, nothing indexed for chat.
-The rows are in ext.stock_count, and a dormant connector is registered — see `lm connector list`.
-```
+### Editing a connector's stored fields
 
-### Creating from flat fields
+`lm connector get NAME` prints the connector as the hub stores it. Edit that file and apply it back:
 
-`lm connector apply -f` without an `id` creates the connector. A `csv-file` connector made this
-way gets the same endpoint `lm apply -f` would give it, so it runs at once:
-
-```
-$ cat clients.yaml
-name: erp-clients
-typeId: csv-file
-enabled: true
-config:
-  kind: csv-file
-  after_process: none
-  parser: {has_header: true}
-  transport: {kind: local, path: /tmp/imports/clients.csv}
-tags: [sales]
-$ lm connector apply -f clients.yaml
-applied
-$ lm connector run erp-clients
-run scheduled: ba6041df-be91-4878-90ec-aba18d36aa60
-$ lm run list --connector erp-clients
-ID        CONNECTOR    ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-ba6041df  erp-clients  default   Completed  3   3    0        0             2026-10-18 17:49  2026-10-18 17:49
+```bash
+lm connector get erp-clients > c.yaml     # keep the id: line, it names the connector to update
+lm connector apply -f c.yaml
 ```
 
-A name is unique in your tenant. Applying a file without an `id` under a taken name is refused
-with the holder's id; add it to the file and the same command updates that connector:
-
-```
-$ lm connector apply -f clients.yaml
-Error: API error 409: connector "erp-clients" already exists (id e9fc0700-07e5-4869-b4d5-4eab9122bf96) — to update it, add that id to the file you apply
-$ head -2 clients.yaml
-id: e9fc0700-07e5-4869-b4d5-4eab9122bf96
-name: erp-clients
-$ lm connector apply -f clients.yaml
-applied
-```
-
-- A rename onto a taken name is refused the same way.
-- A name held in a métier you do not hold answers `403 scope not granted`.
-- Two applies of one new name at once (two CI jobs): one creates, the other gets the `409`.
-
-`jdbc-generic`, `rest-generic` and `kafka` connectors are created from their `kind: Connector`
-manifest with `lm apply -f`; once created, any of them is edited here except its `typeId`. A
-`tenantId` other than yours is refused:
-
-```
-$ lm connector apply -f orders-db.yaml
-Error: API error 400: a jdbc-generic connector is created from its kind: Connector manifest with lm apply -f — this door creates csv-file and hello-world connectors, and updates any
-$ lm connector apply -f other-tenant.yaml
-Error: API error 400: tenantId (2) does not match the authenticated tenant (1) — omit it, the connector is written in yours
-```
+- Create a connector with `lm apply -f` and its `kind: Connector` manifest. `lm connector apply`
+  creates only `csv-file` and `hello-world`; for another type it says to use `lm apply -f`.
+- A file without `id:` under a name already taken is refused, naming the id to add.
 
 ## Data, runs & answers
 
 | Command | What it does |
 |---|---|
-| `lm run list` / `lm run get ID` | connector runs, **one row per endpoint** (records in/out/skipped); `list` is newest first, `--connector NAME`, `--limit N` |
-| `lm run cancel ID` | request cancellation of a `Running` run — cooperative, not immediate; see [Stopping a run](tui.md#watch-an-ingestion) for the refusals |
+| `lm run list` / `lm run get ID` | connector runs, **one row per endpoint** (records in/out/skipped); `list` is newest first, `--connector NAME`, `--limit N`. An `EVALUATED` column appears once the tenant has an enabled [Process](../apps/processes.md): whether it has evaluated the rows the run wrote. `get --wait-evaluated [--timeout D] [--interval D]` waits for it, and exits 1 when the hub cannot say (no enabled Process, processes changed since the run started, or a run from before the hub recorded it) |
+| `lm run cancel ID` | stop a run. A `Running` run stops at its next chunk; a `Queued` one ends at once. Refusals: [Stopping a run](tui.md#stopping-a-run) |
 | `lm dlq list` / `lm dlq get ID` | dead-letter entries (reason + offending row); `--run RUN`, `--connector NAME`, `list --limit N` |
-| `lm dlq replayed/discard ID` | mark an entry handled (`replayed --new-run-id RUN` links it to the run that replayed it) |
+| `lm dlq replayed ID --new-run-id RUN` / `lm dlq discard ID` | close an entry: carried again by that run, or dropped — [the rules](../recipes/diagnose-a-run.md) |
 | `lm conflicts list` | fused-entity rows with a source conflict or a lookup ambiguity (`--limit N`) |
-| `lm observations list` | the workflow tape: watched documents, stillest first (`--limit N`) |
+| `lm observations list` | the workflow tape: watched documents, stillest first (`--limit N`); `--workflow NAME` narrows the hub's read to one workflow |
+| `lm observations transitions` | the journal: each observed move, newest first, with the seconds spent in the state it left (`IN_FROM_S`, counted from the first observation for a document's first move); `--workflow NAME`, `--doc KEY`, `--limit N` |
 | `lm observations stats` | the tape per workflow: watched, dormant, median detection delay (seconds; `-` when nothing is dormant) |
-| `lm integration add NAME --url U --events T [--secret-stdin]` | register a webhook target — the secret arrives on stdin, never as a flag |
+| `lm integration add NAME --url U --secret-stdin [--events T]` | register a webhook target. The signing secret is required and read on stdin. `--events` defaults to `decision.*`; `--platform` is a label only |
 | `lm integration list` / `describe ID` | registered targets; the table shows scheme and host only, `-o json\|yaml` the full URL |
 | `lm integration test ID [--event T]` | fire a catalog event at the target and report the delivery; `decision.*` events cannot be fired here |
 | `lm integration rm ID` | remove a target — delivery history is kept |
@@ -239,7 +193,7 @@ ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTE
 884f487d  orders     default   Completed  10  8    2        2             2026-10-19 01:38  2026-10-19 01:38
 $ lm dlq list --run 884f487d
 ID        CONNECTOR  RUN       REASON           ATTEMPTS  MESSAGE
-b6bc9601  orders     884f487d  MalformedSource  1         /tmp/exports/orders.csv:9 — Index for header 'status' is 2 b…
+b6bc9601  orders     884f487d  MalformedSource  1         /tmp/exports/orders.csv:9 — Record has 2 values but 5 column…
 b4176d39  orders     884f487d  MalformedSource  1         /tmp/exports/orders.csv:8 — Record has 6 values but only 5 c…
 ```
 
@@ -251,9 +205,18 @@ b4176d39  orders     884f487d  MalformedSource  1         /tmp/exports/orders.cs
 
 !!! tip "A full page says so"
 
-    `lm run list`, `lm dlq list`, `lm conflicts list`, `lm observations list`, `lm outputs list` and
-    `lm inbox` answer in pages. Each takes `--limit N`, up to 200 (runs, dead letters, inbox),
-    500 (deliveries) or 1000 (conflicts, workflow tape).
+    Lists answer in pages. Each takes `--limit N`, up to a cap:
+
+    | Command | Default | Cap |
+    |---|---|---|
+    | `lm run list` | 50 | 200 |
+    | `lm dlq list` | 100 | 200 |
+    | `lm inbox` | 50 | 200 |
+    | `lm export runs NAME` | 20 | 200 |
+    | `lm outputs list` | 200 | 500 |
+    | `lm conflicts list` | 200 | 1000 |
+    | `lm observations list` / `transitions` | 200 | 1000 |
+    | `lm entity get NAME` / `lm entity ambiguous NAME` | 100 | 1000 |
 
     A full page prints `note: result hit the limit of N — there may be more` on **stderr**, so pipes
     and `-o json` stay clean. Raise `--limit` to see further back. `--connector` filters on the hub,
@@ -261,9 +224,13 @@ b4176d39  orders     884f487d  MalformedSource  1         /tmp/exports/orders.cs
 
 ## Ask your data
 
+!!! info "lumnik Pro"
+    `lm ask`, `lm chat`, `lm rag` and `lm scopes` need the AI. On lumnik Open, or with the AI off,
+    they answer `Error: API error 404 (no details from the server)`.
+
 | Command | What it does |
 |---|---|
-| `lm ask [--scope S] [--lang XX] "question"` | analytic text-to-SQL over the fused hub: the answer, a `data as of` line, any [disputed rows](../transparency/ask-honesty.md#disputed-rows-a-disclosure-not-a-veto), the rows the query returned and **the SQL that ran** ([the guards](../transparency/ask-honesty.md)). `--lang` sets the answer language (default: from `LC_ALL`, `LC_MESSAGES` or `LANG`). Without `--scope`, asks your default scope. `-o json\|yaml` for a script |
+| `lm ask [--scope S] [--lang XX] [--previous "question"] "question"` | analytic text-to-SQL over the fused hub: the answer, a `data as of` line, any [disputed rows](../transparency/ask-rules.md#disputed-rows-a-disclosure-not-a-veto), the rows the query returned and **the SQL that ran** ([the guards](../transparency/ask-honesty.md)). `--lang` sets the answer language (default: from `LC_ALL`, `LC_MESSAGES` or `LANG`). Without `--scope`, asks your default scope. `--previous` names the question this one continues: "Et SUP-004 ?" is answered as the full question, shown on an `understood as` line. `-o json\|yaml` for a script |
 | `lm chat` | interactive REPL chat — in-REPL commands: `:corpus NAME` (or `all`), `:scope TAG` (or `default`), `:topK N` (1 to 50), `:clear`, `:help`, `:exit` |
 | `lm scopes` / `lm scope` / `lm scope set TAG` | list scopes (a scope-bound user sees only granted ones); show/set your default (`404 no user record on this hub…`: see [Tenants, users & scopes](../security/identity-admin.md)) |
 | `lm rag search/status/reindex` | semantic search (`--top-k N`, 1 to 50, default 5); corpus status; re-index of the platform corpus (manifests, API, hooks) |
@@ -311,8 +278,15 @@ P-1000  Hydraulique Lyon 1000
 P-1008  Filtration Lyon 1008
 ```
 
-The document holds `answer`, `sql`, `rowCount`, `columns`, `rows` (numbers stay numbers), `dataAsOf`,
-`disputed` and `abstained`. Tell a refusal by `"abstained": true`, never by the wording of `answer`.
+| Field | Holds |
+|---|---|
+| `answer` | the sentence |
+| `abstained` | `true` for a refusal. Test this, never the wording of `answer` |
+| `sql`, `columns`, `rows`, `rowCount` | the query and what it returned; numbers stay numbers |
+| `dataAsOf` | the last run that fed the scope |
+| `understoodAs` | the full question, when `--previous` was used |
+| `disputed`, `disputedTruncated` | the disputed rows, and whether the list was cut |
+| `otherDoors` | the `try:` suggestions printed under the answer |
 
 ## The apps ladder
 
@@ -325,14 +299,14 @@ The document holds `answer`, `sql`, `rowCount`, `columns`, `rows` (numbers stay 
 | `lm view list [--scope S]` | the saved views you may read |
 | `lm view get NAME [-o FILE]` | one saved view's manifest YAML — to stdout, or to a file |
 | `lm view apply -f FILE` / `lm view rm NAME` | store a `kind: View` manifest; delete one (no prompt) |
-| `lm app apply -f FILE` / `list` / `get NAME` / `rm NAME` | métier apps — see [Manifests](#manifests) |
+| `lm app apply -f FILE` / `list` / `get NAME` / `rm NAME` | business apps — see [Manifests](#manifests) |
 | `lm workflow …` | lifecycles — see [Manifests](#manifests) |
 | `lm export apply -f FILE` | declare a [`kind: Export`](../apps/exports.md); inline credentials are refused, naming the field |
 | `lm export list` / `lm export get NAME` | the exports your scopes can see; one export's manifest YAML (`user:password@` printed as `***@`) |
 | `lm export run NAME [--wait]` | start a managed run. Without `--wait` it returns once the run is **accepted**; `--wait` follows it to `Completed` (prints the receipt) or `Failed` (exit 1). `--timeout` (default 30m) and an interrupt stop the waiting, never the run |
 | `lm export retry NAME RUN_ID [--wait]` | a new attempt of a `Failed` run, regenerated from byte 0 |
 | `lm export runs NAME [--limit N]` / `lm export status NAME [RUN_ID]` | the export's run ledger, newest first; one run in full (latest by default) |
-| `lm inbox [--limit N] [--all]` | recent `decision.*` events — [what needs you](../apps/inbox.md) |
+| `lm inbox [--limit N] [--all] [--process NAME] [--type TYPE]` | recent `decision.*` events — [what needs you](../apps/inbox.md); `--process`/`--type` narrow the hub's read |
 | `lm inbox ack ID` | dispose of a decision (idempotent) |
 
 ## Admin & platform
@@ -340,10 +314,14 @@ The document holds `answer`, `sql`, `rowCount`, `columns`, `rows` (numbers stay 
 | Command | What it does |
 |---|---|
 | `lm module list` | installed business modules, with `ACTIVE`/`INACTIVE` and the reason |
-| `lm migration status` | migration status per schema: version, pending count, last applied (`—` when none). No `apply`: the hub migrates at every startup |
+| `lm migration status` | migration status per schema: version, pending count, last applied (`—` when none). No `apply`: the hub migrates at every startup — [capture](../operations/upgrade.md#the-short-version) |
 | `lm hook list` / `lm hook get NAME` | the Kotlin platform hooks loaded at startup |
-| `lm hook apply/delete/reload` | not implemented: hooks come from deployment manifests |
-| `lm hook generate` | not implemented |
+| `lm hook scripts` | the Kotlin scripts a connector manifest can name as `script: hooks:<name>.kts`: name, size, SHA-256 |
+
+## Search
+
+| Command | What it does |
+|---|---|
 | `lm search apply -f FILE` | declare a [`kind: SearchIndex`](../search/search-indexes.md) — validate, then create or update; `-f -` reads stdin (integrator) |
 | `lm search rm NAME` | delete a declared index and queue the purge of its documents ([Deleting](../search/search-indexes.md#deleting-and-the-purge-it-leaves-behind)); asks you to type `delete` (`--force` skips the question; in a script without it: `aborted: no confirmation read`) |
 | `lm search query "TEXT" [--entity E] [--facet field=value]… [--limit N] [--cursor C]` | keyword search over the declared indexes, no model — the [full guide](../search/querying.md) |
@@ -351,18 +329,7 @@ The document holds `answer`, `sql`, `rowCount`, `columns`, `rows` (numbers stay 
 | `lm search rebuild INDEX [--wait]` | full rebuild; without `--wait` it prints the run id once claimed, `--wait` follows it to `ready`/`failed`/`cancelled` (`--timeout`, default 30m) |
 | `lm search cancel INDEX` | request cancellation of an index's active rebuild; refused once it has reached publish |
 
-```
-$ lm migration status
-SCHEMA    VERSION  PENDING  LAST APPLIED
-core      75       0        2026-10-19 01:36
-identity  18       0        2026-10-19 01:36
-rag       6        0        2026-10-19 01:36
-$ lm hook apply
-Error: `lm hook apply` is not implemented: hooks are loaded from deployment manifests at startup
-```
 
 ## The TUI
 
-Bare `lm` (or `lm ui`) launches the k9s-style TUI. `:` opens the command palette.
-
-Full tour by task, plus the complete key reference, on [The TUI](tui.md).
+Bare `lm` (or `lm ui`) opens the TUI: [The TUI](tui.md).

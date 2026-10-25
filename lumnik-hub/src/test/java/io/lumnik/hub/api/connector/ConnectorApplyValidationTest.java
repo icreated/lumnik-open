@@ -30,6 +30,30 @@ class ConnectorApplyValidationTest {
                   .body("errors.path", hasItem("spec.auth.token_env"));
     }
 
+    /** #1489: a scope named no is text through the apply door — only the token_env error is left. */
+    @Test void applyReadsYaml11BooleanWordsAsText() {
+        String yaml = """
+            apiVersion: connectors.lumnik.io/v1
+            kind: Connector
+            metadata:
+              name: bad
+              connector_type: rest-generic
+              scopes: [no]
+            spec:
+              base_url: https://api.example.com
+              auth: { kind: bearer }
+              endpoints:
+                - { id: x, path: /x, method: GET }
+              target: { table_prefix: x_ }
+            """;
+        given().config(YamlBody.CONFIG).contentType("application/yaml").body(yaml)
+            .header("X-Tenant-Id", "1")
+            .when().post("/api/platform/connectors/apply")
+            .then().statusCode(400)
+                  .body("errors.path", hasItem("spec.auth.token_env"))
+                  .body("errors.path", not(hasItem("metadata.scopes[0]")));
+    }
+
     /**
      * The 500 this closure removes, pinned at the door rather than at the tier. Measured before
      * the change: `auth: bearer` validated clean — `validateAuth` returns early on a non-object —

@@ -86,8 +86,11 @@ public class SecretResource {
 
         // Through ApiErrors, which sets the content type this door was missing: the CLI's create →
         // 409 → update fallback reads the status, but anything reading the body got it undressed.
+        // A secret's handle is its name, so the refusal names it and the gesture that replaces its
+        // value — never the value.
         if (repo.findByName(tid, req.name()).isPresent()) {
-            return ApiErrors.conflict("secret with this name already exists");
+            return ApiErrors.conflict("secret " + req.name() + " already exists — lm secret set " + req.name()
+                + " replaces its value");
         }
 
         // Encrypt via pgcrypto in-DB. The id is generated here (not gen_random_uuid() in SQL) so
@@ -141,10 +144,9 @@ public class SecretResource {
             .executeUpdate();
 
         // TOCTOU guard: the existence check above and this UPDATE are two statements, not one —
-        // a concurrent DELETE between them (same tenant + name) leaves this UPDATE's own
-        // "deleted_at IS NULL" matching nothing. Zero rows means the write never happened, so
-        // nothing downstream (cache invalidation, the lifecycle event, the audit row) may run as
-        // if it did.
+        // a concurrent DELETE between them (same tenant + name) removes the row, and this UPDATE
+        // matches nothing. Zero rows means the write never happened, so nothing downstream (cache
+        // invalidation, the lifecycle event, the audit row) may run as if it did.
         if (rows == 0) return Response.status(Response.Status.NOT_FOUND).build();
 
         resolver.invalidate();
@@ -162,14 +164,16 @@ public class SecretResource {
         var existing = repo.findByName(tid, name);
         if (existing.isEmpty()) return Response.status(Response.Status.NOT_FOUND).build();
 
+        // The row goes, not only its visibility: a row stamped deleted_at kept value_encrypted, which
+        // the master key still decrypts. The audit row below records the deletion, never the value.
         int rows = em.createNativeQuery(
-            "UPDATE platform.secret SET deleted_at = now() " +
+            "DELETE FROM platform.secret " +
             "WHERE tenant_id = :tid AND name = :name AND deleted_at IS NULL")
             .setParameter("tid", tid)
             .setParameter("name", name)
             .executeUpdate();
 
-        // Only when the UPDATE actually changed something. A concurrent delete between the
+        // Only when the DELETE actually removed something. A concurrent delete between the
         // existence check above and this statement leaves rows == 0: that request already
         // invalidated the cache, and flushing it again for a write that did not happen is an
         // observable side effect of a 404.

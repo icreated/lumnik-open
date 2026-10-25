@@ -372,7 +372,7 @@ func TestSearchQuery_zeroHitsOverAnIndexWhoseFirstBuildFailedSaysSoAndNamesWhy(t
 	failed := `{"name":"pool-products","status":"degraded","liveGeneration":null,"documentCount":null,` +
 		`"documentCountStale":true,"documentCountAsOf":null,"lagSeconds":2,"invalid":false,` +
 		`"lastRebuild":{"runId":"11111111-1111-1111-1111-111111111111","outcome":"failed","finishedAt":"2026-10-05T08:05:00Z"},` +
-		`"lastError":"IllegalStateException: entity 'PoolProduct' cannot be indexed: apply it again (lm entity apply -f <manifest>), then rebuild"}`
+		`"lastError":"entity 'PoolProduct' cannot be indexed: apply it again (lm entity apply -f <manifest>), then rebuild"}`
 	h := &queryHub{search: okSearch(noHits), indexes: validPoolIndex, status: map[string]string{"pool-products": failed}}
 	_, errOut, err := runLm(t, h.serve(t), "search", "query", "pompe", "--entity", "PoolProduct")
 	if err != nil {

@@ -5,11 +5,11 @@ import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
+import io.lumnik.hub.connector.exceptions.SourceUnreachableException;
 import io.lumnik.jdbc.spi.JdbcDialect;
 import io.lumnik.hub.connector.mapping.writer.SchemaInferrer;
 import io.lumnik.hub.connector.mapping.writer.WallClockTimestamp;
 
-import javax.sql.DataSource;
 import org.jboss.logging.Logger;
 import java.sql.*;
 import java.util.*;
@@ -101,7 +101,6 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
           + " it does not have; set watermark_column, or switch the table to mode 'full'");
     }
     long tenantId = ctx != null ? ctx.tenantId() : -1L;
-    DataSource ds = poolRegistry.acquire(url, user, password, tenantId, dialect);
     JdbcCursor jc = JdbcCursor.fromConnectorCursor(cursor);
     // A re-applied manifest that changes mode, watermark_column or pk_columns meets the cursor the
     // previous configuration persisted (apply upserts the endpoint, keeps the cursor row). Honouring
@@ -126,7 +125,8 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
     JdbcQueryBuilder.Select select = qb.buildSelect(schema, table, watermarkColumn, pkColumns, jc, bound, chunkSize + 1, qMode);
     String sql = select.sql();
 
-    try (Connection conn = ds.getConnection();
+    // The pool is asked inside the try: one that cannot start is the same unreachable source (#1389).
+    try (Connection conn = poolRegistry.acquire(url, user, password, tenantId, dialect).getConnection();
          PreparedStatement ps = conn.prepareStatement(sql)) {
 
       // The whole chunk in one round trip. Left unset, the batch is the driver's: ojdbc 23 read a 500-row
@@ -170,7 +170,10 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
         return new ReadResult.HasMore<>(rows, buildNextCursor(rows.getLast()).toConnectorCursor());
       }
 
-    } catch (SQLException e) {
+    } catch (SQLException | RuntimeException e) {
+      SourceUnreachableException unreachable = JdbcUnreachable.of(schema + "." + table, e);
+      if (unreachable != null) throw unreachable;
+      if (e instanceof RuntimeException r) throw r;
       throw new RuntimeException("JDBC read failed on " + schema + "." + table + ": " + e.getMessage(), e);
     }
   }

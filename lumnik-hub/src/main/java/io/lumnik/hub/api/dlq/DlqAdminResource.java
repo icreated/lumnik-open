@@ -24,6 +24,8 @@ import jakarta.ws.rs.core.Response;
 import java.util.List;
 import java.util.UUID;
 
+import static io.lumnik.hub.connector.domain.ConnectorRunStatus.COMPLETED;
+
 @Path("/api/platform/dlq")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.WILDCARD)
@@ -81,8 +83,9 @@ public class DlqAdminResource {
   public Response discard(@PathParam("id") UUID id) {
     // The capture re-reads by id, which bypasses the tenant @Filter: only an entry this tenant
     // holds reaches it (#1216 review).
-    if (held(id) == null) return ApiErrors.notFound("DLQ entry " + id + " not found");
-    capture.discard(id, RequireUser.current());
+    var d = held(id);
+    if (d == null) return ApiErrors.notFound("DLQ entry " + id + " not found");
+    if (!capture.discard(id, RequireUser.current())) return alreadyResolved(d);
     return Response.status(204).build();
   }
 
@@ -93,12 +96,35 @@ public class DlqAdminResource {
                                 @QueryParam("newRunId") String newRunId) {
     // The capture re-reads by id, which bypasses the tenant @Filter: only an entry this tenant
     // holds reaches it (#1216 review).
-    if (held(id) == null) return ApiErrors.notFound("DLQ entry " + id + " not found");
+    var d = held(id);
+    if (d == null) return ApiErrors.notFound("DLQ entry " + id + " not found");
     // Parsed here, not bound as a UUID: a @QueryParam that fails conversion is JAX-RS's 404,
     // where list's run/connector filters refuse the same mistake with a 400 (#1294).
-    UUID newRun = newRunId == null ? null : ApiErrors.uuidOrRefuse(newRunId);
-    capture.markReplayed(id, newRun, RequireUser.current());
+    // The hub never re-reads a dead letter: without a run, "replayed" would be a discard under
+    // another word, a claim nothing backs (#1377).
+    if (newRunId == null || newRunId.isBlank()) return ApiErrors.badRequest("a replay names the run that carried the row (newRunId);"
+        + " an entry no run carried is closed with discard");
+    UUID newRun = ApiErrors.uuidOrRefuse(newRunId);
+    var run = runs.findByIdForTenant(newRun, TenantContextFilter.current());
+    if (run == null) return ApiErrors.notFound("run " + newRun + " not found");
+    // The run is the proof the row was re-sent: it must be able to have done it (#1375).
+    if (!run.getConnectorId().equals(d.getConnectorId()))
+      return ApiErrors.badRequest("run " + newRun + " belongs to another connector than this dead letter's");
+    if (!COMPLETED.sqlValue().equals(run.getStatus()))
+      return ApiErrors.badRequest("run " + newRun + " ended " + run.getStatus() + ", not " + COMPLETED.sqlValue());
+    if (!run.getStartedAt().isAfter(d.getCapturedAt()))
+      return ApiErrors.badRequest("run " + newRun + " started before this dead letter was captured");
+    if (!capture.markReplayed(id, newRun, RequireUser.current())) return alreadyResolved(d);
     return Response.status(204).build();
+  }
+
+  /**
+   * A resolution is recorded once (#1375): the conditional write refused, so name the one that won —
+   * re-read, since {@code d} was loaded before it (another close may have committed in between).
+   */
+  private Response alreadyResolved(ConnectorDeadLetter d) {
+    repo.getEntityManager().refresh(d);
+    return ApiErrors.conflict("DLQ entry " + d.getId() + " is already " + d.getResolution());
   }
 
   /**

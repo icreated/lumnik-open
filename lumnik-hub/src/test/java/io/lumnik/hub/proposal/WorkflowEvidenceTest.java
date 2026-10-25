@@ -14,11 +14,11 @@ class WorkflowEvidenceTest {
 
     private static WorkflowGraph graph(String key, boolean dormancy) {
         return new WorkflowGraph("wf", "demo", "connector.t_commandes", "statut", "declared", key,
-            dormancy ? new WorkflowManifest.DormancyDef("7d") : null, List.of(), "A", List.of());
+            dormancy ? new WorkflowManifest.DormancyDef("7d", null) : null, List.of(), "A", List.of(), null);
     }
 
     private static Report report(boolean tableMissing, boolean keyColumnMissing, boolean unavailable, String reason) {
-        return new Report(List.of(), List.of(), 0L, tableMissing, keyColumnMissing, null, unavailable, reason);
+        return new Report(List.of(), List.of(), 0L, tableMissing, keyColumnMissing, null, unavailable, reason, null);
     }
 
     private static final Report READ = report(false, false, false, null);

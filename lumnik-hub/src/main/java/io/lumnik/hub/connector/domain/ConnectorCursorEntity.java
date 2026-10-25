@@ -37,6 +37,16 @@ public class ConnectorCursorEntity extends TenantedEntity {
   @ColumnTransformer(write = "?::jsonb", read = "cursor_value::text")
   private JsonNode cursorValue;
 
+  /**
+   * What the mapping's carrying hooks held after the last source row of the chunk that wrote {@link #cursorValue}
+   * (#1452) — stored in the same transaction, so a resume finds the two together. Null: nothing carried.
+   */
+  @Convert(converter = JsonNodeConverter.class)
+  @Mutability(ImmutableJsonNodePlan.class)
+  @Column(name = "mapping_carry", columnDefinition = "jsonb")
+  @ColumnTransformer(write = "?::jsonb", read = "mapping_carry::text")
+  private JsonNode mappingCarry;
+
   @Column(name = "captured_at", nullable = false)
   private Instant capturedAt = Instant.now();
 

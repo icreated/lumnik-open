@@ -1,8 +1,10 @@
 package io.lumnik.hub.ask;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 import io.lumnik.extraction.spi.ask.SchemaCard;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -34,6 +36,34 @@ class DisputedRowsPlanTest {
             new DisputedRows.Filter("city", List.of("Lyon")),
             new DisputedRows.Filter("segment", List.of("GOLD")));
         assertThat(p.countedReportable(1, 500)).isTrue();
+    }
+
+    /**
+     * #1338: a fused number column is filtered with a number, and the plan says it in the canonical text the
+     * view and its ledger write ({@code trim_scale}): {@code 999.50} is {@code 999.5}.
+     */
+    @Test
+    void a_number_filter_on_a_number_column_makes_a_plan_in_canonical_text() {
+        SchemaCard card = new SchemaCard("nu", List.of(
+            new SchemaCard.Table("connector.v_nuorder", "Order", List.of(
+                new SchemaCard.Column("order_no", "numeric", "Order"),
+                new SchemaCard.Column("amount", "numeric", "Amount"),
+                new SchemaCard.Column("city", "text", "City")))));
+        String sql = "SELECT COUNT(*) FROM connector.v_nuorder WHERE amount = 999.50 AND order_no IN (12, 7.0)";
+        var p = DisputedRows.plan(sql, sql + "\nLIMIT 500", card).orElseThrow();
+        assertThat(p.filters()).containsExactly(
+            new DisputedRows.Filter("amount", List.of("999.5")),
+            new DisputedRows.Filter("order_no", List.of("12", "7")));
+        String quoted = "SELECT COUNT(*) FROM connector.v_nuorder WHERE amount = '999.50'";
+        assertThat(DisputedRows.plan(quoted, quoted, card).orElseThrow().filters())
+            .containsExactly(new DisputedRows.Filter("amount", List.of("999.5")));
+        String notANumber = "SELECT COUNT(*) FROM connector.v_nuorder WHERE amount = 'lots'";
+        assertThat(DisputedRows.plan(notANumber, notANumber, card)).as("never a cast error: no plan").isEmpty();
+        String bomb = "SELECT COUNT(*) FROM connector.v_nuorder WHERE amount = '1e999999999'";
+        assertThat(assertTimeoutPreemptively(Duration.ofSeconds(1),
+            () -> DisputedRows.plan(bomb, bomb, card))).as("an exponent bomb is no plan, at once").isEmpty();
+        String numberOnText = "SELECT COUNT(*) FROM connector.v_nuorder WHERE city = 1";
+        assertThat(DisputedRows.plan(numberOnText, numberOnText, card)).isEmpty();
     }
 
     @Test

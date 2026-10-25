@@ -62,6 +62,8 @@ class DeadLetterIT {
 
       capture.discard(entry.getId(), 99L);
 
+      // The close is one conditional bulk update (#1375): it bypasses the session, whose copy is stale.
+      dlqs.getEntityManager().refresh(entry);
       var refreshed = dlqs.findById(entry.getId());
       assertThat(refreshed.getResolution()).isEqualTo("DISCARDED");
       assertThat(refreshed.getResolvedBy()).isEqualTo(99L);

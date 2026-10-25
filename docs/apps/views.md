@@ -1,6 +1,6 @@
 # kind: View — see
 
-> The first rung of the per-métier app ladder: a **declarative, read-only list** over a
+> The first rung of the app ladder: a **declarative, read-only list** over a
 > scope's table, rendered by the hub and displayed by `lm`, the TUI or the PWA. One YAML says
 > which columns; a filter it cannot apply is refused instead of showing an empty table.
 
@@ -8,7 +8,7 @@
 |---|---|
 | **Kind** | `View` — `apps.lumnik.io/v1` |
 | **Over** | any table of a scope's card: a raw `connector.t_*`, or a fused `connector.v_*` |
-| **Renders** | `lm view -f FILE` or `lm view NAME` (list, filters, one record's detail); the TUI's `:view`; the PWA's *Fiches* tab |
+| **Renders** | `lm view -f FILE` or `lm view NAME` (list, filters, one record's detail); the TUI's `:view`; the PWA's *Records* tab |
 | **Store** | `lm view apply` / `lm view rm` — `lm_integrator`, scope-bound; reads `lm_user` |
 | **Bounds** | 1 000 rows and a 5-second statement timeout per read, read-only, tenant-isolated; when more rows match, `lm view` ends with `first 1000 rows shown; more match — narrow with --filter` (`-o json`: `"truncated": true`) |
 | **Edition** | Open |
@@ -129,46 +129,49 @@ table's name instead of a title.
 
 ### Linking views
 
-A cell can lead somewhere. Declare it on the view the user starts from:
+A cell can lead somewhere: to another view, or to a page of your ERP. Declare it on the view the
+user starts from:
 
 ```yaml
---8<-- "docs/apps/demo/views/30-categories-links.yaml"
+--8<-- "docs/apps/demo/views/40-customers-links.yaml"
 ```
 
-- **To another view.** Tapping *Pompes* opens the `articles` view with `category_id=1000021` already applied,
-  on its first page. The filter shows in the filter bar like one the user typed, and removes the same way.
-- **To an external page.** Tapping a category id opens `https://erp.example.com/categories/1000021` in a new tab.
-- **`{column}` is the value of that column on the row tapped.** It must be one of this view's `spec.columns`.
-  Literal text around it is kept (`CAT-{category_id}`). Nothing else is substituted.
-- **One destination per link**: `targetView` (with at least one filter) or `url`, never both. One link per
-  column, at most 16 links, at most 8 filters per link.
-- A row whose value is empty has no link on that cell.
+- **Tap a name:** the `acme-orders` view opens, already filtered on that customer. The filter
+  shows in the filter bar, and removes like one the user typed.
+- **Tap a code:** `https://erp.example.com/customers/P-1008` opens in a new tab.
+- `{code}` is the value of that column on the row tapped. It must be one of the view's `columns`.
 
-The **target** view judges the link's filters, like any filter: an unknown column, a value outside
-a declared domain or a malformed value is refused. The target must be a view of the same scope.
-If it is missing or refuses the filter, the user stays on the current view and reads why; the
-target is never opened unfiltered.
-
-**Order of apply.** A target that does not exist yet is accepted with a warning (stderr, exit 0);
-the link works once the target is applied:
+What the tap on *Filtration Lyon 1008* opens is this list:
 
 ```
-$ lm view apply -f docs/apps/demo/views/30-categories-links.yaml
-applied: categories (scope catalogue)
-! 30-categories-links.yaml — 0 error(s), 1 warning(s)
+$ lm view acme-orders --filter code=P-1008
+Commandes · code=P-1008
+
+order_no   code    status     amount   ordered_on
+SO-000006  P-1008  EN LITIGE  4100.00  2026-08-07
+```
+
+**Apply the target first, or later.** A link to a view that does not exist yet is kept, with a
+warning. It works once the target is applied:
+
+```
+$ lm view apply -f docs/apps/demo/views/40-customers-links.yaml
+applied: acme-customers-linked (scope desk)
+! 40-customers-links.yaml — 0 error(s), 1 warning(s)
 
   WARN     spec.links[0].targetView
-          targetView 'articles' is not a view of scope 'catalogue' (yet); the declaration is kept, and following the link is refused until that view is applied
+          targetView 'acme-orders' is not a view of scope 'desk' (yet); the declaration is kept, and following the link is refused until that view is applied
+
+$ lm view apply -f docs/apps/demo/views/20-orders.yaml
+applied: acme-orders (scope desk)
 ```
 
-If the target exists but does not show a filtered column, the warning names the column.
-
-**External links:**
-
-- `https://` only, with the host written out — no `{column}` before the first `/`, no credentials.
-- The value is percent-encoded, so an id like `a/b?x` stays inside its segment.
-- The page opens in a new tab without a referrer.
-- **The other system receives the value** — link only to systems you trust with it.
+- One destination per link: `targetView` with at least one filter, or `url`.
+- The target must be a view of the same scope. If it refuses the filter, the user stays where they
+  are and reads why.
+- An external link is `https://` only. **The other system receives the value**: link only to
+  systems you trust with it.
+- Limits: one link per column, 16 links, 8 filters per link.
 
 The same rules apply to a [search result's link to your ERP](../search/search-indexes.md#linking-a-result-to-your-erp).
 
@@ -215,32 +218,14 @@ P-1005       Transmission Aarhus 1005  Aarhus  GOLD     1185
 P-1008       Filtration Lyon 1008      Lyon    GOLD     1596
 ```
 
-Rendering needs `lm_user` and stays inside the [métier-scope boundary](../rag/scopes.md): a view
-whose `spec.scope` you do not hold answers `403 scope not granted`.
+Rendering needs `lm_user` and stays inside the [business-scope boundary](../rag/scopes.md): a view
+whose `spec.scope` you do not hold answers `Error: access refused (403): scope not granted`.
 
-| Bound | What happens |
-|---|---|
-| 1 000 rows per read | `lm view` prints the first 1 000 rows and does not say the list was cut. The hub's JSON answer carries `"truncated": true`; narrow the list with filters |
-| 5-second statement timeout | refused with a `400` that says so |
-| Order | the first declared column, nulls last, then the record's own `id` (for a fused entity, the remaining declared columns) |
-
-A timestamp cell, in a render or a record's detail, is its UTC instant with the microseconds
-stored, `"2026-07-01T00:00:00.000500Z"`: the text `lm data row` shows. Numbers and booleans stay
-JSON numbers and booleans.
-
-The PWA reads a view **page by page** (50 rows); `lm view` has no paging flag. Over HTTP the
-door is `POST /api/views/render?pageSize=N` (1 to 200):
-
-- the answer carries `"hasMore": true` and an opaque `"nextCursor"` when more rows exist;
-- send it back as `&cursor=…` with the same manifest, filters and `pageSize`;
-- any change (filter, page size, view, scope) makes the cursor `400` *this page link is no longer
-  valid — reload the view from its first page*;
-- no total is counted;
-- on a table no row is skipped or repeated between pages; a fused entity is paged by position, so
-  a row ingested between two page reads can shift its boundary by one.
-
-**A slow page on a large table?** Narrow it with filters first. Then add an index matching the
-paging order, `(tenant_id, first_column, id)` — the hub never creates one.
+- Rows are sorted by the first declared column.
+- `lm view` shows at most 1 000 rows. Past that it says `first 1000 rows shown; more match —
+  narrow with --filter`.
+- A render that takes more than 5 seconds is refused, and says so. Narrow it with filters.
+- The PWA reads a view 50 rows at a time.
 
 In the TUI, `:view` opens the same file interactively:
 
@@ -258,7 +243,7 @@ In the TUI, `:view` opens the same file interactively:
 
 | Form | Meaning |
 |---|---|
-| `col=value` | exact match; a date against a date or timestamp column is equal as an instant (`due=2026-07-01` is midnight UTC); on a column with declared `values`, an out-of-domain value is **refused** |
+| `col=value` | exact match; a date against a date or timestamp column is equal as an instant (`due=2026-07-01` is midnight UTC); a number against a number column by value (`amount=1500.00` finds `1500`); on a column with declared `values`, an out-of-domain value is **refused** |
 | `col~text` | substring, case-insensitive |
 | `col>v` `col<v` `col>=v` `col<=v` | ordering — `v` must be a number or an ISO-8601 date; a row whose value has neither shape is not matched |
 
@@ -276,22 +261,11 @@ SO-000011  P-1006  BROUILLON  3000.00  2026-08-12
 SO-000012  P-1011  En cours   55.00    2026-08-13
 ```
 
-Whether a column takes an ordering filter depends on its type:
-
-| Column type | Ordering (`<` `>` `<=` `>=`) |
-|---|---|
-| number (floating-point included), date, timestamp | yes |
-| text holding numbers or dates | yes |
-| `money`, `time`, `interval`, `boolean`, `uuid` | refused, naming the column and its type — use `=` or `~` |
-
-A bound may be written in scientific notation (`1e-5`, `6.022e23`); on a floating-point column it
-must fit a double. A number orders a number or text column, a date a date or text column.
-
-A date or date-time written without an offset is read as UTC, in the bound and in the column
-alike: `ordered_on>2026-08-10` starts at midnight UTC, whatever time zone the hub runs in. A
-process reads a date the same way, so a view and a process given the same filter pick the same
-rows ([how a process compares a date](processes.md#watch-a-second-condition-on-the-same-table)).
-`~` on a timestamp column searches its text written in UTC, `2026-01-01 00:30:00+00`.
+??? note "Filter details"
+    - Ordering works on numbers and dates, and on text that holds them. `money`, `time`,
+      `interval`, `boolean` and `uuid` columns refuse it, naming the column: use `=` or `~`.
+    - A date without an offset is read as UTC: `ordered_on>2026-08-10` starts at midnight UTC. A
+      process reads a date the same way.
 
 ### Refusal rules
 
@@ -310,20 +284,11 @@ $ lm view -f docs/apps/demo/views/10-customers.yaml --filter "city='Lyon'"
 Error: API error 400: filter value 'Lyon' is quoted; a value here is a bare literal, so the quotes would be compared to city too — write city=Lyon
 ```
 
-| Refused | Why |
-|---|---|
-| an unknown column in `columns:` | the scope's card does not have it |
-| a filter on a column the view does not show | filters run over the view's own columns |
-| a malformed filter | — |
-| an ordering filter on a type that cannot be ordered | see the operator table above |
-| an `=` value outside the column's declared domain | the entity's `values` — the same rule as the chat's [domain guard](../transparency/ask-honesty.md) |
-| a quoted value | write `city=Lyon`. A lone apostrophe is data: `name~l'ecole` works |
-
 A zero-row result is then meaningful: the filter is valid and matches nothing.
 
 ## The saved-view store
 
-A manifest can also live **in the hub**, where the métier PWA at `/app/` finds it under its scope:
+A manifest can also live **in the hub**, where the PWA at `/app/` finds it under its scope:
 
 ```
 $ lm view apply -f docs/apps/demo/views/10-customers.yaml
@@ -357,9 +322,8 @@ Error: API error 404: no saved view named 'acme-orders'
 - There is no disable: a saved view is live from `apply` until `rm`.
 - `apply` and `rm` are scope-bound: a scope-bound integrator cannot publish or remove a view
   outside their grants.
-- Every apply and removal is recorded in the [audit trail](../security/index.md#the-audit-trail)
-  — actor, name, scope, and for an apply the manifest's SHA-256.
-- The store is shared by all tenants of the deployment; every render reads only your tenant's rows.
+- Every apply and removal is recorded in the [audit trail](../security/index.md#the-audit-trail).
+- A saved view is visible to every tenant of the hub. Each one sees only its own rows.
 
 A user holding only `scope:stock` sees nothing of the desk:
 
@@ -388,7 +352,7 @@ manifest written to lyon.yaml — review it, then: lm view -f lyon.yaml
 $ cat lyon.yaml
 # asked for: les clients de Lyon
 # kept: city=Lyon — a condition of that description not listed here is NOT enforced
-# lm view -f clients_of_lyon.yaml --filter 'city=Lyon'
+# lm view -f lyon.yaml --filter 'city=Lyon'
 apiVersion: "apps.lumnik.io/v1"
 kind: "View"
 metadata:
@@ -409,12 +373,10 @@ spec:
 |---|---|
 | `# asked for:` | your sentence, on one line |
 | `# kept:` | the filters the view enforces — anything else in your sentence is **not** enforced |
-| `# lm view -f …` | a ready-to-run render; it names the file by the manifest's name, not your `-o` |
+| `# lm view -f …` | a ready-to-run render of your `-o` file |
 
 Within `generate`, `-o` is the output file, not the output format.
 
-- A quoted value the model writes (`city='Lyon'`) is unquoted before validation.
-- A filter on a column the model left out of `columns` adds that column.
 - Generation is rate-limited per tenant: `lumnik.ratelimit.view-generate.rpm`, default 10 per
   minute; past it, `lm` prints `rate limited (429): rate limit exceeded, retry in Ns`.
 
@@ -423,7 +385,6 @@ Within `generate`, `-o` is the output file, not the output format.
 | Case | Answer |
 |---|---|
 | The scope cannot serve the description (*"les commandes"* over a scope with no orders) | the model **abstains**; you get its reason, never invented columns |
-| The selection fails validation (unknown column, invalid filter) | one retry with the exact error; a second failure returns the error and the model's raw output |
 | No card for the scope | `no schema for scope '…' — run discovery first` |
 | No chat model on the hub | `generation abstained: no chat model is available on this hub — view generation needs one` |
 
@@ -435,7 +396,7 @@ manifest written to litiges.yaml — review it, then: lm view -f litiges.yaml
 $ head -3 litiges.yaml
 # asked for: les commandes en litige de plus de 500 euros
 # kept: amount>500 — a condition of that description not listed here is NOT enforced
-# lm view -f commandes_en_litige.yaml --filter 'amount>500'
+# lm view -f litiges.yaml --filter 'amount>500'
 ```
 
 Two conditions asked, one kept: *en litige* was dropped. Add the filter by hand, or rephrase.
@@ -446,14 +407,15 @@ scope you hold). `lm source schema --scope <tag>` shows what the card holds.
 
 ## How to…
 
-### Show one métier a filtered list on their phone
+### Show one team a filtered list on their phone
 
 ```bash
 lm view apply -f docs/apps/demo/views/10-customers.yaml
 ```
 
-**Result:** anyone holding `scope:desk` finds *Clients ACME* under the **Fiches** tab of the PWA
-at `/app/`, with the same filter grammar as the CLI.
+**Result:** anyone holding `scope:desk` finds *Clients ACME* under the **Records** tab of the PWA
+at `/app/`. On the phone, a text column offers *contient* and *=*; ordering (`>`, `<`) needs a
+column typed at the source ([`parse-number`, `parse-date`](../connectors/transformers.md#dates-and-amounts)).
 
 ### Let the AI draft a view, then check it before anyone else sees it
 
@@ -477,6 +439,7 @@ export's own columns, unlabelled, filterable the same way.
 |---|---|---|
 | apply refused: `unknown key(s) in the manifest: …` | a misspelled field (`titel:`) | the message lists what `kind:View` honors — fix the spelling |
 | render or apply refused: column `is not in the '…' schema for table …` | `spec.columns` names a column the scope's card does not have | fix the column name, or add it to the scope's entity |
+| render refused: `column '…' is not in … — the entity changed since this view was written` | the entity lost that column, but the scope's card still lists it: in another tenant than the one that applied, for the moment it takes to rebuild the card; for good, if that rebuild failed (the hub log says so) | drop the column from `spec.columns`, or put it back in the entity; `lm source rediscover --scope <tag>` refreshes the card |
 | filter refused: `cannot filter on '…' — the view does not show it` | filtering on a column not listed in `spec.columns` | add the column to `spec.columns` |
 | filter refused: `'…' is not an allowed value for …` | the entity declares a `values` domain for that column | one of the listed values — or fix the domain in the entity |
 | filter refused: `'…' is not a number or ISO date — > needs an ordered value` | an ordering filter with a value that is neither | a number, or `YYYY-MM-DD` |
@@ -497,5 +460,5 @@ export's own columns, unlabelled, filterable the same way.
 - [The demo desk](demo-desk.md) — the sources every screen here reads
 - [Entities](../entities.md) — where the labels, the domain and the `_conflicts` ledger come from
 - [Processes](processes.md) — react to what the view shows
-- [The métier PWA](pwa.md) — where a saved view is displayed
+- [The PWA](pwa.md) — where a saved view is displayed
 - [Scopes](../rag/scopes.md) — the boundary a view renders within

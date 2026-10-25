@@ -61,31 +61,40 @@ class OrgResourceTest {
         String body = """
             {"code": "DUP", "name": "Duplicate Org"}
             """;
-        given().contentType(ContentType.JSON).body(body)
+        String holder = given().contentType(ContentType.JSON).body(body)
             .when().post("/api/tenants/" + tenantId + "/orgs")
-            .then().statusCode(201);
+            .then().statusCode(201)
+            .extract().path("id").toString();
 
         given().contentType(ContentType.JSON).body(body)
             .when().post("/api/tenants/" + tenantId + "/orgs")
-            .then().statusCode(409);
+            .then().statusCode(409)
+            .contentType(ContentType.JSON)
+            .body("error", equalTo("org code DUP is already held by org " + holder));
     }
 
-    /** The entity strips the code before it is stored; the duplicate check must compare the same value. */
+    /**
+     * The entity strips the code before it is stored; the duplicate check must compare the same value.
+     * The refusal names the stored code, not the padded one that was sent.
+     */
     @Test
     void duplicateOrgCodeWithSurroundingWhitespaceIsRejected() {
-        given().contentType(ContentType.JSON)
+        String holder = given().contentType(ContentType.JSON)
             .body("""
                 {"code": "PAD", "name": "Padded Org"}
                 """)
             .when().post("/api/tenants/" + tenantId + "/orgs")
-            .then().statusCode(201);
+            .then().statusCode(201)
+            .extract().path("id").toString();
 
         given().contentType(ContentType.JSON)
             .body("""
                 {"code": " PAD ", "name": "Padded Org again"}
                 """)
             .when().post("/api/tenants/" + tenantId + "/orgs")
-            .then().statusCode(409);
+            .then().statusCode(409)
+            .contentType(ContentType.JSON)
+            .body("error", equalTo("org code PAD is already held by org " + holder));
     }
 
     @Test
@@ -156,7 +165,7 @@ class OrgResourceTest {
             .body("active", equalTo(false));
     }
 
-    /** The tenant is in the {@code codeExists} query, so this holds on any datasource, filter or not. */
+    /** The tenant is in the {@code holderOfCode} query, so this holds on any datasource, filter or not. */
     @Test
     void sameCodeInDifferentTenantsIsAllowed() {
         Tenant other = new Tenant("OTEST2", "Other Tenant");

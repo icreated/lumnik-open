@@ -30,7 +30,6 @@ class CsvMappingE2EIT {
 
     row:
       - aggregator:
-          group-by: [incident_id]
           emit-on-change: incident_id
           keep-first: [incident_id, title]
           merge:

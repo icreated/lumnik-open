@@ -1,26 +1,18 @@
-# 70-graphql-relay.yaml — GraphQL is a request SHAPE on the REST engine, not a second connector.
+# 70-graphql-relay.yaml — GraphQL is a request shape of the REST connector.
 #
-# `connector_type` stays rest-generic. What changes: the request is a POST carrying
-# {"query": ..., "variables": ...} to a single URL, and the cursor rides in the body.
+# `connector_type` stays rest-generic. The request is a POST carrying {"query", "variables"} to
+# one URL; the cursor rides in `variables`.
 #
-# ── The hard rule ────────────────────────────────────────────────────────────────────────
-# A graphql endpoint must declare `kind: relay` with `cursor_binding: variable`, and that
-# binding is valid nowhere else. The reason is mechanical: the binding writes the cursor into
-# the POST body's `variables.<cursor_var>`, and a GET has no body to write it into. Both halves
-# are refused at apply.
+# A graphql endpoint must declare `kind: relay` with `cursor_binding: variable`. Both are refused
+# at apply otherwise.
 #
-# ── Relay, concretely ────────────────────────────────────────────────────────────────────
-# The Connections spec puts rows under edges[].node and the paging state under pageInfo:
-#   cursor_path    → $.data.partners.pageInfo.endCursor   (an OPAQUE string — base64 here)
+# Relay puts the rows under edges[].node and the paging state under pageInfo:
+#   cursor_path    → $.data.partners.pageInfo.endCursor
 #   has_more_path  → $.data.partners.pageInfo.hasNextPage
-#   response_path  → $.data.partners.edges[*].node        (a JSONPath projection)
-#   cursor_var     → after — the same name as $after in the query, without the sigil
+#   response_path  → $.data.partners.edges[*].node
+#   cursor_var     → after — the name of $after in the query, without the $
 #
-# Note the asymmetry with the `cursor` strategy, which unwraps a one-element list from
-# $.data[-1:].id: relay does not — cursor_path must resolve to a scalar directly.
-#
-# Page size lives in the query (`first: 500`): GraphQL has no size parameter to bind.
-# `graphql_path` is spec-level and defaults to /graphql — spelled out here for readability.
+# Page size lives in the query (`first: 500`).
 #
 # Expect: 2 400 rows in ext.acme_graphql_partners.
 

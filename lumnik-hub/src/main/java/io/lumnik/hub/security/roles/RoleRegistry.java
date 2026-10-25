@@ -7,6 +7,7 @@ import com.networknt.schema.JsonSchema;
 import com.networknt.schema.JsonSchemaFactory;
 import com.networknt.schema.SpecVersion;
 import com.networknt.schema.ValidationMessage;
+import io.lumnik.hub.manifest.HubYaml;
 import io.lumnik.hub.manifest.ModuleManifest;
 import io.lumnik.hub.manifest.ModuleManifestRegistry;
 import io.quarkus.runtime.StartupEvent;
@@ -40,7 +41,7 @@ public class RoleRegistry {
     /** The grant/role list key in roles.yaml. */
     private static final String PERMISSIONS = "permissions";
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final YAMLMapper YAML_MAPPER = new YAMLMapper();
+    private static final YAMLMapper YAML_MAPPER = HubYaml.mapper();
 
     @Inject ModuleManifestRegistry manifestRegistry;
 

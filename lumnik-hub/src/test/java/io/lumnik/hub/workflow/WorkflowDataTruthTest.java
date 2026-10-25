@@ -12,7 +12,7 @@ class WorkflowDataTruthTest {
 
     private static final WorkflowGraph GRAPH = new WorkflowGraph("wf-truth", "demo",
         "connector.t_wf_truth", "statut", "declared", null, null,
-        List.of(new WorkflowGraph.StateDto("A", null, List.of(), true)), "A", List.of());
+        List.of(new WorkflowGraph.StateDto("A", null, List.of(), true)), "A", List.of(), null);
 
     @Test
     void a_data_class_failure_names_its_sqlstate_and_withholds_the_value() {

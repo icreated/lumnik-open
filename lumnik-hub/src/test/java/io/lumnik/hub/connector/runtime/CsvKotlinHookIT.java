@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.runtime;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.tenant.TenantContext;
+import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.connector.api.types.RunStatus;
 import io.lumnik.hub.connector.api.types.RunTrigger;
 import io.lumnik.hub.connector.domain.Connector;
@@ -15,6 +16,7 @@ import jakarta.transaction.UserTransaction;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
@@ -122,6 +124,13 @@ class CsvKotlinHookIT {
         assertThat(scalarText("SELECT phone FROM connector.t_csv_hook WHERE row_id = '2'"))
             .as("phone for row 2 must be uppercased by the Kotlin cell hook")
             .isEqualTo("XYZ");
+
+        // #1430: the run says which version of the script produced these rows.
+        String text = new String(Thread.currentThread().getContextClassLoader()
+            .getResourceAsStream("mapping/uppercase-phone.kts").readAllBytes(), StandardCharsets.UTF_8);
+        assertThat(scalarText("SELECT scripts::text FROM connector.connector_run WHERE connector_id = '" + connectorId + "'"))
+            .as("the run records the script's name and the SHA-256 of its text")
+            .isEqualTo("[{\"name\": \"classpath:mapping/uppercase-phone.kts\", \"sha256\": \"" + AuditRecorder.sha256(text) + "\"}]");
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────

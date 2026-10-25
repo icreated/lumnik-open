@@ -1,6 +1,8 @@
 package io.lumnik.hub.connector.runtime;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.common.error.Throwables;
 import io.lumnik.hub.connector.api.ConnectorType;
 import io.lumnik.hub.connector.api.ItemReader;
 import io.lumnik.hub.connector.api.ItemWriter;
@@ -12,7 +14,10 @@ import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.domain.ConnectorRun;
 import io.lumnik.hub.connector.domain.EffectiveConfig;
 import io.lumnik.hub.connector.event.RunTableStats;
+import io.lumnik.hub.connector.exceptions.AuthoredRunFailure;
+import io.lumnik.hub.connector.exceptions.RunCancelledException;
 import io.lumnik.hub.connector.exceptions.SourceCallException;
+import io.lumnik.hub.connector.exceptions.SourceUnreachableException;
 import io.lumnik.hub.connector.exceptions.TransientFailureException;
 import io.lumnik.hub.connector.repository.ConnectorCursorEntityRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
@@ -106,6 +111,8 @@ public class ChunkExecutor {
     try {
       // OUTSIDE any transaction — this is the source round-trip.
       result = reader.read(type.defaultChunkSize(), cursorIn, ctx);
+    } catch (RunCancelledException cancelled) {
+      return new ChunkResult.Cancelled();
     } catch (Throwable t) {
       return failure(c, t);
     }
@@ -115,15 +122,23 @@ public class ChunkExecutor {
       case ReadResult.EndOfStream eos -> eos.records();
       case ReadResult.EmptyButOpen ep -> List.of();
     };
-    if (writer != null && !recordsRead.isEmpty()) {
+    // #1452: a mapping that carries values row to row starts empty at a file's first record, and resumes from what the
+    // cursor row carries otherwise — the writer applies both rules and hands back what this chunk leaves.
+    boolean startsAFile = reader.startsAFile();
+    boolean maps = writer != null && !recordsRead.isEmpty();
+    JsonNode carryOut = null;
+    if (maps) {
       try {
         // STILL OUTSIDE any transaction — a writer's own network round-trip (e.g. RagWriter's
         // embedAll) belongs here, not inside the write transaction below.
-        writer.prepare(recordsRead, ctx);
+        carryOut = writer.prepare(recordsRead, ctx, cursorIn.mappingCarry(), startsAFile);
       } catch (Throwable t) {
         return failure(c, t);
       }
     }
+    // A chunk that mapped no row keeps what was stored — the writer's file-start rule, restated for the one case it
+    // never sees. Stored only with a position, so a refused batch moves neither.
+    JsonNode carryAfter = maps ? carryOut : startsAFile ? null : cursorIn.mappingCarry();
 
     return QuarkusTransaction.joiningExisting().call(() -> {
       try {
@@ -147,7 +162,7 @@ public class ChunkExecutor {
             // still commits what preceded the throw — the position must not be among it, or the next
             // run resumes past rows this one never counted. Left alone, the replay is absorbed by the
             // row-hash dedup.
-            persistCursor(c.getId(), endpoint.getId(), c.getTenantId(), hm.nextCursor());
+            persistCursor(c.getId(), endpoint.getId(), c.getTenantId(), hm.nextCursor(), carryAfter);
             yield new ChunkResult.Success(hm.records().size(), hm.nextCursor(), false);
           }
           case ReadResult.EndOfStream eos -> {
@@ -161,7 +176,7 @@ public class ChunkExecutor {
             // accounting throws is a failure, and the transaction still commits what preceded the
             // throw — the position must not be among it.
             if (!eos.finalCursor().isEmpty()) {
-              persistCursor(c.getId(), endpoint.getId(), c.getTenantId(), eos.finalCursor());
+              persistCursor(c.getId(), endpoint.getId(), c.getTenantId(), eos.finalCursor(), carryAfter);
             }
             // The type's last word on the finished stream (#1195), LAST: its side effects (a csv full
             // refresh deletes rows, committed on the admin datasource) must follow every step that can
@@ -176,6 +191,8 @@ public class ChunkExecutor {
             }
             switch (end) {
               case StreamEnd.Removed removed -> r.setRecordsRemoved(r.getRecordsRemoved() + removed.rows());
+              case StreamEnd.Unchanged unchanged -> r.setFilesUnchanged(r.getFilesUnchanged() + unchanged.files());
+              case StreamEnd.NotArchived left -> r.setFilesNotArchived(r.getFilesNotArchived() + left.files());
               case StreamEnd.Refused refused -> {
                 clearCursor(endpoint.getId());
                 yield new ChunkResult.Failure(refused.reason(), null, false);
@@ -204,7 +221,7 @@ public class ChunkExecutor {
             // that says nothing — it reads back exactly like the absent row, while touching
             // captured_at. Only a real advance is stored.
             if (!ep.position().isEmpty()) {
-              persistCursor(c.getId(), endpoint.getId(), c.getTenantId(), ep.position());
+              persistCursor(c.getId(), endpoint.getId(), c.getTenantId(), ep.position(), carryAfter);
             }
             // "Short of the target" needs a target, and THIS is the one place that rule lives. A
             // reader with no bound cannot be short of anything, so its empty-but-open pass ends the
@@ -306,7 +323,10 @@ public class ChunkExecutor {
     r.setRecordsSkipped(r.getRecordsSkipped()
         + outcomeSkipped(outcome, deadLetter, c.getId(), r.getId(), mapper)
         + malformed);
-    r.setCellErrors(r.getCellErrors() + ((writer != null) ? writer.drainCellErrors() : 0));
+    if (writer != null) {
+      r.setCellErrors(r.getCellErrors() + writer.drainCellErrors());
+      r.recordScripts(writer.drainScripts());
+    }
     r.setChunkCount(r.getChunkCount() + 1);
   }
 
@@ -364,9 +384,20 @@ public class ChunkExecutor {
         log.warnf("Chunk failure for connector %s: %s", connectorName, described.getMessage());
         yield described.getMessage();
       }
+      // A source that cannot be reached is said the same way: its sentence names the kind, and the
+      // root's message is the driver's, which quotes the host (#1389).
+      case SourceUnreachableException unreachable -> {
+        log.warnf("Chunk failure for connector %s: %s", connectorName, unreachable.getMessage());
+        yield unreachable.getMessage();
+      }
+      // A failure the hub wrote whole, wherever it sits in the chain, is stored as written: withCause would carry
+      // its cause's message to the run, and a script's toInt() quotes the cell it could not read (#1434). The log
+      // keeps the cause, with the stack.
       default -> {
         log.warnf(t, "Chunk failure for connector %s: %s", connectorName, t.getMessage());
-        yield SqlFailureText.withCause(t);
+        yield Throwables.causeChain(t).stream().filter(AuthoredRunFailure.class::isInstance).findFirst()
+            .map(Throwable::getMessage)
+            .orElseGet(() -> SqlFailureText.withCause(t));
       }
     };
     return new ChunkResult.Failure(text, t, t instanceof TransientFailureException);
@@ -428,20 +459,21 @@ public class ChunkExecutor {
     if (ent != null) cursors.delete(ent);
   }
 
-  private void persistCursor(UUID connectorId, UUID endpointId, Long tenantId, ConnectorCursor newCursor) {
+  private void persistCursor(UUID connectorId, UUID endpointId, Long tenantId, ConnectorCursor newCursor,
+                             JsonNode mappingCarry) {
     var ent = cursors.findByEndpoint(endpointId);
-    if (ent == null) {
+    boolean fresh = ent == null;
+    if (fresh) {
       ent = new ConnectorCursorEntity();
       ent.setTenantId(tenantId);
       ent.setConnectorId(connectorId);
       ent.setEndpointId(endpointId);
-      ent.setCursorValue(newCursor.value());
-      ent.setCapturedAt(Instant.now());
-      cursors.persist(ent);
-    } else {
-      ent.setCursorValue(newCursor.value());
-      ent.setCapturedAt(Instant.now());
     }
+    ent.setCursorValue(newCursor.value());
+    ent.setMappingCarry(mappingCarry);
+    ent.setCapturedAt(Instant.now());
+    // Persisted once its NOT NULL fields are set: the insert carries them, no null-then-update.
+    if (fresh) cursors.persist(ent);
   }
 
   private static int outcomeWritten(WriteOutcome o) {

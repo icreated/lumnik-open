@@ -8,6 +8,7 @@ import io.lumnik.identity.role.UserLevel;
 import io.lumnik.identity.tenant.Tenant;
 import io.lumnik.identity.tenant.TenantRepository;
 import io.quarkus.test.junit.QuarkusTest;
+import io.restassured.http.ContentType;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import org.junit.jupiter.api.AfterEach;
@@ -83,7 +84,9 @@ class RoleOrgAccessResourceTest {
             .then().statusCode(201);
 
         given().when().post("/api/tenants/" + tenantId + "/roles/" + roleId + "/orgs/" + orgId)
-            .then().statusCode(409);
+            .then().statusCode(409)
+            .contentType(ContentType.JSON)
+            .body("error", equalTo("access to org " + orgId + " is already granted to role " + roleId));
     }
 
     @Test

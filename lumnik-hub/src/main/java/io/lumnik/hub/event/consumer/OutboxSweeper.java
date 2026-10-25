@@ -105,9 +105,16 @@ public class OutboxSweeper {
             pos = em.find(EventConsumerPosition.class, consumerName, LockModeType.PESSIMISTIC_WRITE);
         }
 
-        List<EventOutboxRow> batch = em.createQuery(
-                "FROM EventOutboxRow WHERE id > :after ORDER BY id", EventOutboxRow.class)
-            .setParameter("after", pos.getLastEventId())
+        // Only what is decided, in (xact_id, id) order (#1570): an id cursor alone moved past a lower id
+        // a long transaction committed later, and the event was never read — no webhook, no email, no
+        // decision. Below the horizon no row can still appear, so nothing behind the cursor is lost.
+        // The price: a row waits while an older transaction is open (EventHorizonWatch says so).
+        @SuppressWarnings("unchecked")
+        List<EventOutboxRow> batch = em.createNativeQuery(
+                "SELECT * FROM core.event_outbox WHERE " + EventOutboxRow.DECIDED
+                + " AND (xact_id, id) > (:xact, :id) ORDER BY xact_id, id", EventOutboxRow.class)
+            .setParameter("xact", pos.getLastXactId())
+            .setParameter("id", pos.getLastEventId())
             .setMaxResults(batchSize)
             .getResultList();
 
@@ -128,7 +135,7 @@ public class OutboxSweeper {
             } finally {
                 CurrentTenantHolder.clear();
             }
-            pos.advanceTo(row.getId());
+            pos.advanceTo(row.getXactId(), row.getId());
         }
         return batch.size();
     }

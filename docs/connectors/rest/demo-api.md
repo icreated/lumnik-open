@@ -11,7 +11,7 @@ python3 docs/connectors/rest/demo/acme-api.py
 ```
 
 ```
-ACME Partners API on http://0.0.0.0:8099 — 2400 partners, dialects: down, drf, flaky, hdr, liar, link, offset, open, spring, v1 + POST /graphql
+ACME Partners API on http://0.0.0.0:8099 — 2400 partners, dialects: down, drf, flaky, hdr, liar, link, offset, open, spring, v1 + POST /graphql + GET /openapi.json
 SOAP services (POST /<service>/start.swe): fault, fault200, flaky, mute, sap, session, siebel, tail
 ```
 
@@ -25,16 +25,20 @@ The first path segment picks the envelope; the data is the same under every dial
 | Path | What it imitates | Used by |
 |---|---|---|
 | `/spring/partners` | Spring Data `Page` — `$.content` + `$.totalPages` | [Quickstart](../rest.md#quickstart) |
-| `/v1/partners` | Stripe-style opaque cursor — `?starting_after=` | [Pagination](pagination.md) |
-| `/drf/partners` | Django REST — `$.results` + a whole next URL in `$.next` | [Pagination](pagination.md) |
+| `/v1/partners` | Stripe-style opaque cursor — `?starting_after=` | [One connector, one API](../rest.md#one-connector-one-api) |
+| `/drf/partners` | Django REST — `$.results` + a whole next URL in `$.next` | [One connector, one API](../rest.md#one-connector-one-api) |
 | `/link/partners` | an RFC 5988 `Link: …; rel="next"` header | [Pagination](pagination.md) |
 | `/offset/partners` | offset + limit with a published `$.total` | [Incremental sync](../rest.md#incremental-sync) |
-| `/open/partners` | the same, with no auth wall at all | `auth: none` |
+| `/open/partners` | the same, with no auth wall at all | try it with `curl` |
 | `/hdr/partners` | 400 to any request without `X-Api-Version` | [Request headers](../rest.md#request-headers) |
 | `/liar/partners` | serves 2 300 rows while declaring 2 400 | [The declared total](../rest.md#the-declared-total-a-witness-on-the-count) |
 | `/down/partners` | 500, forever | [When the source misbehaves](../rest.md#when-the-source-misbehaves) |
 | `/flaky/partners` | 429 then 503 before each page, then 200 | [When the source misbehaves](../rest.md#when-the-source-misbehaves) |
 | `POST /graphql` | Relay `edges` / `pageInfo` | [GraphQL](../graphql.md) |
+| `GET /openapi.json` | an OpenAPI 3 document for `/open`, `/spring` and `/v1` | [Generate a manifest from an OpenAPI spec](../rest.md#generate-a-manifest-from-an-openapi-spec) |
+
+`/openapi.json` describes three paths; the server never reads it. Its `servers` entry is the
+address you called it on.
 
 ## The eight SOAP services
 
@@ -54,7 +58,7 @@ partners, in XML, with `ns:` prefixes on every payload element.
 
 `/tail` ends on a page holding a single element: a correct run ingests 201 rows, not 200.
 
-## Its three credentials
+## Its four credentials
 
 Put them in the hub's secret registry; the manifests name them:
 

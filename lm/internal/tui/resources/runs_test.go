@@ -242,6 +242,24 @@ func TestRunsDescribe_includesCellErrorsAfterRecordsSkipped(t *testing.T) {
 	}
 }
 
+// #1430: the panel names each version of a Kotlin script the run ran, as `lm run get` does.
+func TestRunsDescribe_namesTheScriptVersions(t *testing.T) {
+	r := &Runs{table: tview.NewTable(),
+		sort: style.NewColumnSort(runSortColumns)}
+	r.items = []types.Run{
+		{ID: "r1", RecordsIn: 3, RecordsOut: 3, Scripts: []types.RunScript{{Name: "hooks:shipping-fee.kts", SHA256: "c1c59e5c"}}},
+	}
+	r.render()
+	r.table.Select(1, 0)
+	_, body, ok := r.SelectedDescribe()
+	if !ok {
+		t.Fatal("describe !ok")
+	}
+	if !strings.Contains(body, "script:          hooks:shipping-fee.kts  sha256 c1c59e5c\n") {
+		t.Errorf("script line missing, got body:\n%s", body)
+	}
+}
+
 // The :runs page carried the same silence the CLI half of this change removed: it fetched the
 // newest 200 runs of the WHOLE hub and sieved them in renderList, so a connector whose runs had
 // scrolled out of that page showed an EMPTY table under a ":runs [conn=…]" title — the drill-down
@@ -468,5 +486,28 @@ func TestDrillDownTitles_nameWhatTheyAreNarrowedTo(t *testing.T) {
 	r.SetEndpointFilter("edad9649-2222", "warehouses")
 	if got := r.table.GetTitle(); got != " :runs › endpoint warehouses " {
 		t.Errorf(":runs endpoint title = %q", got)
+	}
+}
+
+// #1351: EVALUATED appears only when the hub answered for some run; the live ticker re-renders it,
+// which is the TUI's way of waiting for kind:Process.
+func TestRunsRender_evaluatedColumnOnlyWhenTheHubAnswered(t *testing.T) {
+	r := &Runs{table: tview.NewTable(), sort: style.NewColumnSort(runSortColumns)}
+	r.items = []types.Run{{ID: "r1", ConnectorName: "demo-erp"}}
+	r.render()
+	if got := r.table.GetCell(0, colEvaluated).Text; got != "" {
+		t.Fatalf("no run carries evaluated, yet the header reads %q", got)
+	}
+
+	yes, no := true, false
+	r.items = []types.Run{{ID: "r1", Evaluated: &yes}, {ID: "r2", Evaluated: &no}, {ID: "r3"}}
+	r.render()
+	if got := r.table.GetCell(0, colEvaluated).Text; got != "EVALUATED" {
+		t.Fatalf("header = %q, want EVALUATED", got)
+	}
+	for i, want := range []string{"yes", "no", "—"} {
+		if got := r.table.GetCell(i+1, colEvaluated).Text; got != want {
+			t.Errorf("row %d EVALUATED = %q, want %q", i+1, got, want)
+		}
 	}
 }

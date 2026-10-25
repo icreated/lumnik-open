@@ -2,6 +2,7 @@ package io.lumnik.hub.view;
 
 import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
+import io.lumnik.hub.manifest.HubYaml;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -26,7 +27,7 @@ public class ViewYamlAssembler {
      */
     private static final Pattern LINE_BREAK = Pattern.compile("[\\n\\r\\u0085\\u2028\\u2029]+");
 
-    private static final YAMLMapper MAPPER = YAMLMapper.builder()
+    private static final YAMLMapper MAPPER = HubYaml.builder()
             .disable(YAMLGenerator.Feature.WRITE_DOC_START_MARKER)
             .build();
 

@@ -229,19 +229,28 @@ func newViewGenerateCmd() *cobra.Command {
 }
 
 // rewriteSuggestedFile points the suggested render command at the file the user actually
-// chose with -o; the server could only suggest its own slug-derived name. The filename is
-// POSIX-quoted when needed so the command stays copy-pasteable.
+// chose with -o; the server could only suggest its own slug-derived name. The command is a
+// line of its own in the leading comment block, after the hub's `# asked for:` and `# kept:`
+// lines. The filename is POSIX-quoted when needed so the command stays copy-pasteable.
 func rewriteSuggestedFile(yaml, outFile string) string {
 	const prefix = "# lm view -f "
-	if !strings.HasPrefix(yaml, prefix) {
-		return yaml
+	lines := strings.SplitAfter(yaml, "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "#") {
+			return yaml
+		}
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		rest := line[len(prefix):]
+		end := strings.IndexAny(rest, " \n")
+		if end == -1 {
+			return yaml
+		}
+		lines[i] = prefix + posixQuote(outFile) + rest[end:]
+		return strings.Join(lines, "")
 	}
-	rest := yaml[len(prefix):]
-	end := strings.IndexAny(rest, " \n")
-	if end == -1 {
-		return yaml
-	}
-	return prefix + posixQuote(outFile) + rest[end:]
+	return yaml
 }
 
 // confirmLine is the post-write message: prose keeps the raw name, the command part is

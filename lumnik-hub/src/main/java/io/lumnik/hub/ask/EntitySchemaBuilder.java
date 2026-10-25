@@ -14,6 +14,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -66,13 +67,18 @@ public class EntitySchemaBuilder {
                     // manifest could carry one the ladder's every rung was the technical name
                     // and a generated view was headed `acmecustomer` (#501).
                     out.add(new SchemaCard.Table(
-                        "connector.v_" + name, or(m.label(), name), cols, m.description()));
+                        cardTableName(name), or(m.label(), name), cols, m.description()));
                 }
             }
         } catch (Exception e) {
             throw new RuntimeException("EntitySchemaBuilder.resolve(scope=" + scope + "): " + e, e);
         }
         return out;
+    }
+
+    /** The name an entity's view carries on a card: {@code connector.v_<name>}, unquoted. */
+    public static String cardTableName(String entityName) {
+        return "connector.v_" + entityName.toLowerCase(Locale.ROOT);
     }
 
     /**

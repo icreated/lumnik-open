@@ -337,4 +337,77 @@ class EntityIdentityRepositoryReadsTest {
     while (root.getCause() != null) root = root.getCause();
     return t.getMessage() + " | " + root.getMessage();
   }
+
+  /** An {@code identity.app_user} of this tenant (its {@code identity.tenant} row first, for the FK). */
+  private long seedUser(long tenant, String login) {
+    long id = tenant * 10;
+    exec(c -> {
+      try (PreparedStatement ps = c.prepareStatement("INSERT INTO identity.tenant (id, code, name, created_at, updated_at) "
+          + "VALUES (?, ?, ?, now(), now()) ON CONFLICT DO NOTHING")) {
+        ps.setLong(1, tenant);
+        ps.setString(2, "t" + tenant);
+        ps.setString(3, "t" + tenant);
+        ps.executeUpdate();
+      }
+      try (PreparedStatement ps = c.prepareStatement("INSERT INTO identity.app_user (id, tenant_id, login, name, created_at, updated_at) "
+          + "VALUES (?, ?, ?, ?, now(), now())")) {
+        ps.setLong(1, id);
+        ps.setLong(2, tenant);
+        ps.setString(3, login);
+        ps.setString(4, login);
+        ps.executeUpdate();
+      }
+    });
+    return id;
+  }
+
+  @Test
+  void evidenceHistory_names_who_asserted_an_asserted_decision_and_why() {
+    long tenant = freshTenant();
+    String reviewer = String.valueOf(seedUser(tenant, "alice"));
+    UUID entity = UUID.randomUUID();
+    UUID crm = seedIdentity(tenant, ENTITY_TYPE, "crm", "CT-9003", "resolved", entity);
+    UUID erp = seedIdentity(tenant, ENTITY_TYPE, "erp", "AC-300", "resolved", entity);
+    seedEvidence(tenant, ENTITY_TYPE, "crm", "CT-9003", crm, "email", "[]", "[]",
+        "ambiguous", "automatic", OffsetDateTime.now().minusMinutes(1));
+    repository.inTransaction(c -> {
+      repository.assertSame(c, tenant, ENTITY_TYPE, crm, erp, reviewer, "The billing contact belongs to AC-300");
+      repository.insertEvidence(c, tenant, ENTITY_TYPE, "crm", "CT-9003", crm, null, null, null,
+          "[\"" + entity + "\"]", "[]", "[]", EntityResolutionState.RESOLVED, "asserted", null, erp,
+          repository.assertionOf(c, tenant, ENTITY_TYPE, crm, erp).orElseThrow());
+      return null;
+    });
+
+    List<EntityIdentityRepository.EvidenceEvent> events = repository.inTransaction(c ->
+        repository.evidenceHistory(c, tenant, ENTITY_TYPE, "crm", "CT-9003"));
+
+    assertThat(events).extracting(EntityIdentityRepository.EvidenceEvent::assertedBy)
+        .containsExactly(null, reviewer);
+    assertThat(events).extracting(EntityIdentityRepository.EvidenceEvent::assertedByLogin)
+        .as("#1347: the reviewer by login, the id kept beside it")
+        .containsExactly(null, "alice");
+    assertThat(events).extracting(EntityIdentityRepository.EvidenceEvent::reason)
+        .containsExactly(null, "The billing contact belongs to AC-300");
+  }
+
+  @Test
+  void evidenceHistory_keeps_the_id_of_a_reviewer_it_cannot_name() {
+    long tenant = freshTenant();
+    UUID entity = UUID.randomUUID();
+    UUID crm = seedIdentity(tenant, ENTITY_TYPE, "crm", "CT-9003", "resolved", entity);
+    UUID erp = seedIdentity(tenant, ENTITY_TYPE, "erp", "AC-300", "resolved", entity);
+    repository.inTransaction(c -> {
+      repository.assertSame(c, tenant, ENTITY_TYPE, crm, erp, "424242", "gone since");
+      repository.insertEvidence(c, tenant, ENTITY_TYPE, "crm", "CT-9003", crm, null, null, null,
+          "[\"" + entity + "\"]", "[]", "[]", EntityResolutionState.RESOLVED, "asserted", null, erp,
+          repository.assertionOf(c, tenant, ENTITY_TYPE, crm, erp).orElseThrow());
+      return null;
+    });
+
+    EntityIdentityRepository.EvidenceEvent asserted = repository.inTransaction(c ->
+        repository.evidenceHistory(c, tenant, ENTITY_TYPE, "crm", "CT-9003")).get(0);
+
+    assertThat(asserted.assertedBy()).isEqualTo("424242");
+    assertThat(asserted.assertedByLogin()).isNull();
+  }
 }

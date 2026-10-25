@@ -80,6 +80,24 @@ class ConnectorFlatDoorValidationTest {
         .body(containsString("tenant_id"));
   }
 
+  /** #1475: a tier written as a map was stored, and refused only by the run (#1464). */
+  @Test
+  void create_refuses_a_mapping_tier_written_as_a_map() {
+    given()
+      .headers(TestIdentity.tenantAndUser(1))
+      .contentType("application/json")
+      .body(String.format("""
+        {"tenantId":1,"name":"flat-maptier-%d","typeId":"csv-file","config":{
+          "kind":"csv-file",
+          "mapping":{"row":{"map-columns":{"rename":{"CUST_NM":"name"}}}}
+        }}
+        """, System.nanoTime()))
+      .when().post("/api/platform/connectors")
+      .then().statusCode(400)
+        .body("error", equalTo("config 'mapping.row' row must be a list of hooks, "
+            + "e.g. - upper: { columns: [name] } (got object)"));
+  }
+
   @Test
   void update_refuses_map_columns_rename_into_a_system_column() {
     // A clean connector goes in through the same flat door, then a bad edit is applied to it.

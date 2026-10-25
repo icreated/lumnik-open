@@ -48,8 +48,40 @@ func TestPrint_YAML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "name: a") {
+	if !strings.Contains(buf.String(), "Name: a") {
 		t.Errorf("unexpected yaml: %s", buf.String())
+	}
+}
+
+// -o yaml names a key the way -o json does, in the same order: a struct carries json tags only, and
+// yaml would otherwise lower-case the Go field name (cellErrors became cellerrors).
+func TestYAML_usesTheJSONKeyNamesAndOrder(t *testing.T) {
+	type run struct {
+		RecordsIn  int64   `json:"recordsIn"`
+		CellErrors int64   `json:"cellErrors"`
+		Note       string  `json:"note,omitempty"`
+		Flag       string  `json:"flag"`
+		Ratio      float64 `json:"ratio"`
+		EndedAt    *string `json:"endedAt"`
+		SQL        string  `json:"sql"`
+	}
+	r := run{RecordsIn: 1000000, CellErrors: 2, Flag: "yes", Ratio: 0.5, SQL: "a <> 1\nb"}
+	for name, c := range map[string]struct {
+		print func(*bytes.Buffer) error
+		want  string
+	}{
+		"Print": {func(b *bytes.Buffer) error { return Print(b, "yaml", nil, []run{r}, nil) },
+			"- recordsIn: 1000000\n  cellErrors: 2\n  flag: \"yes\"\n  ratio: 0.5\n  endedAt: null\n  sql: |-\n    a <> 1\n    b\n"},
+		"PrintObject": {func(b *bytes.Buffer) error { return PrintObject(b, "yaml", r) },
+			"recordsIn: 1000000\ncellErrors: 2\nflag: \"yes\"\nratio: 0.5\nendedAt: null\nsql: |-\n    a <> 1\n    b\n"},
+	} {
+		buf := new(bytes.Buffer)
+		if err := c.print(buf); err != nil {
+			t.Fatal(err)
+		}
+		if got := buf.String(); got != c.want {
+			t.Errorf("%s:\n%s\nwant:\n%s", name, got, c.want)
+		}
 	}
 }
 

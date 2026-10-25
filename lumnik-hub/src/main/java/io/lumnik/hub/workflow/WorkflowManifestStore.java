@@ -122,7 +122,7 @@ public class WorkflowManifestStore {
     }
 
     /**
-     * Removes one workflow for good — the manifest AND its ledger. Existence is the caller's
+     * Removes one workflow for good — the manifest AND its ledgers, dormancy's and the due date's (V81). Existence is the caller's
      * question, answered by findScope.
      *
      * <p>Neither {@code core.workflow_observation} nor {@code core.workflow_transition} carries
@@ -147,6 +147,8 @@ public class WorkflowManifestStore {
                 "DELETE FROM core.workflow_observation WHERE tenant_id = ? AND workflow_name = ?", tenantAndName);
             Jdbc.update(c, "WorkflowManifestStore.delete(transitions)",
                 "DELETE FROM core.workflow_transition WHERE tenant_id = ? AND workflow_name = ?", tenantAndName);
+            Jdbc.update(c, "WorkflowManifestStore.delete(due alerts)",
+                "DELETE FROM core.workflow_due_alert WHERE tenant_id = ? AND workflow_name = ?", tenantAndName);
             return removed;
         });
     }

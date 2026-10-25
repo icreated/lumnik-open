@@ -48,9 +48,21 @@ class FileProcessingCursorTest {
             List.of(new FileProcessingCursor.Entry("/already.csv", 100L, "e1"))
         );
         var fresh = new FileDescriptor("/fresh.csv", 200L, Instant.now(), null);
-        var dup   = new FileDescriptor("/already.csv", 100L, Instant.now(), "e1");
+        // The batch is the files of the watermark second: the one read there is the duplicate.
+        var dup   = new FileDescriptor("/already.csv", 100L, cursor.watermark(), "e1");
 
         assertFalse(cursor.alreadyProcessed(fresh));
         assertTrue(cursor.alreadyProcessed(dup));
+    }
+
+    // #1381: an sftp file carries no etag — a rewrite with the same name and size is told apart by its mtime,
+    // through the one "same bytes" rule (FileDescriptor.sameVersion), as the local path does (#1371).
+    @Test
+    void a_rewrite_with_the_same_name_and_size_but_a_newer_mtime_is_not_already_processed() {
+        Instant read = Instant.parse("2026-10-22T16:35:44Z");
+        var cursor = new FileProcessingCursor(read, List.of(new FileProcessingCursor.Entry("/out/livraisons.csv", 62L, null)));
+
+        assertFalse(cursor.alreadyProcessed(new FileDescriptor("/out/livraisons.csv", 62L, read.plusSeconds(26), null)));
+        assertTrue(cursor.alreadyProcessed(new FileDescriptor("/out/livraisons.csv", 62L, read, null)));
     }
 }

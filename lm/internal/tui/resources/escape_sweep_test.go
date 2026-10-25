@@ -48,7 +48,8 @@ func TestViewListAndRecentsCellsEscape(t *testing.T) {
 }
 
 // The :inbox MESSAGE is user-templated ({col} from CSV data) — the hottest
-// cell in the house. The literal " [traité]" marker must keep rendering.
+// cell in the house. The " [acked]" marker must keep rendering: ASCII in brackets reads as a tview
+// tag, so it survives only escaped like the message (#1336).
 func TestInboxMessageCellEscapes(t *testing.T) {
 	i := &Inbox{table: tview.NewTable(), items: []client.InboxEntry{
 		{ID: 1, Process: evil, Message: evil, EntityKey: evil, Acked: true}}}
@@ -57,8 +58,8 @@ func TestInboxMessageCellEscapes(t *testing.T) {
 	if strings.Contains(msg, evil) {
 		t.Errorf("inbox MESSAGE unescaped: %q", msg)
 	}
-	if !strings.Contains(msg, "traité") {
-		t.Errorf("the [traité] marker must survive: %q", msg)
+	if !strings.HasSuffix(msg, tview.Escape(" [acked]")) {
+		t.Errorf("the [acked] marker must survive, escaped: %q", msg)
 	}
 	if proc := i.table.GetCell(1, 2).Text; strings.Contains(proc, evil) {
 		t.Errorf("inbox PROCESS unescaped: %q", proc)

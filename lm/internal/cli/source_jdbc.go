@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -88,7 +87,7 @@ func newSourceJdbcTestCmd() *cobra.Command {
 }
 
 func newSourceJdbcDiscoverCmd() *cobra.Command {
-	var jdbcURL, jdbcUser, jdbcSchema, jdbcSkipPattern, jdbcOutput string
+	var jdbcURL, jdbcUser, jdbcSchema, jdbcSkipPattern string
 	var jdbcIncludeViews bool
 	cmd := &cobra.Command{
 		Use:   "discover",
@@ -116,10 +115,10 @@ func newSourceJdbcDiscoverCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if jdbcOutput == "json" {
-				return json.NewEncoder(machineOut(cmd)).Encode(resp)
-			}
 			w := cmd.OutOrStdout()
+			if format := outputFormat(cmd); format != "table" {
+				return output.PrintObject(w, format, resp)
+			}
 			fmt.Fprintf(w, "%-10s %-25s %10s %5s %-20s %-15s %s\n", "SCHEMA", "NAME", "ROWS", "COLS", "PK", "WATERMARK", "UNSUPPORTED")
 			for _, t := range resp.Tables {
 				wm := "-"
@@ -143,7 +142,6 @@ func newSourceJdbcDiscoverCmd() *cobra.Command {
 	cmd.Flags().StringVar(&jdbcSchema, "schema", "public", "Source schema the tables live in")
 	cmd.Flags().StringVar(&jdbcSkipPattern, "skip-pattern", defaultSkipPatterns, "Comma-separated glob patterns of tables to skip (default: the source dialect's own — e.g. pg_*,information_schema*,t_* for PostgreSQL)")
 	cmd.Flags().BoolVar(&jdbcIncludeViews, "include-views", false, "Include views")
-	cmd.Flags().StringVar(&jdbcOutput, "output", "table", "Output format: table|json")
 	_ = cmd.MarkFlagRequired("url")
 	_ = cmd.MarkFlagRequired("user")
 	return cmd

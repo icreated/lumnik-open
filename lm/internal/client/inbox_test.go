@@ -2,6 +2,7 @@ package client
 
 import (
 	"net/http"
+	"net/url"
 	"net/http/httptest"
 	"testing"
 
@@ -23,7 +24,7 @@ func TestInboxList_parses(t *testing.T) {
 	defer srv.Close()
 
 	c := New(config.Context{Server: srv.URL})
-	entries, err := c.InboxList(25, true)
+	entries, err := c.InboxList(InboxQuery{Limit: 25, All: true})
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, InboxEntry{
@@ -31,6 +32,29 @@ func TestInboxList_parses(t *testing.T) {
 		Process: "lyon-client-arrive", Message: "Nouveau client à Lyon",
 		Entity: "connector.t_cust_csv", EntityKey: "e717", Acked: false,
 	}, entries[0])
+}
+
+// #1356: the filters travel as query parameters, escaped; an empty one is not sent.
+func TestInboxList_sendsTheFilters(t *testing.T) {
+	var got url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.URL.Query()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+	c := New(config.Context{Server: srv.URL})
+
+	_, err := c.InboxList(InboxQuery{Limit: 50, Process: "workflow:orders", Type: "decision.dormant.orders"})
+	require.NoError(t, err)
+	assert.Equal(t, "workflow:orders", got.Get("process"))
+	assert.Equal(t, "decision.dormant.orders", got.Get("type"))
+	assert.False(t, got.Has("all"))
+
+	_, err = c.InboxList(InboxQuery{Limit: 50})
+	require.NoError(t, err)
+	assert.False(t, got.Has("process"))
+	assert.False(t, got.Has("type"))
 }
 
 func TestInboxAck_postsTheAckPath(t *testing.T) {

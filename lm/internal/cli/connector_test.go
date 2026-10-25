@@ -179,6 +179,36 @@ func TestConnectorList_showsTheRunWindowBesideTheSchedule(t *testing.T) {
 	}
 }
 
+// A paused connector is listed as paused: its cron alone read as a schedule still running, and only
+// -o json said otherwise (#1389). The pause stops the schedule, so it is said beside it, and only
+// where there is one.
+func TestConnectorList_saysWhichScheduleIsPaused(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"id": "11111111-1111-1111-1111-111111111111", "name": "cmms-retired",
+				"typeId": "jdbc-generic", "tenantId": 1, "schedule": "0 2 * * *", "enabled": false},
+			{"id": "22222222-2222-2222-2222-222222222222", "name": "erp-nightly",
+				"typeId": "jdbc-generic", "tenantId": 1, "schedule": "0 3 * * *", "enabled": true},
+			{"id": "33333333-3333-3333-3333-333333333333", "name": "manual-only",
+				"typeId": "csv-file", "tenantId": 1, "enabled": false},
+		})
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	out := runRoot(t, "connector", "list")
+	if !strings.Contains(out, "0 2 * * * (paused)") {
+		t.Errorf("the paused connector's schedule should say so:\n%s", out)
+	}
+	if strings.Contains(out, "0 3 * * * (paused)") {
+		t.Errorf("a running schedule is not paused:\n%s", out)
+	}
+	// No cron, nothing the pause stops: the cell stays empty.
+	if strings.Count(out, "(paused)") != 1 {
+		t.Errorf("only the scheduled connector can read paused:\n%s", out)
+	}
+}
+
 // `lm connector get` writes the flat fields once each, and `connector apply` reads back what it
 // wrote. A `schedule` that appeared both at the top level and inside `config` left an integrator
 // editing the copy the hub reads with nothing — the scheduler selects on the column.

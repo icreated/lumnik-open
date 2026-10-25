@@ -19,15 +19,17 @@ import java.util.function.Function;
  * 2026-09-11). One of the five copies was already wrong: the two transports read the system property
  * BEFORE the OS variable. A rule in five copies is four that can go quietly false.
  *
- * <p><b>Two paths deliberately do NOT come here</b>, and each says so where an integrator reads
- * it: {@code jdbc-generic}'s {@code password_env} and REST's declarative {@code headers[].value_env}.
- * The reason is about behaviour, not design — folding the others in changed nothing, because
- * {@code rest} basic auth and {@code sftp} already read the registry first and {@code kafka} read
- * nothing at all. Folding these two WOULD change what a live connector resolves: a tenant secret
- * would start outranking an environment variable of the same name on a connector that has been
- * running for months. SOAP's {@code {{secret:}}} took that change on purpose (#1246): its name
- * says registry, and an installer could not set it with {@code lm secret}; {@code {{env:}}} stays
- * environment-only.
+ * <p><b>One path deliberately does NOT come here</b>, and says so where an integrator reads it:
+ * {@code jdbc-generic}'s {@code password_env}. The reason is about behaviour, not design — folding
+ * the others in changed nothing, because {@code rest} basic auth and {@code sftp} already read the
+ * registry first and {@code kafka} read nothing at all. Folding it WOULD change what a live
+ * connector resolves: a tenant secret would start outranking an environment variable of the same
+ * name on a connector that has been running for months. Two paths took that change on purpose,
+ * because an installer could not set them with {@code lm secret}: SOAP's {@code {{secret:}}}
+ * (#1246; {@code {{env:}}} stays environment-only) and REST's declarative
+ * {@code headers[].value_env} (#1542), which now reads like the auth fields beside it. jdbc reads
+ * the registry too since #1349, but AFTER the environment, so a name that resolved before keeps
+ * its value.
  *
  * <p>Resolution reads the tenant from {@code CurrentTenantHolder}, so a caller must already be in a
  * tenant scope — the run thread is ({@code ConnectorEngine} wraps every run in

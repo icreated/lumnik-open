@@ -23,18 +23,18 @@ nothing pulls the hub or your sources back toward the manifest. The one watcher 
 `Workflow`'s [dormancy sweep](apps/workflows.md#dormancy-the-memory-of-the-breathing): it
 raises an alert, and never changes the manifest or the data.
 
-## Eight kinds, three families { #seven-kinds-two-families }
+## Eight kinds, three families
 
-| `kind:` | `apiVersion:` | What it declares | Apply | Owning page |
+| `kind:` | `apiVersion:` to write | What it declares | Apply | Owning page |
 |---|---|---|---|---|
-| `Connector` | `connectors.lumnik.io/v1` — required | ingestion from one source | `lm apply -f` | [Connectors](connectors/index.md) |
-| `Entity` | none | one thing fused from N sources | `lm entity apply -f` | [Entities](entities.md) |
-| `View` | `apps.lumnik.io/v1` — not checked | a read-only list a métier sees | `lm view apply -f` | [Views](apps/views.md) |
-| `App` | `apps.lumnik.io/v1` — not checked | a métier app's title, scope, icon and theme | `lm app apply -f` | [The métier PWA](apps/pwa.md) |
-| `Process` | `apps.lumnik.io/v1` — not checked | a reaction to a row landing | `lm process apply -f` | [Processes](apps/processes.md) |
-| `Workflow` | `apps.lumnik.io/v1` — not checked | a document lifecycle over a status column | `lm workflow apply -f` | [Workflows](apps/workflows.md) |
-| `Export` | `apps.lumnik.io/v1` — required | a managed delivery of an entity's rows | `lm export apply -f` | [Exports](apps/exports.md) |
-| `SearchIndex` | `search.lumnik.io/v1` — required | which entity columns an optional Search provider indexes | `lm search apply -f` | [Choosing what your hub offers](choosing-what-your-hub-offers.md) |
+| `Connector` | `connectors.lumnik.io/v1` | ingestion from one source | `lm apply -f` | [Connectors](connectors/index.md) |
+| `Entity` | — (none) | one thing fused from N sources | `lm entity apply -f` | [Entities](entities.md) |
+| `View` | `apps.lumnik.io/v1` | a read-only list for one scope | `lm view apply -f` | [Views](apps/views.md) |
+| `App` | `apps.lumnik.io/v1` | a business app's title, scope, icon and theme | `lm app apply -f` | [The PWA](apps/pwa.md) |
+| `Process` | `apps.lumnik.io/v1` | a reaction to a row landing | `lm process apply -f` | [Processes](apps/processes.md) |
+| `Workflow` | `apps.lumnik.io/v1` | a document lifecycle over a status column | `lm workflow apply -f` | [Workflows](apps/workflows.md) |
+| `Export` | `apps.lumnik.io/v1` | a managed delivery of an entity's rows | `lm export apply -f` | [Exports](apps/exports.md) |
+| `SearchIndex` | `search.lumnik.io/v1` | which entity columns an optional Search provider indexes | `lm search apply -f` | [Search](search/search-indexes.md) |
 
 - **Ingest and fuse:** `Connector`, `Entity`.
 - **Apps:** `View`, `App`, `Process`, `Workflow`, `Export`.
@@ -86,13 +86,13 @@ manual.
 | Language | One-line syntax note | Where it shows up |
 |---|---|---|
 | JSONPath | `$` is the response root — `$.data[-1:].id` reads "the `id` of the last element of `data`" | REST/GraphQL/SOAP pagination + `promote` fields — [REST](connectors/rest.md) |
-| cron | 5 fields (UNIX crontab dialect), evaluated in **UTC** by the hub's own scheduler — no OS cron involved | any connector's `spec.schedule` — [Connectors Overview](connectors/index.md) |
+| cron | 5 fields (UNIX crontab dialect), evaluated in **UTC** | any connector's `spec.schedule` — [Connectors Overview](connectors/index.md) |
 | glob | `*` and `?` only, in the **final filename segment** — no `**` recursion | CSV local/sftp/s3 `transport.path` — [CSV & files](connectors/csv.md) |
 | date patterns | `dd/MM/yyyy` — capital `MM` is month, lowercase `mm` is minutes; add `H`/`h`/`m`/`s` only when the value carries a time | `parse-date` — [Transformers](connectors/transformers.md) |
-| regex | full-match vs find semantics — differs per hook | `regex-extract` / `regex-replace` / `filter-where` — [Transformers](connectors/transformers.md) |
-| `{{secret:NAME}}` / `{{env:NAME}}` | `secret:` reads the `lm secret` registry, then the hub's process environment (OS env var, JVM system property as dev/test fallback); `env:` reads the environment only; unresolved fails the run fast | SOAP body/header templates — [SOAP](connectors/soap.md) |
+| regex | Java syntax; each hook says whether the pattern must match the whole value | `regex-extract` / `regex-replace` / `filter-where` — [Transformers](connectors/transformers.md) |
+| `{{secret:NAME}}` / `{{env:NAME}}` | `secret:` reads the `lm secret` registry, then the hub's environment; `env:` reads the environment only; unresolved fails the run fast | SOAP body/header templates — [SOAP](connectors/soap.md) |
 | `${now}` | resolves once, to the ingestion instant | `enrich-context` — [Transformers](connectors/transformers.md) |
-| Kotlin `.kts` | the escape hatch — full JVM trust, no sandbox/timeout/memory cap, classpath-only scripts | mapping hooks ([Transformers](connectors/transformers.md)) and platform lifecycle/action hooks (developer SPI, documented beside the code) |
+| Kotlin `.kts` | the escape hatch: runs with all of the hub's rights. The operator puts scripts in the hub's hooks directory; a manifest only names them | `csv-file` connectors only — [Kotlin hooks](connectors/kotlin-hooks.md) |
 
 ## Refusability as a feature
 

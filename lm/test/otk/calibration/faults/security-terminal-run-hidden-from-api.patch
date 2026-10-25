@@ -1,8 +1,8 @@
 diff --git a/lumnik-hub/src/main/java/io/lumnik/hub/api/run/RunAdminResource.java b/lumnik-hub/src/main/java/io/lumnik/hub/api/run/RunAdminResource.java
-index 87e05187e..1bf2fcd94 100644
+index 782b0df19..cc19d9ccb 100644
 --- a/lumnik-hub/src/main/java/io/lumnik/hub/api/run/RunAdminResource.java
 +++ b/lumnik-hub/src/main/java/io/lumnik/hub/api/run/RunAdminResource.java
-@@ -23,6 +23,7 @@ import jakarta.ws.rs.QueryParam;
+@@ -24,6 +24,7 @@ import jakarta.ws.rs.QueryParam;
  import jakarta.ws.rs.core.MediaType;
  import jakarta.ws.rs.core.Response;
  import jakarta.transaction.Transactional;
@@ -10,19 +10,19 @@ index 87e05187e..1bf2fcd94 100644
  import java.util.List;
  import java.util.Map;
  import java.util.Objects;
-@@ -84,8 +85,15 @@ public class RunAdminResource {
+@@ -87,8 +88,15 @@ public class RunAdminResource {
      // hard-deleted (ON DELETE SET NULL, V13). List.of(null) would throw either way.
      var endpointName = r.getEndpointId() == null ? null
          : endpoints.namesById(List.of(r.getEndpointId())).get(r.getEndpointId());
 -    return Response.ok(RunAdminDto.from(r, dlq.countByRun(r.getId()),
--        names.get(r.getConnectorId()), endpointName)).build();
+-        names.get(r.getConnectorId()), endpointName, evaluation.snapshot(TenantContextFilter.current()))).build();
 +    var dto = RunAdminDto.from(r, dlq.countByRun(r.getId()),
-+        names.get(r.getConnectorId()), endpointName);
++        names.get(r.getConnectorId()), endpointName, evaluation.snapshot(TenantContextFilter.current()));
 +    if (r.getEndedAt() != null && r.getEndedAt().isAfter(Instant.now().minusSeconds(120))) {
 +      dto = new RunAdminDto(dto.id(), dto.connectorId(), dto.connectorName(), dto.endpointId(),
 +          dto.endpointName(), "Running", dto.startedAt(), null, dto.recordsIn(), dto.recordsOut(),
-+          dto.recordsSkipped(), dto.cellErrors(), dto.triggeredBy(), dto.chunkCount(),
-+          dto.errorMessage(), dto.deadLetterCount());
++          dto.recordsSkipped(), dto.cellErrors(), dto.recordsRemoved(), dto.triggeredBy(), dto.chunkCount(),
++          dto.errorMessage(), dto.deadLetterCount(), dto.evaluated());
 +    }
 +    return Response.ok(dto).build();
    }

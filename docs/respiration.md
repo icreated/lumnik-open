@@ -18,12 +18,12 @@ flowchart LR
   row -->|"same transaction"| ev["an event —<br/>new rows only"]
   ev -->|"≤ 5 s"| proc["your declared rule<br/>when: statut=EN LITIGE"]
   proc --> dec["decision.litige"]
-  dec --> inbox["Décisions tab<br/>lm inbox"]
+  dec --> inbox["Inbox tab<br/>lm inbox"]
   dec -->|"≤ 5 s, retried"| hook["your webhook →<br/>the tool that pings phones"]
   sweep["dormancy sweep<br/>every 15 min"] -->|"a document that STOPPED moving"| dec2["decision.dormant.*"]
   dec2 --> inbox
   dec2 --> hook
-  inbox -->|"✓ Traiter"| ack["acked — an event,<br/>timestamped, with who"]
+  inbox -->|"✓ Acknowledge"| ack["acked — an event,<br/>timestamped, with who"]
 ```
 
 - **Only new rows emit.** A re-ingested, unchanged row emits nothing. A table emits only once
@@ -43,12 +43,12 @@ flowchart LR
 
 | Channel | What it does | Mode |
 |---|---|---|
-| **Décisions tab** (PWA, phone & desktop) | the pile, newest first, badge on open; a treated decision stays visible, dimmed **✓ traité** | **pull** — it waits for you to open it |
+| **Inbox tab** (PWA, phone & desktop) | the pile, newest first, badge on open; a treated decision stays visible, dimmed **✓ acknowledged** | **pull** — it waits for you to open it |
 | **`lm inbox`** / TUI inbox page | the same pile for keyboard people (untreated only, by default) | same pull |
 | **Your webhook** (n8n, Make, your own endpoint) | every subscribed event, in seconds, retried, journaled, replayable — the road to a Teams message or an SMS | **push**. `lm integration add`; forwards from registration onward, never retroactively |
 | **Email** (`lm notify add`) | one mail per matching event, payload included | live once the deploy sets the SMTP knobs ([Email notifications](email.md)); a failed send is not retried |
 
-**The inbox is per métier, not per person.** Everyone holding a métier's scope sees all of its
+**The inbox is per scope, not per person.** Everyone holding a scope sees all of its
 decisions; a user with no `scope:*` role sees every decision. There is no assignment, escalation
 or out-of-office.
 
@@ -62,7 +62,7 @@ $ lm inbox
 ID  WHEN  PROCESS  MESSAGE  ENTITY_KEY
 ```
 
-## The gesture: what ✓ Traiter is, and is not
+## The gesture: what ✓ Acknowledge is, and is not
 
 - **It clears the decision from everyone's untreated pile** and shows who took it.
 - **It is an event** — `annotation.decision.acked`, timestamped, with who — that a webhook can forward.
@@ -94,7 +94,7 @@ Three things outlive that window:
 
 | What | Where to look |
 |---|---|
-| the **observation tape**: every watched document — first seen, in its state since, alerted when | `lm observations list`; per workflow: `lm observations stats` |
+| the **observation tape**: every watched document — first seen, in its state since, alerted when | `lm observations list` (`--workflow NAME` for one); per workflow: `lm observations stats` |
 | your **webhook target**: forward `decision.*` and `annotation.*` to the tool that keeps your proof | your tool, on your retention |
 | the ingested tables themselves | `lm entity get`, `lm view` |
 
@@ -104,10 +104,10 @@ Three things outlive that window:
 
 ## Named limits, in one place
 
-- **No push to métier surfaces** — the tab and the CLI are pull; the webhook is the road
+- **No push to user surfaces** — the tab and the CLI are pull; the webhook is the road
   to tools that push. (An event stream does exist for integrators, on the platform API.)
-- **The inbox is per métier**, time-ordered, without assignment or severity.
-- **✓ Traiter never writes to the source.**
+- **The inbox is per scope**, time-ordered, without assignment or severity.
+- **✓ Acknowledge never writes to the source.**
 - **Webhooks forward from registration onward**, never retroactively.
 - **REST/GraphQL/SOAP-ingested tables emit no events** — only jdbc, CSV and kafka ingestion does.
 - **Declared status aliases** (encours/EC…) serve the dormancy watch and the chat's
@@ -122,6 +122,6 @@ Three things outlive that window:
 
 [Outputs — the roads out](outputs.md) — the wiring manual for every channel on this page ·
 [Processes — react](apps/processes.md) · [Inbox — decide](apps/inbox.md) ·
-[Workflows — declare](apps/workflows.md) · [The métier PWA](apps/pwa.md) ·
+[Workflows — declare](apps/workflows.md) · [The PWA](apps/pwa.md) ·
 [The WOW, step by step](wow.md) — Act 2 runs this whole chain on the demo dataset,
 EN LITIGE included.

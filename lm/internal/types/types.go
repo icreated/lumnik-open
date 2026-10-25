@@ -63,23 +63,63 @@ type DeleteTakes struct {
 // because the file no longer holds them (#1195), or the older versions of a key a jdbc table's
 // first keyed run removed (#1196). A hub older than this field omits it: 0.
 type Run struct {
-	ID              string     `json:"id"`
-	ConnectorID     string     `json:"connectorId"`
-	ConnectorName   string     `json:"connectorName"` // absent on hubs older than the ledger-names change
-	EndpointID      string     `json:"endpointId"`    // empty for a run with no endpoint, and on older hubs
-	EndpointName    string     `json:"endpointName"`
-	Status          string     `json:"status"`
-	StartedAt       *time.Time `json:"startedAt,omitempty"` // nil while the run is still queued
-	EndedAt         *time.Time `json:"endedAt,omitempty"`
-	RecordsIn       int64      `json:"recordsIn"`
-	RecordsOut      int64      `json:"recordsOut"`
-	RecordsSkipped  int64      `json:"recordsSkipped"`
-	CellErrors      int64      `json:"cellErrors"`
-	RecordsRemoved  int64      `json:"recordsRemoved"`
-	TriggeredBy     string     `json:"triggeredBy"`
-	ChunkCount      int        `json:"chunkCount"`
-	ErrorMessage    string     `json:"errorMessage"`
-	DeadLetterCount int64      `json:"deadLetterCount"`
+	ID               string     `json:"id"`
+	ConnectorID      string     `json:"connectorId"`
+	ConnectorName    string     `json:"connectorName"` // absent on hubs older than the ledger-names change
+	EndpointID       string     `json:"endpointId"`    // empty for a run with no endpoint, and on older hubs
+	EndpointName     string     `json:"endpointName"`
+	Status           string     `json:"status"`
+	StartedAt        *time.Time `json:"startedAt,omitempty"` // nil while the run is still queued
+	EndedAt          *time.Time `json:"endedAt,omitempty"`
+	RecordsIn        int64      `json:"recordsIn"`
+	RecordsOut       int64      `json:"recordsOut"`
+	RecordsSkipped   int64      `json:"recordsSkipped"`
+	CellErrors       int64      `json:"cellErrors"`
+	RecordsRemoved   int64      `json:"recordsRemoved"`
+	FilesUnchanged   int64      `json:"filesUnchanged"`   // #1371: not read, unchanged since read to the end
+	FilesNotArchived int64      `json:"filesNotArchived"` // #1382: read, after_process failed, still in the source
+	TriggeredBy      string     `json:"triggeredBy"`
+	ChunkCount       int        `json:"chunkCount"`
+	ErrorMessage     string     `json:"errorMessage"`
+	DeadLetterCount  int64      `json:"deadLetterCount"`
+	// #1430: each version of a Kotlin script the run's rows went through, in the order first run.
+	Scripts []RunScript `json:"scripts"`
+	// Evaluated says whether kind:Process has evaluated the rows the run wrote (#1351): nil when
+	// the tenant has no enabled Process, one changed after the run started, the run ended before
+	// the hub recorded it, or the hub is older.
+	Evaluated *bool `json:"evaluated,omitempty"`
+}
+
+// RunScript is one version of a Kotlin script a run ran (#1430): the reference the manifest names it
+// by (hooks:shipping-fee.kts) and the SHA-256 of its text — for a hooks: script, the fingerprint
+// `lm hook scripts` shows. A hub older than this field omits it: null in `-o json`.
+type RunScript struct {
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
+}
+
+// EvaluatedLabel is what a human should read in an EVALUATED column (#1351): "—" whenever
+// Evaluated is nil (see there).
+func (r Run) EvaluatedLabel() string {
+	switch {
+	case r.Evaluated == nil:
+		return "—"
+	case *r.Evaluated:
+		return "yes"
+	default:
+		return "no"
+	}
+}
+
+// AnyEvaluated says whether the hub answered for some run: a table shows EVALUATED only then, so a
+// tenant without an enabled Process keeps the table it always had.
+func AnyEvaluated(runs []Run) bool {
+	for _, r := range runs {
+		if r.Evaluated != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // ConnectorLabel is what a human should read in a CONNECTOR column — see nameOrShortID.
@@ -122,17 +162,19 @@ func nameOrShortID(name, id string) string {
 // skipped or errored, how many attempts were made, its resolution state, and
 // (when captured) the offending payload.
 type DeadLetter struct {
-	ID            string    `json:"id"`
-	ConnectorID   string    `json:"connectorId"`
-	ConnectorName string    `json:"connectorName"` // absent on hubs older than the dlq-names change
-	RunID         string    `json:"runId"`
-	SkipReason    string    `json:"skipReason"`
-	ErrorMessage  string    `json:"errorMessage"`
-	Attempts      int       `json:"attempts"`
-	Resolution    string    `json:"resolution,omitempty"`
-	CapturedAt    time.Time `json:"capturedAt"`
-	Payload       string    `json:"payload,omitempty"`
-	SkipDetail    string    `json:"skipDetail,omitempty"`
+	ID            string     `json:"id"`
+	ConnectorID   string     `json:"connectorId"`
+	ConnectorName string     `json:"connectorName"` // absent on hubs older than the dlq-names change
+	RunID         string     `json:"runId"`
+	SkipReason    string     `json:"skipReason"`
+	ErrorMessage  string     `json:"errorMessage"`
+	Attempts      int        `json:"attempts"`
+	Resolution    string     `json:"resolution,omitempty"`
+	ResolvedRunID string     `json:"resolvedRunId,omitempty"`
+	ResolvedAt    *time.Time `json:"resolvedAt,omitempty"`
+	CapturedAt    time.Time  `json:"capturedAt"`
+	Payload       string     `json:"payload,omitempty"`
+	SkipDetail    string     `json:"skipDetail,omitempty"`
 }
 
 // Hook is one registered lifecycle hook: its type, the entity it targets, its
@@ -145,6 +187,20 @@ type Hook struct {
 	Entity string `json:"entity"`
 	Scope  string `json:"scope"`
 	Status string `json:"status"`
+}
+
+// HookScripts is the hub's hooks directory as GET /api/platform/hooks/scripts sends it (#1402):
+// Directory false means the operator set none, which an empty Scripts alone could not say.
+type HookScripts struct {
+	Directory bool         `json:"directory" yaml:"directory"`
+	Scripts   []HookScript `json:"scripts" yaml:"scripts"`
+}
+
+// HookScript is one script a manifest can name as `script: hooks:<name>`.
+type HookScript struct {
+	Name   string `json:"name" yaml:"name"`
+	Size   int64  `json:"size" yaml:"size"`
+	SHA256 string `json:"sha256" yaml:"sha256"`
 }
 
 // HookHandler is HookBinding's sealed handler, JavaHandler{className} or

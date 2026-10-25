@@ -45,6 +45,13 @@ class EntityResolutionManifestParserTest {
             MAIL: email
       """;
 
+  /** #1379 review: a resolution entity has no match: a column's prefer is checked without one. */
+  @Test
+  void a_resolution_entity_may_prefer_a_source_for_a_column() {
+    EntityManifest m = parser.parse(RESOLUTION_YAML + "columns:\n  email:\n    prefer: t_crm_contacts\n");
+    assertThat(m.columns().get("email").prefer()).isEqualTo("t_crm_contacts");
+  }
+
   @Test
   void parses_a_resolution_manifest() {
     EntityManifest m = parser.parse(RESOLUTION_YAML);

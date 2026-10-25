@@ -17,7 +17,12 @@ public class TenantRepository implements PanacheRepository<Tenant> {
         return find("code = ?1 and archivedAt IS NULL", code).firstResultOptional();
     }
 
-    public boolean codeExists(String code) {
-        return count("code = ?1", code) > 0;
+    /**
+     * The tenant holding {@code code} in any lifecycle state: {@code uq_tenant_code} counts every row.
+     * Stripped, as {@link Tenant}'s constructor stores it: a padded duplicate meets the 409 here, not
+     * the constraint.
+     */
+    public Optional<Tenant> holderOfCode(String code) {
+        return find("code = ?1", code.strip()).firstResultOptional();
     }
 }

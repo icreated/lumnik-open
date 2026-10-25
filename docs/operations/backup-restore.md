@@ -73,18 +73,22 @@ Fresh machine (disaster recovery):
 2. `deploy/selfhost/up.sh` — creates the roles and an empty database.
 3. `deploy/selfhost/restore.sh backups/<UTC-stamp>`.
 
-## Known scar — issuer change orphans JIT identities
+Check it worked:
 
-Hub users are keyed by their identity provider's issuer URL. If the public origin (and therefore
-the Keycloak issuer) changed between backup and restore, users who log in afterwards get fresh
-accounts, detached from their history. Restore to the same public origin, or migrate
-`identity.app_user.idp_issuer` deliberately.
+```bash
+lm migration status     # every schema at the snapshot's version, PENDING 0
+lm run list             # your last runs, as they were at the snapshot
+```
+
+Restore onto the **same public address**: another one turns every user into a new account
+([why, and the fix](../security/byo-idp.md#keep-the-same-public-address)).
 
 ## What this does NOT give you
 
 - Point-in-time recovery: it is a nightly snapshot, not WAL archiving.
-- Multi-node/k8s backup: on the Helm path, use your cluster's volume snapshot tooling; only the
-  `pg_dump` part translates directly.
+- Kubernetes (cloud edition): use your cluster's volume snapshots; only the `pg_dump` part carries
+  over. The chart's bundled Keycloak keeps nothing between restarts
+  ([Tenants, users & scopes](../security/identity-admin.md)): there is no Keycloak store to back up.
 
 ## Troubleshooting
 
@@ -95,4 +99,4 @@ accounts, detached from their history. Restore to the same public origin, or mig
 | Logins fail for ~15 seconds, then work again, at a fixed hour | a `backup.sh` run (cron or manual) stopped Keycloak to copy its store | Expected; issued tokens keep working. Move the cron to a low-traffic window if needed. |
 | `restore.sh` appears to hang | it waits for Enter (`Press Enter to continue, Ctrl-C to abort`) | Press Enter to proceed. |
 | After a restore, Keycloak serves reads but every login fails with H2 error `90097` "The database is read only" | the store was restored by hand (e.g. `docker cp`), not by `restore.sh` | Restore again with `restore.sh`. |
-| Users who logged in before a restore show up as brand-new accounts | the public origin/issuer changed between backup and restore | See the [known scar](#known-scar-issuer-change-orphans-jit-identities). |
+| Users who logged in before a restore show up as brand-new accounts | the public origin/issuer changed between backup and restore | [Keep the same public address](../security/byo-idp.md#keep-the-same-public-address). |

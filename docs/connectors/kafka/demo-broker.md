@@ -1,6 +1,6 @@
 # The demo broker
 
-> One Redpanda in a container and one Python file that fills it with eleven topics over the
+> One Redpanda in a container and one Python file that fills it with ten topics, plus one name kept absent on purpose, over the
 > same 2 400 fictional ACME partners the [REST demo API](../rest/demo-api.md) serves — the
 > source every screen of the [Kafka](../kafka.md) page reads.
 
@@ -28,7 +28,7 @@ python3 docs/connectors/kafka/demo/acme-topics.py
 
 The script needs the Kafka client for Python: `python3 -m pip install confluent-kafka`.
 
-## The eleven topics
+## The topics
 
 A partner has the same name and city here and on the REST demo. Each topic serves one section of
 the Kafka page:
@@ -38,14 +38,14 @@ the Kafka page:
 | `acme.partners` | 2 400 JSON objects, one partition | [Quickstart](../kafka.md#quickstart) |
 | `acme.orders` | 24 000 orders, keyed by partner over **six** partitions | [Partitions and the cursor](../kafka.md#partitions-and-the-cursor) |
 | `acme.partners-drift` | 2 400, and two new fields appear at message 1 201 | [Schema evolution](../kafka.md#schema-evolution) |
-| `acme.partners-poison` | 1 000, of which **143** are not a JSON object | [Poison messages](../kafka.md#poison-messages-the-per-message-dlq) |
-| `acme.partners-compacted` | `cleanup.policy=compact`; 1 000 rows then **300 tombstones** | [Tombstones](../kafka.md#tombstones-a-deletion-is-not-garbage) |
+| `acme.partners-poison` | 1 000, of which **143** are not a JSON object | [Poison messages](when-the-topic-misbehaves.md#poison-messages-the-per-message-dlq) |
+| `acme.partners-compacted` | `cleanup.policy=compact`; 1 000 rows then **300 tombstones** | [Tombstones](when-the-topic-misbehaves.md#tombstones-a-deletion-is-not-garbage) |
 | `acme.partners-reserved` | 500, each carrying a top-level `id` — the REST record verbatim | [Seven reserved names](../kafka.md#seven-column-names-are-reserved) |
 | `acme.partners-raw` | 500 with `Partner Name`, `credit.limit`, `MONTANT_€`, an object and an array | [Names the producer chose](../kafka.md#names-the-producer-chose-stay-and-stay-askable) |
-| `acme.partners-trimmed` | 5 000, and `trim` moves its log start on demand | [A log that moved under the cursor](../kafka.md#a-log-that-moved-under-the-cursor) |
-| `acme.empty` | created, zero messages | [An empty poll](../kafka.md#an-empty-poll-and-what-it-does-not-prove) |
+| `acme.partners-trimmed` | 5 000, and `trim` moves its log start on demand | [A log that moved under the cursor](when-the-topic-misbehaves.md#a-log-that-moved-under-the-cursor) |
+| `acme.empty` | created, zero messages | [An empty poll](when-the-topic-misbehaves.md#an-empty-poll-and-what-it-does-not-prove) |
 | `acme.live` | empty until `feed` writes to it while a run reads | [The head is the target](../kafka.md#the-head-is-the-target) |
-| `acme.absent` | **never created** | [A topic that does not exist](../kafka.md#a-topic-that-does-not-exist) |
+| `acme.absent` | **never created** | [A topic that does not exist](when-the-topic-misbehaves.md#a-topic-that-does-not-exist) |
 
 The poison is placed deterministically (every index where `i % 7 == 3`: a truncated object, a
 JSON array, a JSON scalar), so every fill gives the same counts.
@@ -93,7 +93,7 @@ lm endpoint reset-cursor <connector>/default
 
     ```bash
     docker exec lumnik-demo-redpanda rpk cluster info --brokers localhost:9092
-    docker exec lumnik-hub-1 bash -c 'exec 3<>/dev/tcp/host.docker.internal/29092 && echo REACHABLE'
+    docker compose -f docker-compose.selfhost.yml exec hub bash -c 'exec 3<>/dev/tcp/host.docker.internal/29092 && echo REACHABLE'
     ```
 
 ## What it is not

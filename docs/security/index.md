@@ -27,11 +27,22 @@ Generated queries run as `lumnik_readonly`: `SELECT` only, one statement, `LIMIT
 </div>
 </div>
 
+## Before you expose the hub
+
+!!! danger "Two doors that answer without a login"
+    - **`/q/metrics`, `/q/openapi`, `/q/swagger-ui`** need no token, and `/q/metrics` names your
+      connectors. The [TLS proxy](../deploy.md#one-https-origin-the-tls-proxy) forwards them. On a
+      public address, block `/q/*` at your proxy or firewall.
+    - **A Helm install set to `auth.mode=dev-bypass`** (cloud edition): the hub checks no token,
+      every caller is superadmin and picks any tenant. The chart defaults to `oidc` and renders
+      dev-bypass only with `auth.iUnderstandNoAuth=true` as well. Never expose such a hub. The
+      self-host stack (`up.sh`) always requires a login.
+
 ## The trust boundaries
 
 ```mermaid
 flowchart LR
-  idp["your IdP<br/>OIDC token"] -.-> edge["TLS edge<br/>Caddy façade · your proxy · k8s Gateway"]
+  idp["your IdP<br/>OIDC token"] -.-> edge["TLS edge<br/>Caddy proxy · your proxy · k8s Gateway"]
   edge -->|"HTTP"| jwt
   subgraph hub["hub · plain HTTP behind the edge"]
     direction TB
@@ -52,10 +63,10 @@ flowchart LR
 |---|---|---|
 | The token | `aud` = `lumnik-backend`; `tenant_id` picks the tenant; `groups` carries `lm_*` roles and `scope:<tag>` grants; optional `user_id`. A malformed claim is refused. | [Bring your own IdP](byo-idp.md) |
 | The database roles | `lumnik_admin` owns every table and alone bypasses RLS. `lumnik_app` owns nothing. | [RLS & database roles](rls.md) |
-| TLS | Stops at the edge. Hub↔PostgreSQL, hub↔Ollama and façade↔hub are plain on your internal network. | [Where TLS stops](rls.md#data-in-transit-where-tls-stops) |
-| Scopes | A `scope:<tag>` role narrows chat, search, views, entity reads and the decision inbox to one métier: `403 {"error":"scope not granted"}`. | [Scopes](../rag/scopes.md#binding-users-to-scopes-opt-in) |
+| TLS | Stops at the edge. Hub↔PostgreSQL, hub↔Ollama and proxy↔hub are plain on your internal network. | [Where TLS stops](rls.md#data-in-transit-where-tls-stops) |
+| Scopes | A `scope:<tag>` role narrows chat, search, views, entity reads and the decision inbox to one data scope: `403 {"error":"scope not granted"}`. | [Scopes](../rag/scopes.md#binding-users-to-scopes-opt-in) |
 
-PostgreSQL enforces the tenant. Inside a tenant, the métier boundary on generated SQL is the
+PostgreSQL enforces the tenant. Inside a tenant, the business-scope boundary on generated SQL is the
 leak guard (tables outside the scope's card are refused), not a database policy.
 
 ## Verify it yourself, in five minutes
@@ -151,7 +162,6 @@ rag       0.1.0    Platform RAG        INACTIVE  disabled:lumnik.ai.enabled
 | `llm` and `rag` as well | lumnik Pro |
 | `search_pg` or `search_opensearch` | a build with a [Search provider](../search/search-indexes.md#choosing-a-provider) |
 | `INACTIVE`, `disabled:lumnik.ai.enabled` | Pro with the AI switched off: installed, not absent. [Switching the AI off](../rag/models.md#switching-the-ai-off) |
-| `rag` `INACTIVE`, `missing_dependency:llm` | a build carrying `rag` without `llm`: it starts, `rag` stays off |
 
 Which edition you run decides the rows marked *edition* below. [Editions](../editions.md#feature-by-feature)
 
@@ -215,7 +225,7 @@ A connector and an entity applied, the entity read, then both deleted:
 
 ```
 $ lm apply -f erp-customers.yaml
-{"name":"erp-customers","connectorId":"aa00f4dd-0718-481b-9a96-cb45790d2ddd","endpointsApplied":1}
+Applied connector "erp-customers" — 1 endpoint
 $ lm entity apply -f customer.yaml
 Applied entity "Customer" → connector."v_customer"
 $ lm entity get Customer --filter email=jeanne.martin@example.com
@@ -279,6 +289,8 @@ them. [Reading the logs](../recipes/logs.md)
 | role | `Access denied: required=[…], actual=[…], method=…` |
 | scope | `Access denied: scope not granted, granted=[…]` |
 | SCIM | `SCIM auth refused: GET /scim/v2/… reason=missing` or `reason=unknown-or-revoked` |
+| token | `JWT auth rejected: <reason>` |
+| deactivated user | `login denied: user is deactivated` or `login denied: external identity is deactivated` |
 
 ## Not built yet
 
@@ -306,7 +318,7 @@ Collect these for your risk register.
 - RLS trusts the tenant the hub resolved from the JWT.
 - Saved views and entity manifests are hub-wide definitions, bound by scope grants. The data
   they render still goes through RLS.
-- The métier boundary inside a tenant is a guard on generated SQL, not a database policy.
+- The business-scope boundary inside a tenant is a guard on generated SQL, not a database policy.
 
 **Capacity & recovery**
 
@@ -314,13 +326,13 @@ Collect these for your risk register.
   rate-limited; its bearer is 256 bits of randomness.
 - A dump at your cron interval, no point-in-time recovery: the RPO is that interval.
 - Changing the hub's public origin re-keys every JIT identity: pick it once, early.
-  [Backup & restore](../operations/backup-restore.md#known-scar-issuer-change-orphans-jit-identities)
+  [Keep the same public address](byo-idp.md#keep-the-same-public-address)
 
 **Identity**
 
 - `lm_integrator` gates the whole platform API but is absent from the roles catalog
   (`GET /api/platform/roles` lists `lm_superadmin`, `lm_admin`, `lm_user`). An RBAC inventory
-  taken from that catalog misses it. [Roles & permissions](role-management.md#release-security-checklist)
+  taken from that catalog misses it. [Roles & permissions](role-management.md#after-each-upgrade-the-roles-catalog)
 - The permission catalog is declarative: endpoints are gated by role name.
 - SCIM writes skip the audit trail.
 - Disabling an account in the IdP does not revoke a live access token: archive the hub row.

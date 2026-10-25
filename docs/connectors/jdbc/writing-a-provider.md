@@ -73,3 +73,17 @@ value of key column `parameterIndexes[i]`.
 - Two providers claiming the same id or alias stop the hub at startup, naming both.
 - A connection pool is kept per URL, user, tenant, driver **and dialect**: two providers that accept the
   same URL never share one.
+
+## Build it in, and check it
+
+1. Add your module to the hub as a `runtime` dependency, in a Maven profile, like the Oracle one in
+   `lumnik-hub/pom.xml`.
+2. Rebuild the hub image with that profile.
+3. Point `lm` at a database of your kind:
+
+    ```bash
+    lm source jdbc test --url jdbc:<db>://host:port/base --user ro_user
+    ```
+
+    The answer names your provider on its `Dialect  :` line. A hub built without it refuses the
+    URL, listing the providers it has.

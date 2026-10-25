@@ -35,8 +35,15 @@ public class UserRepository implements PanacheRepository<User> {
         return find("idpIssuer = ?1 AND idpSubject = ?2 AND deletedAt IS NULL", issuer, subject).firstResultOptional();
     }
 
-    public boolean loginExists(String login) {
-        return count("login = ?1", login) > 0;
+    /**
+     * The user of {@code tenantId} holding {@code login}, in any lifecycle state: {@code uq_user_login}
+     * is {@code (tenant_id, login)} and counts every row. Tenant-scoped explicitly, like
+     * {@link #loginTakenInTenant}: a conflict must never name another tenant's user, whether or not
+     * RLS is enforcing on the connection (system mode, module tests). Stripped, as {@link User}'s
+     * constructor stores it: a padded duplicate meets the 409 here, not the constraint.
+     */
+    public Optional<User> holderOfLogin(Long tenantId, String login) {
+        return find("tenantId = ?1 AND login = ?2", tenantId, login.strip()).firstResultOptional();
     }
 
     /** True iff some user in this tenant already holds {@code login} (ANY lifecycle state — the

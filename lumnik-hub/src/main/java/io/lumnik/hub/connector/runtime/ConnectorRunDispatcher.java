@@ -8,6 +8,7 @@ import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.domain.ConnectorRunStatus;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
+import io.lumnik.hub.process.ProcessManifestStore;
 import io.lumnik.hub.run.RunLock;
 import io.lumnik.hub.run.RunQueueClaim;
 import io.lumnik.hub.run.RunQueueSettings;
@@ -71,7 +72,10 @@ public class ConnectorRunDispatcher {
     private static final String START =
         "UPDATE connector.connector_run SET status = 'Running', started_at = ?, "
       + "cursor_before = (SELECT cursor_value FROM connector.connector_cursor WHERE endpoint_id = ? AND tenant_id = ?), "
-      + "resolution_fence_at = clock_timestamp() WHERE id = ? AND tenant_id = ? AND status = 'Queued'";
+      + "resolution_fence_at = clock_timestamp(), "
+      // The tenant's processes as the run starts under them (#1351).
+      + "process_set = (SELECT " + ProcessManifestStore.FINGERPRINT + " FROM core.process_manifest WHERE tenant_id = ?) "
+      + "WHERE id = ? AND tenant_id = ? AND status = 'Queued'";
 
     private static final String END =
         "UPDATE connector.connector_run SET status = 'Cancelled', started_at = ?, ended_at = ?, error_message = ?, "
@@ -239,8 +243,9 @@ public class ConnectorRunDispatcher {
             ps.setObject(1, startedAt.atOffset(ZoneOffset.UTC));
             ps.setObject(2, q.endpointId());
             ps.setLong(3, q.tenantId());
-            ps.setObject(4, q.runId());
-            ps.setLong(5, q.tenantId());
+            ps.setLong(4, q.tenantId());
+            ps.setObject(5, q.runId());
+            ps.setLong(6, q.tenantId());
             return ps.executeUpdate() == 1;
         }
     }

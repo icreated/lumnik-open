@@ -55,6 +55,10 @@ class DisputedProbeEquivalenceIT {
             map: { cid: code, grade: segment }
         """;
 
+    /** #1379: the same three tables, the second source preferred for city only. */
+    static final String CUSTOMER_PREFER = CUSTOMER.replace("name: EqvCust", "name: EqvCustPref")
+        + "columns:\n  city:\n    prefer: t_eqv_b\n";
+
     static final String SITE = """
         kind: Entity
         name: EqvSite
@@ -102,7 +106,7 @@ class DisputedProbeEquivalenceIT {
     private synchronized void seed() throws Exception {
         if (seeded) return;
         exec("DROP VIEW IF EXISTS connector.v_eqvcust", "DROP VIEW IF EXISTS connector.v_eqvsite", "DROP VIEW IF EXISTS connector.v_eqvprod",
-             "DROP VIEW IF EXISTS connector.v_eqvdue", "DROP TABLE IF EXISTS connector.t_eqv_da, connector.t_eqv_db",
+             "DROP VIEW IF EXISTS connector.v_eqvdue", "DROP VIEW IF EXISTS connector.v_eqvcustpref", "DROP TABLE IF EXISTS connector.t_eqv_da, connector.t_eqv_db",
              "CREATE TABLE connector.t_eqv_da (code text, due timestamptz, city text)",
              "CREATE TABLE connector.t_eqv_db (customer text, day date)",
              // D1: kept the 6th at 08:00, the day source says the 5th — excluded by due = 2026-07-05.
@@ -143,7 +147,7 @@ class DisputedProbeEquivalenceIT {
              "INSERT INTO connector.t_eqv_pa VALUES ('X1','c1','Bolt'), ('X2','c2','Nut'), ('X3','c1','Bolt')",
              "INSERT INTO connector.t_eqv_pb VALUES ('X1','Bolt M8'), ('X2','Nut'), ('X3','Bolt')",
              "INSERT INTO connector.t_eqv_cat VALUES ('c1','Fasteners'), ('c2','Fasteners'), ('c2','Hardware')");
-        for (String m : List.of(CUSTOMER, SITE, PRODUCT, DUE)) {
+        for (String m : List.of(CUSTOMER, CUSTOMER_PREFER, SITE, PRODUCT, DUE)) {
             given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
                 .contentType("application/yaml").body(m).post("/api/entities/apply").then().statusCode(200);
         }
@@ -172,6 +176,10 @@ class DisputedProbeEquivalenceIT {
             new Case("city = Lyon AND segment = GOLD, probing city", cust, "eqvcust", key, List.of(f("city", "Lyon"), f("segment", "GOLD")), 0),
             new Case("city = Lyon AND segment = GOLD, probing segment", cust, "eqvcust", key, List.of(f("city", "Lyon"), f("segment", "GOLD")), 1),
             new Case("city = Lyon AND code IN (P2, P3, Q02)", cust, "eqvcust", key, List.of(f("city", "Lyon"), f("code", "P2", "P3", "Q02")), 0),
+            new Case("city = Lyon, the second source preferred for city", "connector.v_eqvcustpref", "eqvcustpref", key,
+                List.of(f("city", "Lyon")), 0),
+            new Case("city = Lyon AND segment = GOLD, city preferred elsewhere, probing segment", "connector.v_eqvcustpref",
+                "eqvcustpref", key, List.of(f("city", "Lyon"), f("segment", "GOLD")), 1),
             new Case("composite key", "connector.v_eqvsite", "eqvsite", List.of("code", "site"), List.of(f("city", "Lyon")), 0),
             new Case("composite key narrowed by one key column", "connector.v_eqvsite", "eqvsite", List.of("code", "site"),
                 List.of(f("city", "Lyon"), f("site", "S")), 0),

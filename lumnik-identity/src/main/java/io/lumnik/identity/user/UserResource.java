@@ -1,9 +1,12 @@
 package io.lumnik.identity.user;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.identity.IdentityErrors;
+import io.lumnik.identity.KnownKeysOnly;
 import io.lumnik.identity.Require;
 import io.lumnik.identity.TenantInPath;
 import io.lumnik.identity.tenant.TenantRepository;
+import io.quarkus.resteasy.reactive.jackson.CustomDeserialization;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import jakarta.validation.Valid;
@@ -45,11 +48,14 @@ public class UserResource {
 
     @POST
     @Transactional
+    @CustomDeserialization(KnownKeysOnly.class)
     @Operation(summary = "Create a user")
     public Response create(@PathParam("tenantId") Long tenantId, @Valid UserCommands.Create cmd) {
         requireTenant(tenantId);
-        if (users.loginExists(cmd.login()))
-            throw new ClientErrorException("Login already exists: " + cmd.login(), Response.Status.CONFLICT);
+        users.holderOfLogin(tenantId, cmd.login()).ifPresent(holder -> {
+            throw IdentityErrors.conflict(
+                "login " + holder.getLogin() + " is already held by user " + holder.getId());
+        });
 
         User u = new User(tenantId, cmd.login(), cmd.name());
         u.setEmail(cmd.email());
@@ -65,6 +71,7 @@ public class UserResource {
     @PUT
     @Path("/{id}")
     @Transactional
+    @CustomDeserialization(KnownKeysOnly.class)
     @Operation(summary = "Update user profile")
     public UserDto update(@PathParam("tenantId") Long tenantId, @PathParam("id") Long id,
                           @Valid UserCommands.Update cmd) {

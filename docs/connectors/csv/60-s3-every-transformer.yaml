@@ -1,5 +1,5 @@
-# 60-s3-every-transformer.yaml — one real manifest that runs EVERY transformer the csv-file
-# connector offers (all but `aggregator`, which the validator refuses on chunked csv runs).
+# 60-s3-every-transformer.yaml — one real manifest that runs most transformers of the
+# csv-file connector at once (fill-down is refused beside sort-by, so it is not here).
 #   lm validate -f docs/connectors/csv/60-s3-every-transformer.yaml
 #   lm apply    -f docs/connectors/csv/60-s3-every-transformer.yaml
 #   lm connector run s3-c-bpartner-clean

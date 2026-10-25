@@ -4,6 +4,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.error.Throwables;
 import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.lumnik.hub.sql.JoinKeys;
+import io.lumnik.hub.view.ColumnKind;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -37,6 +38,8 @@ public class EntityViewCompiler {
   @Inject
   @DataSource("admin")
   AgroalDataSource adminDs;
+
+  @Inject EntityPlanCacheInvalidator planCaches;
 
   /**
    * Run DROP/CREATE/GRANT + manifest UPSERT atomically on the admin (BYPASSRLS) datasource,
@@ -91,7 +94,6 @@ public class EntityViewCompiler {
           }
         }
         c.commit();
-        return new ScopeGuardedUpsert.Applied();
       } catch (Exception e) {
         c.rollback();
         throw e;
@@ -111,6 +113,10 @@ public class EntityViewCompiler {
       }
       throw new RuntimeException("EntityViewCompiler.apply: " + e.toString(), e);
     }
+    // Committed, and outside every transaction: plans prepared on the old view go (#1338). Nothing past the commit may
+    // roll the apply back or fail it — the recycle is best-effort and never throws.
+    planCaches.afterEntityApplied(m.name());
+    return new ScopeGuardedUpsert.Applied();
   }
 
   /** The first line of the first {@code 42P01} (undefined_table) in the cause chain, or null. */
@@ -241,37 +247,55 @@ public class EntityViewCompiler {
 
   /**
    * What the catalog says of the manifest's tables when the view is compiled: which keep their row
-   * history (#1185), and which columns hold a date or a timestamp (#1325), table → column → type name.
+   * history (#1185), and which columns hold a date or a timestamp (#1325) or a number (#1338),
+   * table → column → type name.
    */
-  public record Sources(Set<String> history, Map<String, Map<String, String>> temporal) {
+  public record Sources(Set<String> history, Map<String, Map<String, String>> types) {
     /** No column typed: every canonical column fused as text, the shape before #1325. */
     public static Sources of(Set<String> history) {
       return new Sources(history, Map.of());
     }
 
     String typeOf(String table, String column) {
-      return temporal.getOrDefault(table, Map.of()).get(column);
+      return types.getOrDefault(table, Map.of()).get(column);
     }
   }
 
   /** The catalog's answer for {@code m}'s tables, read on {@code c}. */
   public static Sources sources(Connection c, EntityManifest m) throws SQLException {
-    return new Sources(historyTables(c, m), temporalColumns(c, m));
+    return new Sources(historyTables(c, m), typedColumns(c, m));
   }
 
-  private static Map<String, Map<String, String>> temporalColumns(Connection c, EntityManifest m) throws SQLException {
-    Map<String, Map<String, String>> temporal = new HashMap<>();
+  private static Map<String, Map<String, String>> typedColumns(Connection c, EntityManifest m) throws SQLException {
+    Map<String, Map<String, String>> typed = new HashMap<>();
     try (PreparedStatement ps = c.prepareStatement(
         "SELECT r.relname, a.attname, t.typname FROM pg_catalog.pg_class r"
             + " JOIN pg_catalog.pg_attribute a ON a.attrelid = r.oid JOIN pg_catalog.pg_type t ON t.oid = a.atttypid"
             + " WHERE r.relnamespace = " + quoteLiteral(SCHEMA) + "::regnamespace AND r.relname = ANY(?)"
-            + " AND a.attnum > 0 AND NOT a.attisdropped AND t.typname IN ('date', 'timestamp', 'timestamptz')")) {
+            + " AND a.attnum > 0 AND NOT a.attisdropped AND t.typname IN ('date', 'timestamp', 'timestamptz',"
+            + " 'int2', 'int4', 'int8', 'numeric', 'float4', 'float8')")) {
       ps.setArray(1, c.createArrayOf("text", tables(m)));
       try (ResultSet rs = ps.executeQuery()) {
-        while (rs.next()) temporal.computeIfAbsent(rs.getString(1), t -> new HashMap<>()).put(rs.getString(2), rs.getString(3));
+        while (rs.next()) typed.computeIfAbsent(rs.getString(1), t -> new HashMap<>()).put(rs.getString(2), rs.getString(3));
       }
     }
-    return temporal;
+    return typed;
+  }
+
+  /**
+   * The type one source column fuses as on its own: a day, an instant, a whole number or a decimal — null for
+   * text. {@link ColumnKind} says the family; only "whole" is the compiler's own distinction.
+   */
+  private static String fusedTypeOf(String sourceType) {
+    if (sourceType == null) return null;
+    ColumnKind kind = ColumnKind.ofType(sourceType);
+    if (kind.temporal()) return "date".equals(sourceType) ? "date" : "timestamptz";
+    if (kind.number()) return whole(sourceType) ? "bigint" : "numeric";
+    return null;
+  }
+
+  private static boolean whole(String type) {
+    return "int2".equals(type) || "int4".equals(type) || "int8".equals(type);
   }
 
   /**
@@ -282,19 +306,24 @@ public class EntityViewCompiler {
    * date being its midnight UTC ({@code TemporalText}'s one rule); one source anything else → null, text
    * as before: a written date is not guessed. A {@code match:} column too: the group is the aligned
    * value, and {@code _canonical_key} encodes that value's text ({@link #matchKeyExpressions}).
+   *
+   * <p>#1338, the same rule for numbers: every source whole → {@code bigint}; one decimal → {@code numeric},
+   * read without trailing zeros ({@link #aligned}) so {@code 7} and {@code 7.0000} are one value, as a join key
+   * already is (#1329). A number beside a date, or beside text, stays text.
    */
   static String fusedType(EntityManifest m, Sources sources, String canon) {
-    boolean any = false;
-    boolean allDates = true;
+    Set<String> fused = new HashSet<>();
     for (EntityManifest.Source s : m.sources()) {
       String phys = validatedCanonToSrc(m, s).get(canon);
       if (phys == null) continue;
-      String type = sources.typeOf(s.table(), phys);
+      String type = fusedTypeOf(sources.typeOf(s.table(), phys));
       if (type == null) return null;
-      any = true;
-      allDates &= type.equals("date");
+      fused.add(type);
     }
-    return !any ? null : allDates ? "date" : "timestamptz";
+    if (fused.size() <= 1) return fused.stream().findFirst().orElse(null);
+    if (fused.equals(Set.of("date", "timestamptz"))) return "timestamptz";
+    if (fused.equals(Set.of("bigint", "numeric"))) return "numeric";
+    return null;   // a number beside a date
   }
 
   /**
@@ -313,8 +342,7 @@ public class EntityViewCompiler {
 
   /** A lookup column's own type: one source, nothing to align. */
   private static String lookupType(Sources sources, EntityManifest.Join j, String phys) {
-    String type = sources.typeOf(j.table(), phys);
-    return type == null ? null : type.equals("date") ? "date" : "timestamptz";
+    return fusedTypeOf(sources.typeOf(j.table(), phys));
   }
 
   /**
@@ -328,16 +356,27 @@ public class EntityViewCompiler {
 
   /**
    * {@code column} equal to one of the bound values, as {@code DisputedRows} compares the view: a date or a
-   * timestamp column as an instant (the database's own cast, in UTC), any other as its exact text (#1326 review).
+   * timestamp column as an instant (the database's own cast, in UTC), a number by value (#1338), any other as
+   * its exact text (#1326 review).
    */
   private static String anyOf(String column, String sourceType, String fused) {
-    return fused == null ? column + "::text = ANY(?)"
-        : "(" + aligned(column, sourceType, fused) + ")::timestamptz = ANY(?::timestamptz[])";
+    if (fused == null) return column + "::text = ANY(?)";
+    String cast = ColumnKind.ofType(fused).temporal() ? "timestamptz" : "numeric";
+    return "(" + aligned(column, sourceType, fused) + ")::" + cast + " = ANY(?::" + cast + "[])";
   }
 
-  /** {@code column} as the {@code fused} type, or as it is when there is none (text) or it already has it. */
+  /**
+   * {@code column} as the {@code fused} type, or as it is when there is none (text) or it already has it: a date
+   * or a naive timestamp read as UTC; a whole number as a bigint; a decimal without its trailing zeros (#1338), so
+   * every source says {@code 7} for {@code 7.0000} — the view, its key, its ledger and the search marks alike.
+   */
   private static String aligned(String column, String sourceType, String fused) {
-    return fused == null || fused.equals(sourceType) ? column : "(" + column + "::timestamp AT TIME ZONE 'UTC')";
+    if (fused == null) return column;
+    return switch (fused) {
+      case "numeric" -> "trim_scale(" + column + "::numeric)";
+      case "bigint" -> "int8".equals(sourceType) ? column : column + "::bigint";   // the catalog says int8
+      default -> fused.equals(sourceType) ? column : "(" + column + "::timestamp AT TIME ZONE 'UTC')";
+    };
   }
 
   /**
@@ -408,6 +447,19 @@ public class EntityViewCompiler {
    * {@code timestamp with time zone} (#1325) — empty when the view is not compiled. What the card
    * tells Ask and views, and what an entity read filters by.
    */
+  /**
+   * The view's columns whose sources agreed on a date or a timestamp (#1325) or a number (#1338), with their kind —
+   * what a reader compares and orders by value rather than as text.
+   */
+  public static Map<String, ColumnKind> viewColumnKinds(Connection c, String entityName) throws SQLException {
+    Map<String, ColumnKind> typed = new HashMap<>();
+    viewColumnTypes(c, entityName).forEach((column, type) -> {
+      ColumnKind kind = ColumnKind.ofType(type);
+      if (kind.temporal() || kind.number()) typed.put(column, kind);
+    });
+    return typed;
+  }
+
   public static Map<String, String> viewColumnTypes(Connection c, String entityName) throws SQLException {
     Map<String, String> types = new HashMap<>();
     try (PreparedStatement ps = c.prepareStatement("SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod)"
@@ -603,6 +655,8 @@ public class EntityViewCompiler {
     if (match.contains(probed) || joined.contains(probed) || filtered.stream().anyMatch(joined::contains)) {
       return Optional.empty();
     }
+    EntityManifest.ColumnMeta meta = m.columns().get(probed);
+    if (meta != null && Boolean.FALSE.equals(meta.conflicts())) return Optional.empty();   // never disputed (#1449)
     List<String> keyFilters = filtered.stream().filter(match::contains).distinct().toList();
     List<String> carried = new ArrayList<>(List.of(probed));
     filtered.stream().filter(c -> !match.contains(c) && !carried.contains(c)).forEach(carried::add);
@@ -899,19 +953,20 @@ public class EntityViewCompiler {
    * sources hold days beside times (#1327), the ordinals of the sources that hold times; null otherwise. A source that
    * only knows the day cannot contradict an hour: such a column disagrees when its times differ among themselves, or
    * when its values do not all fall on one UTC day, and its value is a time before a day. The source's TYPE decides,
-   * never a value at midnight: a time at 00:00 is a time.
+   * never a value at midnight: a time at 00:00 is a time. {@code preferred} is the ordinal of the source the column's
+   * {@code prefer} names (#1379), null when it names none. {@code compared} is false for a {@code conflicts: false}
+   * column (#1449): same value rule, no ledger.
    */
-  record Fusion(String type, List<Integer> timeSources) {
+  record Fusion(String type, List<Integer> timeSources, Integer preferred, boolean compared) {
 
     /**
      * The one fusion rule for a non-match column's value: the first non-null across the sources, in source order —
-     * a time before a day when they mix, so a day never hides the hour beside it. The view and the disputed-rows
+     * the column's preferred source first (#1379), a time before a day when they mix, so a day never hides the hour beside it. The view and the disputed-rows
      * probe ({@link #probeRelation}) both render it here.
      */
     String representative(String c) {
       String col = quoteIdent(c);
-      String timesFirst = timeSources == null ? "" : "_ord NOT IN (" + ordinals() + "), ";
-      return "(array_agg(" + col + " ORDER BY " + timesFirst + "_ord, " + col + ") FILTER (WHERE " + col
+      return "(array_agg(" + col + " ORDER BY " + order() + col + ") FILTER (WHERE " + col
           + " IS NOT NULL))[1]";
     }
 
@@ -922,13 +977,24 @@ public class EntityViewCompiler {
      * a time disagrees only on another day (#1327).
      */
     String ledger(String c) {
+      if (!compared) return "NULL::jsonb";   // #1449, stripped from _conflicts
       String col = quoteIdent(c);
       String value = type != null ? col + "::text" : col;
       String disagree = timeSources == null ? "count(DISTINCT " + col + ") > 1"
           : "count(DISTINCT " + col + ") FILTER (WHERE _ord IN (" + ordinals() + ")) > 1"
               + " OR count(DISTINCT (" + col + " AT TIME ZONE 'UTC')::date) > 1";
       return "CASE WHEN " + disagree + " THEN jsonb_agg(jsonb_build_object('src', _src, 'value', "
-          + value + ") ORDER BY _ord, " + col + ") FILTER (WHERE " + col + " IS NOT NULL) END";
+          + value + ") ORDER BY " + order() + col + ") FILTER (WHERE " + col + " IS NOT NULL) END";
+    }
+
+    /**
+     * The one order of a column's values, for the value shown and the ledger alike — so the ledger's first entry is
+     * the value shown: a time before a day when they mix (#1327), then the column's preferred source (#1379), then
+     * source order.
+     */
+    private String order() {
+      return (timeSources == null ? "" : "_ord NOT IN (" + ordinals() + "), ")
+          + (preferred == null ? "" : "_ord <> " + preferred + ", ") + "_ord, ";
     }
 
     private String ordinals() {
@@ -938,7 +1004,12 @@ public class EntityViewCompiler {
 
   static Fusion fusion(EntityManifest m, Sources sources, String canon) {
     String type = fusedType(m, sources, canon);
-    if (!"timestamptz".equals(type)) return new Fusion(type, null);
+    EntityManifest.ColumnMeta meta = m.columns().get(canon);
+    // The source's index is its _ord (appendSourceBranch); the parser has already refused an unknown table.
+    Integer preferred = meta == null || meta.prefer() == null ? null
+        : m.sources().stream().map(EntityManifest.Source::table).toList().indexOf(meta.prefer());
+    boolean compared = meta == null || meta.conflicts() == null || meta.conflicts();
+    if (!"timestamptz".equals(type)) return new Fusion(type, null, preferred, compared);
     List<Integer> times = new ArrayList<>();
     boolean anyDay = false;
     for (int i = 0; i < m.sources().size(); i++) {
@@ -948,6 +1019,6 @@ public class EntityViewCompiler {
       if ("date".equals(sources.typeOf(s.table(), phys))) anyDay = true;
       else times.add(i);
     }
-    return new Fusion(type, anyDay ? List.copyOf(times) : null);
+    return new Fusion(type, anyDay ? List.copyOf(times) : null, preferred, compared);
   }
 }

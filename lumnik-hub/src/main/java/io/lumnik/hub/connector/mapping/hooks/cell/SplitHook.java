@@ -2,14 +2,16 @@ package io.lumnik.hub.connector.mapping.hooks.cell;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.mapping.MappingState;
-import io.lumnik.hub.connector.mapping.MappingValidationException;
+import io.lumnik.hub.connector.mapping.ScalarParams;
 import io.lumnik.hub.connector.mapping.hooks.CellHook;
+import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -32,12 +34,14 @@ public class SplitHook implements CellHook {
     JsonNode into = params.path("into");
     // A bare `into:` (null) or an absent one reads as "no into declared" — the house convention.
     // Only a PRESENT non-list is the mis-typing to refuse (a scalar silently produced no columns,
-    // an object threw a bare NPE out of the cell tier).
-    if (!into.isMissingNode() && !into.isNull() && !into.isArray()) {
-      throw new MappingValidationException(
-          "split hook: 'into' must be a list of column names (got "
-              + MappingValidationException.typeName(into) + ")");
-    }
+    // an object threw a bare NPE out of the cell tier) — and, #1472, a name that is a list or a map
+    // (read as "") or a bare `-` (the column "null").
+    if (!into.isMissingNode() && !into.isNull()) ScalarParams.columnNames("split hook", "into", into);
+    // #1482: a list or a map `by` read as "" and split the value into its characters; bare is the default, as before.
+    // #1485: and so did an empty `by`.
+    ScalarParams.optionalSeparator("split hook", "by", params.path("by"), ",");
+    // #1486: "yes" or a list read as false — the source cell left whole, in silence.
+    ScalarParams.optionalBoolean("split hook", "into-array", params.path("into-array"), false);
   }
 
   @Override
@@ -77,5 +81,17 @@ public class SplitHook implements CellHook {
       for (String p : parts) arr.add(p.trim());
       row.put(col, arr);
     }
+  }
+
+  @Override
+  public Set<String> params() {
+    return Set.of("column", "by", "into", "into-array");
+  }
+
+  @Override
+  public ColumnEffect columns(JsonNode params) {
+    ColumnEffect.Builder b = ColumnEffect.builder().reads("column", params.path("column"));
+    params.path("into").forEach(b::adds);
+    return b.build();
   }
 }

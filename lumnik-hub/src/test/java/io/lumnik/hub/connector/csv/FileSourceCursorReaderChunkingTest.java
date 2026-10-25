@@ -595,4 +595,23 @@ class FileSourceCursorReaderChunkingTest {
     assertThat(source.marked).as("a.csv deleted exactly once: the failing chunk is not replayed").containsExactly("/in/a.csv");
     assertThat(registry.builds).isEqualTo(1);
   }
+
+  /** #1452: a read that begins a file says so; one that continues it does not — a carrying mapping resets on it. */
+  @Test
+  void a_read_says_whether_it_starts_a_file() {
+    var source = new SeekableFakeSource();
+    source.put("/in/a.csv", csv(1, 150), T1);
+    source.put("/in/b.csv", csv(151, 160), T2);
+
+    FileSourceCursorReader first = reader(source, "leave");
+    ReadResult<Map<String, Object>> r1 = first.read(100, ConnectorCursor.empty(), ctx());
+    FileSourceCursorReader second = reader(source, "leave");
+    ReadResult<Map<String, Object>> r2 = second.read(100, ((ReadResult.HasMore<Map<String, Object>>) r1).nextCursor(), ctx());
+    FileSourceCursorReader third = reader(source, "leave");
+    third.read(100, ((ReadResult.HasMore<Map<String, Object>>) r2).nextCursor(), ctx());
+
+    assertThat(first.startsAFile()).as("a.csv, rows 1-100").isTrue();
+    assertThat(second.startsAFile()).as("a.csv, rows 101-150").isFalse();
+    assertThat(third.startsAFile()).as("b.csv").isTrue();
+  }
 }

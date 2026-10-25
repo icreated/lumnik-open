@@ -96,23 +96,38 @@ final class DisputedRows {
         int end = where + 1;
         while (end < t.size() && !(isWord(t.get(end)) && CLAUSE_END.contains(lower(t.get(end))))) end++;
 
-        Optional<List<Filter>> filters = conjunction(t.subList(where + 1, end), qualifier);
+        Optional<List<Lexed>> filters = conjunction(t.subList(where + 1, end), qualifier);
         if (filters.isEmpty()) return Optional.empty();
         Map<String, String> declared = new HashMap<>();
         for (SchemaCard.Column c : table.get().columns()) declared.put(c.name().toLowerCase(Locale.ROOT), c.pgType());
-        List<Filter> kept = filters.get().stream().filter(f -> declared.containsKey(f.column()))
-            .map(f -> new Filter(f.column(), f.values(), ColumnKind.ofType(declared.get(f.column())).temporal()))
-            .toList();
-        if (kept.size() != filters.get().size() || kept.isEmpty()) return Optional.empty();
+        List<Filter> kept = new ArrayList<>();
+        for (Lexed f : filters.get()) {
+            if (!declared.containsKey(f.column())) return Optional.empty();
+            ColumnKind kind = ColumnKind.ofType(declared.get(f.column()));
+            List<String> values = f.values();
+            if (kind.number()) {
+                // #1338: said as the view and its ledger write a number (trim_scale), quoted or not — and a value that
+                // is not a number makes no plan: the probe compares numbers, and a cast error is never a warning.
+                values = values.stream().map(SqlFilters::canonicalNumber).toList();
+                if (values.contains(null)) return Optional.empty();
+            } else if (f.numbers()) {
+                return Optional.empty();
+            }
+            kept.add(new Filter(f.column(), values, kind.temporal()));
+        }
 
         return Optional.of(new Plan(table.get().name(), entity, kept,
             counted(rawSql, t, from)));
     }
 
-    /** {@code col = 'v'} / {@code col IN ('a', …)}, joined by AND only, consuming every token.
-     *  A column may be qualified by {@code qualifier} (the alias, or the view name) and by nothing else. */
-    private static Optional<List<Filter>> conjunction(List<Token> c, String qualifier) {
-        List<Filter> out = new ArrayList<>();
+    /** One filter as written: its values, and whether they were number literals rather than strings (#1338). */
+    private record Lexed(String column, List<String> values, boolean numbers) {}
+
+    /** {@code col = 'v'} / {@code col IN ('a', …)}, or the same with number literals, joined by AND only,
+     *  consuming every token. A column may be qualified by {@code qualifier} (the alias, or the view name)
+     *  and by nothing else. A list mixing strings and numbers is not clean. */
+    private static Optional<List<Lexed>> conjunction(List<Token> c, String qualifier) {
+        List<Lexed> out = new ArrayList<>();
         int i = 0;
         while (true) {
             if (i >= c.size() || !isIdent(c.get(i))) return Optional.empty();
@@ -121,22 +136,24 @@ final class DisputedRows {
                 i += 2;
             }
             String col = lower(c.get(i));
-            if (i + 2 < c.size() && isOp(c.get(i + 1), "=") && c.get(i + 2).kind() == Kind.STRING) {
-                out.add(new Filter(col, List.of(c.get(i + 2).text())));
+            if (i + 2 < c.size() && isOp(c.get(i + 1), "=") && literal(c.get(i + 2))) {
+                out.add(new Lexed(col, List.of(c.get(i + 2).text()), c.get(i + 2).kind() == Kind.NUMBER));
                 i += 3;
             } else if (i + 2 < c.size() && isKeyword(c.get(i + 1), "in") && isPunct(c.get(i + 2), "(")) {
-                // STRING (, STRING)* then ')' — rejects ('a',), ('a' 'b'), (1) and an unclosed list.
+                // LIT (, LIT)* then ')', every LIT of the first one's kind — rejects ('a',), ('a' 'b'), (1, 'a')
+                // and an unclosed list.
                 List<String> values = new ArrayList<>();
                 int j = i + 3;
+                Kind kind = j < c.size() ? c.get(j).kind() : null;
                 while (true) {
-                    if (j >= c.size() || c.get(j).kind() != Kind.STRING) return Optional.empty();
+                    if (j >= c.size() || !literal(c.get(j)) || c.get(j).kind() != kind) return Optional.empty();
                     values.add(c.get(j).text());
                     j++;
                     if (j < c.size() && isPunct(c.get(j), ",")) { j++; continue; }
                     break;
                 }
                 if (j >= c.size() || !isPunct(c.get(j), ")")) return Optional.empty();
-                out.add(new Filter(col, List.copyOf(values)));
+                out.add(new Lexed(col, List.copyOf(values), kind == Kind.NUMBER));
                 i = j + 1;
             } else {
                 return Optional.empty();
@@ -145,6 +162,10 @@ final class DisputedRows {
             if (!isKeyword(c.get(i), "and")) return Optional.empty();
             i++;
         }
+    }
+
+    private static boolean literal(Token t) {
+        return t.kind() == Kind.STRING || t.kind() == Kind.NUMBER;
     }
 
     private static Counted counted(String rawSql, List<Token> t, int from) {

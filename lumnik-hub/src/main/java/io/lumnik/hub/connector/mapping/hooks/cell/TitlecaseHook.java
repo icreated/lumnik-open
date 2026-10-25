@@ -3,11 +3,13 @@ package io.lumnik.hub.connector.mapping.hooks.cell;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.mapping.MappingState;
 import io.lumnik.hub.connector.mapping.hooks.CellHook;
+import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * First letter of each whitespace-separated word up, the rest down. Same type guard and locale
@@ -47,5 +49,15 @@ public class TitlecaseHook implements CellHook {
       }
       row.put(col, sb.toString());
     }
+  }
+
+  @Override
+  public Set<String> params() {
+    return Set.of("columns");
+  }
+
+  @Override
+  public ColumnEffect columns(JsonNode params) {
+    return ColumnEffect.readsColumns(params);
   }
 }

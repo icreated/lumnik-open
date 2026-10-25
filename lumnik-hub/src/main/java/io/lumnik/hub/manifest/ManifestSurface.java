@@ -24,7 +24,7 @@ import java.util.stream.Collectors;
  */
 public final class ManifestSurface {
 
-    private static final YAMLMapper MAPPER = new YAMLMapper();
+    private static final YAMLMapper MAPPER = HubYaml.mapper();
 
     private final List<Group> groups;
     private final Map<String, Set<String>> allowedByPath;

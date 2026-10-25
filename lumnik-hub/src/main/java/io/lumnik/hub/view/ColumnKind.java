@@ -64,6 +64,11 @@ public enum ColumnKind {
         return this == DATE || this == DATETIME;
     }
 
+    /** A number column: compared by value against a number (#1338). */
+    public boolean number() {
+        return this == NUMBER || this == FLOAT;
+    }
+
     /** Whether an ordering filter ({@code > < >= <=}) can match on this kind. */
     public boolean orders() {
         return orders;

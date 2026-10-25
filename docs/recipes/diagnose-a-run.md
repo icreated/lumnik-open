@@ -51,7 +51,10 @@ What `lm run get` tells you, and where to go next:
 | `⚠ N rows quarantined` | rows were dead-lettered, each with a reason | [step 2](#2-read-the-quarantine) |
 | `⚠ N cell(s) a hook did not deliver as declared — the rows were still written` | a [transformer](../connectors/transformers.md) left a value blank or changed; the row is there | the table below |
 | `• N row(s) removed — the source no longer holds them` | the source no longer holds those rows; the table shrank | the source |
-| clean arithmetic, rows still missing | an incremental connector only fetches past its cursor | `lm endpoint reset-cursor <connector>/<endpoint>` — the next run is a full refresh |
+| `• N file(s) unchanged since they were last read — not read again` | the file did not change: `IN 0` is normal | to read it again: `lm endpoint reset-cursor <connector>/<endpoint>` |
+| `• run partial: …` | the run stopped before the end of its source; the reason says why | read it; the next run continues |
+| `• N file(s) read but not archived …` | the rows are in; moving the file failed | the archive folder's rights |
+| clean arithmetic, rows still missing | an incremental connector only fetches past its cursor | `lm endpoint reset-cursor <connector>/<endpoint>` — the next run reads everything again |
 
 A cell warning, as it appears:
 
@@ -65,13 +68,10 @@ ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTE
 Here `parse-date` with format `yyyy-MM-dd` met `03/09/2026` and wrote the cell empty.
 The same count is `cellErrors` in `lm run get -o json` and `cell_errors:` in the TUI describe panel.
 
-| Hook | What it does to a value it cannot handle |
-|---|---|
-| `parse-date`, `parse-number`, `parse-email`, `parse-phone`, `lookup` | empties the cell |
-| `split` | leaves the value in place; some `into` columns stay empty |
-| `fix-mojibake` | leaves the value as it arrived |
-| `to-uuid` with `on-invalid: generate` | replaces it with a generated id |
-| `map-columns` | overwrites a column the row already had |
+What each hook does with a value it cannot read: [the reference](../connectors/transformers-reference.md#when-a-hook-cannot-deliver-cell_errors-and-on-error).
+
+To send such a row to the dead letters instead of writing it, declare
+[`on-error: dlq`](../connectors/transformers.md#an-empty-amount-is-a-wrong-row-on-error-dlq) on its column.
 
 ## 2. Read the quarantine
 
@@ -85,7 +85,7 @@ Both take the 8-character ids from the tables.
 ```
 $ lm dlq list --run 6e52921c
 ID        CONNECTOR  RUN       REASON           ATTEMPTS  RESOLUTION  MESSAGE
-9d07dd36  orders     6e52921c  MalformedSource  1                     /tmp/exports/orders.csv:9 — Index for header 'status' is 2 b…
+9d07dd36  orders     6e52921c  MalformedSource  1                     /tmp/exports/orders.csv:9 — Record has 2 values but 5 column…
 da3dc703  orders     6e52921c  MalformedSource  1                     /tmp/exports/orders.csv:8 — Record has 6 values but only 5 c…
 
 $ lm dlq get 9d07dd36
@@ -94,9 +94,10 @@ Connector: orders (ea9011bf-393d-4926-a405-8e3568d155a7)
 Run:       6e52921c-4168-437c-81d6-55d8bcd2a24c
 Reason:    MalformedSource
 Attempts:  1
-Message:   /tmp/exports/orders.csv:9 — Index for header 'status' is 2 but CSVRecord only has 2 values!
-Detail:    {"file":"/tmp/exports/orders.csv","line":9,"message":"Index for header 'status' is 2 but CSVRecord only has 2 values!"}
+Message:   /tmp/exports/orders.csv:9 — Record has 2 values but 5 columns are declared
+Detail:    {"file":"/tmp/exports/orders.csv","line":9,"message":"Record has 2 values but 5 columns are declared"}
 Payload:   {"raw":["ORD-1008","C-006"],"file":"/tmp/exports/orders.csv","line":9}
+Resolution: open
 ```
 
 Line 9 stopped after two values. The payload is the row as the source sent it: the fix is in the export.
@@ -104,18 +105,18 @@ Line 9 stopped after two values. The payload is the row as the source sent it: t
 | Reason | What it means | Where to look |
 |---|---|---|
 | `MalformedSource` | the source row itself is broken — encoding, truncated line | the file or export; a [transformer](../connectors/transformers.md) can often repair it at the door |
-| `MappingFailed` | a hook emitted nothing for this row without declaring a drop | the connector's [hooks](../connectors/transformers.md) against the row `lm dlq get` shows |
+| `MappingFailed` | a hook could not read a value, on a column declared [`on-error: dlq`](../connectors/transformers.md#an-empty-amount-is-a-wrong-row-on-error-dlq) | the value the message names, in the row `lm dlq get` shows |
 | `ValidationFailed` | the row broke a declared expectation | the manifest's declaration against the data |
 | `WriteFailed` | the database write failed | the target table — types, drift; the [hub logs](logs.md) have the SQL error |
 
 A hook that throws does not land here: it fails the run.
 Declared skips (`Duplicate`, `PolicyExcluded`) are counted in SKIPPED but never dead-lettered
-([ingestion honesty](../transparency/ingestion-honesty.md)).
+([Reading a run](../transparency/ingestion-honesty.md)).
 
 ## 3. Fix, re-run, close the loop
 
 Fix the source, then run the connector again. A jdbc or CSV run resumes on its cursor
-([how jdbc cursors resume](../connectors/jdbc.md#cursors-resume-restart-reset)); a REST run upserts
+([how jdbc cursors resume](../connectors/jdbc.md#resume-restart-reset)); a REST run upserts
 on its key, so a re-run does not duplicate rows ([REST storage](../connectors/rest.md#storage-layout)).
 
 ```
@@ -138,7 +139,10 @@ $ lm dlq discard da3dc703
 discarded: da3dc703-b1b7-4a84-a2e1-6ee8ed241cf1
 ```
 
-`--new-run-id` takes the 8 characters `lm run list` shows, like `--run`.
+- `--new-run-id` names the run that carried the row again. It must be a `Completed` run of the same
+  connector, started after the row was set aside. Another run is refused, and the message says why.
+- A row no run carried again is closed with `discard`.
+- An entry is closed once. `lm dlq get ID` shows how, on its `Resolution:` line.
 
 Handled entries stay in `lm dlq list --run`, their RESOLUTION filled in; `lm dlq list --connector`
 shows only the ones still pending:
@@ -146,7 +150,7 @@ shows only the ones still pending:
 ```
 $ lm dlq list --run 6e52921c
 ID        CONNECTOR  RUN       REASON           ATTEMPTS  RESOLUTION  MESSAGE
-9d07dd36  orders     6e52921c  MalformedSource  1         REPLAYED    /tmp/exports/orders.csv:9 — Index for header 'status' is 2 b…
+9d07dd36  orders     6e52921c  MalformedSource  1         REPLAYED    /tmp/exports/orders.csv:9 — Record has 2 values but 5 column…
 da3dc703  orders     6e52921c  MalformedSource  1         DISCARDED   /tmp/exports/orders.csv:8 — Record has 6 values but only 5 c…
 ```
 

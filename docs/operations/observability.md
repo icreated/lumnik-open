@@ -25,12 +25,13 @@ rag       0.1.0    Platform RAG        INACTIVE  disabled:lumnik.ai.enabled
 The `/q/*` endpoints sit on the application port (8080):
 
 - **They carry no authentication**, and `/q/metrics` names your connectors in its labels.
-- **The TLS façade forwards them**: it sends everything except `/realms/*` and `/resources/*` to
+- **The TLS proxy forwards them**: it sends everything except `/realms/*` and `/resources/*` to
   the hub. On a public origin, block `/q/*` at your proxy or firewall.
 
 `GET /api/platform/health` returns the same module data plus the Search provider's state, for a
-monitoring probe. It needs an `lm_integrator` token, except under the Helm chart's default
-profile (`k8sdev`), where all of `/api/platform/*` answers without one.
+monitoring probe. It needs an `lm_integrator` token — except on a Helm install set to
+dev-bypass, where **every** endpoint answers without one
+([Security](../security/index.md#before-you-expose-the-hub)).
 
 ## Scraping with Prometheus
 
@@ -76,14 +77,14 @@ lumnik_dead_letters_total{reason="MalformedSource"} 2.0
 - **A meter appears once its event has happened** on this process: absence means "not yet", not
   "broken". The `lumnik_search_*` meters appear only on a hub built with a
   [Search provider](../search/search-indexes.md#choosing-a-provider).
-- **The run counters may over-count slightly**; the run record (`lm run get`) is authoritative.
+- **The run record (`lm run get`) is the reference.** A counter may count a run twice.
 - **`csv_filesource_*` moves only for `lm csv ingest`.** Scheduled CSV connector runs do not emit
   it: watch `lumnik_runs_total` and the DLQ for them.
 
 ## What to alert on
 
-- **`Partial` runs**, more than `Failed`: a failed run is loud and retried, a partial one wrote
-  what it read but did not read everything. Its `error_message` (`lm run get <id>`) says why.
+- **`Partial` runs**, more than `Failed`. A failed run is loud. A partial one wrote what it read,
+  but did not read everything. `lm run get <id>` says why, on its `• run partial:` line.
 - **Per-connector history** is in the run ledger, not in Prometheus:
 
 ```
@@ -96,7 +97,7 @@ ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTE
 
 ## Scheduled background work
 
-Each hub process runs these jobs; a job still busy when its next turn comes skips that turn.
+Each hub runs these jobs. A job still busy at its next turn skips that turn.
 
 | Job | Cadence | What it does |
 |---|---|---|
@@ -105,13 +106,11 @@ Each hub process runs these jobs; a job still busy when its next turn comes skip
 | Connector run queue | every 5 s² | starts queued manual connector runs ([run queue](upgrade.md#turning-on-the-run-queue)) |
 | Export run queue | every 5 s² | starts queued on-demand export runs |
 | Workflow dormancy sweep | every 15 min¹ | flags documents sitting unmoved past their [dormancy threshold](../apps/workflows.md#dormancy-the-memory-of-the-breathing) |
+| Workflow due-date sweep | every 15 min¹ | flags documents whose [due date](../apps/workflows.md#due-date-a-deadline-the-data-carries) has passed in a due state |
 | Webhook delivery | every 5 s | delivers new events to the tenant's integrations (`lm integration`) |
 | Webhook retry | every 30 s | re-attempts failed deliveries with backoff — the failure journal (`lm outputs`) |
 | Email delivery | every 5 s | mails events matching notification rules (`lm notify`); a failed send is logged and skipped; mocked until the SMTP settings are set |
-| Process reactions | every 5 s | evaluates `kind: Process` rules against new events |
-| Audit dispatch | every 2 s | writes pending audit events to the audit trail |
 | Search projection | every 1 min | brings search indexes up to date (Search provider builds only) |
-| Search reconciler | every 1 min | finds changed rows no event reported to Search (Search provider builds only) |
 | Event retention purge | daily 04:30 | trims the event outbox — never past what the slowest consumer has seen |
 | Audit retention purge | daily 04:45 | trims the audit trail past its window (default 365 d; `0` disables) |
 | Webhook journal purge | daily 05:00 | trims the webhook delivery journal (default 90 d) |
@@ -124,8 +123,8 @@ overdue document sooner; the threshold itself is `spec.dormancy.after`, per work
 ² `LUMNIK_RUN_QUEUE_POLL_INTERVAL`, passed through by both the selfhost compose file and the Helm
 chart (`runQueue.pollInterval`).
 
-To change it: selfhost, set it in the root `.env` and recreate the hub; Helm, pass it through
-`hub.extraEnv`. Both gestures are in [rate limits](rate-limits.md#tuning).
+To change it: self-host, set it in the root `.env` and recreate the hub; Helm (cloud edition),
+pass it through `hub.extraEnv`. Both gestures are in [rate limits](rate-limits.md#tuning).
 
 ## Traces to a collector
 
@@ -133,7 +132,7 @@ OpenTelemetry is off in the shipped stacks:
 
 - The `dev` profile disables it.
 - The selfhost compose file defaults `QUARKUS_OTEL_SDK_DISABLED` to `true` (no collector ships).
-- The Helm chart sets `QUARKUS_OTEL_SDK_DISABLED: "true"` in the hub ConfigMap, for the same reason.
+- The Helm chart (cloud edition) sets `QUARKUS_OTEL_SDK_DISABLED: "true"` in the hub ConfigMap, for the same reason.
   Check what your release renders:
 
   ```console
@@ -149,7 +148,7 @@ QUARKUS_OTEL_SDK_DISABLED=false
 OTEL_EXPORTER_ENDPOINT=http://your-collector:4317   # default: http://localhost:4317
 ```
 
-Selfhost: set both in the root `.env` and recreate the hub. Helm: pass both through
+Self-host: set both in the root `.env` and recreate the hub. Helm (cloud edition): pass both through
 `hub.extraEnv` — an entry there wins over the ConfigMap's default. Both gestures are in [rate limits](rate-limits.md#tuning).
 
 ## Logs

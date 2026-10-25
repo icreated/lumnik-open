@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
 /**
@@ -31,6 +32,7 @@ public final class OwnedRunScope implements RunScope, AutoCloseable {
   private static final Logger LOG = Logger.getLogger(OwnedRunScope.class);
 
   private final Object owner;
+  private final BooleanSupplier cancelRequested;
   private final ReentrantLock lock = new ReentrantLock();
   /** Insertion order is creation order: close walks it backwards. A key invalidated then rebuilt re-enters last. */
   private final Map<Object, AutoCloseable> open = new LinkedHashMap<>();
@@ -38,7 +40,18 @@ public final class OwnedRunScope implements RunScope, AutoCloseable {
 
   /** @param owner only labels the log lines — the run id */
   public OwnedRunScope(Object owner) {
+    this(owner, () -> false);
+  }
+
+  /** @param cancelRequested the engine's cancel flag for this run, read by {@link #cancelRequested()} */
+  public OwnedRunScope(Object owner, BooleanSupplier cancelRequested) {
     this.owner = owner;
+    this.cancelRequested = Objects.requireNonNull(cancelRequested, "a run scope needs its run's cancel flag");
+  }
+
+  @Override
+  public boolean cancelRequested() {
+    return cancelRequested.getAsBoolean();
   }
 
   @Override

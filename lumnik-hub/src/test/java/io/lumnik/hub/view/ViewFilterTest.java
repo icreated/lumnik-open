@@ -297,4 +297,22 @@ class ViewFilterTest {
         assertThat(ViewFilter.resolveAll(List.of("amount>5", "ratio<1e-5", "due>2026-01-01", "at>=2026-01-01T10:00:00Z",
                 "landed>5", "landed<2026-01-01"), view, table)).hasSize(6);
     }
+
+    /**
+     * #1338: the one rule by which {@code =} compares a number by value — in a view, an entity read, an export and
+     * Ask's canonical text. A plain decimal, at most 38 digits each side of the point (JoinKeys' bound): a value longer
+     * than that would cost the database a cast and, past numeric's own range, fail the read instead of matching nothing.
+     */
+    @Test
+    void aNumberOperandIsABoundedPlainDecimal() {
+        String digits38 = "1".repeat(38);
+        for (String number : List.of("7", "-7", " 12.5 ", "0.5", digits38, digits38 + "." + digits38)) {
+            assertThat(ViewFilter.isNumeric(number)).as(number).isTrue();
+        }
+        for (String notOne : List.of("1e3", "1.5e3", "7.", ".5", "abc", "", digits38 + "1", "1." + digits38 + "1",
+                "1".repeat(100_000))) {
+            assertThat(ViewFilter.isNumeric(notOne)).as(notOne.length() > 50 ? notOne.length() + " digits" : notOne).isFalse();
+        }
+        assertThat(ViewFilter.isNumeric(null)).isFalse();
+    }
 }

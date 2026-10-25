@@ -67,6 +67,27 @@ func TestRewriteSuggestedFile_commentWithoutFilters_tokenEndsAtNewline(t *testin
 	assert.Equal(t, "# lm view -f gold.yaml\napiVersion: apps.lumnik.io/v1\n", got)
 }
 
+// The hub writes the asked-for and kept lines BEFORE the render command (#1513): the rewrite must
+// find the command wherever it sits in the leading comment block.
+func TestRewriteSuggestedFile_afterTheHubsAskedForAndKeptLines(t *testing.T) {
+	in := "# asked for: les clients gold avec leur ville et segment\n" +
+		"# kept: segment=GOLD — a condition of that description not listed here is NOT enforced\n" +
+		"# lm view -f gold_customers.yaml --filter 'segment=GOLD'\n" +
+		"apiVersion: \"apps.lumnik.io/v1\"\n"
+	got := rewriteSuggestedFile(in, "gold.yaml")
+	assert.Equal(t, "# asked for: les clients gold avec leur ville et segment\n"+
+		"# kept: segment=GOLD — a condition of that description not listed here is NOT enforced\n"+
+		"# lm view -f gold.yaml --filter 'segment=GOLD'\n"+
+		"apiVersion: \"apps.lumnik.io/v1\"\n", got)
+}
+
+// A description that itself mentions the command never moves: only a line of its own counts, and
+// only in the leading comment block.
+func TestRewriteSuggestedFile_onlyInTheLeadingCommentBlock(t *testing.T) {
+	in := "apiVersion: apps.lumnik.io/v1\n# lm view -f other.yaml\n"
+	assert.Equal(t, in, rewriteSuggestedFile(in, "gold.yaml"))
+}
+
 func TestRewriteSuggestedFile_noCommentLine_unchanged(t *testing.T) {
 	in := "apiVersion: apps.lumnik.io/v1\nkind: View\n"
 	assert.Equal(t, in, rewriteSuggestedFile(in, "gold.yaml"))

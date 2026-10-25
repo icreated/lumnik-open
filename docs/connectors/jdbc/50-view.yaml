@@ -1,13 +1,11 @@
 # 50-view.yaml — read a VIEW instead of a table.
 #
-# A view is how a source-side table reaches the hub when the table itself cannot: no primary
-# key to page on, a column name the hub reserves, a column too wide for the hub's numeric
-# type, or simply more rows than the métier needs. jdbc-generic issues `SELECT *` — a view is
-# a table as far as the read is concerned.
+# A view brings a source table the hub cannot read as it is: no primary key, a column name the
+# hub reserves, a column too wide, or more rows than the métier needs.
 #
-# The guided `lm source jdbc add` refuses views on purpose: a view has no primary key to
-# discover, so `pk_columns` has to be declared, and that is what a manifest is for. The column
-# named here must be unique and stable — it is what the reader pages on.
+# The guided `lm source jdbc add` refuses views: declare `pk_columns` in a manifest. The column
+# named there must be unique and stable.
+
 apiVersion: connectors.lumnik.io/v1
 kind: Connector
 metadata:

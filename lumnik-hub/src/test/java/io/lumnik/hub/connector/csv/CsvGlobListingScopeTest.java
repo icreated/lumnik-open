@@ -134,7 +134,8 @@ class CsvGlobListingScopeTest {
 
     assertThat(nextRun.ids()).as("every dropped row arrives exactly once, and nothing before it is read again")
         .containsExactly("zzz.csv-0", "zzz.csv-1", "zzz.csv-2");
-    assertThat(next.builds()).isEqualTo(1);
+    // one listing; the next run also counts b.csv as unchanged (#1371), a resource of its own
+    assertThat(next.builds(CsvFileConnectorType.LocalListingKey.class)).isEqualTo(1);
   }
 
   @Test

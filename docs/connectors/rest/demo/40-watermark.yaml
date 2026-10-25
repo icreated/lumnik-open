@@ -1,32 +1,18 @@
-# 40-watermark.yaml — reading only what moved since last time.
+# 40-watermark.yaml — read only what changed since the last run.
 #
-# `mode: full` re-fetches every page on every run. `mode: watermark` sends the stored high-water
-# mark as a query parameter on the first request of the run, and the API returns only what is
-# newer:  GET /offset/partners?updated_since=2026-01-02T15:59:00Z&offset=0&limit=500
+# `mode: watermark` sends the last mark on the first request of the run, and the API returns
+# only what is newer:  GET /offset/partners?updated_since=2026-01-02T15:59:00Z&offset=0&limit=500
 #
-# The new mark is the MAX of `watermark_path` across the items actually read. Here that is
-# $.updated_at, whose ISO shape sorts lexicographically — which is why a plain string
-# comparison is enough for the demo API to filter on it.
+# Run 1: no mark yet — a full read, 2 400 rows.
+# Run 2: only the rows changed since run 1 (a little before, so nothing changed during run 1 is
+#        missed). They replace their earlier version: the table stays at 2 400.
 #
-# ── Why the first run is not the interesting one ─────────────────────────────────────────
-# Run 1: nothing stored, so no parameter is sent — a full read, 2 400 rows.
-# Run 2: the parameter goes out and only newer rows come back — here the single row sharing
-#        the maximal instant, because the demo API filters inclusively, as most APIs do. It is
-#        re-upserted on its unique key, so it counts as records_out and the table does not
-#        grow. Run 2 reading 2 400 again would mean the watermark never persisted.
-#
-# ── The staged promotion, which is the subtle part ───────────────────────────────────────
-# The mark is NOT advanced page by page. A crash mid-pagination would otherwise leave it past
-# pages that were never fetched — silent, permanent data loss. The stored value keeps its
-# pre-run reading throughout while a candidate carries the running MAX, and only the final
-# chunk promotes it.
+# The mark moves only when a run completes: a failed run leaves it where it was.
 #
 #   lm endpoint reset-cursor acme-incremental/partners     # the next run is full again
 #
-# A watermark is only as incremental as the column behind it: pointed at a column the source
-# does not touch on update, it re-reads everything forever and reports it as new.
-#
-# Expect: run 1 = 2 400 in / 2 400 out. Run 2 = 1 in / 1 out, and the table still 2 400.
+# Point `watermark_path` at a field the source updates on every change, or every run re-reads
+# everything.
 
 apiVersion: connectors.lumnik.io/v1
 kind: Connector

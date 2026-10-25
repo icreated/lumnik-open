@@ -200,4 +200,78 @@ class RegexExtractHookTest {
     assertThat(row.get("second")).isNull();
     assertThat(state.counters().cellErrors().get()).isZero();
   }
+
+  // ---- required: true — a miss the integrator declared a fault (#1417) ----
+
+  @Test
+  void a_miss_is_not_counted_by_default() throws Exception {
+    var state = new MappingState();
+    var row = apply(TWO_GROUPS, "ftp://srv-edi", state);
+
+    assertThat(row).containsEntry("year", null).containsEntry("month", null);
+    assertThat(state.counters().cellErrors().get()).isZero();
+  }
+
+  @Test
+  void with_required_a_miss_on_a_non_empty_cell_counts_one() throws Exception {
+    var state = new MappingState();
+    var row = apply(TWO_GROUPS + "required: true\n", "ftp://srv-edi", state);
+
+    assertThat(row).containsEntry("year", null).containsEntry("month", null);
+    assertThat(state.counters().cellErrors().get()).isEqualTo(1);
+  }
+
+  @Test
+  void with_required_a_match_and_an_empty_cell_count_nothing() throws Exception {
+    var state = new MappingState();
+    apply(TWO_GROUPS + "required: true\n", "2024-01", state);
+    apply(TWO_GROUPS + "required: true\n", null, state);
+
+    assertThat(state.counters().cellErrors().get()).isZero();
+  }
+
+  @Test
+  void required_that_is_not_a_boolean_is_refused() {
+    assertThatThrownBy(() -> validateParams(TWO_GROUPS + "required: yes-please\n"))
+        .isInstanceOf(MappingValidationException.class)
+        .hasMessageContaining("required");
+  }
+
+  /**
+   * #1505: a miss writes null — over a column already in the row (from the file, or an earlier hook), that erases a
+   * value nothing counts. With a header read at run time validate cannot see it: the run fails, naming the column,
+   * matched or not, empty cell or not.
+   */
+  @ParameterizedTest
+  @MethodSource("cellsAndGroups")
+  void a_group_naming_a_column_already_in_the_row_fails_the_run_by_name(Object cell, String groups, String named) {
+    JsonNode params;
+    try {
+      params = YAML.readTree("column: ref\npattern: '(\\d{4})-(\\d{2})'\ngroups: " + groups + "\n");
+    } catch (Exception e) {
+      throw new IllegalStateException(e);
+    }
+    var row = new HashMap<String, Object>();
+    row.put("ref", cell);
+    row.put("year", "1999");
+    assertThatThrownBy(() -> catalog.cell("regex-extract").apply(row, params, new MappingState()))
+        .isInstanceOf(MappingValidationException.class)
+        .hasMessageContaining("'" + named + "'");
+    assertThat(row).containsEntry("year", "1999");
+  }
+
+  static Stream<Arguments> cellsAndGroups() {
+    return Stream.of(
+        Arguments.of("2024-01", "{\"1\": year}", "year"),        // a match would overwrite it
+        Arguments.of("no date", "{\"1\": year}", "year"),        // a miss would null it
+        Arguments.of(null, "{\"1\": year}", "year"));            // an empty cell would null it
+  }
+
+  /** #1505: a group writing the column the hook reads is refused before any row — its own column, nulled on a miss. */
+  @Test
+  void a_group_writing_the_column_it_reads_is_refused() {
+    assertThatThrownBy(() -> validateParams("column: ref\npattern: '(\\d{4})'\ngroups: {\"1\": ref}\n"))
+        .isInstanceOf(MappingValidationException.class)
+        .hasMessageContaining("group 1 writes 'ref', the column it reads");
+  }
 }

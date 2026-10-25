@@ -2,7 +2,6 @@ package io.lumnik.hub.manifest;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -26,7 +25,7 @@ public class ModuleManifestRegistry {
     private static final Logger LOG = Logger.getLogger(ModuleManifestRegistry.class);
     private static final String MANIFEST_PATH = "META-INF/module-manifest.yaml";
 
-    private final ObjectMapper yaml = new ObjectMapper(new YAMLFactory())
+    private final ObjectMapper yaml = HubYaml.mapper()
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     private List<ModuleManifest> manifests = List.of();

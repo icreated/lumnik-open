@@ -1,6 +1,7 @@
 package output
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -69,7 +70,7 @@ func Print[T any](w io.Writer, format string, headers []string, rows []T, toRow 
 	case "json":
 		return encodeJSON(w, rows)
 	case "yaml":
-		return yaml.NewEncoder(textsafe.Unwrap(w)).Encode(rows)
+		return encodeYAML(w, rows)
 	default:
 		return fmt.Errorf("unknown output format: %s (want table|json|yaml)", format)
 	}
@@ -86,10 +87,45 @@ func PrintObject(w io.Writer, format string, v any) error {
 	case "json":
 		return encodeJSON(w, v)
 	case "yaml":
-		return yaml.NewEncoder(textsafe.Unwrap(w)).Encode(v)
+		return encodeYAML(w, v)
 	default:
 		return fmt.Errorf("unknown output format: %s (want json|yaml)", format)
 	}
+}
+
+// encodeYAML writes v as YAML under the keys -o json prints, in the same order. The structs lm prints carry json tags
+// only, and yaml would name a field after its lower-cased Go name (cellErrors as cellerrors). So v goes through JSON
+// first; JSON is YAML, and parsing it as a node keeps the key order and each number's text as it is.
+func encodeYAML(w io.Writer, v any) error {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return err
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(buf.Bytes(), &doc); err != nil {
+		return err
+	}
+	if err := yamlStyle(&doc); err != nil {
+		return err
+	}
+	return yaml.NewEncoder(textsafe.Unwrap(w)).Encode(&doc)
+}
+
+// yamlStyle drops the JSON look the parser recorded (every string quoted, flow braces) and lets yaml style each node
+// as it styles a Go value: a string is quoted only when it would read as another type ("true", "yes", "1").
+func yamlStyle(n *yaml.Node) error {
+	if n.Kind == yaml.ScalarNode && n.Tag == "!!str" {
+		return n.Encode(n.Value)
+	}
+	n.Style = 0
+	for _, c := range n.Content {
+		if err := yamlStyle(c); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // encodeJSON writes v indented, byte for byte what it holds: lm's JSON goes to a terminal or a script, never into an

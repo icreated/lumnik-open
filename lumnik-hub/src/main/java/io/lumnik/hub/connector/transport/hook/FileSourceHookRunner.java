@@ -3,6 +3,7 @@ package io.lumnik.hub.connector.transport.hook;
 import io.lumnik.hub.connector.transport.FileDescriptor;
 import io.lumnik.hub.connector.transport.FileSource;
 import io.lumnik.hub.hook.KotlinScriptHost;
+import io.lumnik.hub.hook.ScriptFailures;
 import io.lumnik.hub.hook.kts.KtsScriptRunner;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -63,17 +64,24 @@ public class FileSourceHookRunner {
     /** Calls the script's {@code fnName}; {@code ifUndefined} when the script does not define it. */
     private Object invoke(HookSpec hook, String fnName, Object ifUndefined, Object... args) {
         KtsScriptRunner.Script script = load(hook.scriptRef());   // a refusal passes through as-is
+        KtsScriptRunner.ScriptFunction fn;
         try {
-            KtsScriptRunner.ScriptFunction fn = script.function(fnName, args.length);
-            if (fn == null) {
-                LOG.debugf("Hook %s does not define %s() — skipping", hook.scriptRef(), fnName);
-                return ifUndefined;
-            }
+            fn = script.function(fnName, args.length);
+        } catch (Exception e) {
+            // The script's shape — the hub's own words, wrapped, never the refusal's type.
+            throw new RuntimeException("Hook " + hook.scriptRef() + "#" + fnName + "() failed: " + e.getMessage(), e);
+        }
+        if (fn == null) {
+            LOG.debugf("Hook %s does not define %s() — skipping", hook.scriptRef(), fnName);
+            return ifUndefined;
+        }
+        try {
             return fn.call(args);
         } catch (Exception e) {
-            // The script's own failure or shape — wrapped, never the refusal's type.
+            // The script's own failure: its kind and line, never its message — toInt() quotes the value it could
+            // not read (#1435). The cause keeps it, for the hub's log.
             throw new RuntimeException(
-                "Hook " + hook.scriptRef() + "#" + fnName + "() failed: " + e.getMessage(), e);
+                "Hook " + hook.scriptRef() + "#" + fnName + "() failed: " + ScriptFailures.kindAndLine(e), e);
         }
     }
 

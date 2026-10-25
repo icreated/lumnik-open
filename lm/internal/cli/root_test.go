@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -86,4 +87,58 @@ func TestEveryCommandHasAShortLine(t *testing.T) {
 		}
 	}
 	walk(NewRootCmd())
+}
+
+// --help speaks to the integrator: no issue number, no plan or task of the project, no "(stub)".
+var engineWords = regexp.MustCompile(`#[0-9]+|\bTask [0-9]+|\bPlan [0-9]+|\(stub\)`)
+
+func TestHelpTextsCarryNoProjectBookkeeping(t *testing.T) {
+	var walk func(c *cobra.Command)
+	walk = func(c *cobra.Command) {
+		if !c.Hidden {
+			for _, text := range []string{c.Short, c.Long} {
+				if w := engineWords.FindString(text); w != "" {
+					t.Errorf("%s: help text carries %q: %q", c.CommandPath(), w, text)
+				}
+			}
+		}
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+	}
+	walk(NewRootCmd())
+}
+
+// The commands that do nothing yet stay callable (a script may call them) but out of --help, and
+// their refusal names no plan or task of the project.
+func TestStubCommandsAreHiddenAndRefusePlainly(t *testing.T) {
+	setupCfg(t, "http://127.0.0.1:0")
+	for _, args := range [][]string{
+		{"source", "rest", "run", "acme", "--endpoint", "e"},
+		{"hook", "generate"},
+		{"hook", "apply"},
+		{"hook", "delete", "h1"},
+		{"hook", "reload", "h1"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			root := NewRootCmd()
+			cmd, _, err := root.Find(args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !cmd.Hidden {
+				t.Errorf("%s is shown in --help", cmd.CommandPath())
+			}
+			root.SetOut(new(bytes.Buffer))
+			root.SetErr(new(bytes.Buffer))
+			root.SetArgs(args)
+			err = root.Execute()
+			if err == nil {
+				t.Fatal("expected a refusal")
+			}
+			if w := engineWords.FindString(err.Error()); w != "" {
+				t.Errorf("refusal carries %q: %v", w, err)
+			}
+		})
+	}
 }

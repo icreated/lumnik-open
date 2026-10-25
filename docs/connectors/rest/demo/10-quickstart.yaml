@@ -1,14 +1,9 @@
-# 10-quickstart.yaml — one endpoint, a preset instead of a pagination block.
+# 10-quickstart.yaml — one endpoint, a pagination preset instead of a pagination block.
 #
-# `pagination: {kind: spring-page}` expands at apply time into the real strategy, read out of
-# SpringPagePreset:
-#   kind: page · page_param: page · size_param: size · start_page: 0
-#   total_pages_path: $.totalPages · response_path: $.content
-# Everything a Spring Data `Page` emits is covered, so `size` is the only field worth
-# overriding — the strategy's own default is 50, which turns 2 400 partners into 48 requests.
+# `pagination: {kind: spring-page, size: 500}` fits any API that answers like a Spring `Page`
+# (`content`, `totalPages`). Set `size`: the default, 50, turns 2 400 partners into 48 requests.
 #
-# The password is never in this file. `password_env` names an entry the hub resolves at run
-# time: the `lm secret` registry first, then its own environment.
+# The password is never in this file. `password_env` names a secret:
 #   lm secret set ACME_BASIC_PW        # the demo API answers to demo-user / demo-pass
 #
 # Expect: 2 400 rows in ext.acme_partners.
@@ -27,7 +22,7 @@ spec:
   auth:
     kind: basic
     username: demo-user
-    password_env: ACME_BASIC_PW   # BasicAuthProviderFactory has NO inline password field
+    password_env: ACME_BASIC_PW   # basic takes no inline password: name a secret
 
   endpoints:
     - id: partners

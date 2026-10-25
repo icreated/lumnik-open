@@ -11,7 +11,7 @@ public record MappingSpec(
     List<HookInvocation> dataset,
     List<HookInvocation> row,
     List<HookInvocation> cell,
-    /** Parsed from the mapping but NOT enforced by any runtime consumer yet (tribunal B3). */
+    /** What a value a cell hook could not deliver does to its row (#1408). */
     ErrorPolicy onError
 ) {
   public enum StreamMode { STREAM, SORTED_STREAM }

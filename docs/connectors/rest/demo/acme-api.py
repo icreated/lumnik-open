@@ -2,8 +2,9 @@
 """ACME Partners API — the source every screen on docs/connectors/rest.md reads.
 
 One HTTP server, no dependencies beyond the Python standard library, serving the SAME 2 400
-partners under ten JSON dialects, a GraphQL door and eight SOAP services. The first path segment
-picks the envelope; it never changes the data. That is the whole point: a manifest that works
+partners under ten JSON dialects, a GraphQL door and eight SOAP services — plus an OpenAPI
+document for three of the dialects (GET /openapi.json). The first path segment picks the
+envelope; it never changes the data. That is the whole point: a manifest that works
 here differs from the one you will write for your own ERP by a base URL, a credential and a path.
 
     python3 docs/connectors/rest/demo/acme-api.py        # foreground, one log line per request
@@ -300,6 +301,56 @@ SOAP_SERVICES = {"siebel": s_siebel, "sap": s_sap, "mute": s_mute, "tail": s_tai
                  "session": s_session}
 
 
+# ── GET /openapi.json ─────────────────────────────────────────────────────────────────────
+# A hand-written OpenAPI 3 document for three of the paths above — enough for
+# `lm source rest from-openapi` to have something real to read. It describes, it does not
+# drive: the server never consults it. `servers` is the address this request arrived on, so
+# the draft's base_url is one the caller can reach (the hub sees host.docker.internal).
+
+def openapi(base):
+    partner = {"type": "object", "properties": {
+        "id": {"type": "integer"}, "name": {"type": "string"}, "city": {"type": "string"},
+        "country": {"type": "string"}, "credit_limit": {"type": "integer"},
+        "updated_at": {"type": "string", "format": "date-time"}}}
+    rows = {"type": "array", "items": {"$ref": "#/components/schemas/Partner"}}
+
+    def query(name, kind="integer"):
+        return {"name": name, "in": "query", "required": False, "schema": {"type": kind}}
+
+    def ok(props):
+        return {"200": {"description": "one page of partners", "content": {"application/json": {
+            "schema": {"type": "object", "properties": props}}}}}
+
+    return {
+        "openapi": "3.0.3",
+        "info": {"title": "ACME Partners API", "version": "2026-01",
+                 "description": "Fictional demo data. Three of its paths, described by hand."},
+        "servers": [{"url": base}],
+        "components": {
+            "schemas": {"Partner": partner},
+            "securitySchemes": {"basic": {"type": "http", "scheme": "basic"},
+                                "bearer": {"type": "http", "scheme": "bearer"}}},
+        "paths": {
+            "/open/partners": {"get": {
+                "summary": "Every partner, offset and limit, no auth",
+                "parameters": [query("offset"), query("limit")],
+                "responses": ok({"data": rows, "total": {"type": "integer"}})}},
+            "/spring/partners": {"get": {
+                "summary": "A Spring Data page, numbered from 0",
+                "security": [{"basic": []}],
+                "parameters": [query("page"), query("size")],
+                "responses": ok({"content": rows, "totalPages": {"type": "integer"},
+                                 "totalElements": {"type": "integer"}, "number": {"type": "integer"},
+                                 "last": {"type": "boolean"}})}},
+            "/v1/partners": {"get": {
+                "summary": "An opaque cursor, Stripe-style",
+                "security": [{"bearer": []}],
+                "parameters": [query("limit"), query("starting_after", "string")],
+                "responses": ok({"data": rows, "has_more": {"type": "boolean"}})}},
+        },
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -344,6 +395,8 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["admin", "reset"]:
             FLAKY_SEEN.clear()
             return self.send(200, {"reset": "ok"})
+        if parts == ["openapi.json"]:
+            return self.send(200, openapi(f"http://{self.headers.get('Host', f'127.0.0.1:{PORT}')}"))
         if len(parts) != 2 or parts[0] not in DIALECTS or parts[1] != "partners":
             return self.send(404, {"error": "unknown resource",
                                    "known": sorted(DIALECTS) , "resource": url.path})
@@ -394,15 +447,17 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {"data": None})
         first = int(next(iter(re.findall(r"first:\s*(\d+)", query)), variables.get("first", 50)))
         after = variables.get("after")
+        # $updated_since — the variable a `watermark` endpoint sends on its second run.
+        rows = since(PARTNERS, variables.get("updated_since"))
         # Relay cursors are opaque by contract: base64 here, so a manifest that tries to build
         # one instead of echoing back what pageInfo handed it fails where a real API would.
         start = int(base64.b64decode(after)) + 1 if after else 0
-        items = slice_of(PARTNERS, start, first)
+        items = slice_of(rows, start, first)
         edges = [{"cursor": base64.b64encode(str(start + i).encode()).decode(), "node": r}
                  for i, r in enumerate(items)]
         return self.send(200, {"data": {"partners": {
             "edges": edges,
-            "pageInfo": {"hasNextPage": start + first < len(PARTNERS),
+            "pageInfo": {"hasNextPage": start + first < len(rows),
                          "endCursor": edges[-1]["cursor"] if edges else None}}}})
 
     # ── POST /<service>/start.swe — the SOAP door ──────────────────────────────────────────
@@ -419,7 +474,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(f"ACME Partners API on http://{HOST}:{PORT} — {len(PARTNERS)} partners, "
-          f"dialects: {', '.join(sorted(DIALECTS))} + POST /graphql\n"
+          f"dialects: {', '.join(sorted(DIALECTS))} + POST /graphql + GET /openapi.json\n"
           f"SOAP services (POST /<service>/start.swe): {', '.join(sorted(SOAP_SERVICES))}",
           flush=True)
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

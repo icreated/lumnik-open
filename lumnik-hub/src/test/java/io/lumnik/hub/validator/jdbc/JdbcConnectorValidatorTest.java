@@ -102,6 +102,22 @@ class JdbcConnectorValidatorTest {
         assertTrue(r.isValid(), () -> "a knob claiming nothing must not be refused, got: " + r.errors());
     }
 
+    /**
+     * #1437: jdbc-generic writes rows 1:1 (dumpSpec: rename only), so a `mapping:` block — an operator's Kotlin check,
+     * say — never runs. It used to pass with an "unknown key" warning; a control the integrator declared is refused.
+     */
+    @Test void mappingBlock_isRefused() throws Exception {
+        String manifest = JDBC_HEAD.formatted("{\"name\":\"supplier_bank\",\"mode\":\"full\",\"pk_columns\":[\"code\"]}")
+            .replace("\"source\":", "\"mapping\":{\"cell\":[{\"kotlin\":{\"script\":\"hooks:iban-check.kts\"}}]},\"source\":");
+        ValidationResult r = service.validate(mapper.readTree(manifest));
+
+        assertFalse(r.isValid(), "a mapping block on jdbc-generic must be refused");
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.mapping") && String.join(" ", e.recommendations()).contains("source.tables[].rename")),
+            () -> "the refusal names spec.mapping and says what to do, got: " + r.errors());
+        assertTrue(ValidationWarnings.unknownKeyPaths(r).isEmpty(),
+            () -> "refused once, not also warned as unknown, got: " + r.warnings());
+    }
+
     @Test void deadTargetBlock_isNamed() throws Exception {
         ValidationResult r = service.validate(load("jdbc-dead-target.yaml"));
         assertTrue(r.isValid(), () -> "an unknown key is a warning, not a refusal: " + r.errors());

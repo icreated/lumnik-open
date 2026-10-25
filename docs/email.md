@@ -6,7 +6,7 @@ you choose. Needs the `lm_admin` role. For tools rather than people, use a [webh
 ## Route events to a mailbox
 
 ```bash
-# The métier case: every minted decision, to the ADV inbox, in métier words
+# Business alerts: send every decision to the sales administration inbox
 lm notify add --events 'decision.*' --to adv@example.com --template decision-alert
 
 # The ops case: failed runs, to the integrator, raw payload included
@@ -26,9 +26,22 @@ ID    EVENTS                RECIPIENT               TEMPLATE            ENABLED
 
 - `--events` takes an exact type or a prefix ending in `.*` — see the
   [event registry](outputs.md#the-event-registry).
-- **One table only:** no `lm` flag narrows a rule to one table. Over HTTP
-  (`POST /api/notifications`) a rule takes an `entity_filter` with the table's full name
-  (`connector.t_customers`); any other form is refused.
+- **Narrow a rule to one table (HTTP only):** no `lm` flag does it. Post the rule with
+  `entityFilter` and the table's full name ([mint `$TOKEN`](recipes/test-the-api.md#mint-a-token)):
+
+    ```bash
+    curl -s -X POST http://localhost:8080/api/notifications -H "Authorization: Bearer $TOKEN" \
+      -H 'Content-Type: application/json' \
+      -d '{"eventPattern":"data.row.changed","entityFilter":"connector.t_customers","recipient":"adv@example.com"}'
+    ```
+
+    A misspelt key is refused with `400`, naming it and the accepted keys:
+
+    ```
+    {"error":"unknown key: entity_filter — accepted keys: enabled, entityFilter, eventPattern, recipient, template"}
+    ```
+
+    For `data.row.changed`, a name that is not a connector table is refused.
 
 ## Templates
 
@@ -46,14 +59,14 @@ Two ship with the hub:
 | Template | Voice | Body |
 |---|---|---|
 | `event-notification` (default) | ops | subject + source/entity/time line + the payload as JSON in a `<pre>` |
-| `decision-alert` | métier | the process **message as headline** ("Commande 12045 bloquée depuis 32 jours"), entity & key, the referenced fields as a table |
+| `decision-alert` | business | the process **message as headline** ("Commande SO-000013 du client P-1007 en litige — 860.00 €"), entity & key, the referenced fields as a table |
 
 ### The variables a template sees
 
 | Variable | Type | Content |
 |---|---|---|
-| `{eventType}` | string | `decision.commande-bloquee` |
-| `{source}` | string | the emitter (`process:commande-bloquee`, `connector-engine`, …) |
+| `{eventType}` | string | `decision.litige-ouvert` |
+| `{source}` | string | the emitter (`process:litige-ouvert`, `connector-engine`, …) |
 | `{entity}` | string | the ingested table, or `—` |
 | `{occurredAt}` | string | ISO timestamp |
 | `{payload}` | **map, navigable** | the event's payload — `{payload.entity_key}`, `{#for f in payload.fields}` |
@@ -69,7 +82,7 @@ what may be absent — a missing reference fails the render and the mail is skip
 {/if}
 ```
 
-`decision.*` payloads come in **two shapes**, sharing only `message` — which is why
+`decision.*` payloads come in **three shapes**, sharing only `message` — which is why
 `decision-alert` leads with it and guards everything else:
 
 - **[Process](apps/processes.md) rules** (`decision.<name>`): `message` (the rule's
@@ -78,17 +91,20 @@ what may be absent — a missing reference fails the render and the mail is skip
 - **[Dormancy watches](apps/workflows.md)** (`decision.dormant.<workflow>`): `message`,
   `workflow`, `doc_key`, `state`, `since`, `first_observed_at`, `threshold` — never
   `process`, `entity_key` or `fields`.
+- **[Due dates](apps/workflows.md#due-date-a-deadline-the-data-carries)** (`decision.overdue.<workflow>`): `message`, `workflow`,
+  `doc_key`, `state`, `due`, `due_at`.
 
 ### Add your own template
 
-Drop `templates/email/<kebab-name>.html` into the hub's resources and rebuild — templates
-ship inside the hub image; there is no runtime upload. Rehearse against the
+Templates ship inside the hub image: the published image cannot take your own. Put the file at
+`lumnik-hub/src/main/resources/templates/email/<kebab-name>.html`, then rebuild with
+`./deploy/selfhost/up.sh --build`. Rehearse against the
 [Mailpit drill](deploy.md#turn-on-email-delivery) before pointing rules at it.
 
 ## Delivery — what to expect
 
-- **Sweep:** every 5 s, independent of webhooks.
-- **Mocked** until the deploy sets the SMTP knobs ([turn on email delivery](deploy.md#turn-on-email-delivery)); the boot log says which.
+- A mail leaves within about 5 seconds.
+- **Mocked** until the deploy sets the SMTP knobs ([turn on email delivery](deploy.md#turn-on-email-delivery)).
 - **Best-effort:** a failed send is logged and skipped — no retry, no journal. One broken
   recipient does not block the others.
 - **A hub crash can lose a batch of mails**; it never sends one twice.
@@ -97,37 +113,18 @@ When delivery must be provable, wire a [webhook](outputs.md#wire-a-webhook) as w
 
 ## How to…
 
-### Mail the ADV every time an order gets blocked
+### Mail the ADV every time an order lands in dispute
 
-One rule declares the watch, one rule routes the mail — the French sentence you write in
-the manifest is the headline the ADV reads:
-
-```yaml
-# commande-bloquee.yaml — same shape as the WOW's lyon-process.yaml
-apiVersion: apps.lumnik.io/v1
-kind: Process
-metadata:
-  name: commande-bloquee
-spec:
-  scope: ventes
-  on:
-    event: data.row.changed
-    table: connector.t_commandes
-  when:
-    - statut=BLOQUEE
-  emit:
-    type: decision.commande-bloquee
-    message: "Commande {num} bloquée ({montant} €)"
-```
+The demo desk's `litige-ouvert` process already writes the sentence the ADV reads
+([Processes](apps/processes.md#quickstart)). Route it to a mailbox:
 
 ```bash
-lm process apply -f commande-bloquee.yaml
-lm notify add --events decision.commande-bloquee --to adv@example.com --template decision-alert
+lm notify add --events decision.litige-ouvert --to adv@example.com --template decision-alert
 ```
 
-**Result:** the next ingestion run that lands a `statut=BLOQUEE` row sends a mail whose
-headline is *Commande 12045 bloquée (8 400 €)* — with `num` and `montant` in the fields
-table, because the message referenced them.
+**Result:** the next run that lands an order in dispute sends one mail. Its headline is the
+process's sentence, as `lm inbox` shows it: *Commande SO-000013 du client P-1007 en litige —
+860.00 €*. Below it, the referenced fields as a table.
 
 ### Rehearse without a mail provider
 
@@ -149,11 +146,11 @@ nothing else:
 ```html
 <!-- templates/email/commande-courte.html -->
 <h2>{payload.message ?: eventType}</h2>
-<p>N° <strong>{payload.fields.num ?: '—'}</strong> · {payload.fields.montant ?: '—'} €</p>
+<p>N° <strong>{payload.fields.order_no ?: '—'}</strong> · {payload.fields.amount ?: '—'} €</p>
 ```
 
 Rebuild the hub (templates ship in the image), then point the rule at it:
-`lm notify add --events decision.commande-bloquee --to adv@example.com --template commande-courte`.
+`lm notify add --events decision.litige-ouvert --to adv@example.com --template commande-courte`.
 
 ## See also
 

@@ -1,0 +1,3 @@
+# The operator's Kotlin scripts stay out of git: this directory is theirs (docs/deploy.md).
+*
+!.gitignore

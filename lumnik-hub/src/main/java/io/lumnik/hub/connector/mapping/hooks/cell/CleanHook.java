@@ -2,7 +2,9 @@ package io.lumnik.hub.connector.mapping.hooks.cell;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.mapping.MappingState;
+import io.lumnik.hub.connector.mapping.ScalarParams;
 import io.lumnik.hub.connector.mapping.hooks.CellHook;
+import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import jakarta.enterprise.context.ApplicationScoped;
 
@@ -10,17 +12,35 @@ import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @ApplicationScoped
 @HookId("clean")
 public class CleanHook implements CellHook {
+
+  private static final List<String> FORMS = List.of("NFC", "NFD", "NFKC", "NFKD");
+
+  /**
+   * {@code columns} is a list of column names; a scalar cleaned nothing, a list element read "" (#1472), a blank one
+   * named no column (#1482). {@code normalize-unicode} is one of the four forms, or off when missing or bare: anything
+   * else failed every row of the run, not the manifest once (#1482). {@code strip} and {@code remove-control-chars} are
+   * booleans: "yes" or a list read as false, in silence (#1486).
+   */
+  @Override
+  public void validateParams(JsonNode params) {
+    if (params.has("columns")) ScalarParams.columnNames("clean hook", "columns", params.get("columns"));
+    ScalarParams.optionalWord("clean hook", "normalize-unicode", params.path("normalize-unicode"), null, FORMS);
+    ScalarParams.optionalBoolean("clean hook", "strip", params.path("strip"), false);
+    ScalarParams.optionalBoolean("clean hook", "remove-control-chars", params.path("remove-control-chars"), false);
+  }
 
   @Override
   public void apply(Map<String, Object> row, JsonNode params, MappingState s) {
     List<String> columns = columnList(params, row);
     boolean strip = params.path("strip").asBoolean(false);
     boolean removeCtrl = params.path("remove-control-chars").asBoolean(false);
-    String form = params.has("normalize-unicode") ? params.get("normalize-unicode").asText() : null;
+    JsonNode formNode = params.path("normalize-unicode");   // validated once: missing or bare is off
+    String form = formNode.isMissingNode() || formNode.isNull() ? null : formNode.asText();
 
     for (String col : columns) {
       Object v = row.get(col);
@@ -45,5 +65,15 @@ public class CleanHook implements CellHook {
     List<String> out = new ArrayList<>();
     for (JsonNode c : cols) out.add(c.asText());
     return out;
+  }
+
+  @Override
+  public Set<String> params() {
+    return Set.of("columns", "strip", "remove-control-chars", "normalize-unicode");
+  }
+
+  @Override
+  public ColumnEffect columns(JsonNode params) {
+    return ColumnEffect.readsColumns(params);
   }
 }

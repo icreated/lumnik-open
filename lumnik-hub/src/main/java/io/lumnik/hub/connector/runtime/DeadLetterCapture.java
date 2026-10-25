@@ -13,6 +13,7 @@ import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 
 import java.time.Instant;
+import java.util.Objects;
 import java.util.UUID;
 
 @ApplicationScoped
@@ -45,23 +46,24 @@ public class DeadLetterCapture {
     return dlq.getId();
   }
 
+  /** False when the entry is absent or already resolved: a resolution is recorded once (#1375). */
   @Transactional
-  public void discard(UUID dlqId, long userId) {
-    var dlq = repo.findById(dlqId);
-    if (dlq == null) return;
-    dlq.setResolution("DISCARDED");
-    dlq.setResolvedAt(Instant.now());
-    dlq.setResolvedBy(userId);
+  public boolean discard(UUID dlqId, long userId) {
+    return resolve(dlqId, "DISCARDED", null, userId);
   }
 
+  /** False when the entry is absent or already resolved: a resolution is recorded once (#1375). */
   @Transactional
-  public void markReplayed(UUID dlqId, UUID newRunId, long userId) {
-    var dlq = repo.findById(dlqId);
-    if (dlq == null) return;
-    dlq.setResolution("REPLAYED");
-    dlq.setResolvedAt(Instant.now());
-    dlq.setResolvedBy(userId);
-    dlq.setResolvedRunId(newRunId);
+  public boolean markReplayed(UUID dlqId, UUID newRunId, long userId) {
+    // No replay without the run that carried the row: that is a discard (#1377).
+    return resolve(dlqId, "REPLAYED", Objects.requireNonNull(newRunId, "newRunId"), userId);
+  }
+
+  // One conditional statement, not read-then-set: two concurrent closes cannot both win. A bulk
+  // update skips @PreUpdate, so it stamps updatedAt itself.
+  private boolean resolve(UUID dlqId, String resolution, UUID runId, long userId) {
+    return repo.update("resolution = ?1, resolvedAt = ?2, updatedAt = ?2, resolvedBy = ?3, resolvedRunId = ?4"
+        + " where id = ?5 and resolution is null", resolution, Instant.now(), userId, runId, dlqId) == 1;
   }
 
   /**

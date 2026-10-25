@@ -18,14 +18,14 @@ class SearchFieldLabelsTest {
         return new EntityManifest("Entity", name, null, List.of("code"), List.of(), List.of("stock"), null, columns, null);
     }
 
-    private static ColumnMeta label(String label) { return new ColumnMeta(label, null, null, null); }
+    private static ColumnMeta label(String label) { return new ColumnMeta(label, null, null, null, null, null); }
 
     private static final Map<String, EntityManifest> BY_NAME = Map.of(
         "Product", entity("Product", new LinkedHashMap<>(Map.of(
             "category_description", label("Catégorie"),
             "reference", label("  Référence  "),
             "blank", label("   "),
-            "nolabel", new ColumnMeta(null, "a description only", null, null)))),
+            "nolabel", new ColumnMeta(null, "a description only", null, null, null, null)))),
         "Plain", entity("Plain", Map.of()));
 
     @Test void only_columns_that_declare_a_label_are_listed_and_a_label_is_trimmed() {

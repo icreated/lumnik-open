@@ -34,5 +34,12 @@ public sealed interface ChunkResult {
    */
   record ShortOfTarget(String detail) implements ChunkResult {}
 
+  /**
+   * The reader stopped inside the chunk because the run was cancelled (#1444): nothing it read was written, and
+   * the run ends {@code Cancelled} as the engine's own check between chunks ends it. Its own member, not a
+   * {@code Failure} the engine would have to recognise by its cause.
+   */
+  record Cancelled() implements ChunkResult {}
+
   record Failure(String message, Throwable cause, boolean retryable)         implements ChunkResult {}
 }

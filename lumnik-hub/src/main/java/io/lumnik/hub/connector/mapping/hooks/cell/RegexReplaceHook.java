@@ -4,11 +4,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.mapping.MappingState;
 import io.lumnik.hub.connector.mapping.MappingValidationException;
 import io.lumnik.hub.connector.mapping.hooks.CellHook;
+import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.RegexParams;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.PatternSyntaxException;
 
 @ApplicationScoped
@@ -46,5 +48,15 @@ public class RegexReplaceHook implements CellHook {
           "regex-replace hook: 'replacement' is not usable with this pattern "
               + "(a lone '$' or '\\\\' is a group reference — escape it): " + e.getMessage(), e);
     }
+  }
+
+  @Override
+  public Set<String> params() {
+    return Set.of("column", "pattern", "replacement");
+  }
+
+  @Override
+  public ColumnEffect columns(JsonNode params) {
+    return ColumnEffect.readsColumn(params);
   }
 }

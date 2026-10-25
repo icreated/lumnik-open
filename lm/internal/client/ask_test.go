@@ -54,7 +54,7 @@ func TestRagAskSendsAnalyticMode(t *testing.T) {
 	defer srv.Close()
 
 	c := New(config.Context{Server: srv.URL})
-	res, err := c.RagAsk("which orders were never invoiced?", "atelier", "")
+	res, err := c.RagAsk("which orders were never invoiced?", "atelier", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestAskResult_aDocumentWithNoRowsKeepsEveryKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	assert.Equal(t, `{"answer":"Je ne peux pas répondre.","sql":"","rowCount":0,"columns":[],"rows":[],`+
-		`"dataAsOf":null,"otherDoors":[],"disputed":[],"disputedTruncated":false,"abstained":true}`, string(js))
+		`"dataAsOf":null,"otherDoors":[],"disputed":[],"disputedTruncated":false,"abstained":true,"understoodAs":null}`, string(js))
 }
 
 // A jsonb cell is shown as JSON, with its characters as written: & < > are not turned into \u0026 escapes.

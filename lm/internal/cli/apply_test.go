@@ -71,10 +71,9 @@ func TestApply_serverReturns400_rendersValidationErrors(t *testing.T) {
 // declared", decides whether anything this connector ingests is askable at all. The hub now sends
 // its warnings in the success body (#531); apply renders them the way validate does.
 //
-// Stdout stays the JSON body alone: it is what the connector docs print and what a
-// `lm apply -f x.yaml | jq` in an integrator's script reads. The advice goes to stderr, where a
-// diagnostic belongs, and the exit code stays 0 — a warning has never failed a validate and a CI
-// gate built on that must not start failing here.
+// Stdout stays the one applied line (the hub's body under -o json, what a script pipes into jq).
+// The advice goes to stderr, where a diagnostic belongs, and the exit code stays 0 — a warning has
+// never failed a validate and a CI gate built on that must not start failing here.
 func TestApply_successWithWarnings_rendersThemOnStderr_exitZero(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"name":"orders","connectorId":"487ed9d1-58d5-4120-969c-dc448910e1f2",` +
@@ -93,12 +92,8 @@ func TestApply_successWithWarnings_rendersThemOnStderr_exitZero(t *testing.T) {
 		t.Fatalf("a warning must not fail apply: %v", err)
 	}
 
-	var body map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &body); err != nil {
-		t.Errorf("stdout must stay parseable JSON — a pipe reads it: %s", out)
-	}
-	if body["connectorId"] != "487ed9d1-58d5-4120-969c-dc448910e1f2" {
-		t.Errorf("stdout lost the apply body: %s", out)
+	if out != `Applied connector "orders" — 1 endpoint`+"\n" {
+		t.Errorf("stdout must stay the applied line alone: %q", out)
 	}
 	for _, want := range []string{"orders.yaml", "1 warning(s)", "WARN", "metadata.scopes",
 		"not be askable", "Add: scopes: [compta]"} {
@@ -108,7 +103,7 @@ func TestApply_successWithWarnings_rendersThemOnStderr_exitZero(t *testing.T) {
 	}
 }
 
-// The quiet path: no warnings, no report — the command prints the one JSON line it always did.
+// The quiet path: no warnings, no report — one line saying what was applied.
 func TestApply_successWithoutWarnings_printsNothingExtra(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"name":"orders","connectorId":"x","endpointsApplied":1}`))
@@ -126,8 +121,75 @@ func TestApply_successWithoutWarnings_printsNothingExtra(t *testing.T) {
 	if errOut != "" {
 		t.Errorf("nothing to advise, nothing on stderr, got: %s", errOut)
 	}
-	if out != `{"name":"orders","connectorId":"x","endpointsApplied":1}`+"\n" {
+	if out != `Applied connector "orders" — 1 endpoint`+"\n" {
 		t.Errorf("stdout changed shape: %q", out)
+	}
+}
+
+// A jdbc-generic connector applies one endpoint per table: the count is a plural.
+func TestApply_countsEveryEndpoint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"name":"erp","connectorId":"x","endpointsApplied":3}`))
+	}))
+	defer srv.Close()
+	path := filepath.Join(t.TempDir(), "erp.yaml")
+	if err := writeFile(t, path, "kind: Connector\n"); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := runLm(t, srv, "apply", "-f", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != `Applied connector "erp" — 3 endpoints`+"\n" {
+		t.Errorf("got %q", out)
+	}
+}
+
+// -o json and -o yaml print the hub's answer for a script: the id, the count, the warnings. The
+// warnings still reach stderr too — a pipe must not swallow the advice.
+func TestApply_machineFormats_printTheHubAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"name":"orders","connectorId":"487ed9d1-58d5-4120-969c-dc448910e1f2",` +
+			`"endpointsApplied":1,"warnings":[{"path":"metadata.scopes","severity":"WARNING",` +
+			`"message":"no scopes declared"}]}`))
+	}))
+	defer srv.Close()
+	path := filepath.Join(t.TempDir(), "orders.yaml")
+	if err := writeFile(t, path, "kind: Connector\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut, err := runLm(t, srv, "apply", "-f", path, "-o", "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		Name             string `json:"name"`
+		ConnectorID      string `json:"connectorId"`
+		EndpointsApplied int    `json:"endpointsApplied"`
+		Warnings         []struct {
+			Path string `json:"path"`
+		} `json:"warnings"`
+	}
+	if err := json.Unmarshal([]byte(out), &body); err != nil {
+		t.Fatalf("-o json must be parseable JSON: %v\n%s", err, out)
+	}
+	if body.Name != "orders" || body.ConnectorID != "487ed9d1-58d5-4120-969c-dc448910e1f2" ||
+		body.EndpointsApplied != 1 || len(body.Warnings) != 1 || body.Warnings[0].Path != "metadata.scopes" {
+		t.Errorf("-o json lost part of the hub's answer: %s", out)
+	}
+	if !strings.Contains(errOut, "metadata.scopes") {
+		t.Errorf("the warning must still reach stderr: %q", errOut)
+	}
+
+	out, _, err = runLm(t, srv, "apply", "-f", path, "-o", "yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"name: orders\n", "connectorId: 487ed9d1-58d5-4120-969c-dc448910e1f2\n", "endpointsApplied: 1\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("-o yaml missing %q:\n%s", want, out)
+		}
 	}
 }
 

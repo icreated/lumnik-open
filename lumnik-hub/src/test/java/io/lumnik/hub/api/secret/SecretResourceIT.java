@@ -64,12 +64,13 @@ class SecretResourceIT {
     }
 
     /**
-     * `secret rm` is a SOFT delete: deleted_at is stamped and the row stays. Every reader filters
+     * `secret rm` was a SOFT delete: deleted_at was stamped and the row stayed. Every reader filtered
      * it out — SecretRepository.findByName/listByTenant, PgcryptoSecretResolver, and both partial
-     * indexes V14 declares — so by every definition the application uses, the name is free again.
+     * indexes V14 declares — so by every definition the application uses, the name was free again.
      * UNIQUE (tenant_id, name) did not agree: it still counted the tombstone, the create door's
      * INSERT raised 23505, and the caller got an anonymous 500 for a name `list` no longer showed
-     * and `rm` answered 404 for. No command could free it.
+     * and `rm` answered 404 for. No command could free it. Since V84 the delete removes the row
+     * itself, and the name must stay reusable.
      */
     @Test
     void a_name_freed_by_delete_can_be_created_again() {

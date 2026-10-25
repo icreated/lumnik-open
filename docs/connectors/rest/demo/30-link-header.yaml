@@ -25,7 +25,7 @@ spec:
     kind: api-key
     in: header
     name: X-API-Key
-    value_env: ACME_API_KEY   # ApiKeyAuthProviderFactory has NO inline value field
+    value_env: ACME_API_KEY   # api_key takes no inline value: name a secret
 
   endpoints:
     - id: partners

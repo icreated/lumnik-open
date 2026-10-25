@@ -22,7 +22,7 @@ public class ProcessManifestStore {
     private final ProcessManifestParser parser = new ProcessManifestParser();
 
     public record StoredProcess(String name, String scope, String onTable, List<String> when,
-                                String emitType, String emitMessage, boolean enabled) {}
+                                String emitType, String emitMessage, List<String> emitFields, boolean enabled) {}
 
     /**
      * Upsert this process, refusing to overwrite a name the caller's grants do not reach.
@@ -42,7 +42,7 @@ public class ProcessManifestStore {
             + "(tenant_id, name, yaml_text, scope, on_table, emit_type) VALUES (?, ?, ?, ?, ?, ?) "
             + "ON CONFLICT (tenant_id, name) DO UPDATE SET yaml_text = EXCLUDED.yaml_text, "
             + "scope = EXCLUDED.scope, on_table = EXCLUDED.on_table, emit_type = EXCLUDED.emit_type, "
-            + "updated_at = NOW() "
+            + "updated_at = NOW(), revision = nextval('core.process_manifest_revision_seq') "
             + "WHERE (?::text[] IS NULL OR core.process_manifest.scope = ANY (?::text[]))";
         return ScopeGuardedUpsert.of(Jdbc.update(adminDs, "ProcessManifestStore.upsert", sql, ps -> {
             ps.setLong(1, tenantId);
@@ -91,7 +91,8 @@ public class ProcessManifestStore {
      * no hand to reach it. Like {@link #delete}, existence is already the caller's question.
      */
     public void setEnabled(long tenantId, String name, boolean enabled) {
-        String sql = "UPDATE core.process_manifest SET enabled = ?, updated_at = NOW() "
+        String sql = "UPDATE core.process_manifest SET enabled = ?, updated_at = NOW(), "
+            + "revision = nextval('core.process_manifest_revision_seq') "
             + "WHERE tenant_id = ? AND name = ?";
         Jdbc.update(adminDs, "ProcessManifestStore.setEnabled", sql, ps -> {
             ps.setBoolean(1, enabled);
@@ -105,6 +106,28 @@ public class ProcessManifestStore {
                 ps -> ps.setLong(1, tenantId));
     }
 
+    /**
+     * The tenant's processes as one value (#1351): whether any is enabled, and the fingerprint of
+     * their revisions — every apply, re-apply, enable and disable takes a fresh one from a sequence,
+     * and a removal drops one, so two equal fingerprints mean no process changed in between. No
+     * clock is involved: the database orders the revisions.
+     */
+    public ProcessSet processSet(long tenantId) {
+        return Jdbc.queryOne(adminDs, "ProcessManifestStore.processSet",
+                "SELECT COALESCE(bool_or(enabled), false), " + FINGERPRINT
+                    + " FROM core.process_manifest WHERE tenant_id = ?",
+                ps -> ps.setLong(1, tenantId), rs -> new ProcessSet(rs.getBoolean(1), rs.getString(2))).orElseThrow();
+    }
+
+    public record ProcessSet(boolean anyEnabled, String fingerprint) {}
+
+    /**
+     * The fingerprint over {@code core.process_manifest} rows of one tenant — one expression, so the
+     * run queue's start (a single UPDATE) computes exactly what {@link #processSet} does.
+     */
+    public static final String FINGERPRINT =
+            "md5(COALESCE(string_agg(revision::text, ',' ORDER BY revision), ''))";
+
     /** Enabled processes listening on this table — the ProcessConsumer's per-event lookup. */
     public List<StoredProcess> findEnabledFor(long tenantId, String table) {
         return query("SELECT yaml_text, enabled FROM core.process_manifest "
@@ -116,7 +139,7 @@ public class ProcessManifestStore {
         return Jdbc.query(adminDs, "ProcessManifestStore.query", sql, binder, rs -> {
             ProcessManifest m = parser.parse(rs.getString(1));
             return new StoredProcess(m.name(), m.scope(), m.onTable(), m.when(),
-                    m.emitType(), m.emitMessage(), rs.getBoolean(2));
+                    m.emitType(), m.emitMessage(), m.emitFields(), rs.getBoolean(2));
         });
     }
 }

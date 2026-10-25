@@ -116,14 +116,15 @@ class CsvFileReaderTest {
         .as("the DLQ payload keeps EVERY raw value, including the one no column has a home for; "
             + "that value is the whole reason silent truncation was a defect")
         .containsExactlyElementsOf(expectedRaw);
-    assertThat(bad.get(0).message()).as("the refusal names the shape").contains(messageFragment);
+    assertThat(bad.get(0).message()).as("the refusal names the shape, in the reader's words")
+        .contains(messageFragment).doesNotContain("CSVRecord");
     assertThat(bad.get(0).line()).as("the offending line, for the operator").isEqualTo(2L);
   }
 
   static Stream<Arguments> quarantinedShapes() {
     return Stream.of(
         Arguments.of("one column short", "a,b", "1",
-            List.of("1"), "only has 1 values"),
+            List.of("1"), "Record has 1 value but 2 columns are declared"),
         Arguments.of("one column too many, carrying data", "a,b", "1,2,3",
             List.of("1", "2", "3"), "3 values but only 2 columns are declared"),
         Arguments.of("a trailing delimiter is one column too many", "a,b", "1,2,",
@@ -142,7 +143,9 @@ class CsvFileReaderTest {
     assertThat(good).hasSize(1);
     assertThat(bad).hasSize(1);
     assertThat(bad.get(0).rawValues()).isNull();
-    assertThat(bad.get(0).message()).contains("EOF reached before encapsulated token");
+    assertThat(bad.get(0).message())
+        .as("the reader's own sentence, never the parser library's exception text")
+        .isEqualTo("A quoted value does not close where expected: the file cannot be read past this line");
   }
 
   @Test

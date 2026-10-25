@@ -81,7 +81,7 @@ The shipped realm is the working reference; copy its mapper shapes onto your cli
 
 | Step | Configuration |
 |---|---|
-| **1. Realm roles** | create `lm_user`, `lm_integrator`, `lm_admin`, and `scope:<tag>` roles if you bind métiers. Assign to users or groups; the hub matches names flat |
+| **1. Realm roles** | create `lm_user`, `lm_integrator`, `lm_admin`, and `scope:<tag>` roles if you restrict users by scope. Assign them to users or groups; the hub matches names flat |
 | **2. `tenant_id` mapper** | *User Attribute* mapper: attribute `tenant_id`, claim `tenant_id`, JSON type **long**, on the access token |
 | **3. `groups` mapper** | *User Realm Role* mapper: claim name `groups`, multivalued, on the access token |
 | **4. Audience mapper** | *Audience* mapper adding `lumnik-backend` to the access token, on **every** client that calls the hub |
@@ -105,7 +105,8 @@ The shipped realm is the working reference; copy its mapper shapes onto your cli
 
 ## Kubernetes: `auth.mode=oidc-external`
 
-Trust the customer's issuer, deploy **no** Keycloak:
+Cloud edition. Trust the customer's issuer, deploy **no** Keycloak. Set the mode explicitly:
+the chart's default, `oidc`, deploys its own Keycloak instead.
 
 ```yaml
 # deploy/helm/lumnik/values.yaml
@@ -137,21 +138,27 @@ A real customer IdP is then an `issuerUrl` swap. Leave `tokenIssuer` empty in re
     The hub pins `aud: lumnik-backend`, and a freshly created SPA client emits **no** audience
     by default. Symptom: every PWA call is a 401 while `lm` works fine. Register the SPA client
     as public + PKCE (S256), redirect URI `https://<hub-origin>/app/*`, **and** the audience
-    mapper on the access token. [The métier PWA](../apps/pwa.md)
+    mapper on the access token. [The PWA](../apps/pwa.md)
 
-## The issuer is part of the identity
+## Keep the same public address
 
-!!! warning "Changing the issuer URL orphans JIT identities"
-    **Pick the public origin once, early**, before the first real login.
+**Pick the hub's public address once, before the first real login.**
 
-    - **Cause**: users are keyed by issuer + subject. A new scheme (http → https), hostname or
-      issuer path makes the same human a *new* identity.
-    - **Symptom**: the first login after the move collides with the old row's login.
-    - **Fix**: migrate `identity.app_user.idp_issuer` deliberately, or clear the old-issuer users
-      and accept re-provisioning.
+- lumnik knows a user by the issuer URL + the subject in the token.
+- Change the scheme (http → https), the hostname or the issuer path, and the issuer changes. The
+  same person then logs in as a **new** user, detached from their history.
+- This bites on a move to TLS, a new hostname, or a restore onto another address.
 
-    [Upgrade](../operations/upgrade.md#known-scar) ·
-    [Backup & restore](../operations/backup-restore.md#known-scar-issuer-change-orphans-jit-identities)
+Moved anyway? Point the old users at the new issuer, once, before they log in again:
+
+```bash
+docker compose -f docker-compose.selfhost.yml exec postgres psql -U lumnik -d lumnik -c \
+  "UPDATE identity.app_user SET idp_issuer = 'https://new.example/realms/lumnik'
+   WHERE idp_issuer = 'http://localhost:8180/realms/lumnik'"
+```
+
+Users who already logged in under the new issuer have a second row: archive it first, or accept
+that they start fresh.
 
 ## Troubleshooting
 
@@ -166,7 +173,7 @@ A real customer IdP is then an `issuerUrl` swap. Leave `tokenIssuer` empty in re
 | First login 500, logs show `fk_user_tenant` | Tenant row not seeded | Seed the tenant, retry |
 | `403 {"error":"user is deactivated"}` | Identity exists but was deactivated (a SCIM departure) | Reactivate via admin or SCIM; JIT never resurrects |
 | 403 on every endpoint despite a valid login | `groups` missing, or carrying IdP-native names | Map roles into `groups` as literal `lm_*` names |
-| Login error after moving to TLS or a new hostname | The issuer change orphaned the identity | Migrate `idp_issuer` on the existing rows (box above) |
+| Login error after moving to TLS or a new hostname | The issuer changed | [Keep the same public address](#keep-the-same-public-address) |
 
 ## See also
 

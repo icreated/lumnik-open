@@ -3,9 +3,9 @@ package io.lumnik.hub.entity;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.entity.resolution.NormalizerAllowlist;
+import io.lumnik.hub.manifest.HubYaml;
 import io.lumnik.hub.manifest.ManifestKeys;
 import jakarta.enterprise.context.ApplicationScoped;
 
@@ -18,6 +18,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.stream.Collectors;
 
 @ApplicationScoped
 public class EntityManifestParser {
@@ -67,7 +68,7 @@ public class EntityManifestParser {
     // (round 1 on PR #631).
   }
 
-  private static final ObjectMapper KEYS = new ObjectMapper(new YAMLFactory());
+  private static final ObjectMapper KEYS = HubYaml.mapper();
 
   /**
    * Every key the manifest declares that this parser does not honor, as dotted paths in document
@@ -128,7 +129,7 @@ public class EntityManifestParser {
     return String.join(", ", new TreeSet<>(keys));
   }
 
-  private final ObjectMapper yaml = new ObjectMapper(new YAMLFactory())
+  private final ObjectMapper yaml = HubYaml.mapper()
       .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
   /**
@@ -147,6 +148,8 @@ public class EntityManifestParser {
     requireScopes(m);
     Set<String> canonical = new HashSet<>(m.canonicalColumns());
     requireGroundingNamesRealColumns(m, canonical);
+    requirePreferredSourcesMapTheirColumn(m);
+    requireUncomparedColumnsAreFused(m);
     if (hasResolution) requireResolution(m, canonical);
     return m;
   }
@@ -332,6 +335,41 @@ public class EntityManifestParser {
               + "' has an allowed value with leading/trailing whitespace (would never exact-match): '" + v + "'");
       }
     }
+  }
+
+  /**
+   * #1379: {@code prefer} names one of {@code sources[]} that maps the column — a column of no source (a join's)
+   * is refused the same way — and never a match column, which every source holds alike.
+   */
+  private static void requirePreferredSourcesMapTheirColumn(EntityManifest m) {
+    m.columns().forEach((col, meta) -> {
+      if (meta == null || meta.prefer() == null) return;
+      if (m.match() != null && m.match().contains(col))
+        throw new IllegalArgumentException("column '" + col
+            + "' is a match column: every source holds the same value, there is nothing to prefer");
+      EntityManifest.Source s = m.sources().stream().filter(x -> meta.prefer().equals(x.table())).findFirst()
+          .orElseThrow(() -> new IllegalArgumentException("column '" + col + "' prefers '" + meta.prefer()
+              + "', which is not one of sources[] (" + m.sources().stream().map(EntityManifest.Source::table)
+                  .collect(Collectors.joining(", ")) + ")"));
+      if (!sourceMapsColumn(s, col))
+        throw new IllegalArgumentException("column '" + col + "' prefers '" + meta.prefer() + "', which does not map it");
+    });
+  }
+
+  /**
+   * #1449: {@code conflicts: false} on a column the sources fuse; a match column or one no source maps (a join's) is
+   * never compared.
+   */
+  private static void requireUncomparedColumnsAreFused(EntityManifest m) {
+    m.columns().forEach((col, meta) -> {
+      if (meta == null || meta.conflicts() == null || meta.conflicts()) return;
+      if (m.match() != null && m.match().contains(col))
+        throw new IllegalArgumentException("column '" + col
+            + "' is a match column: every source holds the same value, there is nothing to compare");
+      if (m.sources().stream().noneMatch(src -> sourceMapsColumn(src, col)))
+        throw new IllegalArgumentException("column '" + col
+            + "' is mapped by no source: only fused columns are compared, conflicts: false says nothing");
+    });
   }
 
   private static void requireResolution(EntityManifest m, Set<String> canonical) {

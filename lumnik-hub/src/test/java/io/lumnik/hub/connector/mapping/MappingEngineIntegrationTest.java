@@ -30,7 +30,7 @@ class MappingEngineIntegrationTest {
         version: 1
         target: x
         dataset:
-          - { test-add-marker: true }
+          - { test-add-marker: {} }
         """);
 
     List<Map<String, Object>> input = List.of(new HashMap<>(Map.of("a", "1")));

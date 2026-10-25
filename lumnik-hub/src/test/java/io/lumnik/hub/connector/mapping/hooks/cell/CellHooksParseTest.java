@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import io.lumnik.hub.connector.mapping.MappingState;
+import io.lumnik.hub.connector.mapping.MappingValidationException;
 import io.lumnik.hub.connector.mapping.hooks.HookCatalog;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -16,6 +17,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @QuarkusTest
 class CellHooksParseTest {
@@ -180,5 +182,38 @@ class CellHooksParseTest {
     var row = new HashMap<String, Object>(Map.of("country", "XX"));
     hook.apply(row, params, new MappingState());
     assertThat(row.get("country")).isNull();
+  }
+
+  /** #1463: the documented, unquoted form is a YAML null — it empties the cell, it does not keep it. */
+  @Test
+  void lookup_on_missing_unquoted_null_returns_null() throws Exception {
+    var hook = catalog.cell("lookup");
+    var params = yaml("column: country\ntable:\n  FR: France\non-missing: null");
+    var row = new HashMap<String, Object>(Map.of("country", "XX"));
+    var state = new MappingState();
+    hook.validateParams(params);
+    hook.apply(row, params, state);
+    assertThat(row).containsEntry("country", null);
+    assertThat(state.counters().cellErrors().get()).isEqualTo(1);
+  }
+
+  @Test
+  void lookup_on_missing_absent_keeps_the_value() throws Exception {
+    var hook = catalog.cell("lookup");
+    var params = yaml("column: country\ntable:\n  FR: France");
+    var row = new HashMap<String, Object>(Map.of("country", "XX"));
+    hook.apply(row, params, new MappingState());
+    assertThat(row).containsEntry("country", "XX");
+  }
+
+  /** #1467: the refusal names the column and the policy, never the cell it could not match. */
+  @Test
+  void lookup_on_missing_error_names_the_column_not_the_value() throws Exception {
+    var hook = catalog.cell("lookup");
+    var params = yaml("column: country\ntable:\n  FR: France\non-missing: error");
+    var row = new HashMap<String, Object>(Map.of("country", "SENTINEL-1467"));
+    assertThatThrownBy(() -> hook.apply(row, params, new MappingState()))
+        .isInstanceOf(MappingValidationException.class)
+        .hasMessage("lookup: no match in column 'country' (on-missing: error)");
   }
 }

@@ -116,13 +116,10 @@ class WorkflowDormancySweepIT {
         assertThat(events).allSatisfy(e ->
             assertThat(e.get("type")).isEqualTo("decision.dormant.wf-sweep-it"));
 
-        // The message obeys the temporal-honesty vocabulary. Jackson does NOT escape
-        // non-ASCII (see the captured payload in docs/demo/wow-customer/README.md:239 —
-        // "Nouveau client Claire Martin à Lyon" lands verbatim), and the build is UTF-8
-        // (project.build.sourceEncoding), so assert the accented text directly.
+        // The message obeys the temporal-honesty vocabulary: what lumnik observed, never "stuck".
         String payload = events.get(0).get("payload");
-        assertThat(payload).contains("observé immobile").contains("première observation");
-        assertThat(payload).doesNotContain("bloqu");
+        assertThat(payload).contains("observed unmoved").contains("first observed");   // #1363: English by default
+        assertThat(payload).doesNotContain("stuck");
 
         // The Java gate itself fired — alerted_at is actually set on both sleepers, not
         // just "the count happens to still be 2" (which the outbox's own ON CONFLICT would
@@ -200,6 +197,50 @@ class WorkflowDormancySweepIT {
             ps.setLong(1, TENANT);
             try (ResultSet rs = ps.executeQuery()) { rs.next(); assertThat(rs.getLong(1)).isEqualTo(1); }
         }
+    }
+
+    /**
+     * #1367 — the data-truth report invites the integrator to declare each spelling it surfaces.
+     * Doing so on a watched workflow is a new MEANING for a value the tape already holds raw, not a
+     * movement: no journal row, and the alerted sleeper keeps its clock and its alert.
+     */
+    @Test
+    void declaring_an_alias_for_a_raw_state_on_the_tape_is_not_movement() throws Exception {
+        sweep.sweepNow();
+        ageAll();
+        sweep.sweepNow();
+        WorkflowObservationStore.Observation before = observations.loadAll(TENANT, WF).get("CMD-LITIGE");
+        assertThat(before.state()).isEqualTo("EN LITIGE");
+        assertThat(before.alertedAt()).isNotNull();
+
+        declareLitigeAsEnCours();
+        sweep.sweepNow();
+
+        WorkflowObservationStore.Observation after = observations.loadAll(TENANT, WF).get("CMD-LITIGE");
+        assertThat(after.state()).isEqualTo("EN_COURS");
+        assertThat(after.since()).isEqualTo(before.since());
+        assertThat(after.alertedAt()).isEqualTo(before.alertedAt());
+        assertThat(transitionCount("CMD-LITIGE")).isZero();
+        assertThat(dormantEvents()).hasSize(2);
+    }
+
+    /** #1367 — relabelled and found overdue in the same tick: the alert names the declared state. */
+    @Test
+    void a_sleeper_relabelled_in_the_tick_that_alerts_it_is_named_by_its_declared_code() throws Exception {
+        sweep.sweepNow();
+        declareLitigeAsEnCours();
+        ageAll();
+        sweep.sweepNow();
+
+        String payload = dormantEvents().stream().filter(e -> e.get("key").equals("CMD-LITIGE"))
+            .findFirst().orElseThrow().get("payload");
+        assertThat(payload).contains("EN_COURS").doesNotContain("EN LITIGE");
+        assertThat(transitionCount("CMD-LITIGE")).isZero();
+    }
+
+    private void declareLitigeAsEnCours() {
+        String declared = YAML.replace("aliases: [en cours]", "aliases: [en cours, en litige]");
+        manifests.upsert(TENANT, new WorkflowManifestParser().parse(declared), declared, null);
     }
 
     /**

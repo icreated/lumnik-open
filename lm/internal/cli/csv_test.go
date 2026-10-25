@@ -253,7 +253,7 @@ func TestCsvIngestSummary_saysBreathOnRefresh(t *testing.T) {
 	if err := rootCmd.Execute(); err != nil {
 		t.Fatalf("execute: %v (out=%s)", err, out.String())
 	}
-	if !strings.Contains(out.String(), "Re-ingested") || !strings.Contains(out.String(), "one more breath") {
+	if !strings.Contains(out.String(), "Re-ingested ") || !strings.Contains(out.String(), " — refreshed, rows deduplicated by key\n") {
 		t.Errorf("a refreshed ingest must say so:\n%s", out.String())
 	}
 }

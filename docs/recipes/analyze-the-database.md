@@ -44,8 +44,15 @@ docker compose -f docker-compose.selfhost.yml -f analyse-ports.yml up -d postgre
 
 Then in your tool: host `localhost`, port `5433`, database `lumnik`, one of the three
 roles above with its `.env` password. The `127.0.0.1:` prefix matters — the database
-listens to your machine, not your network. To close the door, re-run `up.sh` (or the
-same command without the override file).
+listens to your machine, not your network. To close the door, run the same command without
+the override file:
+
+```bash
+docker compose -f docker-compose.selfhost.yml up -d postgres
+```
+
+Opening or closing the door recreates the database container: the hub loses its database for a
+few seconds.
 
 ## The one habit: name your tenant
 

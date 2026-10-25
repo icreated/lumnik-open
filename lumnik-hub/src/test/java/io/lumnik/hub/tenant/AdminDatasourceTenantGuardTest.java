@@ -96,6 +96,10 @@ class AdminDatasourceTenantGuardTest {
           "an Entity is deployment-global, so its re-apply re-checks every tenant's SearchIndex over it "
           + "(#669); it reads definitions only (tenant, name, manifest) and each invalidating UPDATE "
           + "names that row's own tenant_id"),
+      e("SchemaCardStore:select:connector.schema_card",
+          "cardsListingOrIn (#1538): an Entity is deployment-global, so its re-apply or delete changes the "
+          + "cards of every tenant that lists its view; it reads addresses only (tenant_id, scope), and "
+          + "each rebuild that follows runs as that card's own tenant and writes by its own tenant_id"),
       e("SearchIndexStore:delete:core.audit_outbox,core.search_index,core.search_index_purge",
           "purgeAllForEntity (#701): an Entity is deployment-global, so deleting it purges every "
           + "tenant's SearchIndex over it, keyed by entity name not tenant_id; each purged row still "
@@ -158,6 +162,8 @@ class AdminDatasourceTenantGuardTest {
           + "connector UUID (#1186)"),
       e("WorkflowDormancySweep:select:core.workflow_manifest",
           "the dormancy sweep's cross-tenant scan for which tenants have a workflow to check"),
+      e("WorkflowDueSweep:select:core.workflow_manifest",
+          "the due sweep's cross-tenant scan for which tenants have a workflow to check"),
       e("TenantListResource:select:identity.app_user,identity.org",
           "the superadmin cross-tenant listing — its count sub-queries correlate o.tenant_id = "
           + "t.id per LISTED tenant, they do not scope to the caller (which is the whole point)"),

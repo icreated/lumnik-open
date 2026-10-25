@@ -7,7 +7,10 @@ import jakarta.persistence.Table;
 
 import java.time.Instant;
 
-/** One cursor per outbox consumer. Rewinding last_event_id = replay. */
+/**
+ * One cursor per outbox consumer: the last event read, as {@code (last_xact_id, last_event_id)} in the
+ * outbox's reading order (V85). Rewinding both to 0 = replay.
+ */
 @Entity
 @Table(schema = "core", name = "event_consumer")
 public class EventConsumerPosition {
@@ -19,6 +22,9 @@ public class EventConsumerPosition {
     @Column(name = "last_event_id", nullable = false)
     private long lastEventId;
 
+    @Column(name = "last_xact_id", nullable = false)
+    private long lastXactId;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
@@ -26,8 +32,10 @@ public class EventConsumerPosition {
 
     public String getConsumerName() { return consumerName; }
     public long getLastEventId()    { return lastEventId; }
+    public long getLastXactId()     { return lastXactId; }
 
-    public void advanceTo(long eventId) {
+    public void advanceTo(long xactId, long eventId) {
+        this.lastXactId = xactId;
         this.lastEventId = eventId;
         this.updatedAt = Instant.now();
     }

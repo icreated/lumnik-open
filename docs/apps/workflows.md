@@ -9,7 +9,7 @@
 | **Kind** | `Workflow` — `apps.lumnik.io/v1` |
 | **Over** | one column of one table: a raw `connector.t_*`, or a fused `connector.v_*` (taxonomy only) |
 | **Declares** | states with aliases, transitions, `provenance: declared`; optionally a business key and a dormancy threshold |
-| **Produces** | a data-truth report at apply; one chunk in the scope's corpus; `decision.dormant.<name>` alerts and an observation tape when watched |
+| **Produces** | a report at apply on what the data holds; answers in the chat (Pro); `decision.dormant.<name>` and `decision.overdue.<name>` alerts, and an observation tape, when watched |
 | **Commands** | `lm workflow apply` · `list` · `get` · `disable` · `enable` · `rm` — `lm_integrator`, scope-bound; one lifecycle per column |
 | **Edition** | Open |
 
@@ -24,8 +24,8 @@ declared graph instead of inventing one.
 - **[A data-truth report that never blocks.](#the-data-truth-report-never-blocks)** Apply
   compares the declaration with the column — undeclared values, unobserved codes, blanks — and
   stores the manifest either way.
-- **[Grounded answers.](#what-the-chat-answers-from-it)** The lifecycle is one chunk in the
-  scope's corpus.
+- **[Grounded answers](#what-the-chat-answers-from-it) (Pro).** The chat answers lifecycle
+  questions from the declared graph.
 - **[Dormancy.](#dormancy-the-memory-of-the-breathing)** A key and a threshold turn the
   declaration into a watch: a document unmoved in a non-terminal state past the threshold is a
   `decision.dormant.*` in the inbox.
@@ -67,9 +67,15 @@ stateDiagram-v2
   end note
 ```
 
+`lm workflow apply` prints what it stored, then the report: one line per disagreement between the
+declaration and the data. With `-o json`, the hub's answer: the report is under `dataTruth`.
+
 ```
 $ lm workflow apply -f docs/apps/demo/workflows/10-order-lifecycle.yaml
-{"name":"acme-order-lifecycle","scope":"desk","table":"connector.t_acme_desk_orders","column":"status","dataTruth":{"undeclared":[{"value":"EN LITIGE","rows":2},{"value":"Terminé","rows":1}],"unobserved":["ANNULE"],"nullOrBlank":1,"tableMissing":false,"keyColumnMissing":false,"keyNullOrBlank":0,"checkUnavailable":false,"unavailableReason":null}}
+Applied workflow "acme-order-lifecycle" → connector.t_acme_desk_orders.status, scope desk
+  in the data, not declared: EN LITIGE (2 rows), Terminé (1 row)
+  declared, not in the data: ANNULE
+  status null or blank: 1 row
 $ lm workflow list
 NAME                  TABLE                         COLUMN  SCOPE  ENABLED
 acme-order-lifecycle  connector.t_acme_desk_orders  status  desk   true
@@ -89,12 +95,17 @@ One `200`, stored and indexed, with what the declaration and the data disagree o
 | Field | Required | Meaning |
 |---|---|---|
 | `metadata.name` | yes | kebab-case identifier (`[a-z0-9-]+`) — the name `apply` updates under, and the alert's `decision.dormant.<name>` |
-| `spec.scope` | yes | the métier scope the lifecycle belongs to; must be a **discovered** scope — [below](#the-scope-must-exist-the-table-need-not) |
+| `spec.scope` | yes | the business scope the lifecycle belongs to; must be a **discovered** scope — [below](#the-scope-must-exist-the-table-need-not) |
 | `spec.provenance` | yes | **must be `declared`** — the only accepted value; the chat cites it |
 | `spec.on.table` | yes | the table to watch — an ingest table (`connector.t_<table>`) or a fused entity view (`connector.v_<entity>`, always lower-case) |
 | `spec.on.column` | yes | the column whose values this taxonomy explains — **whatever the source called it** |
-| `spec.on.key` | no (required by `dormancy`) | the business key linking a document's successive versions |
+| `spec.on.key` | no (required by `dormancy` and `due`) | the business key linking a document's successive versions |
 | `spec.dormancy.after` | no (required by `dormancy`) | the sweep threshold, `[0-9]+[mhd]` (`30d`) — requires `spec.on.key`, and an ingest table, not a fused view |
+| `spec.dormancy.message` | no | the alert text, in the team's language: `{doc_key}`, `{state}`, `{state_label}`, `{since}`, `{first_observed_at}`, `{threshold}`, `{workflow}`; any other `{name}` is refused at apply. Absent: the English default [below](#the-alert-verbatim) |
+| `spec.due.column` | no (required by `due`) | the column whose date is the document's deadline — an ingest table or a fused view |
+| `spec.due.states` | no (required by `due`) | the declared, **non-terminal** state codes in which a passed date makes the document overdue (`[CONFIRMED]`); an alias, an undeclared or a terminal state is refused |
+| `spec.due.zone` | no | the time zone a date-only column is read in (`Europe/Paris`): due at the end of that day there. Absent: `UTC`. An unknown zone is refused |
+| `spec.due.message` | no | the alert's sentence: `{doc_key}`, `{state}`, `{state_label}`, `{due}`, `{workflow}`; any other `{name}` is refused at apply |
 | `spec.states[]` | yes (≥ 1) | the declared states |
 | `spec.transitions[]` | no | the allowed edges of the graph |
 
@@ -108,7 +119,7 @@ An unknown key is refused, at every level:
 
 ```
 $ lm workflow apply -f docs/apps/demo/workflows/67-refused-unknown-key.yaml
-Error: API error 400: unknown key(s) in the manifest: spec.after — kind:Workflow honors root {apiVersion, kind, metadata, spec}, metadata {name}, spec {dormancy, on, provenance, scope, states, transitions}, spec.on {column, key, table}, spec.dormancy {after}, states[] {aliases, code, initial, label, terminal}, transitions[] {from, to}
+Error: API error 400: unknown key(s) in the manifest: spec.after — kind:Workflow honors root {apiVersion, kind, metadata, spec}, metadata {name}, spec {dormancy, due, on, provenance, scope, states, transitions}, spec.on {column, key, table}, spec.dormancy {after, message}, spec.due {column, message, states, zone}, states[] {aliases, code, initial, label, terminal}, transitions[] {from, to}
 ```
 
 ### The scope must exist, the table need not
@@ -121,7 +132,7 @@ Error: API error 404: no schema for scope 'dsk' — run discovery first
 ```
 
 The table is **not** checked: you may declare a lifecycle before ingesting the data. The report
-then says `tableMissing: true`.
+then says `the table is not there yet`.
 
 ### Names the source chose
 
@@ -194,51 +205,60 @@ Error: API error 400: terminal state 'TERMINE' has an outgoing transition
 ## The data-truth report — never blocks
 
 `apply` stores the manifest first, then compares it with what the column contains. The
-comparison never becomes a refusal:
+comparison never becomes a refusal. Read three lines:
 
-| Field | Meaning | On the demo desk (day 1) |
-|---|---|---|
-| `undeclared` | values in the data with no matching state or alias, each with its row count | `EN LITIGE` ×2, `Terminé` ×1 |
-| `unobserved` | declared codes never seen in the column | `ANNULE` |
-| `nullOrBlank` | rows with no status at all | `1` |
-| `tableMissing` | the table does not exist (yet, or any more) | `false` |
-| `keyColumnMissing` | `spec.on.key` names a column the table does not have — the only signal a misspelled key produces | `false` |
-| `keyNullOrBlank` | rows whose key is `NULL` or blank: documents the dormancy sweep skips. `null` = not measured | `0` |
-| `checkUnavailable` + `unavailableReason` | the comparison could not run (timeout, dropped column, revoked grant); the other fields are empty, **not** "the data agrees". Re-apply once fixed | `false` |
+| Line | `-o json` field | Means | On the demo desk (day 1) |
+|---|---|---|---|
+| `in the data, not declared` | `undeclared` | values in the data that no state declares, each with its row count | `EN LITIGE` ×2, `Terminé` ×1 |
+| `declared, not in the data` | `unobserved` | declared states never seen in the data | `ANNULE` |
+| `<column> null or blank` | `nullOrBlank` | rows with no status | `status null or blank: 1 row` |
 
-`keyNullOrBlank` counts presence only — a row with neither key nor status is in both counters,
-and a present key is not proof it is unique or stable.
+Nothing to report: `the data matches the declaration`.
 
-The comparison looks at the **200 most frequent distinct values**: on a high-cardinality column a
-rare undeclared value can fall below the cut.
+??? note "The other lines"
+    | Line | `-o json` field | Means |
+    |---|---|---|
+    | `the table is not there yet` | `tableMissing` | the table does not exist yet |
+    | `spec.on.key: the table has no such column` | `keyColumnMissing` | `spec.on.key` names a column the table does not have |
+    | `key null or blank` | `keyNullOrBlank` | rows with no key: the dormancy watch skips them |
+    | `spec.due.column …` | `dueProblem` | why `spec.due.column` cannot give a deadline; `null` when it can |
+    | `the data could not be checked` | `checkUnavailable`, `unavailableReason` | the comparison could not run: the other fields are empty, **not** "the data agrees". Re-apply once fixed |
+
+    The comparison reads the 200 most frequent values: a rare undeclared value can be missed.
 
 ## What the chat answers from it
 
-Applying a workflow indexes it as **one chunk** in the manifest's scope: states, aliases,
-transitions, provenance. Two doors read differently:
+**lumnik Pro.** Two gestures, two kinds of answer:
 
-| Door | Gesture | Answers about |
-|---|---|---|
-| semantic | `lm chat`, then `:scope desk` (or `lm scope set desk` first) | the **graph**: transitions, states, aliases |
-| analytic | `lm ask --scope desk "…"`, the PWA's Chat tab | the **rows**: a document's current status |
+| You ask with | It answers about |
+|---|---|
+| `lm chat`, then `:scope desk` | the **lifecycle**: states, aliases, transitions |
+| `lm ask --scope desk "…"`, the PWA's Chat tab | the **rows**: a document's current status |
 
-The semantic door, asked over HTTP (the same chat `lm chat` reaches):
+The lifecycle, asked in the chat:
 
-```bash
-curl -s "$HUB/api/rag/chat" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"question":"Pourquoi je ne peux pas clôturer la commande SO-000004 ? Quelles sont les étapes avant TERMINE ?","scope":"desk"}'
+```
+$ lm chat
+[corpus=* scope=default topK=10] > :scope desk
+scope → desk
+
+[corpus=* scope=desk topK=10] > quels sont les états d une commande et quelles transitions sont autorisées ?
+Les états d'une commande sont :
+
+* Brouillon
+* En cours
+* Terminée (ou finie)
+* Annulée
+
+ Les transitions autorisées entre ces états sont :
+
+* Du brouillon vers l'état en cours ou l'état annulé
+* De l'état en cours vers l'état annulé ou le terme
 ```
 
-Its `answer` field:
-
-```text
-Les étapes autorisées pour passer du statut BROUILLON sont : BROUILLON -> EN_COURS, BROUILLON -> ANNULE.
-Les étapes autorisées pour passer du statut EN_COURS sont : EN_COURS -> ANNULE, EN_COURS -> TERMINE.
-Aucune étape n'est autorisée pour passer directement de BROUILLON à TERMINE. […]
-```
-
-Every transition it names is declared. It does not know which state SO-000004 is in — the chunk
-carries the graph, not the table. The analytic door does:
+Every transition it names is declared. The wording varies from one run to the next; the states
+and transitions must match the manifest. The chat does not know which state an order is in. `lm ask`
+does:
 
 ```
 $ lm ask --scope desk "Dans quel statut est la commande SO-000004 ?"
@@ -252,8 +272,6 @@ La commande SO-000004 est en statut "BROUILLON".
   SQL: SELECT status FROM "connector"."t_acme_desk_orders" WHERE order_no = 'SO-000004'
 LIMIT 500
 ```
-
-Asked *"why can't I close it"*, the analytic door abstains: it does not read the lifecycle chunk.
 
 ## Dormancy — the memory of the breathing
 
@@ -301,7 +319,7 @@ For the next screens the threshold was shortened to `after: 1m` and the manifest
 under the same name (the shipped file keeps `30d`). Then **day 2** was loaded:
 
 ```bash
-docker cp docs/apps/demo/data/acme-orders-day2.csv lumnik-hub-1:/tmp/acme-desk/acme-orders.csv
+docker compose -f docker-compose.selfhost.yml cp docs/apps/demo/data/acme-orders-day2.csv hub:/tmp/acme-desk/acme-orders.csv
 lm connector run acme-desk-orders
 ```
 
@@ -338,10 +356,10 @@ What each alert says, in the inbox:
 
 ```
 $ lm inbox --limit 3
-ID  WHEN         PROCESS                        MESSAGE                                                                                                                                            ENTITY_KEY
-47  à l'instant  workflow:acme-order-lifecycle  SO-000013 : observé immobile en « EN LITIGE » depuis le 2026-10-19 (première observation 2026-10-19) — seuil déclaré 1m dans acme-order-lifecycle  SO-000013
-46  15min        workflow:acme-order-lifecycle  SO-000012 : observé immobile en « EN_COURS » depuis le 2026-10-18 (première observation 2026-10-18) — seuil déclaré 1m dans acme-order-lifecycle   SO-000012
-45  15min        workflow:acme-order-lifecycle  SO-000011 : observé immobile en « BROUILLON » depuis le 2026-10-18 (première observation 2026-10-18) — seuil déclaré 1m dans acme-order-lifecycle  SO-000011
+ID  WHEN      PROCESS                        MESSAGE                                                                                                                                  ENTITY_KEY
+47  just now  workflow:acme-order-lifecycle  SO-000013: observed unmoved in "EN LITIGE" since 2026-10-19 (first observed 2026-10-19) — declared threshold 1m in acme-order-lifecycle  SO-000013
+46  15min     workflow:acme-order-lifecycle  SO-000012: observed unmoved in "EN_COURS" since 2026-10-18 (first observed 2026-10-18) — declared threshold 1m in acme-order-lifecycle   SO-000012
+45  15min     workflow:acme-order-lifecycle  SO-000011: observed unmoved in "BROUILLON" since 2026-10-18 (first observed 2026-10-18) — declared threshold 1m in acme-order-lifecycle  SO-000011
 note: result hit the limit of 3 — there may be more
 ```
 
@@ -349,6 +367,58 @@ note: result hit the limit of 3 — there may be more
 it first saw the document and the declared threshold — never how long the order sat in the ERP.
 The message's dates are UTC, while `lm observations list` shows your terminal's time zone: the
 01:51 (Paris) sighting was 23:51 UTC the day before.
+
+## Due date — a deadline the data carries
+
+Dormancy counts from the day lumnik first saw a document. A due date counts from a date the data
+carries: a delivery promised for 20 October, still on the road on the 24th, is late.
+
+The desk's carrier export holds a promised date per delivery:
+
+```csv
+--8<-- "docs/apps/demo/data/acme-deliveries.csv"
+```
+
+**Type the date at the door.** A CSV column is text, and a due date must be a date. The connector
+types it with [`parse-date`](../connectors/transformers.md#parse-date-dates-are-31122019):
+
+```yaml
+  mapping:
+    cell:
+      - parse-date: { column: promised_on, formats: ["yyyy-MM-dd"] }
+```
+
+Without it, the apply says so, and no alert is ever raised:
+
+```
+  spec.due.column promised_on is text, not a date: no deadline can be read from it
+```
+
+The workflow declares the deadline:
+
+```yaml
+--8<-- "docs/apps/demo/workflows/20-delivery-lifecycle.yaml"
+```
+
+```
+$ lm connector run acme-desk-deliveries
+$ lm workflow apply -f docs/apps/demo/workflows/20-delivery-lifecycle.yaml -o json | jq -r .dataTruth.dueProblem
+null
+$ lm inbox --type decision.overdue.acme-delivery-lifecycle
+ID  WHEN      PROCESS                           MESSAGE                                                       ENTITY_KEY
+66  just now  workflow:acme-delivery-lifecycle  Livraison DL-1 promise pour le 2026-10-20, toujours en route  DL-1
+```
+
+- **DL-1** is late: promised for 20 October, still `EN_ROUTE`. `DL-2` is delivered. `DL-3` is
+  promised for 2030. `DL-4` has no date. None of them alerts.
+- The check runs every 15 minutes, like dormancy: the alert lands in the inbox within that time.
+- **One alert per deadline.** A date moved to another past day alerts again; a date moved to the
+  future waits.
+- `zone` says where the deadline falls: a date passes at the end of that day in `zone`. Without
+  `zone`, UTC.
+- A fused entity view is accepted, unlike dormancy.
+- Files: `data/acme-deliveries.csv`, `sources/80-deliveries.yaml`,
+  `workflows/20-delivery-lifecycle.yaml`, landed like the [demo desk](demo-desk.md#landing-the-sources).
 
 ## Applying it
 
@@ -401,7 +471,7 @@ semantic chat in that scope now answers transition questions from the declared g
 ### Get told when a document stops moving
 
 The demo manifest already carries `spec.on.key` and `spec.dormancy.after`: applying it switches
-the sweep on. Alerts land in `lm inbox` (and the PWA's *Décisions* tab) for users holding the
+the sweep on. Alerts land in `lm inbox` (and the PWA's *Inbox* tab) for users holding the
 workflow's scope and for users with no `scope:` role. To push them to an external system,
 `lm integration add` ([Processes](processes.md#delivery-is-opt-in)).
 
@@ -411,67 +481,16 @@ and the alert ages out with the event log (30 days by default). The tape keeps i
 
 ### Add the value the report says nobody declared
 
-`dataTruth.undeclared` named `EN LITIGE`. Add it as a state (or an alias of one) and re-apply
+The report named `EN LITIGE` (`in the data, not declared`). Add it as a state (or an alias of one) and re-apply
 under the same name. **Result:** the report no longer lists it, the chat knows what it means, and
-the sweep watches it as a declared state.
+the sweep watches it as a declared state. The documents the tape held as `EN LITIGE`, and the source still
+holds, read the declared code from the next tick; a meaning is not a movement, so their `SINCE`, their alert and
+the transition journal stay as they were.
 
-## Checking a proposal dossier
+## From a proposal dossier
 
-A business person can describe a problem on lumnik.fr and download a **proposal dossier**. Before
-turning it into manifests, ask the hub what it can establish on your data, against a workflow you
-already applied. No `lm` command does this; the door is HTTP:
-
-```bash
-curl -X POST "$HUB/api/proposal/check?workflow=<name>" \
-  -H "Authorization: Bearer $TOKEN" \
-  --data-binary @dossier.md > dossier-checked.md
-```
-
-It needs `lm_integrator`; `$TOKEN` is the token `lm login` stored (see the
-[HTTP API quickstart](../rag/http-api.md#quickstart-one-chat-call-with-curl)). The answer is the
-same file, checked; nothing is applied, and the original answers are untouched.
-Without `workflow=`, the dossier is only recomputed.
-
-| Point | Confirmed when | Refuted when |
-|---|---|---|
-| *a status column exists* | the comparison read the column | the table is there and the column is not |
-| *an identifier column exists* | the table has the `spec.on.key` column | the table is there and does not have it (judged only if the status column exists) |
-| *the target is accepted by the watch validation* | the workflow is stored | never |
-
-- What only a person can establish (*the column describes the lifecycle*, *the identifier is
-  stable*) stays *to be established*.
-- A table not ingested yet, a timeout or a missing grant leave a point unchanged.
-- The proof is about your data **today**.
-- A dossier for another catalogue version is returned recomputed, unverified.
-- The answer is the same whether the workflow does not exist, is not yours, or no longer parses.
-- A malformed dossier is a `400` with the reason (`duplicate-key`); a file that is not UTF-8 is a
-  `400` `malformed-header`.
-
-## Drafting a manifest from a dossier
-
-`lm proposal draft` writes the **start** of the manifest a dossier proposes. It does not contact
-the hub:
-
-```bash
-lm proposal draft dossier.md \
-  --name orders-lifecycle --scope sales \
-  --table connector.t_commandes --column statut --key n_commande --after 14d \
-  -o orders-lifecycle.yaml
-```
-
-- Every flag is optional; a value you leave out is left out of the file, with a comment saying
-  where it goes.
-- States and transitions are never generated: you write them before `lm workflow apply`.
-- `--after` without `--key` is accepted here and refused at apply.
-- The header comments list each point, **refuted first**, then missing, unverified, confirmed;
-  what no tool can check is marked **to establish yourself**.
-- `-o` never overwrites a file; without it the draft goes to stdout. The dossier can come from
-  stdin (`lm proposal draft -`).
-- A dossier with no `stalled-documents@1` lead, or two, is refused; other leads are named on
-  stderr.
-
-The loop: draft → complete and `lm workflow apply -f` → check the dossier against the stored
-workflow (the `curl` above) → draft again from the checked dossier, to a new file.
+A business person can describe a problem on lumnik.fr and download a **proposal dossier**. Turning
+it into a workflow, and checking it against your data: [Proposal dossiers](proposal-dossier.md).
 
 ## Troubleshooting
 
@@ -480,16 +499,20 @@ workflow (the `curl` above) → draft again from the checked dossier, to a new f
 | apply refused: `unknown key(s) in the manifest: …` | a misspelled or misplaced field | the message lists what `kind:Workflow` honors, level by level |
 | apply refused `404`: `no schema for scope '…' — run discovery first` | `spec.scope` is not a discovered scope | `lm source rediscover --scope <tag>` (`lm_integrator` + `lm_admin`, a scope you hold), then re-apply |
 | apply refused: `column … already has a declared lifecycle: workflow '…'` | a *different* name declares this `on.table` + `on.column` | re-apply under the existing name, or point at a different column |
-| apply refused: `column … already has a declared lifecycle, in a métier you do not hold` | the same, in a scope you do not hold | ask the integrator who owns that scope |
+| apply refused: `column … already has a declared lifecycle, in a scope you do not hold` | the same, in a scope you do not hold | ask the integrator who owns that scope |
 | apply refused: `spec.dormancy requires spec.on.key …` | `spec.dormancy.after` without `spec.on.key` | add `spec.on.key` |
 | apply refused: `spec.dormancy cannot be declared on a fused entity view …` | `on.table` is a `connector.v_*` view with `spec.dormancy` | declare it on the ingest table, or drop it |
 | apply refused: `spec.on.table … must name a table in the 'connector' schema that ingestion owns` | another schema, or one of the hub's own tables | `connector.t_<the connector's target>` |
 | apply refused: `alias '…' … collides with state code` / `exactly one state must be initial` / `terminal state '…' has an outgoing transition` | a contradiction in the declaration | fix the graph |
-| dormancy declared, but no alert ever arrives | `spec.on.key` names a column the table does not have | check `keyColumnMissing` in the apply response |
+| apply refused: `spec.due requires spec.on.key …` | `spec.due` without `spec.on.key` | add `spec.on.key` |
+| apply refused: `spec.due.states names …` | an alias, an undeclared or a terminal state, or one named twice | name the declared, non-terminal codes once |
+| apply refused: `spec.due.zone has no effect on …` | a `zone` over a `timestamptz` column | drop `spec.due.zone` |
+| due date declared, but no alert ever arrives | the column is missing or not a date | the apply report names it: `spec.due.column …` |
+| dormancy declared, but no alert ever arrives | `spec.on.key` names a column the table does not have | the apply report says `spec.on.key: the table has no such column` |
 | a document stuck for weeks does not alert on day one | the threshold counts from lumnik's first sighting | wait `after` from the apply date; `lm observations list` shows `SINCE` |
-| a document is missing from `lm observations list` | its key or its status is `NULL` or blank | fix it at the source; `keyNullOrBlank` and `nullOrBlank` count them |
-| a status value never shows up in chat answers | undeclared | check `dataTruth.undeclared`, add it, re-apply |
-| `lm ask` abstains on a "why can't I close it" question | the analytic door does not read the lifecycle | `lm chat` with the scope |
+| a document is missing from `lm observations list` | its key or its status is `NULL` or blank | fix it at the source; the apply report counts them: `key null or blank`, `<column> null or blank` |
+| a status value never shows up in chat answers | undeclared | the apply report lists it under `in the data, not declared`; add it, re-apply |
+| `lm ask` abstains on a "why can't I close it" question | `lm ask` reads the rows, not the lifecycle | `lm chat` with the scope |
 | `403 … scope not granted` | you do not hold the `spec.scope` role | ask for that `scope:` role |
 | `API error 403 (forbidden): no details from the server` | you lack `lm_integrator`, or `lm_admin` for `lm observations` | ask your administrator; no `lm` command lists your roles (`GET /api/bff/v1/me` returns them under `roles`) |
 
@@ -509,20 +532,31 @@ workflow (the `curl` above) → draft again from the checked dossier, to a new f
 
     A document with a `NULL` or blank **key**, or a `NULL` or blank **status**, is skipped —
     permanently: there is nothing to follow it by, or no state to watch (`SO-000009` on the demo
-    desk). The apply report counts both: `keyNullOrBlank` and `nullOrBlank`.
+    desk). The apply report counts both: `key null or blank` and `status null or blank`.
 
     ### The alert, verbatim
 
     From the demo desk, with `dormancy.after` shortened to `1m`:
 
     ```
-    SO-000004 : observé immobile en « BROUILLON » depuis le 2026-10-18 (première observation 2026-10-18) — seuil déclaré 1m dans acme-order-lifecycle
+    SO-000004: observed unmoved in "BROUILLON" since 2026-10-18 (first observed 2026-10-18) — declared threshold 1m in acme-order-lifecycle
     ```
 
-    The shape — `<key> : observé immobile en « <state> » depuis le <date> (première observation
-    <date>) — seuil déclaré <after> dans <workflow>` — never asserts how long the document sat in
-    the source. It is emitted as `decision.dormant.<workflow>` and appears in the
-    [inbox](inbox.md) as `workflow:<workflow>`.
+    The default shape — `<key>: observed unmoved in "<state>" since <date> (first observed <date>)
+    — declared threshold <after> in <workflow>` — never asserts how long the document sat in the
+    source. It is emitted as `decision.dormant.<workflow>` and appears in the [inbox](inbox.md) as
+    `workflow:<workflow>`.
+
+    A workflow writes the sentence in the team's language with `spec.dormancy.message`:
+
+    ```yaml
+    dormancy:
+      after: 14d
+      message: "{doc_key} : immobile en « {state_label} » depuis le {since} — seuil {threshold}"
+    ```
+
+    `{state_label}` is the state's declared `label` (its code when the state is undeclared); dates
+    are the UTC day. A placeholder outside the seven is refused at apply, naming it.
 
     ### Re-alert semantics
 
@@ -538,25 +572,24 @@ workflow (the `curl` above) → draft again from the checked dossier, to a new f
     ### Reading the tape
 
     `lm observations list` — the watched documents of every workflow in your scopes, **stillest
-    first** (`--limit`, default 200, at most 1000). `SINCE` is when lumnik started observing that
+    first** (`--workflow`, `--limit`: default 200, at most 1000). `SINCE` is when lumnik started observing that
     state; `ALERTED` is empty until the sweep alerts. `lm observations stats` sums it up per workflow. The TUI's
     `:observations` screen shows the same, with humanized ages. Both need `lm_admin` (or
     `lm_superadmin`) on top of `lm_integrator`.
 
+    `lm observations transitions` reads the journal: every observed move, **newest first**
+    (`--workflow`, `--doc`, `--limit`). `IN_FROM_S` is the seconds the document spent in `FROM`,
+    from `ENTERED` — its previous move, or its first observation for its first one (a lower bound,
+    like `SINCE`). Moves are seen at sweep granularity: a document that moved twice between two
+    ticks shows one move.
+
     ### Scale
 
-    Each tick reads the latest state of every business key, in the database. On a table with
-    millions of distinct documents, lengthen `lumnik.workflow.sweep.every`. That read spills to
-    temporary files and counts against PostgreSQL's `temp_file_limit`; past it, the tick logs
-    `dormancy sweep failed …`.
-
-    The tape and its transition journal are never pruned; only `lm workflow rm` clears them.
-
-    A workflow whose table, status column or key column is gone is skipped, logged once:
-    `dormancy sweep standing down for tenant … workflow …`; it resumes by itself, with one log
-    line, when the table is readable again. Any other failure (timeout, revoked grant) logs
-    `dormancy sweep failed for tenant … workflow … — skipped` on every tick. Other workflows are
-    never affected.
+    - On a table with millions of documents, lengthen `lumnik.workflow.sweep.every` (15 minutes by
+      default).
+    - The tape is kept until `lm workflow rm`.
+    - A workflow whose table is gone is skipped, and comes back by itself when the table returns.
+      The other workflows are never affected. The hub log names the workflow.
 
     ### An undeclared value can never be terminal
 

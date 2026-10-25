@@ -143,6 +143,26 @@ class IntegrationResourceIT {
             .body("enabled", equalTo(false));
     }
 
+    @Test
+    void an_unknown_key_is_refused_by_name_on_create_and_update() {
+        String name = "strict-hook-" + System.nanoTime();
+        given().contentType("application/json").header("X-Tenant-ID", TENANT.toString())
+            .body("""
+                  {"name":"%s","targetUrl":"https://hook.make.com/abc","authMode":"NONE",
+                   "eventTypes":["repair.completed"],"event_types":["x"]}""".formatted(name))
+        .when().post("/api/tenants/" + TENANT + "/integrations")
+            .then().statusCode(400)
+            .body("error", containsString("unknown key: event_types —"));
+
+        Integer id = createIntegration(name).then().statusCode(201).extract().path("id");
+
+        given().contentType("application/json").header("X-Tenant-ID", TENANT.toString())
+            .body("{\"enable\":false}")
+        .when().put("/api/tenants/" + TENANT + "/integrations/" + id)
+            .then().statusCode(400)
+            .body("error", containsString("unknown key: enable —"));
+    }
+
     private Response createIntegration(String name) {
         return given().contentType("application/json")
             .header("X-Tenant-ID", TENANT.toString())

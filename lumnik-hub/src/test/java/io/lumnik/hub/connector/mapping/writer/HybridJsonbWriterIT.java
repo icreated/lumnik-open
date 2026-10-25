@@ -112,6 +112,34 @@ class HybridJsonbWriterIT {
     }
 
     @Test
+    void a_promoted_value_reaches_its_type_or_is_one_cell_error_never_a_failed_write() {
+        // #1398: a JSON API sends instants and numbers as strings; bound as varchar they failed every run.
+        String table = "ext.test_typed_" + System.nanoTime();
+        HybridJsonbSpec spec = new HybridJsonbSpec(table, "$.id", List.of(
+            new PromotedColumn("updated_at", "$.updated_at", SqlType.TIMESTAMPTZ, Optional.empty()),
+            new PromotedColumn("qty", "$.qty", SqlType.BIGINT, Optional.empty())));
+        long[] unreadable = new long[1];
+        TenantContext.runAsSystem(() -> {
+            try {
+                utx.begin();
+                unreadable[0] = writer.write(spec, List.of(
+                    Map.of("id", "o1", "updated_at", "2026-10-01T08:01:00.000Z", "qty", "12"),
+                    Map.of("id", "o2", "updated_at", "yesterday", "qty", "3")), 1L, UUID.randomUUID(), UUID.randomUUID());
+                utx.commit();
+            } catch (Exception e) { throw new RuntimeException(e); }
+        });
+        assertEquals(1L, unreadable[0]);
+        Object[] o1 = (Object[]) em.createNativeQuery(
+            "SELECT updated_at IS NOT NULL, qty FROM " + table + " WHERE external_id = 'o1'").getSingleResult();
+        assertEquals(true, o1[0]);
+        assertEquals(12L, ((Number) o1[1]).longValue());
+        Object[] o2 = (Object[]) em.createNativeQuery(
+            "SELECT updated_at IS NULL, data->>'updated_at' FROM " + table + " WHERE external_id = 'o2'").getSingleResult();
+        assertEquals(true, o2[0]);
+        assertEquals("yesterday", o2[1], "the payload keeps the value whole");
+    }
+
+    @Test
     void system_context_row_hash_is_persisted_and_upserted() throws Exception {
         // C4/P18 PR1: the hash the hybrid branch used to throw away is the row identity the
         // event emission (PR2) will key on — it must survive the write AND follow the upsert.

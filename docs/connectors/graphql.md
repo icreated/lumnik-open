@@ -31,7 +31,7 @@ lm secret set ACME_API_KEY        # demo-key
 
 ```
 $ lm apply -f docs/connectors/rest/demo/70-graphql-relay.yaml
-{"name":"acme-graphql","connectorId":"35e9c66a-ec11-4ea5-a9f8-12cca9829c69","endpointsApplied":1}
+Applied connector "acme-graphql" — 1 endpoint
 $ lm source rest test acme-graphql
 ENDPOINT  METHOD  STATUS  ITEMS  VERDICT
 partners  POST    200     500    ok
@@ -59,42 +59,16 @@ f26868f0  acme-graphql  partners  Completed  2400  2400  0        0             
 | `cursor_var` | pagination | yes | The variable that receives `endCursor` (e.g. `after`) |
 | `cursor_path`, `has_more_path`, `response_path` | pagination | yes | JSONPaths to `endCursor`, `hasNextPage` and the node list |
 | `target` | endpoint | yes | The same hybrid target as REST: `table`, `unique_key`, `promote` |
-| `incremental` | endpoint | no | Leave it at `full` — see [Incremental does not reach a GraphQL server](#incremental-does-not-reach-a-graphql-server) |
+| `incremental` | endpoint | no | `mode: watermark` sends the mark as the variable named by `param` — see [Incremental](#incremental-the-mark-rides-in-a-variable) |
 
 `path` and `method` are implicit — the request is always a POST to `graphql_path`.
 
 - In the query the variable carries its sigil (`$after`); `cursor_var: after` names it without.
 - There is no page-size field: page size is in the query itself (`first: 500` above).
 
-## How it works
-
-- The query is POSTed as `{ "query": ..., "variables": ... }` to `base_url + graphql_path`.
-- Relay pagination reads `pageInfo { hasNextPage endCursor }`, and re-injects `endCursor` into
-  `variables.<cursor_var>` for the next request — the Relay Connections convention.
-- `response_path: ...edges[*].node` extracts the node list (a JSONPath projection), so the rows
-  that land are the nodes, without the `edges` wrapper.
-- A relay cursor is **opaque**: point `cursor_path` at `pageInfo.endCursor`; it must resolve
-  to a scalar.
-
-## The hard rule, and its two refusals
-
-A graphql endpoint must declare `kind: relay` with `cursor_binding: variable`, and that binding
-is valid nowhere else:
-
-```
-$ lm apply -f bad-gql.yaml
-✗ bad-gql.yaml — 1 error(s), 0 warning(s)
-
-  ERROR    spec.endpoints[0].pagination
-          graphql endpoints require pagination.kind=relay with cursor_binding=variable
-          → Use pagination: { kind: relay, cursor_binding: variable, cursor_var: <name>, cursor_path: ..., has_more_path: ..., response_path: ... }
-
-Fix errors above before running 'lm apply -f bad-gql.yaml'.
-Error: validation failed: 1 error(s)
-```
-
-The other half — `cursor_binding: variable` on a non-graphql endpoint — is refused the same way;
-see [Cursor binding](rest/pagination.md#cursor-binding).
+- The rows that land are the nodes, without the `edges` wrapper.
+- A graphql endpoint must declare `kind: relay` with `cursor_binding: variable`. `lm apply`
+  refuses anything else, and shows the block to write.
 
 ## The two ways a GraphQL server says no on HTTP 200
 
@@ -134,32 +108,52 @@ and run again.
 
 `spec.headers[]` applies to every request, as for [REST request headers](rest.md#request-headers).
 
-## Incremental does not reach a GraphQL server
+## Incremental: the mark rides in a variable
 
-`incremental: { mode: watermark }` is accepted on a graphql endpoint, but the mark is sent as a
-URL **query parameter**, not as a GraphQL variable:
+On a graphql endpoint, `incremental.param` names a **GraphQL variable**. The stored mark is
+sent in the request's `variables`, on every page of the run:
+
+```yaml
+endpoints:
+  - id: partners
+    kind: graphql
+    query: |
+      query($after: String, $updated_since: String) {
+        partners(first: 500, after: $after, updatedSince: $updated_since) {
+          edges { cursor node { id name updated_at } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    incremental:
+      mode: watermark
+      param: updated_since              # the variable, without the $
+      watermark_path: "$.updated_at"
+```
+
+- The query must declare the variable. `lm apply` refuses a `param` the query does not declare.
+- Declare it nullable (`String`, not `String!`). The first run has no mark yet and sends none.
+- The server filters on it. The [demo API](rest/demo-api.md) reads `$updated_since` and
+  returns the partners changed at or after it.
+
+The demo's `acme-graphql` with this `incremental` block (and `updated_at` added to the node),
+run twice:
 
 ```
-19/Oct/2026 07:26:36  "POST /graphql?updated_since=2026-01-02T15%3A59%3A00Z HTTP/1.1" 200 -
+$ lm run get 0e15e816
+ID        CONNECTOR         ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED             EVALUATED
+0e15e816  acme-graphql-inc  partners  Completed  2400  2400  0        0             2026-10-25 11:16  2026-10-25 11:16  yes
+$ lm run get beb5aab8
+ID        CONNECTOR         ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED             EVALUATED
+beb5aab8  acme-graphql-inc  partners  Completed  2   2    0        0             2026-10-25 11:16  2026-10-25 11:16  yes
 ```
 
-A GraphQL server ignores it, so every run reads everything — `acme-graphql` with `incremental`
-added, run twice:
-
-```
-$ lm run list --connector acme-graphql
-ID        CONNECTOR     ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
-df7023ae  acme-graphql  partners  Completed  2400  2400  0        0             2026-10-19 07:26  2026-10-19 07:26
-b108a108  acme-graphql  partners  Completed  2400  2400  0        0             2026-10-19 07:26  2026-10-19 07:26
-```
-
-Filter in the query itself — a static `variables:` entry or a literal argument — and
-leave `incremental` at `full`.
+The second run asks only from the mark. It reads a little before it, by the length of the
+previous run: [a change during a run](rest.md#a-change-during-a-run).
 
 ## Not yet supported
 
 Mutations, subscriptions, schema-introspection discovery, persisted queries, query batching,
-per-endpoint header overrides, and `on_error: warn` (partial-success ingestion).
+per-endpoint header overrides.
 
 ## How to…
 

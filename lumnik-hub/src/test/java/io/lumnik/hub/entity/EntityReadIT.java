@@ -96,6 +96,19 @@ class EntityReadIT {
   }
 
   @Test
+  void a_filter_naming_no_column_is_refused_with_the_filterable_ones() {
+    // Ignoring it answered every row under a filter that selected none of them (#1519). _conflicts is
+    // in every row, but it is the fusion ledger, not a column a filter can match.
+    for (String key : List.of("_conflicts", "nope")) {
+      given().headers(TestIdentity.tenantAndUser(1))
+          .get("/api/entities/customer?" + key + "=x")
+          .then().statusCode(400)
+          .body("error", equalTo("filter " + key + " is not a column of Customer;"
+              + " filterable columns: id, name, segment, credit_limit"));
+    }
+  }
+
+  @Test
   void paginates_with_limit() {
     given().headers(TestIdentity.tenantAndUser(1))
         .get("/api/entities/customer?limit=1")

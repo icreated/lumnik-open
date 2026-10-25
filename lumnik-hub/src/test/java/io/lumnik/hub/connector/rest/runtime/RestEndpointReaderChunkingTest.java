@@ -20,6 +20,7 @@ import io.lumnik.hub.connector.rest.pagination.EndpointConfig;
 import io.lumnik.hub.connector.rest.pagination.PaginationFactory;
 import io.lumnik.hub.connector.rest.pagination.PaginationStrategy;
 import io.lumnik.hub.connector.rest.reliability.RateLimiterRegistry;
+import io.lumnik.hub.connector.secret.SecretRefs;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
@@ -104,7 +105,7 @@ class RestEndpointReaderChunkingTest {
     /** Fresh reader per read, exactly like the engine builds one per chunk. */
     private RestEndpointReader reader() {
         return new RestEndpointReader(endpoint, new PassThroughAuth(), pagination,
-            new RateLimiterRegistry(), http, mapper);
+            new RateLimiterRegistry(), http, mapper, SecretRefs.environmentOnly(name -> null));
     }
 
     private ConnectorContext ctx(UUID runId, Map<String, Object> config) {
@@ -265,6 +266,7 @@ class RestEndpointReaderChunkingTest {
 
     @Test
     void an_unusable_resume_state_fails_loudly_naming_the_endpoint_instead_of_restarting_at_page_one() {
+        endpoint.setName("orders");
         twentyItemsInFivePages();
         ObjectNode broken = mapper.createObjectNode();
         broken.putNull("watermark");
@@ -276,7 +278,8 @@ class RestEndpointReaderChunkingTest {
         ConnectorContext context = ctx(fullConfig());
         var e = assertThrows(ConnectorException.class, () -> reader.read(8, cursor, context));
 
-        assertTrue(e.getMessage().contains(ENDPOINT.toString()),
+        // #1373: by its manifest id, the name an integrator can look up — not the hub's internal id
+        assertTrue(e.getMessage().startsWith("Endpoint 'orders': ") && !e.getMessage().contains(ENDPOINT.toString()),
             "names the endpoint: " + e.getMessage());
         assertTrue(e.getMessage().contains("re-run the connector"),
             "tells the operator the safe recovery: " + e.getMessage());

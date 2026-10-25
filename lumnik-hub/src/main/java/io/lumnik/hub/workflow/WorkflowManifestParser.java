@@ -2,8 +2,11 @@ package io.lumnik.hub.workflow;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.hub.connector.mapping.MappingValidationException;
+import io.lumnik.hub.connector.mapping.Zones;
 import io.lumnik.hub.manifest.ManifestKeys;
 import io.lumnik.hub.manifest.ManifestSurface;
+import io.lumnik.hub.process.MessageTemplate;
 import io.lumnik.hub.sql.SqlIdentifiers;
 
 import java.util.ArrayList;
@@ -28,11 +31,12 @@ public class WorkflowManifestParser {
     private static final Set<String> ROOT_KEYS = Set.of("apiVersion", "kind", METADATA, "spec");
     private static final Set<String> METADATA_KEYS = Set.of("name");
     private static final Set<String> SPEC_KEYS =
-        Set.of("scope", "provenance", "on", "states", "transitions", "dormancy");
+        Set.of("scope", "provenance", "on", "states", "transitions", "dormancy", "due");
     private static final Set<String> ON_KEYS = Set.of("table", "column", "key");
     private static final Set<String> STATE_KEYS = Set.of("code", "label", "aliases", "initial", "terminal");
     private static final Set<String> TRANSITION_KEYS = Set.of("from", "to");
-    private static final Set<String> DORMANCY_KEYS = Set.of("after");
+    private static final Set<String> DORMANCY_KEYS = Set.of("after", "message");
+    private static final Set<String> DUE_KEYS = Set.of("column", "states", "zone", "message");
 
     private static final ManifestSurface SURFACE = ManifestSurface.builder()
         .group("", "root", ROOT_KEYS)
@@ -40,6 +44,7 @@ public class WorkflowManifestParser {
         .group("spec", "spec", SPEC_KEYS)
         .group("spec.on", "spec.on", ON_KEYS)
         .group("spec.dormancy", "spec.dormancy", DORMANCY_KEYS)
+        .group("spec.due", "spec.due", DUE_KEYS)
         .group("spec.states[]", "states[]", STATE_KEYS)
         .group("spec.transitions[]", "transitions[]", TRANSITION_KEYS)
         .build();
@@ -86,9 +91,10 @@ public class WorkflowManifestParser {
 
         Declared declared = requireStates(spec);
         List<WorkflowManifest.TransitionDef> transitions = requireTransitions(spec, declared);
+        WorkflowManifest.DueDef due = optionalDue(spec, watched, declared);
 
         return new WorkflowManifest(name, scope, provenance, watched.table(), watched.column(),
-            watched.key(), dormancy, List.copyOf(declared.states()), List.copyOf(transitions));
+            watched.key(), dormancy, due, List.copyOf(declared.states()), List.copyOf(transitions));
     }
 
     /** The column this workflow watches, and the optional business key linking a document's versions. */
@@ -282,7 +288,73 @@ public class WorkflowManifestParser {
             throw new IllegalArgumentException(
                 "spec.dormancy.after is required and must match " + AFTER_RX
                     + " (e.g. 30d, 12h, 2m): " + after);
-        return new WorkflowManifest.DormancyDef(after);
+        String message = ManifestKeys.text(dorm, "message");
+        if (message != null) requireKnownPlaceholders(message, "spec.dormancy.message", DormancyMessage.PLACEHOLDERS);
+        return new WorkflowManifest.DormancyDef(after, message);
+    }
+
+    /**
+     * A watched due date (#1448) — the clock is a date the DATA carries, where dormancy's is our
+     * first sighting. Unlike dormancy it is admitted on a fused view: a view has one row per key,
+     * so there are no versions to order, and the view is where a lifecycle spread over several
+     * flows lives.
+     *
+     * <p>Its states must be declared codes (an alias is a raw value, not a state) and non-terminal:
+     * a terminal document can never be late, so naming one is a contradiction, not a wish. Whether
+     * the column exists, and is a date, is the data's business and is reported, never refused here:
+     * declaring before ingesting is a legitimate order.
+     */
+    private static WorkflowManifest.DueDef optionalDue(JsonNode spec, Watched watched, Declared declared) {
+        JsonNode due = spec.path("due");
+        if (due.isMissingNode() || due.isNull()) return null;
+        if (!due.isObject())
+            throw new IllegalArgumentException("spec.due must be a map {column, states, zone, message} (got "
+                + MappingValidationException.typeName(due) + ")");
+        if (watched.key() == null)
+            throw new IllegalArgumentException(
+                "spec.due requires spec.on.key (a due date is per document; the key names the document)");
+        String column = requireNamed(ManifestKeys.text(due, "column"), "spec.due.column");
+        List<String> states = requireDueStates(due.path("states"), declared);
+        String zone = ManifestKeys.text(due, "zone");
+        Zones.whyNot(zone).ifPresent(why -> { throw new IllegalArgumentException("spec.due: " + why); });
+        if (zone != null && zone.isBlank()) zone = null;   // blank is no zone, as Zones reads it
+        String message = ManifestKeys.text(due, "message");
+        if (message != null) requireKnownPlaceholders(message, "spec.due.message", DueMessage.PLACEHOLDERS);
+        return new WorkflowManifest.DueDef(column, states, zone, message);
+    }
+
+    private static List<String> requireDueStates(JsonNode node, Declared declared) {
+        if (!node.isArray() || node.isEmpty())
+            throw new IllegalArgumentException("spec.due.states must list the non-terminal states whose "
+                + "documents are due on spec.due.column, e.g. [CONFIRMED]");
+        List<String> states = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (JsonNode n : node) {
+            String named = n.asText();
+            WorkflowManifest.StateDef state = declared.states().stream()
+                .filter(s -> norm(s.code()).equals(norm(named))).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(
+                    "spec.due.states names an undeclared state '" + named + "' — name a state code"));
+            if (state.terminal())
+                throw new IllegalArgumentException("spec.due.states names the terminal state '" + named
+                    + "': a document that has reached it can never be late");
+            if (!seen.add(state.code()))
+                throw new IllegalArgumentException("spec.due.states names '" + named + "' twice");
+            states.add(state.code());
+        }
+        return List.copyOf(states);
+    }
+
+    /** A declared sentence must say something, and may name only what its renderer knows. */
+    private static void requireKnownPlaceholders(String message, String path, Set<String> known) {
+        if (message.isBlank())
+            throw new IllegalArgumentException(path + " must not be blank — omit it for the default sentence");
+        List<String> unknown = MessageTemplate.placeholders(message).stream()
+            .filter(p -> !known.contains(p)).toList();
+        if (!unknown.isEmpty())
+            throw new IllegalArgumentException(path + " references "
+                + unknown.stream().map(p -> "{" + p + "}").toList() + " — it may name "
+                + known.stream().sorted().toList());
     }
 
     private static Declared requireStates(JsonNode spec) {

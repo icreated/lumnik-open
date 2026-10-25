@@ -6,6 +6,7 @@ import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.api.types.SkipReason;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
+import io.lumnik.hub.connector.api.types.ScriptVersion;
 import io.lumnik.hub.connector.domain.ConnectorRun;
 import io.lumnik.hub.connector.repository.ConnectorDeadLetterRepository;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
@@ -25,6 +26,7 @@ import java.util.UUID;
 
 import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
@@ -109,6 +111,20 @@ class RunAdminResourceTest {
       .when().get("/api/platform/runs/" + runId)
       .then().statusCode(200)
         .body("cellErrors", equalTo(5));
+  }
+
+  /** #1430: which version of an operator's script produced the run's rows. */
+  @Test
+  void get_run_exposes_the_scripts_it_ran() throws Exception {
+    UUID withScript = seedRunWithCellErrors(0, List.of(new ScriptVersion("hooks:shipping-fee.kts", "c1c59e5c")));
+    UUID without = seedRunWithCellErrors(0);
+
+    given().headers(TestIdentity.tenantAndUser(1)).when().get("/api/platform/runs/" + withScript)
+      .then().statusCode(200)
+        .body("scripts.name", contains("hooks:shipping-fee.kts"))
+        .body("scripts.sha256", contains("c1c59e5c"));
+    given().headers(TestIdentity.tenantAndUser(1)).when().get("/api/platform/runs/" + without)
+      .then().statusCode(200).body("scripts", empty());
   }
 
   /**
@@ -503,6 +519,10 @@ class RunAdminResourceTest {
 
   /** Seeds a connector with a Completed run carrying the given cell_errors; returns the run id. */
   private UUID seedRunWithCellErrors(long cellErrors) throws Exception {
+    return seedRunWithCellErrors(cellErrors, List.of());
+  }
+
+  private UUID seedRunWithCellErrors(long cellErrors, List<ScriptVersion> scripts) throws Exception {
     return TenantContext.callAsSystem(() -> {
       try {
         utx.begin();
@@ -522,6 +542,7 @@ class RunAdminResourceTest {
         run.setSyncMode("full");
         run.setTriggeredBy("Manual");
         run.setCellErrors(cellErrors);
+        run.recordScripts(scripts);
         runs.persist(run);
         runs.flush();
 

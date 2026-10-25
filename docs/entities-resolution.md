@@ -34,8 +34,7 @@ The manifests read the files from `/tmp/acme-resolution/` on the hub's filesyste
 command places a file there. Copy them in, then land both sources:
 
 ```bash
-docker exec lumnik-hub-1 mkdir -p /tmp/acme-resolution
-for f in docs/entities-resolution/*.csv; do docker cp "$f" lumnik-hub-1:/tmp/acme-resolution/; done
+docker compose -f docker-compose.selfhost.yml cp docs/entities-resolution/. hub:/tmp/acme-resolution
 lm apply -f docs/entities-resolution/10-erp.yaml
 lm apply -f docs/entities-resolution/20-crm.yaml
 lm connector run res-erp
@@ -106,15 +105,17 @@ a [correction](#correct-it) moves it.
 ```
 $ lm entity ambiguous Customer
 IDENTITY_REF                          SOURCE     SOURCE_ID  CANDIDATES                                                                 DECIDED_BY  OCCURRED_AT
-8b8d23db-749e-48d8-a256-e7fbcd268022  t_res_crm  9003       2e8eb5e3-d246-456a-a0a4-cda4d2e5260a,519ee7f9-d04c-4a56-ba6f-33517b107294  automatic   2026-10-19 01:47
+410ca39f-f788-4696-b9c4-82ef9a21e774  t_res_crm  9003       8b2d2706-be5c-44d3-a70f-14523d9a68df,a653a6a7-6d2f-488e-99f0-772d5b462d7b  automatic   2026-10-24 23:12
 ```
+
+The two candidates are the identities of `C-003` (`8b2d2706…`) and `C-004` (`a653a6a7…`).
 
 `lm entity history NAME SOURCE ID` explains any decision, one line per pass:
 
 ```
 $ lm entity history Customer t_res_crm 9003
-OCCURRED_AT          OUTCOME    RULE   PROVIDER  CANDIDATES                                                                 SET_ASIDE  DECIDED_BY  RUN_ID
-2026-10-19 01:47:52  AMBIGUOUS  email            2e8eb5e3-d246-456a-a0a4-cda4d2e5260a,519ee7f9-d04c-4a56-ba6f-33517b107294             automatic
+OCCURRED_AT          OUTCOME    RULE   PROVIDER  CANDIDATES                                                                 SET_ASIDE  DECIDED_BY  RUN_ID  ASSERTED_BY  REASON
+2026-10-24 23:12:05  AMBIGUOUS  email            8b2d2706-be5c-44d3-a70f-14523d9a68df,a653a6a7-6d2f-488e-99f0-772d5b462d7b             automatic
 ```
 
 `C-004` shares `C-003`'s mailbox but comes from the same ERP. One customer never holds two rows of
@@ -123,8 +124,8 @@ from:
 
 ```
 $ lm entity history Customer t_res_erp C-004
-OCCURRED_AT          OUTCOME   RULE  PROVIDER  CANDIDATES                            SET_ASIDE                             DECIDED_BY  RUN_ID
-2026-10-19 01:47:52  RESOLVED                  2e8eb5e3-d246-456a-a0a4-cda4d2e5260a  519ee7f9-d04c-4a56-ba6f-33517b107294  automatic
+OCCURRED_AT          OUTCOME   RULE  PROVIDER  CANDIDATES                            SET_ASIDE                             DECIDED_BY  RUN_ID  ASSERTED_BY  REASON
+2026-10-24 23:12:05  RESOLVED                  a653a6a7-6d2f-488e-99f0-772d5b462d7b  8b2d2706-be5c-44d3-a70f-14523d9a68df  automatic
 ```
 
 ## Correct it
@@ -157,13 +158,13 @@ CODE   NAME             EMAIL                        CRM_ID  _CONFLICTS
 C-003  Filtration Lyon  compta@groupe-rhone.example  9003    {"name": [{"src": "t_res_erp", "value": "Filtration Lyon"}, {"src": "t_res_crm", "value": "Groupe Rhône"}]}
 ```
 
-The history records the correction as `asserted`:
+The history records the correction as `asserted`, with who made it and why:
 
 ```
 $ lm entity history Customer t_res_crm 9003
-OCCURRED_AT          OUTCOME    RULE   PROVIDER  CANDIDATES                                                                 SET_ASIDE  DECIDED_BY  RUN_ID
-2026-10-19 01:47:52  AMBIGUOUS  email            2e8eb5e3-d246-456a-a0a4-cda4d2e5260a,519ee7f9-d04c-4a56-ba6f-33517b107294             automatic
-2026-10-19 01:47:57  RESOLVED                    519ee7f9-d04c-4a56-ba6f-33517b107294                                                  asserted
+OCCURRED_AT          OUTCOME    RULE   PROVIDER  CANDIDATES                                                                 SET_ASIDE  DECIDED_BY  RUN_ID  ASSERTED_BY  REASON
+2026-10-24 23:12:05  AMBIGUOUS  email            8b2d2706-be5c-44d3-a70f-14523d9a68df,a653a6a7-6d2f-488e-99f0-772d5b462d7b             automatic
+2026-10-24 23:12:05  RESOLVED                    8b2d2706-be5c-44d3-a70f-14523d9a68df                                                  asserted            integrator   Groupe Rhône is Filtration Lyon's billing name
 ```
 
 - **A correction outranks every rule** and survives every later run and resolve.
@@ -186,6 +187,7 @@ C-004  Levage Lyon  compta@groupe-rhone.example  9003    {"name": [{"src": "t_re
 If that is wrong too, assert it distinct as well.
 
 A row is named as the history names it. A mistyped one is refused:
+
 ```
 $ lm entity assert-same Customer --left t_res_crm:9030 --right t_res_erp:C-003
 Error: API error 404: entity 'Customer' has no row t_res_crm:9030 — check it with lm entity history Customer t_res_crm 9030, or run lm entity resolve Customer if the row is new
@@ -198,7 +200,7 @@ again. The new row joins the CRM's `9005` with no other gesture:
 
 ```
 $ lm connector run res-erp
-run scheduled: dbdc0745-1ba9-446c-89cb-ff65d71e9e0d
+run scheduled: ada9937e-9dc1-4444-adae-fda4c29b9afb
 ```
 
 ```
@@ -209,8 +211,8 @@ C-005  Pneumatique Porto  geral@pneumatique-porto.example  9005    {}
 
 ```
 $ lm entity history Customer t_res_erp C-005
-OCCURRED_AT          OUTCOME   RULE   PROVIDER  CANDIDATES                            SET_ASIDE  DECIDED_BY  RUN_ID
-2026-10-19 01:48:01  RESOLVED  email            4295e78e-360a-4198-a74a-1b20d7bf1977             automatic   dbdc0745-1ba9-446c-89cb-ff65d71e9e0d
+OCCURRED_AT          OUTCOME   RULE   PROVIDER  CANDIDATES                            SET_ASIDE  DECIDED_BY  RUN_ID                                ASSERTED_BY  REASON
+2026-10-24 23:12:13  RESOLVED  email            643566ff-d862-4748-95bf-61dca428bcd1             automatic   ada9937e-9dc1-4444-adae-fda4c29b9afb
 ```
 
 Run `lm entity resolve NAME` yourself after applying the entity, after changing its rules, and after
@@ -230,33 +232,27 @@ Corrections are made in `:entities`: `Enter` on the entity, `m` marks a row, `=`
 
 ## With joins and Search
 
-- **[`joins[]`](entities.md#fuse-or-join) work on a `resolution:` entity too.** They are read on top
+- **[`joins[]`](entities-joins.md) work on a `resolution:` entity too.** They are read on top
   of the resolved customers: each row gets the lookup's value. A key that the lookup holds more than once
   leaves the joined column empty and lists those rows in `_conflicts`; it never picks one.
-- **A [SearchIndex](search/search-indexes.md#columns-joined-from-a-lookup-table) indexes one
-  document per resolved customer.**
-  - A row nothing has decided yet (ambiguous, or with no rule) is not a document until it is
-    decided.
-  - A change in a lookup table re-indexes every customer whose rows hold the changed key.
-- **A document's freshness (`asOf`) waits for the resolution.** It moves only once the resolution
-  pass has covered every run that wrote the entity's sources, and once the lookup tables have been
-  read.
-  - A `Failed` or `Cancelled` run holds `asOf` back until the next `lm entity resolve`.
+- **A [SearchIndex](search/search-indexes.md#columns-joined-from-a-lookup-table) finds a customer
+  once it is resolved.** A row still ambiguous, or with no rule, is not searchable yet.
 
 ## The manifest
 
 | Key | What it says |
 |---|---|
-| `resolution.identity` | for each source table, the column that identifies one of its rows (`t_res_crm: crm_id`) — one column per source, every source listed |
+| `resolution.identity` | for each source table, the column that identifies one of its rows — one per source, every source listed. Write the column's **name in the entity** (the right side of the source's `map`), not the source's own name: `t_res_crm: crm_id`, although the CRM file calls it `contact_id` |
 | `resolution.cascade` | the rules, tried in order — at least one |
 | `cascade[].id` | the rule's name, shown in the history |
 | `cascade[].exact.fields` | canonical columns that must be equal — several fields must all be equal |
 | `cascade[].exact.normalize` | how values are compared: `lower`, `upper`, `remove-diacritics`, `strip-invisible`, `fix-mojibake`, `replace-smart-quotes`, `decode-html-entities`, `titlecase`, `clean`. Here `clean` only removes a leading byte-order mark: it does not trim spaces |
-| `cascade[].propose` | asks an external candidate provider (`provider`, `acceptAbove`, `reviewAbove`). No provider ships today, so such a rule leaves its rows *unresolved (provider)* |
+| `cascade[].propose` | reserved: no candidate provider ships today. Such a rule leaves its rows *unresolved (provider)* |
 
-Rules run in order, and a later rule can settle what an earlier one left ambiguous. The same entity
-with a second rule on the name, applied as `Customer2`: a CRM contact *Levage Lyon* (`9007`) at the
-shared mailbox is ambiguous by email, then resolved to `C-004` by name:
+Rules run in order, and a later rule can settle what an earlier one left ambiguous. Add a second
+rule on the name: a CRM contact named *Levage Lyon* at the shared mailbox is ambiguous by email,
+then resolved to `C-004` by name. Its history then shows two lines: `AMBIGUOUS` under `email`,
+then `RESOLVED` under `name`.
 
 ```yaml
 cascade:
@@ -264,13 +260,6 @@ cascade:
     exact: { fields: [email], normalize: [lower] }
   - id: name
     exact: { fields: [name], normalize: [lower] }
-```
-
-```
-$ lm entity history Customer2 t_res_crm 9007
-OCCURRED_AT          OUTCOME    RULE   PROVIDER  CANDIDATES                                                                 SET_ASIDE  DECIDED_BY  RUN_ID
-2026-10-15 15:04:03  AMBIGUOUS  email            b82d893a-9ff5-4de0-8f9f-a8893a375d04,f969ba42-8c76-403e-8a93-d5998bff3d4e             automatic
-2026-10-15 15:04:03  RESOLVED   name             b82d893a-9ff5-4de0-8f9f-a8893a375d04                                                  automatic
 ```
 
 - `match:` and `resolution:` are two ways to fuse; an entity declares one or the other.
@@ -286,7 +275,6 @@ OCCURRED_AT          OUTCOME    RULE   PROVIDER  CANDIDATES                     
   links. Back it up with your other secrets.
 - **After upgrading the hub**, apply each `resolution:` entity again with the same manifest, then run
   `lm entity resolve NAME`.
-- `LUMNIK_ENTITY_RESOLUTION_BATCH_SIZE` (default `500`) sets how many rows a pass reads at a time.
 
 ## See also
 

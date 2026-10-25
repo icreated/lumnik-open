@@ -102,6 +102,8 @@ services:
       LUMNIK_ASK_ANSWER_BUDGET_CHARS: ${LUMNIK_ASK_ANSWER_BUDGET_CHARS:-6000}
       JUDGE_MODEL: ${JUDGE_MODEL:-gemma4}
       RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-nomic-embed-text}
+      # Must match the embedding model, and change only with the migration in docs/rag/models.md.
+      RAG_EMBEDDING_DIM: ${RAG_EMBEDDING_DIM:-768}
       LUMNIK_EVENTS_RETENTION_DAYS: ${LUMNIK_EVENTS_RETENTION_DAYS:-30}
       LUMNIK_AUDIT_RETENTION_DAYS: ${LUMNIK_AUDIT_RETENTION_DAYS:-365}
       LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS: ${LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS:-90}
@@ -124,10 +126,11 @@ services:
       # Exactly `true` or `false`; anything else stops the hub at startup. A change takes a restart.
       LUMNIK_AI_ENABLED: ${LUMNIK_AI_ENABLED:-true}
       # Email delivery — mock stays on until BOTH are set (see .env.example):
-      # Default mirrors the property's own default: SmallRye (Quarkus 3.33) refuses a
-      # DEFINED-but-empty quarkus.mailer.host at boot, where an absent one takes the
-      # default. 'localhost' is inert while LUMNIK_SMTP_MOCK=true (the default here).
-      LUMNIK_SMTP_HOST: ${LUMNIK_SMTP_HOST:-localhost}
+      # The host has no default: unset in .env, it stays unset in the hub, which boots mocked
+      # and quiet. Never set it to the empty string: SmallRye (Quarkus 3.33) refuses a
+      # DEFINED-but-empty quarkus.mailer.host at boot, where an absent one takes the default.
+      # (A 'localhost' default made every boot WARN "host set but still mocked".)
+      LUMNIK_SMTP_HOST:
       LUMNIK_SMTP_PORT: ${LUMNIK_SMTP_PORT:-587}
       LUMNIK_SMTP_USERNAME: ${LUMNIK_SMTP_USERNAME:-}
       LUMNIK_SMTP_PASSWORD: ${LUMNIK_SMTP_PASSWORD:-}
@@ -137,6 +140,11 @@ services:
       LUMNIK_SECRET_MASTER_KEY: ${LUMNIK_SECRET_MASTER_KEY:?set a strong key in .env — openssl rand -base64 32}
       LUMNIK_CRYPTO_SECRET_KEY: ${LUMNIK_CRYPTO_SECRET_KEY:?set a strong key in .env — openssl rand -base64 32}
       LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET: ${LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET:?set a strong secret in .env — openssl rand -base64 32}
+      # Kotlin scripts a connector manifest names as `script: hooks:<name>.kts` (docs/deploy.md): drop the
+      # .kts files in deploy/selfhost/hooks/ — read-only in the hub, kept out of git, no restart needed.
+      LUMNIK_HOOKS_DIR: /etc/lumnik/hooks
+    volumes:
+      - ./deploy/selfhost/hooks:/etc/lumnik/hooks:ro
     extra_hosts:
       # Make the host's Ollama (and any other host service) reachable as host.docker.internal
       # on Linux too (Docker Desktop provides it automatically; this makes it portable).

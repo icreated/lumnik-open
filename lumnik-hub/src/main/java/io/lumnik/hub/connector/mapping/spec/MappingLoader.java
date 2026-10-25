@@ -2,20 +2,20 @@ package io.lumnik.hub.connector.mapping.spec;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import io.lumnik.hub.connector.mapping.MappingValidationException;
+import io.lumnik.hub.connector.mapping.ScalarParams;
+import io.lumnik.hub.manifest.HubYaml;
 import io.lumnik.hub.sql.SqlIdentifiers;
-import org.jboss.logging.Logger;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 public final class MappingLoader {
 
-  private static final ObjectMapper YAML = new ObjectMapper(new YAMLFactory());
+  private static final ObjectMapper YAML = HubYaml.mapper();
 
   private MappingLoader() {}
 
@@ -31,21 +31,18 @@ public final class MappingLoader {
     int version = requireInt(root, "version");
     MappingTarget target = parseTarget(root.get("target"));
 
-    MappingSpec.StreamMode mode = MappingSpec.StreamMode.STREAM;
-    if (root.hasNonNull("mode")) {
-      String m = root.get("mode").asText();
-      if ("sorted-stream".equals(m)) mode = MappingSpec.StreamMode.SORTED_STREAM;
-      else if (!"stream".equals(m)) throw new MappingValidationException("unknown mode: " + m);
-    }
+    MappingSpec.StreamMode mode = "sorted-stream".equals(
+        ScalarParams.optionalWord("mapping", "mode", root.path("mode"), "stream", List.of("stream", "sorted-stream")))
+        ? MappingSpec.StreamMode.SORTED_STREAM : MappingSpec.StreamMode.STREAM;
 
-    String description = root.path("description").asText("");
+    String description = ScalarParams.optionalText("mapping", "description", root.path("description"), "");
 
     return new MappingSpec(
         id, version, target, mode, description,
-        parseHooks(root.path("dataset")),
-        parseHooks(root.path("row")),
-        parseHooks(root.path("cell")),
-        parseErrorPolicy(root.path("on-error"))
+        HookInvocation.parseList(root, "dataset"),
+        HookInvocation.parseList(root, "row"),
+        HookInvocation.parseList(root, "cell"),
+        ErrorPolicy.parse(root.path("on-error"))
     );
   }
 
@@ -64,7 +61,7 @@ public final class MappingLoader {
     MappingTarget.Rag rag = node.has("rag") ? parseRag(node.get("rag")) : null;
     MappingTarget.Table table = node.has("table") ? parseTable(node.get("table")) : null;
     MappingTarget.Jpa jpa = node.has("jpa")
-        ? new MappingTarget.Jpa(node.get("jpa").path("entity").asText())
+        ? new MappingTarget.Jpa(ScalarParams.optionalText("target.jpa", "entity", node.get("jpa").path("entity"), ""))
         : null;
     if (rag == null && table == null && jpa == null) {
       throw new MappingValidationException("target must specify at least one of: rag, table, jpa, hybrid-jsonb");
@@ -77,35 +74,51 @@ public final class MappingLoader {
   private static MappingTarget.Rag parseRag(JsonNode r) {
     Map<String, String> meta = new LinkedHashMap<>();
     if (r.has("metadata")) {
-      r.get("metadata").fields().forEachRemaining(e -> meta.put(e.getKey(), e.getValue().asText()));
+      r.get("metadata").fields().forEachRemaining(e ->
+          meta.put(e.getKey(), ScalarParams.text("target.rag.metadata", e.getKey(), e.getValue())));
     }
-    String embModel = r.has("embedding-model") ? r.get("embedding-model").asText() : null;
     return new MappingTarget.Rag(
-        r.path("corpus").asText(),
-        r.path("chunk-template").asText(""),
+        ScalarParams.optionalText("target.rag", "corpus", r.path("corpus"), ""),
+        ScalarParams.optionalText("target.rag", "chunk-template", r.path("chunk-template"), ""),
         meta,
-        embModel
+        ScalarParams.optionalText("target.rag", "embedding-model", r.path("embedding-model"), null)
     );
   }
 
+  /**
+   * #1472: each knob is read typed — asText() read a list or a map as "" (an index over no column, an unknown enum
+   * constant thrown raw) and a null as the word "null" (a table named null).
+   */
   private static MappingTarget.Table parseTable(JsonNode t) {
-    MappingTarget.OnConflict oc = MappingTarget.OnConflict.SKIP;
-    if (t.has("on-conflict")) {
-      oc = MappingTarget.OnConflict.valueOf(t.get("on-conflict").asText("skip").toUpperCase());
+    MappingTarget.OnConflict oc = switch (
+        ScalarParams.optionalText("target.table", "on-conflict", t.path("on-conflict"), "skip").toLowerCase(Locale.ROOT)) {
+      case "skip" -> MappingTarget.OnConflict.SKIP;
+      case "update" -> MappingTarget.OnConflict.UPDATE;
+      case "error" -> MappingTarget.OnConflict.ERROR;
+      default -> throw new MappingValidationException("target.table: 'on-conflict' must be skip, update or error");
+    };
+    JsonNode indexes = t.path("indexes");
+    if (!indexes.isMissingNode() && !indexes.isNull() && !indexes.isArray()) {
+      throw new MappingValidationException("target.table: 'indexes' must be a list of { columns: [...], unique } (got "
+          + MappingValidationException.typeName(indexes) + ")");
     }
     List<MappingTarget.Index> idx = new ArrayList<>();
-    if (t.has("indexes")) {
-      for (JsonNode i : t.get("indexes")) {
-        List<String> cols = new ArrayList<>();
-        for (JsonNode c : i.get("columns")) cols.add(c.asText());
-        idx.add(new MappingTarget.Index(cols, i.path("unique").asBoolean(false)));
+    for (int n = 0; n < indexes.size(); n++) {
+      JsonNode i = indexes.get(n);
+      if (!i.isObject()) {
+        throw new MappingValidationException("target.table: 'indexes[" + n + "]' must be { columns: [...], unique } (got "
+            + MappingValidationException.typeName(i) + ")");
       }
+      List<String> cols = ScalarParams.columnNames("target.table.indexes[" + n + "]", "columns", i.path("columns"));
+      idx.add(new MappingTarget.Index(cols,
+          ScalarParams.optionalBoolean("target.table.indexes[" + n + "]", "unique", i.path("unique"), false)));
     }
-    String schema = t.path("schema").asText("public");
-    String name = t.path("name").asText();
+    String schema = ScalarParams.optionalText("target.table", "schema", t.path("schema"), "public");
+    String name = ScalarParams.optionalText("target.table", "name", t.path("name"), "");
     requireIdentifier(schema, "target.table.schema");
     requireIdentifier(name, "target.table.name");
-    return new MappingTarget.Table(schema, name, t.path("auto-schema").asBoolean(true), oc, idx);
+    boolean autoSchema = ScalarParams.optionalBoolean("target.table", "auto-schema", t.path("auto-schema"), true);
+    return new MappingTarget.Table(schema, name, autoSchema, oc, idx);
   }
 
   /**
@@ -135,28 +148,5 @@ public final class MappingLoader {
       throw new MappingValidationException(key + " must be an int");
     }
     return v.intValue();
-  }
-
-  private static List<HookInvocation> parseHooks(JsonNode arr) {
-    return HookInvocation.parseList(arr);
-  }
-
-  private static ErrorPolicy parseErrorPolicy(JsonNode n) {
-    if (n.isMissingNode() || n.isNull()) return ErrorPolicy.soft();
-    // Honest boundary (tribunal B3): the policy is parsed and carried on MappingSpec,
-    // but NO runtime consumer enforces it yet — rows follow the engine's default
-    // behavior regardless. Warn so a mapping author doesn't rely on it silently.
-    Logger.getLogger(MappingLoader.class).warn(
-        "mapping declares on-error, which is parsed but NOT enforced yet — "
-            + "rows follow the engine's default error handling");
-    String def = n.path("default").asText("soft");
-    var defaultMode = ErrorPolicy.Mode.valueOf(def.toUpperCase());
-    var fields = new HashMap<String, ErrorPolicy.Mode>();
-    JsonNode fieldsNode = n.path("fields");
-    if (fieldsNode.isObject()) {
-      fieldsNode.fields().forEachRemaining(e ->
-          fields.put(e.getKey(), ErrorPolicy.Mode.valueOf(e.getValue().asText("soft").toUpperCase())));
-    }
-    return new ErrorPolicy(defaultMode, fields);
   }
 }

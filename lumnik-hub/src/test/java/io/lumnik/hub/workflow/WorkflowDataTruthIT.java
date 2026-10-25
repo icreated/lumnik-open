@@ -40,7 +40,7 @@ class WorkflowDataTruthIT {
             List.of(new WorkflowGraph.StateDto("EN_COURS", null, List.of("en cours"), false),
                     new WorkflowGraph.StateDto("TERMINE", null, List.of("fini"), true),
                     new WorkflowGraph.StateDto("ANNULE", null, List.of(), true)),
-            "EN_COURS", List.of());
+            "EN_COURS", List.of(), null);
     }
 
     @Test

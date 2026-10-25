@@ -15,8 +15,8 @@ class DossierCheckerTest {
 
     private static final TrustedCatalogue TRUSTED = TrustedCatalogue.load();
     private static final WorkflowGraph GRAPH = new WorkflowGraph("wf", "demo", "connector.t_commandes", "statut",
-        "declared", "id", new WorkflowManifest.DormancyDef("7d"), List.of(), "A", List.of());
-    private static final Report READ = new Report(List.of(), List.of(), 0L, false, false, null, false, null);
+        "declared", "id", new WorkflowManifest.DormancyDef("7d", null), List.of(), "A", List.of(), null);
+    private static final Report READ = new Report(List.of(), List.of(), 0L, false, false, null, false, null, null);
 
     private static Dossier minimal() {
         return DossierReader.read(DossierReaderTest.fixture("valid/minimal.md"));
@@ -69,7 +69,7 @@ class DossierCheckerTest {
 
     @Test
     void an_unrunnable_probe_leaves_the_recomputed_checks_but_the_apply_door_still_speaks() {
-        Report unavailable = new Report(List.of(), List.of(), 0L, false, false, null, true, "SQLSTATE 57014: timeout");
+        Report unavailable = new Report(List.of(), List.of(), 0L, false, false, null, true, "SQLSTATE 57014: timeout", null);
 
         Dossier out = DossierChecker.check(minimal(), TRUSTED, Optional.of(GRAPH), g -> unavailable);
 

@@ -4,7 +4,7 @@
 # stored position below it names messages that no longer exist. Replay it in three gestures:
 #
 #   lm connector run acme-kafka-trimmed                              # run 1: 5 000, cursor at 5 000
-#   python3 …/acme-topics.py feed --topic acme.partners-trimmed --rate 500 --seconds 2   # ~1 000 more
+#   python3 …/acme-topics.py feed --topic acme.partners-trimmed --rate 500 --seconds 2   # ~600 more
 #   python3 …/acme-topics.py trim 5500                               # offsets 0..5499 are gone
 #   lm connector run acme-kafka-trimmed                              # run 2
 #

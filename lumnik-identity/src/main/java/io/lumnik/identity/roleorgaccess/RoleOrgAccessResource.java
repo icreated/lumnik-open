@@ -1,6 +1,7 @@
 package io.lumnik.identity.roleorgaccess;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.identity.IdentityErrors;
 import io.lumnik.identity.Require;
 import io.lumnik.identity.TenantInPath;
 import io.lumnik.identity.org.OrgRepository;
@@ -50,7 +51,7 @@ public class RoleOrgAccessResource {
         requireOrg(tenantId, orgId);
 
         if (grants.grantExists(roleId, orgId))
-            throw new ClientErrorException("Org access already granted", Response.Status.CONFLICT);
+            throw IdentityErrors.conflict("access to org " + orgId + " is already granted to role " + roleId);
 
         RoleOrgAccess grant = new RoleOrgAccess(tenantId, roleId, orgId, readOnly);
         grants.persist(grant);

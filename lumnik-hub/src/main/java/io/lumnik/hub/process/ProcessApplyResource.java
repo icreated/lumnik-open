@@ -107,6 +107,7 @@ public class ProcessApplyResource {
         ApiErrors.checkOrBadRequest(() -> {
             ProcessConditionResolver.resolve(m.when(), table);
             ProcessConditionResolver.validateMessage(m.emitMessage(), table);
+            ProcessConditionResolver.validateFields(m.emitFields(), table);
         });
 
         // granted().orElse(null) — empty Optional means unscoped, i.e. every scope. The write's own

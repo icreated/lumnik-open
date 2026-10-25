@@ -7,6 +7,7 @@ import io.lumnik.hub.connector.domain.EffectiveConfig;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.rest.DottedPath;
+import io.lumnik.hub.connector.rest.RequestHeaders;
 import io.lumnik.hub.connector.rest.RestHttpClient;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
@@ -16,6 +17,7 @@ import io.lumnik.hub.connector.rest.auth.AuthProviderRegistry;
 import io.lumnik.hub.connector.rest.auth.AuthSpec;
 import io.lumnik.hub.connector.rest.runtime.RestConnectorType;
 import io.lumnik.hub.connector.rest.runtime.RestEndpointReader;
+import io.lumnik.hub.connector.secret.SecretRefs;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -30,6 +32,7 @@ public class RestProber {
     @Inject JsonStructureInference inference;
     @Inject LlmManifestAugmenter llm;
     @Inject AuthProviderRegistry authReg;
+    @Inject SecretRefs secrets;
 
     /**
      * Probe a path on a connector the operator named — the only way in, because it is the only one
@@ -53,10 +56,12 @@ public class RestProber {
         }
         Map<String, Object> cfg = EffectiveConfig.of(c);
         String baseUrl = RestConnectorType.requireBaseUrl(cfg);
-        return probe(baseUrl, endpointPath, RestEndpointReader.authSpecFor(cfg), connectorName);
+        return probe(baseUrl, endpointPath, RestEndpointReader.authSpecFor(cfg, new AuthSpec.Owner(c.getTenantId(), c.getId())),
+            cfg.get("headers"), connectorName);
     }
 
-    private String probe(String baseUrl, String endpointPath, AuthSpec authSpec, String connectorName) throws Exception {
+    private String probe(String baseUrl, String endpointPath, AuthSpec authSpec, Object headers,
+                         String connectorName) throws Exception {
         var auth = authReg.build(authSpec);
         // Before anything is sent, like the run (RestEndpointReader) and the pre-flight: the
         // factories BUILD what they have — Basic encodes `user:` when password_env resolves to
@@ -72,10 +77,12 @@ public class RestProber {
         Urls.whyNotAbsolute(url).ifPresent(why -> {
             throw new ConfigValidationException("the endpoint path does not compose a usable URL: " + why);
         });
-        RestRequest req = auth.apply(RestRequest.get(url));
+        // The connector's declared headers, resolved as the run resolves them: a reference nothing
+        // holds is refused here, before anything is sent.
+        RestRequest req = RequestHeaders.apply(RestRequest.get(url), headers, secrets::lookup);
         RestResponse resp;
         try {
-            resp = http.execute(req);
+            resp = auth.send(req, http::exchange);
         } catch (InterruptedException cancelled) {
             // A cancelled request is not an answer about the source, and a plain catch would drop
             // the thread's interrupt flag. Same rule as RestEndpointReader.fetchAllPages and the

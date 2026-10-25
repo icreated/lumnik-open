@@ -105,6 +105,13 @@ class EntityViewCompilerProbeTest {
     assertThat(relation(TWO_SOURCES, "code")).isEmpty();
   }
 
+  /** #1449: a conflicts: false column is never disputed, so no probe groups its sources' keys. */
+  @Test
+  void an_uncompared_column_needs_no_probe() {
+    assertThat(relation(TWO_SOURCES.replace("match: [code]", "match: [code]\ncolumns:\n  city: { conflicts: false }"), "city")).isEmpty();
+    assertThat(relation(TWO_SOURCES, "city")).isPresent();
+  }
+
   @Test
   void a_resolution_entity_has_no_match_key_to_group_by() {
     var sources = List.of(new EntityManifest.Source("t_erp", new LinkedHashMap<>(Map.of("code", "code", "city", "city"))));

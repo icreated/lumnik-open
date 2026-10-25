@@ -154,6 +154,15 @@ public class WorkflowApplyResource {
             // write's own answer goes straight into the void guard, so it cannot be had and
             // dropped. It THROWS, like its siblings, and reaches the wire intact because the
             // WebApplicationException arm below re-throws ahead of the broad catch.
+            // A zone says where a date-only or a wall-clock column is read; a timestamp with a zone
+            // carries its own instant, so a declared zone over one is an option that does nothing
+            // (#1448). Refused before storing, and only when the column is there to say so: a column
+            // not yet ingested is the report's business. Inside the try: a failed read is the
+            // stable error below, like the store's.
+            if (m.due() != null && m.due().zone() != null && truth.dueColumnIsAnInstant(m)) {
+                return ApiErrors.badRequest("spec.due.zone has no effect on " + m.table() + "." + m.due().column()
+                    + ": a timestamp with time zone carries its own instant — drop spec.due.zone");
+            }
             ApplyScopeBoundary.refuseUnlessApplied(
                 store.upsert(tenant, m, body, ScopeGrants.granted().orElse(null)));
             WorkflowGraph g = WorkflowGraph.from(m);

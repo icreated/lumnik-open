@@ -104,6 +104,11 @@ type EvidenceEvent struct {
 	DecidedBy           string              `json:"decidedBy"`
 	RunID               string              `json:"runId"`
 	OccurredAt          time.Time           `json:"occurredAt"`
+	// AssertedBy and Reason name the human correction behind an asserted decision (#1343); null otherwise.
+	// AssertedBy is the stored user id; AssertedByLogin the user's login read now (#1347), null when unknown.
+	AssertedBy      *string `json:"assertedBy"`
+	AssertedByLogin *string `json:"assertedByLogin"`
+	Reason          *string `json:"reason"`
 }
 
 // EntityHistory reads one source identity's full resolution decision history, chronological

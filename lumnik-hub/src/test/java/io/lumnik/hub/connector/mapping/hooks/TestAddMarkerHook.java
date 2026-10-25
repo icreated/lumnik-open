@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Test-only DatasetHook used by MappingEngineIntegrationIT to verify that CDI discovery,
@@ -26,5 +27,15 @@ public class TestAddMarkerHook implements DatasetHook {
       out.add(copy);
     }
     return out;
+  }
+
+  @Override
+  public Set<String> params() {
+    return Set.of();
+  }
+
+  @Override
+  public ColumnEffect columns(JsonNode params) {
+    return ColumnEffect.builder().adds("marker").build();
   }
 }

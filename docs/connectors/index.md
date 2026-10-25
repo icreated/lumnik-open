@@ -27,8 +27,10 @@ flowchart LR
   p --> m["mapping & transforms"] --> tbl["hub table"] --> rag["RAG chunks"]
 ```
 
-Every connector reads the source, parses it, optionally transforms it ([Transformers](transformers.md)),
-writes a tenant-isolated hub table, and indexes it for [scoped chat](../rag/scopes.md).
+Every connector reads the source and writes a hub table. Each tenant sees only its own rows.
+
+- A `csv-file` connector can repair the data on the way: [Transformers](transformers.md).
+- On lumnik Pro with the AI on, the table also feeds the [scoped chat](../rag/scopes.md).
 
 ## The lifecycle — every connector, same three commands
 
@@ -42,7 +44,7 @@ Assumes a deployed hub and an authenticated `lm` — see [Quickstart](../quickst
     metadata:
       name: <kebab-case-name>
       connector_type: <csv-file|jdbc-generic|rest-generic|kafka>
-      scopes: [<métier>]          # the scope(s) this connector's tables are askable in
+      scopes: [<scope>]                    # the scope(s) this connector's tables are askable in
     spec:
       # type-specific — see your connector's page
       ...
@@ -61,7 +63,7 @@ Assumes a deployed hub and an authenticated `lm` — see [Quickstart](../quickst
     $ lm validate -f orders.yaml
     ✓ orders.yaml — valid
     $ lm apply -f orders.yaml
-    {"name":"orders","connectorId":"36bb1629-6b7f-418a-9bd8-c903148ab86d","endpointsApplied":1}
+    Applied connector "orders" — 1 endpoint
     $ lm connector run orders
     run scheduled: 6806802f-ed3c-46d6-8eeb-a0f7cff94e77
     ```
@@ -73,9 +75,9 @@ Assumes a deployed hub and an authenticated `lm` — see [Quickstart](../quickst
     ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
     6806802f  orders     default   Completed  10  8    2        2             2026-10-19 01:41  2026-10-19 01:41
     $ lm dlq list --run 6806802f-ed3c-46d6-8eeb-a0f7cff94e77
-    ID        CONNECTOR  RUN       REASON           ATTEMPTS  MESSAGE
-    7c863b7a  orders     6806802f  MalformedSource  1         /tmp/exports/sales-orders.csv:10 — Record has 5 values but o…
-    004c3b56  orders     6806802f  MalformedSource  1         /tmp/exports/sales-orders.csv:7 — Record has 4 values but on…
+    ID        CONNECTOR  RUN       REASON           ATTEMPTS  RESOLUTION  MESSAGE
+    7c863b7a  orders     6806802f  MalformedSource  1                     /tmp/exports/sales-orders.csv:10 — Record has 5 values but o…
+    004c3b56  orders     6806802f  MalformedSource  1                     /tmp/exports/sales-orders.csv:7 — Record has 4 values but on…
     ```
 
     Ten rows read, eight written, two set aside in the dead-letter queue with their reason.
@@ -85,41 +87,21 @@ Assumes a deployed hub and an authenticated `lm` — see [Quickstart](../quickst
 5. Watch it in the TUI ([CLI & TUI](../cli/lm-reference.md)): `:sources` (connectors),
    `:runs` (history), `:dlq` (rejected rows).
 
-### Scheduled runs take turns
+### Several runs at once
 
-- A scheduled connector runs each endpoint as its own run; a hub instance drives **at most 4**
-  at once (`LUMNIK_CONNECTOR_MAX_CONCURRENT_SCHEDULED_RUNS`, property
-  `lumnik.connector.max-concurrent-scheduled-runs`). An endpoint still waiting has no run in
-  `lm run list` yet.
-- Each run uses up to two connections of the hub's `admin` pool: raise
-  `quarkus.datasource."admin".jdbc.max-size` along with the bound.
-- With the run queue off (the default), `lm connector run` does not count against the bound and
-  never waits — a manual run of a connector with many endpoints can fill the `admin` pool on its
-  own (turn on the run queue below).
-- A waiting scheduled endpoint does not start if the connector was paused or deleted, its window
-  closed, or the endpoint already ran (a manual run).
-
-### Manual runs can queue
-
-With `LUMNIK_RUN_QUEUE_ENABLED=true` (off by default; read
-[Turning on the run queue](../operations/upgrade.md#turning-on-the-run-queue) first),
-`lm connector run` queues one run per enabled endpoint in status `Queued` (no start time yet). The hub
-starts each as a slot frees, on the same budget as scheduled runs. `lm run cancel` ends a queued run.
-
-| Situation | What `lm run list` shows |
-|---|---|
-| A second run requested for an endpoint that already has one queued or running | a new run, `Cancelled`: "another run is already active" |
-| Not started within `LUMNIK_RUN_QUEUE_MAX_AGE` (default `1h`) | `Cancelled`: "expired in the queue" |
-| Endpoint disabled or deleted, connector paused or deleted, or manifest re-applied while it waited | `Cancelled`, with that reason |
-| A run left `Running` by a hub that died (until the reaper fails it, within a minute) | a new request is answered with a run already `Cancelled` |
-| `lm run cancel` on a run the hub is just starting | refused: "is being started; try again in a moment" |
-
-On-demand exports queue the same way ([Exports](../apps/exports.md#runs-can-queue)).
+- A hub runs at most **4** scheduled endpoints at once. The others wait; a waiting endpoint has
+  no run in `lm run list` yet.
+- `lm run cancel <id>` stops a run after its current batch of rows.
+- Raising the limit, and queuing manual runs:
+  [Turning on the run queue](../operations/upgrade.md#turning-on-the-run-queue).
 
 ### Freshness follows the schedule
 
-A change in the source appears at the next run that reads it. Deletes never propagate, and
-watermark mode re-reads only rows whose watermark advanced.
+A change in the source appears at the next run that reads it.
+
+- A row deleted at the source stays in the hub table. One exception: a `csv-file` connector
+  reading one local file, where the table follows the file ([full refresh](csv.md#one-file-is-the-table-full-refresh)).
+- A JDBC watermark connector re-reads only the rows whose watermark moved.
 
 ## Validate before apply
 
@@ -160,23 +142,12 @@ $ lm validate -f noscopes.yaml
 ! noscopes.yaml — 0 error(s), 1 warning(s)
 
   WARN     metadata.scopes
-          no scopes declared — the connector's tables will not be askable in any métier
-          → Add: scopes: [compta]  (the métier a user must hold as scope:compta)
+          no scopes declared — the connector's tables will not be askable in any scope
+          → Add: scopes: [compta]  (users need the scope:compta role)
 ```
 
-`lm apply` writes the JSON body (with its `warnings`) to stdout, then the same report to **stderr**:
-
-```
-$ lm apply -f noscopes.yaml
-{"name":"noscopes","connectorId":"dd1cf69e-6742-41b7-9ebb-2543521ed521","endpointsApplied":1,"warnings":[{"path":"metadata.scopes","severity":"WARNING","message":"no scopes declared — the connector's tables will not be askable in any métier","recommendations":["Add: scopes: [compta]  (the métier a user must hold as scope:compta)"]}]}
-! noscopes.yaml — 0 error(s), 1 warning(s)
-
-  WARN     metadata.scopes
-          no scopes declared — the connector's tables will not be askable in any métier
-          → Add: scopes: [compta]  (the métier a user must hold as scope:compta)
-```
-
-The exit code is 0: a warning never fails `lm validate` or `lm apply`.
+`lm apply` prints the same warnings, and applies. A warning never fails `lm validate` or
+`lm apply`.
 
 ### Exit codes
 

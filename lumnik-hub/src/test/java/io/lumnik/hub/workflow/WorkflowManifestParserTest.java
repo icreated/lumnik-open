@@ -7,6 +7,8 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import java.util.stream.Stream;
 import java.time.Duration;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import static org.assertj.core.api.Assertions.*;
 
@@ -144,6 +146,15 @@ class WorkflowManifestParserTest {
         assertThat(m.initialState()).isEqualTo("BROUILLON");
         assertThat(m.states().get(2).terminal()).isTrue();
         assertThat(m.transitions()).hasSize(2);
+    }
+
+    /** #1489: a legacy status written OFF or NO is a state code, not a boolean — YAML 1.2's words. */
+    @Test
+    void yaml_1_1_boolean_words_are_state_codes_and_aliases() {
+        WorkflowManifest m = parser.parse(VALID.replace("TERMINE", "OFF").replace("[fini, ok, co]", "[NO, yes]"));
+        assertThat(m.states().get(2).code()).isEqualTo("OFF");
+        assertThat(m.states().get(2).aliases()).containsExactly("NO", "yes");
+        assertThat(m.states().get(2).terminal()).isTrue();   // true stays a boolean
     }
 
     @Test
@@ -462,6 +473,22 @@ class WorkflowManifestParserTest {
         }
     }
 
+    /** #1363: the workflow writes its own dormancy sentence, over what the sweep knows. */
+    @Test
+    void a_declared_dormancy_message_is_kept_and_its_placeholders_are_checked() {
+        String withMessage = WITH_DORMANCY.replace("after: 30d",
+            "after: 30d\n    message: \"{doc_key} attend en {state_label} depuis le {since}\"");
+        assertThat(parser.parse(withMessage).dormancy().message())
+            .isEqualTo("{doc_key} attend en {state_label} depuis le {since}");
+        assertThat(parser.parse(WITH_DORMANCY).dormancy().message()).isNull();
+
+        assertThatThrownBy(() -> parser.parse(withMessage.replace("{since}", "{amount}")))
+            .hasMessageContaining("spec.dormancy.message").hasMessageContaining("{amount}")
+            .hasMessageContaining("doc_key");
+        assertThatThrownBy(() -> parser.parse(WITH_DORMANCY.replace("after: 30d", "after: 30d\n    message: \"  \"")))
+            .hasMessageContaining("spec.dormancy.message");
+    }
+
     @Test
     void unknown_keys_under_dormancy_are_reported() {
         String yaml = WITH_DORMANCY.replace("after: 30d", "after: 30d\n    afterr: 1d");
@@ -470,9 +497,102 @@ class WorkflowManifestParserTest {
 
     @Test
     void duration_units_map_correctly() {
-        assertThat(new WorkflowManifest.DormancyDef("2m").duration())
+        assertThat(new WorkflowManifest.DormancyDef("2m", null).duration())
             .isEqualTo(Duration.ofMinutes(2));
-        assertThat(new WorkflowManifest.DormancyDef("12h").duration())
+        assertThat(new WorkflowManifest.DormancyDef("12h", null).duration())
             .isEqualTo(Duration.ofHours(12));
+    }
+
+    /** #1448: a watched due date, on the fused view where a multi-flow lifecycle lives. */
+    private static final String WITH_DUE = VALID
+        .replace("connector.t_commandes_csv", "connector.v_commandes")
+        .replace("column: statut", "column: statut\n    key: num")
+        .replace("provenance: declared", "provenance: declared\n  due:\n    column: date_confirmee\n    states: [en_cours]");
+
+    @Test
+    void parses_a_due_date_with_its_states_as_declared_codes_and_utc_by_default() {
+        WorkflowManifest.DueDef due = parser.parse(WITH_DUE).due();
+        assertThat(due.column()).isEqualTo("date_confirmee");
+        assertThat(due.states()).containsExactly("EN_COURS");
+        assertThat(due.zone()).isNull();
+        assertThat(due.zoneId()).isEqualTo(ZoneOffset.UTC);
+        assertThat(due.message()).isNull();
+        assertThat(parser.parse(VALID).due()).isNull();
+    }
+
+    @Test
+    void a_declared_zone_is_kept() {
+        WorkflowManifest.DueDef due = parser.parse(WITH_DUE.replace("states: [en_cours]",
+            "states: [en_cours]\n    zone: Europe/Paris")).due();
+        assertThat(due.zone()).isEqualTo("Europe/Paris");
+        assertThat(due.zoneId()).isEqualTo(ZoneId.of("Europe/Paris"));
+    }
+
+    /** Blank is no zone, as {@code Zones} reads it: the record says absent, not "  ". */
+    @Test
+    void a_blank_zone_is_no_zone() {
+        WorkflowManifest.DueDef due = parser.parse(WITH_DUE.replace("states: [en_cours]",
+            "states: [en_cours]\n    zone: \"  \"")).due();
+        assertThat(due.zone()).isNull();
+        assertThat(due.zoneId()).isEqualTo(ZoneOffset.UTC);
+    }
+
+    @Test
+    void a_due_date_is_declarable_on_an_ingest_table_too() {
+        assertThat(parser.parse(WITH_DUE.replace("connector.v_commandes", "connector.t_commandes_csv"))
+            .due().column()).isEqualTo("date_confirmee");
+    }
+
+    static Stream<Arguments> dueRefusals() {
+        return Stream.of(
+            Arguments.of("a due date is per document", WITH_DUE.replace("\n    key: num", ""),
+                "spec.due requires spec.on.key"),
+            Arguments.of("the column is required", WITH_DUE.replace("    column: date_confirmee\n", ""),
+                "spec.due.column"),
+            Arguments.of("the column cannot hold a NUL", WITH_DUE.replace("column: date_confirmee", "column: \"a\\0b\""),
+                "spec.due.column"),
+            Arguments.of("the states are required", WITH_DUE.replace("\n    states: [en_cours]", ""),
+                "spec.due.states"),
+            Arguments.of("the states cannot be empty", WITH_DUE.replace("[en_cours]", "[]"),
+                "spec.due.states"),
+            Arguments.of("a state must be declared", WITH_DUE.replace("[en_cours]", "[LIVRE]"),
+                "spec.due.states names an undeclared state 'LIVRE'"),
+            Arguments.of("an alias is not a state", WITH_DUE.replace("[en_cours]", "[encours]"),
+                "spec.due.states names an undeclared state 'encours'"),
+            Arguments.of("a terminal state is never overdue", WITH_DUE.replace("[en_cours]", "[TERMINE]"),
+                "spec.due.states names the terminal state 'TERMINE'"),
+            Arguments.of("a state is named once", WITH_DUE.replace("[en_cours]", "[EN_COURS, en_cours]"),
+                "spec.due.states names 'en_cours' twice"),
+            Arguments.of("an unknown zone", WITH_DUE.replace("states: [en_cours]", "states: [en_cours]\n    zone: Mars/Olympus"),
+                "spec.due: 'zone' is not a time zone: \"Mars/Olympus\""),
+            Arguments.of("a blank message", WITH_DUE.replace("states: [en_cours]", "states: [en_cours]\n    message: \"  \""),
+                "spec.due.message must not be blank"),
+            Arguments.of("an unknown placeholder", WITH_DUE.replace("states: [en_cours]",
+                    "states: [en_cours]\n    message: \"{doc_key} {since}\""),
+                "spec.due.message references [{since}]"),
+            Arguments.of("due is a map", WITH_DUE.replace("due:\n    column: date_confirmee\n    states: [en_cours]", "due: tomorrow"),
+                "spec.due must be a map"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("dueRefusals")
+    void refuses_a_malformed_due_date(String rule, String manifest, String expected) {
+        assertThatThrownBy(() -> parser.parse(manifest))
+            .as(rule)
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining(expected);
+    }
+
+    @Test
+    void a_due_message_may_name_what_the_sweep_knows() {
+        String yaml = WITH_DUE.replace("states: [en_cours]",
+            "states: [en_cours]\n    message: \"Ligne {doc_key} : due le {due}, toujours {state_label} ({state}, {workflow})\"");
+        assertThat(parser.parse(yaml).due().message()).startsWith("Ligne {doc_key}");
+    }
+
+    @Test
+    void unknown_keys_under_due_are_reported() {
+        assertThat(parser.unknownKeys(WITH_DUE.replace("states: [en_cours]", "states: [en_cours]\n    zones: UTC")))
+            .containsExactly("spec.due.zones");
     }
 }

@@ -191,6 +191,17 @@ class ProcessConditionTest {
         assertThat(ProcessRuleEvaluator.matches(Map.of("x", 5), List.of(ViewFilter.parse("x=abc")))).isFalse();
     }
 
+    /** #1365: a declared payload field is checked at apply like a placeholder. */
+    @Test
+    void refusesADeclaredFieldThatIsNotAColumn() {
+        SchemaCard.Table t = new SchemaCard.Table("connector.t_cust_csv", "Cust", List.of(
+            new SchemaCard.Column("cname", "text", "Nom")));
+        assertThatThrownBy(() -> ProcessConditionResolver.validateFields(List.of("cname", "iban"), t))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessage("spec.emit.fields names iban — not a column of connector.t_cust_csv");
+        ProcessConditionResolver.validateFields(List.of("cname"), t);
+    }
+
     @Test
     void refusesAMessagePlaceholderThatIsNotAColumn() {
         SchemaCard.Table t = new SchemaCard.Table("connector.t_cust_csv", "Cust", List.of(

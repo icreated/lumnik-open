@@ -6,6 +6,7 @@ import io.lumnik.hub.manifest.ManifestKeys;
 import io.lumnik.hub.manifest.ManifestSurface;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
@@ -29,7 +30,7 @@ public class ProcessManifestParser {
     private static final Set<String> METADATA_KEYS = Set.of("name");
     private static final Set<String> SPEC_KEYS = Set.of("scope", "on", "when", "emit");
     private static final Set<String> ON_KEYS = Set.of("event", "table");
-    private static final Set<String> EMIT_KEYS = Set.of("type", "message");
+    private static final Set<String> EMIT_KEYS = Set.of("type", "message", "fields");
 
     private static final ManifestSurface SURFACE = ManifestSurface.builder()
         .group("", "root", ROOT_KEYS)
@@ -124,6 +125,25 @@ public class ProcessManifestParser {
             throw new IllegalArgumentException(
                 "spec.emit.type is required and must start with 'decision.' — the governed taxonomy");
         String emitMessage = ManifestKeys.requiredText(emit, "message", "spec.emit.message");
-        return new ProcessManifest(name, scope, onEvent, onTable, when, emitType, emitMessage);
+        return new ProcessManifest(name, scope, onEvent, onTable, when, emitType, emitMessage, emitFields(emit));
+    }
+
+    /** What an automation reads besides the sentence (#1365): a list of distinct, non-blank column names. */
+    private static List<String> emitFields(JsonNode emit) {
+        JsonNode fields = emit.path("fields");
+        if (fields.isMissingNode() || fields.isNull()) return List.of();
+        if (!fields.isArray())
+            throw new IllegalArgumentException("spec.emit.fields must be a list of column names");
+        List<String> out = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (JsonNode f : fields) {
+            String name = f.isTextual() ? f.asText() : null;
+            if (name == null || name.isBlank())
+                throw new IllegalArgumentException("spec.emit.fields holds a blank or non-text entry");
+            if (!seen.add(name))
+                throw new IllegalArgumentException("spec.emit.fields names " + name + " twice");
+            out.add(name);
+        }
+        return List.copyOf(out);
     }
 }

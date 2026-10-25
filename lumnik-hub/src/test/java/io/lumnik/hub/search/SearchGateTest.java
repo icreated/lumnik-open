@@ -97,6 +97,31 @@ class SearchGateTest {
         assertThat(o).isEqualTo(new SearchOutcome.Rejected("cursor does not match this query"));
     }
 
+    @Test void a_refused_cursor_says_to_run_the_search_again_without_it() {
+        IndexedSearchQuery nextPage = new IndexedSearchQuery(7, Set.of("customer"), "mueller", null, 10, "c2");
+        IndexedSearchPort stale = provider("postgres", ProviderStatus.available(),
+            q -> { throw new InvalidIndexedSearchQueryException("eligible SearchIndex set changed since this cursor was issued"); });
+        assertThat(gate(null, stale).search(nextPage)).isEqualTo(new SearchOutcome.Rejected(
+            "eligible SearchIndex set changed since this cursor was issued; run the search again without cursor"));
+    }
+
+    @Test void provider_installed_is_false_only_when_none_is_built_in_and_never_asks_one() {
+        AtomicInteger statusCalls = new AtomicInteger();
+        IndexedSearchPort another = provider("opensearch", null, q -> null);
+        IndexedSearchPort p = new IndexedSearchPort() {
+            @Override public String name() { return "postgres"; }
+            @Override public ProviderStatus status() { statusCalls.incrementAndGet(); return ProviderStatus.available(); }
+            @Override public IndexedSearchResult search(IndexedSearchQuery q) { return null; }
+        };
+        assertThat(gate(null).providerInstalled()).isFalse();
+        assertThat(gate("opensearch").providerInstalled()).isFalse();
+        assertThat(gate(null, p).providerInstalled()).isTrue();
+        // installed but unusable is degraded, not absent: a provider is there to build once it is fixed
+        assertThat(gate(null, p, another).providerInstalled()).isTrue();
+        assertThat(gate("opensearch", p).providerInstalled()).isTrue();
+        assertThat(statusCalls).hasValue(0);
+    }
+
     @Test void a_provider_returning_null_is_degraded_never_empty_success() {
         assertThat(gate(null, answering("postgres", null)).search(QUERY))
             .isInstanceOf(SearchOutcome.Unavailable.class);

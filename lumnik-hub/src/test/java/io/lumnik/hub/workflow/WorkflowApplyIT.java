@@ -306,4 +306,67 @@ class WorkflowApplyIT {
     void deleteWithoutTenant_401() {
         given().when().delete("/api/workflows/wf-disable-it").then().statusCode(401);
     }
+
+    // #1448 — what the door says of a due column it can see.
+    private static final String DUE_YAML = """
+        apiVersion: apps.lumnik.io/v1
+        kind: Workflow
+        metadata: { name: wf-due-apply-it }
+        spec:
+          scope: demo
+          provenance: declared
+          on: { table: connector.t_wf_due_apply_it, column: statut, key: num }
+          due: { column: COLUMN, states: [A]ZONE }
+          states:
+            - { code: A, initial: true }
+            - { code: B, terminal: true }
+          transitions:
+            - { from: [A], to: B }
+        """;
+
+    private static String due(String column, String zone) {
+        return DUE_YAML.replace("COLUMN", column).replace("ZONE", zone == null ? "" : ", zone: " + zone);
+    }
+
+    private void dueTable() throws Exception {
+        try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
+            st.execute("CREATE TABLE IF NOT EXISTS connector.t_wf_due_apply_it (id BIGSERIAL PRIMARY KEY,"
+                + " tenant_id BIGINT NOT NULL, num TEXT, statut TEXT, confirmed_at TIMESTAMPTZ, confirmed_txt TEXT)");
+        }
+    }
+
+    @Test
+    @Order(60)
+    void a_zone_over_a_timestamp_that_carries_its_own_is_refused() throws Exception {
+        dueTable();
+        asIntegrator()
+            .contentType("application/yaml").body(due("confirmed_at", "Europe/Paris"))
+            .when().post("/api/workflows/apply")
+            .then().statusCode(400)
+            .body("error", equalTo("spec.due.zone has no effect on connector.t_wf_due_apply_it.confirmed_at:"
+                + " a timestamp with time zone carries its own instant — drop spec.due.zone"));
+        asIntegrator()
+            .contentType("application/yaml").body(due("confirmed_at", null))
+            .when().post("/api/workflows/apply")
+            .then().statusCode(200)
+            .body("dataTruth.dueProblem", nullValue());
+    }
+
+    @Test
+    @Order(61)
+    void a_due_column_that_is_not_a_date_or_not_there_is_reported_not_refused() throws Exception {
+        dueTable();
+        asIntegrator()
+            .contentType("application/yaml").body(due("confirmed_txt", "Europe/Paris"))
+            .when().post("/api/workflows/apply")
+            .then().statusCode(200)
+            .body("dataTruth.dueProblem", equalTo("spec.due.column confirmed_txt is text, not a date:"
+                + " no deadline can be read from it"));
+        asIntegrator()
+            .contentType("application/yaml").body(due("confirmed_on", null))
+            .when().post("/api/workflows/apply")
+            .then().statusCode(200)
+            .body("dataTruth.dueProblem", equalTo("spec.due.column confirmed_on is not a column of"
+                + " connector.t_wf_due_apply_it (yet)"));
+    }
 }

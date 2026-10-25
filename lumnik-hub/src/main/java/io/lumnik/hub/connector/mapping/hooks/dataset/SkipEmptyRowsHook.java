@@ -3,6 +3,7 @@ package io.lumnik.hub.connector.mapping.hooks.dataset;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.api.types.SkipReason;
 import io.lumnik.hub.connector.mapping.MappingState;
+import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.DatasetHook;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -11,6 +12,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @ApplicationScoped
 @HookId("skip-empty-rows")
@@ -29,5 +31,15 @@ public class SkipEmptyRowsHook implements DatasetHook {
       }
     }
     return out;
+  }
+
+  @Override
+  public Set<String> params() {
+    return Set.of();
+  }
+
+  @Override
+  public ColumnEffect columns(JsonNode params) {
+    return ColumnEffect.NONE;
   }
 }

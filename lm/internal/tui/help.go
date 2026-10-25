@@ -152,7 +152,7 @@ const helpBody = `[yellow]Global keys[white]
                      n      new question
   :inbox          decisions waiting for you (decision.* events, live)
                      a   ack the selected decision (idempotent)
-                     A   toggle disposed entries ([traité])
+                     A   toggle disposed entries ([acked])
 
 [yellow]Workshop[white]
   :new            create an object — pick a kind, edit its living example
@@ -172,7 +172,7 @@ const helpBody = `[yellow]Global keys[white]
                      c   request cancellation (only while Running)
                      D   the run's dead letters in :dlq (Esc there clears the filter)
   :dlq            dead-letter queue (live: every 5 s and when a run ends)
-                     ^R  mark replayed, naming the run that carried it (Enter: the connector's latest · - none)
+                     ^R  mark replayed, naming the run that carried it (Enter: the connector's latest)
                      ^D  discard
   :secrets        the credentials connectors refer to by name (values are never shown)
                      n   store a new one (the value is typed masked)

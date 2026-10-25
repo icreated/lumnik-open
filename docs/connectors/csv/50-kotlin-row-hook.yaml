@@ -9,22 +9,24 @@
 # to "YYYY-MM-DD" before the row is written to the hub table.  The transformation
 # is idempotent — rows that already carry ISO dates pass through unchanged.
 #
-# Script distribution (v1 rule)
-# -----------------------------
-# Hook scripts are loaded from the PLATFORM CLASSPATH only (`script: classpath:...`).
-# This is a deliberate security restriction: a `file:` path in a manifest would let anyone
-# who can apply manifests execute arbitrary code on the server. Operator-deployed scripts
-# on the classpath are the v1 trust boundary. This example uses a sample shipped with the
-# platform (hooks/samples/normalize-date.kts); its readable source is also mirrored at
-# docs/connectors/csv/hooks/normalize-date.kts for documentation.
+# Where a script comes from
+# -------------------------
+# A manifest never carries a script, nor a path to one: it NAMES a script the hub already has.
+#   script: hooks:<name>.kts   — a file the operator put in the hub's hooks directory
+#                                (docs/deploy.md, "Offer Kotlin scripts to the integrators")
+#   script: classpath:<path>   — a script built into the hub
+# A script runs with all of the hub's rights, so only the operator installs one. This example
+# uses the sample shipped with the platform (hooks/samples/normalize-date.kts); its readable
+# source is also mirrored at docs/connectors/csv/hooks/normalize-date.kts for documentation.
 #
 # KotlinScriptHost binding contract
 # ----------------------------------
 # The host injects two top-level bindings into the script:
 #   bindings["cells"]   — MutableMap<String, Any?> — the current row's columns; mutate in-place.
 #   bindings["context"] — Map<String, Any?>          — a copy of the hook's own params.context values from
-#                          the manifest (e.g. `context: { defaultCountry: FR }` under the hook); rebuilt
-#                          per row, so a mutation reaches nothing — treat it as read-only.
+#                          the manifest (e.g. `context: { defaultCountry: FR }` under the hook), with
+#                          their YAML types (text, number, boolean, list, map); rebuilt per row, so a
+#                          mutation reaches nothing — treat it as read-only.
 # Changes to "cells" are visible to subsequent hooks in the chain and to the sink writer.
 
 apiVersion: connectors.lumnik.io/v1
@@ -47,7 +49,7 @@ spec:
   mapping:
     cell:
       - kotlin:
-          script: classpath:hooks/samples/normalize-date.kts   # v1: classpath only (see header)
+          script: classpath:hooks/samples/normalize-date.kts   # built in (see header)
           # The script receives the mutable 'cells' map.  Any column value may be
           # read or overwritten; rows are not filtered (return nothing — the sink
           # always writes the row).

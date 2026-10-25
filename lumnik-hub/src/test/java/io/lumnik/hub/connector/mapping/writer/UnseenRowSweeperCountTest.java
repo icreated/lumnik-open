@@ -19,4 +19,16 @@ class UnseenRowSweeperCountTest {
   void shrinking_beyond_the_limit_is_what_refuses(long before, long met, long unseen, double max, boolean refused) {
     assertThat(new UnseenRowSweeper.Count(before, met, unseen).shrinksBeyond(max)).isEqualTo(refused);
   }
+
+  @ParameterizedTest(name = "held {0}, met {1}, unseen {2} → lost {3}")
+  @CsvSource({
+      "10, 9, 1, 1",     // one row gone from the file
+      "10, 10, 1, 0",    // one value changed: one version replaced, nothing lost (#1544)
+      "10, 9, 2, 1",     // one gone, one changed
+      "10, 12, 0, 0",    // the file grew
+      "0, 4, 0, 0",      // a first run
+  })
+  void lost_is_how_much_the_table_shrinks(long before, long met, long unseen, long lost) {
+    assertThat(new UnseenRowSweeper.Count(before, met, unseen).lost()).isEqualTo(lost);
+  }
 }

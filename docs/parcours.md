@@ -1,8 +1,8 @@
-# Parcours — the guided path
+# Guided path — the guided path
 
 <section class="lm-hero" markdown>
 <p class="lm-eyebrow">Guided onboarding</p>
-<p class="lm-lead" markdown="span">From an empty machine to a running hub, a fused entity, a métier chat that cites its sources, and a workflow that flags what stopped moving — in three half-days.</p>
+<p class="lm-lead" markdown="span">From an empty machine to a running hub, a fused entity, scoped chat that cites its sources, and a workflow that flags what stopped moving — in three half-days.</p>
 <div class="lm-meta" markdown>
 <div class="lm-meta-item" markdown>
 <strong>Audience</strong>
@@ -64,7 +64,7 @@ Understand entities, the ask guards, scopes, models, and the TUI an integrator o
 <div class="lm-kicker">Half-day 3</div>
 <div class="lm-title">Defrost time</div>
 
-Move from a mirror of the source to views, processes, workflows, inbox decisions, and the métier PWA.
+Move from a mirror of the source to views, processes, workflows, inbox decisions, and the PWA.
 
 <p class="lm-note">Six steps, ≈ 3 h 15</p>
 </article>
@@ -92,7 +92,7 @@ Read the [Home page](index.md): what lumnik is (a read-only defrost of legacy sy
 <div class="lm-kicker">30 min</div>
 <div class="lm-title">Deploy the hub</div>
 
-Decide what the hub carries — [The two editions](editions.md), [Choosing what your hub offers](choosing-what-your-hub-offers.md). Then follow [Deploy lumnik](deploy.md): `./deploy/selfhost/up.sh`. Your credentials are in the `.env` it writes.
+Decide what the hub carries — [The two editions](editions.md), [Choosing what your hub offers](choosing-what-your-hub-offers.md). Then follow [Deploy lumnik](deploy.md): `./deploy/selfhost/up.sh --build`. Your passwords are in the `.env` it writes, at the root of the clone.
 
 <p class="lm-check" markdown="span">**You know it worked when:** the script ends like this:</p>
 
@@ -113,7 +113,7 @@ Decide what the hub carries — [The two editions](editions.md), [Choosing what 
 <div class="lm-kicker">20 min</div>
 <div class="lm-title">Meet <code>lm</code></div>
 
-Follow the [60-second Quickstart](quickstart/installer.md): install `lm`, log in, put a first file into the hub.
+Follow the [Quickstart](quickstart/installer.md): install `lm`, log in, put a first file into the hub.
 
 <p class="lm-check" markdown="span">**You know it worked when:** `lm connector list` shows the connector your first file registered.</p>
 
@@ -130,7 +130,7 @@ stock_count  csv-file  1
 <div class="lm-kicker">60–90 min</div>
 <div class="lm-title">The WOW</div>
 
-Read [The WOW, step by step](wow.md), then replay it with [The WOW, hands-on](demo/wow-customer/README.md): a SOAP Siebel and a CSV fused into one Customer.
+Run [The WOW](wow.md): a SOAP Siebel and a CSV fused into one Customer.
 
 <p class="lm-check" markdown="span">**You know it worked when:** `lm entity get customer` lists the fused customers. **Pro:** a question asked in French answers with the SQL it ran.</p>
 </div>
@@ -154,13 +154,12 @@ Read [Connectors overview](connectors/index.md) and [CSV & files](connectors/csv
 
 Read [Seeing what was ingested, skipped, and quarantined](transparency/ingestion-honesty.md).
 
-<p class="lm-check" markdown="span">**You know it worked when:** on your own run, `lm run get` shows IN = OUT + SKIPPED, and DEAD-LETTERS never exceeds SKIPPED.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** on the WOW's `cust-csv` run, you read IN = OUT + SKIPPED. Every skipped row is counted; `lm dlq list` shows the ones set aside.</p>
 
 ```
-$ lm run get f0466804
+$ lm run get 3e9f353a
 ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
-f0466804  orders     default   Completed  10  8    2        2             2026-09-05 05:38  2026-09-05 05:38
-⚠ 2 rows quarantined — see: lm dlq list --run f0466804-0824-4eb4-8aa2-54e263dccafe
+3e9f353a  cust-csv   default   Completed  8   8    0        0             2026-10-24 21:57  2026-10-24 21:57
 ```
 </div>
 </article>
@@ -192,11 +191,11 @@ C-200          Marie  SILVER   m@x.fr  Lyon  {"name": [{"src": "cust_siebel", "v
 <div class="lm-step__num">2</div>
 <div markdown>
 <div class="lm-kicker">30 min</div>
-<div class="lm-title">The five guards · Pro</div>
+<div class="lm-title">When Ask refuses · Pro</div>
 
-Read [Ask honesty — the five guards](transparency/ask-honesty.md): when `lm ask` refuses to answer, and what it says.
+Read [When Ask refuses](transparency/ask-honesty.md): what `lm ask` says, and what to do.
 
-<p class="lm-check" markdown="span">**You know it worked when:** you can name the guard that stops a hallucinated table name.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** you can say what to do when `lm ask` answers « la question ne correspond pas au schéma déclaré ».</p>
 </div>
 </article>
 <article class="lm-step" markdown>
@@ -207,7 +206,7 @@ Read [Ask honesty — the five guards](transparency/ask-honesty.md): when `lm as
 
 Read [Scopes](rag/scopes.md): a scope is declared on the connector or entity (`scopes:`) and granted as a Keycloak role `scope:<tag>`. No scope role = tenant-wide; one or more = bound.
 
-The bundled realm has no scope-bound user: create one in Keycloak with the realm role `scope:desk` ([Add a user](security/identity-admin.md#add-a-user), [Grant a métier scope](security/identity-admin.md#grant-or-revoke-a-metier-scope)).
+The bundled realm has no scope-bound user: create one in Keycloak with the realm role `scope:desk` ([Add a user](security/identity-admin.md#add-a-user), [Grant a business scope](security/identity-admin.md#grant-or-revoke-a-business-scope)).
 
 To work as that second user, give `lm` a second context. Open the login link in a **private browser window**: a normal window signs you in as `integrator` again.
 
@@ -220,7 +219,7 @@ lm login
 
 `lm config use-context selfhost` switches back to `integrator`.
 
-<p class="lm-check" markdown="span">**You know it worked when:** a user holding only `scope:desk` is refused the `customer` entity (scope `clients`), and a user holding `scope:clients` reads it.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** a user holding only `scope:desk` is refused the `customer` entity, whose scope is `clients`.</p>
 
 ```
 $ lm entity get customer          # as a user holding scope:desk
@@ -272,7 +271,7 @@ ID  WHEN  PROCESS  MESSAGE  ENTITY_KEY
 
 ## Half-day 3 — defrost *time* and the apps
 
-Goal of the day: the hub stops being a mirror and starts finding things — and each métier gets a surface.
+Goal of the day: the hub stops being a mirror and starts finding things — and each team gets an app.
 
 <div class="lm-rail" markdown>
 <article class="lm-step" markdown>
@@ -319,7 +318,7 @@ Read [Processes](apps/processes.md): declarative reactions to `data.row.changed`
 
 Read [Workflows](apps/workflows.md): a declared lifecycle over a status column, and a dormancy threshold that turns a document left unmoved into an alert.
 
-<p class="lm-check" markdown="span">**You know it worked when:** `lm workflow apply` reports `EN LITIGE` as an undeclared value. **Pro:** the métier chat answers a lifecycle question from your declared graph.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** you replayed [the WOW's step 9](wow.md#9-declare-what-a-status-means): `lm workflow apply` reports `EN LITIGE` as undeclared. **Pro:** scoped chat answers a lifecycle question from your declared graph.</p>
 </div>
 </article>
 <article class="lm-step" markdown>
@@ -330,19 +329,19 @@ Read [Workflows](apps/workflows.md): a declared lifecycle over a status column, 
 
 Read [Inbox](apps/inbox.md): where `decision.*` events (including `decision.dormant.<workflow>`) wait for a human, and `lm inbox ack` that closes them.
 
-<p class="lm-check" markdown="span">**You know it worked when:** an acked decision leaves `lm inbox` and shows `[traité]` in `lm inbox --all`.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** an acked decision leaves `lm inbox` and shows `[acked]` in `lm inbox --all`.</p>
 </div>
 </article>
 <article class="lm-step" markdown>
 <div class="lm-step__num">5</div>
 <div markdown>
 <div class="lm-kicker">30 min</div>
-<div class="lm-title">The métier PWA</div>
+<div class="lm-title">The PWA</div>
 
-Read [The métier PWA](apps/pwa.md), then:
+Read [The PWA](apps/pwa.md), then:
 
 - open `https://<your-host>/app/` — cards on a phone, a table on a tablet;
-- a phone cannot reach your laptop's `localhost`: put the [TLS façade](deploy.md#one-https-origin-the-tls-facade) in front first;
+- a phone cannot reach your laptop's `localhost`: put the [TLS proxy](deploy.md#one-https-origin-the-tls-proxy) in front first;
 - choose each app's tabs with one line of its manifest: [`spec.tabs`](choosing-what-your-hub-offers.md#3-does-the-app-ask-for-it).
 
 <p class="lm-check" markdown="span">**You know it worked when:** you see the same scope boundary on the phone and on the desktop.</p>
@@ -370,8 +369,8 @@ Common stumbles:
 - **The first minute is not an outage.** Right after the stack starts, the hub can briefly
   answer `401` or refuse connections. Wait a minute and retry before diagnosing.
 - **The ghost binary.** After rebuilding `lm`, run `lm version`. If it prints an old build,
-  your PATH serves a stale copy — prefer a symlink to your build over `cp`.
-- **Credentials.** Everything is generated at install time into the `.env` next to `up.sh`.
+  your PATH serves a stale copy.
+- **Credentials.** Every password is generated at install time into `.env`, at the root of the clone.
   If a login page surprises you, the answer is in that file.
 - **Ollama pulls one model at a time.** One `ollama pull <model>` per line, and make sure
   `ollama serve` isn't already running before starting it again.

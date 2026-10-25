@@ -3,6 +3,8 @@ package io.lumnik.hub.connector.mapping.hooks.dataset;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.mapping.MappingState;
 import io.lumnik.hub.connector.mapping.MappingValidationException;
+import io.lumnik.hub.connector.mapping.ScalarParams;
+import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.DatasetHook;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -11,10 +13,17 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @ApplicationScoped
 @HookId("sort-by")
 public class SortByHook implements DatasetHook {
+
+  /** {@code columns} is a list of column names; a scalar sorted by nothing, a list element by "" (#1472). */
+  @Override
+  public void validateParams(JsonNode params) {
+    parseColumns(params);
+  }
 
   @Override
   public List<Map<String, Object>> apply(List<Map<String, Object>> rows, JsonNode params, MappingState state) {
@@ -33,11 +42,7 @@ public class SortByHook implements DatasetHook {
   }
 
   private static List<String> parseColumns(JsonNode params) {
-    List<String> columns = new ArrayList<>();
-    if (params.has("columns")) {
-      for (JsonNode c : params.get("columns")) columns.add(c.asText());
-    }
-    return columns;
+    return params.has("columns") ? ScalarParams.columnNames("sort-by hook", "columns", params.get("columns")) : List.of();
   }
 
   /** Lexicographic comparator over the given columns; null cells sort as empty strings. */
@@ -53,5 +58,15 @@ public class SortByHook implements DatasetHook {
 
   private static String asText(Object v) {
     return v == null ? "" : v.toString();
+  }
+
+  @Override
+  public Set<String> params() {
+    return Set.of("columns", "max-rows");
+  }
+
+  @Override
+  public ColumnEffect columns(JsonNode params) {
+    return ColumnEffect.builder().readsEach("columns", params.path("columns")).build();
   }
 }

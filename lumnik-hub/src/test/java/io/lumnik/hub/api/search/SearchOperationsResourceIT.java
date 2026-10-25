@@ -104,6 +104,7 @@ class SearchOperationsResourceIT {
     private void mockSearchGateAvailable() {
         SearchGate mockGate = mock(SearchGate.class);
         when(mockGate.capability()).thenReturn(new SearchCapability(SearchAvailability.AVAILABLE, "fake", null, "1"));
+        when(mockGate.providerInstalled()).thenReturn(true);
         QuarkusMock.installMockForType(mockGate, SearchGate.class);
     }
 
@@ -123,6 +124,7 @@ class SearchOperationsResourceIT {
     void listAndStatusShowBuildingWithNoDocumentCountBeforeTheFirstBuild() {
         long tenant = 970_001L;
         String name = applyIndex(tenant, unique("fresh"));
+        mockSearchGateAvailable();   // "building" means a provider will build it; the next test is the hub without one
 
         as(tenant).get("/api/platform/search/index")
             .then().statusCode(200)
@@ -141,6 +143,44 @@ class SearchOperationsResourceIT {
             .body("activeRun", nullValue())
             .body("invalid", equalTo(false))
             .body("withheld", equalTo(false));
+    }
+
+    // -- 3a: no provider, so nothing will ever build it (#1549) ----------------------------------------
+
+    @Test
+    // Asserts the no-provider posture itself, which cannot hold under -Psearch (same note as the 501 test).
+    @DisabledIfSystemProperty(named = "lumnik.test.searchContractSuiteActive", matches = "true")
+    void listAndStatusSayNotInstalledWhenNoSearchProviderIsBuiltIn() {
+        long tenant = 970_021L;
+        String name = applyIndex(tenant, unique("no-provider"));
+
+        as(tenant).get("/api/platform/search/index")
+            .then().statusCode(200)
+            .body("find { it.name == '" + name + "' }.status", equalTo("not_installed"));
+        as(tenant).get("/api/platform/search/index/" + name + "/status")
+            .then().statusCode(200)
+            .body("status", equalTo("not_installed"))
+            .body("activeRun", nullValue())
+            .body("invalid", equalTo(false));
+    }
+
+    /** A state row left by a provider that is no longer built in does not make the index "ready":
+     *  nothing answers from it. */
+    @Test
+    @DisabledIfSystemProperty(named = "lumnik.test.searchContractSuiteActive", matches = "true")
+    void aStateRowLeftByARemovedProviderStillSaysNotInstalled() {
+        long tenant = 970_022L;
+        String name = applyIndex(tenant, unique("provider-removed"));
+
+        SearchProjectionStateStore readyStateStore = mock(SearchProjectionStateStore.class);
+        when(readyStateStore.find(tenant, name)).thenReturn(Optional.of(
+            new SearchProjectionState(tenant, name, "postgres", "gen-1", 0L, "ready", 0, null)));
+        QuarkusMock.installMockForType(readyStateStore, SearchProjectionStateStore.class);
+
+        as(tenant).get("/api/platform/search/index/" + name + "/status")
+            .then().statusCode(200)
+            .body("status", equalTo("not_installed"))
+            .body("liveGeneration", equalTo("gen-1"));
     }
 
     // -- 3b: a withheld index says so on both doors (#1219) ----------------------------------------

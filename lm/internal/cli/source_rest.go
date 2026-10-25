@@ -138,10 +138,12 @@ func newSourceRestRunCmd() *cobra.Command {
 	var limit int
 	cmd := &cobra.Command{
 		Use:   "run <connector>",
-		Short: "Run an endpoint (with --dry-run flag)",
-		Args:  cobra.ExactArgs(1),
+		Short: "Not available — use lm source rest test or lm connector run",
+		// Does nothing: hidden from --help, still callable so a script that calls it reads why.
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("not implemented yet — defers to /run endpoint API added in Task 12")
+			return fmt.Errorf("`lm source rest run` is not available: `lm source rest test %s` reads one page without writing, `lm connector run %s` runs the connector", args[0], args[0])
 		},
 	}
 	cmd.Flags().StringVar(&endpoint, "endpoint", "", "endpoint name (required)")

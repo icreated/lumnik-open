@@ -44,9 +44,16 @@ public class ConnectorValidationService {
 
         List<ValidationError> errors = new ArrayList<>();
         List<ValidationError> warnings = new ArrayList<>();
-        for (ValidationError e : all) {
+        // One mistake, one line: a rest-generic default is checked in every endpoint that inherits it, and by the
+        // defaults' own declaration (#1481).
+        for (ValidationError e : new LinkedHashSet<>(all)) {
             (e.severity() == Severity.ERROR ? errors : warnings).add(e);
         }
+        // A cross-field rule that refuses an undeclared key already speaks of it: the closed sweep's
+        // "unknown key" for the same path would report it a second time.
+        Set<String> refused = new HashSet<>();
+        errors.forEach(e -> refused.add(e.path()));
+        warnings.removeIf(w -> ConfigDefRunner.UNKNOWN_KEY.equals(w.message()) && refused.contains(w.path()));
         return new ValidationResult(errors, warnings);
     }
 

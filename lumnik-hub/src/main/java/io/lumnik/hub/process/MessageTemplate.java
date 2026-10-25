@@ -2,6 +2,7 @@ package io.lumnik.hub.process;
 
 import io.lumnik.hub.sql.TemporalText;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -12,12 +13,14 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * The kind:Process message template — {col} placeholders substituted from the triggering row.
+ * A {@code {name}} message template — kind:Process substitutes the triggering row's columns, a
+ * workflow's dormancy sentence what the sweep observed (#1363).
  * A placeholder is exactly {@code \{[A-Za-z0-9_]+\}}; anything else ({}, {a-b}, a lone brace)
  * passes through literal — no escape syntax to learn. A null value renders as the empty string
  * (absence renders as absence, never the text "null"). A timestamp renders as its ISO instant in
- * UTC whatever the hub's zone (#1303); a date keeps its {@code yyyy-MM-dd}. Pure: no DB, no HTTP,
- * no CDI.
+ * UTC whatever the hub's zone (#1303); a date keeps its {@code yyyy-MM-dd}. A numeric renders as the
+ * number, not at its column's scale: a source's {@code 18.7} is stored {@code 18.7000} in a
+ * {@code NUMERIC(18,4)}, and the sentence says {@code 18.7} (#1357). Pure: no DB, no HTTP, no CDI.
  */
 public final class MessageTemplate {
 
@@ -40,10 +43,14 @@ public final class MessageTemplate {
         Matcher m = PLACEHOLDER.matcher(template);
         StringBuilder sb = new StringBuilder();
         while (m.find()) {
-            String text = Objects.toString(TemporalText.render(row.get(m.group(1))), "");
+            String text = Objects.toString(text(row.get(m.group(1))), "");
             m.appendReplacement(sb, Matcher.quoteReplacement(text));
         }
         m.appendTail(sb);
         return sb.toString();
+    }
+
+    private static String text(Object value) {
+        return value instanceof BigDecimal d ? d.stripTrailingZeros().toPlainString() : TemporalText.render(value);
     }
 }

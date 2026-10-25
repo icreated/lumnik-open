@@ -111,6 +111,7 @@ const (
 	colDuration
 	colRecords
 	colTrigger
+	colEvaluated // only when the hub answered for some run (#1351) — see types.AnyEvaluated
 )
 
 // ── Runs resource page ──
@@ -148,7 +149,7 @@ func NewRuns(app *tview.Application, c *client.Client, toast func(string)) *Runs
 		toast:  toast,
 		sort:   style.NewColumnSort(runSortColumns),
 	}
-	r.setHeader()
+	r.setHeader(false)
 	t.SetInputCapture(r.handleKey)
 	t.SetSelectionChangedFunc(func(row, col int) {
 		if r.onSelect != nil {
@@ -171,12 +172,15 @@ func (r *Runs) Hints() string {
 	return base
 }
 
-func (r *Runs) setHeader() {
-	headers := make([]string, 0, len(runSortColumns)+2)
+func (r *Runs) setHeader(showEvaluated bool) {
+	headers := make([]string, 0, len(runSortColumns)+3)
 	for i := range runSortColumns {
 		headers = append(headers, r.sort.HeaderLabel(i))
 	}
 	headers = append(headers, "RECORDS", "TRIGGER")
+	if showEvaluated {
+		headers = append(headers, "EVALUATED")
+	}
 	for i, h := range headers {
 		r.table.SetCell(0, i, tview.NewTableCell(h).SetSelectable(false).SetExpansion(1))
 	}
@@ -236,7 +240,7 @@ func (r *Runs) renderList(list []types.Run, err error) {
 	defer r.mu.Unlock()
 	if err != nil {
 		r.table.Clear()
-		r.setHeader()
+		r.setHeader(false)
 		r.table.SetCell(1, 0, dataCell(fmt.Sprintf("ERROR: %v", err)))
 		return
 	}
@@ -305,7 +309,8 @@ func startedLabel(started, now time.Time) string {
 
 func (r *Runs) render() {
 	r.table.Clear()
-	r.setHeader()
+	showEvaluated := types.AnyEvaluated(r.items) // once: the header and every row follow the same answer
+	r.setHeader(showEvaluated)
 	now := time.Now()
 	for i, run := range r.items {
 		row := i + 1
@@ -320,6 +325,9 @@ func (r *Runs) render() {
 		r.table.SetCell(row, colDuration, tview.NewTableCell(duration).SetExpansion(1))
 		r.table.SetCell(row, colRecords, tview.NewTableCell(fmt.Sprintf("%d/%d/%d", run.RecordsIn, run.RecordsOut, run.RecordsSkipped)).SetExpansion(1))
 		r.table.SetCell(row, colTrigger, dataCell(run.TriggeredBy).SetExpansion(1))
+		if showEvaluated {
+			r.table.SetCell(row, colEvaluated, tview.NewTableCell(run.EvaluatedLabel()).SetExpansion(1))
+		}
 	}
 }
 
@@ -452,6 +460,12 @@ func (r *Runs) SelectedDescribe() (string, string, bool) {
 	fmt.Fprintf(&b, "dead_letters:    %d\n", run.DeadLetterCount)
 	fmt.Fprintf(&b, "cell_errors:     %d\n", run.CellErrors)
 	fmt.Fprintf(&b, "chunks:          %d\n", run.ChunkCount)
+	for _, s := range run.Scripts { // #1430: which version of a Kotlin script produced the rows
+		fmt.Fprintf(&b, "script:          %s  sha256 %s\n", esc(s.Name), esc(s.SHA256))
+	}
+	if run.Evaluated != nil {
+		fmt.Fprintf(&b, "evaluated:       %s\n", run.EvaluatedLabel())
+	}
 	return shortRunID(run.ID), b.String(), true
 }
 

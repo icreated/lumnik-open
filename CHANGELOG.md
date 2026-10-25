@@ -7,6 +7,102 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.10.0 — 2026-10-25
+
+A manifest that would fail a run is now refused when you validate it: a hook that does not exist, a
+parameter it does not read, a column the file does not hold, a wrong shape. Events are no longer
+missed when database transactions end out of order. Processes say when they have read a run.
+Workflows alert on due dates. New hooks read EDIFACT, fixed-width files and Windows mojibake.
+
+### Before you upgrade
+- **Take a backup.** This release carries ten migrations (V76–V85). Migrations are forward-only.
+  See `docs/operations/upgrade.md`.
+- **Removed secrets are deleted for good.** V84 deletes every secret removed with `lm secret rm`
+  before this release, in every tenant. The value is gone, not hidden. This cannot be undone.
+- **Plan for short locks at first boot.**
+  - V85 builds two indexes on `core.event_outbox`. Writes to the outbox wait while they build.
+  - V78 checks every dead letter once under a table lock.
+  - Time both on a copy if those tables are large.
+- **Run `lm validate` on every manifest.** Each of these used to pass and now is refused:
+  - in a csv-file mapping: an unknown hook, a parameter the hook does not read
+    (`upper hook: unknown parameter 'colums' — accepted: columns`), parameters that are not a map,
+    a tier that is not a list, an unknown key under `spec.mapping`, a column that does not exist,
+    a value outside a knob's allowed values, two `regex-extract` writing the same column;
+  - a boolean written `yes`, `no`, `on` or `off`: write `true` or `false`;
+  - a `mapping:` block on `jdbc-generic` or `rest-generic`: those rows land as the source holds
+    them, remove the block;
+  - in rest-generic `spec.defaults`: `base_url`, `auth`, `default_rate_limit`, `graphql_path` or a
+    key that switches the request shape;
+  - a GraphQL `incremental.param` the query does not declare;
+  - a Kotlin `script:` that is not `classpath:` or `hooks:`, and `column:` on a `kotlin` hook;
+  - an unknown SOAP `{{placeholder}}`, an unknown `on-error` mode.
+- **Fix scripts that parse `lm` output.**
+  - `lm apply -f`, `lm process apply` and `lm workflow apply` print one line, not JSON.
+  - `lm -o yaml` uses the JSON key names (`recordsIn`, `cellErrors`).
+  - `lm inbox` prints `[acked]` and English ages.
+- **Fix scripts that close dead letters.** `lm dlq replayed` needs `--new-run-id`: the run that
+  carried the row. An entry no run carried is closed with `lm dlq discard`. Past `REPLAYED` entries
+  with no run become `DISCARDED`.
+- **Fix scripts that call the API by hand.**
+  - The notification, integration and tenant-user doors refuse an unknown JSON key with `400`.
+    Write keys in camelCase (`entityFilter`, not `entity_filter`).
+  - `GET /api/entities/{name}` answers `400` for a filter on a column it cannot filter. Before, the
+    filter was ignored and every row came back.
+  - A `409` from the identity and secret doors now carries `{"error": …}`. Before, it was empty.
+- **Helm: authentication is on by default.** `auth.mode` is `oidc`. `dev-bypass` renders only with
+  `auth.iUnderstandNoAuth=true`.
+- **A REST header `value_env` that resolves to nothing stops the run.** It reads `lm secret` first,
+  then the environment. The run stops with `Header X unavailable (env=Y)`. Before, the header was
+  left out.
+
+### After you upgrade
+- **Columns declared `on-error: dlq` or `fail` now act.** Before, the mode was accepted and ignored.
+- **`lookup on-missing: null`** (unquoted) now empties the cell, as documented. Before, it kept the
+  value.
+- **Kotlin `context` values keep their YAML types.** A script that casts a number `as String` fails.
+- **rest-generic incremental runs look back.** The next request starts before the mark, by the
+  last run's length plus 60 s. Rows near the mark are read again and upserted.
+  `incremental.lookback: 0s` restores the old behaviour.
+- **GraphQL incremental runs now read only what changed.** The mark goes in the query variables.
+  Before, it went in the URL, and every run read everything.
+- **Entity columns fed by numbers become numbers.** All whole numbers fuse as `bigint`, any decimal
+  as `numeric`. Before, both were text. Re-apply the entity. The entity JSON still sends strings.
+- **Archive names carry the file's time**: `deliveries.20261022T163544Z.csv`. Update anything that
+  looked for the old names.
+- **The default dormancy alert is in English.** `spec.dormancy.message` sets your own sentence.
+
+### Added
+- **Processes say when they have read a run.** `lm run get` shows `EVALUATED`;
+  `lm run get ID --wait-evaluated` waits for it.
+- **Workflow due dates.** `spec.due` alerts `decision.overdue` once per document and deadline.
+- **New hooks and options**: `fill-down` (carries a value onto the empty cells below it),
+  `fix-mojibake`, `parser.lines: true` (one line, one row: fixed-width files and logs),
+  `split-row escape:` (EDIFACT) and `position:`, `regex-extract required:`, `to-uuid generate-from:`,
+  `parse-number integer: true`.
+- **Kotlin hooks from the operator's folder**: `script: hooks:<name>.kts`, loaded from
+  `LUMNIK_HOOKS_DIR` and compiled at apply. Each run records the scripts it ran and their SHA-256.
+- **rest-generic `auth.kind: oauth2`** (client credentials). `lm source rest from-openapi` drafts
+  auth from the spec.
+- **Entities**: `columns.<col>.prefer:` picks the source that wins a column;
+  `columns.<col>.conflicts: false` stops reporting sources that progress. `lm entity history` shows
+  who asserted a decision and why.
+- **Filters**: `lm inbox --process/--type`, `lm observations list --workflow`, and
+  `lm observations transitions` for the transition journal.
+- **`lm ask --previous`** asks a follow-up question.
+- **SOAP `{{page}}`** pages a SOAP source.
+
+### Fixed
+- **No event is missed when transactions end out of order**, by the live tail, webhooks, email or
+  processes. An event waits while an older write transaction stays open; the hub logs a warning
+  after two minutes.
+- A local or sftp file replaced with the same name and size is read again.
+- A csv full refresh no longer counts changed rows as removed.
+- An unreachable jdbc source gives one plain sentence on the run.
+- A view over a column its entity lost answers `400` naming the column, not `500`.
+- An entity apply or delete refreshes every tenant's schema card.
+- A SearchIndex on a hub without a Search provider reports `not_installed`, not `building`.
+- `deploy/selfhost/up.sh` keeps the overlays the stack was started with.
+
 ## v1.9.0 — 2026-10-20
 
 A hub table now holds what its source holds: one row per key for a database table, the file's rows

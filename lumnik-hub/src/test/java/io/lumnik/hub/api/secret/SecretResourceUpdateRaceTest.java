@@ -28,8 +28,8 @@ import static org.mockito.Mockito.when;
  * F1 (row-count half). {@link SecretResource#update} checks the secret exists via
  * {@code findByName}, then — in the same request but a moment later — runs the native
  * {@code UPDATE ... WHERE ... AND deleted_at IS NULL}. In the window between those two
- * statements, a concurrent {@code DELETE /api/platform/secrets/{name}} can soft-delete the same
- * row: the {@code UPDATE}'s own guard then matches zero rows, but nothing downstream checked
+ * statements, a concurrent {@code DELETE /api/platform/secrets/{name}} can delete the same row:
+ * the {@code UPDATE} then matches zero rows, but nothing downstream checked
  * that — {@code resolver.invalidate()}, {@code events.emitUpdated()} and
  * {@code recordAudit("UPDATE", ...)} all ran unconditionally, writing an audit row (and firing an
  * event) for a write that never touched a row.
@@ -67,8 +67,8 @@ class SecretResourceUpdateRaceTest {
         Query query = mock(Query.class);
         when(resource.em.createNativeQuery(anyString())).thenReturn(query);
         when(query.setParameter(anyString(), any())).thenReturn(query);
-        // The race: another request soft-deleted the row after findByName ran above, so the
-        // UPDATE's own "AND deleted_at IS NULL" guard matches nothing.
+        // The race: another request deleted the row after findByName ran above, so the UPDATE
+        // matches nothing.
         when(query.executeUpdate()).thenReturn(0);
 
         Response response = resource.update("race-secret", new SecretUpdateRequest("new-value", null));

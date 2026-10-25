@@ -1,7 +1,10 @@
 package io.lumnik.hub.event.consumer;
 
+import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.tenant.TenantContext;
+import io.lumnik.hub.event.EventHorizonWatch;
 import io.lumnik.hub.event.EventOutboxRow;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
@@ -9,6 +12,8 @@ import jakarta.transaction.Transactional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +29,8 @@ class EventSpineIT {
 
     @Inject OutboxSweeper sweeper;
     @Inject EntityManager em;
+    @Inject @DataSource("admin") AgroalDataSource adminDs;
+    @Inject EventHorizonWatch watch;
 
     @BeforeEach
     @Transactional
@@ -63,6 +70,60 @@ class EventSpineIT {
         assertTrue(seenByOne.stream().noneMatch(t -> t.startsWith("spine.test.")));
     }
 
+    /**
+     * #1570: an event's id is assigned at INSERT and becomes visible at COMMIT. A transaction holding
+     * the LOWER id commits after a sweep has read a HIGHER one: an id cursor has moved past it, and the
+     * webhook, email and process consumers never read it. A cursor that reads only what is decided
+     * reads both, each once.
+     */
+    @Test
+    void anEventALongTransactionCommitsLateIsStillRead() throws Exception {
+        List<String> seen = new CopyOnWriteArrayList<>();
+        try (Connection open = adminDs.getConnection()) {
+            open.setAutoCommit(false);
+            insert(open, "spine.test.late");                 // the lower id, not yet visible
+            seed(1L, "spine.test.early");                     // the higher id, committed
+            TenantContext.runAsSystem(() -> sweeper.sweep("it-late", 100, r -> seen.add(r.getEventType())));
+            open.commit();                                    // the lower id becomes visible
+        }
+        TenantContext.runAsSystem(() -> sweeper.sweep("it-late", 100, r -> seen.add(r.getEventType())));
+
+        assertEquals(List.of("spine.test.late", "spine.test.early"),
+            seen.stream().filter(t -> t.startsWith("spine.test.")).toList(),
+            "both events, each once, the late one included");
+    }
+
+    /**
+     * #1570's price, said: while an older transaction stays open, newer events wait. The watch counts
+     * the committed events that have waited past its patience — here one, made to look three minutes
+     * old — and none once the blocker ends.
+     */
+    @Test
+    void theWatchCountsEventsAnOpenTransactionHasHeldTooLong() throws Exception {
+        try (Connection open = adminDs.getConnection()) {
+            open.setAutoCommit(false);
+            insert(open, "spine.test.blocker");               // the older transaction, still open
+            try (Connection c = adminDs.getConnection();
+                 PreparedStatement ps = c.prepareStatement(
+                     "INSERT INTO core.event_outbox (tenant_id, event_type, source, payload, occurred_at, created_at) "
+                     + "VALUES (1, 'spine.test.held', 'system', '{}'::jsonb, now(), now() - interval '3 minutes')")) {
+                ps.executeUpdate();                            // newer, committed, held behind the blocker
+            }
+            assertEquals(1L, TenantContext.callAsSystem(watch::check));
+            open.rollback();
+        }
+        assertEquals(0L, TenantContext.callAsSystem(watch::check));
+    }
+
+    private static void insert(Connection c, String type) throws Exception {
+        try (PreparedStatement ps = c.prepareStatement(
+                "INSERT INTO core.event_outbox (tenant_id, event_type, source, payload, occurred_at, created_at) "
+                + "VALUES (1, ?, 'system', '{}'::jsonb, now(), now())")) {
+            ps.setString(1, type);
+            ps.executeUpdate();
+        }
+    }
+
     @Test
     void sweepRefusesToRunOutsideSystemMode() {
         // sweep sets the cross-tenant sentinel '0' directly, bypassing the interceptor's
@@ -88,7 +149,7 @@ class EventSpineIT {
     @Transactional
     void rewind(String consumer) {
         em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
-        em.createNativeQuery("UPDATE core.event_consumer SET last_event_id = 0 WHERE consumer_name = :c")
+        em.createNativeQuery("UPDATE core.event_consumer SET last_xact_id = 0, last_event_id = 0 WHERE consumer_name = :c")
           .setParameter("c", consumer).executeUpdate();
     }
 

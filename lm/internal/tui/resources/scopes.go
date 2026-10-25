@@ -36,7 +36,7 @@ func NewScopes(app *tview.Application, c *client.Client) *Scopes {
 
 func (s *Scopes) View() tview.Primitive { return s.table }
 func (s *Scopes) Hints() string {
-	return "Enter: switch scope · d: describe · y: yank · s: sort · r: refresh"
+	return "Enter: switch scope · d: describe · y: yank · r: refresh"
 }
 func (s *Scopes) SetOnEnter(fn func(string)) { s.onEnter = fn }
 

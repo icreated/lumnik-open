@@ -1,5 +1,5 @@
 // normalize-date.kts — a cell hook: rewrite legacy "DD/MM/YYYY" into ISO "YYYY-MM-DD".
-// KotlinScriptHost injects 'bindings' with a mutable "cells" map (the current row's columns).
+// The script reads and changes the row through bindings["cells"].
 @Suppress("UNCHECKED_CAST")
 val cells = bindings["cells"] as MutableMap<String, Any?>
 val raw = cells["signup_date"] as? String

@@ -8,7 +8,6 @@ import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -103,6 +102,49 @@ class UserResourceTest {
             .body("email", equalTo("carol@example.com"));
     }
 
+    // ── A key the door does not know is refused, never dropped ────────────────
+
+    @Test
+    void createWithAnUnknownKeyIsRefusedByName() {
+        // `mail` for `email`: dropped, the user would be created without an address and a 201.
+        given().contentType(ContentType.JSON)
+            .body("""
+                {"login": "dave", "name": "Dave", "mail": "dave@example.com"}
+                """)
+            .when().post("/api/tenants/" + tenantId + "/users")
+            .then().statusCode(400)
+            .body("error", containsString("unknown key: mail —"))
+            .body("error", containsString("email"))
+            .body("error", not(containsString("dave@example.com")));
+
+        given().when().get("/api/tenants/" + tenantId + "/users")
+            .then().statusCode(200)
+            .body("login", not(hasItem("dave")));
+    }
+
+    @Test
+    void updateWithAnUnknownKeyIsRefusedByName() {
+        String id = given().contentType(ContentType.JSON)
+            .body("""
+                {"login": "erin", "name": "Erin Old"}
+                """)
+            .when().post("/api/tenants/" + tenantId + "/users")
+            .then().statusCode(201)
+            .extract().path("id").toString();
+
+        given().contentType(ContentType.JSON)
+            .body("""
+                {"name": "Erin New", "displayName": "Erin"}
+                """)
+            .when().put("/api/tenants/" + tenantId + "/users/" + id)
+            .then().statusCode(400)
+            .body("error", containsString("unknown key: displayName —"));
+
+        given().when().get("/api/tenants/" + tenantId + "/users/" + id)
+            .then().statusCode(200)
+            .body("name", equalTo("Erin Old"));
+    }
+
     @Test
     void deactivateUser() {
         String id = given().contentType(ContentType.JSON)
@@ -134,23 +176,47 @@ class UserResourceTest {
         String body = """
             {"login": "dup_user", "name": "First"}
             """;
-        given().contentType(ContentType.JSON).body(body)
+        String holder = given().contentType(ContentType.JSON).body(body)
             .when().post("/api/tenants/" + tenantId + "/users")
-            .then().statusCode(201);
+            .then().statusCode(201)
+            .extract().path("id").toString();
 
-        // Same login, same tenant → 409
+        // Same login, same tenant → 409, naming the user who holds it
         given().contentType(ContentType.JSON)
             .body("""
                 {"login": "dup_user", "name": "Second"}
                 """)
             .when().post("/api/tenants/" + tenantId + "/users")
-            .then().statusCode(409);
+            .then().statusCode(409)
+            .contentType(ContentType.JSON)
+            .body("error", equalTo("login dup_user is already held by user " + holder));
     }
 
+    /** The door stores the login stripped: a padded duplicate is the same login, and meets the 409. */
     @Test
-    @Disabled("Cross-tenant uniqueness is enforced by Hibernate tenantFilter + RLS; " +
-              "verified in TenantHubIsolationIT. Without the filter active in " +
-              "module-level tests, loginExists() sees all tenants.")
+    void aPaddedDuplicateLoginIsRejectedLikeAnyOther() {
+        String holder = given().contentType(ContentType.JSON).body("""
+                {"login": "pad_user", "name": "First"}
+                """)
+            .when().post("/api/tenants/" + tenantId + "/users")
+            .then().statusCode(201).extract().path("id").toString();
+
+        given().contentType(ContentType.JSON).body("""
+                {"login": " pad_user ", "name": "Second"}
+                """)
+            .when().post("/api/tenants/" + tenantId + "/users")
+            .then().statusCode(409)
+            .contentType(ContentType.JSON)
+            .body("error", equalTo("login pad_user is already held by user " + holder));
+    }
+
+    /**
+     * A login is unique per tenant ({@code uq_user_login} is {@code (tenant_id, login)}), and the
+     * lookup that names the holder is scoped to the path's tenant by itself: it must not lean on RLS,
+     * which these module tests (and any system-mode caller) run without. Unscoped, it refused a login
+     * that is free in this tenant AND named another tenant's user in the refusal.
+     */
+    @Test
     void sameLoginInDifferentTenantsIsAllowed() {
         given().contentType(ContentType.JSON)
             .body("""

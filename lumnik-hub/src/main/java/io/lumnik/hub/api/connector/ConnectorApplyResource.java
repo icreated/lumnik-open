@@ -12,6 +12,7 @@ import io.lumnik.hub.api.connector.handler.ConnectorApplyHandler;
 import io.lumnik.hub.ask.SchemaCardRefresher;
 import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
+import io.lumnik.hub.manifest.HubYaml;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.hub.validator.ConnectorValidationService;
 import io.lumnik.hub.validator.ValidationResult;
@@ -28,7 +29,7 @@ import java.util.Map;
 @Produces(MediaType.APPLICATION_JSON)
 public class ConnectorApplyResource {
 
-    private static final YAMLMapper YAML = new YAMLMapper();   // no managed YAML mapper exists
+    private static final YAMLMapper YAML = HubYaml.mapper();   // no managed YAML mapper exists
     @Inject ObjectMapper json;   // the Quarkus-managed one: one JSON behavior app-wide
     private static final String METADATA = "metadata";
     private static final String TENANT = "tenant";

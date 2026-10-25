@@ -163,6 +163,26 @@ class EndpointResourceIT {
                 .body("error", containsString("tenant_id"));
     }
 
+    /** #1475: a mapping tier written as a map was stored, and refused only by the run (#1464). */
+    @Test
+    void update_refuses_a_mapping_tier_written_as_a_map() {
+        given().headers(TestIdentity.tenantAndUser(1))
+            .contentType("application/json")
+            .body("""
+                {
+                  "method": "GET",
+                  "path": "/v1/contacts",
+                  "enabled": true,
+                  "config": {"mapping": {"cell": {"upper": {"columns": ["name"]}}}}
+                }
+                """)
+            .when().put("/api/platform/connectors/" + connectorId + "/endpoints/" + endpointId)
+            .then()
+                .statusCode(400)
+                .body("error", equalTo("config 'mapping.cell' cell must be a list of hooks, "
+                    + "e.g. - upper: { columns: [name] } (got object)"));
+    }
+
     @Test
     void delete_soft_deletes_endpoint() {
         given().headers(TestIdentity.tenantAndUser(1))

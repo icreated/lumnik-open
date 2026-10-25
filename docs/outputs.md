@@ -17,7 +17,7 @@ Error: API error 403: missing role lm_integrator
 
 **Wiring is tenant-wide**: a webhook or an email rule receives every matching event of the tenant.
 An admin holding any `scope:*` role is refused `lm integration`, `lm notify`, `lm outputs` and the
-live event stream with `403 {"error":"scope not granted"}`.
+live event stream with `Error: access refused (403): scope not granted`.
 
 ## The three roads out
 
@@ -26,6 +26,12 @@ live event stream with `403 {"error":"scope not granted"}`.
 | **Webhook** | every subscribed event, signed, retried, journaled, replayable | `lm integration` |
 | **Email** | events matching a rule, one mail per event, best-effort | `lm notify` |
 | **Pull** | the decision pile and the delivery journal, when you come asking | `lm inbox` · `lm outputs` |
+
+**No event is missed because transactions end out of order.** A road takes an event once the
+database transactions older than it have ended. A transaction left open after a write holds back the events of every tenant on the hub,
+without losing them. That includes another application's database on the same PostgreSQL
+server. After two minutes the hub log says so: `… event(s) have waited more than 2 minutes for an older database
+transaction to end`.
 
 ## Wire a webhook
 
@@ -41,8 +47,16 @@ lm integration test <ID>          # fires a real POST at the target, result inli
   [registry below](#the-event-registry) is the vocabulary.
 - The signing secret rides **stdin, never argv** — it is stored encrypted and never
   returned by `list`/`describe`.
-- `test` fires a catalog event (`--event`, default `org.created`); `decision.*` types are
-  dynamic and not testable this way — trigger the rule instead.
+- `test` fires a sample event (`org.created`) at the target and prints the result:
+
+    ```
+    $ lm integration test 1000
+    delivered in 4ms (HTTP 200)
+    $ lm integration test 1001
+    Error: delivery failed: connection failed (ConnectException)
+    ```
+
+    A decision cannot be tested this way: make a process fire instead.
 - Forwarding starts **at registration** — nothing is delivered retroactively.
 - Without `--secret-stdin` the hub refuses the registration (`400`) and stores nothing.
 - `list` and `describe` show the target's **scheme and host only**: a webhook URL's path
@@ -60,7 +74,8 @@ ID    NAME  URL                      EVENTS      ENABLED
 
 ### What arrives, and how to verify it
 
-One HTTP `POST` per event, JSON payload as in the registry, with three headers:
+One HTTP `POST` per event. The body is the event's JSON: a decision's, as n8n receives it, is on
+[Processes](apps/processes.md#quickstart). With it come three headers:
 
 ```
 X-Lumnik-Event: decision.commande-bloquee
@@ -75,10 +90,10 @@ X-Lumnik-Signature: sha256=<hex HMAC-SHA256 of the raw request body, keyed with 
 
 ### Delivery semantics
 
-The outbox is swept every **5 s**; a failed delivery is retried by a **30 s** sweep, **3
-attempts in total**, per target — a target that already succeeded is not sent the event again.
-Delivery is at-least-once: a hub stop mid-send can deliver an event twice, so deduplicate on
-`X-Lumnik-Event-Id`.
+- An event leaves within about 5 seconds.
+- A failed delivery is tried 3 times in all, about 30 seconds apart. Then you replay it.
+- An event can arrive twice (a hub stopped mid-send): deduplicate on `X-Lumnik-Event-Id`. The test
+  POST carries no event id.
 
 Every attempt lands in the journal:
 
@@ -87,20 +102,25 @@ lm outputs list                   # deliveries across every integration, failure
 lm integration describe <ID>      # one target's registration; :integrations adds its recent deliveries
 ```
 
-A decision fired while the target was down — the journal says so, failures first:
-
 ```
 $ lm outputs list
-ID  INTEGRATION     EVENT                   STATUS       WHEN              ERROR
-41  ops-automation  decision.order-on-hold  no response  2026-09-05 05:40  ConnectException: null
+ID    INTEGRATION  EVENT                                     STATUS  WHEN              ERROR
+1003  fake-n8n     decision.litige-ouvert                    ok      2026-10-24 23:38
+1002  fake-n8n     decision.overdue.acme-delivery-lifecycle  ok      2026-10-24 23:33
 ```
-A delivery that exhausted its attempts can be **replayed**: `lm outputs replay ID` (or `^R` on
-`:outputs` in `lm ui`).
+
+Failures come first, with the reason in `ERROR` (`connection failed (ConnectException)` for a
+target that is down). Replay one, with `lm outputs replay ID` or `^R` on `:outputs` in `lm ui`:
+
+```
+$ lm outputs replay 1001
+replayed: delivery 1001 — a new attempt is on record
+```
 
 | What | Kept | Setting | Purged |
 |---|---|---|---|
-| delivery journal (payload + receiver's response) | 90 days; `0` = forever | `LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS` | daily, 05:00 — a purged delivery cannot be replayed; one still being retried is kept |
-| events (the outbox) | 30 days | `LUMNIK_EVENTS_RETENTION_DAYS` | daily, 04:30 — never past what the slowest consumer has read |
+| delivery journal (payload + receiver's response) | 90 days; `0` = forever | `LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS` | nightly — a purged delivery cannot be replayed |
+| events | 30 days | `LUMNIK_EVENTS_RETENTION_DAYS` | nightly |
 
 ## Route events to email
 
@@ -128,8 +148,8 @@ echo -n "$SIGNING_SECRET" | lm integration add n8n \
 lm integration test <ID>
 ```
 
-**Result:** the `test` fires a real `org.created` POST — the n8n execution list shows it
-within seconds, with `X-Lumnik-Event` and the `sha256=` signature ready for an HMAC node.
+**Result:** `delivered in …ms (HTTP 200)`, and the n8n execution list shows the POST, with
+`X-Lumnik-Event` and the `sha256=` signature ready for an HMAC node.
 
 ### Replay a delivery that exhausted its attempts
 
@@ -155,8 +175,8 @@ in the journal like any delivery.
 ## The event registry
 
 The hub's governed vocabulary — what `--events` patterns match against and what each
-payload carries. `decision.<name>` types are **dynamic**: your `kind: Process` rules and
-dormancy watches mint them under the enforced `decision.` prefix.
+payload carries. `decision.<name>` types are **dynamic**: your processes mint them, and your
+workflows mint `decision.dormant.<name>` and `decision.overdue.<name>`.
 
 ??? note "Every event type, from the registry the hub ships (`events.yaml`)"
 
@@ -168,8 +188,8 @@ Two emission rules worth planning around:
 
 - **`data.row.changed`** is emitted only when an integration, rule or process subscribes to it,
   and only for jdbc, CSV and kafka ingestion ([named limits](respiration.md#named-limits-in-one-place)).
-- **`decision.*` is the métier layer**: minted by [Processes](apps/processes.md) and
-  [Workflow dormancy](apps/workflows.md), treated in the [Inbox](apps/inbox.md) —
+- **`decision.*` is the business-event layer**: minted by [Processes](apps/processes.md) and
+  [Workflows](apps/workflows.md) (dormancy, due dates), treated in the [Inbox](apps/inbox.md) —
   `annotation.decision.acked` closes the loop with who and when.
 
 ## See also

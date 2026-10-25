@@ -23,7 +23,7 @@ Full walkthroughs: [Deploy](deploy.md) · [Reading the logs](recipes/logs.md).
 | 5 | `lm run list --connector NAME` | the run ledger — records in/out/skip at a glance |
 | 6 | `lm dlq list --run ID` | exactly which rows fell out, and why |
 | 7 | `lm entity apply -f FILE` | fuse sources into one canonical entity (`lm entity delete NAME` removes it, and frees a connector it blocked) |
-| 8 | `lm workflow apply -f FILE` | declare a lifecycle — prints the data-truth report |
+| 8 | `lm workflow apply -f FILE` | declare a lifecycle — lists the status values your data holds and the manifest does not declare |
 | 9 | `lm ask --scope S "question"` | ask the data — prints the answer, the rows *and the SQL that ran* (`-o json` for the whole result). **lumnik Pro** |
 | 10 | `lm secret set NAME` | store a secret — prompted, not echoed (`NAME -` reads stdin instead, for a multi-line key or a script); values are never returned |
 
@@ -43,15 +43,10 @@ f0466804  orders        default   Completed  10  8    2        2             202
 
 - **`Failed`** is the run itself (source unreachable, bad credentials): `lm run get 3ccd21eb` prints the reason.
 - **`DEAD-LETTERS`** are rows set aside with their reason: `lm dlq list`.
-- **Stop a running run:** `lm run cancel ID` — it ends after the chunk in flight. An ended run is refused:
-
-```
-$ lm run cancel 2af6db4c
-Error: API error 409: run 2af6db4c-31a5-4615-8cf9-96f7924fdce4 already ended (Completed)
-```
+- **Stop a running run:** `lm run cancel ID`. It ends after the current batch of rows.
 
 Every `-f` also takes `-f -` (stdin), and every listing takes `-o json`:
-[Integration as code](integration-as-code.md). Command 9 answers `404` on the open edition —
+[Integration as code](integration-as-code.md). Command 9 answers `Error: API error 404 (no details from the server)` on the open edition —
 see [which edition you installed](editions.md#which-edition-am-i-running).
 
 ## The TUI in six keys
@@ -76,7 +71,7 @@ see [which edition you installed](editions.md#which-edition-am-i-running).
 | Hub API | `http://localhost:8080` — health at [`/q/health`](operations/observability.md) |
 | Try the API | `http://localhost:8080/q/swagger-ui/` — spec at `/q/openapi`, [Postman recipe](recipes/test-the-api.md) |
 | Keycloak | `http://localhost:8180/realms/lumnik` |
-| The métier PWA | `http://localhost:8080/app/` |
+| The PWA | `http://localhost:8080/app/` |
 | This documentation | [docs.lumnik.io](https://docs.lumnik.io/) |
 
 ## The three files
@@ -91,6 +86,6 @@ see [which edition you installed](editions.md#which-edition-am-i-running).
 
 | You see | It means | Where to look |
 |---|---|---|
-| `403 {"error":"scope not granted"}` | your user holds scope roles, and this resource is in none of them | [Scopes](rag/scopes.md) |
-| "I can't answer that…" from the chat | a [guard](transparency/ask-honesty.md) refused rather than guess; the message says what to do next | [The five guards](transparency/ask-honesty.md) |
+| `Error: access refused (403): scope not granted` | your user holds scope roles, and this resource is in none of them | [Scopes](rag/scopes.md) |
+| `Je ne peux pas répondre à partir des données disponibles…` from `lm ask` | a [guard](transparency/ask-honesty.md) refused rather than guess; the message says what to do next | [The five guards](transparency/ask-honesty.md) |
 | a run with `SKIPPED > 0` | rows counted and not written. Duplicates and policy-excluded rows are skipped without reaching the DLQ; `DEAD-LETTERS` is the part that did | [Ingestion honesty](transparency/ingestion-honesty.md) |

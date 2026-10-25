@@ -10,6 +10,7 @@ import io.lumnik.hub.connector.api.types.ChunkResult;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
+import io.lumnik.hub.connector.api.types.ScriptVersion;
 import io.lumnik.hub.connector.api.types.SkipReason;
 import io.lumnik.hub.connector.api.types.TriggerMode;
 import io.lumnik.hub.connector.api.types.WriteOutcome;
@@ -30,8 +31,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
 
 import java.time.Instant;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.SequencedSet;
 import java.util.Set;
 import java.util.UUID;
 
@@ -134,6 +137,33 @@ class ChunkExecutorSkipRoutingTest {
           return new WriteOutcome.AllWritten(items.size());
         }
         @Override public long drainCellErrors() { return cellErrors; }
+      };
+    }
+  }
+
+  static final ScriptVersion V1 = new ScriptVersion("hooks:shipping-fee.kts", "23ba31c1");
+  static final ScriptVersion V2 = new ScriptVersion("hooks:shipping-fee.kts", "c1c59e5c");
+
+  /** First chunk ran v1; the operator replaced the script, so the second chunk's rows ran v1 then v2 (#1430). */
+  static final class ScriptProbeType implements ConnectorType {
+    private int writerCalls = 0;
+
+    @Override public String id() { return "script-probe"; }
+    @Override public WritePerformanceProfile defaultWriteProfile() { return new WritePerformanceProfile.Safe(); }
+    @Override public Set<TriggerMode> supportedTriggerModes() { return Set.of(TriggerMode.MANUAL); }
+    @Override public void validateConfig(Map<String, Object> config) { /* nothing to validate */ }
+
+    @Override public ItemReader<Map<String, Object>> reader(ConnectorContext ctx) {
+      return (chunkSize, cursor, c) -> new ReadResult.EndOfStream<>(List.of(ROW_A));
+    }
+
+    @Override public ItemWriter<Map<String, Object>> writer(ConnectorContext ctx) {
+      SequencedSet<ScriptVersion> scripts = new LinkedHashSet<>(++writerCalls == 1 ? List.of(V1) : List.of(V1, V2));
+      return new ItemWriter<Map<String, Object>>() {
+        @Override public WriteOutcome write(List<Map<String, Object>> items, ConnectorContext c) {
+          return new WriteOutcome.AllWritten(items.size());
+        }
+        @Override public SequencedSet<ScriptVersion> drainScripts() { return scripts; }
       };
     }
   }
@@ -247,5 +277,23 @@ class ChunkExecutorSkipRoutingTest {
     assertThat(persistedRun().getCellErrors())
         .as("second chunk's 2 cell errors accumulate onto the first chunk's 3")
         .isEqualTo(5);
+  }
+
+  @Test
+  void a_run_records_each_version_of_a_script_once_in_the_order_it_first_ran() {
+    ScriptProbeType type = new ScriptProbeType();
+
+    TenantContext.callAsSystem(() -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty(), null));
+    assertThat(persistedRun().scriptVersions()).containsExactly(V1);
+
+    TenantContext.callAsSystem(() -> exec.executeChunk(run, type, endpoint, ConnectorCursor.empty(), null));
+    assertThat(persistedRun().scriptVersions()).as("v1 once, then v2").containsExactly(V1, V2);
+  }
+
+  @Test
+  void a_run_without_a_script_records_none() {
+    TenantContext.callAsSystem(
+        () -> exec.executeChunk(run, new CellErrorProbeType(), endpoint, ConnectorCursor.empty(), null));
+    assertThat(persistedRun().scriptVersions()).isEmpty();
   }
 }

@@ -1,6 +1,8 @@
 package io.lumnik.hub.connector.csv;
 
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
+import io.lumnik.hub.connector.mapping.MappingValidationException;
+import io.lumnik.hub.connector.mapping.spec.ErrorPolicy;
 import io.lumnik.hub.connector.mapping.spec.MappingSpec;
 import org.junit.jupiter.api.Test;
 
@@ -27,6 +29,29 @@ class CsvBuildSpecTest {
         assertEquals("filter-where", spec.dataset().get(0).name());
         assertEquals(1, spec.row().size());
         assertEquals(1, spec.cell().size());
+    }
+
+    /** #1408: the manifest's on-error reached nothing — buildSpec handed the engine a soft policy. */
+    @Test
+    void mapping_on_error_is_parsed_into_the_spec() {
+        Map<String, Object> config = Map.of("mapping", Map.of(
+            "on-error", Map.of("fields", Map.of("amount_eur", "dlq"))));
+
+        MappingSpec spec = CsvFileConnectorType.buildSpec("invoices", config);
+
+        assertEquals(ErrorPolicy.Mode.DLQ, spec.onError().modeFor("amount_eur"));
+        assertEquals(ErrorPolicy.Mode.SOFT, spec.onError().modeFor("supplier_id"));
+    }
+
+    /** #1464: the run's own load refuses a tier written as a map — a manifest that skipped validation ran no hooks. */
+    @Test
+    void a_tier_written_as_a_map_is_refused() {
+        Map<String, Object> config = Map.of("mapping", Map.of(
+            "row", Map.of("map-columns", Map.of("rename", Map.of("cust_no", "customer_id")))));
+
+        assertThatThrownBy(() -> CsvFileConnectorType.buildSpec("clients", config))
+            .isInstanceOf(MappingValidationException.class)
+            .hasMessageStartingWith("row must be a list of hooks");
     }
 
     @Test

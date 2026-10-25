@@ -275,7 +275,7 @@ public class SftpFileSource implements FileSource, SeekableSource {
                 case DELETE -> sftp.remove(file.path());
                 case MOVE -> {
                     String archive = (String) cfg.getOrDefault("archive_path", "/archive/");
-                    String newPath = archive + (archive.endsWith("/") ? "" : "/") + file.name();
+                    String newPath = archive + (archive.endsWith("/") ? "" : "/") + file.archivedName();
                     mkdirs(parentDir(newPath));
                     sftp.rename(file.path(), newPath);
                 }

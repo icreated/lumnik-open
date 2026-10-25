@@ -1065,6 +1065,31 @@ class CascadeResolverTest {
   }
 
   @Test
+  void a_later_assertion_never_rewrites_who_asserted_an_earlier_decision_and_why() {
+    // #1520: the history is an audit trail — each asserted line keeps the correction in force when it
+    // was recorded, not the pair's current one.
+    long tenant = freshTenant();
+    EntityManifest.CascadeRule email = exactRule("email", List.of("email"), List.of("clean", "lower"));
+    seedResolvedRow(tenant, "erp", "cust-1", UUID.randomUUID(), email, Map.of("email", "alice@example.com"));
+    UUID refA = identityRefOf(tenant, "erp", "cust-1");
+    seedResolvedRow(tenant, "crm", "contact-9", UUID.randomUUID(), email, Map.of("email", "bob@example.com"));
+    UUID refB = identityRefOf(tenant, "crm", "contact-9");
+
+    resolver.assertSame(tenant, ENTITY_TYPE, refA, refB, "reviewer-1", "same person, two mailboxes");
+    resolver.resolve(tenant, ENTITY_TYPE, "crm", "contact-9", List.of(email), Map.of("email", "bob@example.com"), null);
+    resolver.assertDistinct(tenant, ENTITY_TYPE, refA, refB, "reviewer-2", "different people after all");
+    resolver.resolve(tenant, ENTITY_TYPE, "crm", "contact-9", List.of(email), Map.of("email", "bob@example.com"), null);
+
+    List<EntityIdentityRepository.EvidenceEvent> asserted = repository.inTransaction(
+            c -> repository.evidenceHistory(c, tenant, ENTITY_TYPE, "crm", "contact-9")).stream()
+        .filter(e -> "asserted".equals(e.decidedBy())).toList();
+    assertThat(asserted).extracting(EntityIdentityRepository.EvidenceEvent::assertedBy)
+        .containsExactly("reviewer-1", "reviewer-2");
+    assertThat(asserted).extracting(EntityIdentityRepository.EvidenceEvent::reason)
+        .containsExactly("same person, two mailboxes", "different people after all");
+  }
+
+  @Test
   void an_anchor_reprocessed_while_the_merge_is_active_stays_automatic() {
     long tenant = freshTenant();
     EntityManifest.CascadeRule email = exactRule("email", List.of("email"), List.of("clean", "lower"));
@@ -1085,6 +1110,32 @@ class CascadeResolverTest {
     // Only the row whose entity_id CHANGED was moved by the assertion.
     assertThat(decidedByOf(tenant, "erp", "cust-1")).isEqualTo("automatic");
     assertThat(decidedByOf(tenant, "crm", "contact-9")).isEqualTo("asserted");
+  }
+
+  @Test
+  void an_anchor_reprocessed_while_the_merge_is_active_keeps_the_rule_that_resolved_it() {
+    // #1344: unchanged data, two passes — the anchor's ledger and the rule tally must not change.
+    long tenant = freshTenant();
+    EntityManifest.CascadeRule email = exactRule("email", List.of("email"), List.of("clean", "lower"));
+    resolver.resolve(tenant, ENTITY_TYPE, "crm", "contact-1", List.of(email), Map.of("email", "alice@example.com"), null);
+    ResolutionResult byEmail = resolver.resolve(tenant, ENTITY_TYPE, "erp", "cust-1",
+        List.of(email), Map.of("email", "alice@example.com"), null);
+    resolver.resolve(tenant, ENTITY_TYPE, "sav", "contact-9", List.of(email), Map.of("email", "bob@example.com"), null);
+
+    resolver.assertSame(tenant, ENTITY_TYPE, identityRefOf(tenant, "erp", "cust-1"),
+        identityRefOf(tenant, "sav", "contact-9"), "reviewer-1", "same person");
+    resolver.resolve(tenant, ENTITY_TYPE, "sav", "contact-9", List.of(email), Map.of("email", "bob@example.com"), null);
+    ResolutionResult anchor = resolver.resolve(tenant, ENTITY_TYPE, "erp", "cust-1",
+        List.of(email), Map.of("email", "alice@example.com"), null);
+
+    assertThat(anchor.entityId()).isEqualTo(byEmail.entityId());
+    assertThat(anchor.ruleIdsInvolved()).isEqualTo(byEmail.ruleIdsInvolved()).containsExactly(ENTITY_TYPE + ":email");
+    List<EntityIdentityRepository.EvidenceEvent> history = repository.inTransaction(
+        c -> repository.evidenceHistory(c, tenant, ENTITY_TYPE, "erp", "cust-1"));
+    assertThat(history).extracting(EntityIdentityRepository.EvidenceEvent::ruleDeclaredId)
+        .containsExactly("email", "email");
+    assertThat(history.get(1).ruleVersion()).isEqualTo(history.get(0).ruleVersion());
+    assertThat(history.get(1).decidedBy()).isEqualTo("automatic");
   }
 
   @Test

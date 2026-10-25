@@ -5,7 +5,6 @@ import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.ask.SchemaCardStore;
-import io.lumnik.hub.sql.TemporalText;
 import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
@@ -67,7 +66,7 @@ public class ViewDetailResource {
         ResolvedView rv = ApiErrors.orBadRequest(() -> resolver.resolve(manifest, card.get()));
 
         String firstCol = rv.columns().get(0).name();
-        ViewDetailReader.DetailRead read = reader.read(tenant, rv, key);
+        ViewDetailReader.DetailRead read = ApiErrors.orBadRequest(() -> reader.read(tenant, rv, key));
         if (read.rows().isEmpty()) {
             return Response.status(404).entity(ApiErrors.error(
                 "no record where " + firstCol + "=" + key)).build();
@@ -81,7 +80,7 @@ public class ViewDetailResource {
         List<Field> fields = new ArrayList<>();
         for (int i = 0; i < rv.columns().size(); i++) {
             ResolvedView.Column col = rv.columns().get(i);
-            fields.add(new Field(col.name(), col.label(), TemporalText.wire(row.values().get(i))));
+            fields.add(new Field(col.name(), col.label(), rv.wire(row.values().get(i))));
         }
         List<ConflictLedger.Conflict> conflicts = read.ledgerPresent()
             ? ConflictLedger.parse(row.conflictsJson(), rv) : List.of();

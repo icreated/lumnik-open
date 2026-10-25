@@ -26,7 +26,10 @@ lm connector run csv-local-simple
 | `30-sftp-key.yaml` | Remote pull over SFTP (creds via env var named by `password_env`). |
 | `40-s3-prefix.yaml` | Every `.csv` under an S3 / MinIO prefix (creds via `access_key_env` / `secret_key_env`). |
 | `45-s3-headerless-archive.yaml` | A headerless, tab-separated export under an S3 prefix (`parser.columns`), archived to another bucket after commit. |
-| `60-s3-every-transformer.yaml` | One S3 export run through **every** `spec.mapping` transformer (all but `aggregator`) — the walk-through lives in [transformers.md](../transformers.md#one-manifest-every-transformer). |
+| `60-s3-every-transformer.yaml` | One S3 export run through most `spec.mapping` transformers, in one manifest. |
+| `70-fill-down.yaml`, `71-fill-down-reset.yaml` | `fill-down` on a bank statement, then with `reset-when` on an order export — [Transformers](../transformers.md#fill-down-a-value-written-once-for-the-rows-that-follow). |
+| `72-on-error-dlq.yaml` | An invoice without a readable amount goes to the dead letters — [Transformers](../transformers.md#an-empty-amount-is-a-wrong-row-on-error-dlq). |
+| `73-lines-fixed-width.yaml` | A fixed-width payroll file read with `lines: true`, cut by position — [CSV & files](../csv.md#parser). |
 
 > **Remote cursor:** remote connectors (`sftp`, `s3`) track a per-file watermark — each run ingests
 > only files newer than the last processed one; replays are idempotent via `_row_hash` dedup.

@@ -48,3 +48,12 @@ func (c *Client) HookGet(id string) (*types.HookDetail, error) {
 	}
 	return &out, nil
 }
+
+// HookScripts lists the hub's hooks directory via GET /api/platform/hooks/scripts (#1402).
+func (c *Client) HookScripts() (*types.HookScripts, error) {
+	var out types.HookScripts
+	if err := c.GET("/api/platform/hooks/scripts", &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}

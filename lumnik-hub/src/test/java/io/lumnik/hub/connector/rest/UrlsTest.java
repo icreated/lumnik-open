@@ -156,4 +156,13 @@ class UrlsTest {
         assertThat(Urls.forDisplay("not a url")).isEqualTo("not a url");
         assertThat(Urls.forDisplay(null)).isNull();
     }
+
+    @Test
+    void whyNotHttp_accepts_http_and_https_and_names_any_other_scheme() {
+        assertThat(Urls.whyNotHttp("https://auth.example/oauth/token")).isEmpty();
+        assertThat(Urls.whyNotHttp("HTTP://auth.example:8098/oauth/token")).isEmpty();
+        assertThat(Urls.whyNotHttp("ftp://auth.example/token")).contains("must be an http or https URL");
+        assertThat(Urls.whyNotHttp("/oauth/token")).contains("must be an absolute URL (scheme + host)");
+        assertThat(Urls.whyNotHttp(" ")).contains("must not be blank");
+    }
 }

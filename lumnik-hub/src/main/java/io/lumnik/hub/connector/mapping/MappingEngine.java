@@ -1,13 +1,19 @@
 package io.lumnik.hub.connector.mapping;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.api.ItemWriter;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
+import io.lumnik.hub.connector.api.types.ScriptVersion;
 import io.lumnik.hub.connector.api.types.SkipReason;
 import io.lumnik.hub.connector.api.types.WriteOutcome;
-import io.lumnik.hub.connector.mapping.hooks.CellHook;
-import io.lumnik.hub.connector.mapping.hooks.DatasetHook;
+import io.lumnik.hub.connector.mapping.carry.CarryCodec;
+import io.lumnik.hub.connector.mapping.carry.MappingCarry;
+import io.lumnik.hub.connector.mapping.carry.MappingFingerprint;
+import io.lumnik.hub.connector.mapping.carry.StaleCarryException;
 import io.lumnik.hub.connector.mapping.hooks.HookCatalog;
+import io.lumnik.hub.connector.mapping.hooks.HookDescriptor.Tier;
 import io.lumnik.hub.connector.mapping.hooks.RowHook;
+import io.lumnik.hub.connector.mapping.spec.ErrorPolicy;
 import io.lumnik.hub.connector.mapping.spec.HookInvocation;
 import io.lumnik.hub.connector.mapping.spec.MappingSpec;
 import io.lumnik.hub.connector.mapping.writer.MultiTargetWriter;
@@ -16,9 +22,12 @@ import jakarta.inject.Inject;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.SequencedSet;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 
 /**
@@ -73,42 +82,30 @@ public class MappingEngine {
     rows = applyDatasetHooks(spec, rows, state);
     rows = applyRowHooks(spec, rows, state);
     if (endOfStream) flushRowHooks(spec, rows, state);
-    applyCellHooks(spec, rows, state);
+    rows = applyCellHooks(spec, rows, state);
 
     state.counters().rowsOut().addAndGet(rows.size());
     return rows;
   }
 
   /**
-   * Resolve and validate every row/cell hook ONCE, before any row. Params are invariant across the
+   * Resolve and validate every hook ONCE, before any row. Params are invariant across the
    * chunk, so a param-shape refusal that hooks used to run per row — and that slipped through
    * entirely on an empty chunk, since {@code apply()} never fired — now fires here, exactly once.
-   * An UNKNOWN hook is refused here too, for the same reason: the apply tiers name it, but they name
-   * it inside the per-row loop, which an empty chunk skips. (Dataset hooks need no line here — their
-   * apply tier iterates invocations, not rows, so it already refuses an unknown one on an empty chunk.)
+   * An UNKNOWN hook is refused here too, for the same reason: refused inside the per-row loop, it
+   * would slip past an empty chunk.
    */
   private void validateHookParams(MappingSpec spec) {
-    for (HookInvocation inv : spec.row()) {
-      RowHook hook = catalog.row(inv.name());
-      if (hook == null) throw new MappingValidationException("unknown row hook: " + inv.name());
-      hook.validateParams(inv.params());
-    }
-    for (HookInvocation inv : spec.cell()) {
-      CellHook hook = catalog.cell(inv.name());
-      if (hook == null) throw new MappingValidationException("unknown cell hook: " + inv.name());
-      hook.validateParams(inv.params());
-    }
+    for (HookInvocation inv : spec.dataset()) catalog.validate(Tier.DATASET, inv.name(), inv.params());
+    for (HookInvocation inv : spec.row()) catalog.validate(Tier.ROW, inv.name(), inv.params());
+    for (HookInvocation inv : spec.cell()) catalog.validate(Tier.CELL, inv.name(), inv.params());
   }
 
   /** Tier 1: dataset hooks (one-shot, may rewrite the whole chunk). */
   private List<Map<String, Object>> applyDatasetHooks(
       MappingSpec spec, List<Map<String, Object>> rows, MappingState state) {
     for (HookInvocation inv : spec.dataset()) {
-      DatasetHook hook = catalog.dataset(inv.name());
-      if (hook == null) {
-        throw new MappingValidationException("unknown dataset hook: " + inv.name());
-      }
-      rows = hook.apply(rows, inv.params(), state);
+      rows = catalog.dataset(inv.name()).apply(rows, inv.params(), state);
     }
     return rows;
   }
@@ -172,17 +169,63 @@ public class MappingEngine {
     }
   }
 
-  /** Tier 3: cell hooks (per cell of each row, mutates in place). */
-  private void applyCellHooks(MappingSpec spec, List<Map<String, Object>> rows, MappingState state) {
-    for (Map<String, Object> row : rows) {
-      for (HookInvocation inv : spec.cell()) {
-        CellHook hook = catalog.cell(inv.name());
-        if (hook == null) {
-          throw new MappingValidationException("unknown cell hook: " + inv.name());
-        }
-        hook.apply(row, inv.params(), state);
-      }
+  /**
+   * Tier 3: cell hooks (per cell of each row, mutates in place). A cell a hook could not deliver follows the
+   * mapping's {@code on-error} for its column (#1408): {@code soft} keeps the row, {@code dlq} drops it as it was
+   * read — its cell is then not counted, the count says what was <em>written</em> — and {@code fail} stops.
+   */
+  private List<Map<String, Object>> applyCellHooks(MappingSpec spec, List<Map<String, Object>> rows,
+                                                   MappingState state) {
+    ErrorPolicy policy = spec.onError();
+    // The all-soft path keeps no copy of the row as it was read: only a dead letter needs one.
+    if (policy.isSoft()) {
+      rows.forEach(row -> applyCellChain(spec, row, state));
+      return rows;
     }
+    // CellHook.apply says nothing back: a hook that could not deliver its cell counts it, so the counter's
+    // move IS the failure. Safe because a MappingState is one chunk on one thread. A hook without `column:`
+    // (an every-column one) follows `default`, and its letter names the hook instead of a column.
+    AtomicLong cellErrors = state.counters().cellErrors();
+    List<Map<String, Object>> kept = new ArrayList<>(rows.size());
+    rows:
+    for (Map<String, Object> row : rows) {
+      Map<String, Object> read = new HashMap<>(row);
+      long rowStart = cellErrors.get();
+      for (int i = 0; i < spec.cell().size(); i++) {
+        HookInvocation inv = spec.cell().get(i);
+        state.atCellHook(i);
+        long before = cellErrors.get();
+        catalog.cell(inv.name()).apply(row, inv.params(), state);
+        if (cellErrors.get() == before) continue;
+        String column = inv.params().path("column").asText();
+        switch (policy.modeFor(column)) {
+          case SOFT -> { }
+          case FAIL -> throw new MappingValidationException("on-error: fail — " + inv.name()
+              + (column.isEmpty() ? " could not read a value" : " could not read a value of column '" + column + "'"));
+          case DLQ -> {
+            cellErrors.set(rowStart);
+            state.dropped().add(new MappingState.DroppedRow(read, new SkipReason.MappingFailed(
+                column.isEmpty() ? inv.name() : column, inv.name() + " could not read the value")));
+            continue rows;
+          }
+        }
+      }
+      kept.add(row);
+    }
+    return kept;
+  }
+
+  private void applyCellChain(MappingSpec spec, Map<String, Object> row, MappingState state) {
+    for (int i = 0; i < spec.cell().size(); i++) {
+      HookInvocation inv = spec.cell().get(i);
+      state.atCellHook(i);
+      catalog.cell(inv.name()).apply(row, inv.params(), state);
+    }
+  }
+
+  /** Whether one of these cell hooks carries values across rows — its state then outlives the chunk (#1452). */
+  public boolean carriesState(List<HookInvocation> cell) {
+    return cell.stream().map(inv -> catalog.cell(inv.name())).anyMatch(h -> h != null && h.carriesState());
   }
 
   /**
@@ -225,8 +268,11 @@ public class MappingEngine {
    * connection. {@link #writePrepared} then writes these rows without transforming them again;
    * {@link PreparedChunk} says why the chunk is never transformed twice.
    */
-  public PreparedChunk prepare(MappingSpec spec, List<Map<String, Object>> input, Long tenantId, UUID runId) {
+  /** @param carryIn what the mapping's carrying hooks held after the previous chunk of this file; null: start empty. */
+  public PreparedChunk prepare(MappingSpec spec, List<Map<String, Object>> input, Long tenantId, UUID runId,
+                               Map<String, Map<String, Object>> carryIn) {
     MappingState state = new MappingState();
+    if (carryIn != null) state.seedCarry(carryIn);
     var transformed = transform(spec, input, state, false);
     Map<String, float[]> vectors = multiWriter.prepare(spec.targets(), transformed, tenantId, runId,
         spec.id(), spec.version(), spec.id());
@@ -256,7 +302,7 @@ public class MappingEngine {
     }
     multiWriter.write(spec.targets(), transformed, tenantId, runId,
         spec.id(), spec.version(), spec.id(), connectorId, tags, sourceTypeHints, preparedVectors);
-    return new MappingOutcome(state.dropped(), state.counters().cellErrors().get());
+    return new MappingOutcome(state.dropped(), state.counters().cellErrors().get(), state.scripts());
   }
 
   /**
@@ -299,6 +345,7 @@ public class MappingEngine {
     private List<Map<String, Object>> preparedFor;
     private PreparedChunk prepared;
     private long cellErrors;
+    private final SequencedSet<ScriptVersion> scripts = new LinkedHashSet<>();
 
     MappingSpecItemWriter(MappingEngine engine, MappingSpec spec,
         Function<ConnectorContext, Map<String, String>> sourceTypeHints) {
@@ -309,8 +356,36 @@ public class MappingEngine {
 
     @Override
     public void prepare(List<Map<String, Object>> records, ConnectorContext ctx) {
-      prepared = engine.prepare(spec, records, ctx.tenantId(), ctx.runId());
+      prepare(records, ctx, null, true);
+    }
+
+    /**
+     * The carry's three rules (#1452), only for a mapping whose cell hooks carry state: a chunk that starts a file
+     * starts empty; any other one needs the stored carry, of THIS mapping; the carry out is encoded here, before the
+     * write transaction, so a value that cannot be stored fails the chunk before anything is written.
+     */
+    @Override
+    public JsonNode prepare(List<Map<String, Object>> records, ConnectorContext ctx, JsonNode carryIn,
+                            boolean startsAFile) {
+      boolean carries = engine.carriesState(spec.cell());
+      String fingerprint = carries ? MappingFingerprint.of(spec) : null;
+      MappingCarry in = carries && !startsAFile ? storedCarry(carryIn, fingerprint) : null;
+      prepared = engine.prepare(spec, records, ctx.tenantId(), ctx.runId(), in == null ? null : in.declarations());
       preparedFor = records;
+      return carries ? CarryCodec.encode(new MappingCarry(fingerprint, prepared.state().carried())) : null;
+    }
+
+    private static MappingCarry storedCarry(JsonNode carryIn, String fingerprint) {
+      MappingCarry stored = CarryCodec.decode(carryIn);
+      if (stored == null) {
+        throw new StaleCarryException("this file is resumed mid-way and no carried values are stored for it — the "
+            + "mapping gained a carrying hook since; " + StaleCarryException.RESET);
+      }
+      if (!stored.fingerprint().equals(fingerprint)) {
+        throw new StaleCarryException("the mapping changed since this file's carried values were stored — they belong "
+            + "to another mapping; " + StaleCarryException.RESET);
+      }
+      return stored;
     }
 
     @Override
@@ -329,6 +404,7 @@ public class MappingEngine {
         preparedFor = null;
       }
       cellErrors += outcome.cellErrors();
+      scripts.addAll(outcome.scripts());
       var drops = outcome.dropped();
       if (drops.isEmpty()) {
         return new WriteOutcome.AllWritten(items.size());
@@ -342,6 +418,13 @@ public class MappingEngine {
       long n = cellErrors;
       cellErrors = 0;
       return n;
+    }
+
+    @Override
+    public SequencedSet<ScriptVersion> drainScripts() {
+      SequencedSet<ScriptVersion> ran = new LinkedHashSet<>(scripts);
+      scripts.clear();
+      return ran;
     }
   }
 }

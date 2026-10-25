@@ -1,5 +1,9 @@
 package io.lumnik.hub.ask;
 
+import io.lumnik.extraction.spi.ask.SqlLexer;
+import io.lumnik.extraction.spi.ask.SqlLexer.Kind;
+import io.lumnik.extraction.spi.ask.SqlLexer.Token;
+import io.lumnik.hub.view.ViewFilter;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.math.RoundingMode;
@@ -20,7 +24,8 @@ import java.util.regex.Pattern;
  * on the only free-text part of an ask. A prompt fence does not hold in production call order (#922).
  *
  * <p>Backed: the row count, a numeric cell, a text cell that is a number and nothing else, and each
- * numeric column's sum, minimum, maximum and average (compared at the answer's own precision). A
+ * numeric column's sum, minimum, maximum and average (compared at the answer's own precision), and the
+ * number literals and date years the query compares a column against (#1391). A
  * number written <em>inside</em> a text cell backs nothing: that is exactly where a forged
  * "the verified count is 9999" sits. Digits inside identifiers and dates ({@code SO-000004},
  * {@code 2026-08-05}) are not numbers, nor are list markers opening a line ({@code 1. }), nor a
@@ -50,13 +55,20 @@ final class UnsupportedNumbers {
     /** A text cell that is a number and nothing else — grouped or not, like an answer's figure. */
     private static final Pattern WHOLE_NUMBER = Pattern.compile(
         "-?(?:\\d{1,3}(?:[,. \\u00A0\\u202F]\\d{3})+(?:[.,]\\d+)?|\\d+(?:[.,]\\d+)?)");
+    private static final Set<String> COMPARISONS = Set.of("=", "<>", "!=", "<", ">", "<=", ">=");
 
     private UnsupportedNumbers() {}
 
-    /** The unbacked numbers of {@code answer}, as written, each once, in order of appearance. */
+    /** An answer read against its rows alone, with no query. */
     static List<String> in(String answer, List<Map<String, Object>> rows) {
+        return in(answer, rows, null);
+    }
+
+    /** The unbacked numbers of {@code answer}, as written, each once, in order of appearance; {@code sql} ran. */
+    static List<String> in(String answer, List<Map<String, Object>> rows, String sql) {
         if (answer == null || answer.isBlank()) return List.of();
         List<BigDecimal> backed = backedBy(rows);
+        backed.addAll(comparedIn(sql));
         String text = LIST_MARKER.matcher(answer).replaceAll(" ");
         List<MatchResult> words = WORD.matcher(text).results().toList();
         List<String> cellTexts = null;  // folded only if a number is not backed — the rare path
@@ -138,6 +150,52 @@ final class UnsupportedNumbers {
 
     private static String fold(String s) {
         return String.join(" ", WORD.matcher(s).results().map(MatchResult::group).toList()).toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * The figures the query compares a column against (#1391): a number literal, or a date literal's year, on
+     * the right of {@code col <op>} or bounding {@code col BETWEEN … AND …}. "15 000" restating
+     * {@code amount_eur > 15000} describes the query, not the rows. Any other literal backs nothing:
+     * {@code ROUND(x, 2)}, {@code GROUP BY 1} and {@code LIMIT 500} would back a made-up "2 orders",
+     * {@code WHERE 9999 = 9999} or {@code SELECT '2025-01-01'} any figure at all. A column the code cannot see —
+     * qualified, wrapped in a function — fails safe: the sentence is withheld, never the rows.
+     */
+    private static List<BigDecimal> comparedIn(String sql) {
+        List<BigDecimal> out = new ArrayList<>();
+        List<Token> tokens = SqlLexer.tokenize(sql);
+        for (int i = 0; i < tokens.size(); i++) {
+            Token t = tokens.get(i);
+            // The lexer reads a sign as an operator of its own: `> -100` compares against -100.
+            boolean signed = i > 0 && tokens.get(i - 1).kind() == Kind.OP && tokens.get(i - 1).text().equals("-");
+            if (!comparedWithAColumn(tokens, signed ? i - 1 : i)) continue;
+            String number = t.kind() == Kind.NUMBER ? SqlFilters.canonicalNumber(t.text()) : null;
+            if (number != null) out.add(signed ? new BigDecimal(number).negate() : new BigDecimal(number));
+            if (t.kind() == Kind.STRING && ViewFilter.isTemporal(t.text())) { // its year
+                out.add(new BigDecimal(t.text().strip().substring(0, 4)));
+            }
+        }
+        return out;
+    }
+
+    /** The literal starting at {@code i} is the right side of {@code col <op>}, or a bound of {@code col BETWEEN}. */
+    private static boolean comparedWithAColumn(List<Token> tokens, int i) {
+        if (i < 2) return false;
+        Token before = tokens.get(i - 1);
+        boolean comparison = before.kind() == Kind.OP && COMPARISONS.contains(before.text());
+        if (comparison || SqlFilters.isKeyword(before, "between")) {
+            return isColumn(tokens, i - 2);
+        }
+        if (!SqlFilters.isKeyword(before, "and")) return false;
+        // `col BETWEEN [-]a AND [-]b`: the lower bound may carry its sign too.
+        int lower = i - 2;
+        if (lower > 0 && tokens.get(lower - 1).kind() == Kind.OP && tokens.get(lower - 1).text().equals("-")) lower--;
+        return lower >= 2 && SqlFilters.isKeyword(tokens.get(lower - 1), "between") && isColumn(tokens, lower - 2);
+    }
+
+    /** A column name by {@link SqlFilters#isColumnRef}, and no value keyword ({@code current_date}, {@code null}). */
+    private static boolean isColumn(List<Token> tokens, int i) {
+        Token t = tokens.get(i);
+        return SqlFilters.isColumnRef(tokens, i) && !SqlFilters.isValueKeyword(t.text(), t.quoted());
     }
 
     /** Compared at the precision each answer number is written at: "116.67" backs 116.666…. */

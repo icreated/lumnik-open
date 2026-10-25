@@ -4,7 +4,7 @@ import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.hub.api.ApiErrors;
-import io.lumnik.hub.ask.DiscoveryService;
+import io.lumnik.hub.ask.SchemaCardRefresher;
 import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.search.SearchIndexStore;
 import io.lumnik.hub.tenant.TenantContextFilter;
@@ -15,7 +15,6 @@ import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import org.jboss.logging.Logger;
 
 import java.util.Map;
 
@@ -24,25 +23,23 @@ import java.util.Map;
  * {@code /api/entities/apply}. Kept off {@link EntityReadResource} on purpose: that class stays a
  * read of the RLS datasource, and this one never drags a write-side collaborator into an RLS read
  * path (the same reason {@code EntityApplyResource} is its own door). Its collaborators are apply's
- * — the compiler, the registry, discovery — not the read resource's.
+ * — the compiler, the registry, the card refresher — not the read resource's.
  */
 @Path("/api/entities")
 @Produces(MediaType.APPLICATION_JSON)
 @RequiresPermission("lm_admin")
 public class EntityWriteResource {
 
-  private static final Logger LOG = Logger.getLogger(EntityWriteResource.class);
-
   @Inject EntityRegistry registry;
   @Inject EntityViewCompiler compiler;
-  @Inject DiscoveryService discovery;
+  @Inject SchemaCardRefresher cardRefresher;
   @Inject SearchIndexStore searchIndexStore;
   @Inject AuditRecorder audit;
 
   /**
    * Remove an entity: purge every tenant's SearchIndex over it, drop its view, delete its manifest
-   * row (atomically, admin DS), evict the in-memory entry, and rediscover its scopes best-effort so
-   * the RAG schema card drops it. Same scope asymmetry as apply — a bound integrator must hold ALL
+   * row (atomically, admin DS), evict the in-memory entry, and refresh best-effort every tenant's
+   * schema card that lists it, so the card drops it. Same scope asymmetry as apply — a bound integrator must hold ALL
    * the entity's scopes (allowsAll, the write rule); an unknown name is a 404. Not
    * {@code @Transactional}: the compiler runs its own atomic admin-DS transaction and rediscover
    * needs none, mirroring apply.
@@ -70,18 +67,8 @@ public class EntityWriteResource {
     // The SearchIndexes it took are audited by the purge itself, each in the tenant that owned it.
     audit.record("Entity", m.name(), "DELETE", Map.of("scopes", m.scopes()));
     // Best-effort, like apply: the view + manifest row are already gone, so a card-refresh failure
-    // must not fail the delete. No tenant context (system caller) → skip: every tenant picks the
-    // removal up on its next rediscover, since entity_manifest is global.
-    Long tenant = CurrentTenantHolder.get();
-    if (tenant != null) {
-      for (String scope : m.scopes()) {
-        try {
-          discovery.rediscover(tenant, scope);
-        } catch (Exception e) {
-          LOG.warnf(e, "entity delete: card refresh failed for scope %s", scope);
-        }
-      }
-    }
+    // must not fail the delete. Every card, in any tenant, that still lists the view loses it (#1538).
+    cardRefresher.afterEntityChanged(m.name(), CurrentTenantHolder.get(), m.scopes());
     return Response.status(204).build();
   }
 }

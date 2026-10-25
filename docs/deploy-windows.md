@@ -83,7 +83,7 @@ from Ubuntu is slow and mangles scripts.
 1. Install the small tools lumnik's installer uses (Ubuntu arrives almost
    empty):
    ```
-   sudo apt update && sudo apt install -y git curl python3 openssl gawk
+   sudo apt update && sudo apt install -y git curl python3 openssl gawk jq
    ```
    (`sudo` asks for your Ubuntu password — typed blind, see above.)
 2. Fetch the code:
@@ -167,7 +167,6 @@ natural-language "ask"** need a local AI runtime:
    ollama pull llama3.2
    ollama pull qwen2.5-coder:7b
    ```
-   A fourth model, `gemma4`, is used only by an offline evaluation; skip it.
 3. Prove it:
    ```
    ollama run llama3.2 "say hello"
@@ -201,8 +200,8 @@ unpack `lm.exe` anywhere, e.g. your Downloads folder.
 In **PowerShell**, from the folder holding the file:
 
 ```
-.\lm.exe config set-context local --server http://localhost:8080 --oidc-issuer http://localhost:8180/realms/lumnik
-.\lm.exe config use-context local
+.\lm.exe config set-context selfhost --server http://localhost:8080 --oidc-issuer http://localhost:8180/realms/lumnik
+.\lm.exe config use-context selfhost
 .\lm.exe login
 ```
 
@@ -224,16 +223,16 @@ Then just:
 
 ## Where to next
 
-Walk **[The WOW, hands-on](demo/wow-customer/README.md)** — ingest two fake
+Walk **[The WOW](wow.md)** — ingest two fake
 legacy systems, watch lumnik fuse them, and ask the result a question in plain
 language. One habit to take along: after every `lm connector run …`, check
 `lm run list` — *"run scheduled" is not "run succeeded"*, and the list is where
 the truth lives.
 
 - **A phone on this stack:** `http://localhost:8080` is reachable from your PC only. Put the
-  [TLS façade](deploy.md#one-https-origin-the-tls-facade) in front.
+  [TLS proxy](deploy.md#one-https-origin-the-tls-proxy) in front.
 - **Another port, an external PostgreSQL:** see [How to…](deploy.md#how-to) — the port stays,
-  use the façade; an external database is not an option on this path.
+  use the proxy; an external database is not an option on this path.
 
 ## Troubleshooting, Windows edition
 
@@ -242,7 +241,7 @@ the truth lives.
 | `wsl --install` is "not recognized" | Windows too old — run Windows Update until version 21H2+, or install WSL from the Microsoft Store. |
 | WSL complains about virtualization / BIOS | The VT switch is off — see the note in step 1. |
 | `docker: command not found` in Ubuntu | The WSL-integration switch for Ubuntu is off — step 2, setting 3. |
-| `!! could not obtain a Keycloak admin token` at the end of up.sh | Not a missing tool — the preflight would have stopped the script before this point. The login server was still finishing its first start; `up.sh` retries for ~25 s, then warns and leaves both accounts without a password. Re-run `./deploy/selfhost/up.sh --build` — the passwords get set on the next pass (step 4). |
+| `!! could not obtain a Keycloak admin token` at the end of up.sh | The login server was still starting. Re-run `./deploy/selfhost/up.sh --build`: the passwords get set on the next pass. |
 | `http://localhost:8080` suddenly unreachable (often after the PC slept) | WSL's plumbing went stale — in PowerShell `wsl --shutdown`, reopen Docker Desktop, wait a minute. |
 | Logins fail with 401 after the laptop slept | Ubuntu's clock drifted during sleep — same cure: `wsl --shutdown`, reopen Docker Desktop. |
 | The ask/chat errors after ~20 s | The model failed to load on the Windows side: update your **NVIDIA drivers** (the classic), then check the RAM note in step 5. |

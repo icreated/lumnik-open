@@ -68,10 +68,14 @@ public class WorkflowDataTruth {
      * @param checkUnavailable the confrontation could not be run at all (statement timeout,
      *        dropped column, revoked grant…). It means "we could not confront the data", NOT
      *        "the data agrees": the other fields of a degraded report are empty by ignorance.
+     * @param dueProblem what the due sweep would find wrong in {@code spec.due.column} (#1448): it is not
+     *        there (yet), or it is not a date. {@code null} when it is readable, when no due date is
+     *        declared, or when the probe did not run. Reported, never refused: declaring before ingesting
+     *        is legitimate, and a column can be parsed into a date later.
      */
     public record Report(List<ValueCount> undeclared, List<String> unobserved, long nullOrBlank,
                          boolean tableMissing, boolean keyColumnMissing, Long keyNullOrBlank,
-                         boolean checkUnavailable, String unavailableReason) {}
+                         boolean checkUnavailable, String unavailableReason, String dueProblem) {}
 
     /**
      * Three movements: fold the declaration into the values it accepts, confront the data, compare.
@@ -92,7 +96,7 @@ public class WorkflowDataTruth {
 
     /** What the data said: value counts, blanks, and whether the declared key column is even there. */
     private record Observed(Map<String, Long> seen, long nullOrBlank, boolean keyColumnMissing,
-                            Long keyNullOrBlank) {}
+                            Long keyNullOrBlank, String dueProblem) {}
 
     /** Every value the manifest accepts for this column — a state code or one of its aliases. */
     private static Set<String> declaredValues(WorkflowGraph g) {
@@ -122,7 +126,7 @@ public class WorkflowDataTruth {
             }
             boolean keyMissing = g.key() != null && !hasColumn(c, g.table(), g.key());
             Long keyNullOrBlank = g.key() == null || keyMissing ? null : countUnusableKeys(c, g);
-            return new Observed(seen, nullOrBlank, keyMissing, keyNullOrBlank);
+            return new Observed(seen, nullOrBlank, keyMissing, keyNullOrBlank, dueProblem(c, g));
         }
     }
 
@@ -134,7 +138,7 @@ public class WorkflowDataTruth {
      */
     static Report degraded(long tenantId, WorkflowGraph g, SQLException e) {
         if (UNDEFINED_TABLE.equals(e.getSQLState())) {
-            return new Report(List.of(), List.of(), 0L, true, false, null, false, null);
+            return new Report(List.of(), List.of(), 0L, true, false, null, false, null, null);
         }
         LOG.warnf(e, "workflow data-truth check unavailable for tenant %d, workflow %s "
             + "(%s.%s, SQLSTATE %s)", tenantId, g.name(), g.table(), g.column(), e.getSQLState());
@@ -142,7 +146,7 @@ public class WorkflowDataTruth {
         // the SQLSTATE itself; a structural message keeps its words behind ours (#1315).
         String said = SqlFailureText.rootMessage(e);
         return new Report(List.of(), List.of(), 0L, false, false, null, true,
-            said.startsWith("SQLSTATE ") ? said : "SQLSTATE " + e.getSQLState() + ": " + said);
+            said.startsWith("SQLSTATE ") ? said : "SQLSTATE " + e.getSQLState() + ": " + said, null);
     }
 
     /** What the data says that the manifest does not, and what the manifest says that the data never shows. */
@@ -161,7 +165,26 @@ public class WorkflowDataTruth {
             if (!seen) unobserved.add(s.code());
         }
         return new Report(List.copyOf(undeclared), List.copyOf(unobserved), observed.nullOrBlank(),
-            false, observed.keyColumnMissing(), observed.keyNullOrBlank(), false, null);
+            false, observed.keyColumnMissing(), observed.keyNullOrBlank(), false, null, observed.dueProblem());
+    }
+
+    private static String dueProblem(Connection c, WorkflowGraph g) throws SQLException {
+        if (g.due() == null) return null;
+        return DueColumn.problem(g.table(), g.due().column(), columnType(c, g.table(), g.due().column()));
+    }
+
+    /**
+     * Is {@code spec.due.column} a timestamp with time zone? Asked by the apply door before it stores:
+     * a zone declared over a column that carries its own instant is refused. As the readonly role, the
+     * one the sweep reads the column as, so the door, the report and the sweep see the same catalog.
+     */
+    public boolean dueColumnIsAnInstant(WorkflowManifest m) {
+        try (Connection c = readonlyDs.getConnection()) {
+            return DueColumn.of(columnType(c, m.table(), m.due().column())) == DueColumn.TIMESTAMPTZ;
+        } catch (SQLException e) {
+            // the door's broad catch logs it and answers a stable error that quotes nothing of it
+            throw new IllegalStateException("WorkflowDataTruth.dueColumnIsAnInstant", e);
+        }
     }
 
     /** The sweep's own predicate, negated: its {@code key IS NOT NULL AND btrim(key::text) <> ''}. */
@@ -189,15 +212,21 @@ public class WorkflowDataTruth {
      * a false {@code keyColumnMissing} on the one flag a typo'd key raises.
      */
     private static boolean hasColumn(Connection c, String table, String column) throws SQLException {
+        return columnType(c, table, column) != null;
+    }
+
+    /** The column's {@code information_schema} data type ({@code date}, {@code text}…), null when it is not
+     *  there — asked the way {@link #hasColumn} asks, every part bound. The due sweep reads its date by it. */
+    static String columnType(Connection c, String table, String column) throws SQLException {
         int dot = table.indexOf('.');
-        String sql = "SELECT 1 FROM information_schema.columns "
+        String sql = "SELECT data_type FROM information_schema.columns "
             + "WHERE table_schema = ? AND table_name = ? AND column_name = ?";
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setString(1, dot < 0 ? "" : table.substring(0, dot));
             ps.setString(2, dot < 0 ? table : table.substring(dot + 1));
             ps.setString(3, column);
             try (ResultSet rs = ps.executeQuery()) {
-                return rs.next();
+                return rs.next() ? rs.getString(1) : null;
             }
         }
     }

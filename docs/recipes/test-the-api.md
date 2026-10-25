@@ -5,7 +5,7 @@
 
 Day-to-day work goes through `lm`; this page is for testing the HTTP API itself.
 URLs below are the self-host defaults. Behind the
-[TLS façade](../deploy.md#one-https-origin-the-tls-facade) everything lives on one
+[TLS proxy](../deploy.md#one-https-origin-the-tls-proxy) everything lives on one
 https origin, with Keycloak under `/realms/*`.
 
 ## The doors
@@ -16,7 +16,7 @@ https origin, with Keycloak under `/realms/*`.
 | `http://localhost:8080/q/metrics` | none | Prometheus metrics (block `/q/*` at the proxy on a public origin) |
 | `http://localhost:8080/q/openapi` | none | **the OpenAPI spec** — what Postman imports |
 | `http://localhost:8080/q/swagger-ui/` | none | the try-it console, shipped in the packaged hub |
-| `http://localhost:8080/app/` | browser login | the [métier PWA](../apps/pwa.md) |
+| `http://localhost:8080/app/` | browser login | the [PWA](../apps/pwa.md) |
 | `http://localhost:8080/api/rag/chat` | Bearer, `lm_user` | the chat door — semantic or analytic, [guards](../transparency/ask-honesty.md) apply |
 | `http://localhost:8080/api/entities/…` | Bearer: reads `lm_user`; apply and writes `lm_admin` | fused entities, reads scope-bound — [entities](../entities.md) |
 | `http://localhost:8080/api/views` | Bearer, `lm_user` | saved-view discovery, scope-bound — [views](../apps/views.md) |
@@ -26,7 +26,7 @@ https origin, with Keycloak under `/realms/*`.
 
 Roles ride in the JWT's `groups` claim; the catalog is on
 [Roles & permissions](../security/role-management.md). A scope-bound user gets the
-uniform `403 {"error":"scope not granted"}` outside their métiers —
+uniform `403 {"error":"scope not granted"}` outside their granted scopes —
 [a feature, not a failure](troubleshooting.md#refusals-that-are-features).
 
 ## Mint a token
@@ -36,7 +36,7 @@ The bundled realm ships an `integrator` user (password: `INTEGRATOR_PASSWORD` in
 password grant. From the repo root, in `curl`:
 
 ```bash
-set -a; . ./.env; set +a          # loads INTEGRATOR_PASSWORD into the shell
+INTEGRATOR_PASSWORD=$(grep '^INTEGRATOR_PASSWORD=' .env | cut -d= -f2-)
 
 TOKEN=$(curl -s "http://localhost:8180/realms/lumnik/protocol/openid-connect/token" \
   -d grant_type=password -d client_id=lm-cli \
@@ -78,7 +78,7 @@ collection from the running hub, every endpoint pre-filled. Set the collection a
 Prefer a browser? `http://localhost:8080/q/swagger-ui/` is the same spec with a
 try-it button — paste the token from *Mint a token* into its **Authorize** dialog.
 
-!!! note "Testing as a métier user, not an integrator"
+!!! note "Testing as a business user, not an integrator"
     Everything above authenticates as `integrator`. To see what a scope-bound user
     sees (the `403 scope not granted` boundaries, the user chat door), mint the token
     with that user's credentials instead. [Scopes](../rag/scopes.md#binding-users-to-scopes-opt-in)

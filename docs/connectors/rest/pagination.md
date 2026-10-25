@@ -1,21 +1,21 @@
 # Pagination
 
 > How an endpoint asks for the next page. Most APIs follow a convention that already has a
-> name — declare the preset. When none fits, six strategies are written out by hand.
+> name: declare its preset. When none fits, write one of six strategies.
 
 This page serves [REST](../rest.md) and [GraphQL](../graphql.md): both are the same engine, and
 `relay` is what a GraphQL endpoint declares.
 
 ## Presets
 
-Declare the preset; it is expanded at apply time into the real strategy:
+Declare the preset that matches the API's framework:
 
-| Preset | For | Expands to |
+| Preset | For | Same as |
 |---|---|---|
 | `spring-page` | Spring Data `Page` | `page` (`$.content`, `$.totalPages`, 0-indexed) |
 | `spring-slice` | Spring Data `Slice` (no total) | `page` + `last_path: $.last` |
 | `spring-hateoas` | Spring Data REST | `body-link` (`$._links.next.href`, `$._embedded.{items}` — needs `items`) |
-| `micronaut` | Micronaut Data `Page` | `page` (`$.content`, `$.totalPages`) |
+| `micronaut` | Micronaut Data `Page` | `page` (`$.content`, `$.totalPages`, 0-indexed) |
 | `drf-page` | Django REST `PageNumberPagination` | `body-link` (`$.next`, `$.results`) |
 | `drf-limit-offset` | Django REST `LimitOffsetPagination` | `offset` (`$.count`, `$.results`) |
 | `fastapi` | fastapi-pagination | `page` (`$.items`, `$.pages`, 1-indexed) |
@@ -35,28 +35,79 @@ pagination: { kind: spring-hateoas, items: products }   # {items} → $._embedde
 
 ## Strategies
 
-When no preset fits, write the strategy out:
+When no preset fits, write the strategy out. Each one below shows what the API answers, then
+the block that reads it.
 
-| Strategy | Use for | Required fields | Optional fields (default) |
-|---|---|---|---|
-| `cursor` | Stripe, OpenAI, most modern APIs | cursor_param, cursor_path, has_more_path, response_path | cursor_binding (query), total_path |
-| `page` | Spring, Laravel, anything with page numbers | page_param, response_path | size_param, size (50), start_page (1), total_pages_path, total_path, has_more_path, last_path, empty_check (true) |
-| `offset` | legacy REST | offset_param, limit_param, response_path | limit (100), total_path |
-| `link-header` | GitHub | response_path | rel (next), total_path |
-| `body-link` | Django REST, JSON:API, NestJS, HATEOAS | link_path, response_path | total_path |
-| `relay` | GraphQL Connections | cursor_path, has_more_path, response_path; plus cursor_param **or** cursor_var | cursor_binding (query), total_path |
-| `custom` | — | — | refused — see below |
+**`cursor`** — the next page starts after the last item:
 
-`page` stops on whichever of `total_pages_path` / `has_more_path` / `last_path` is present —
-and, with `empty_check: true` (the default), on the first empty page.
+```json
+{ "data": [ {"id": "cus_41"}, {"id": "cus_42"} ], "has_more": true }
+```
 
-`total_path` is accepted by every strategy; it also checks the run's row count — see
-[The declared total](../rest.md#the-declared-total-a-witness-on-the-count).
+```yaml
+pagination:
+  kind: cursor
+  cursor_param: starting_after      # sent as ?starting_after=cus_42
+  cursor_path: $.data[-1:].id       # the id of the last item
+  has_more_path: $.has_more
+  response_path: $.data
+```
 
-!!! warning "`kind: custom` is refused"
-    `lm validate` and `lm apply` stop on it with `custom pagination is not supported; use page,
-    offset, cursor, link-header or body-link`. A connector applied before that check still meets
-    the same sentence in its run. Use one of the six strategies above.
+**`page`** — page numbers:
+
+```json
+{ "content": [ … ], "number": 0, "totalPages": 5 }
+```
+
+```yaml
+pagination:
+  kind: page
+  page_param: page                  # ?page=0, ?page=1, …
+  size_param: size
+  size: 500
+  start_page: 0                     # the default is 1
+  total_pages_path: $.totalPages
+  response_path: $.content
+```
+
+`page` stops at `total_pages_path`, `has_more_path` or `last_path` (whichever you declare), and
+on the first empty page.
+
+**`offset`** — a row offset and a limit:
+
+```json
+{ "data": [ … ], "total": 2400 }
+```
+
+```yaml
+pagination:
+  kind: offset
+  offset_param: offset              # ?offset=0&limit=500, then ?offset=500…
+  limit_param: limit
+  limit: 500
+  response_path: $.data
+```
+
+**`body-link`** — the answer carries the next page's URL:
+
+```json
+{ "results": [ … ], "next": "https://api.example.com/partners?page=2" }
+```
+
+```yaml
+pagination:
+  kind: body-link
+  link_path: $.next
+  response_path: $.results
+```
+
+**`link-header`** — the next URL is in the `Link` header (GitHub style). Only `response_path` is
+needed: [the example below](#a-full-example-link-header).
+
+**`relay`** — GraphQL Connections: [GraphQL](../graphql.md).
+
+`total_path` is accepted by every strategy. It checks the run's row count against what the API
+declares: [The declared total](../rest.md#the-declared-total-a-witness-on-the-count).
 
 !!! warning "Page size is a knob on `page` and `offset` only"
     `cursor`, `body-link` and `link-header` send **no size parameter**: the server's default
@@ -66,8 +117,9 @@ and, with `empty_check: true` (the default), on the first empty page.
     [`20-two-endpoints.yaml`](../rest.md#one-connector-one-api) does with
     `path: /drf/partners?page_size=500`. `relay` takes its size from `first:` in the query.
 
-The `link-header` strategy written out, with an API key — the next page is in an RFC 5988
-`Link` header:
+### A full example: `link-header`
+
+The next page is in the response's `Link` header, and the API wants a key:
 
 ```yaml
 --8<-- "docs/connectors/rest/demo/30-link-header.yaml"
@@ -81,7 +133,7 @@ ID        CONNECTOR    ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  S
 
 ## Cursor binding
 
-For `cursor` and `relay`, `cursor_binding` picks where the next-page cursor is injected:
+For `cursor` and `relay`, `cursor_binding` says where the cursor goes:
 
 | Binding | Cursor goes into | Needs |
 |---|---|---|
@@ -89,25 +141,32 @@ For `cursor` and `relay`, `cursor_binding` picks where the next-page cursor is i
 | `header` | an HTTP header | cursor_param (the header name) |
 | `variable` | the POST body's `variables.<name>` | cursor_var — `relay` on a graphql endpoint only |
 
-Both halves of that last rule are refused at apply:
+An API that wants the cursor in a header:
 
-```
-$ lm apply -f bad-binding.yaml
-✗ bad-binding.yaml — 2 error(s), 0 warning(s)
-
-  ERROR    spec.endpoints[0].pagination.cursor_binding
-          cursor_binding=variable is only valid for graphql endpoints; non-graphql endpoints use cursor_binding=query|header
-
-  ERROR    spec.endpoints[0].pagination.cursor_binding
-          cursor_binding=variable is only valid for pagination.kind=relay; cursor pagination uses cursor_binding=query|header
-
-Fix errors above before running 'lm apply -f bad-binding.yaml'.
-Error: validation failed: 2 error(s)
+```yaml
+pagination:
+  kind: cursor
+  cursor_binding: header
+  cursor_param: X-Next-Cursor       # the header's name
+  cursor_path: $.next_cursor
+  has_more_path: $.has_more
+  response_path: $.items
 ```
 
-Both errors must be fixed.
+`variable` anywhere else than a GraphQL `relay` is refused at `lm apply`.
 
 > **A pure GraphQL API** (POST a query, cursor in `variables`): see [GraphQL](../graphql.md).
+
+## Every field
+
+| Strategy | Required fields | Optional fields (default) |
+|---|---|---|
+| `cursor` | cursor_param, cursor_path, has_more_path, response_path | cursor_binding (query), total_path |
+| `page` | page_param, response_path | size_param, size (50), start_page (1), total_pages_path, total_path, has_more_path, last_path, empty_check (true) |
+| `offset` | offset_param, limit_param, response_path | limit (100), total_path |
+| `link-header` | response_path | rel (next), total_path |
+| `body-link` | link_path, response_path | total_path |
+| `relay` | cursor_path, has_more_path, response_path; plus cursor_param **or** cursor_var | cursor_binding (query), total_path |
 
 ## See also
 

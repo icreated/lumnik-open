@@ -29,23 +29,25 @@ public record FileProcessingCursor(Instant watermark, List<Entry> lastBatch) {
     private static final String LAST_BATCH = "lastBatch";
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record Entry(String path, long size, String etag) {}
+    public record Entry(String path, long size, String etag) {
+        /** The file this entry recorded: the batch is the files of the watermark second, so that is its mtime. */
+        public FileDescriptor descriptor(Instant watermark) {
+            return new FileDescriptor(path, size, watermark, etag);
+        }
+    }
 
     /**
-     * Returns {@code true} when the given file was already processed in the last batch.
-     *
-     * <p>Match criteria: same {@code path} AND same {@code size}.
-     * When both sides carry an {@code etag}, the etag must also match.
+     * Returns {@code true} when the given file was already processed in the last batch: the same path, and the same
+     * bytes by the one rule, {@link FileDescriptor#sameVersion} — size, mtime, and etag when both carry one. The
+     * batch holds the files of the watermark second, so each entry's mtime is the watermark: a rewrite with the same
+     * name and size but a newer mtime is a new version (#1381) — an sftp file carries no etag to tell it otherwise.
+     * A same-size rewrite within the same mtime second still reads as the same version: the transport's resolution.
      */
     public boolean alreadyProcessed(FileDescriptor file) {
         if (lastBatch == null) return false;
         for (Entry e : lastBatch) {
-            if (e.path().equals(file.path()) && e.size() == file.size()) {
-                if (e.etag() != null && file.etag() != null) {
-                    return e.etag().equals(file.etag());
-                }
-                return true;
-            }
+            if (e.path().equals(file.path())
+                && e.descriptor(watermark).sameVersion(file)) return true;
         }
         return false;
     }

@@ -147,6 +147,17 @@ class ViewLinksIT {
                 containsString("numeric"));
     }
 
+    /** #1338: a bigint is an integer too — a CSV read with parse-number integer: true, or an entity's whole number. */
+    @Test
+    void aLinkOnABigintSourceColumnSaysNothingAboutTypes() {
+        cards.save(TENANT, "registry", new SchemaCard(SCOPE, List.of(
+            new SchemaCard.Table("connector.t_vl_cat", "Categories", List.of(
+                new SchemaCard.Column("category_id", "bigint", "Category"),
+                new SchemaCard.Column("name", "text", "Name"))))));
+        apply(view("vl-articles", SCOPE, "connector.t_vl_cat", "[category_id, name]", null)).statusCode(200);
+        apply(categories(TO_ARTICLES)).statusCode(200).body("$", not(hasKey("warnings")));
+    }
+
     @Test
     void aLinkOnATextOrIntegerSourceColumnSaysNothingAboutTypes() {
         cards.save(TENANT, "registry", new SchemaCard(SCOPE, List.of(

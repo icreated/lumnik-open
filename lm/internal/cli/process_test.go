@@ -2,6 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +12,32 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// lm process apply says what it applied in one line, as every apply does; -o json keeps the hub's
+// answer for a script.
+func TestProcessApply_printsOneLine_andTheHubAnswerUnderJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/processes/apply" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"name":"litige-ouvert","table":"connector.t_acme_desk_orders","emit":"decision.litige-ouvert"}`))
+	}))
+	defer srv.Close()
+	f := filepath.Join(t.TempDir(), "p.yaml")
+	require.NoError(t, os.WriteFile(f, []byte("kind: Process\n"), 0o600))
+
+	out, _, err := runLm(t, srv, "process", "apply", "-f", f)
+	require.NoError(t, err)
+	assert.Equal(t, `Applied process "litige-ouvert" → table connector.t_acme_desk_orders, emits decision.litige-ouvert`+"\n", out)
+
+	out, _, err = runLm(t, srv, "process", "apply", "-f", f, "-o", "json")
+	require.NoError(t, err)
+	var body map[string]string
+	require.NoError(t, json.Unmarshal([]byte(out), &body), out)
+	assert.Equal(t, map[string]string{"name": "litige-ouvert", "table": "connector.t_acme_desk_orders",
+		"emit": "decision.litige-ouvert"}, body)
+}
 
 func TestProcessApplyCmd_requiresFileAndReadsIt(t *testing.T) {
 	dir := t.TempDir()

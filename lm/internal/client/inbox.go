@@ -1,6 +1,10 @@
 package client
 
-import "fmt"
+import (
+	"fmt"
+	"net/url"
+	"strconv"
+)
 
 // InboxEntry is one decision waiting for the human — the fruit of a declared kind:Process rule.
 type InboxEntry struct {
@@ -14,15 +18,29 @@ type InboxEntry struct {
 	Acked      bool   `json:"acked"`
 }
 
+// InboxQuery is what one inbox read asks for. All includes acked decisions; Process and Type,
+// when set, narrow the hub's query (#1356) — Process is what a decision shows as its process.
+type InboxQuery struct {
+	Limit         int
+	All           bool
+	Process, Type string
+}
+
 // InboxList returns the tenant's most recent decision.* events, newest first.
-// By default the fold hides acked decisions; all=true returns everything with the acked flag.
-func (c *Client) InboxList(limit int, all bool) ([]InboxEntry, error) {
-	path := fmt.Sprintf("/api/inbox?limit=%d", limit)
-	if all {
-		path += "&all=true"
+// By default the fold hides acked decisions; All returns everything with the acked flag.
+func (c *Client) InboxList(q InboxQuery) ([]InboxEntry, error) {
+	v := url.Values{"limit": {strconv.Itoa(q.Limit)}}
+	if q.All {
+		v.Set("all", "true")
+	}
+	if q.Process != "" {
+		v.Set("process", q.Process)
+	}
+	if q.Type != "" {
+		v.Set("type", q.Type)
 	}
 	var out []InboxEntry
-	if err := c.GET(path, &out); err != nil {
+	if err := c.GET("/api/inbox?"+v.Encode(), &out); err != nil {
 		return nil, err
 	}
 	return out, nil

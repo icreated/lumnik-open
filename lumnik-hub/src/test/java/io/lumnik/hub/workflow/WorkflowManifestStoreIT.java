@@ -79,12 +79,16 @@ class WorkflowManifestStoreIT {
           + "(tenant_id, workflow_name, doc_key, from_state, to_state, observed_at) "
           + "VALUES (?, ?, 'CMD-1', 'A', 'B', NOW())",
             ps -> { ps.setLong(1, tenant); ps.setString(2, name); });
+        Jdbc.update(adminDs, "test.seedDueAlert",
+            "INSERT INTO core.workflow_due_alert (tenant_id, workflow_name, doc_key, due_at) VALUES (?, ?, 'CMD-1', NOW())",
+            ps -> { ps.setLong(1, tenant); ps.setString(2, name); });
 
         store.delete(tenant, name);
 
         assertThat(store.findYaml(tenant, name)).isEmpty();
         assertThat(ledgerRowCount("core.workflow_observation", tenant, name)).isZero();
         assertThat(ledgerRowCount("core.workflow_transition", tenant, name)).isZero();
+        assertThat(ledgerRowCount("core.workflow_due_alert", tenant, name)).as("#1448").isZero();
     }
 
     /** #1237: two removals racing past findScope must audit once — the store says which one removed it. */

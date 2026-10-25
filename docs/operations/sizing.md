@@ -1,5 +1,16 @@
 # Sizing & load tests
 
+## The short answer
+
+| Measured on | Load | Result |
+|---|---|---|
+| a VPS, 4 vCPU / 16 GB / NVMe, self-host + TLS proxy | 50 concurrent users on the read surface | p95 ≈ 11 ms, 0 errors, ~112 requests/s |
+| a laptop (Docker VM, 10 CPU / 7.6 GB), PostgreSQL Search provider | search alone, 50 000 rows per index | p95 87–140 ms |
+
+- Not measured: `ask`, chat and RAG search. The model is the cost there: size its machine on its own.
+- Not measured: ingestion. It is a batch; its cost shows in each run.
+- Disk is your own question: see [Storage](#storage-the-sizing-question-this-page-does-not-answer).
+
 ## Storage — the sizing question this page does NOT answer
 
 The load tests below measure throughput and latency, not disk. What grows, and what is purged:

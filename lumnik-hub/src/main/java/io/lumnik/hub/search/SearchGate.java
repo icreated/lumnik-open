@@ -5,6 +5,7 @@ import io.lumnik.extraction.spi.search.IndexedSearchQuery;
 import io.lumnik.extraction.spi.search.IndexedSearchResult;
 import io.lumnik.extraction.spi.search.InvalidIndexedSearchQueryException;
 import io.lumnik.extraction.spi.search.ProviderStatus;
+import io.lumnik.extraction.spi.search.SearchAvailability;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
@@ -48,6 +49,16 @@ public class SearchGate {
     }
 
     /**
+     * Whether any provider is built in — the opposite of {@link #capability()}'s {@code not_installed}.
+     * Never asks a provider anything: an installed provider that is failing or ambiguous still counts,
+     * since fixing it is what builds a declared index; with none, nothing ever will.
+     */
+    public boolean providerInstalled() {
+        SearchCapability whyNone = select().capability();
+        return whyNone == null || whyNone.state() != SearchAvailability.UNAVAILABLE;
+    }
+
+    /**
      * Run one query through the selected provider. Never throws and never returns a successful empty
      * answer for a provider that is absent, failing, or returned nothing at all.
      */
@@ -65,7 +76,11 @@ public class SearchGate {
             if (result != null) return new SearchOutcome.Hits(result);
             LOG.warnf("Search provider '%s' returned no result object", s.name());
         } catch (InvalidIndexedSearchQueryException e) {
-            return new SearchOutcome.Rejected(e.getMessage());
+            // A refused cursor (stale, tampered, from another query) is never fixed by sending it again:
+            // the way on is page one. Said here, once, rather than in each provider's own wording.
+            return new SearchOutcome.Rejected(query.cursor() == null
+                ? e.getMessage()
+                : e.getMessage() + "; run the search again without cursor");
         } catch (RuntimeException e) {
             LOG.warnf(e, "Search provider '%s' failed a query", s.name());
         }

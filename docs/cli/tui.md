@@ -3,12 +3,27 @@
 > Bare `lm` (or `lm ui`) opens the k9s-style console — the installer's daily screen. `:` is the
 > command palette (type a page name, Tab/Enter to commit); `?` opens the in-app help; `q` quits.
 
-This page tours the TUI by task: watch an ingestion, decide on a pending item, ask your data,
-create something new. The [key reference](#key-reference) at the bottom lists every gesture.
+```
+ lumnik 2026 · lm @ selfhost (localhost:18080) · :sources /desk (Esc clears) · scope: system · 00:32:33
+╔═════════════════════════════════════════════════ :sources ═════════════════════════════════════════════════╗
+║NAME                         TYPE           KIND       TENANT       SCHED       ENABLED       SCOPES        ║
+║● acme-desk-crm              csv-file       csv        1                        yes           desk          ║
+║● acme-desk-deliveries       csv-file       csv        1                        yes           desk          ║
+║● acme-desk-erp              csv-file       csv        1                        yes           desk          ║
+║● acme-desk-orders           csv-file       csv        1                        yes           desk          ║
+║● due-erp                    csv-file       csv        1                        yes           desk          ║
+║● due-partner                csv-file       csv        1                        yes           desk          ║
+║● stage-deliveries           csv-file       csv        1                        yes           desk          ║
+║● stage-orders               csv-file       csv        1                        yes           desk          ║
+╚════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+ e: edit  t: scopes  d: describe  D: dead letters  ^R: run  ^P: pause  Del: delete  y: yank  s: sort  Enter:
+```
+
+The footer lists the keys of the page you are on. The [key reference](#key-reference) lists them all.
 
 ## Getting around
 
-`:` opens the palette — type the start of a page name (`:so` offers `:sources`), then Tab or Enter.
+`:` opens the palette. Type the start of a page name (`:so` offers `:sources`), then Tab or Enter.
 
 | Group | Pages |
 |---|---|
@@ -27,60 +42,60 @@ Global keys, from any page:
 | `d` | toggle the describe panel (full detail on the selected row) |
 | `Tab` | with the describe panel open: give it the keys, so `↑` `↓` `PgUp` `PgDn` scroll a long record; `Tab` or `Esc` gives them back to the list |
 | `/` | on list pages: filter the table to the rows holding a text (`Esc` clears) — the [key reference](#key-reference) lists the pages |
-| `y` | yank the current row — copies it to your local clipboard, even over SSH |
+| `y` | copy the current row to your clipboard, through the terminal: works over SSH where the terminal allows it (iTerm2, kitty, WezTerm, Windows Terminal; not macOS Terminal) |
 | `q` | quit |
 | `?` | help screen (the same table, always at hand) |
 | `Esc` | close a modal, cancel an input, or back out one level |
 
-- `:sources`, `:endpoints`, `:runs`, `:dlq` and `:inbox` live-update; the cursor stays on your row.
-- The header names the hub (context and host) and the event stream: `[CONNECTING]`, `[LIVE✓]`, or
+- The header names the hub, the page, the session scope and the event stream: `[LIVE✓]`, or
   `[RECONNECTING]` with the reason in the footer.
-- A key that acts on the hub (run, toggle, delete, apply) is ignored while its first press still
-  waits on the hub; the footer says it is in progress.
-
-**Another hub.** `:context` (or `:ctx`) lists the contexts of `~/.lm/config.yaml`, the current one
-marked `●`. `Enter` switches for this session only: every page is rebuilt on the chosen hub, and
-`lm config use-context` still sets the default for the next command. The session scope starts over
-on the new hub, and the `--server`/`--token` flags `lm ui` was started with stay behind.
-
-**Session expired.** If your login expires mid-session, a **session-expired** modal opens. `L` logs
-in again with the same device flow as `lm login` and the TUI resumes; `Esc` dismisses it until the
-next request needs the session.
+- `:sources`, `:endpoints`, `:runs`, `:dlq` and `:inbox` update live; the cursor stays on your row.
+- **Another hub:** `:context` (or `:ctx`) lists your contexts. `Enter` switches for this session
+  only; `lm config use-context` sets the default.
+- **Session expired:** a window opens. `L` logs in again, as `lm login` does, and the TUI resumes.
 
 ## Watch an ingestion
 
-`:sources` is the home page — one row per connector instance.
+`:sources` is the home page: one row per connector. `/desk` above kept the rows holding `desk`.
 
-| Column / key | Where | What it tells you |
-|---|---|---|
-| `SCHED` | `:sources` | the connector's schedule |
-| `ENABLED` | `:sources` | whether the connector is on at all |
-| `Enter` | `:sources` | REST or JDBC source → its `:endpoints` (one per spec entry / per table); any other kind → its `:runs` |
-| `SCHEDULE`, `LAST_RUN`, `STATUS` | `:endpoints` | per endpoint — for a REST source, where to check "did it even fire?" |
-| `Enter` | `:endpoints` | that endpoint's own `:runs` (`Esc` clears it) |
-| `T` / `P` | `:endpoints` | test the endpoint — the request a run would send, nothing written · probe a path of the API and draft its endpoint fragment |
-| `^P` / `C` / `Del` | `:endpoints` | enable/disable the endpoint · reset its cursor — the next run re-reads from the start (asks first) · purge the rows it landed |
-| `D` | `:sources`, `:runs` | the connector's / the run's dead letters in `:dlq` — `Esc` there clears the filter |
-| `at:` (under `── last run ──`) | `d` describe panel | the exact last-run time |
-
-`Del` on an endpoint asks the hub first. A `jdbc-generic`, `csv-file` or `kafka` endpoint shows the
-hub's refusal; an endpoint with no rows says there is nothing to purge; otherwise the question names
-the count.
-
-In `:sources`:
-
-- `Del` asks the hub what the delete would take. A table an entity reads shows the refusal naming
-  the entity; otherwise the confirmation names each table and its rows:
+- `^R` (or `R`) runs the selected connector now; `^P` pauses or resumes its schedule.
+- `e` opens its YAML in `$EDITOR`; `t` edits its scopes, then offers to re-stamp its chat chunks.
+- `Del` says what the delete takes, then asks:
   `Delete connector "cust-csv"? Goes with it: 3 rows of connector.t_cust_csv, its run history and RAG chunks.`
-- `t` edits the connector's tags, then offers to re-stamp its indexed RAG chunks
-  (`lm connector scope sync`). `Re-stamp` says how many chunks changed; `Cancel` leaves the old scopes on them.
+  A table an entity reads shows the refusal instead, naming the entity.
+- `Enter` opens a REST or JDBC source's `:endpoints`, any other connector's `:runs`.
 
-**Reading a run.** `:runs` shows `CONNECTOR`, `ENDPOINT`, `STATUS`, `STARTED`, `DURATION`,
-`RECORDS` (in/out/skip) and `TRIGGER` — one row per endpoint. `d` adds the run id, the chunk count
-and, for a failed or cancelled run, an `error:` section with the full message.
+`Enter` on `acme-desk-crm`, then `d` on its run:
 
-**Stopping a run.** Select a `Running` row and press `c`. The chunk in flight finishes and the run
-ends at the next chunk boundary. On a `Queued` row, `c` ends the run at once (`it had not started`).
+```
+ lumnik 2026 · lm @ selfhost (localhost:18080) · :runs · scope: system · 00:32:36  [LIVE✓]
+╔══════════════════════════════════════ :runs › connector acme-desk-crm ═════════════════════════════════════╗
+║CONNECTOR          ENDPOINT      STATUS           STARTED          DURATION      RECORDS      TRIGGER       ║
+║acme-desk-crm      default       ● Completed      10-24 23:07      37ms          8/8/0        MANUAL        ║
+╚════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+── describe: cb24e3a8 ──
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│id:              cb24e3a8-c418-4985-8247-d5210ebc0687                                                       │
+│connector:       acme-desk-crm                                                                              │
+│endpoint:        default                                                                                    │
+│status:          ● Completed                                                                                │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ Esc: clear filter  d: describe  D: dead letters  y: yank  s: sort  c: cancel  r: refresh  Tab: scroll the
+```
+
+- `RECORDS` is in/out/skip. Every dead letter is counted in `skip`.
+- `d` shows the run in full: for a failed or cancelled run, an `error:` section with the message.
+- `D` opens the run's dead letters in `:dlq`.
+
+**`:endpoints`** (REST and JDBC sources) shows each endpoint's `SCHEDULE`, `LAST_RUN` and `STATUS`:
+where to check "did it even fire?". `T` tests the endpoint, nothing written; `P` probes a path and
+drafts its fragment; `C` resets its cursor (asks first); `Del` purges its rows, when the type
+allows it — the question names the count.
+
+### Stopping a run
+
+Select a `Running` row in `:runs` and press `c`. The chunk in flight finishes; the run ends at the
+next one. A `Queued` run ends at once.
 
 | Refusal toasted | Meaning |
 |---|---|
@@ -88,35 +103,42 @@ ends at the next chunk boundary. On a `Queued` row, `c` ends the run at once (`i
 | `run … is being started; try again in a moment` | a `Queued` run is starting — retry |
 | `run … is not in flight on this hub` | the run started a moment ago — retry; refused again, no process runs it, and the hub marks it `Failed` on its own |
 
-`STATUS` takes six values. Check them in this order when a run's outcome isn't obvious:
+### What a status means
 
-| What you see | What happened | Where the detail lives |
+| `STATUS` | What happened | Look at |
 |---|---|---|
-| `STATUS` = `Queued` | Accepted, waiting for a free slot — only with the [run queue](../connectors/index.md) on | `:runs`; it starts on its own |
-| `STATUS` = `Running` | Still going | `:runs` live-updates; `d` shows progress so far |
-| `STATUS` = `Failed` | The run itself failed: source unreachable, bad credentials, a refused config | The `error:` section in `d` |
-| `STATUS` = `Completed`, a row is in `:dlq` | A quality failure on that one row (e.g. `validate-row`) | `:dlq` — reason and payload |
-| `STATUS` = `Completed`, row counted in `skip` but not in `:dlq` | Excluded by a declared filter (`filter-where`, `skip-empty-rows`), not rejected | The `skip` figure in `RECORDS` |
-| `STATUS` = `Partial` | Read less than the source held when it started; nothing written twice, the next run resumes from the kept position | The `error:` section in `d` names the target and what was not reached |
-| `STATUS` = `Cancelled` | Cancelled by a user, or skipped because another run for the endpoint was already active | `d`: `cancelled by user` or `skipped: another run is already active for this endpoint` |
-| No entry in `:runs` at all | The schedule hasn't fired yet | `:sources` / `:endpoints` |
+| `Queued` | waiting for a free slot (only with the [run queue](../operations/upgrade.md#turning-on-the-run-queue) on) | nothing: it starts on its own |
+| `Running` | still going | `d` |
+| `Completed` | done. Rows in `:dlq` were set aside; other `skip` rows were filtered on purpose | `:dlq`, `RECORDS` |
+| `Partial` | read less than the source held; the next run resumes | `d`: the `error:` section |
+| `Failed` | the run failed: source unreachable, bad credentials, refused config | `d`: the `error:` section |
+| `Cancelled` | stopped by a user, or skipped: another run of the endpoint was active | `d` |
+| no row at all | the schedule has not fired yet | `:sources`, `:endpoints` |
 
-Every dead letter is also counted in `skip`, so `in/out/skip` alone tells you whether a run dropped
-anything.
+Found the cause? In `:sources`, `e` fixes the connector and `R` runs it again. The full
+walk: [Diagnosing a failed run](../recipes/diagnose-a-run.md).
 
-Once you have the cause, fix it (`e` edits the connector's YAML) and press `R` to run again. The
-full walk is [Diagnosing a failed run](../recipes/diagnose-a-run.md).
-
-`:dlq` is the **dead-letter queue**: each row a connector could not place, with its reason and
-payload. `^R` marks one replayed, `^D` discards it.
+`:dlq` lists the rows a run set aside, with reason and row. `^R` marks one replayed (naming the run
+that carried it again), `^D` discards it.
 
 ## Decide
 
 Four pages answer "what needs me":
 
-- **`:inbox`** — your métiers' `decision.*` events, raised by processes and workflows (never run
-  failures: those are in `:runs`). `a` acks the selected one (idempotent); `A` shows or hides
-  disposed entries.
+- **`:inbox`** — the decisions your processes and workflows raised. `a` acks the selected one; it
+  leaves the list. `A` shows the acked ones too:
+
+  ```
+   lumnik 2026 · lm @ selfhost (localhost:18080) · :inbox · scope: system · 00:34:00  [LIVE✓]
+  ╔══════════════════════════════════════════════════ :inbox ══════════════════════════════════════════════════╗
+  ║ID WHEN PROCESS                          MESSAGE                                                            ║
+  ║66 1h   workflow:acme-delivery-lifecycle Livraison DL-1 promise pour le 2026-10-20, toujours en route [acke…║
+  ║63 1h   litige-ouvert                    Commande SO-000013 du client P-1007 en litige — 860.00 €           ║
+  ║8  2h   lyon-client-arrive               Nouveau client Camille Roux à Lyon [acked]                         ║
+  ╚════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+   a: ack · A: show disposed · d: describe · y: yank · r: refresh
+  ```
+
 - **`:outputs`** — what was sent out and whether it arrived, failures first. `^R` replays a failed
   delivery.
 - **`:observations`** — the workflow tape: documents that have NOT moved, stillest first. The title
@@ -128,17 +150,54 @@ Four pages answer "what needs me":
 
 `:ask` is analytic chat: a plain-language question comes back as generated SQL, rows and an answer.
 It asks the session scope shown in the header — your default (`lm scope`) at startup, changed with
-`:scopes` → `Enter` or `:scope <tag>`.
+`:scopes` → `Enter` or `:scope <tag>`. A question continues the last one answered, as
+[`lm ask --previous`](lm-reference.md) does: "Et SUP-004 ?" is answered as the full question, shown
+in the headline after `understood as:`. An answer that ran no SQL keeps the question it continues; changing the scope starts over.
 
 | Key | Effect |
 |---|---|
 | `Enter` | run the question |
 | `y` | yank the generated SQL |
 | `e` | export the result rows to a CSV file |
-| `n` | new question |
+| `n` | new question — the next one stands alone |
+| `r` | clear the page — the next question stands alone |
 
-`:view` opens a [`kind: View`](../apps/views.md) manifest file and renders it — `Enter` on an empty
-path opens the living example.
+`:view` renders a [`kind: View`](../apps/views.md) manifest file. The path field starts on the
+WOW's `docs/demo/wow-customer/clients-view.yaml`, relative to where you started `lm`: from the repo
+root, `Enter` renders it:
+
+```
+ lumnik 2026 · lm @ selfhost (localhost:18080) · :view · scope: desk · 00:33:37  [LIVE✓]
+╔══════════════════════════════════════════════════ Clients ═════════════════════════════════════════════════╗
+║CODE CLIENT NOM              VILLE SEGMENT                                                                  ║
+║C-100       Jean Dupont      Paris GOLD                                                                     ║
+║C-200       Marie            Lyon  SILVER                                                                   ║
+║C-300       Solo             Nice                                                                           ║
+║C-400       Camille Roux     Lyon                                                                           ║
+║C-500       Claire Martin    Lyon                                                                           ║
+║C-600       Pierre Corneille Paris                                                                          ║
+║C-700       Maurice Druon    Paris                                                                          ║
+║C-800       Albert Camus     Lyon                                                                           ║
+║C-900       Saint Exupery    Lyon                                                                           ║
+╚════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+ Enter: detail (_conflicts) · f: add filter · F: clear filters · g: generate (AI) · a: apply to hub · o: open
+```
+
+`Enter` on a row opens the record, with its conflicts:
+
+```
+ lumnik 2026 · lm @ selfhost (localhost:18080) · :view · scope: desk · 00:33:41  [LIVE✓]
+╔════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║Clients — C-100                                                                                             ║
+║Code client  C-100                                                                                          ║
+║Nom          Jean Dupont                                                                                    ║
+║Ville        Paris                                                                                          ║
+║Segment      GOLD                                                                                           ║
+║conflicts                                                                                                   ║
+║no conflicts or ambiguities                                                                                 ║
+╚════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+ Esc: back to the list
+```
 
 | Key | Effect |
 |---|---|
@@ -185,14 +244,14 @@ it after a confirmation.
 | `:entities` | the entities you may read | see [`:entities` keys](#entities-and-ambiguous) |
 | `:ambiguous` | the identities one entity's resolution could not settle | `Enter` type an entity name / load a row's history · `^R` re-run the pass · `d` the row |
 | `:views` | the saved views the hub serves the PWA | `Enter` render in `:view` · `e` edit in `:new` · `Del` delete (asks first) |
-| `:apps` | the métier apps (title, scope, default, tabs) | `e` edit in `:new` (rebuilt from the app's fields) · `Del` delete (asks first) |
+| `:apps` | the business apps (title, scope, default, tabs) | `e` edit in `:new` (rebuilt from the app's fields) · `Del` delete (asks first) |
 | `:workflows` | the declared document lifecycles | `e` edit in `:new` · `^P` enable/disable · `Del` delete (asks first) |
 | `:exports` | `kind: Export` manifests: entity, schedule, destination, last run (integrator role only) | `Enter` its runs · `R` run now · `^R` retry a Failed run · `e` edit in `:new` |
 | `:search` | whether this hub has a Search provider, then the declared indexes (status, documents, last rebuild) | `/` query, bound to the session scope · `R` rebuild · `c` cancel the rebuild · `Del` delete (asks first) |
 | `:secrets` | the credentials connectors refer to by name (values never shown) | `n` store one (typed masked) · `e` rotate its value · `Del` delete (asks first) |
 | `:integrations` | the webhook targets `:outputs` delivers to, with recent delivery health; URLs shown to the host only | `n` register (URL and secret typed masked) · `T` fire a test event · `d` registration and latest deliveries · `Del` remove (asks first; history kept) |
 | `:notify` | the email rules | `n` add one (events, recipient, entity filter, template) · `Del` remove (asks first) |
-| `:scopes` | the tenant's métier scopes | `Enter` set the active scope |
+| `:scopes` | the tenant's business scopes | `Enter` set the active scope |
 
 What the pages show when a feature is absent:
 
@@ -220,21 +279,25 @@ What the pages show when a feature is absent:
 | Key | Where | Effect |
 |---|---|---|
 | `:` `r` `d` `y` `q` `?` `Esc` | global | palette · refresh · describe · yank row · quit · help · close |
+| `D` | `:sources` `:runs` | the dead letters of the connector / the run, in `:dlq` |
 | `Tab` | global, describe panel open | scroll the panel (`↑` `↓` `PgUp` `PgDn`) · `Tab` / `Esc` back to the list |
 | `:context` | global | switch to another configured hub, for this session (`Enter` switches, `Esc` leaves) |
 | `/` | `:sources` `:runs` `:dlq` `:endpoints` `:processes` `:views` `:apps` `:workflows` `:inbox` `:secrets` `:integrations` `:notify` `:exports` | filter to the rows holding a text (any column, case-insensitive); survives the live refresh, `Esc` clears it |
-| `s` | `:sources` `:runs` `:dlq` `:conflicts` `:ambiguous` | cycle the sort column |
+| `s` | `:sources` `:runs` `:dlq` `:conflicts` `:ambiguous` `:scopes` | cycle the sort column |
 | `c` | `:runs` | request cancellation of the selected `Running` run |
 | `e` / `R` (or `^R`) / `^P` / `Del` / `t` | `:sources` | edit YAML in `$EDITOR` · run now · pause/resume · delete · edit tags (then offers to re-stamp the indexed chunks) |
 | `Enter` | `:sources` | REST / JDBC → its `:endpoints`; others → its `:runs` |
 | `Enter` / `Esc` | `:endpoints` | the endpoint's `:runs` · back to `:sources` |
 | `T` / `P` / `^P` / `C` / `Del` | `:endpoints` | test · probe · enable/disable · reset cursor · purge |
-| `^R` / `^D` | `:dlq` | mark replayed, naming the run that carried it (Enter: the connector's latest · `-`: none) · discard |
+| `^R` / `^D` | `:dlq` | mark replayed, naming the run that carried it (Enter: the connector's latest; with no run, `^D` instead) · discard |
 | `^R` | `:outputs` | replay the selected failed delivery |
-| `a` / `A` | `:inbox` | ack the selected decision · show/hide disposed (`[traité]`) |
+| `a` / `A` | `:inbox` | ack the selected decision · show/hide disposed (`[acked]`) |
 | `Enter` / `n` `p` / `a` / `Del` / `m` `=` `!` / `h` / `^R` | `:entities` | rows · page · ambiguous · delete · mark, same, distinct · history · re-resolve |
 | `Enter` / `^R` | `:ambiguous` | list an entity / load a row's history · re-run the pass |
 | `R` | `:rag` | reindex the platform corpus (asks first) |
+| `Enter` / `d` | `:tables` | the raw rows (`n` `p` page, `d` whole row, `Esc` back) · describe |
+| `Enter` / `e` / `Del` | `:views` | render in `:view` · edit in `:new` · delete (asks first) |
+| `e` / `Del` | `:apps` | edit in `:new` · delete (asks first) |
 | `d` | `:hooks` | the hook's binding (`lm hook get`) |
 | `n` / `e` / `Del` | `:secrets` | store a secret · rotate its value · delete it (asks first) |
 | `n` / `T` / `Del` | `:integrations` | register a target · fire a test event · remove it (asks first) |

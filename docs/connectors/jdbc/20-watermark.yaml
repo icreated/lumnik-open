@@ -1,12 +1,11 @@
 # 20-watermark.yaml — the same table, read incrementally on a column that moves on every change.
 #
-# `updated_at` only ever grows, so a run reads the rows past the persisted cursor and nothing
-# else: an INSERT and an UPDATE both arrive, a run with nothing changed reads 0 rows.
+# `updated_at` only ever grows: an INSERT and an UPDATE both arrive, and a run with nothing
+# changed reads 0 rows.
 #
-# Same connector name as 10-full-dump.yaml on purpose. Applying this over a table that already
-# ran in `full` meets the cursor the full read persisted; the hub recognises it as foreign,
-# logs a WARN naming both, and restarts the table from the beginning. A row the hub table already
-# holds unchanged is skipped — the table does not grow.
+# Same connector name as 10-full-dump.yaml on purpose. Applied over a table that already ran in
+# `full`, it reads the table again once; the hub table does not grow.
+
 apiVersion: connectors.lumnik.io/v1
 kind: Connector
 metadata:

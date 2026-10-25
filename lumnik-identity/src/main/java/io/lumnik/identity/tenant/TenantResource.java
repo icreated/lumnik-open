@@ -1,6 +1,7 @@
 package io.lumnik.identity.tenant;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.identity.IdentityErrors;
 import jakarta.enterprise.event.Event;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
@@ -48,8 +49,10 @@ public class TenantResource {
     @Transactional
     @Operation(summary = "Create a new tenant")
     public Response create(@Valid TenantCommands.Create cmd) {
-        if (tenants.codeExists(cmd.code()))
-            throw new ClientErrorException("Tenant code already exists: " + cmd.code(), Response.Status.CONFLICT);
+        tenants.holderOfCode(cmd.code()).ifPresent(holder -> {
+            throw IdentityErrors.conflict(
+                "tenant code " + holder.getCode() + " is already held by tenant " + holder.getId());
+        });
 
         Tenant t = new Tenant(cmd.code(), cmd.name());
         t.setDescription(cmd.description());

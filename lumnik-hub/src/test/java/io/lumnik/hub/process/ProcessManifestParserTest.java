@@ -35,6 +35,21 @@ class ProcessManifestParserTest {
         assertThat(m.emitMessage()).isEqualTo("Nouveau client GOLD");
     }
 
+    /** #1365: what an automation reads, apart from what a human reads. */
+    @Test
+    void emitFieldsAreKept_absentIsEmpty_blankOrRepeatedIsRefused() {
+        String withFields = YAML.replace("message: \"Nouveau client GOLD\"",
+            "message: \"Nouveau client GOLD\"\n    fields: [iban, segment]");
+        assertThat(new ProcessManifestParser().parse(withFields).emitFields()).containsExactly("iban", "segment");
+        assertThat(new ProcessManifestParser().parse(YAML).emitFields()).isEmpty();
+        assertThatThrownBy(() -> new ProcessManifestParser().parse(withFields.replace("[iban, segment]", "[iban, iban]")))
+            .hasMessageContaining("spec.emit.fields");
+        assertThatThrownBy(() -> new ProcessManifestParser().parse(withFields.replace("[iban, segment]", "[\"  \"]")))
+            .hasMessageContaining("spec.emit.fields");
+        assertThatThrownBy(() -> new ProcessManifestParser().parse(withFields.replace("[iban, segment]", "iban")))
+            .hasMessageContaining("spec.emit.fields");
+    }
+
     @Test
     void refusesWrongKind() {
         assertThatThrownBy(() -> new ProcessManifestParser().parse(YAML.replace("kind: Process", "kind: View")))

@@ -41,4 +41,30 @@ class AuthBlockValidatorTest {
                 && e.path().equals("spec.auth.token")),
             () -> "expected the unknown-key warning for token, got: " + errs);
     }
+
+    // ── oauth2 (#1393) ──
+
+    private List<ValidationError> oauth2(String extra) throws Exception {
+        return ConfigDefRunner.run(AuthBlockValidator.configDef(), mapper.readTree(
+            "{\"kind\":\"oauth2\",\"token_url\":\"https://auth.example/oauth/token\",\"client_id\":\"lumnik\","
+                + "\"client_secret_env\":\"SAAS_SECRET\"" + extra + "}"), "spec.auth");
+    }
+
+    @Test void oauth2_with_its_keys_validates_clean() throws Exception {
+        List<ValidationError> errs = oauth2(",\"scope\":\"orders.read\",\"client_auth\":\"post\"");
+        assertTrue(errs.isEmpty(), () -> "every oauth2 key is honored, got: " + errs);
+    }
+
+    @Test void oauth2_without_its_secret_reference_is_refused() throws Exception {
+        List<ValidationError> errs = ConfigDefRunner.run(AuthBlockValidator.configDef(), mapper.readTree(
+            "{\"kind\":\"oauth2\",\"token_url\":\"https://a.example/t\",\"client_id\":\"lumnik\"}"), "spec.auth");
+        assertTrue(errs.stream().anyMatch(e -> e.severity() == ValidationError.Severity.ERROR
+            && e.path().equals("spec.auth.client_secret_env")), () -> "expected client_secret_env required, got: " + errs);
+    }
+
+    @Test void oauth2_client_secret_inline_is_not_a_key() throws Exception {
+        List<ValidationError> errs = oauth2(",\"client_secret\":\"pasted\"");
+        assertTrue(errs.stream().anyMatch(e -> e.path().equals("spec.auth.client_secret")),
+            () -> "an inline secret must be flagged, got: " + errs);
+    }
 }

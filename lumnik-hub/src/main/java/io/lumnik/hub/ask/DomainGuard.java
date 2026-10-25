@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Stream;
 
 /**
  * Refuses a generated query that filters a column on a literal NOT in that column's declared
@@ -95,7 +96,11 @@ public class DomainGuard {
         Map<String, String> declaredByLower = new HashMap<>();
         for (String name : domainByName.keySet()) declaredByLower.put(name.toLowerCase(Locale.ROOT), name);
 
-        for (SqlFilters.Filter f : SqlFilters.columnLiteralFilters(SqlLexer.tokenize(sql))) {
+        // A number column's domain holds against a number too (#1338): only DECLARED domain columns are read, so a
+        // number compared to an aggregate alias never reaches this loop.
+        List<SqlLexer.Token> tokens = SqlLexer.tokenize(sql);
+        for (SqlFilters.Filter f : Stream.concat(SqlFilters.columnLiteralFilters(tokens).stream(),
+                SqlFilters.columnNumberFilters(tokens).stream()).toList()) {
             String declared = declaredByLower.get(f.column().toLowerCase(Locale.ROOT));
             if (declared == null) continue;                     // not a column with an enforceable domain
             Set<String> domain = domainByName.get(declared);

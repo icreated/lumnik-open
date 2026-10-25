@@ -9,6 +9,8 @@ import jakarta.transaction.Transactional;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
+import java.util.List;
+
 /**
  * Purges events every consumer has passed AND older than the retention window.
  * Never purges under a lagging consumer; no registered consumer = no purge.
@@ -32,10 +34,17 @@ public class EventRetentionPurger {
     @Transactional
     public void purge() {
         em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
-        Number floor = (Number) em.createNativeQuery(
-            "SELECT MIN(last_event_id) FROM core.event_consumer").getSingleResult();
-        // floor == null: no consumer registered. floor == 0 is valid: a consumer exists but hasn't consumed yet (id <= 0 matches nothing).
-        if (floor == null) return;
+        // The slowest cursor in the order consumers read (xact_id, id) — V85, #1570. MIN(last_event_id)
+        // alone could stand past a row the slowest consumer has not read yet: a lower id from a later
+        // transaction, read after the higher ids of an earlier one.
+        @SuppressWarnings("unchecked")
+        List<Object[]> slowest = em.createNativeQuery(
+            "SELECT last_xact_id, last_event_id FROM core.event_consumer ORDER BY last_xact_id, last_event_id LIMIT 1")
+            .getResultList();
+        // No row: no consumer registered. (0, 0) is valid: a consumer exists but hasn't consumed yet.
+        if (slowest.isEmpty()) return;
+        long floorXact = ((Number) slowest.get(0)[0]).longValue();
+        Number floor = (Number) slowest.get(0)[1];
 
         Number maxId = (Number) em.createNativeQuery(
             "SELECT MAX(id) FROM core.event_outbox").getSingleResult();
@@ -52,8 +61,9 @@ public class EventRetentionPurger {
 
         int purged = em.createNativeQuery("""
             DELETE FROM core.event_outbox
-            WHERE id <= :floor AND created_at < NOW() - make_interval(days => :days)
+            WHERE (xact_id, id) <= (:floorXact, :floor) AND created_at < NOW() - make_interval(days => :days)
             """)
+            .setParameter("floorXact", floorXact)
             .setParameter("floor", floor.longValue())
             .setParameter("days", retentionDays)
             .executeUpdate();

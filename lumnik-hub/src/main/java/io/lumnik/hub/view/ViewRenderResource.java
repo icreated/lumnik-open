@@ -7,7 +7,6 @@ import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.ask.ScopeFreshness;
-import io.lumnik.hub.sql.TemporalText;
 import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
@@ -88,22 +87,19 @@ public class ViewRenderResource {
         boolean paged = pageSize != null || (cursor != null && !cursor.isBlank());
         if (!paged) {
             ViewDataReader.ReadResult read = ApiErrors.orBadRequest(() -> reader.read(tenant, rv, viewFilters));
-            return Response.ok(new RenderResponse(rv.title(), rv.columns(), wired(read.rows()), read.truncated(),
+            return Response.ok(new RenderResponse(rv.title(), rv.columns(), wired(rv, read.rows()), read.truncated(),
                 dataAsOf, read.truncated(), null, manifest.links())).build();
         }
 
         SealedPage sealed = ApiErrors.orBadRequest(() -> readPage(tenant, manifest, rv, viewFilters, pageSize, cursor));
         ViewDataReader.PageResult page = sealed.page();
-        return Response.ok(new RenderResponse(rv.title(), rv.columns(), wired(page.rows()), page.hasMore(),
+        return Response.ok(new RenderResponse(rv.title(), rv.columns(), wired(rv, page.rows()), page.hasMore(),
             dataAsOf, page.hasMore(), sealed.next(), manifest.links())).build();
     }
 
-    /**
-     * The rows as JSON writes them: a timestamp as its UTC instant (#1314). The reader keeps the
-     * JDBC types; text is the wire's business.
-     */
-    private static List<Map<String, Object>> wired(List<Map<String, Object>> rows) {
-        rows.forEach(r -> r.replaceAll((column, v) -> TemporalText.wire(v)));
+    /** The rows as JSON writes them ({@link ResolvedView#wire}). The reader keeps the JDBC types; text is the wire's business. */
+    private static List<Map<String, Object>> wired(ResolvedView rv, List<Map<String, Object>> rows) {
+        rows.forEach(r -> r.replaceAll((column, v) -> rv.wire(v)));
         return rows;
     }
 

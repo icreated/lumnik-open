@@ -40,7 +40,7 @@ and the error channel that is not the HTTP status.
 $ lm validate -f docs/connectors/rest/demo/90-soap-querypage.yaml
 ✓ 90-soap-querypage.yaml — valid
 $ lm apply -f docs/connectors/rest/demo/90-soap-querypage.yaml
-{"name":"acme-soap","connectorId":"d4f12957-40b8-4508-926d-32e4fb170ad5","endpointsApplied":1}
+Applied connector "acme-soap" — 1 endpoint
 ```
 
 Before running anything, send the first request a run would send:
@@ -82,12 +82,12 @@ The same partners as the [REST quickstart](rest.md#quickstart), in the same
 
 | Field | Where | Required | Notes |
 |---|---|---|---|
-| `kind: soap` | endpoint | yes | Picks the request builder — and demands `pagination.kind: soap` |
+| `kind: soap` | endpoint | yes | Goes with `pagination.kind: soap` |
 | `path` | endpoint | yes | The POST target, appended to `base_url` (e.g. `/eai_enu/start.swe`) |
 | `body` | endpoint | yes | The **inner** `<soap:Body>` XML — the hub wraps the SOAP 1.1 envelope |
 | `soap_action` | endpoint | no | Sent as the `SOAPAction` header (an empty quoted string when absent) |
 | `header` | endpoint | no | The inner `<soap:Header>` XML — same substitution as `body` |
-| `pagination.kind: soap` | endpoint | yes | Picks the XML parser and the offset arithmetic |
+| `pagination.kind: soap` | endpoint | yes | Goes with `kind: soap` |
 | `page_size` | pagination | yes | Rows per page, injected as `{{page_size}}` — **explicit, no default** |
 | `response_path` | pagination | yes | A **plain dotted path** to the repeated element |
 | `last_page_path` / `has_more_path` | pagination | no | One stop signal — see [Where the QueryPage loop stops](#where-the-querypage-loop-stops) |
@@ -98,38 +98,37 @@ The same partners as the [REST quickstart](rest.md#quickstart), in the same
   supported.
 - Set `page_size` to the number of rows the service actually returns per page.
 
-## How it works
+## How it reads
 
-- The rendered body is wrapped in a `<soap:Envelope>` and POSTed to `base_url + path`.
-- `{{cursor}}` is a **row offset**: `0` on the first request, `+page_size` per page.
-- **Namespace prefixes are stripped** (`ns1:Customer` → `Customer`): write every path without
-  prefixes.
-- The last segment of `response_path` is always read as a list, even when a page holds a single
-  element. A repeated *intermediate* segment is not.
-- DTDs and external entities are disabled.
+- Write every path **without namespace prefixes**: `Customer`, not `ns1:Customer`.
+- `response_path` is a plain dotted path to the repeated element. A page holding a single element
+  is still read.
+- A body with neither `{{cursor}}` nor `{{page}}` is sent once: there is no next page to ask for.
 
-!!! warning "A SOAP endpoint reads all its pages in one pass, in memory — size it accordingly"
-    The quickstart's 2 400 partners are five requests in a single fetch.
+!!! warning "Nothing is written until the last page is read"
+    The pages are held in the hub's memory until the end. Size `page_size` × the number of pages
+    accordingly. A cancelled run writes nothing.
 
 ## Body templating
 
-Four placeholders are resolved on every request — in `body:` **and** `header:` alike:
+Five placeholders are resolved on every request — in `body:` **and** `header:` alike:
 
 | Placeholder | Resolves to |
 |---|---|
 | `{{page_size}}` | `pagination.page_size`, verbatim |
 | `{{cursor}}` | the row offset of the page being fetched |
+| `{{page}}` | the page number of the page being fetched, from 1 |
 | `{{secret:NAME}}` | the `lm secret` registry, then the hub's process environment — see below |
 | `{{env:NAME}}` | the hub's process environment only |
 
 An **unresolved placeholder fails the run before any request is sent**; the error names the
-placeholder, never a value. Any other placeholder (`{{watermark}}`, a typo) fails the same way.
+placeholder, never a value. Any other placeholder (`{{watermark}}`, a typo) is refused at
+`lm validate` and `lm apply`, naming the placeholder and the key (`body` or `header`).
 
 ### A credential inside the envelope
 
-`{{secret:NAME}}` reads the `lm secret` registry first, then the hub's process environment (an
-OS variable, or a JVM system property), like `password_env`. `{{env:NAME}}` reads the hub's
-process environment only.
+`{{secret:NAME}}` reads the `lm secret` registry first, then the hub's environment, like
+`password_env`. `{{env:NAME}}` reads the hub's environment only.
 
 A session token inside the envelope goes in `header:`:
 
@@ -146,7 +145,7 @@ partners  POST    -       0      unresolved secret/env placeholder: ACME_SESSION
 Error: 1 of 1 enabled endpoint(s) did not answer with readable data
 ```
 
-`STATUS -`: no request was composed. When no request is composed, `METHOD` shows the endpoint's stored method — `POST` for a SOAP endpoint unless the manifest sets one.
+`STATUS -`: no request was sent.
 
 Store it, and the next run sends it; the manifest does not change:
 
@@ -245,43 +244,13 @@ without one is retried.
     `curl http://127.0.0.1:8099/admin/reset`. Otherwise a second run finds the counters spent
     and retries nothing.
 
-### What the front door refuses
+### What `lm apply` refuses
 
-`kind: soap` and `pagination.kind: soap` require each other:
+- `kind: soap` without `pagination.kind: soap`, or the reverse.
+- A `response_path` with `[*]` or `..`: write a plain dotted path.
+- A missing `page_size`.
 
-```
-$ lm apply -f bad-soap.yaml
-✗ bad-soap.yaml — 2 error(s), 0 warning(s)
-
-  ERROR    spec.endpoints[0].pagination.kind
-          kind=soap endpoints require pagination.kind=soap
-          → Use: pagination: { kind: soap, response_path: ... }
-
-  ERROR    spec.endpoints[1].pagination.kind
-          pagination.kind=soap requires endpoints[].kind=soap
-          → Set kind: soap on the endpoint
-
-Fix errors above before running 'lm apply -f bad-soap.yaml'.
-Error: validation failed: 2 error(s)
-```
-
-A SOAP `response_path` must be a plain dotted path (no `[*]`, no `..`), and `page_size` is
-required:
-
-```
-$ lm apply -f bad-paths.yaml
-✗ bad-paths.yaml — 2 error(s), 0 warning(s)
-
-  ERROR    spec.endpoints[0].pagination.response_path
-          SOAP response_path must be a plain dotted path (e.g. $.Body.Out.List.Item) — JsonPath operators ([*], ..) bypass the force-list and cause silent single-element data loss
-          → Remove operators; use a plain dotted path like $.Body.Out.ListOfItems.Item
-
-  ERROR    spec.endpoints[1].pagination.page_size
-          page_size is required when pagination.kind = soap
-
-Fix errors above before running 'lm apply -f bad-paths.yaml'.
-Error: validation failed: 2 error(s)
-```
+Each refusal names the endpoint and shows the line to write.
 
 ## Incremental — the mark rides the URL, not the body
 
@@ -336,6 +305,38 @@ lm apply -f siebel-customers.yaml
 lm source rest test siebel-customers
 ```
 
+### Read a custom service that pages by number
+
+Custom business services often take a page number in the body and say on the page whether it is
+the last one, in an attribute. Put `{{page}}` where the number goes; an attribute reads like an
+element:
+
+```yaml
+      body: |
+        <cus:getListOpportunity_Input xmlns:cus="http://siebel.com/CustomUI">
+          <getOpportunity>
+            <Opportunity>
+              <refExtPersonne>40012345</refExtPersonne>
+              <page>{{page}}</page>
+            </Opportunity>
+          </getOpportunity>
+        </cus:getListOpportunity_Input>
+      pagination:
+        kind: soap
+        page_size: 3            # the service's own page size: no placeholder sends it
+        last_page_path: "$.Body.getListOpportunity_Output.getOpportunity.lastpage"
+        response_path: "$.Body.getListOpportunity_Output.getOpportunity.Opportunity"
+```
+
+The pages asked are 1, 2, 3… until `lastpage` reads `true`.
+
+### Read a service that does not page
+
+A service that answers everything in one call (the actions of one case, say) needs no paging
+placeholder. Leave `{{cursor}}` and `{{page}}` out of the body and header: the endpoint sends one
+request per run, whatever the answer holds. `pagination.kind: soap`, `page_size` and
+`response_path` are still required.
+
 ### Read a second collection from the same service
 
 Add a second endpoint with its own `body:`, `response_path` and table. The ledger records one
@@ -347,10 +348,9 @@ run per endpoint, as the [stop-signals connector](#where-the-querypage-loop-stop
 |---|---|---|
 | Run fails instantly with `unresolved secret/env placeholder` | `secret:` — the name is neither in `lm secret` nor in the hub's environment; `env:` — it is not in the hub's environment | `lm secret set NAME` for `secret:`; the hub's environment for `env:` |
 | Run fails on HTTP 500 with no retry | a `<soap:Fault>` is never retried | read the `faultstring` in `lm run get`; fix the request or the permission it needs |
-| Run completed with `IN` 0 | `response_path` does not match the answer | remember the namespace strip — write the path **without** prefixes; `lm source rest test` prints the item count from one page |
+| Run completed with `IN` 0 | `response_path` does not match the answer | write the path **without** namespace prefixes; `lm source rest test` prints the item count of one page |
 | A run reads one row fewer than the source holds | `response_path` carries `[*]` or `..`, or an intermediate segment repeats | use a plain dotted path; the last page holding a single element is where the loss shows |
 | Pagination stops after one page | the flag is missing, null or unreadable, which stops the loop | check `last_page_path` / `has_more_path` against the real answer, or set neither and rely on the short page |
-| Pre-flight prints `METHOD GET` on a SOAP endpoint | the endpoint was applied by a hub that stored `GET` when the manifest set no `method`; the run sends `POST` anyway | `lm apply` the manifest again to store `POST` |
 
 ## See also
 

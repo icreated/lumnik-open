@@ -242,10 +242,16 @@ Kotlin hook scripts run with **full JVM trust** — no sandbox, no timeout, no m
 (nothing in `KotlinScriptHost` or `KotlinCellHook` enforces any). Platform hook scripts
 (`KotlinScriptHost`) are always resolved via the context classloader — there is no filesystem
 path option at all. The mapping-hook Kotlin escape hatch (`KotlinCellHook`, used from
-connector manifests) is explicit about the same constraint: `script:` must be a `classpath:`
-reference, and a `file:` path is rejected with `only classpath: scripts supported in v1`
-(`KotlinCellHook.java:75-89`). Hot-reload is off by default
-(`lumnik.hooks.kotlin.hot-reload=false`); scripts are compiled once and cached.
+connector manifests) takes `classpath:<resource>` or, since #1402, `hooks:<name>.kts`: a file of
+the directory the OPERATOR sets with `LUMNIK_HOOKS_DIR` (`lumnik.hooks.dir`), mounted read-only by
+the self-host compose and the Helm chart. The name is a bare file name (`[a-z0-9][a-z0-9-]*\.kts`),
+so a manifest names a file of that directory, never a path (the files themselves, symlinks
+included — every key of a ConfigMap mount is one — are the operator's); any other scheme, `file:` included, is refused. The trust
+boundary is unchanged: whoever can write that directory can already deploy the hub, and a manifest
+still carries neither code nor a path. `CsvFileConnectorValidator` resolves and compiles every
+script at apply; the hook re-reads a `hooks:` file before each chunk, never per row. Hot-reload of
+`classpath:` scripts is off by default (`lumnik.hooks.kotlin.hot-reload=false`); scripts are
+compiled once and cached.
 
 This is the canonical statement of the trust boundary. `docs/how-it-works.md` and
 `docs/connectors/transformers.md` restate the fact in one sentence for the integrator

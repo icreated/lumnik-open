@@ -35,8 +35,10 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Supplier;
 
 /**
@@ -98,6 +100,8 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
     private final AfterProcessAction afterProcess;
     private final Map<String, Object> markCfg;
     private final List<MalformedRecord> malformedBuffer = new ArrayList<>();
+    /** Whether the last {@link #read} began a file (#1452): a carrying mapping starts that chunk empty. */
+    private boolean startsAFile;
     /** One parser per reader lifetime, so its parse-work counter can span a test-driven run. */
     private final CsvFileReader reader = new CsvFileReader();
 
@@ -136,6 +140,7 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
         // The source (SFTP session, S3 client) belongs to the run, not to this chunk: the engine builds a fresh
         // reader per chunk but closes ctx.scope() once, when the run ends. Closing it here would rebuild a
         // session every 500 rows.
+        startsAFile = false;
         try {
             FileSource source = source(ctx);
             FileProcessingCursor fpc = cursor.isEmpty()
@@ -147,11 +152,12 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
                 return continueFile(source, fpc, ip, chunkSize);
             }
 
-            archiveCommitted(source, fpc);
+            archiveCommitted(source, fpc, ctx.scope());
 
             FileDescriptor next = nextFile(source, fpc, ctx.scope());
             if (next == null) return new ReadResult.EndOfStream<>(List.of());
 
+            startsAFile = true;
             return startFile(source, fpc, next, chunkSize);
         } catch (RuntimeException e) {
             throw e;
@@ -543,24 +549,63 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
 
     /**
      * Archives every file the persisted cursor carries — their chunks committed, or the
-     * cursor would not hold them. Per-entry failures warn and continue: a MOVE on an
-     * already-archived file throws (idempotent retry across reads of the same watermark
-     * second), and a real source error must not block ingestion — the file lingers and
-     * the warning is the operator's signal.
+     * cursor would not hold them — and only the version that was read (#1385): the batch names a path, and a new
+     * file dropped under the same name since (a night whose archive failed, then the next one) is not this entry's
+     * file. Moved by path, it was archived unread and the listing found nothing. So the source is asked first: gone
+     * means already archived, another version is left for the listing to read (its own archive follows). A move
+     * that fails on the version read leaves the file where it was, and the run says so (#1382). The check is not
+     * atomic with the move — neither an sftp rename nor an s3 copy is conditional — so a file dropped in the
+     * milliseconds between them is still moved: the window shrinks from "until the next run" to that.
      */
-    private void archiveCommitted(FileSource source, FileProcessingCursor fpc) {
+    private void archiveCommitted(FileSource source, FileProcessingCursor fpc, RunScope scope) {
         if (afterProcess == AfterProcessAction.LEAVE || fpc.lastBatch() == null) return;
         for (FileProcessingCursor.Entry e : fpc.lastBatch()) {
+            FileDescriptor read = e.descriptor(fpc.watermark());
+            if (!stillThere(source, read)) continue;
             try {
-                source.markProcessed(
-                    new FileDescriptor(e.path(), e.size(), fpc.watermark(), e.etag()),
-                    afterProcess, markCfg);
+                source.markProcessed(read, afterProcess, markCfg);
             } catch (Exception ex) {
                 if (ex instanceof InterruptedException) Thread.currentThread().interrupt();
-                LOG.warnf(ex, "after_process %s skipped for %s (already archived, or source error)",
-                    afterProcess, e.path());
+                // Asked again: gone or rewritten between the check and the move is not "stays in the folder".
+                if (stillThere(source, read)) {
+                    scope.resource(new NotArchivedKey(), NotArchived::new).paths.add(read.path());
+                    LOG.warnf(ex, "after_process %s failed for %s — the file stays in the source folder",
+                        afterProcess, read.path());
+                } else {
+                    LOG.debugf(ex, "after_process %s failed for %s, which is gone or rewritten since",
+                        afterProcess, read.path());
+                }
             }
         }
+    }
+
+    /** True when the source still holds {@code read}'s bytes; a source that cannot say is taken as not. */
+    private static boolean stillThere(FileSource source, FileDescriptor read) {
+        try {
+            return source.stat(read.path()).map(read::sameVersion).orElse(false);
+        } catch (RuntimeException statFailed) {
+            // Not archived this time, never moved unread; the next read asks again.
+            LOG.debugf(statFailed, "stat failed for %s — not archived this time", read.path());
+            return false;
+        }
+    }
+
+    /** The run-scope key of {@link NotArchived}: one per run, the reads count and endOfStream reports. */
+    record NotArchivedKey() {}
+
+    /** The files the run read and could not archive (#1382), by path: a retry of the same file counts once. */
+    static final class NotArchived implements AutoCloseable {
+        final Set<String> paths = new HashSet<>();
+
+        @Override
+        public void close() {
+            // holds no resource; the run scope only keeps AutoCloseables
+        }
+    }
+
+    @Override
+    public boolean startsAFile() {
+        return startsAFile;
     }
 
     @Override

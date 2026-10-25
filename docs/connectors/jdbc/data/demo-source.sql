@@ -4,7 +4,7 @@
 -- self-host stack (`deploy/selfhost/up.sh`). A real integration points at the ERP instead;
 -- nothing else in the manifests changes.
 --
---   docker exec -i lumnik-postgres-1 psql -U lumnik -d lumnik < docs/connectors/jdbc/data/demo-source.sql
+--   docker compose -f docker-compose.selfhost.yml exec -T postgres psql -U lumnik -d lumnik < docs/connectors/jdbc/data/demo-source.sql
 --
 -- The two GRANTs are the only ones a lumnik connection user ever needs: USAGE on the schema,
 -- SELECT on the tables. Nothing in the jdbc connector writes to a source.

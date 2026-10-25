@@ -65,7 +65,9 @@ public final class NormalizerAllowlist {
   public static final Set<String> EXCLUDED = Set.of(
       "mask", "default", "lookup", "truncate", "split", "kotlin",
       "parse-phone", "parse-date", "parse-email", "to-uuid", "regex-replace", "regex-extract",
-      "parse-number");
+      "parse-number",
+      // Carries a value from one row to the next (#1452): what it writes depends on the rows before, not on the value.
+      "fill-down");
 
   public static boolean isAdmitted(String hookId) {
     return ADMITTED.containsKey(hookId);

@@ -139,13 +139,43 @@ class FileSourceCursorReaderS3IT {
     }
 
     private static FileSourceCursorReader reader(String prefix) {
+        return reader(prefix, "leave");
+    }
+
+    private static FileSourceCursorReader reader(String prefix, String afterProcess) {
         Map<String, Object> parser = Map.of("encoding", "UTF-8", "delimiter", ",", "has_header", true);
         Map<String, Object> config = Map.of(
             "transport", Map.of("kind", "s3", "bucket", BUCKET, "prefix", prefix),
-            "after_process", "leave",
+            "after_process", afterProcess,
             "parser", parser);
         return new FileSourceCursorReader(config,
             CsvFileConnectorType.buildParserOverrides(parser), registry(prefix));
+    }
+
+    /**
+     * #1385: the sweep archives only the version that was read, asking the source first. On s3 that answer is a
+     * listing narrowed to the key — the same precision as the listing that started the file — so a normal night
+     * is still archived: were the two to disagree, no object would ever be archived again.
+     */
+    @Test
+    void a_normal_night_is_archived_after_its_rows_are_read() {
+        admin.putObject(b -> b.bucket(BUCKET).key("swept/night.csv"), RequestBody.fromString(csv(3), StandardCharsets.UTF_8));
+        int rows = 0;
+        ConnectorCursor cursor = ConnectorCursor.empty();
+        while (true) {
+            ReadResult<Map<String, Object>> res = reader("swept/", "move").read(CHUNK, cursor, ctx());
+            if (res instanceof ReadResult.HasMore<Map<String, Object>> hm) {
+                rows += hm.records().size();
+                cursor = hm.nextCursor();
+            } else {
+                rows += ((ReadResult.EndOfStream<Map<String, Object>>) res).records().size();
+                break;
+            }
+        }
+        assertThat(rows).isEqualTo(3);
+        assertThat(admin.listObjectsV2(b -> b.bucket(BUCKET).prefix("swept/")).contents()).as("the source key is gone").isEmpty();
+        assertThat(admin.listObjectsV2(b -> b.bucket(BUCKET).prefix("archive/night.")).contents())
+            .as("archived under its own name").hasSize(1);
     }
 
     @Test

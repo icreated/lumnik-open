@@ -46,6 +46,19 @@ public class CsvFileReader {
       List<String> nullValues,
       List<String> columns          // required when hasHeader == false; ignored otherwise
   ) {
+    /**
+     * The delimiter of {@code parser.lines: true} (#1415): ASCII's own unit separator — a marker, never a split: a
+     * line that holds it is joined back whole ({@code lineRow}). Line mode rides on the delimiter
+     * because every resume path already carries the delimiter — the remote cursor persists it — so the mode
+     * reaches them with no new field and no new cursor format. The validator reserves this character.
+     */
+    public static final char LINES = '\u001F';
+
+    /** One line = one row: no field splitting, and no quote character a line could open and never close. */
+    public boolean lines() {
+      return delimiter == LINES;
+    }
+
     public static Config defaults() {
       return new Config(StandardCharsets.UTF_8, ',', true, true,
           List.of("", "NULL", "null", "#N/A"), null);
@@ -189,7 +202,7 @@ public class CsvFileReader {
           // must propagate to fail the run loudly, not masquerade as a "malformed source" entry.
           if (seen >= skip) {
             malformed.accept(new MalformedRecord(
-                fileLabel, lineBase + parser.getCurrentLineNumber(), null, tokenizerDesync.getMessage()));
+                fileLabel, lineBase + parser.getCurrentLineNumber(), null, desyncSentence(tokenizerDesync)));
             consumed++;
           }
           return new Scan(consumed, true, null, 0L, headers);
@@ -199,7 +212,9 @@ public class CsvFileReader {
         }
         Map<String, Object> row;
         try {
-          row = toRow(rec, originalToStripped, declaredColumns, nullSet, effective.bomStrip());
+          row = effective.lines()
+              ? lineRow(rec, headers.get(0), nullSet, effective.bomStrip())
+              : toRow(rec, originalToStripped, declaredColumns, nullSet, effective.bomStrip());
         } catch (IllegalArgumentException badColumns) {
           // Column-count mismatch: isolate this row, keep going.
           malformed.accept(new MalformedRecord(
@@ -283,7 +298,7 @@ public class CsvFileReader {
   }
 
   private CSVFormat buildFormat(Config effective) {
-    if (effective.hasHeader()) {
+    if (effective.hasHeader() && !effective.lines()) {
       return CSVFormat.Builder.create(CSVFormat.DEFAULT)
           .setDelimiter(effective.delimiter())
           .setHeader()
@@ -298,6 +313,7 @@ public class CsvFileReader {
     }
     return CSVFormat.Builder.create(CSVFormat.DEFAULT)
         .setDelimiter(effective.delimiter())
+        .setQuote(effective.lines() ? null : CSVFormat.DEFAULT.getQuoteCharacter())
         .setHeader(effective.columns().toArray(new String[0]))
         .setSkipHeaderRecord(false)
         .setIgnoreEmptyLines(true)
@@ -346,13 +362,47 @@ public class CsvFileReader {
       // "are declared", not "the header declares": a headerless file declares its columns in the
       // config, and this sentence is what the operator reads in `lm dlq get`.
       throw new IllegalArgumentException("Record has " + rec.size()
-          + " values but only " + declaredColumns + " columns are declared");
+          + " values but only " + columns(declaredColumns));
     }
     Map<String, Object> row = new LinkedHashMap<>(originalToStripped.size());
     for (var entry : originalToStripped.entrySet()) {
-      String v = stripBom(rec.get(entry.getKey()), bomStrip);
+      String cell;
+      try {
+        cell = rec.get(entry.getKey());
+      } catch (IllegalArgumentException tooFew) {
+        // Commons CSV's own text names its record class; the operator reads the shape instead.
+        throw new IllegalArgumentException("Record has " + (rec.size() == 1 ? "1 value" : rec.size() + " values")
+            + " but " + columns(declaredColumns), tooFew);
+      }
+      String v = stripBom(cell, bomStrip);
       row.put(entry.getValue(), nullSet.contains(v) ? null : v);
     }
+    return row;
+  }
+
+  private static String columns(int declared) {
+    return declared == 1 ? "1 column is declared" : declared + " columns are declared";
+  }
+
+  /**
+   * The reader's sentence for a stream it cannot read on: a quote that does not close where the
+   * format expects is the usual cause; any other read failure gets the plain fact. Never the
+   * library's exception text, which names its own classes.
+   */
+  private static String desyncSentence(UncheckedIOException desync) {
+    return String.valueOf(desync.getMessage()).contains("encapsulated token")
+        ? "A quoted value does not close where expected: the file cannot be read past this line"
+        : "The file cannot be read past this line";
+  }
+
+  /**
+   * Line mode's row: the whole line, whatever it holds. With no quote and no escape, Commons CSV's split on
+   * {@link Config#LINES} is lossless, so a line that holds the unit separator is joined back exactly as written.
+   */
+  private static Map<String, Object> lineRow(CSVRecord rec, String column, Set<String> nullSet, boolean bomStrip) {
+    String line = stripBom(String.join(String.valueOf(Config.LINES), rec.values()), bomStrip);
+    Map<String, Object> row = new LinkedHashMap<>(1);
+    row.put(column, nullSet.contains(line) ? null : line);
     return row;
   }
 

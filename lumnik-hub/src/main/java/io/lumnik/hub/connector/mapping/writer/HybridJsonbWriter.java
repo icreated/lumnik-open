@@ -23,6 +23,7 @@ import java.sql.*;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteTable;
@@ -78,20 +79,22 @@ public class HybridJsonbWriter {
      * @param connectorId connector lineage column
      * @param endpointId  endpoint lineage column
      */
-    public void write(HybridJsonbSpec spec, List<Map<String, Object>> items,
+    public long write(HybridJsonbSpec spec, List<Map<String, Object>> items,
                       long tenantId, UUID connectorId, UUID endpointId) {
-        write(spec, items, null, tenantId, connectorId, endpointId);
+        return write(spec, items, null, tenantId, connectorId, endpointId);
     }
 
     /**
      * Full write: {@code systemContexts} (aligned with {@code items}) supply {@code _row_hash} —
      * the row identity the RAG/table targets already persist and this branch used to throw away
      * (C4/P18 PR1). {@code null} contexts bind NULL hashes (direct/test callers).
+     *
+     * @return the promoted cells that did not read as their column's type, written NULL (#1398)
      */
-    public void write(HybridJsonbSpec spec, List<Map<String, Object>> items,
+    public long write(HybridJsonbSpec spec, List<Map<String, Object>> items,
                       List<Map<String, Object>> systemContexts,
                       long tenantId, UUID connectorId, UUID endpointId) {
-        if (items.isEmpty()) return;
+        if (items.isEmpty()) return 0;
         // Pre-compile JsonPath expressions once per write call to avoid recompilation per row
         JsonPath uniqueKey = JsonPath.compile(spec.uniqueKeyPath());
         List<JsonPath> colPaths = spec.promote().stream()
@@ -101,7 +104,7 @@ public class HybridJsonbWriter {
         try (Connection c = adminDs.getConnection()) {
             DynamicTableWriter.writeLock(c, target[0], target[1]);
             try {
-                writeLocked(c, spec, items, systemContexts, tenantId, connectorId, endpointId, uniqueKey, colPaths);
+                return writeLocked(c, spec, items, systemContexts, tenantId, connectorId, endpointId, uniqueKey, colPaths);
             } finally {
                 DynamicTableWriter.releaseWriteLock(c, target[0], target[1]);
             }
@@ -110,22 +113,24 @@ public class HybridJsonbWriter {
         }
     }
 
-    private void writeLocked(Connection c, HybridJsonbSpec spec, List<Map<String, Object>> items,
+    private long writeLocked(Connection c, HybridJsonbSpec spec, List<Map<String, Object>> items,
                              List<Map<String, Object>> systemContexts, long tenantId, UUID connectorId,
                              UUID endpointId, JsonPath uniqueKey, List<JsonPath> colPaths) throws SQLException {
         boolean schemaChanged = ensureTable(c, spec);
         if (schemaChanged) registered.removeIf(k -> k.startsWith(spec.table() + "|" + tenantId + "|"));
         registerIfNeeded(spec, tenantId, connectorId, c);
         String sql = buildInsertSql(spec);
+        long unreadable = 0;
         try (PreparedStatement ps = c.prepareStatement(sql)) {
             for (int r = 0; r < items.size(); r++) {
                 String rowHash = systemContexts == null ? null
                     : (String) systemContexts.get(r).get("_row_hash");
-                bind(ps, spec, uniqueKey, colPaths, items.get(r), rowHash,
+                unreadable += bind(ps, spec, uniqueKey, colPaths, items.get(r), rowHash,
                      tenantId, connectorId, endpointId);
             }
             ps.executeBatch();
         }
+        return unreadable;
     }
 
     /** {@code [schema, table]} of the target, as it is registered — {@code public} when the spec names none. */
@@ -350,7 +355,7 @@ public class HybridJsonbWriter {
 
     // ── Row binding ──────────────────────────────────────────────────────────
 
-    private void bind(PreparedStatement ps, HybridJsonbSpec spec,
+    private int bind(PreparedStatement ps, HybridJsonbSpec spec,
                       JsonPath uniqueKey, List<JsonPath> colPaths,
                       Map<String, Object> item, String rowHash,
                       long tenantId, UUID connectorId, UUID endpointId) throws SQLException {
@@ -367,10 +372,15 @@ public class HybridJsonbWriter {
         ps.setString(i++, externalId);
 
         List<PromotedColumn> promote = spec.promote();
+        int unreadable = 0;
         for (int ci = 0; ci < promote.size(); ci++) {
             PromotedColumn col = promote.get(ci);
             Object raw = ctx.read(colPaths.get(ci), Object.class);
-            Object val = applyTransform(raw, col.transform(), col.name());
+            Object val = converted(transformed(raw, col), col.type());
+            if (val == UNREADABLE) {
+                unreadable++;
+                val = null;   // the row is written; its payload keeps the value whole in `data`
+            }
             bindTyped(ps, i++, val, col.type());
         }
 
@@ -379,6 +389,82 @@ public class HybridJsonbWriter {
         ps.setObject(i++, connectorId);
         ps.setObject(i,   endpointId);
         ps.addBatch();
+        return unreadable;
+    }
+
+    /** The transform's result, or {@link #UNREADABLE} when the value is not one it reads — one cell, not the run. */
+    private static Object transformed(Object raw, PromotedColumn col) {
+        try {
+            return applyTransform(raw, col.transform(), col.name());
+        } catch (IllegalArgumentException | ClassCastException | DateTimeException notReadable) {
+            return UNREADABLE;
+        }
+    }
+
+    /** A plain decimal numeral, bounded: never an exponent to expand (#1090). */
+    private static final Pattern DECIMAL_NUMERAL = Pattern.compile("-?\\d{1,38}(\\.\\d{1,38})?");
+
+    /** A promoted value that does not read as its column's type: bound NULL, counted as a cell error (#1398). */
+    static final Object UNREADABLE = new Object();
+
+    /**
+     * The value as its declared column type, or {@link #UNREADABLE} (#1398). A JSON API sends instants — and
+     * often numbers — as strings; bound as they came, they reached PostgreSQL as varchar and failed the whole run
+     * on a type error. A string is read as the type says: an instant as {@link TemporalText} reads one (the rule
+     * {@code parse_iso8601} and the view filters share), a numeral as a number, {@code true}/{@code false} as a
+     * boolean. What does not read is one cell, not the run.
+     */
+    static Object converted(Object val, SqlType type) {
+        if (val == null || val == UNREADABLE) return val;
+        try {
+            return switch (type) {
+                case TEXT -> String.valueOf(val);
+                // A string is parsed as a plain numeral only: "1e999999999" would otherwise be expanded (#1090).
+                case BIGINT -> val instanceof Number n ? (Object) new BigDecimal(n.toString()).longValueExact()
+                    : (Object) Long.parseLong(String.valueOf(val).strip());
+                case INTEGER -> val instanceof Number n ? (Object) new BigDecimal(n.toString()).intValueExact()
+                    : (Object) Integer.parseInt(String.valueOf(val).strip());
+                case DECIMAL -> val instanceof BigDecimal b ? b : val instanceof Number n ? new BigDecimal(n.toString())
+                    : DECIMAL_NUMERAL.matcher(String.valueOf(val).strip()).matches() ? new BigDecimal(String.valueOf(val).strip())
+                    : UNREADABLE;
+                case BOOLEAN -> val instanceof Boolean b ? b : booleanOf(String.valueOf(val));
+                case TIMESTAMPTZ -> switch (val) {
+                    case String text -> timestampOf(text);
+                    case OffsetDateTime t -> t;
+                    case Instant t -> t;
+                    case ZonedDateTime t -> t;
+                    case LocalDateTime t -> t;
+                    default -> UNREADABLE;
+                };
+                case DATE -> switch (val) {
+                    case String text -> dateOf(text);
+                    case LocalDate d -> d;
+                    case OffsetDateTime t -> t.toLocalDate();
+                    default -> UNREADABLE;
+                };
+                case JSONB -> val;
+            };
+        } catch (ArithmeticException | IllegalArgumentException | DateTimeException notThatType) {
+            return UNREADABLE;
+        }
+    }
+
+    private static Object booleanOf(String text) {
+        return switch (text.strip().toLowerCase(Locale.ROOT)) {
+            case "true" -> Boolean.TRUE;
+            case "false" -> Boolean.FALSE;
+            default -> UNREADABLE;
+        };
+    }
+
+    private static Object dateOf(String text) {
+        Instant at = TemporalText.parse(text);
+        return at == null ? UNREADABLE : at.atOffset(ZoneOffset.UTC).toLocalDate();
+    }
+
+    private static Object timestampOf(String text) {
+        Instant at = TemporalText.parse(text);
+        return at == null ? UNREADABLE : at.atOffset(ZoneOffset.UTC);
     }
 
     // package-private static: a pure function of (raw, transform), so a unit test can drive it

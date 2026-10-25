@@ -6,6 +6,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.hub.tenant.TenantContextFilter;
@@ -18,8 +19,11 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
+import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.MultivaluedMap;
 import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriInfo;
 import org.jboss.logging.Logger;
 
 import java.sql.Array;
@@ -79,23 +83,41 @@ public class InboxResource {
     /** Appended to a read of {@code d}: binds the caller's sources twice ({@code bindGrants}), null when unbound. */
     private static final String IN_GRANTED_SOURCES = "AND (?::text[] IS NULL OR d.source = ANY (?::text[])) ";
 
+    /**
+     * {@code process=} and {@code type=} narrow the query, not the page (#1356): filtered after the
+     * fact, a page would answer about the tenant's newest N decisions rather than what was asked.
+     * {@code process} is what a decision shows as its process — a kind:Process name, or
+     * {@code workflow:<name>} for a kind:Workflow's. The métier binding applies either way.
+     */
     @GET
     public Response list(@QueryParam("limit") @DefaultValue("50") int limit,
-                         @QueryParam("all") @DefaultValue("false") boolean all) {
+                         @QueryParam("all") @DefaultValue("false") boolean all,
+                         @Context UriInfo uri) {
         long tenant = RequireTenant.current();
         int lim = Math.min(Math.max(limit, 1), 200);
+        MultivaluedMap<String, String> query = uri.getQueryParameters();
+        String process = ApiErrors.orBadRequest(() -> ApiErrors.once(query, "process"));
+        String type = ApiErrors.orBadRequest(() -> ApiErrors.once(query, "type"));
+        String source = process == null ? null : sourceOf(process);
         Set<String> sources = grantedSources(tenant);
         List<InboxEntry> out = Jdbc.query(adminDs, "InboxResource.list", listSql(all),
             ps -> {
                 ps.setLong(1, tenant);
                 ScopeGuardedUpsert.bindGrants(ps, 2, sources);
-                ps.setInt(4, lim);
+                ps.setString(4, source);
+                ps.setString(5, source);
+                ps.setString(6, type);
+                ps.setString(7, type);
+                ps.setInt(8, lim);
             },
             this::shape);
         return Response.ok(out).build();
     }
 
-    /** The inbox read (binds: tenant, the caller's sources twice, limit) — package-private so its plan can be pinned. */
+    /**
+     * The inbox read (binds: tenant, the caller's sources twice, the source filter twice, the type
+     * filter twice, limit) — package-private so its plan can be pinned.
+     */
     static String listSql(boolean all) {
         // "Acked" is looked up by the key ack() writes: one uq_event_outbox_dedup probe, whose one
         // row then has its type checked, so no other writer's key can ever ack a decision.
@@ -108,6 +130,7 @@ public class InboxResource {
              + ackedExpr + " AS acked "
              + "FROM core.event_outbox d WHERE d.tenant_id = ? AND d.event_type LIKE 'decision.%' "
              + IN_GRANTED_SOURCES
+             + "AND (?::text IS NULL OR d.source = ?) AND (?::text IS NULL OR d.event_type = ?) "
              + (all ? "" : "AND NOT EXISTS (" + ackMatch + ") ")
              + "ORDER BY d.id DESC LIMIT ?";
     }
@@ -154,12 +177,26 @@ public class InboxResource {
         return Response.ok(Map.of("acked", true)).build();
     }
 
+    /**
+     * What a decision shows as its process, and back (#1356): a kind:Process decision's source is
+     * {@code process:<name>} and shows the name; a kind:Workflow's is {@code workflow:<name>} and shows
+     * as is. One rule, both directions, so the filter matches what the PROCESS column says.
+     */
+    private static final String PROCESS_SOURCE = "process:";
+
+    private static String processOf(String source) {
+        return source != null && source.startsWith(PROCESS_SOURCE) ? source.substring(PROCESS_SOURCE.length()) : source;
+    }
+
+    private static String sourceOf(String process) {
+        return process.startsWith("workflow:") ? process : PROCESS_SOURCE + process;
+    }
+
     /** Shape one outbox row; a non-object payload degrades to source-derived fallbacks, never a 500. */
     private InboxEntry shape(ResultSet rs) throws SQLException {
         String type = rs.getString("event_type");
         String source = rs.getString("source");
-        String process = source != null && source.startsWith("process:")
-            ? source.substring("process:".length()) : source;
+        String process = processOf(source);
         String message = "";
         String payload = rs.getString("payload");
         if (payload != null) {
@@ -168,6 +205,7 @@ public class InboxResource {
                 // Only a scalar overrides the fallback: asText() on an object/array node returns "",
                 // which would silently erase the source-derived process / empty message.
                 JsonNode pn = n.get("process");
+                // ProcessConsumer writes the same name it puts in the source: the filter still matches.
                 if (pn != null && pn.isValueNode()) process = pn.asText();
                 JsonNode mn = n.get("message");
                 if (mn != null && mn.isValueNode()) message = mn.asText();

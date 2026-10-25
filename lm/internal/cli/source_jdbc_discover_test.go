@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -34,15 +35,36 @@ func TestJdbcDiscover_namesTheUnsupportedColumnsInTheTableOutput(t *testing.T) {
 	}
 }
 
+// -o is the root's output flag, as on every other command; --output is its long form.
 func TestJdbcDiscover_keepsTheFieldInJsonOutput(t *testing.T) {
+	for _, flag := range []string{"-o", "--output"} {
+		discoverHub(t)
+		stdout, _, err := runCLI(t, "pw\n", "source", "jdbc", "discover",
+			"--url", "jdbc:oracle:thin:@//h/x", "--user", "u", "--password-stdin", flag, "json")
+		if err != nil {
+			t.Fatalf("%s json: execute: %v", flag, err)
+		}
+		var doc struct {
+			Tables []struct {
+				UnsupportedColumns []string `json:"unsupportedColumns"`
+			} `json:"tables"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &doc); err != nil || len(doc.Tables) != 2 ||
+			len(doc.Tables[1].UnsupportedColumns) != 1 || doc.Tables[1].UnsupportedColumns[0] != "BODY BLOB" {
+			t.Errorf("%s json lost the unsupported columns (%v): %q", flag, err, stdout)
+		}
+	}
+}
+
+func TestJdbcDiscover_yamlOutput(t *testing.T) {
 	discoverHub(t)
 	stdout, _, err := runCLI(t, "pw\n", "source", "jdbc", "discover",
-		"--url", "jdbc:oracle:thin:@//h/x", "--user", "u", "--password-stdin", "--output", "json")
+		"--url", "jdbc:oracle:thin:@//h/x", "--user", "u", "--password-stdin", "-o", "yaml")
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if !strings.Contains(stdout, `"unsupportedColumns":["BODY BLOB"]`) {
-		t.Errorf("--output json lost the unsupported columns: %q", stdout)
+	if !strings.Contains(stdout, "unsupportedColumns:") || !strings.Contains(stdout, "- BODY BLOB") {
+		t.Errorf("-o yaml is not the descriptor: %q", stdout)
 	}
 }
 

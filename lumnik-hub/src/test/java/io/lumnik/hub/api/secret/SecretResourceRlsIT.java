@@ -1,12 +1,24 @@
 package io.lumnik.hub.api.secret;
 
+import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
 import io.restassured.RestAssured;
+import io.restassured.http.ContentType;
+import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.CoreMatchers.containsString;
+import static org.hamcrest.CoreMatchers.equalTo;
+import static org.hamcrest.CoreMatchers.not;
 
 /**
  * The secret store, read under the posture it runs in.
@@ -32,6 +44,8 @@ import static org.hamcrest.CoreMatchers.containsString;
 @QuarkusTest
 @TestProfile(RlsEnforcedProfile.class)
 class SecretResourceRlsIT {
+
+    @Inject @DataSource("admin") AgroalDataSource adminDs;
 
     @Test
     void a_secret_that_was_written_can_be_listed_and_described() {
@@ -68,12 +82,58 @@ class SecretResourceRlsIT {
     @Test
     void a_duplicate_name_is_still_refused_which_needs_the_lookup_to_see() {
         String name = "RLS_IT_DUP_" + System.nanoTime();
+        String body = "{\"name\":\"" + name + "\",\"value\":\"never-echoed\",\"description\":\"d\"}";
+
+        RestAssured.given().header("X-Tenant-Id", "1").contentType("application/json")
+            .body(body).post("/api/platform/secrets").then().statusCode(201);
+
+        // The refusal names the secret and the gesture that replaces its value — never the value.
+        RestAssured.given().header("X-Tenant-Id", "1").contentType("application/json")
+            .body(body).post("/api/platform/secrets").then().statusCode(409)
+            .contentType(ContentType.JSON)
+            .body("error", equalTo("secret " + name + " already exists — lm secret set " + name
+                + " replaces its value"))
+            .body(not(containsString("never-echoed")));
+    }
+
+    /**
+     * {@code secret rm} removes the row, and the encrypted value with it. A soft delete stamped
+     * {@code deleted_at} and kept the row: no reader saw it again, but whoever holds the master key
+     * could still decrypt a secret an admin had removed. The row is counted on the admin datasource,
+     * which sees every row, so a row hidden from the app role cannot pass for a deleted one. It runs
+     * on this harness because the non-owner app role is the one that issues the DELETE.
+     */
+    @Test
+    void a_deleted_secret_leaves_no_row_behind() throws SQLException {
+        String name = "RLS_IT_RM_" + System.nanoTime();
         String body = "{\"name\":\"" + name + "\",\"value\":\"v\",\"description\":\"d\"}";
 
         RestAssured.given().header("X-Tenant-Id", "1").contentType("application/json")
             .body(body).post("/api/platform/secrets").then().statusCode(201);
 
+        RestAssured.given().header("X-Tenant-Id", "1")
+            .delete("/api/platform/secrets/" + name).then().statusCode(204);
+
+        assertThat(count("SELECT count(*) FROM platform.secret WHERE tenant_id = 1 AND name = ?", name))
+            .as("the row and its encrypted value are gone, not stamped and kept")
+            .isZero();
+        assertThat(count("SELECT count(*) FROM core.audit_outbox WHERE tenant_id = 1 AND entity_type = 'Secret' "
+                + "AND operation = 'DELETE' AND changes->>'name' = ?", name))
+            .as("the audit trail keeps the deletion")
+            .isEqualTo(1);
+
         RestAssured.given().header("X-Tenant-Id", "1").contentType("application/json")
-            .body(body).post("/api/platform/secrets").then().statusCode(409);
+            .body(body).post("/api/platform/secrets").then().statusCode(201);
+    }
+
+    private long count(String sql, String name) throws SQLException {
+        try (Connection c = adminDs.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, name);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getLong(1);
+            }
+        }
     }
 }

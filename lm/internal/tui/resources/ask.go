@@ -1,10 +1,12 @@
 package resources
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/icreated/lumnik-open/lm/internal/ask"
@@ -26,6 +28,7 @@ type Ask struct {
 	answer   *tview.TextView
 	scope    string
 	last     *client.AskResult
+	previous string      // the question the next one continues (#1406); "" sends it alone
 	isFront  func() bool // true when :ask is the front page of a live app; gates the answer's focus
 	onError  func(string)
 	onToast  func(string)
@@ -73,8 +76,13 @@ func (a *Ask) Hints() string {
 }
 
 // SetScope is called by the App when switching to :ask so questions carry the
-// current session scope.
-func (a *Ask) SetScope(scope string) { a.scope = scope }
+// current session scope. A question about another scope is not continued.
+func (a *Ask) SetScope(scope string) {
+	if scope != a.scope {
+		a.previous = ""
+	}
+	a.scope = scope
+}
 
 // FocusPrimitive lets the App focus the input field when the page opens.
 func (a *Ask) FocusPrimitive() tview.Primitive { return a.input }
@@ -87,6 +95,7 @@ func (a *Ask) Refresh() {
 	a.answer.SetText("")
 	a.table.Clear()
 	a.last = nil
+	a.previous = ""
 }
 
 func (a *Ask) submit(question string) {
@@ -95,10 +104,11 @@ func (a *Ask) submit(question string) {
 	}
 	a.headline.SetText("[yellow]…thinking[white]")
 	scope := a.scope // capture on the event loop; SetScope may write a.scope concurrently
+	previous := a.previous
 	// The answer to a question asked must not be lost: background lands it once an open $EDITOR
 	// closes, where QueueUpdate dropped it (#1158).
 	background(a.app, func() func() {
-		res, err := a.client.RagAsk(question, scope, client.AnswerLang(""))
+		res, err := a.client.RagAsk(question, scope, client.AnswerLang(""), previous)
 		return func() {
 			if err != nil {
 				// Calm, full-page degradation — notably for REST/CSV scopes with no
@@ -106,9 +116,30 @@ func (a *Ask) submit(question string) {
 				a.renderNotice(friendlyAskError(err, scope))
 				return
 			}
+			if res.SQL != "" {
+				a.previous = continued(question, res.UnderstoodAs)
+			}
 			a.render(res)
 		}
 	})
+}
+
+// maxPrevious is the longest previous the hub accepts (AskPort.MAX_PREVIOUS_CHARS, UTF-16 units).
+const maxPrevious = 1000
+
+// continued is the sentence the next question continues, as the PWA's chat keeps it: what the hub
+// understood, or the question as asked when it stood alone. Only an answer that ran SQL sets it — a
+// refusal or an error leaves it, as the user often retries in other words. One too long to send is
+// not held: the hub would refuse every next question.
+func continued(question, understoodAs string) string {
+	sentence := cmp.Or(understoodAs, question)
+	units := 0
+	for _, r := range sentence {
+		if units += utf16.RuneLen(r); units > maxPrevious {
+			return ""
+		}
+	}
+	return sentence
 }
 
 // renderNotice shows a calm, full-page message (e.g. no discovered schema for a
@@ -141,7 +172,11 @@ func (a *Ask) render(res *client.AskResult) {
 	a.last = res
 
 	// gold headline band
-	head := tview.Escape(deriveHeadline(res.Answer, res.RowCount))
+	head := deriveHeadline(res.Answer, res.RowCount)
+	if res.UnderstoodAs != "" {
+		head += " · understood as: " + res.UnderstoodAs
+	}
+	head = tview.Escape(head)
 	if style.ColorsEnabled() {
 		a.headline.SetText("[black:#FFB000] " + head + " [-:-]")
 	} else {
@@ -203,7 +238,11 @@ func (a *Ask) tableKeys(ev *tcell.EventKey) *tcell.EventKey {
 	case ev.Rune() == 'e':
 		a.exportCSV()
 		return nil
-	case ev.Rune() == 'n' || ev.Key() == tcell.KeyEnter:
+	case ev.Rune() == 'n':
+		a.previous = "" // a new question, not a follow-up
+		a.app.SetFocus(a.input)
+		return nil
+	case ev.Key() == tcell.KeyEnter:
 		a.app.SetFocus(a.input)
 		return nil
 	}

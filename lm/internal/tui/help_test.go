@@ -2,12 +2,24 @@ package tui
 
 import (
 	"github.com/icreated/lumnik-open/lm/internal/tui/newkind"
+	"github.com/icreated/lumnik-open/lm/internal/tui/resources"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 )
+
+// The :scopes footer names only keys the page handles: each one it announces is global or
+// dispatched in scopes.go. It announced "s: sort", which nothing there handles.
+func TestScopesFooterAnnouncesOnlyHandledKeys(t *testing.T) {
+	for _, hint := range strings.Split((&resources.Scopes{}).Hints(), " · ") {
+		key, _, _ := strings.Cut(hint, ":")
+		if !globalKeys[key] && !keyIsDispatched(t, "scopes", key) {
+			t.Errorf(":scopes footer announces %q, which the page does not handle", hint)
+		}
+	}
+}
 
 // The in-app help is the TUI's only documentation: every palette page
 // must have a help row, or the page is undiscoverable.

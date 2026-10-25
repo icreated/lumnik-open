@@ -22,6 +22,8 @@ public final class ParserBlockValidator {
             .optional("null_values", Type.LIST, Importance.LOW,
                 "Strings treated as null",
                 List.of("", "NULL", "null", "#N/A"))
+            .optional("lines", Type.BOOLEAN, Importance.MEDIUM,
+                "One line = one row, one column (`line`): no delimiter, no quoting — fixed-width files, logs", false)
             .optional("columns", Type.LIST, Importance.MEDIUM,
                 "Column names in file order — REQUIRED when has_header: false "
                     + "(cross-checked by the csv validator)", null)

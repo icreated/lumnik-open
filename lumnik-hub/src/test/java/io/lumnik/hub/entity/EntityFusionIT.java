@@ -51,6 +51,8 @@ class EntityFusionIT {
   void seedAndApply() throws Exception {
     try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
       st.execute("DROP VIEW IF EXISTS connector.\"v_fusedcustomer\"");
+      st.execute("DROP VIEW IF EXISTS connector.\"v_fusedcustomercsvname\"");
+      st.execute("DROP VIEW IF EXISTS connector.\"v_fusedcustomeruncompared\"");
       st.execute("DROP TABLE IF EXISTS connector.t_fuse_erp");
       st.execute("DROP TABLE IF EXISTS connector.t_fuse_csv");
       st.execute("CREATE TABLE connector.t_fuse_erp (tenant_id bigint NOT NULL, \"cust_id\" text, \"cust_name\" text)");
@@ -101,6 +103,46 @@ class EntityFusionIT {
         .body("[0]._conflicts", containsString("MARIE A."))
         .body("[0]._conflicts", containsString("t_fuse_erp"))
         .body("[0]._conflicts", containsString("t_fuse_csv"));
+  }
+
+  /** #1379: the csv is preferred for name only — it wins name, the erp still wins nothing else, and the ledger keeps both. */
+  @Test
+  void a_preferred_source_wins_its_column_and_the_ledger_keeps_both() {
+    given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
+        .contentType("application/yaml").body(MANIFEST.replace("name: FusedCustomer", "name: FusedCustomerCsvName")
+            + "columns:\n  name:\n    prefer: t_fuse_csv\n")
+        .post("/api/entities/apply").then().statusCode(200);
+
+    given().headers(TestIdentity.tenantAndUser(1))
+        .get("/api/entities/fusedcustomercsvname?customer_code=C-200")
+        .then().statusCode(200)
+        .body("[0].name", equalTo("MARIE A."))      // the preferred source, for this column
+        .body("[0]._conflicts", equalTo("{\"name\": [{\"src\": \"t_fuse_csv\", \"value\": \"MARIE A.\"},"
+            + " {\"src\": \"t_fuse_erp\", \"value\": \"Marie\"}]}"));  // nothing hidden; the shown value first
+    // Agreement stays agreement: a preference is not a disagreement.
+    given().headers(TestIdentity.tenantAndUser(1))
+        .get("/api/entities/fusedcustomercsvname?customer_code=C-100")
+        .then().statusCode(200)
+        .body("[0].name", equalTo("Jean Dupont"))
+        .body("[0]._conflicts", equalTo("{}"));
+  }
+
+  /**
+   * #1449: a column whose sources progress rather than disagree declares conflicts: false — its value follows the
+   * source order as before, and the ledger no longer reports it.
+   */
+  @Test
+  void an_uncompared_column_keeps_its_value_and_leaves_the_ledger() {
+    given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
+        .contentType("application/yaml").body(MANIFEST.replace("name: FusedCustomer", "name: FusedCustomerUncompared")
+            + "columns:\n  name:\n    conflicts: false\n")
+        .post("/api/entities/apply").then().statusCode(200);
+
+    given().headers(TestIdentity.tenantAndUser(1))
+        .get("/api/entities/fusedcustomeruncompared?customer_code=C-200")
+        .then().statusCode(200)
+        .body("[0].name", equalTo("Marie"))          // the source order, as without the option
+        .body("[0]._conflicts", equalTo("{}"));      // the two names are not a disagreement any more
   }
 
   @Test

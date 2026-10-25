@@ -572,3 +572,206 @@ func TestRunList_aFullConnectorIdSkipsTheNameLookup(t *testing.T) {
 		}
 	}
 }
+
+// #1351: EVALUATED appears only when the hub answered for some run — a tenant without an enabled
+// Process keeps the table every capture in the docs shows.
+func TestRunColumns_evaluatedOnlyWhenTheHubAnswered(t *testing.T) {
+	headers, _ := runColumns([]types.Run{{ID: "r1"}})
+	if headers[len(headers)-1] == "EVALUATED" {
+		t.Fatalf("no run carries evaluated, yet the column is there: %v", headers)
+	}
+	yes, no := true, false
+	headers, row := runColumns([]types.Run{{ID: "r1", Evaluated: &yes}, {ID: "r2", Evaluated: &no}, {ID: "r3"}})
+	if headers[len(headers)-1] != "EVALUATED" {
+		t.Fatalf("headers = %v, want EVALUATED last", headers)
+	}
+	for _, c := range []struct {
+		run  types.Run
+		want string
+	}{{types.Run{Evaluated: &yes}, "yes"}, {types.Run{Evaluated: &no}, "no"}, {types.Run{}, "—"}} {
+		cells := row(c.run)
+		if len(cells) != len(headers) || cells[len(cells)-1] != c.want {
+			t.Fatalf("row = %v, want %d cells ending in %q", cells, len(headers), c.want)
+		}
+	}
+}
+
+// #1353: --wait-evaluated polls until the hub says kind:Process has evaluated the run.
+func TestRunGet_waitEvaluatedPollsUntilTrue(t *testing.T) {
+	polls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		polls++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "0a0a0a0a-0000-4000-8000-00000000000a", "connectorId": "c1", "status": "Completed",
+			"evaluated": polls >= 3,
+		})
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	outBuf := new(bytes.Buffer)
+	cmd.SetOut(outBuf)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"run", "get", "0a0a0a0a-0000-4000-8000-00000000000a", "--wait-evaluated", "--interval", "1ms", "-o", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if polls != 3 || !strings.Contains(outBuf.String(), `"evaluated": true`) {
+		t.Fatalf("polls = %d, out = %s; want 3 polls ending on evaluated true", polls, outBuf.String())
+	}
+}
+
+// null is the hub saying it cannot answer (no enabled Process, processes changed since the run
+// started, a run from before the hub recorded it): waiting would never end, and exit 0 would read
+// as "evaluated" to a script.
+func TestRunGet_waitEvaluatedRefusesANullAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "0b0b0b0b-0000-4000-8000-00000000000b", "connectorId": "c1", "status": "Completed",
+		})
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"run", "get", "0b0b0b0b-0000-4000-8000-00000000000b", "--wait-evaluated", "--interval", "1ms"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "cannot say") {
+		t.Fatalf("err = %v, want a refusal saying the hub cannot say", err)
+	}
+}
+
+func TestRunGet_waitEvaluatedGivesUpAtTheTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "0c0c0c0c-0000-4000-8000-00000000000c", "connectorId": "c1", "status": "Completed", "evaluated": false,
+		})
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"run", "get", "0c0c0c0c-0000-4000-8000-00000000000c", "--wait-evaluated", "--interval", "1ms", "--timeout", "30ms"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "gave up waiting") {
+		t.Fatalf("err = %v, want a timeout", err)
+	}
+}
+
+// #1371: a run that read nothing because the file had not changed says so, so IN 0 is not a mystery.
+func TestRunGet_saysAnUnchangedFileWasNotRead(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "13131313-0000-4000-8000-000000000013", "connectorId": "c1", "status": "Completed",
+			"recordsIn": 0, "recordsOut": 0, "recordsSkipped": 0, "filesUnchanged": 1,
+		})
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	outBuf, errBuf := new(bytes.Buffer), new(bytes.Buffer)
+	cmd.SetOut(outBuf)
+	cmd.SetErr(errBuf)
+	cmd.SetArgs([]string{"run", "get", "13131313-0000-4000-8000-000000000013"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errBuf.String(), "1 file(s) unchanged since they were last read — not read again") {
+		t.Errorf("the skip should be said on stderr: %q", errBuf.String())
+	}
+}
+
+// #1382: a file read and left in the source folder because after_process failed is said on the run.
+func TestRunGet_saysAFileCouldNotBeArchived(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "13821382-0000-4000-8000-000000001382", "connectorId": "c1", "status": "Completed",
+			"recordsIn": 1, "recordsOut": 1, "recordsSkipped": 0, "filesNotArchived": 1,
+		})
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	outBuf, errBuf := new(bytes.Buffer), new(bytes.Buffer)
+	cmd.SetOut(outBuf)
+	cmd.SetErr(errBuf)
+	cmd.SetArgs([]string{"run", "get", "13821382-0000-4000-8000-000000001382"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errBuf.String(), "1 file(s) read but not archived — still in the source folder (after_process failed; see the hub log)") {
+		t.Errorf("the failed archive should be said on stderr: %q", errBuf.String())
+	}
+}
+
+// #1430: the operator replaced a Kotlin script on 1 January; `run get` says which version produced the run's rows,
+// with the fingerprint `lm hook scripts` shows — one line per version, two when it was replaced mid-run.
+func TestRunGet_namesTheScriptVersionsItRan(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "12121212-0000-4000-8000-000000000012", "connectorId": "c1", "status": "Completed",
+			"recordsIn": 3, "recordsOut": 3,
+			"scripts": []map[string]string{
+				{"name": "hooks:shipping-fee.kts", "sha256": "23ba31c1b1827ff8"},
+				{"name": "hooks:shipping-fee.kts", "sha256": "c1c59e5c7b81302d"},
+			},
+		})
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	outBuf, errBuf := new(bytes.Buffer), new(bytes.Buffer)
+	cmd.SetOut(outBuf)
+	cmd.SetErr(errBuf)
+	cmd.SetArgs([]string{"run", "get", "12121212-0000-4000-8000-000000000012", "-o", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"• script hooks:shipping-fee.kts  sha256 23ba31c1b1827ff8\n",
+		"• script hooks:shipping-fee.kts  sha256 c1c59e5c7b81302d\n",
+	} {
+		if !strings.Contains(errBuf.String(), want) {
+			t.Errorf("stderr should carry %q: %q", want, errBuf.String())
+		}
+	}
+	var parsed []types.Run
+	if err := json.Unmarshal(outBuf.Bytes(), &parsed); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\n%s", err, outBuf.String())
+	}
+	if len(parsed[0].Scripts) != 2 || parsed[0].Scripts[1].SHA256 != "c1c59e5c7b81302d" {
+		t.Errorf("-o json should carry the scripts: %+v", parsed[0].Scripts)
+	}
+}
+
+// Review of #1431: a hub that ran no script returns `scripts: []`; `-o json` keeps it, as the docs say.
+func TestRunGet_jsonKeepsAnEmptyScriptsList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "13131313-0000-4000-8000-000000000013", "connectorId": "c1", "status": "Completed",
+			"scripts": []map[string]string{},
+		})
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	outBuf := new(bytes.Buffer)
+	cmd.SetOut(outBuf)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"run", "get", "13131313-0000-4000-8000-000000000013", "-o", "json"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(outBuf.String(), `"scripts": []`) {
+		t.Errorf("-o json should keep scripts: [], got %s", outBuf.String())
+	}
+}

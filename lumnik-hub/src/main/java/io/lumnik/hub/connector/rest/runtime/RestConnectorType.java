@@ -14,6 +14,7 @@ import io.lumnik.hub.connector.rest.Urls;
 import io.lumnik.hub.connector.rest.auth.AuthProviderRegistry;
 import io.lumnik.hub.connector.rest.pagination.PaginationFactory;
 import io.lumnik.hub.connector.rest.reliability.RateLimiterRegistry;
+import io.lumnik.hub.connector.secret.SecretRefs;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -44,6 +45,7 @@ public class RestConnectorType implements ConnectorType {
     @Inject RestHttpClient http;
     @Inject MultiTargetWriter multiTargetWriter;
     @Inject ObjectMapper mapper;
+    @Inject SecretRefs secrets;
 
     @Override
     public String id() { return KIND; }
@@ -91,7 +93,7 @@ public class RestConnectorType implements ConnectorType {
     @Override
     public ItemReader<?> reader(ConnectorContext ctx) {
         return new RestEndpointReader(epRepo.findById(ctx.endpointId()),
-            authReg, paginationFactory, rateRegistry, http, mapper);
+            authReg, paginationFactory, rateRegistry, http, mapper, secrets);
     }
 
     /** ItemWriter bridge: writes the collected batch via the runtime's hybrid JSONB write path. */

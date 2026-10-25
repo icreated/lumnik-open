@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"net/url"
 	"strconv"
 
@@ -26,6 +27,15 @@ func (c *Client) RunList(connectorID, endpointID string, limit int) ([]types.Run
 	var out []types.Run
 	if err := c.GET("/api/platform/runs?"+q.Encode(), &out); err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// RunGetCtx is RunGet bounded by ctx — what a poll needs, so a blocked read cannot outlive --timeout.
+func (c *Client) RunGetCtx(ctx context.Context, id string) (types.Run, error) {
+	var out types.Run
+	if err := c.doOnCtx(ctx, c.http, 0, "GET", "/api/platform/runs/"+id, nil, &out); err != nil {
+		return types.Run{}, err
 	}
 	return out, nil
 }

@@ -127,6 +127,25 @@ class NotificationRulesIT {
     }
 
     @Test @Order(3)
+    void a_misspelt_key_is_refused_by_name_and_stores_nothing() {
+        // `entity_filter` for `entityFilter` used to be dropped: the rule was stored with no
+        // filter and mailed every table's events, with a clean 201.
+        asAdmin(TENANT)
+            .body("{\"eventPattern\":\"data.row.changed\",\"recipient\":\"a@b.c\","
+                + "\"entity_filter\":\"connector.t_notif_demo\"}")
+            .post("/api/notifications")
+        .then().statusCode(400)
+            .contentType("application/json")
+            .body("error", containsString("unknown key: entity_filter —"))
+            .body("error", containsString("entityFilter"))
+            .body("error", not(containsString("connector.t_notif_demo")));
+
+        asAdmin(TENANT).get("/api/notifications")
+        .then().statusCode(200)
+            .body("find { it.recipient == 'a@b.c' }", nullValue());
+    }
+
+    @Test @Order(3)
     void without_a_tenant_a_malformed_body_is_still_401_not_400() {
         // The order is the assertion: an unauthenticated caller must not be able to tell a
         // malformed body from a well-formed one. Copilot caught this on #510 — the same rule the

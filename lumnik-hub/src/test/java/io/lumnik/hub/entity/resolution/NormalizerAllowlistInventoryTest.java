@@ -26,7 +26,9 @@ class NormalizerAllowlistInventoryTest {
 
   @Test
   void every_cell_hook_is_admitted_or_explicitly_excluded() {
-    List<String> cells = catalog.allCellHooks().stream().map(HookDescriptor::name).toList();
+    // A test-only hook (test-carry, #1452) sits in the catalogue only while tests run: production has nothing to say.
+    List<String> cells = catalog.allCellHooks().stream().map(HookDescriptor::name)
+        .filter(name -> !name.startsWith("test-")).toList();
     assertThat(cells).as("the sweep must find the catalogue it is meant to police").isNotEmpty();
 
     Set<String> classified = new HashSet<>(NormalizerAllowlist.ADMITTED.keySet());

@@ -47,6 +47,16 @@ func resolveConnector(c *client.Client, idOrName string) (types.Connector, error
 	return types.Connector{}, fmt.Errorf("connector %q not found", idOrName)
 }
 
+// listedSchedule is the SCHED cell: the cron, and "(paused)" beside it when `lm connector pause`
+// stopped it (#1389) — a manual run still goes, so the pause belongs to the schedule, and a
+// connector with no cron has none to pause.
+func listedSchedule(c types.Connector) string {
+	if c.Enabled || c.Schedule == "" {
+		return c.Schedule
+	}
+	return c.Schedule + " (paused)"
+}
+
 func newConnectorCmd() *cobra.Command {
 	cn := &cobra.Command{Use: "connector", Short: "Manage data connectors"}
 
@@ -66,7 +76,7 @@ func newConnectorCmd() *cobra.Command {
 			return output.Print(cmd.OutOrStdout(), format,
 				[]string{"NAME", "TYPE", "TENANT", "SCHED", "WINDOW", "STATUS", "LAST RUN"}, cs,
 				func(c types.Connector) []string {
-					return []string{c.Name, c.TypeID, fmt.Sprintf("%d", c.TenantID), c.Schedule,
+					return []string{c.Name, c.TypeID, fmt.Sprintf("%d", c.TenantID), listedSchedule(c),
 						c.Window, c.Status, output.HumanTime(c.LastRunAt)}
 				})
 		},

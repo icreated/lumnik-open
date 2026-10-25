@@ -166,7 +166,7 @@ class ProcessScopeBindingUnitTest {
 
     private static ProcessManifestStore.StoredProcess row(String name, String scope) {
         return new ProcessManifestStore.StoredProcess(
-            name, scope, "connector.t_x", List.of("a=b"), "decision.x", "msg", true);
+            name, scope, "connector.t_x", List.of("a=b"), "decision.x", "msg", List.of(), true);
     }
 
     @Test

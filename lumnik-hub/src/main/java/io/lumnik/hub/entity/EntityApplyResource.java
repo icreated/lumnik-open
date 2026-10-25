@@ -5,7 +5,7 @@ import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.ApplyScopeBoundary;
-import io.lumnik.hub.ask.DiscoveryService;
+import io.lumnik.hub.ask.SchemaCardRefresher;
 import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.search.SearchIndexRevalidator;
 import jakarta.inject.Inject;
@@ -16,7 +16,6 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import org.jboss.logging.Logger;
 
 import java.util.List;
 import java.util.Map;
@@ -25,12 +24,10 @@ import java.util.Map;
 @RequiresPermission("lm_admin")
 public class EntityApplyResource {
 
-  private static final Logger LOG = Logger.getLogger(EntityApplyResource.class);
-
   @Inject EntityManifestParser parser;
   @Inject EntityViewCompiler compiler;
   @Inject EntityRegistry registry;
-  @Inject DiscoveryService discovery;
+  @Inject SchemaCardRefresher cardRefresher;
   @Inject SearchIndexRevalidator searchIndexes;
   @Inject AuditRecorder audit;
 
@@ -100,20 +97,12 @@ public class EntityApplyResource {
     // Best-effort by contract — Search is optional and never refuses an Entity apply.
     searchIndexes.afterEntityApplied(m, body);
     // Make the entity askable in its scopes immediately, for the tenant of this request — resolved by
-    // TenantContextFilter (header in dev, JWT in prod), NOT a raw header. Best-effort: the view +
-    // manifest are already committed, so a discovery failure must NOT fail the apply (the card can be
-    // rebuilt via /rediscover). If there is no tenant context, skip — every tenant picks the entity up
-    // on its next rediscover (entity_manifest is global), so we never build a bogus tenant-0 card.
-    Long tenant = CurrentTenantHolder.get();
-    if (tenant != null) {
-      for (String scope : m.scopes()) {
-        try {
-          discovery.rediscover(tenant, scope);
-        } catch (Exception e) {
-          LOG.warnf(e, "entity apply: card refresh failed for scope %s", scope);
-        }
-      }
-    }
+    // TenantContextFilter (header in dev, JWT in prod), NOT a raw header — and refresh every card, in
+    // any tenant, that lists its view or describes one of its scopes: a scope it left, a column it
+    // dropped, must not stay on a card Ask reads (#1538). Best-effort: the view + manifest are already
+    // committed, so a discovery failure must NOT fail the apply. No tenant context → no card is
+    // created for a bogus tenant 0; the stored cards are still refreshed.
+    cardRefresher.afterEntityChanged(m.name(), CurrentTenantHolder.get(), m.scopes());
     return new ApplyResult(m.name(), EntityViewCompiler.viewName(m.name()));
   }
 }

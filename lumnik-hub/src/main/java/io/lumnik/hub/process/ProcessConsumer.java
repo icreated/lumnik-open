@@ -23,8 +23,10 @@ import java.sql.ResultSetMetaData;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteTable;
 import static io.quarkus.scheduler.Scheduled.ConcurrentExecution.SKIP;
@@ -122,7 +124,7 @@ public class ProcessConsumer {
                       Map<String, Object> content) {
         String payload;
         try {
-            payload = buildPayload(json, p.emitMessage(), p.name(),
+            payload = buildPayload(json, p.emitMessage(), p.emitFields(), p.name(),
                 trigger.getEntity(), trigger.getEntityKey(), content);
         } catch (JsonProcessingException e) {
             throw new RuntimeException("ProcessConsumer.emit: payload build failed: " + e.getMessage(), e);
@@ -143,8 +145,9 @@ public class ProcessConsumer {
 
     /** The decision event payload as valid JSON — Jackson-escaped so any message text is safe.
      *  {col} placeholders render from the row; the referenced columns ride along as `fields`
-     *  (structured data for webhook consumers — n8n reads data, not text). */
-    static String buildPayload(ObjectMapper json, String template, String process,
+     *  (structured data for webhook consumers — n8n reads data, not text), and so do the declared
+     *  {@code extra} ones, which the sentence a human reads need not name (#1365). */
+    static String buildPayload(ObjectMapper json, String template, List<String> extra, String process,
                                String entity, String entityKey, Map<String, Object> row)
             throws JsonProcessingException {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -152,7 +155,8 @@ public class ProcessConsumer {
         m.put("process", process);
         m.put("entity", entity);
         m.put("entity_key", entityKey);
-        List<String> refs = MessageTemplate.placeholders(template);
+        Set<String> refs = new LinkedHashSet<>(MessageTemplate.placeholders(template));
+        refs.addAll(extra);
         if (!refs.isEmpty()) {
             Map<String, Object> fields = new LinkedHashMap<>();
             for (String r : refs) fields.put(r, TemporalText.wire(row.get(r)));

@@ -52,20 +52,22 @@ LUMNIK_RATELIMIT_VIEW_GENERATE_RPM=20
 LUMNIK_RATELIMIT_USER_CHAT_RPM=0    # 0 disables that bucket
 ```
 
-`0` disables a bucket: no counting, no 429.
+`0` disables a bucket: no counting, no 429. A misspelt bucket name is ignored.
 
-Buckets: `default`, `view-generate`, `search`, `user-chat`, `platform-chat`, `platform-search`.
-An unset bucket uses `default`.
-
-**Selfhost.** Set the variables in the root `.env`, then recreate the hub — the hub reads them at
+**Self-host.** Set the variables in the root `.env`, then recreate the hub alone — it reads them at
 startup:
 
 ```bash
 docker compose -f docker-compose.selfhost.yml up -d hub
 ```
 
-- Also name every overlay you started with (`-f docker-compose.tls.yml`, `-f docker-compose.search.yml`).
-- Check what the hub container will receive first; with `LUMNIK_RATELIMIT_USER_CHAT_RPM=0` in `.env`:
+- Name every overlay the stack runs with (`-f docker-compose.tls.yml`…). The hub lists them:
+  `docker inspect $(docker compose -f docker-compose.selfhost.yml ps -q hub) --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}'`.
+  With the TLS proxy, `LUMNIK_TLS_HOST` must be set too, as when you started it.
+- `up.sh` keeps the overlays by itself, but pulls the hub image: pin `LUMNIK_VERSION` in `.env`
+  first, or the change becomes an upgrade.
+
+Before that, check what the hub container will receive. With `LUMNIK_RATELIMIT_USER_CHAT_RPM=0` in `.env`:
 
 ```
 $ docker compose -f docker-compose.selfhost.yml config hub | grep RATELIMIT
@@ -79,7 +81,7 @@ $ docker compose -f docker-compose.selfhost.yml config hub | grep RATELIMIT
 
 An empty value is the same as unset: that bucket uses `default`.
 
-**Helm.** The chart has no value per bucket; pass them through `hub.extraEnv`, then restart the hub.
+**Helm (cloud edition).** The chart has no value per bucket; pass them through `hub.extraEnv`, then restart the hub.
 On the kind cluster `up.sh` built:
 
 ```bash
@@ -102,11 +104,6 @@ Every refusal shows twice on the hub side:
 A spike on one bucket from one tenant (the WARN lines name it) tells an attack from a busy
 Monday. Both reset when the hub restarts.
 
-## Dev mode has NO limits
-
-The `dev` profile sets `default.rpm` and `view-generate.rpm` to `0`: a local `mvn quarkus:dev`
-never returns 429. To reproduce a 429 locally, set them back to a non-zero value.
-
 ## Single-node caveat
 
 - **Counters are per hub process**, in memory. Both shipped deploy paths run one hub replica, so
@@ -119,7 +116,6 @@ never returns 429. To reproduce a 429 locally, set them back to a non-zero value
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| 429s in production you cannot reproduce with `mvn quarkus:dev` | the `dev` profile disables the limits | Set the properties to a non-zero value locally (see [Dev mode](#dev-mode-has-no-limits)). |
 | Set `LUMNIK_RATELIMIT_*` in `.env`, the limit did not move | the hub reads it at startup only, or the bucket name is misspelt (an unknown bucket is ignored) | Recreate the hub (`up -d hub`) and check the name against the bucket list (see [Tuning](#tuning)). |
 | The chat or RAG search endpoints never return 429 | open edition: they do not exist | Expected; `view-generate` and `search` are limited there. |
 | A request seems to share its budget with unrelated callers | requests with no resolved tenant share the `system` budget | Check why the tenant did not resolve. |

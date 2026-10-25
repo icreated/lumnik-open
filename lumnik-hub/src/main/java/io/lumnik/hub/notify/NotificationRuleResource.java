@@ -6,6 +6,8 @@ import io.lumnik.hub.api.TenantWide;
 import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
 import io.lumnik.hub.event.RowEventGate;
 import io.lumnik.hub.tenant.RequireTenant;
+import io.lumnik.identity.KnownKeysOnly;
+import io.quarkus.resteasy.reactive.jackson.CustomDeserialization;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
@@ -69,6 +71,9 @@ public class NotificationRuleResource {
 
     @POST
     @Transactional
+    // An unknown key is refused while the body is read — before the tenant check below, like a body
+    // Jackson cannot parse. On a real hub the token filter has already answered 401 by then.
+    @CustomDeserialization(KnownKeysOnly.class)
     public Response create(RuleCreate in) {
         // Tenant FIRST: a 400 on a malformed body must not be answerable by someone the 401 has
         // not yet turned away. Same order as the schema-card door and both process write doors.

@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/icreated/lumnik-open/lm/internal/client"
 )
 
 func TestEntityResolveCmd_printsTheSummary(t *testing.T) {
@@ -142,6 +144,42 @@ func TestEntityHistoryCmd_jsonKeepsANullRuleNull(t *testing.T) {
 	}
 }
 
+func TestEntityHistoryCmd_namesWhoAssertedAndWhy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"ruleDeclaredId":"email","candidates":[],"discardedCandidates":[],"setAside":[],
+			"outcome":"AMBIGUOUS","decidedBy":"automatic","occurredAt":"2026-09-20T10:00:00Z","assertedBy":null,"reason":null},
+			{"ruleDeclaredId":null,"candidates":[],"discardedCandidates":[],"setAside":[],
+			"outcome":"RESOLVED","decidedBy":"asserted","occurredAt":"2026-09-20T10:05:00Z",
+			"assertedBy":"7","assertedByLogin":"alice","reason":"The billing contact belongs to AC-300"}]`))
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	for _, format := range []string{"table", "json"} {
+		cmd := NewRootCmd()
+		buf := new(bytes.Buffer)
+		cmd.SetOut(buf)
+		cmd.SetErr(buf)
+		cmd.SetArgs([]string{"entity", "history", "Customer", "crm", "CT-9003", "-o", format})
+		if err := cmd.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		out := buf.String()
+		if !strings.Contains(out, "alice") || !strings.Contains(out, "The billing contact belongs to AC-300") {
+			t.Errorf("%s: history must name who asserted and why: %s", format, out)
+		}
+		if format == "json" {
+			var events []map[string]any
+			if err := json.Unmarshal(buf.Bytes(), &events); err != nil {
+				t.Fatalf("not JSON: %v\n%s", err, out)
+			}
+			if reason, present := events[0]["reason"]; !present || reason != nil {
+				t.Errorf("an automatic event must keep \"reason\": null, got %v (present=%v)", reason, present)
+			}
+		}
+	}
+}
+
 func TestEntityHistoryCmd_notFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -271,5 +309,15 @@ func TestEntityAssertSameCmd_sendsASourceHandleBesideARef(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "t_res_crm:9003") {
 		t.Errorf("the confirmation must name the row as written, got: %s", buf.String())
+	}
+}
+
+func TestAssertedBy_fallsBackToTheIdWhenTheLoginIsUnknown(t *testing.T) {
+	id, login := "7", "alice"
+	if got := assertedBy(client.EvidenceEvent{AssertedBy: &id, AssertedByLogin: &login}); got != "alice" {
+		t.Errorf("a known reviewer is named by login, got %q", got)
+	}
+	if got := assertedBy(client.EvidenceEvent{AssertedBy: &id}); got != "7" {
+		t.Errorf("an unknown reviewer keeps the stored id, got %q", got)
 	}
 }

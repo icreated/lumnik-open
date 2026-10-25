@@ -71,3 +71,12 @@ func TestIntegrationDeliveries_perTargetPath(t *testing.T) {
 	assert.Equal(t, 502, *rows[0].HTTPStatus)
 	assert.False(t, rows[0].Succeeded())
 }
+
+// The hub refuses a key its integration body does not declare (400), so every key lm can send must
+// be one of them — checked with every field set, omitempty included.
+func TestIntegrationCreate_sendsOnlyKeysTheHubAccepts(t *testing.T) {
+	enabled := true
+	assertKeysWithin(t, IntegrationCreate{Name: "n", TargetURL: "u", Platform: "p", AuthMode: "HMAC",
+		EventTypes: []string{"e"}, Secret: "s", Enabled: &enabled},
+		"name", "targetUrl", "platform", "authMode", "secret", "eventTypes", "enabled")
+}

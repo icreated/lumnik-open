@@ -26,8 +26,7 @@ The manifests read the files from `/tmp/acme-desk/` **on the hub's filesystem**.
 stack mounts nothing, so copy them into the container first — no restart needed:
 
 ```bash
-docker exec lumnik-hub-1 mkdir -p /tmp/acme-desk
-for f in docs/apps/demo/data/*.csv; do docker cp "$f" lumnik-hub-1:/tmp/acme-desk/; done
+docker compose -f docker-compose.selfhost.yml cp docs/apps/demo/data/. hub:/tmp/acme-desk
 for n in 10-erp 20-crm 30-orders; do lm apply -f docs/apps/demo/sources/$n.yaml; done
 for n in erp crm orders; do lm connector run acme-desk-$n; done
 ```
@@ -76,7 +75,7 @@ see [Entities](../entities.md). Everything on the four pages is applied on top o
 Two pages need the next mornings' exports. Load one over the day-1 file, then re-run the source:
 
 ```bash
-docker cp docs/apps/demo/data/acme-orders-day2.csv lumnik-hub-1:/tmp/acme-desk/acme-orders.csv   # or -day3
+docker compose -f docker-compose.selfhost.yml cp docs/apps/demo/data/acme-orders-day2.csv hub:/tmp/acme-desk/acme-orders.csv   # or -day3
 lm connector run acme-desk-orders
 ```
 
@@ -88,7 +87,8 @@ next run removes the newer orders, and `lm run get <id>` says so (from day 3:
 
 | Folder | Files | The page |
 |---|---|---|
-| `entities/` | `10-customer` fuses the ERP and the CRM; `20-crm-first` is the same fusion with the priority flipped; `60`–`65` must each be refused | [Entities](../entities.md) |
+| `entities/` | `10-customer` fuses the ERP and the CRM; `20-crm-first` flips the priority; `40-customer-crm-city` prefers the CRM for the city; `50-order-stage` and `55-order-due` read the extra sources below; `60`–`65` must each be refused | [Entities](../entities.md) |
+| `sources/` | `10-erp`, `20-crm`, `30-orders` land the desk; `55`–`56-stage-*` (`conflicts: false`) and `70`–`72-due-*` (dates and numbers) land the extra examples, same `docker cp` | [Entities](../entities.md), [Dates and numbers](../entities-types.md) |
 | `views/` | `10-customers` over the fused entity, `20-orders` straight over the raw order book; `60`–`62` must be refused | [Views](views.md) |
 | `processes/` | `10-litige` emits a decision when an order lands in dispute, `20-grosse-commande` when it is above 1 000 €; `60`–`64` must each be refused | [Processes](processes.md) |
 | `workflows/` | `10-order-lifecycle` declares what the status column means, with a dormancy threshold; `60`–`67` must be refused | [Workflows](workflows.md) |

@@ -26,17 +26,17 @@ public class MultiTargetWriter {
    * <p>hybridJsonb target is constructed directly by RestEndpointWriter from endpoint config
    * (stored as JSONB on connector_endpoint.config); it does not go through the YAML mapping loader.
    */
-  public void write(MappingTarget target, List<Map<String, Object>> rows, Long tenantId, UUID runId,
+  public long write(MappingTarget target, List<Map<String, Object>> rows, Long tenantId, UUID runId,
                     String mappingId, int mappingVersion, String source,
                     UUID connectorId, List<String> tags) {
-    write(target, rows, tenantId, runId, mappingId, mappingVersion, source, connectorId, tags, Map.of());
+    return write(target, rows, tenantId, runId, mappingId, mappingVersion, source, connectorId, tags, Map.of());
   }
 
   /** @param sourceTypeHints source-declared column types, forwarded to the dynamic table writer. */
-  public void write(MappingTarget target, List<Map<String, Object>> rows, Long tenantId, UUID runId,
+  public long write(MappingTarget target, List<Map<String, Object>> rows, Long tenantId, UUID runId,
                     String mappingId, int mappingVersion, String source,
                     UUID connectorId, List<String> tags, Map<String, String> sourceTypeHints) {
-    write(target, rows, tenantId, runId, mappingId, mappingVersion, source, connectorId, tags,
+    return write(target, rows, tenantId, runId, mappingId, mappingVersion, source, connectorId, tags,
         sourceTypeHints, null);
   }
 
@@ -45,13 +45,14 @@ public class MultiTargetWriter {
    * @param preparedVectors  row_hash → vector, computed ahead of this transaction by
    *                         {@link #prepare}; {@code null} means no prepare phase ran, so the RAG
    *                         target embeds inline — the original, backward-compatible behaviour.
+   * @return the hybrid target's promoted cells that did not read as their column's type (#1398); 0 elsewhere
    */
-  public void write(MappingTarget target, List<Map<String, Object>> rows, Long tenantId, UUID runId,
+  public long write(MappingTarget target, List<Map<String, Object>> rows, Long tenantId, UUID runId,
                     String mappingId, int mappingVersion, String source,
                     UUID connectorId, List<String> tags, Map<String, String> sourceTypeHints,
                     Map<String, float[]> preparedVectors) {
-    if (rows.isEmpty()) return;
-    if (target == null) return;
+    if (rows.isEmpty()) return 0;
+    if (target == null) return 0;
 
     List<Map<String, Object>> systemContexts =
         buildSystemContexts(rows, tenantId, runId, mappingId, mappingVersion, source);
@@ -70,8 +71,9 @@ public class MultiTargetWriter {
     if (target.hybridJsonb() != null) {
       var hj = target.hybridJsonb();
       HybridJsonbSpec spec = new HybridJsonbSpec(hj.table(), hj.uniqueKeyPath(), hj.promote());
-      hybridJsonbWriter.write(spec, rows, systemContexts, tenantId, connectorId, hj.endpointId());
+      return hybridJsonbWriter.write(spec, rows, systemContexts, tenantId, connectorId, hj.endpointId());
     }
+    return 0;
   }
 
   /**

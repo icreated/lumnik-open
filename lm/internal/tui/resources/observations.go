@@ -59,7 +59,7 @@ func (o *Observations) setHeader() {
 // stats ride in the title: a refused stats call leaves the tape shown and says why.
 func (o *Observations) Refresh() {
 	o.offLoop.run(o.app, func() func() {
-		list, err := o.client.ObservationList(200)
+		list, err := o.client.ObservationList(200, "")
 		stats, statsErr := o.client.ObservationStats()
 		return func() {
 			o.mu.Lock()

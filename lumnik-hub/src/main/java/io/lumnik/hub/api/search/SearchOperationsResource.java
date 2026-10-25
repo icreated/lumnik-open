@@ -80,6 +80,7 @@ public class SearchOperationsResource {
         long tenant = TenantContextFilter.current();
         Map<String, SearchProjectionState> states = stateStore.findAllForTenant(tenant);
         Map<String, Instant> oldestMarks = markStore.oldestPendingMarkedAtForTenant(tenant);
+        boolean providerInstalled = searchGate.providerInstalled();
         // Narrow transaction (Copilot finding): indexStore.list() is the only call here needing the
         // default datasource's JTA transaction (its own TxType.MANDATORY) — scoped to just this read
         // rather than held across the live provider round trips and admin-pool writes dispatched
@@ -105,7 +106,7 @@ public class SearchOperationsResource {
                     permits.acquire();
                     try {
                         return body(tenant, s.name(), s.status(), s.invalidReason(), s.withheld(),
-                            states.get(s.name()), oldestMarks.get(s.name()));
+                            states.get(s.name()), oldestMarks.get(s.name()), providerInstalled);
                     } finally {
                         permits.release();
                     }
@@ -134,7 +135,7 @@ public class SearchOperationsResource {
             SearchProjectionState state = stateStore.find(tenant, name).orElse(null);
             Instant oldestMark = markStore.oldestPendingMarkedAtForTenant(tenant).get(name);
             Map<String, Object> body = body(tenant, name, decl.status(), decl.invalidReason(), decl.withheld(),
-                state, oldestMark);
+                state, oldestMark, searchGate.providerInstalled());
             body.put("lastError", state == null ? null : state.lastError());
             body.put("activeRun", activeRunBody(state));
             return Response.ok(body).build();
@@ -240,7 +241,8 @@ public class SearchOperationsResource {
      *  {@link TenantContextFilter#current()}, since {@link #list} dispatches this on a worker thread
      *  (code review finding) where that request-bound {@code ThreadLocal} is never set. */
     private Map<String, Object> body(long tenant, String name, String indexStatus, String invalidReason,
-                                     boolean withheld, SearchProjectionState state, Instant oldestMark) {
+                                     boolean withheld, SearchProjectionState state, Instant oldestMark,
+                                     boolean providerInstalled) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("name", name);
         // Review Focus: no row yet == awaiting first build. insertBuilding/transitionToBuilding always
@@ -249,7 +251,10 @@ public class SearchOperationsResource {
         // exposes activeRun for exactly this reason (code review finding) — a caller must check it,
         // not status alone, to tell "queued" from "actually running"; list() deliberately omits
         // activeRun (§4) and so cannot make that distinction, by the same design.
-        body.put("status", state == null ? "building" : state.status());
+        // With no provider built in, nothing will ever build it, and a row a removed provider left
+        // serves nothing either: capability()'s own not_installed, rather than "building" for ever.
+        if (!providerInstalled) body.put("status", "not_installed");
+        else body.put("status", state == null ? "building" : state.status());
         body.put("liveGeneration", state == null ? null : state.liveGeneration());
 
         DocumentCount dc = resolveDocumentCount(tenant, name, state);

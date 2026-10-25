@@ -1,6 +1,7 @@
 package io.lumnik.identity.userrole;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.identity.IdentityErrors;
 import io.lumnik.identity.Require;
 import io.lumnik.identity.TenantInPath;
 import io.lumnik.identity.role.Role;
@@ -49,7 +50,7 @@ public class UserRoleResource {
         requireRole(tenantId, roleId);
 
         if (userRoles.assignmentExists(userId, roleId))
-            throw new ClientErrorException("Role already assigned", Response.Status.CONFLICT);
+            throw IdentityErrors.conflict("role " + roleId + " is already assigned to user " + userId);
 
         UserRole ur = new UserRole(tenantId, userId, roleId);
         userRoles.persist(ur);

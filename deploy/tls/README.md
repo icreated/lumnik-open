@@ -55,12 +55,10 @@ warning, but the browser will not install the PWA.)
 - **Bare-IP clients send no SNI** (RFC 6066 forbids it), and without a `default_sni`
   global option Caddy matches no certificate and aborts every handshake with TLS
   alert 80. The shipped Caddyfile sets it.
-- **Re-running `up.sh` silently un-stacks the overlays.** `up.sh` composes the base file
-  alone, so the hub is recreated with the localhost issuer and every externally-minted
-  token is refused until the overlay command runs again. On a façade install, bringing
-  the stack up is a two-step gesture — `up.sh`, then
-  `LUMNIK_TLS_HOST=erp.example.com docker compose -f docker-compose.selfhost.yml -f docker-compose.tls.yml up -d`
-  (plus any other overlays you run; TLS last, its issuer must win).
+- **Re-running `up.sh` keeps the façade.** It reads the files the running hub was started
+  with and applies them again, with the same `LUMNIK_TLS_HOST` and `LUMNIK_TLS_BIND`. A bare
+  `docker compose up -d` on the base file alone still drops it: the hub then refuses every
+  token minted through the https origin.
 - **Changing the public origin changes the token issuer — and orphans JIT-provisioned
   identities.** They are keyed `(idp_issuer, idp_subject)`; after a move to https the
   same human is a NEW identity, and that first login fails on the existing login name. Migrating an install to TLS means

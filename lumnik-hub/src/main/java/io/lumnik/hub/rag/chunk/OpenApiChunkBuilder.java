@@ -2,8 +2,8 @@ package io.lumnik.hub.rag.chunk;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import io.lumnik.extraction.spi.ExtractedChunk;
+import io.lumnik.hub.manifest.HubYaml;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.jboss.logging.Logger;
 
@@ -17,7 +17,7 @@ import java.util.Map;
 public class OpenApiChunkBuilder {
 
     private static final Logger LOG = Logger.getLogger(OpenApiChunkBuilder.class);
-    private static final ObjectMapper YAML = new ObjectMapper(new YAMLFactory());
+    private static final ObjectMapper YAML = HubYaml.mapper();
 
     public List<ExtractedChunk> buildFromClasspath() {
         try (InputStream is = Thread.currentThread().getContextClassLoader()

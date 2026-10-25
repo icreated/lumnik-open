@@ -63,19 +63,46 @@ class ViewDataReaderBuildSqlTest {
             () -> "the left-hand cast defeats the index: " + sql);
     }
 
-    @Test void equality_onANonTextColumn_keepsTheCast_deliberately() {
+    /**
+     * #1338: a number against a number column is equal by value — {@code amount=12.5} finds a {@code 12.5000} that the
+     * text comparison never matched. The 22P02 this test once guarded against cannot arise: the numeric form is chosen
+     * only for an operand that parsed as a number, and the column is already one, so the native cast cannot fail.
+     */
+    @Test void equality_onANumberColumn_withANumber_comparesByValue_natively() {
         ResolvedView typed = new ResolvedView("Demo", "connector.t_view_demo", List.of(
                 new ResolvedView.Column("amount", "Amount", "numeric")));
 
         String sql = ViewDataReader.buildSql(typed, List.of(new ViewFilter("amount", "=", "12.5")));
 
-        // Deliberate limitation, pinned so nobody "finishes the job" later without thinking:
-        // casting the PARAMETER instead (amount = ?::numeric) would make the index usable, but a
-        // non-numeric filter value would then raise 22P02 instead of simply matching no rows —
-        // turning an empty result into an error the view has no honest refusal for. Only the
-        // text case is safe to narrow without changing behaviour.
-        assertTrue(sql.contains("\"amount\"::text = ?"),
-            () -> "non-text columns keep the text comparison until 22P02 is handled: " + sql);
+        assertTrue(sql.contains("\"amount\"::numeric = ?::numeric") && !sql.contains("CASE WHEN"),
+            () -> "a number operand compares by value, natively — no per-row text and regex: " + sql);
+    }
+
+    /** One rule for every reader's {@code =} (ViewFilter.isNumeric): a scientific or overlong value stays text. */
+    @Test void equality_onANumberColumn_withAValueOutsideTheRule_keepsTheTextComparison() {
+        ResolvedView typed = new ResolvedView("Demo", "connector.t_view_demo", List.of(
+                new ResolvedView.Column("amount", "Amount", "numeric")));
+        for (String value : List.of("1e3", "1".repeat(39))) {
+            String sql = ViewDataReader.buildSql(typed, List.of(new ViewFilter("amount", "=", value)));
+            assertTrue(sql.contains("\"amount\"::text = ?") && !sql.contains("::numeric = "), () -> value + ": " + sql);
+        }
+    }
+
+    @Test void equality_onAFloatColumn_withANumber_comparesNatively() {
+        ResolvedView typed = new ResolvedView("Demo", "connector.t_view_demo", List.of(
+                new ResolvedView.Column("ratio", "Ratio", "double precision")));
+        String sql = ViewDataReader.buildSql(typed, List.of(new ViewFilter("ratio", "=", "0.5")));
+        assertTrue(sql.contains("\"ratio\" = ?::float8"), () -> sql);
+    }
+
+    /** A value that is not a number keeps the exact-text comparison: it matches nothing, and raises nothing. */
+    @Test void equality_onANumberColumn_withANonNumber_keepsTheTextComparison() {
+        ResolvedView typed = new ResolvedView("Demo", "connector.t_view_demo", List.of(
+                new ResolvedView.Column("amount", "Amount", "numeric")));
+
+        String sql = ViewDataReader.buildSql(typed, List.of(new ViewFilter("amount", "=", "lots")));
+
+        assertTrue(sql.contains("\"amount\"::text = ?"), () -> "never ?::numeric on a value that is not one: " + sql);
     }
 
     @Test void containsOperator_keepsTheCast_itNeedsTextSemantics() {

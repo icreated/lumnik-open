@@ -3,8 +3,10 @@ package io.lumnik.hub.connector.mapping.hooks.cell;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.mapping.MappingState;
 import io.lumnik.hub.connector.mapping.MappingValidationException;
+import io.lumnik.hub.connector.mapping.ScalarParams;
 import io.lumnik.hub.connector.mapping.Zones;
 import io.lumnik.hub.connector.mapping.hooks.CellHook;
+import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import jakarta.enterprise.context.ApplicationScoped;
 
@@ -18,6 +20,7 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Parses a text cell with the first declared format that fits: a date, or a date and time. A time
@@ -33,9 +36,41 @@ public class ParseDateHook implements CellHook {
 
   @Override
   public void validateParams(JsonNode params) {
-    Zones.whyNot(zone(params)).ifPresent(why -> {
+    // #1472: each format is a pattern's text; a list or a map read as "" and matched nothing.
+    if (params.has("formats")) {
+      List<String> formats = ScalarParams.textList("parse-date hook", "formats", params.get("formats"));
+      for (int i = 0; i < formats.size(); i++) {
+        // #1485: checked here, once — a malformed pattern threw on the first cell; a blank one matched nothing.
+        String fault = formats.get(i).isBlank() ? "blank text" : patternFault(formats.get(i));
+        if (fault != null) {
+          throw new MappingValidationException(
+              "parse-date hook: 'formats[" + i + "]' is not a valid date pattern (" + fault + ")");
+        }
+      }
+    }
+    // #1482: read typed — a list or a map `zone` read as "", no zone, UTC, in silence.
+    Zones.whyNot(ScalarParams.optionalText("parse-date hook", "zone", params.path("zone"), null)).ifPresent(why -> {
       throw new MappingValidationException("parse-date hook: " + why);
     });
+  }
+
+  /**
+   * What is wrong with a pattern, in words of our own, or null when it compiles. The JDK's message quotes the pattern
+   * — a manifest's text, not ours to relay — so it is only read to name the kind of fault.
+   */
+  private static String patternFault(String pattern) {
+    try {
+      DateTimeFormatter.ofPattern(pattern);
+      return null;
+    } catch (IllegalArgumentException e) {
+      String jdk = String.valueOf(e.getMessage());
+      if (jdk.startsWith("Pattern includes reserved character")) return "a reserved character: {, } or #";
+      if (jdk.startsWith("Unknown pattern letter")) return "an unknown pattern letter";
+      if (jdk.startsWith("Too many pattern letters")) return "a pattern letter repeated too many times";
+      if (jdk.startsWith("Pattern ends with an incomplete string literal")) return "an unclosed quote";
+      if (jdk.startsWith("Pattern invalid as it contains ]")) return "a ']' that opens no '['";
+      return "malformed";
+    }
   }
 
   /** The declared zone, or null when there is none: missing, null and blank all count as none, as
@@ -86,5 +121,15 @@ public class ParseDateHook implements CellHook {
     // None matched — soft failure
     s.counters().cellErrors().incrementAndGet();
     row.put(col, null);
+  }
+
+  @Override
+  public Set<String> params() {
+    return Set.of("column", "formats", "zone");
+  }
+
+  @Override
+  public ColumnEffect columns(JsonNode params) {
+    return ColumnEffect.readsColumn(params);
   }
 }

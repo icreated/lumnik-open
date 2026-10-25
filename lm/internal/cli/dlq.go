@@ -91,7 +91,7 @@ func newDlqCmd() *cobra.Command {
 	var newRunID string
 	replayed := &cobra.Command{
 		Use:   "replayed ID",
-		Short: "Mark a dead-letter entry replayed (--new-run-id links the run that did it)",
+		Short: "Mark a dead-letter entry replayed by the run that carried it (--new-run-id)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := ClientFromCmd(cmd)
@@ -106,11 +106,9 @@ func newDlqCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			replayedBy := newRunID
-			if replayedBy != "" {
-				if replayedBy, err = resolveRunID(c, replayedBy); err != nil {
-					return err
-				}
+			replayedBy, err := resolveRunID(c, newRunID)
+			if err != nil {
+				return err
 			}
 			if err := c.DlqReplayed(id, replayedBy); err != nil {
 				return err
@@ -120,7 +118,8 @@ func newDlqCmd() *cobra.Command {
 		},
 	}
 	replayed.Flags().StringVar(&newRunID, "new-run-id", "",
-		"run that replayed this entry (rides the hub's optional newRunId link)")
+		"run that carried the row again (required: an entry no run carried is closed with discard)")
+	_ = replayed.MarkFlagRequired("new-run-id")
 	d.AddCommand(replayed)
 
 	d.AddCommand(&cobra.Command{
@@ -156,6 +155,7 @@ func newDlqCmd() *cobra.Command {
 			fmt.Fprintf(w, "Message:   %s\n", dl.ErrorMessage)
 			fmt.Fprintf(w, "Detail:    %s\n", dl.SkipDetail)
 			fmt.Fprintf(w, "Payload:   %s\n", dl.Payload)
+			fmt.Fprintf(w, "Resolution: %s\n", resolutionLine(dl))
 			return nil
 		},
 	})
@@ -163,6 +163,21 @@ func newDlqCmd() *cobra.Command {
 	d.PersistentFlags().String("connector", "", "Filter by connector name or ID")
 	d.PersistentFlags().String("run", "", "Filter by run ID")
 	return d
+}
+
+// resolutionLine says how a letter was closed — by which run and when — or that it is still open (#1375).
+func resolutionLine(dl types.DeadLetter) string {
+	if dl.Resolution == "" {
+		return "open"
+	}
+	line := dl.Resolution
+	if dl.ResolvedRunID != "" {
+		line += " by run " + dl.ResolvedRunID
+	}
+	if dl.ResolvedAt != nil { // absent on hubs older than #1375
+		line += ", " + output.HumanTime(dl.ResolvedAt)
+	}
+	return line
 }
 
 func shortID(s string) string {

@@ -3,7 +3,10 @@ package io.lumnik.hub.connector.rest.soap;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.Urls;
 
+import java.util.List;
+import java.util.Optional;
 import java.util.function.UnaryOperator;
+import java.util.regex.MatchResult;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -13,7 +16,8 @@ import java.util.regex.Pattern;
  * {@code SOAPAction} header. The optional header template becomes {@code <soap:Header>} content.
  * Mirrors {@code GraphQlRequestBuilder} (a request-shape on the HTTP engine).
  *
- * <p>Placeholders ({@code {{...}}}): {@code page_size} / {@code cursor} are the pagination values;
+ * <p>Placeholders ({@code {{...}}}): {@code page_size} / {@code cursor} are the pagination values,
+ * {@code page} the 1-based page number a custom service pages by;
  * {@code secret:NAME} resolves through {@code secrets} (the hub passes the lm secret registry, then
  * the environment) and {@code env:NAME} through {@code environment} (the hub environment only). An
  * unresolved placeholder fails fast (never sent literally; never logged).
@@ -27,20 +31,52 @@ public final class SoapRequestBuilder {
     // Broad sentinel: catches any {{...}} that TOKEN didn't match (e.g. a dot in the name).
     private static final Pattern LEFTOVER = Pattern.compile("\\{\\{[^}]*}}");
 
+    /** Help text naming every placeholder {@link Token} knows — the validator's hint and description. */
+    public static final String PLACEHOLDERS =
+        "{{page_size}}, {{cursor}} (row offset from 0), {{page}} (page number from 1), {{secret:NAME}}, {{env:NAME}}";
+
+    /** The placeholder shapes: one classification for rendering and for the validator (#1387). */
+    private enum Token {
+        PAGE_SIZE, CURSOR, PAGE, SECRET, ENV;
+
+        static Optional<Token> of(String token) {
+            if (token.startsWith("secret:")) return Optional.of(SECRET);
+            if (token.startsWith("env:"))    return Optional.of(ENV);
+            return switch (token) {
+                case "page_size" -> Optional.of(PAGE_SIZE);
+                case "cursor"    -> Optional.of(CURSOR);
+                case "page"      -> Optional.of(PAGE);
+                default          -> Optional.empty();
+            };
+        }
+    }
+
     private SoapRequestBuilder() {}
+
+    /** Every placeholder of TEMPLATE that rendering would refuse as unknown, as written — so apply
+     *  refuses what a run would. */
+    public static List<String> unknownPlaceholders(String template) {
+        if (template == null) return List.of();
+        return LEFTOVER.matcher(template).results().map(MatchResult::group)
+            .filter(p -> {
+                Matcher m = TOKEN.matcher(p);
+                return !m.matches() || Token.of(m.group(1)).isEmpty();
+            })
+            .toList();
+    }
 
     public static RestRequest render(String baseUrl, String path, String soapAction,
                                      String headerTemplate, String bodyTemplate,
-                                     String pageSize, String cursor, UnaryOperator<String> secrets,
-                                     UnaryOperator<String> environment) {
+                                     String pageSize, String cursor, String page,
+                                     UnaryOperator<String> secrets, UnaryOperator<String> environment) {
         if (bodyTemplate == null) {
             throw new IllegalStateException("SOAP body template must not be null — the validator requires 'body'");
         }
-        String body = subst(bodyTemplate, pageSize, cursor, secrets, environment);
+        String body = subst(bodyTemplate, pageSize, cursor, page, secrets, environment);
         StringBuilder env = new StringBuilder()
             .append("<soap:Envelope xmlns:soap=\"").append(SOAP_NS).append("\">");
         if (headerTemplate != null && !headerTemplate.isBlank()) {
-            env.append("<soap:Header>").append(subst(headerTemplate, pageSize, cursor, secrets, environment)).append("</soap:Header>");
+            env.append("<soap:Header>").append(subst(headerTemplate, pageSize, cursor, page, secrets, environment)).append("</soap:Header>");
         }
         env.append("<soap:Body>").append(body).append("</soap:Body></soap:Envelope>");
 
@@ -57,12 +93,12 @@ public final class SoapRequestBuilder {
      * <p>Resolving a token is its own concern ({@link #resolveToken}); this method is the scan and
      * the never-echo guard that refuses anything which survived it.
      */
-    private static String subst(String template, String pageSize, String cursor,
+    private static String subst(String template, String pageSize, String cursor, String page,
                                 UnaryOperator<String> secrets, UnaryOperator<String> environment) {
         Matcher m = TOKEN.matcher(template);
         StringBuilder out = new StringBuilder();
         while (m.find()) {
-            String value = resolveToken(m.group(1), pageSize, cursor, secrets, environment);
+            String value = resolveToken(m.group(1), pageSize, cursor, page, secrets, environment);
             m.appendReplacement(out, Matcher.quoteReplacement(escapeXml(value)));
         }
         m.appendTail(out);
@@ -77,26 +113,31 @@ public final class SoapRequestBuilder {
     }
 
     /**
-     * The four token shapes, each failing fast rather than sending something wrong on the wire: an
-     * absent pagination value would otherwise NPE inside quoteReplacement, and an unresolved secret
-     * would go out as the literal {@code {{secret:NAME}}}.
+     * Each token shape, failing fast rather than sending something wrong on the wire: an absent
+     * pagination value would otherwise NPE inside quoteReplacement, and an unresolved secret would go
+     * out as the literal {@code {{secret:NAME}}}.
      */
-    private static String resolveToken(String token, String pageSize, String cursor,
+    private static String resolveToken(String token, String pageSize, String cursor, String page,
                                        UnaryOperator<String> secrets, UnaryOperator<String> environment) {
-        if ("page_size".equals(token)) return required(pageSize, token);
-        if ("cursor".equals(token))    return required(cursor, token);
-        if (token.startsWith("secret:") || token.startsWith("env:")) {
-            String name = token.substring(token.indexOf(':') + 1);
-            UnaryOperator<String> resolver = token.startsWith("secret:") ? secrets : environment;
-            // Guard the resolver itself: a null resolver must fail closed, not NPE.
-            String value = resolver == null ? null : resolver.apply(name);
-            if (value == null) {
-                // Fail closed: do not send "{{secret:NAME}}" literally, and do not echo any value.
-                throw new IllegalStateException("unresolved secret/env placeholder: " + name);
-            }
-            return value;
+        Token kind = Token.of(token).orElseThrow(() -> new IllegalStateException("unknown placeholder: " + token));
+        return switch (kind) {
+            case PAGE_SIZE -> required(pageSize, token);
+            case CURSOR    -> required(cursor, token);
+            case PAGE      -> required(page, token);
+            case SECRET    -> resolved(secrets, token);
+            case ENV       -> resolved(environment, token);
+        };
+    }
+
+    private static String resolved(UnaryOperator<String> resolver, String token) {
+        String name = token.substring(token.indexOf(':') + 1);
+        // Guard the resolver itself: a null resolver must fail closed, not NPE.
+        String value = resolver == null ? null : resolver.apply(name);
+        if (value == null) {
+            // Fail closed: do not send "{{secret:NAME}}" literally, and do not echo any value.
+            throw new IllegalStateException("unresolved secret/env placeholder: " + name);
         }
-        throw new IllegalStateException("unknown placeholder: " + token);
+        return value;
     }
 
     private static String required(String value, String token) {

@@ -324,10 +324,13 @@ func shortDlqID(s string) string {
 	return s
 }
 
+const noRunToReplay = "replayed: name the run that carried the row — no run carried it? ^D discards it"
+
 // replayed marks a letter replayed and names the run that carried it (#1127): it offers the
-// letter's connector's latest run — Enter takes it, "-" records the replay with no run, anything
-// else is the run typed. The lookup and the mark run off the event loop, each under ^R: a ^R
-// pressed while either is out is dropped.
+// letter's connector's latest run — Enter takes it, anything else is the run typed. There is no
+// replay without a run (#1377): with none to offer and none typed, it says to discard instead.
+// The lookup and the mark run off the event loop, each under ^R: a ^R pressed while either is
+// out is dropped.
 func (d *DLQ) replayed(it types.DeadLetter) {
 	mark := func(runID string) {
 		d.inFlight.background(d.app, "^R", d.onError, func() func() {
@@ -340,26 +343,26 @@ func (d *DLQ) replayed(it types.DeadLetter) {
 			}
 		})
 	}
-	if d.ask == nil {
-		mark("")
+	if d.ask == nil { // no prompt to name the run with: there is no replay without one
+		say(d.onError, noRunToReplay)
 		return
 	}
 	d.inFlight.background(d.app, "^R", d.onError, func() func() {
 		latest := latestRun(d.client, it.ConnectorID)
 		return func() {
-			label := "Run that carried the replay (- for none): "
+			label := "Run that carried the replay: "
 			if latest != "" {
-				label = fmt.Sprintf("Run that carried the replay (Enter: %s, the connector's latest · - for none): ", shortRunID(latest))
+				label = fmt.Sprintf("Run that carried the replay (Enter: %s, the connector's latest): ", shortRunID(latest))
 			}
 			d.ask(label, false, func(answer string) {
-				switch answer = strings.TrimSpace(answer); answer {
-				case "":
-					mark(latest)
-				case "-":
-					mark("")
-				default:
-					mark(answer)
+				if answer = strings.TrimSpace(answer); answer == "" {
+					answer = latest
 				}
+				if answer == "" {
+					say(d.onError, noRunToReplay)
+					return
+				}
+				mark(answer)
 			})
 		}
 	})

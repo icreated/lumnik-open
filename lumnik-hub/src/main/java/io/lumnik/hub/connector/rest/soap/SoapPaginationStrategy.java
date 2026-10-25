@@ -86,7 +86,7 @@ public class SoapPaginationStrategy implements PaginationStrategy {
 
     private RestRequest render(long cursor) {
         return SoapRequestBuilder.render(baseUrl, path, soapAction, headerTemplate, bodyTemplate,
-            String.valueOf(pageSize), String.valueOf(cursor), secrets, ENV);
+            String.valueOf(pageSize), String.valueOf(cursor), String.valueOf(cursor / pageSize + 1), secrets, ENV);
     }
 
     /** Stop signals, in priority order. A null/missing flag is treated as "stop" (never loops forever).

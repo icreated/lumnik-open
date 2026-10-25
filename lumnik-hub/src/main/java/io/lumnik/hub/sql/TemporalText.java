@@ -1,5 +1,7 @@
 package io.lumnik.hub.sql;
 
+import java.math.BigDecimal;
+
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -56,6 +58,20 @@ public final class TemporalText {
      */
     public static Object wire(Object value) {
         return value instanceof Timestamp t ? render(t) : value;
+    }
+
+    /**
+     * The value an entity's cell is written into JSON as (#1338): a timestamp as {@link #wire}, and a number as
+     * its text too — an entity says every value as a string (docs/entities.md), and a fused number now keeps its
+     * type in the view only so that it orders and compares as one. A decimal is fused without trailing zeros, so
+     * its plain text is {@code 999.5}, never {@code 9.995E+2}; a bigint past 2^53 keeps every digit.
+     */
+    public static Object entityWire(Object value) {
+        return switch (value) {
+            case BigDecimal d -> d.toPlainString();
+            case Number n -> String.valueOf(n);
+            case null, default -> wire(value);
+        };
     }
 
     /**

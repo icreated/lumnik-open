@@ -11,6 +11,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.sql.Array;
 import java.sql.Connection;
@@ -74,6 +75,47 @@ class InboxResourceIT {
             .body("[1].type", is("decision.lyon-client-arrive"))
             .body("type", not(hasItem("data.row.changed")))
             .body("message", not(hasItem("secret")));
+    }
+
+    /** #1356: the filter narrows the query, not the page — limit=1 still finds an older decision. */
+    @Test
+    void processFiltersNarrowTheQueryNotThePage() {
+        given().header("X-Tenant-Id", "5100")
+        .when().get("/api/inbox?process=lyon-client-arrive&limit=1")
+        .then().statusCode(200)
+            .body("size()", is(1))
+            .body("[0].type", is("decision.lyon-client-arrive"));
+    }
+
+    @Test
+    void typeFiltersTheDecisionType() {
+        given().header("X-Tenant-Id", "5100")
+        .when().get("/api/inbox?type=decision.gold-client-arrive")
+        .then().statusCode(200)
+            .body("size()", is(1))
+            .body("[0].process", is("gold-client-arrive"));
+        given().header("X-Tenant-Id", "5100")
+        .when().get("/api/inbox?type=decision.gold-client-arrive&process=lyon-client-arrive")
+        .then().statusCode(200).body("size()", is(0));
+    }
+
+    /** A workflow's decision shows its process as workflow:<name>; that is what filters it. */
+    @Test
+    void aWorkflowDecisionFiltersByTheProcessItShows() {
+        insertEvent(5100, "decision.dormant.orders", "workflow:orders", "{\"message\": \"idle\"}");
+        given().header("X-Tenant-Id", "5100")
+        .when().get("/api/inbox?process=workflow:orders")
+        .then().statusCode(200)
+            .body("size()", is(1))
+            .body("[0].process", is("workflow:orders"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"process=", "process=%20", "type=", "process=a&process=b", "type=decision.a&type=decision.b"})
+    void aBlankOrRepeatedFilterIs400(String query) {
+        given().urlEncodingEnabled(false).header("X-Tenant-Id", "5100")   // %20 reaches the hub as a space
+        .when().get("/api/inbox?" + query)
+        .then().statusCode(400);
     }
 
     @Test
@@ -299,7 +341,8 @@ class InboxResourceIT {
                     ps.setNull(2, Types.ARRAY);   // an unbound caller: every source
                     ps.setNull(3, Types.ARRAY);
                 }
-                ps.setInt(4, 50);
+                for (int i = 4; i <= 7; i++) ps.setNull(i, Types.VARCHAR);   // no process, no type filter
+                ps.setInt(8, 50);
                 try (ResultSet rs = ps.executeQuery()) {
                     rs.next();
                     List<JsonNode> nodes = new ArrayList<>();

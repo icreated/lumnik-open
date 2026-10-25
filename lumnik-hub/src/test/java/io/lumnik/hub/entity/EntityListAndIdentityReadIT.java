@@ -94,4 +94,18 @@ class EntityListAndIdentityReadIT {
     assertThat(resolved).isEqualTo(1);
     assertThat(unresolved).isEqualTo(1);
   }
+
+  @Test
+  void a_resolution_entity_filters_by_its_entity_id() throws Exception {
+    // A search hit on a resolution entity links to ?_entity_id=…: that filter selects the row, it is not
+    // refused as a non-column, nor ignored into every row (#1519).
+    String entity = fixture(1_519_001);
+    String path = "/api/entities/" + entity.toLowerCase(Locale.ROOT);
+    String id = get(1_519_001, path + "?identity=true").findValuesAsText("_entity_id").stream()
+        .filter(v -> !"null".equals(v)).findFirst().orElseThrow();
+
+    JsonNode rows = get(1_519_001, path + "?_entity_id=" + id);
+    assertThat(rows).hasSize(1);
+    assertThat(rows.get(0).path("product_name").asText()).isEqualTo("n1");
+  }
 }

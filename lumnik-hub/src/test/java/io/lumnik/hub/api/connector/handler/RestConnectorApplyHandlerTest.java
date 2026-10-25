@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
+import io.lumnik.hub.connector.rest.runtime.RestEndpointReader;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.validator.JsonNodes;
@@ -12,6 +13,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -98,6 +101,50 @@ class RestConnectorApplyHandlerTest {
             + "\"defaults\":{\"default_rate_limit\":\"50/s\"},"
             + "\"default_rate_limit\":\"5/m\"}}");
         assertEquals("5/m", conn.getConfig().get("default_rate_limit"));
+    }
+
+    /**
+     * #1471, defence in depth for manifests stored before spec.defaults refused them: the passthrough is copied first,
+     * so the checked spec.kind, base_url and auth win over it — a literal token in defaults.auth no longer replaces
+     * spec.auth, nor survives a spec without auth.
+     */
+    @Test
+    void apply_spec_connector_level_keys_win_over_defaults_passthrough() throws Exception {
+        String defaults = "\"defaults\":{\"kind\":\"soap\",\"base_url\":\"https://other.example.com\","
+            + "\"auth\":{\"kind\":\"bearer\",\"token_value\":\"s3cr3t\"}}";
+        Connector conn = applyAndCapture(
+            "{\"metadata\":{\"name\":\"c1\"},"
+            + "\"spec\":{\"base_url\":\"https://api.example.com\","
+            + "\"auth\":{\"kind\":\"bearer\",\"token_env\":\"API_TOKEN\"}," + defaults + "}}");
+
+        assertEquals("rest-generic", conn.getConfig().get("kind"));
+        assertFalse(RestEndpointReader.isSoapEndpoint(conn.getConfig()), "defaults.kind must not turn endpoints SOAP");
+        assertEquals("https://api.example.com", conn.getConfig().get("base_url"));
+        assertEquals(Map.of("kind", "bearer", "token_env", "API_TOKEN"), conn.getConfig().get("auth"));
+
+        Connector noAuth = applyAndCapture(
+            "{\"metadata\":{\"name\":\"c1\"},\"spec\":{\"base_url\":\"https://api.example.com\"," + defaults + "}}");
+        assertFalse(noAuth.getConfig().containsKey("auth"), "a spec without auth means none, whatever defaults say");
+    }
+
+    /**
+     * #1481: a re-apply writes the manifest, not the manifest over yesterday's. A key an earlier apply flattened from
+     * spec.defaults, or wrote from a spec-level knob the new spec drops, used to survive in the stored config and run.
+     */
+    @Test
+    void reapply_drops_the_keys_the_new_manifest_no_longer_writes() throws Exception {
+        Connector existing = new Connector();
+        existing.setConfig(new HashMap<>(Map.of("kind", "rest-generic", "base_url", "https://old.example.com",
+            "query", "{ a }", "incremental", Map.of("mode", "full"), "graphql_path", "/gql",
+            "default_rate_limit", "5/s", "soap_action", "A")));
+        ConnectorRepository connRepo = mock(ConnectorRepository.class);
+        when(connRepo.byAddressForUpdate(1L, "c1")).thenReturn(Optional.of(existing));
+
+        apply("{\"metadata\":{\"name\":\"c1\"},\"spec\":{\"base_url\":\"https://api.example.com\","
+            + "\"defaults\":{\"variables\":{\"locale\":\"fr\"}}}}", connRepo, mock(ConnectorEndpointRepository.class));
+
+        assertEquals(Map.of("kind", "rest-generic", "base_url", "https://api.example.com",
+            "variables", Map.of("locale", "fr")), existing.getConfig());
     }
 
     /** The method stored for the one endpoint of {@code endpoint} (JSON), when the manifest leaves it to the default. */

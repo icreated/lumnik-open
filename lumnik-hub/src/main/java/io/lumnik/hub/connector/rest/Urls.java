@@ -62,6 +62,15 @@ public final class Urls {
         }
     }
 
+    /** As {@link #whyNotAbsolute}, and an {@code http} or {@code https} one: where a request will be sent. */
+    public static Optional<String> whyNotHttp(String url) {
+        return whyNotAbsolute(url).or(() -> {
+            String scheme = URI.create(url).getScheme();
+            return scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https")
+                ? Optional.empty() : Optional.of("must be an http or https URL");
+        });
+    }
+
     /**
      * A URL — or a bare path — stripped of everything that can carry a credential, for a message
      * or a log line:

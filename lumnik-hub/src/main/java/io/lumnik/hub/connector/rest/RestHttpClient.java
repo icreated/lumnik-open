@@ -1,5 +1,8 @@
 package io.lumnik.hub.connector.rest;
 
+import io.lumnik.hub.connector.rest.auth.SecretRedactor;
+import io.lumnik.hub.connector.rest.reliability.NoopResponseValidator;
+import io.lumnik.hub.connector.rest.reliability.ResponseValidator;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -23,6 +26,35 @@ public class RestHttpClient {
         // The 3xx that now reaches the caller is refused by ResponseStatusGuard, not chased here.
         .followRedirects(HttpClient.Redirect.NEVER)
         .build();
+
+    /**
+     * Sends a request a credential signed, and hands back its response without that credential: a source that
+     * echoes it in a body would otherwise carry it into a validator's refusal, a run's failure, a pre-flight's
+     * sample or a table (#1393). The data plane — a run's pages, the pre-flight, the probe, all signed through
+     * {@code AuthProvider.send} — goes through here; {@link #execute} is the wire, which the oauth2 token request
+     * uses directly: its body is the token answer, and its refusals never quote it.
+     */
+    public RestResponse exchange(RestRequest signed) throws Exception {
+        return exchange(signed, new NoopResponseValidator());
+    }
+
+    /**
+     * As {@link #exchange(RestRequest)}, where {@code validator} says whether a 2xx is data: a body it refuses (a
+     * GraphQL {@code errors}, a SOAP Fault) is never ingested, so it loses the bare credential too.
+     */
+    public RestResponse exchange(RestRequest signed, ResponseValidator validator) throws Exception {
+        RestResponse resp = execute(signed);
+        return SecretRedactor.withoutEchoedCredentials(resp, signed, resp.status() / 100 == 2 && accepts(validator, resp));
+    }
+
+    private static boolean accepts(ResponseValidator validator, RestResponse resp) {
+        try {
+            validator.validate(resp);
+            return true;
+        } catch (RuntimeException refused) {
+            return false;
+        }
+    }
 
     public RestResponse execute(RestRequest req) throws Exception {
         String url = buildUrl(req.url(), req.queryParams());
@@ -59,10 +91,14 @@ public class RestHttpClient {
 
     static String buildUrl(String base, Map<String,String> q) {
         if (q == null || q.isEmpty()) return base;
-        String enc = q.entrySet().stream()
+        return base + (base.contains("?") ? "&" : "?") + formEncode(q);
+    }
+
+    /** {@code k=v&k=v}, each side {@code application/x-www-form-urlencoded} in UTF-8: a query string or a form body. */
+    public static String formEncode(Map<String,String> fields) {
+        return fields.entrySet().stream()
             .map(e -> URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8) + "=" +
                       URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8))
             .collect(Collectors.joining("&"));
-        return base + (base.contains("?") ? "&" : "?") + enc;
     }
 }

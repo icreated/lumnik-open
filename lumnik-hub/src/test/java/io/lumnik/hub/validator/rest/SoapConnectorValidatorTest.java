@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.groups.Tuple.tuple;
 
 @QuarkusTest
 class SoapConnectorValidatorTest {
@@ -35,6 +36,26 @@ class SoapConnectorValidatorTest {
     @Test
     void a_well_formed_soap_endpoint_has_no_errors() throws Exception {
         assertThat(validate(VALID)).isEmpty();
+    }
+
+    /** The runtime refuses a placeholder it does not know before any request; apply says so first (#1387). */
+    @Test
+    void an_unknown_placeholder_in_the_body_or_header_is_rejected_by_name() throws Exception {
+        String bad = VALID.replace("<PageSize>{{page_size}}</PageSize>", "<Page>{{pg}}</Page><X>{{a.b}}</X>")
+            .replace("\"soap_action\":\"A\",", "\"soap_action\":\"A\",\"header\":\"<T>{{token}}</T>\",");
+        assertThat(validate(bad))
+            .extracting(ValidationError::path, ValidationError::message)
+            .contains(
+                tuple("spec.endpoints[0].body", "unknown placeholder: {{pg}}"),
+                tuple("spec.endpoints[0].body", "unknown placeholder: {{a.b}}"),
+                tuple("spec.endpoints[0].header", "unknown placeholder: {{token}}"));
+    }
+
+    @Test
+    void the_page_number_and_the_credential_placeholders_are_known() throws Exception {
+        String ok = VALID.replace("<PageSize>{{page_size}}</PageSize>",
+            "<Page>{{page}}</Page><Row>{{cursor}}</Row><S>{{secret:PWD}}</S><E>{{env:HOST}}</E>");
+        assertThat(validate(ok)).isEmpty();
     }
 
     @Test
@@ -94,8 +115,13 @@ class SoapConnectorValidatorTest {
         String bad = VALID.replace(
             "\"response_path\":\"$.Body.Out.ListOfCustomer.Customer\"",
             "\"response_path\":\"$.Body.Out.ListOfCustomer[*].Customer\"");
+        // The refusal says what the integrator loses, in plain words — not the parser's mechanism.
         assertThat(validate(bad))
-            .anySatisfy(e -> assertThat(e.path()).contains("response_path"));
+            .anySatisfy(e -> {
+                assertThat(e.path()).contains("response_path");
+                assertThat(e.message()).isEqualTo("SOAP response_path must be a plain dotted path "
+                    + "(e.g. $.Body.Out.List.Item): a path with [*] or .. loses the row of a one-element page");
+            });
     }
 
     @Test

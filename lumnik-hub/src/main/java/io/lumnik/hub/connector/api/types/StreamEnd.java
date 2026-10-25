@@ -6,8 +6,23 @@ package io.lumnik.hub.connector.api.types;
  */
 public sealed interface StreamEnd {
 
-  /** {@code rows} removed from the hub because the source no longer holds them. */
+  /**
+   * {@code rows} removed from the hub because the source no longer holds them. A csv full refresh does not
+   * count the older version of a row whose values changed: the source still holds that row (#1544).
+   */
   record Removed(long rows) implements StreamEnd {}
+
+  /**
+   * {@code files} not read because they had not changed since they were read to the end (#1371). A file
+   * not read removes nothing.
+   */
+  record Unchanged(long files) implements StreamEnd {}
+
+  /**
+   * {@code files} read and committed, and not moved or removed as {@code after_process} declares (#1382): they
+   * stay in the source folder.
+   */
+  record NotArchived(long files) implements StreamEnd {}
 
   /**
    * The run fails with {@code reason}, already worded for the operator, and nothing was removed. The

@@ -9,27 +9,34 @@
 
     ```
     $ lm migration status
-    SCHEMA    VERSION  PENDING  LAST APPLIED
-    core      75       0        2026-10-19 01:36
-    identity  18       0        2026-10-19 01:36
-    rag       6        0        2026-10-19 01:36
+    SCHEMA     VERSION  PENDING  LAST APPLIED
+    core       83       0        2026-10-25 07:04
+    identity   18       0        2026-10-24 21:55
+    rag        6        0        2026-10-24 21:55
+    search_pg  3        0        2026-10-25 00:13
     ```
+
+    `search_pg` appears only on a hub built with Search.
 
 3. Point at the new image and restart:
     - **selfhost:** set `LUMNIK_VERSION` in `.env` (or leave it unset to track `main`), then
-      `deploy/selfhost/up.sh`. On a [TLS-façade install](../deploy.md#one-https-origin-the-tls-facade),
-      re-run the overlay command right after — `up.sh` alone un-stacks it.
-    - **Helm:** bump `hub.image.tag`, then `helm upgrade`.
+      `deploy/selfhost/up.sh`. It keeps the overlays the stack was started with (TLS proxy, Search).
+      A stack with Search is rebuilt from source, not pulled: `git pull` first, as in
+      [Running from source](#running-from-source).
+
+    - **Helm (cloud edition):** bump `hub.image.tag`, then `helm upgrade`.
 4. The hub migrates its database at boot, then reports healthy:
 
     | Path | Boot budget | On timeout |
     |---|---|---|
     | selfhost compose | ~210 s (90 s grace + 12 × 10 s) | the container shows `unhealthy`; it is not restarted |
-    | Helm | ~150 s (startup probe) | Kubernetes restarts the pod |
+    | Helm (cloud edition) | ~150 s (startup probe) | Kubernetes restarts the pod |
 
     Follow the boot with `./deploy/selfhost/logs.sh hub`.
 5. Run `lm migration status` again: a higher `VERSION` and `PENDING 0` on every schema means the
    migrations are done.
+6. Apply each [`resolution:` entity](../entities-resolution.md) again with the same manifest, then
+   run `lm entity resolve NAME`.
 
 ## Turning on the run queue
 
@@ -42,6 +49,7 @@ on-demand export runs wait in status `Queued` ([connectors](../connectors/index.
 | `LUMNIK_RUN_QUEUE_ENABLED` | `false` | queue manual and on-demand runs |
 | `LUMNIK_RUN_QUEUE_MAX_AGE` | `1h` | a run still queued after this ends: `Cancelled` (connector), `Failed` (export) |
 | `LUMNIK_RUN_QUEUE_POLL_INTERVAL` | `5s` | how often a waiting run is picked up |
+| `LUMNIK_CONNECTOR_MAX_CONCURRENT_SCHEDULED_RUNS` | `4` | how many endpoint runs one hub drives at once. Each takes up to two connections of the `admin` pool: raise `quarkus.datasource."admin".jdbc.max-size` with it |
 
 The setting is global to the deployment: upgrade **every** hub replica to the same release first,
 then turn it on. Turning it off again:
@@ -56,9 +64,21 @@ then turn it on. Turning it off again:
 Some releases change what existing data means. Each section below says what you see after
 upgrading and what to do.
 
+### A REST header reference must resolve { #a-rest-header-reference-must-resolve }
+
+A REST connector header declared with `value_env` now reads like the auth fields: the `lm secret`
+entry first, then the hub's environment ([REST § request headers](../connectors/rest.md#request-headers)).
+
+- **A name that resolves nowhere fails the run**, `lm source rest test` and `lm source rest probe`:
+  `Header X-Client-Id unavailable (env=CLIENT_ID)`. Before, the header was dropped and the request
+  went out without it. Store the value (`lm secret set CLIENT_ID`), or remove the header from the
+  manifest if the source does not need it.
+- **An `lm secret` entry now outranks an environment variable of the same name** for a header. If
+  both exist with different values, the secret's value is sent: remove the one you do not want.
+
 ### Subscriptions are tenant-wide
 
-Webhooks and email rules are refused to an admin bound to a métier (any `scope:*` role) — see
+Webhooks and email rules are refused to an admin bound to any `scope:*` role — see
 [Outputs](../outputs.md). Ones a bound admin created earlier keep firing. A tenant-wide admin lists
 them and removes what nobody owns:
 
@@ -83,8 +103,9 @@ A webhook goes the same way: `lm integration rm <ID>`.
 
 A `csv-file` connector whose local `path` names one file (no `*` or `?`) removes the rows the file
 no longer holds — see [CSV § full refresh](../connectors/csv.md#one-file-is-the-table-full-refresh).
-The first run that reads the file after upgrading (a file is read again only once it changes) also
-counts the older versions of changed rows as removed:
+Before the upgrade, the table kept every older version of a changed row. The first run that reads
+the file after upgrading (a file is read again only once it changes) counts those older versions
+as removed. Later runs count only the rows the file lost. On that first run:
 
 - up to 30 % of the table: they are removed;
 - beyond 30 %: the run fails, removes nothing and names the counts;
@@ -118,15 +139,17 @@ make -C lm install                 # installs lm into ~/.local/bin (keep it on y
 ./deploy/selfhost/up.sh --build    # rebuilds and restarts the hub
 ```
 
-Your data is kept; migrations run at the hub's next boot. On a TLS-façade install, re-run the
-overlay command afterwards.
+Your data is kept; migrations run at the hub's next boot. On a TLS-proxy install, run its
+command again afterwards.
 
-## Rules the migrations follow
+## Roll back
 
-- **Forward-only:** there are no down-migrations. Rolling back means restoring the pre-upgrade
-  backup, and losing the writes made since.
-- **Never edit a shipped migration:** every applied migration is checksum-validated at boot, and
-  a changed file stops the boot before any SQL runs.
+There is no down-migration. Rolling back is restoring the backup taken in step 1; writes made
+since are lost.
+
+1. Set `LUMNIK_VERSION` in `.env` back to the previous release.
+2. `deploy/selfhost/up.sh`: the hub comes back on the previous image.
+3. `deploy/selfhost/restore.sh backups/<UTC-stamp>`: the database as it was before the upgrade.
 
 ## If the boot fails mid-migration
 
@@ -134,10 +157,10 @@ The migration stops at the failing version; later migrations do not touch your d
 does not become healthy.
 
 1. Save the log: `docker compose -f docker-compose.selfhost.yml logs hub > hub-upgrade.log`.
-2. If you need service back now, [restore the backup](backup-restore.md#restore) on the previous image.
-3. Report the failing version — the last `Migrating schema … to version …` line in the log.
+2. Need service back now? [Roll back](#roll-back).
+3. Report the failing version: the last `Migrating schema … to version …` line in the log.
 
-## Known scar
+## Changing the public address
 
-Changing the public origin (TLS façade hostname, port, issuer path) during an upgrade orphans JIT
-identities — see [backup-restore.md](backup-restore.md#known-scar-issuer-change-orphans-jit-identities).
+Do not change the hub's public address during an upgrade: every user would log in as a new one.
+[Keep the same public address](../security/byo-idp.md#keep-the-same-public-address).
