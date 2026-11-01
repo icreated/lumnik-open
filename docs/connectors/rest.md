@@ -14,6 +14,10 @@
 Every endpoint declares its own `method`; a source usually needs `GET`. The connector sends
 only the requests the manifest declares.
 
+A response must be JSON, except on a [SOAP](soap.md) endpoint. Any other body, such as XML
+or an HTML page, fails the run with its Content-Type:
+`the response is not JSON (Content-Type application/xml)`. The run is never read as an empty page.
+
 ## Quickstart
 
 !!! note "Every screen on this page reads a demo API that ships with the repo"
@@ -79,9 +83,9 @@ lumnik->   FROM ext.acme_partners ORDER BY external_id LIMIT 4;
 
 - **`promote` is a projection, not a filter.** Every field the source returned is in `data`
   (JSONB); the promoted ones are also copied into typed columns.
-- **There is no `mapping` block.** A field is shaped by its `promote[]` entry and its
-  `transform:`; transformers and Kotlin scripts run on a [csv-file](csv.md) connector. A
-  `spec.mapping` is refused.
+- **A field is shaped by its `promote[]` entry and its `transform:`.** A rule over the promoted
+  columns — a filter, a Kotlin script — goes in the endpoint's `mapping`:
+  [Run hooks over the promoted columns](#run-hooks-over-the-promoted-columns).
 - **`unique_key` makes a re-run safe.** It becomes `external_id`, unique per tenant, and every
   write is an upsert — see [Storage layout](#storage-layout).
 - **The password is never in the manifest.** `password_env` names an `lm secret` entry (or, if
@@ -122,6 +126,12 @@ spec:
   type says: `"2026-10-01T08:01:00Z"` as a `timestamptz`, `"12"` as a `bigint`, `"true"` as a
   `boolean`. A value that cannot be read leaves that column empty for the row, and the run counts
   it in `cell_errors`; the row is written and keeps the value in its payload.
+- A path with a filter or a wildcard reads one value: `$.status.conditions[?(@.type=='Ready')].status`
+  reads `False`, not `["False"]`. Nothing matched: the column is empty. Several values: the column is
+  empty and the run counts one cell error. A `jsonb` column keeps the list; a path without a filter
+  keeps what it points at, an array included.
+- A path the JSONPath library cannot evaluate leaves that row's column empty and counts one cell
+  error; the run goes on. `first()` after a filter is one: write the filter alone.
 - A `promote` entry may also carry a `transform:`, e.g. `from_epoch` for a number of seconds:
   [the list](#transform-a-promoted-value).
 - Without `schedule`, the connector runs only on `lm connector run`. `window` fences scheduled
@@ -141,7 +151,8 @@ $ lm validate -f my-api.yaml
 
 ### Transform a promoted value
 
-A REST, GraphQL or SOAP endpoint takes no transformers. A `promote` entry takes one `transform:`:
+A `promote` entry takes one `transform:`. A rule over several columns goes in the endpoint's
+`mapping`: [Run hooks over the promoted columns](#run-hooks-over-the-promoted-columns).
 
 | Value | Effect |
 |---|---|
@@ -150,6 +161,8 @@ A REST, GraphQL or SOAP endpoint takes no transformers. A `promote` entry takes 
 | `to_lower` / `to_upper` | case |
 | `trim` | removes the spaces around the value |
 | `to_json_string` | writes the value as JSON text |
+| `parse_quantity` | a number with a unit suffix → the number in its base unit: `100m` → `0.1`, `64Mi` → `67108864`, `99827146n` → `0.099827146`. Use `type: decimal`. |
+| `last_path_segment` | a link → its last path segment, percent-decoded: `http://erp/products/SKU-00001?projection=full` → `SKU-00001`. A link with no segment reads no value. |
 
 `parse_iso8601` reads these shapes:
 
@@ -160,7 +173,122 @@ A REST, GraphQL or SOAP endpoint takes no transformers. A `promote` entry takes 
 | `2008-04-18` | `2008-04-18T00:00:00Z`: a date alone is midnight |
 | `2026-08-01T14:30:00+02:00` | `2026-08-01T12:30:00Z`: the offset is applied |
 
-Any other shape fails the run, naming the column and the transform.
+Any other shape leaves the column empty for that row and counts one cell error; the row is
+written and keeps the value in its payload.
+
+`parse_quantity` reads the notation Kubernetes uses, which many APIs share:
+
+| Suffix | Factor |
+|---|---|
+| `n` `u` `m` | 10⁻⁹, 10⁻⁶, 10⁻³ |
+| `k` `M` `G` `T` `P` `E` | 10³ … 10¹⁸ |
+| `Ki` `Mi` `Gi` `Ti` `Pi` `Ei` | 2¹⁰ … 2⁶⁰ |
+| `e3`, `E-3` | 10 to that power, at most 18 |
+
+Read from a cluster's `metrics.k8s.io` — each value promoted twice, as sent and with the transform:
+
+```yaml
+promote:
+  - { name: cpu,          path: "$.containers[0].usage.cpu",    type: text }
+  - { name: cpu_cores,    path: "$.containers[0].usage.cpu",    type: decimal, transform: parse_quantity }
+  - { name: memory,       path: "$.containers[0].usage.memory", type: text }
+  - { name: memory_bytes, path: "$.containers[0].usage.memory", type: decimal, transform: parse_quantity }
+```
+
+```
+lumnik=> SELECT pod, cpu, cpu_cores, memory, memory_bytes FROM ext.k8s_usage ORDER BY pod LIMIT 2;
+             pod              |    cpu    |  cpu_cores  | memory | memory_bytes
+------------------------------+-----------+-------------+--------+--------------
+ catalog-api-54b5c97cdf-q9v2g | 99756659n | 0.099756659 | 316Ki  |       323584
+ checkout-worker-0            | 44515n    | 0.000044515 | 8544Ki |      8749056
+```
+
+The suffix is case-sensitive: `m` is milli, `M` mega. `12 MB` or `1mi` is not a quantity: the
+column stays empty and the run counts one cell error, as for any transform.
+
+
+#### A key read from a link
+
+`unique_key` takes the same object form when the key needs a transform. Spring Data REST, for
+example, puts no id in the item: the id is the last segment of its self link.
+
+```yaml
+pagination: { kind: spring-hateoas, items: products }
+target:
+  kind: hybrid
+  table: ext.products
+  unique_key: { path: $._links.self.href, transform: last_path_segment }
+  promote:
+    - { name: sku, path: $._links.self.href, transform: last_path_segment, type: text }
+```
+
+- **Never key on the whole link.** It carries the host the hub reached: the day the API moves
+  behind https or another name, every row is written again beside the old one.
+- An item whose key reads no value fails the run, as an item without the key's field does.
+
+### Run hooks over the promoted columns
+
+`transform:` changes one value. A rule over the row — keep some items, compute a column from
+others — goes in the endpoint's `mapping`. It takes the [transformers](transformers.md) and
+[Kotlin scripts](kotlin-hooks.md) of a csv-file connector:
+
+```yaml
+--8<-- "docs/connectors/rest/demo/96-mapping-hooks.yaml"
+```
+
+The script, from the hub's hooks directory:
+
+```kotlin
+--8<-- "docs/connectors/rest/hooks/credit-band.kts"
+```
+
+The run reads 2 400 partners, keeps the French ones, and says which script it ran:
+
+```
+$ lm run get 0ff895b1-1ba1-4703-a4f4-737203d3325e
+ID        CONNECTOR           ENDPOINT  STATUS     IN    OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+0ff895b1  acme-partner-bands  partners  Completed  2400  300  2100     0             2026-10-29 20:35  2026-10-29 20:35
+• script hooks:credit-band.kts  sha256 eb508f320131cff3ad56cc814743d4af4e7f805ab239f85c0248ab7791baf63d
+```
+
+```
+lumnik=> SELECT external_id, name, credit_limit, credit_band FROM ext.acme_partner_bands
+lumnik->   ORDER BY external_id::int LIMIT 2;
+ external_id |         name          | credit_limit | credit_band
+-------------+-----------------------+--------------+-------------
+ 1000        | Hydraulique Lyon 1000 |          500 | C
+ 1008        | Filtration Lyon 1008  |         1596 | C
+
+lumnik=> SELECT data FROM ext.acme_partner_bands WHERE external_id = '1000';
+ {"id": 1000, "city": "Lyon", "name": "Hydraulique Lyon 1000", "country": "FR", "updated_at": "2026-01-01T00:00:00Z", "credit_limit": 500}
+```
+
+- **A hook sees the promoted columns**, after their `transform:`, not the JSON. To read a
+  field, promote it. A field the item lacks is in the row, empty.
+- **A value is as the API sent it.** `"12"` stays text and `12` a number: the column's `type`
+  applies when the row is written. A script reads `(cells["credit_limit"] as Number)` only when
+  the API sends a number.
+- **A column the mapping fills** is a `promote` entry without `path`. The entry gives its type.
+- **`data` stays what the API returned.** The mapping changes the columns, never the payload.
+- **An item a hook drops is counted** in `SKIPPED`: `IN = OUT + SKIPPED`. Under
+  `on-error: dlq`, the dead letter is the item as the API sent it.
+- **One item is one row, mapped on its own.** `split-row` and `aggregator` are refused: a row
+  lands beside the item it was read from. `sort-by` and `fill-down` are refused too: an item
+  mapped alone has nothing around it to order or to carry from.
+- **The mapping belongs to its endpoint.** `spec.mapping` and `spec.defaults.mapping` are
+  refused: each endpoint promotes its own columns.
+
+`lm validate` knows the columns. In the demo, replace the script with `- lower: { columns: [city] }`:
+`city` is not promoted, and the hook is named by its path:
+
+```
+$ lm validate -f bad-column.yaml
+✗ bad-column.yaml — 1 error(s), 0 warning(s)
+
+  ERROR    spec.endpoints[0].mapping.cell[0].lower.columns[0]
+          column 'city' is not in the row here — the source's columns are known and no earlier hook adds it; the hook would do nothing with it
+          → Check the spelling, or add the column in an earlier hook
+```
 
 ## One connector, one API
 
@@ -211,7 +339,7 @@ mistake in a default once.
 
 | Kind | Config |
 |---|---|
-| `bearer` | `token_env: VAR_NAME` (preferred), or `token_value: "..."` (dev only) |
+| `bearer` | `token_env: VAR_NAME` (preferred), or `token_value: "..."` (dev only); optional `scheme` (`Bearer`) |
 | `basic` | `username` + `password_env: VAR_NAME` |
 | `api-key` | `in: header\|query`, `name`, `value_env: VAR_NAME` |
 | `oauth2` | `token_url`, `client_id`, `client_secret_env: VAR_NAME`; optional `scope`, `client_auth: basic\|post` — [below](#oauth2-client-credentials) |
@@ -224,6 +352,10 @@ first, then a variable of that name in the hub's environment. Set the value befo
 lm secret set ACME_BASIC_PW     # prompts at the keyboard; what you type is not shown
 ```
 
+- `scheme` is the word before a bearer token. An API on Django REST Framework's token
+  authentication, NetBox for one, wants `Authorization: Token <key>` and refuses `Bearer`:
+  `auth: { kind: bearer, scheme: Token, token_env: NETBOX_TOKEN }`. One word that starts with a letter,
+  then letters, digits, `-` or `_`, at most 32 characters.
 - `basic` and `api-key` have **no inline field**: the value comes from `password_env` /
   `value_env`, or not at all.
 - `bearer`: when both are set, `token_env` wins and `token_value` is ignored, even if nothing
@@ -293,6 +425,37 @@ What `lm source rest test` and a failed run say:
 `invalid_client` and similar codes come from the authorization server. The secret and the token
 are never shown.
 
+## An internal CA
+
+An API served over HTTPS with a certificate your company's CA signed — an in-house service, a
+reverse proxy with its own PKI, a Kubernetes API server — is refused at the handshake: lumnik
+trusts the public CAs only. Name the CA in the connector:
+
+```yaml
+spec:
+  base_url: https://kubernetes.default.svc
+  tls:
+    ca_secret: CLUSTER_CA        # an lm secret holding the CA's PEM certificate(s)
+```
+
+```bash
+lm secret set CLUSTER_CA - < ca.crt
+```
+
+- **Only the CAs in that secret are trusted** for this connector — the public ones no longer are.
+  One connector, one API: its runs, `lm source rest test` and `lm source rest probe` all share
+  that trust.
+- A certificate the trust refuses fails at once, as `certificate refused (SSLHandshakeException)`: it is
+  not retried like a network failure, which still reads `TLS failure`.
+- A secret may hold several PEM certificates (a root and an intermediate): each one is trusted.
+- **A secret nothing holds, or one that holds no certificate**, fails the run and `lm source rest
+  test` by the secret's name, never by its content: `CA certificate unavailable
+  (secret=CLUSTER_CA)`, `secret CLUSTER_CA holds no PEM certificate`.
+- A `tls` block that names no CA (`ca_secret` missing or blank) is refused at `lm apply`, and a run
+  given one fails: a declared trust never falls back to the public CAs.
+- There is no switch to skip the check.
+- An `oauth2` token request (`token_url`) still uses the public trust.
+
 ## Pagination
 
 Every endpoint declares how the source hands back its next page. Most APIs follow a named
@@ -302,9 +465,10 @@ convention, so the usual answer is one line:
 pagination: { kind: spring-page }        # Spring Data Page — seven fields under one word
 ```
 
-Eleven presets name the framework behind the API (Spring Data, Micronaut, Django REST,
-FastAPI, NestJS, JSON:API, Sequelize, Stripe). When none fits, write one of six strategies
-by hand: `cursor`, `page`, `offset`, `link-header`, `body-link`, `relay`.
+Twelve presets name the framework behind the API (Spring Data, Micronaut, Django REST,
+FastAPI, NestJS, JSON:API, Sequelize, Stripe). When none fits, write one of seven strategies
+by hand: `cursor`, `page`, `offset`, `link-header`, `body-link`, `relay`, and `none` for an
+answer that holds the whole list.
 
 **→ [Pagination](rest/pagination.md)** — the catalogue, the fields of each strategy, where the
 cursor is injected, page size on the strategies that send none, and `kind: custom`.
@@ -517,6 +681,21 @@ The `drf-limit-offset` and `sequelize` presets set it for you (`total_path: $.co
 - Point `total_path` at an exact **row** count: not a page count, not an estimate.
 - The check does not run on an incremental endpoint, or when the total changes during the read.
 
+**A count in a response header.** Gitea, GitLab or WordPress send it as a header, beside a body
+that is just the list: name the header with `total_header` instead of `total_path`.
+
+```yaml
+pagination: { kind: link-header, response_path: $, total_header: X-Total-Count }
+```
+
+- The header's name is matched in any case. A response without it is no witness.
+- Its value must be a whole number from 0: `pagination.total_header must read a row count: a whole
+  number from 0` otherwise.
+- `total_path` and `total_header` together are refused at `lm validate`: one witness per endpoint.
+- It checks the count only; the pages are read as without it. On `offset`, which can also stop on
+  `total_path`, the read ends on its first short page: one more request when the total is a
+  multiple of the limit.
+
 ## CLI
 
 ```bash
@@ -583,7 +762,7 @@ $ lm source rest probe acme-partners --endpoint /spring/partners
 - id: spring-partners
   method: GET
   path: /spring/partners
-  pagination: { kind: page }
+  pagination: { kind: page, response_path: $.content }
   target:
     kind: hybrid
     table: ext.acme_partners_spring_partners
@@ -602,7 +781,36 @@ $ lm source rest probe acme-partners --endpoint /spring/partners
 
 - The pagination kind is a guess from the response envelope; an unknown envelope gives
   `kind: unknown` for you to fill in.
+- `response_path` says where the list sits in the answer. The draft carries it whatever the kind,
+  because the paging kinds need it to apply. An answer that is itself one record has no list, so
+  the draft has none.
+- A list found with no paging signal is drafted as `kind: none`, with its `response_path` and a
+  comment that gives the number of items read, such as
+  `# 6 items, no paging signal in the answer: if the source pages, declare how`. A round count
+  such as 20 or 50 is often one page: declare the pagination.
 - The promote list covers the scalar fields of the first record only.
+
+A source that pages through a `Link` header needs no other setting, so its draft applies as it is:
+
+```
+$ lm source rest probe acme-header --endpoint '/link/partners?limit=500'
+# Drafted by lm source rest probe — review before applying
+- id: link-partners-limit-500
+  method: GET
+  path: /link/partners?limit=500
+  pagination: { kind: link-header, response_path: $.data }
+  target:
+    kind: hybrid
+    table: ext.acme_header_link_partners_limit_500
+    unique_key: $.id
+    promote:
+      - { name: id, path: $.id, type: bigint }
+      - { name: name, path: $.name, type: text }
+      - { name: city, path: $.city, type: text }
+      - { name: country, path: $.country, type: text }
+      - { name: credit_limit, path: $.credit_limit, type: bigint }
+      - { name: updated_at, path: $.updated_at, type: text }
+```
 
 An upstream error is reported instead of a draft:
 
@@ -765,6 +973,9 @@ change, unless you `lm endpoint reset-cursor` first.
 | Sync stops picking up new rows | the stored watermark is stale or points at a column the source does not touch | `lm endpoint reset-cursor <connector>/<endpoint>` → the next run is a full read |
 | A run reads far more pages than expected | `cursor`, `body-link` and `link-header` send no size parameter | put the size in the endpoint's `path:` — see [the page-size warning](rest/pagination.md#strategies) |
 | `lm apply` refused with an unknown transform | a `promote` entry's `transform:` is not one of the supported values | see [Transformers](transformers.md) |
+| `column 'x' is not in the row here` at `…mapping…` | a hook reads a field the endpoint does not promote | promote it: a hook sees the promoted columns only |
+| `path is required … this endpoint has none` | a `promote` entry without `path`, and no `mapping` to fill it | give the entry a `path`, or the endpoint a `mapping` |
+| Run failed on `the mapping writes column 'x', which no promote entry declares` | a script writes a column the table does not have | add `{ name: x, type: … }` to `promote`, without `path` |
 | Need to wipe an endpoint's rows | — | `lm endpoint purge <connector>/<endpoint>` — see [Empty one endpoint's rows](#empty-one-endpoints-rows) |
 
 ## See also

@@ -1,5 +1,7 @@
 package io.lumnik.hub.connector.transport;
 
+import java.util.Locale;
+
 public enum AfterProcessAction { LEAVE, MOVE, DELETE, CUSTOM_KOTLIN;
 
     /**
@@ -16,7 +18,7 @@ public enum AfterProcessAction { LEAVE, MOVE, DELETE, CUSTOM_KOTLIN;
      */
     public static AfterProcessAction parse(Object node) {
         if (node == null) return LEAVE;
-        return switch (String.valueOf(node).trim().toUpperCase().replace('-', '_')) {
+        return switch (String.valueOf(node).trim().toUpperCase(Locale.ROOT).replace('-', '_')) {
             case "NONE", "LEAVE", "" -> LEAVE;
             case "ARCHIVE", "MOVE"   -> MOVE;
             case "DELETE"            -> DELETE;

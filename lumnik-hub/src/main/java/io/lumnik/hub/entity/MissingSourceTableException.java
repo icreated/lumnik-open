@@ -9,8 +9,13 @@ package io.lumnik.hub.entity;
 public class MissingSourceTableException extends RuntimeException {
 
     public MissingSourceTableException(String dbMessage) {
+        this(dbMessage, null);
+    }
+
+    /** With the failure it translates, so a cleanup failure suppressed on it stays reachable down its cause chain (#1607). */
+    public MissingSourceTableException(String dbMessage, Throwable cause) {
         super("source " + dbMessage
             + " — the entity fuses tables its source connectors create; "
-            + "run the source connectors first, then apply again");
+            + "run the source connectors first, then apply again", cause);
     }
 }

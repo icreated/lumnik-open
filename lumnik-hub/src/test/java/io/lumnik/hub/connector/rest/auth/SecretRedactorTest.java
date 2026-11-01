@@ -86,4 +86,16 @@ class SecretRedactorTest {
             .isEqualTo("denied <redacted>");
         assertThat(echoed(signed, "\uFEFF\n" + fault)).contains("denied &lt;redacted&gt;");   // a BOM, a blank line first
     }
+
+    /** #1641: under scheme Token, the bare token — what a source echoes — is what gets redacted, not "Token <key>". */
+    @Test void a_token_scheme_credential_is_redacted_by_its_bare_value() {
+        RestRequest signed = RestRequest.get("https://x").withHeader("Authorization", "Token 0123456789abcdef");
+        assertTrue(SecretRedactor.bare(signed).containsKey("0123456789abcdef"), () -> "bare token found: " + SecretRedactor.bare(signed));
+    }
+
+    @Test void a_scheme_word_starts_with_a_letter() {
+        assertTrue(SecretRedactor.isSchemeWord("Token"));
+        assertFalse(SecretRedactor.isSchemeWord("1abc"));
+        assertFalse(SecretRedactor.isSchemeWord("-x"));
+    }
 }

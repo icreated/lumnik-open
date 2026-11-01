@@ -46,8 +46,8 @@ public class SoapPaginationStrategy implements PaginationStrategy {
     public SoapPaginationStrategy(Map<String, String> c, UnaryOperator<String> secrets) {
         this.secrets = secrets;
         this.pageSize = parsePositive(c.get("page_size"));
-        this.lastPagePath = blankToNull(c.get("last_page_path"));
-        this.hasMorePath = blankToNull(c.get("has_more_path"));
+        this.lastPagePath = PaginationSupport.optional(c.get("last_page_path"));
+        this.hasMorePath = PaginationSupport.optional(c.get("has_more_path"));
         this.responsePath = c.get("response_path");
     }
 
@@ -109,8 +109,6 @@ public class SoapPaginationStrategy implements PaginationStrategy {
     private static boolean falsey(Object v) { return v != null && "false".equalsIgnoreCase(String.valueOf(v).trim()); }
 
     private static String str(Object o) { return o == null ? null : String.valueOf(o); }
-
-    private static String blankToNull(String s) { return (s == null || s.isBlank()) ? null : s; }
 
     private static int parsePositive(String s) {
         if (s == null || s.isBlank())

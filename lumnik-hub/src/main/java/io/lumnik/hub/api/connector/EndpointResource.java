@@ -79,8 +79,7 @@ public class EndpointResource {
         // (JdbcConnectorType.validateRename) — refuse it at write time, same rule, same shape.
         if (body.config() != null) {
             Response bad = MapColumnsRules.firstStoredConfigViolation(json.valueToTree(body.config()))
-                .map(v -> Response.status(400).type(MediaType.APPLICATION_JSON)
-                    .entity(ApiErrors.error("config '" + v.path() + "' " + v.reason())).build())
+                .map(v -> ApiErrors.badRequest("config '" + v.path() + "' " + v.reason()))
                 .orElse(null);
             if (bad != null) return bad;
         }
@@ -181,9 +180,7 @@ public class EndpointResource {
         String[] parts = table.split("\\.", 2);
         if (parts.length != 2 || !PURGEABLE_SCHEMAS.contains(parts[0])
                 || parts[1].isBlank() || parts[1].contains(".")) {
-            return Response.status(400)
-                .entity(Map.of("error", "invalid or out-of-scope table: " + table))
-                .build();
+            return ApiErrors.badRequest("invalid or out-of-scope table: " + table);
         }
         String fqn = quoteIdent(parts[0]) + "." + quoteIdent(parts[1]);
 

@@ -84,7 +84,7 @@ class JdbcConnectorTypeUnreachableTest {
 
         assertThatThrownBy(() -> type.runStart(ctx(), null))
             .isNotInstanceOf(SourceUnreachableException.class)
-            .hasMessageContaining("could not measure the run's target on public.workorder");
+            .hasMessage("measuring the run's target on public.workorder failed (SQLSTATE 42501)");
     }
 
     /** The source can also go between two chunks: the reader says the same sentence. */

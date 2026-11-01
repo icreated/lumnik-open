@@ -9,7 +9,6 @@ import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 
 import java.sql.Array;
-import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -41,21 +40,17 @@ public class EntityRegistry {
   /** Reloads all manifests from the DB into a temp map, then swaps atomically. Package-private for testing. */
   void loadFromDb() {
     Map<String, EntityManifest> temp = new LinkedHashMap<>();
-    try (Connection c = adminDsInstance.get().getConnection();
-         var st = c.createStatement();
-         var rs = st.executeQuery("SELECT name, yaml_text FROM connector.entity_manifest")) {
-      EntityManifestParser parser = parserInstance.get();
-      while (rs.next()) {
-        String dbName = rs.getString("name");
-        EntityManifest m = parser.parse(rs.getString("yaml_text"));
-        if (!m.name().toLowerCase(Locale.ROOT).equals(dbName))
-          throw new IllegalStateException("entity_manifest row '" + dbName
-              + "' has yaml name '" + m.name() + "' — names diverged, manual intervention required");
-        temp.put(dbName, m);
-      }
-    } catch (Exception e) {
-      throw new RuntimeException("EntityRegistry.loadFromDb: " + e, e);
-    }
+    EntityManifestParser parser = parserInstance.get();
+    Jdbc.query(adminDsInstance.get(), "EntityRegistry.loadFromDb", "SELECT name, yaml_text FROM connector.entity_manifest",
+        ps -> {},
+        rs -> {
+          String dbName = rs.getString("name");
+          EntityManifest m = parser.parse(rs.getString("yaml_text"));
+          if (!m.name().toLowerCase(Locale.ROOT).equals(dbName))
+            throw new IllegalStateException("entity_manifest row '" + dbName
+                + "' has yaml name '" + m.name() + "' — names diverged, manual intervention required");
+          return m;
+        }).forEach(m -> temp.put(m.name().toLowerCase(Locale.ROOT), m));
     // Refresh WITHOUT ever publishing an empty map. clear()+putAll() exposes a transient
     // "registry is empty" window to concurrent readers — harmless at @PostConstruct boot, but
     // findReloadingIfMissing now runs this on the request path, where that window is a false 404 /

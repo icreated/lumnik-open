@@ -36,6 +36,7 @@ exit=1
 | Command | What it does |
 |---|---|
 | `lm config set-context NAME --server URL --oidc-issuer URL` | create/update a context (`--oidc-client-id` defaults to `lm-cli`, the bundled realm client) |
+| `lm config set-context NAME --server URL --tenant ID --user ID` | a context for a **dev-bypass** hub (`make k8s-up`): the ids are sent as `X-Tenant-ID` / `X-User-ID`; an OIDC hub ignores them |
 | `lm config use-context NAME` | switch context (the default for every later command; inside `lm ui`, `:context` switches the session only) |
 | `lm config view` | print `~/.lm/config.yaml` with each credential shown as `REDACTED` — safe to paste into a ticket; `--raw` prints the tokens in clear |
 | `lm login` | OIDC **device flow**: prints a URL + code, stores tokens in the context |
@@ -48,7 +49,7 @@ First run? The [deploy page](../deploy.md) walks through standing up a hub and p
 | Setting | Where | Effect |
 |---|---|---|
 | `LUMNIK_URL` | env var | replaces the current context's server, per run |
-| `LUMNIK_TOKEN` | env var | the Bearer token, per run — for CI. Used only when the context holds no `lm login` session; `--token` always wins |
+| `LUMNIK_TOKEN` | env var | the Bearer token, per run — for CI. Sent as is, ahead of a stored `lm login` session, never refreshed or saved; `--token` wins over it |
 | `ca-file: /path/to/root.crt` | `~/.lm/config.yaml`, by hand | trust an internal CA (the TLS proxy's LAN certificate) |
 | `insecure-skip-verify: true` | `~/.lm/config.yaml`, by hand | disable TLS verification; `ca-file` wins when both are set |
 | `tenant:` / `user:` | `~/.lm/config.yaml` | dev-bypass hubs only; a real hub ignores them |

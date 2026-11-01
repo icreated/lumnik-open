@@ -14,6 +14,7 @@ import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -55,6 +56,7 @@ import static org.mockito.Mockito.when;
  * SearchProjectionRunReaper#beforeTryAcquire}) never leaks onto the CDI singleton other tests share.
  */
 @QuarkusTest
+@ExtendWith(ProjectionTickPaused.class)
 class SearchProjectionRunReaperIT {
 
     @Inject @DataSource("admin") AgroalDataSource adminDs;

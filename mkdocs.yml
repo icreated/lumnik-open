@@ -39,6 +39,12 @@ theme:
 extra_css:
   - stylesheets/lumnik.css
 
+plugins:
+  - search
+  - redirects:
+      redirect_maps:
+        hooks-cookbook.md: connectors/kotlin-hooks.md
+
 markdown_extensions:
   - admonition
   # md_in_html: an HTML element carrying a `markdown` attribute gets its content

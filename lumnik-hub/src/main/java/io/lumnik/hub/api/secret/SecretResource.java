@@ -80,8 +80,7 @@ public class SecretResource {
         long tid = RequireTenant.current();
         if (req == null || req.name() == null || req.name().isBlank()
             || req.value() == null || req.value().isBlank()) {
-            return Response.status(Response.Status.BAD_REQUEST)
-                .entity(Map.of("error", "name and value required")).build();
+            return ApiErrors.badRequest("name and value required");
         }
 
         // Through ApiErrors, which sets the content type this door was missing: the CLI's create →

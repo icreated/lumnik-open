@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.mapping.writer;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget;
@@ -69,19 +70,16 @@ public class SourceKeyIndex {
     long removed;
     try (Connection c = adminDs.getConnection()) {
       if (spec.key().equals(indexedKey(c, spec, tenantId)) || !UnseenRowSweeper.exists(c, fqn(spec))) return 0;
-      c.setAutoCommit(false);
-      try {
-        DynamicTableWriter.firstWriteLock(c, spec.schema(), spec.name());
-        removed = spec.key().equals(indexedKey(c, spec, tenantId)) ? 0 : move(c, spec, source, tenantId);
-        c.commit();
-      } catch (SQLException | RuntimeException e) {
-        c.rollback();
-        throw e;
-      }
+      // The move is one transaction, rolled back on any failure, an Error included (#1649).
+      removed = Jdbc.transaction(c, "SourceKeyIndex.ensure", tx -> {
+        DynamicTableWriter.firstWriteLock(tx, spec.schema(), spec.name());
+        return spec.key().equals(indexedKey(tx, spec, tenantId)) ? 0L : move(tx, spec, source, tenantId);
+      });
     } catch (ConfigValidationException e) {
       throw e;
     } catch (SQLException | RuntimeException e) {
-      throw new ConnectorException("SourceKeyIndex.ensure: " + e.getMessage(), e);
+      // The move's database failures arrive labelled by Jdbc.transaction, as RuntimeExceptions: one text for all.
+      throw new ConnectorException(Jdbc.failureText("SourceKeyIndex.ensure", e), e);
     }
     if (removed > 0) searchMarks.tableLostRows(tenantId, spec.name());
     return removed;
@@ -178,7 +176,7 @@ public class SourceKeyIndex {
         if (rs.next()) throw repeatedKey(spec, "this run read two different rows with the same key", false);
       }
     } catch (SQLException e) {
-      throw new ConnectorException("SourceKeyIndex.refuseRepeatedKeyInRun: " + e.getMessage(), e);
+      throw new ConnectorException(Jdbc.failureText("SourceKeyIndex.refuseRepeatedKeyInRun", e), e);
     }
   }
 

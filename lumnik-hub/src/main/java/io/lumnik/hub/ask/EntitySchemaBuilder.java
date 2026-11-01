@@ -1,6 +1,7 @@
 package io.lumnik.hub.ask;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityManifestParser;
@@ -10,8 +11,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -34,46 +34,46 @@ public class EntitySchemaBuilder {
 
     /** Entity views visible in this scope, as SchemaCard tables (connector.v_&lt;name&gt; + canonical cols). */
     public List<SchemaCard.Table> resolve(String scope) {
-        List<SchemaCard.Table> out = new ArrayList<>();
         String sql = "SELECT name, yaml_text FROM connector.entity_manifest "
             + "WHERE scopes && ARRAY[?]::text[] ORDER BY name";
-        try (Connection cx = adminDs.getConnection();
-             PreparedStatement ps = cx.prepareStatement(sql)) {
-            ps.setString(1, scope);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    String name = rs.getString("name"); // stored lower-cased
-                    EntityManifest m = parser.parse(rs.getString("yaml_text"));
-                    // The compiled view's own types (#1325): a date the sources agree on is a date here,
-                    // so a view filters it and Ask writes SQL for it as on a table. Text before compiling.
-                    Map<String, String> types = EntityViewCompiler.viewColumnTypes(cx, name);
-                    List<SchemaCard.Column> cols = new ArrayList<>();
-                    for (String c : m.canonicalColumns()) {
-                        EntityManifest.ColumnMeta meta = m.columns().get(c);
-                        String type = types.getOrDefault(c, "text");
-                        if (meta == null) {
-                            cols.add(new SchemaCard.Column(c, type, c));
-                        } else {
-                            cols.add(new SchemaCard.Column(c, type, or(meta.label(), c),
-                                meta.description(), meta.example(), meta.values()));
-                        }
-                    }
-                    if (m.resolution() != null) {
-                        addResolutionColumns(cols);
-                    }
-                    // The table's LABEL is the entity's `label:` when it declares one, and its
-                    // name otherwise — the same ladder the per-column label above walks. A
-                    // kind:View with no `title:` falls back to exactly this, so before the
-                    // manifest could carry one the ladder's every rung was the technical name
-                    // and a generated view was headed `acmecustomer` (#501).
-                    out.add(new SchemaCard.Table(
-                        cardTableName(name), or(m.label(), name), cols, m.description()));
+        try (Connection cx = adminDs.getConnection()) {
+            return Jdbc.query(cx, "EntitySchemaBuilder.resolve", sql, ps -> ps.setString(1, scope), rs -> {
+                String name = rs.getString("name"); // stored lower-cased
+                EntityManifest m;
+                try {
+                    m = parser.parse(rs.getString("yaml_text"));
+                } catch (RuntimeException e) {
+                    throw new IllegalStateException(
+                        "EntitySchemaBuilder.resolve: stored manifest " + name + " does not parse", e);
                 }
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("EntitySchemaBuilder.resolve(scope=" + scope + "): " + e, e);
+                // The compiled view's own types (#1325): a date the sources agree on is a date here,
+                // so a view filters it and Ask writes SQL for it as on a table. Text before compiling.
+                Map<String, String> types = EntityViewCompiler.viewColumnTypes(cx, name);
+                List<SchemaCard.Column> cols = new ArrayList<>();
+                for (String c : m.canonicalColumns()) {
+                    EntityManifest.ColumnMeta meta = m.columns().get(c);
+                    String type = types.getOrDefault(c, "text");
+                    if (meta == null) {
+                        cols.add(new SchemaCard.Column(c, type, c));
+                    } else {
+                        cols.add(new SchemaCard.Column(c, type, or(meta.label(), c),
+                            meta.description(), meta.example(), meta.values()));
+                    }
+                }
+                if (m.resolution() != null) {
+                    addResolutionColumns(cols);
+                }
+                // The table's LABEL is the entity's `label:` when it declares one, and its
+                // name otherwise — the same ladder the per-column label above walks. A
+                // kind:View with no `title:` falls back to exactly this, so before the
+                // manifest could carry one the ladder's every rung was the technical name
+                // and a generated view was headed `acmecustomer` (#501).
+                return new SchemaCard.Table(
+                    cardTableName(name), or(m.label(), name), cols, m.description());
+            });
+        } catch (SQLException e) {
+            throw new RuntimeException(Jdbc.failureText("EntitySchemaBuilder.resolve", e), e);
         }
-        return out;
     }
 
     /** The name an entity's view carries on a card: {@code connector.v_<name>}, unquoted. */

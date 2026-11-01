@@ -37,15 +37,15 @@ public class BodyLinkPaginationStrategy implements PaginationStrategy {
 
     @Override
     public RestRequest next(RestResponse resp, RestRequest current) {
-        Object url = JsonPathExtractor.read(resp.json(), linkPath);
-        if (url == null || String.valueOf(url).isBlank()) return null;
+        String url = PaginationSupport.nextLink(resp.json(), linkPath);
+        if (url == null) return null;
         // The URL came out of the upstream response body — untrusted. Vet it before following (SSRF).
-        String nextUrl = PaginationUrlGuard.vet(String.valueOf(url), current.url());
-        // withUrl (not RestRequest.get) so the connector-level RequestHeaders — applied by the reader
-        // to the FIRST request only, not re-decorated per page — and any existing query params survive
-        // onto the next URL. (Auth is re-signed per page by RestEndpointReader, so it's not at stake
+        String nextUrl = PaginationUrlGuard.vet(url, current.url());
+        // following (not RestRequest.get) so the connector-level RequestHeaders — applied by the reader
+        // to the FIRST request only, not re-decorated per page — and a query param the next URL lacks
+        // survive onto it; one it already carries is not sent twice (#1633). (Auth is re-signed per page by RestEndpointReader, so it's not at stake
         // here.) Mirrors LinkHeaderPaginationStrategy, the other "follow an absolute next URL" strategy.
-        return current.withUrl(nextUrl);
+        return current.following(nextUrl);
     }
 
     @Override

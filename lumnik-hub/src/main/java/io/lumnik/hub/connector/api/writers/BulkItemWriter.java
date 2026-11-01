@@ -4,6 +4,7 @@ import io.lumnik.hub.connector.api.ItemWriter;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.WriteOutcome;
 import io.lumnik.hub.connector.api.types.WritePerformanceProfile;
+import io.lumnik.hub.sql.SqlFailureText;
 
 import jakarta.enterprise.inject.spi.CDI;
 
@@ -52,12 +53,17 @@ public abstract class BulkItemWriter<T> implements ItemWriter<T> {
    * On error, returns {@link WriteOutcome.AllFailed AllFailed}.
    * </p>
    */
+  /** The datasource the batch runs on; a seam so a test can hand a failing one. */
+  protected DataSource dataSource() {
+    return CDI.current().select(DataSource.class).get();
+  }
+
   @Override
   public WriteOutcome write(List<T> items, ConnectorContext ctx) {
     if (items.isEmpty()) {
       return new WriteOutcome.AllWritten(0);
     }
-    DataSource ds = CDI.current().select(DataSource.class).get();
+    DataSource ds = dataSource();
     try (Connection conn = ds.getConnection();
          PreparedStatement ps = conn.prepareStatement(insertSql())) {
       for (var item : items) {
@@ -67,7 +73,8 @@ public abstract class BulkItemWriter<T> implements ItemWriter<T> {
       ps.executeBatch();
       return new WriteOutcome.AllWritten(items.size());
     } catch (Exception e) {
-      return new WriteOutcome.AllFailed(e.getMessage(), e);
+      // The same rule as ChunkExecutor.failure: a batch failure quotes its row, and class 22/23 text is withheld (#1679).
+      return new WriteOutcome.AllFailed(SqlFailureText.withCause(e), e);
     }
   }
 }

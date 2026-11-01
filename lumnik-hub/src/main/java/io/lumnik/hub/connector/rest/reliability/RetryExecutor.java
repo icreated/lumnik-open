@@ -54,7 +54,7 @@ public class RetryExecutor {
                 sleepFor(computeDelay(attempt, retryAfterMillis(r)));
             } catch (IOException | InterruptedException ex) {
                 lastEx = ex;
-                if (!policy.retryOnNetwork() || attempt == policy.maxAttempts()) throw ex;
+                if (!policy.retriesNetworkFailure(ex) || attempt == policy.maxAttempts()) throw ex;
                 sleepFor(computeDelay(attempt, -1));
             } catch (Exception ex) {
                 throw ex;

@@ -1,5 +1,6 @@
 package io.lumnik.hub.ask;
 
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.connector.jdbc.HikariPoolRegistry;
 import io.lumnik.hub.connector.jdbc.JdbcConnectionConfig;
 import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
@@ -10,9 +11,6 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import javax.sql.DataSource;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -59,18 +57,14 @@ public class AdLabelProvider implements SchemaLabelProvider {
         try {
             DataSource ds = poolRegistry.acquire(cc.url(), cc.user(), cc.password(), -1L,
                 dialectRegistry.resolve(cc.dialectId()));
-            try (Connection conn = ds.getConnection();
-                 PreparedStatement ps = conn.prepareStatement(sql)) {
+            List<String[]> rows = Jdbc.query(ds, "AdLabelProvider.labelsForTable", sql, ps -> {
                 ps.setQueryTimeout(5);
                 ps.setString(1, tableName);
-                try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) {
-                        String col = rs.getString("columnname");
-                        String label = rs.getString("label");
-                        if (col != null && label != null && !label.isBlank()) {
-                            out.put(col.toLowerCase(Locale.ROOT), label);
-                        }
-                    }
+            }, rs -> new String[]{ rs.getString("columnname"), rs.getString("label") });
+            for (String[] row : rows) {
+                String col = row[0], label = row[1];
+                if (col != null && label != null && !label.isBlank()) {
+                    out.put(col.toLowerCase(Locale.ROOT), label);
                 }
             }
         } catch (Exception e) {

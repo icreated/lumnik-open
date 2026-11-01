@@ -1,7 +1,8 @@
 # Kotlin hooks — when no transformer fits
 
-> A `kotlin` cell hook runs a `.kts` script over each row of a `csv-file` connector. Use it
-> only when no [transformer](transformers.md) does the job.
+> A `kotlin` cell hook runs a `.kts` script over each row of a `csv-file` connector, or over
+> each item's promoted columns on a [REST endpoint](rest.md#run-hooks-over-the-promoted-columns).
+> Use it only when no [transformer](transformers.md) does the job.
 
 ## Name the script in the manifest
 

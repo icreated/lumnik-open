@@ -1,7 +1,5 @@
 package io.lumnik.hub.workflow;
 
-import io.lumnik.hub.process.MessageTemplate;
-
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Map;
@@ -15,7 +13,7 @@ import java.util.Set;
  */
 public final class DormancyMessage {
 
-    /** What a declared message may name; anything else is refused at apply. */
+    /** The reserved names a declared message may use; any other name is a column of the watched relation (#1588). */
     public static final Set<String> PLACEHOLDERS =
         Set.of("doc_key", "state", "state_label", "since", "first_observed_at", "threshold", "workflow");
 
@@ -26,10 +24,11 @@ public final class DormancyMessage {
 
     private DormancyMessage() {}
 
-    /** The sentence of {@code obs}'s dormancy, in {@code g}'s declared message or the default. */
-    static String render(WorkflowGraph g, WorkflowObservationStore.Observation obs) {
+    /** The sentence of {@code obs}'s dormancy, in {@code g}'s declared message or the default, with the version's
+     *  cited columns ({@link DecisionContext#render}). */
+    static String render(WorkflowGraph g, WorkflowObservationStore.Observation obs, Map<String, Object> context) {
         String template = g.dormancy().message();
-        return MessageTemplate.render(template != null ? template : DEFAULT, Map.of(
+        return DecisionContext.render(template != null ? template : DEFAULT, context, Map.of(
             "doc_key", obs.docKey(), "state", obs.state(), "state_label", g.labelOf(obs.state()),
             "since", DAY.format(obs.since()), "first_observed_at", DAY.format(obs.firstObservedAt()),
             "threshold", g.dormancy().after(), "workflow", g.name()));

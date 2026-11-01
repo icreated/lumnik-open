@@ -217,6 +217,22 @@ class EntityApplyIT {
    * <p>Each case names the rule and a fragment of the exact text, so a reworded refusal fails here
    * rather than silently breaking the documented contract.
    */
+  /** #1604: 61 characters is the longest name whose view name, {@code v_<name>}, PostgreSQL keeps whole. */
+  @Test
+  void a_name_of_61_characters_is_applied_and_its_view_keeps_the_whole_name() throws Exception {
+    String name = "c".repeat(61);
+    given().config(YamlBody.CONFIG)
+        .headers(TestIdentity.tenantAndUser(1))
+        .contentType("application/yaml").body(MANIFEST.replace("name: Customer", "name: " + name))
+        .post("/api/entities/apply")
+        .then().statusCode(200)
+        .body("view", Matchers.equalTo(EntityViewCompiler.viewName(name)));
+    try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
+      st.execute("DELETE FROM connector.entity_manifest WHERE name = '" + name + "'");
+      st.execute("DROP VIEW IF EXISTS connector.\"v_" + name + "\"");
+    }
+  }
+
   static Stream<Arguments> refusals() {
     return Stream.of(
         Arguments.of("wrong kind",
@@ -225,6 +241,9 @@ class EntityApplyIT {
         Arguments.of("name is not an identifier",
             MANIFEST.replace("name: Customer", "name: my-customer"),
             "name must be a simple identifier"),
+        Arguments.of("name too long for its view (#1604)",
+            MANIFEST.replace("name: Customer", "name: " + "C".repeat(62)),
+            "name has 62 characters; at most 61"),
         Arguments.of("no match column",
             MANIFEST.replace("match: [id]", "match: []"),
             "match must declare at least one column"),

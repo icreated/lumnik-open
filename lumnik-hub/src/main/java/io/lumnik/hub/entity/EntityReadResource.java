@@ -3,6 +3,7 @@ package io.lumnik.hub.entity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.sql.TemporalText;
 import io.lumnik.hub.tenant.TenantContextFilter;
@@ -26,8 +27,6 @@ import jakarta.ws.rs.core.UriInfo;
 import org.hibernate.Session;
 import org.jboss.logging.Logger;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -131,17 +130,18 @@ public class EntityReadResource {
    * allowed to fail the read that already succeeded.
    */
   private void recordRead(EntityManifest m) {
-    try (Connection c = adminDs.getConnection();
-         PreparedStatement ps = c.prepareStatement(
-             "INSERT INTO core.audit_outbox "
-           + "(tenant_id, actor_id, entity_type, entity_key, operation, changes, created_at) "
-           + "VALUES (?, ?, ?, ?, 'READ', '{}'::jsonb, now())")) {
-      ps.setLong(1, TenantContextFilter.current());
-      Long actorId = TenantContextFilter.currentUser();
-      if (actorId != null) ps.setLong(2, actorId); else ps.setNull(2, Types.BIGINT);
-      ps.setString(3, m.kind());
-      ps.setString(4, m.name());
-      ps.executeUpdate();
+    try {
+      Jdbc.update(adminDs, "EntityReadResource.recordRead",
+          "INSERT INTO core.audit_outbox "
+        + "(tenant_id, actor_id, entity_type, entity_key, operation, changes, created_at) "
+        + "VALUES (?, ?, ?, ?, 'READ', '{}'::jsonb, now())",
+          ps -> {
+            ps.setLong(1, TenantContextFilter.current());
+            Long actorId = TenantContextFilter.currentUser();
+            if (actorId != null) ps.setLong(2, actorId); else ps.setNull(2, Types.BIGINT);
+            ps.setString(3, m.kind());
+            ps.setString(4, m.name());
+          });
     } catch (Exception e) {
       // Never let audit failure break the read — same rule as AuditEntityListener. The throwable
       // goes to the logger, not just its message: this path is silent by design, so this line is

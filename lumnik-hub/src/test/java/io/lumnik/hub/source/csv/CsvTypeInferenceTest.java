@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -63,6 +64,19 @@ class CsvTypeInferenceTest {
             row("totallines", "-3")
         );
         assertThat(promotedType(sample, "totallines")).isEqualTo(SqlType.DECIMAL);
+    }
+
+    /** #1622 (Copilot on #1625): under tr, "ID" lowered to "ıd" and slipped past the reserved columns. */
+    @Test
+    void a_reserved_header_stays_reserved_in_a_turkish_locale() {
+        Locale previous = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr"));
+            assertThat(new CsvIngestService().inferSchema(List.of(Map.of("ID", "7", "amount", "12")))
+                .stream().map(p -> p.name()).toList()).containsExactly("amount");
+        } finally {
+            Locale.setDefault(previous);
+        }
     }
 
     private static Map<String, Object> row(String col, Object v) {

@@ -2,6 +2,7 @@ package io.lumnik.hub.validator.rest;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.lumnik.hub.connector.rest.auth.SecretRedactor;
 import io.lumnik.hub.connector.rest.reliability.RateLimiterRegistry;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.connector.rest.DottedPath;
@@ -18,7 +19,7 @@ import static io.lumnik.hub.validator.JsonNodes.blankOrNull;
 import io.lumnik.hub.validator.ConfigDef.Type;
 import io.lumnik.hub.validator.ValidationError.Severity;
 import io.lumnik.hub.validator.common.CronField;
-import io.lumnik.hub.validator.common.NoMappingBlock;
+import io.lumnik.hub.validator.common.MappingBlockValidator;
 import io.lumnik.hub.validator.common.WindowField;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -34,6 +35,7 @@ import static io.lumnik.hub.validator.ConfigDefValidators.*;
 public class RestConnectorValidator implements ConnectorValidator {
 
     @Inject PaginationPresetRegistry presets;
+    @Inject MappingBlockValidator mappings;
 
     /** Required preset overrides are interpolated into JSONPaths (e.g. {@code $._embedded.{items}}),
      *  so restrict them to a simple identifier — a value can't inject JSONPath metacharacters. */
@@ -44,7 +46,6 @@ public class RestConnectorValidator implements ConnectorValidator {
     private static final String CURSOR_BINDING = "cursor_binding";
     private static final String RELAY = "relay";
     private static final String VARIABLE = "variable";
-    private static final String NO_MAPPING_INSTEAD = "Promote a field with promote[] and its transform:";
 
     @Override public String kind() { return "rest-generic"; }
 
@@ -73,6 +74,15 @@ public class RestConnectorValidator implements ConnectorValidator {
             // non-object auth used to validate clean and then break the apply door with a 500.
             .optionalNested("auth", Importance.MEDIUM,
                 "Authentication for every endpoint (omit => none)", AuthBlockValidator.configDef())
+            // #1609: the source's HTTPS is signed by an internal CA (a cluster's API server, an in-house PKI).
+            .optionalNested("tls", Importance.MEDIUM,
+                "Trust an internal CA for every endpoint: {ca_secret: the lm secret holding its PEM certificate(s)}",
+                new ConfigDef()
+                    // Blank would read as "no CA" — refused here, and failed closed at runtime (CaTrust).
+                    .requireCustom("ca_secret", Type.STRING, Importance.HIGH,
+                        "Name of the lm secret holding the CA's PEM certificate(s); only those CAs are trusted",
+                        nonEmpty())
+                    .closed())
             .optionalHinted("headers", Type.LIST, Importance.MEDIUM,
                 "Static headers sent on every request, [{name, value | value_env}]", null,
                 "headers is a list of { name, value|value_env } objects")
@@ -83,18 +93,19 @@ public class RestConnectorValidator implements ConnectorValidator {
             // schedule's twin, read by the SHARED apply preamble (ApplyUpsert); declared and
             // checked through WindowField, which owns both wordings for all four connector types.
             .optional("window", Type.STRING, Importance.MEDIUM, WindowField.DOC, null)
-            // Declared to be refused: rest transforms through promote[].transform only (#1437).
-            .optional("mapping", Type.NESTED, Importance.LOW, NoMappingBlock.DOC, null)
+            // Declared to be refused: a mapping runs over one endpoint's promoted columns (#1437, #1617).
+            .optional("mapping", Type.NESTED, Importance.LOW, ON_THE_ENDPOINT, null)
             .closed();
     }
 
     @Override
     public List<ValidationError> validateCrossField(JsonNode spec) {
         List<ValidationError> errs = new ArrayList<>();
-        NoMappingBlock.refuse("rest-generic", spec.path("mapping"), NO_MAPPING_INSTEAD, errs);
+        mappingOnTheEndpoint(spec.path("mapping"), "spec.mapping", errs);
         validateAuth(spec.path("auth"), errs);
         validateEndpoints(spec.path("endpoints"), spec.path("defaults"), errs);
         anyShapeRefusals(spec.path("defaults"), "spec.defaults", errs);
+        mappingOnTheEndpoint(spec.path("defaults").path("mapping"), "spec.defaults.mapping", errs);
         errs.addAll(defaultsCannotOverride(spec.path("defaults")));
         validateHeaders(spec.path("headers"), errs);
         CronField.check(spec.path("schedule"), errs,
@@ -152,6 +163,20 @@ public class RestConnectorValidator implements ConnectorValidator {
                 && !"basic".equals(clientAuth.asText()) && !"post".equals(clientAuth.asText())) {
             errs.add(new ValidationError("spec.auth.client_auth", Severity.ERROR, "client_auth must be basic or post",
                 List.of("basic (the default) sends the client id and secret as HTTP Basic; post puts them in the body")));
+        }
+        // scheme is bearer's alone (#1640): one word before the token, as the header's grammar has it.
+        JsonNode scheme = auth.path("scheme");
+        if (!scheme.isMissingNode()) {
+            if (!"bearer".equals(kind)) {
+                errs.add(new ValidationError("spec.auth.scheme", Severity.WARNING,
+                    "scheme under kind: " + kind + " — the runtime ignores it",
+                    List.of("Remove it: scheme names the word before a bearer token (Authorization: Token <key>)")));
+            } else if (scheme.isTextual() && !(SecretRedactor.isSchemeWord(scheme.asText()) && scheme.asText().length() <= 32)) {
+                // A non-string is the declaration's refusal (Type.STRING); null is absent — Bearer at runtime.
+                errs.add(new ValidationError("spec.auth.scheme", Severity.ERROR,
+                    "scheme must be one word starting with a letter — letters, digits, '-' or '_' — at most 32",
+                    List.of("Bearer (the default), or the word the API expects, e.g. Token for Django REST Framework")));
+            }
         }
         if (!"oauth2".equals(kind)) {
             for (String key : OAUTH2_KEYS) {
@@ -224,11 +249,56 @@ public class RestConnectorValidator implements ConnectorValidator {
 
     /**
      * The per-endpoint refusals that hold whatever the request shape: on each endpoint, and on spec.defaults, which the
-     * run lays under every endpoint (#1461) — one list, so a refusal added here reaches both tiers.
+     * run lays under every endpoint (#1461) — one list, so a refusal added here reaches both tiers. A mapping is the
+     * exception: allowed on an endpoint, refused in the defaults ({@link #mappingOnTheEndpoint}).
      */
     private static void anyShapeRefusals(JsonNode block, String basePath, List<ValidationError> errs) {
         errs.addAll(headersStayAtConnectorLevel(block, basePath));
-        NoMappingBlock.refuse("rest-generic", block.path("mapping"), basePath + ".mapping", NO_MAPPING_INSTEAD, errs);
+    }
+
+    /** What {@link #configDef} says of {@code spec.mapping}, and {@link EndpointsBlockValidator} of the defaults'. */
+    static final String ON_THE_ENDPOINT = "Not accepted here — refused by validation; declare the mapping on its endpoint";
+
+    /**
+     * #1617: a mapping runs over one endpoint's promoted columns — spec.mapping and spec.defaults.mapping would run over
+     * none (in the defaults, over columns each endpoint declares differently). Refused when a block, as the declaration
+     * refuses any other shape.
+     */
+    private static void mappingOnTheEndpoint(JsonNode mapping, String at, List<ValidationError> errs) {
+        if (!mapping.isObject()) return;
+        errs.add(new ValidationError(at, Severity.ERROR,
+            "a mapping runs over one endpoint's promoted columns — declared here, it would run over none",
+            List.of("Declare it on the endpoint: endpoints[].mapping, beside the target whose promote it reads")));
+    }
+
+    /**
+     * #1617: the csv checks of a mapping, at the endpoint's path, over the columns its promote entries read; plus the
+     * hooks that cannot run on items mapped one by one, each row landing beside its own: split-row and aggregator make
+     * rows of several or several of one, sort-by orders a batch.
+     */
+    private void validateMapping(JsonNode endpoint, String basePath, List<ValidationError> errs) {
+        JsonNode mapping = endpoint.path("mapping");
+        if (!mapping.isObject()) return;
+        String at = basePath + ".mapping";
+        errs.addAll(mappings.validate(mapping, at));
+        errs.addAll(MappingBlockValidator.hookRefused(mapping, at, "cell", "fill-down", "fill-down carries a value from "
+            + "one row to the next, and a REST endpoint maps each item on its own — each item holds its own values",
+            "Promote the value from the item itself; drop the fill-down hook"));
+        for (String hook : List.of("split-row", "aggregator")) {
+            errs.addAll(MappingBlockValidator.hookRefused(mapping, at, "row", hook, hook + " makes rows of several, or "
+                + "several of one — each row of a REST endpoint lands beside the item it was read from",
+                "Shape each item's own columns; drop the " + hook + " hook"));
+        }
+        errs.addAll(MappingBlockValidator.hookRefused(mapping, at, "dataset", "sort-by", "sort-by orders a batch, and "
+            + "a REST endpoint maps each item on its own — the order would change nothing",
+            "Drop the sort-by hook; order the rows when you read them"));
+        Set<String> promoted = new HashSet<>();
+        Set<String> declared = new HashSet<>();
+        for (JsonNode column : endpoint.path("target").path("promote")) {
+            declared.add(column.path("name").asText());
+            if (!blankOrNull(column.path("path"))) promoted.add(column.path("name").asText());
+        }
+        errs.addAll(mappings.columnsThatDoNotExist(mapping, at, promoted, Map.of(), declared));
     }
 
     /**
@@ -296,9 +366,11 @@ public class RestConnectorValidator implements ConnectorValidator {
         errs.addAll(soapPairsWithSoapPagination(endpoint, basePath, isSoap));
         errs.addAll(soapPlaceholdersAreKnown(endpoint, basePath, isSoap));
         anyShapeRefusals(endpoint, basePath, errs);
+        validateMapping(endpoint, basePath, errs);
         errs.addAll(connectorLevelKeysStayAtSpec(endpoint, basePath));
         validatePagination(endpoint.path(PAGINATION), basePath + ".pagination", errs);
-        validatePromote(endpoint.path("target").path("promote"), basePath + ".target.promote", errs);
+        validatePromote(endpoint.path("target").path("promote"), basePath + ".target.promote",
+            endpoint.path("mapping").isObject(), errs);
     }
 
     /**
@@ -485,17 +557,32 @@ public class RestConnectorValidator implements ConnectorValidator {
 
     /** Per-kind required pagination keys — exactly what each strategy reads to extract items + advance. */
     private void validatePagination(JsonNode pag, String p, List<ValidationError> errs) {
-        switch (pag.path("kind").asText()) {
+        String kind = pag.path("kind").asText();
+        // One witness of the count: the body's or a header's, never both — they could disagree (#1632). Blank is none, as the run reads it.
+        if (!blankOrNull(pag.path("total_path")) && !blankOrNull(pag.path("total_header"))) {
+            errs.add(new ValidationError(p + ".total_header", Severity.ERROR,
+                "total_header and total_path both name the source's count — declare one",
+                List.of("total_header when the API sends the count in a response header (X-Total-Count), total_path when the body carries it")));
+        }
+        switch (kind) {
             case "page"            -> requireKeys(pag, p, errs, "page_param", RESPONSE_PATH);
             case "offset"          -> requireKeys(pag, p, errs, "offset_param", "limit_param", RESPONSE_PATH);
-            // has_more_path is required: next() stops after page 1 when it's absent (silent partial ingestion).
+            // relay requires has_more_path (pageInfo.hasNextPage); cursor may omit it, and then the cursor decides.
             case "cursor", RELAY -> {
-                requireKeys(pag, p, errs, "cursor_path", "has_more_path", RESPONSE_PATH);
+                requireKeys(pag, p, errs, "cursor_path", RESPONSE_PATH);
+                if (RELAY.equals(kind)) {
+                    requireKeys(pag, p, errs, "has_more_path");
+                } else if (absent(pag.path("has_more_path"))) {
+                    // Valid, and said: a misspelled flag key would otherwise switch modes in silence.
+                    errs.add(new ValidationError(p + ".has_more_path", Severity.WARNING,
+                        "no has_more_path: the cursor decides — the read stops on an empty cursor or an empty page",
+                        List.of("Declare has_more_path if the API sends a more-pages flag")));
+                }
                 // GraphQL relay carries the cursor in a body variable (cursor_var); REST in a param.
                 if (VARIABLE.equals(pag.path(CURSOR_BINDING).asText())) {
                     // Only RelayPaginationStrategy reads the cursor from a body variable, whereas
                     // CursorPaginationStrategy rejects cursor_binding=variable with IllegalArgumentException.
-                    if (!RELAY.equals(pag.path("kind").asText())) {
+                    if (!RELAY.equals(kind)) {
                         errs.add(new ValidationError(p + ".cursor_binding", Severity.ERROR,
                             "cursor_binding=variable is only valid for pagination.kind=relay; "
                                 + "cursor pagination uses cursor_binding=query|header", List.of()));
@@ -507,7 +594,8 @@ public class RestConnectorValidator implements ConnectorValidator {
             }
             // link-header still reads response_path in items() — without it, it defaults to "$" and
             // reads the wrong shape, silently.
-            case "link-header" -> requireKeys(pag, p, errs, RESPONSE_PATH);
+            // none (#1650), the whole list in one answer: only where it is.
+            case "link-header", "none" -> requireKeys(pag, p, errs, RESPONSE_PATH);
             // custom has no runtime: it would pass here and fail the run on page 2 (#1245).
             case "custom" -> errs.add(new ValidationError(p + ".kind", Severity.ERROR,
                 CustomPaginationStrategy.NOT_SUPPORTED, List.of()));
@@ -548,8 +636,9 @@ public class RestConnectorValidator implements ConnectorValidator {
         Set.of("text", "bigint", "integer", "decimal", "boolean", "date", "timestamptz", "jsonb");
 
     /** promote[] element shape (mirrors TargetBlockValidator.validateIndexes): each entry needs a
-     *  non-blank name + path + a known type, or the ext.* DDL / extraction breaks at runtime. */
-    private void validatePromote(JsonNode promote, String p, List<ValidationError> errs) {
+     *  non-blank name + path + a known type, or the ext.* DDL / extraction breaks at runtime. Under a mapping
+     *  ({@code mapped}), an entry without a path is a column the mapping fills (#1617). */
+    private void validatePromote(JsonNode promote, String p, boolean mapped, List<ValidationError> errs) {
         if (promote.isMissingNode() || promote.isNull()) return;
         if (!promote.isArray()) {
             errs.add(new ValidationError(p, Severity.ERROR,
@@ -557,24 +646,38 @@ public class RestConnectorValidator implements ConnectorValidator {
             return;
         }
         for (int i = 0; i < promote.size(); i++) {
-            validatePromoteEntry(promote.get(i), p + "[" + i + "]", errs);
+            validatePromoteEntry(promote.get(i), p + "[" + i + "]", mapped, errs);
         }
     }
 
-    private void validatePromoteEntry(JsonNode e, String p, List<ValidationError> errs) {
+    private void validatePromoteEntry(JsonNode e, String p, boolean mapped, List<ValidationError> errs) {
         if (!e.isObject()) {
             errs.add(new ValidationError(p, Severity.ERROR,
                 "promote entry must be an object with name/path/type", List.of()));
             return;
         }
-        for (String f : List.of("name", "path", "type")) {
+        for (String f : List.of("name", "type")) {
             if (blankOrNull(e.path(f))) {
                 errs.add(new ValidationError(p + "." + f, Severity.ERROR,
                     f + " is required and must be non-blank", List.of()));
             }
         }
+        // Absent or null (`path:` left empty), the column is the mapping's to fill, as the run reads it (#1617);
+        // written, it must say where to read.
+        JsonNode path = e.path("path");
+        boolean none = path.isMissingNode() || path.isNull();
+        if (none ? !mapped : blankOrNull(path)) {
+            errs.add(new ValidationError(p + ".path", Severity.ERROR, "path is required and must be non-blank",
+                none ? List.of("Without a path, the column is filled by the endpoint's mapping — this endpoint has none")
+                     : List.of()));
+        }
+        if (none && mapped && !absent(e.path("transform"))) {
+            errs.add(new ValidationError(p + ".transform", Severity.ERROR,
+                "transform reads the value at path — a column the mapping fills has none to read",
+                List.of("Drop the transform: the mapping writes this column's value")));
+        }
         String type = e.path("type").asText();
-        if (!type.isBlank() && !PROMOTE_TYPES.contains(type.toLowerCase())) {
+        if (!type.isBlank() && !PROMOTE_TYPES.contains(type.toLowerCase(Locale.ROOT))) {
             errs.add(new ValidationError(p + ".type", Severity.ERROR,
                 "unknown promote type '" + type + "' (allowed: " + new TreeSet<>(PROMOTE_TYPES) + ")",
                 List.of()));
@@ -584,21 +687,23 @@ public class RestConnectorValidator implements ConnectorValidator {
         // crashes the run, and so does an unknown name.
         JsonNode transformNode = e.path("transform");
         if (!transformNode.isMissingNode() && !transformNode.isNull()) {
-            String transform = transformNode.isTextual() ? transformNode.asText() : "";
-            String allowed = Arrays.stream(HybridJsonbSpec.Transform.values())
-                .map(t -> t.name().toLowerCase(Locale.ROOT))
-                .collect(Collectors.joining(", "));
-            if (transform.isBlank()) {
-                errs.add(new ValidationError(p + ".transform", Severity.ERROR,
-                    "transform must be a non-blank string (allowed: " + allowed + ")", List.of()));
-                return;
-            }
-            try {
-                HybridJsonbSpec.Transform.valueOf(transform.toUpperCase(Locale.ROOT));
-            } catch (IllegalArgumentException ex) {
-                errs.add(new ValidationError(p + ".transform", Severity.ERROR,
-                    "unknown transform '" + transform + "' (allowed: " + allowed + ")", List.of()));
-            }
+            transformRefusal(transformNode).ifPresent(m ->
+                errs.add(new ValidationError(p + ".transform", Severity.ERROR, m, List.of())));
+        }
+    }
+
+    /** Why {@code transform} names no promote transform, if it does not — a promote entry's and the key's (#1630). */
+    static Optional<String> transformRefusal(JsonNode transformNode) {
+        String transform = transformNode.isTextual() ? transformNode.asText() : "";
+        String allowed = Arrays.stream(HybridJsonbSpec.Transform.values())
+            .map(t -> t.name().toLowerCase(Locale.ROOT))
+            .collect(Collectors.joining(", "));
+        if (transform.isBlank()) return Optional.of("transform must be a non-blank string (allowed: " + allowed + ")");
+        try {
+            HybridJsonbSpec.Transform.valueOf(transform.toUpperCase(Locale.ROOT));
+            return Optional.empty();
+        } catch (IllegalArgumentException ex) {
+            return Optional.of("unknown transform '" + transform + "' (allowed: " + allowed + ")");
         }
     }
 

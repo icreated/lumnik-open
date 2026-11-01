@@ -28,6 +28,7 @@ public class RestConnectorApplyHandler implements ConnectorApplyHandler {
     private static final String BASE_URL = "base_url";
     private static final String HEADERS = "headers";
     private static final String AUTH = "auth";
+    private static final String TLS = "tls";
     private static final String DEFAULTS = "defaults";
 
     @Inject ConnectorRepository connRepo;
@@ -78,6 +79,8 @@ public class RestConnectorApplyHandler implements ConnectorApplyHandler {
             connCfg.put("default_rate_limit", rateLimit);
         }
         ApplyUpsert.putOrRemove(connCfg, HEADERS, spec.path(HEADERS), List.class);
+        // #1609: the connector's trust in an internal CA, read by every run and pre-flight (CaTrust).
+        ApplyUpsert.putOrRemove(connCfg, TLS, spec.path(TLS), Map.class);
         return connCfg;
     }
 

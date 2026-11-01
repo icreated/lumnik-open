@@ -3,17 +3,18 @@ package io.lumnik.hub.ask;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.tenant.TenantContext;
+import io.lumnik.common.tx.SuspendedTransaction;
 import io.lumnik.hub.connector.event.ConnectorRunCompleted;
 import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
 import io.lumnik.hub.scheduler.TenantScope;
 import io.quarkus.agroal.DataSource;
-import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Event;
 import jakarta.enterprise.event.ObservesAsync;
 import jakarta.inject.Inject;
 import jakarta.transaction.Status;
 import jakarta.transaction.Synchronization;
+import jakarta.transaction.TransactionManager;
 import jakarta.transaction.TransactionSynchronizationRegistry;
 import org.jboss.logging.Logger;
 
@@ -47,6 +48,7 @@ public class SchemaCardRefresher {
     @Inject DynamicTableRegistry dynamicTables;
     @Inject SchemaCardStore store;
     @Inject TransactionSynchronizationRegistry txSync;
+    @Inject TransactionManager transactionManager;
     @Inject Event<EntityCardsStale> entityCardsStale;
 
     /** Other tenants' cards an entity apply or delete left stale, rebuilt after the request. */
@@ -83,7 +85,7 @@ public class SchemaCardRefresher {
                         // The committed transaction is still associated with the thread here, and the
                         // credential resolver cannot join it: suspend it, as the one-shot CSV ingest does (#938).
                         TenantContext.callAsSystem(() ->
-                            QuarkusTransaction.suspendingExisting().call(() -> discovery.rediscover(tenantId, scope)));
+                            SuspendedTransaction.call(transactionManager, () -> discovery.rediscover(tenantId, scope)));
                     } catch (RuntimeException e) {
                         LOG.warnf(e, "SchemaCardRefresher: card refresh failed for scope %s — manual `lm source rediscover` remains available", scope);
                     }

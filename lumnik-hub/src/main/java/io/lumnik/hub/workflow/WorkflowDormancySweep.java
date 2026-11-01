@@ -18,15 +18,15 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Set;
 
 import io.lumnik.common.sql.Jdbc;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
-import static io.lumnik.hub.sql.SqlIdentifiers.quoteTable;
 import static io.lumnik.hub.workflow.WorkflowManifestParser.norm;
 import static io.quarkus.scheduler.Scheduled.ConcurrentExecution.SKIP;
 
@@ -40,7 +40,9 @@ import static io.quarkus.scheduler.Scheduled.ConcurrentExecution.SKIP;
  * be dormant before the threshold elapses from OUR first observation. All claims are
  * observation-relative; the hub cannot know what happened before its first breath.
  *
- * <p>Admin DS only (transactions=disabled — plain JDBC, no JTA anywhere: the #200 lesson).
+ * <p>A table is read on the admin DS (transactions=disabled — plain JDBC, the #200 lesson). A fused view (#1588)
+ * carries no {@code tenant_id}, so it is read on the readonly DS under the tenant, one short transaction per page,
+ * as the due sweep reads it.
  * Per-workflow fail-closed: one broken declaration logs and never blocks the others.
  */
 @ApplicationScoped
@@ -58,6 +60,11 @@ public class WorkflowDormancySweep {
 
     /** Rows the sweep holds at a time: the hub's heap does not depend on how many documents a workflow has. */
     private static final int PAGE = 1_000;
+    /** Rows fetched per page on a fused view (a key is never cut, so a page may hold one more key's rows);
+     *  changed only by {@link #pageRows}, for the IT that proves a key is never cut. */
+    private volatile int pageRows = PAGE;
+    private volatile Runnable beforeRead = () -> {};
+    private volatile Runnable afterRead = () -> {};
 
     private static final String TENANTS_SQL =
         "SELECT DISTINCT tenant_id FROM core.workflow_manifest WHERE enabled";
@@ -75,14 +82,8 @@ public class WorkflowDormancySweep {
         "42P01", "the table no longer exists",
         "42703", "a declared column no longer exists");
 
-    /**
-     * (tenant, workflow) → the reason already reported, so a standing condition is said ONCE.
-     *
-     * <p>In memory, not in a table: a restart re-saying it once is the right amount of noise for a
-     * condition that is still true, and the alternative is a migration and a row to keep in step
-     * with a manifest that can be re-applied at any moment.
-     */
-    private final Map<String, String> stoodDown = new ConcurrentHashMap<>();
+    /** What has already been said, so a standing condition is said ONCE ({@link WorkflowConditions}). */
+    private final WorkflowConditions conditions = new WorkflowConditions(LOG, "dormancy");
 
     @Inject WorkflowRegistry registry;
     @Inject WorkflowObservationStore observations;
@@ -92,24 +93,31 @@ public class WorkflowDormancySweep {
     @DataSource("admin")
     AgroalDataSource adminDs;
 
+    /** The catalog as the readonly role sees it, for spec.on.order (#1588) — the role the apply door asks as. */
+    @Inject
+    @DataSource("readonly")
+    AgroalDataSource readonlyDs;
+
     @Scheduled(every = "${lumnik.workflow.sweep.every:15m}", concurrentExecution = SKIP)
     void tick() {
         sweepNow();
     }
 
     public void sweepNow() {
+        Set<String> swept = new HashSet<>();
         for (long tenant : tenants()) {
             for (WorkflowGraph g : registry.allParsable(tenant)) {
                 if (g.dormancy() == null || g.key() == null) continue;
+                swept.add(WorkflowConditions.workflowOf(tenant, g.name()));
                 try {
-                    sweepOne(tenant, g);
-                    noteSweepSucceeded(tenant, g);
+                    if (CitedColumns.rebuiltOnce(() -> sweepOne(tenant, g))) noteSweepSucceeded(tenant, g);
                 } catch (RuntimeException e) {
                     // fail-closed per workflow: never let one broken declaration stop the rest
                     noteSweepFailed(tenant, g, e);
                 }
             }
         }
+        conditions.forgetUnswept(swept);
     }
 
     /**
@@ -129,27 +137,29 @@ public class WorkflowDormancySweep {
      */
     void noteSweepFailed(long tenant, WorkflowGraph g, RuntimeException e) {
         String sqlState = Jdbc.sqlStateOf(e);
-        String what = sqlState == null ? null : DECLARATION_OUTRAN_DATA.get(sqlState);
-        if (what == null) {
+        if (sqlState == null || !DECLARATION_OUTRAN_DATA.containsKey(sqlState)) {
             LOG.errorf(e, "dormancy sweep failed for tenant %d workflow %s — skipped",
                 tenant, g.name());
             return;
         }
+        standDownFor(tenant, g, sqlState);
+    }
+
+    /** The declaration outran the data: said once per (tenant, workflow), again only when the SQLSTATE changes. */
+    private void standDownFor(long tenant, WorkflowGraph g, String sqlState) {
         // Comparing against the PREVIOUS value is what makes a condition that CHANGES (the table
         // came back, but spec.on.key now names a column that is not there) news again instead of
         // being swallowed as "already said" — a_condition_that_changes_is_news_again pins it, and
         // two_tenants_of_the_same_workflow_name_are_two_conditions pins the other half.
         //
-        // What is in the key and what is in the value is stated once, on the field. Two rounds of
-        // review went on this line because it re-described the map from memory and drifted both
-        // times ("the reason is part of the key", then "the key is the workflow"); the description
-        // that was right the whole time is the one that sits next to the declaration.
-        String alreadySaid = stoodDown.put(key(tenant, g), sqlState);
-        if (sqlState.equals(alreadySaid)) return;
+        // What is in the key and what is in the value is stated once, in WorkflowConditions. Two rounds
+        // of review went on this line because it re-described that memory from recollection and drifted
+        // both times; the description that stays right is the one next to the declaration.
+        if (!conditions.holds(tenant, g.name(), WorkflowConditions.DECLARATION, sqlState)) return;
         LOG.warnf("dormancy sweep standing down for tenant %d workflow %s: %s (%s.%s, SQLSTATE %s)."
             + " Nothing further will be logged for it until the sweep succeeds again — re-ingest the"
             + " source, or re-apply the workflow against a table that exists.",
-            tenant, g.name(), what, g.table(), g.column(), sqlState);
+            tenant, g.name(), DECLARATION_OUTRAN_DATA.get(sqlState), g.table(), g.column(), sqlState);
     }
 
     /**
@@ -159,51 +169,145 @@ public class WorkflowDormancySweep {
      * of inheriting the first one's silence.
      */
     void noteSweepSucceeded(long tenant, WorkflowGraph g) {
-        if (stoodDown.remove(key(tenant, g)) != null) {
+        if (conditions.cleared(tenant, g.name(), WorkflowConditions.DECLARATION)) {
             LOG.infof("dormancy sweep resumed for tenant %d workflow %s — %s.%s is readable again",
                 tenant, g.name(), g.table(), g.column());
         }
     }
 
-    /** Tenant AND workflow: one scope's table vanishing is not another tenant's news. */
-    private static String key(long tenant, WorkflowGraph g) {
-        return tenant + ":" + g.name();
+    /** Runs after the catalog is read and before the statement: an IT drops a column there. */
+    void beforeRead(Runnable r) {
+        beforeRead = r;
     }
 
-    private void sweepOne(long tenant, WorkflowGraph g) {
+    /** Runs after the documents are read and before they are reconciled: an IT lands a newer row there. */
+    void afterRead(Runnable r) {
+        afterRead = r;
+    }
+
+    /**
+     * One workflow's tick. False when its relation is not there, so the stand-down this says is not cleared at once
+     * by {@link #noteSweepSucceeded}.
+     */
+    private boolean sweepOne(long tenant, WorkflowGraph g) {
         Instant now = Instant.now();
+        OrderColumn order = null;
+        if (g.order() == null) {
+            conditions.releaseOrder(tenant, g.name());
+        } else {
+            switch (OrderColumn.forSweep(readonlyDs, conditions, tenant, g)) {
+                case OrderColumn.Orders o -> order = o.kind();
+                case OrderColumn.Refused r -> {
+                    return true;   // stood down on the order: nothing is read, nothing is suspended
+                }
+                case OrderColumn.RelationMissing m -> {
+                    standDownFor(tenant, g, "42P01");
+                    return false;
+                }
+            }
+        }
         Map<String, String> terminalByNorm = new LinkedHashMap<>();
         for (WorkflowGraph.StateDto s : g.states()) {
             if (s.terminal()) terminalByNorm.put(norm(s.code()), s.code());
+        }
+        CitedColumns context = CitedColumns.of(readonlyDs, conditions, tenant, g, g.dormancy().columns());
+        beforeRead.run();
+        if (g.onFusedView()) {
+            sweepView(tenant, g, order, context, terminalByNorm, now);
+            return true;
         }
 
         // A name of its own per sweep: a cursor that failed to close can then never collide with
         // the next DECLARE on the same pooled connection.
         String cursor = "lumnik_dormancy_" + Long.toHexString(System.nanoTime());
+        KeySample unreadable = new KeySample();
         try (Connection c = adminDs.getConnection()) {
-            declareStream(c, cursor, tenant, g);
+            declareStream(c, cursor, tenant, g, order, context);
+            afterRead.run();   // the held cursor is materialised: what lands now is not in it
+            int ledger = 4 + context.columns().size();
             try (Statement st = c.createStatement()) {
                 int rows;
                 do {
                     rows = 0;
+                    List<String> suspend = new ArrayList<>();
                     try (ResultSet rs = st.executeQuery("FETCH FORWARD " + PAGE + " FROM " + cursor)) {
                         while (rs.next()) {
                             rows++;
-                            reconcileDocument(tenant, g, terminalByNorm, rs, now);
+                            if (!rs.getBoolean(3)) {
+                                reconcileDocument(tenant, g, context, terminalByNorm, rs, ledger, now);
+                                continue;
+                            }
+                            unreadable.add(rs.getString(1));
+                            if (rs.getString(ledger) != null) suspend.add(rs.getString(1));   // only what is observed
                         }
                     }
+                    observations.suspend(tenant, g.name(), suspend, now);
                 } while (rows == PAGE);
             } finally {
                 closeStream(c, cursor);
             }
         } catch (SQLException e) {
-            throw new RuntimeException("WorkflowDormancySweep.sweepOne: " + e.getMessage(), e);
+            throw new RuntimeException(Jdbc.failureText("WorkflowDormancySweep.sweepOne", e), e);
+        }
+        conditions.noteKeys(tenant, g.name(), WorkflowConditions.UNREADABLE, unreadable,
+            WorkflowConditions.UNREADABLE_WHY);
+        // a table breaks every tie by its ingestion: nothing on it is ambiguous, whatever a view said before
+        conditions.noteKeys(tenant, g.name(), WorkflowConditions.AMBIGUOUS, new KeySample(),
+            WorkflowConditions.AMBIGUOUS_WHY);
+        return true;
+    }
+
+    /**
+     * A fused view's documents, a page of whole keys at a time ({@link ViewDocuments}), each page read on the
+     * readonly datasource under the tenant: the view carries no {@code tenant_id}, and no cursor stays open on it.
+     * The page's share of the ledger is read and written on the admin datasource.
+     */
+    private void sweepView(long tenant, WorkflowGraph g, OrderColumn order, CitedColumns context,
+                           Map<String, String> terminalByNorm, Instant now) {
+        KeySample unreadable = new KeySample();
+        KeySample ambiguous = new KeySample();
+        ViewDocuments.forEachPage(readonlyDs, tenant, g, order, false, context.expressions(), pageRows, page -> {
+            if (!page.isEmpty()) afterRead.run();
+            Map<String, WorkflowObservationStore.Observation> ledger =
+                observations.load(tenant, g.name(), page.stream().map(ViewDocuments.Document::key).toList());
+            List<String> suspend = new ArrayList<>();
+            for (ViewDocuments.Document d : page) {
+                ViewDocuments.Verdict verdict = ViewDocuments.decide(d, r -> norm(resolve(g, r.raw())));
+                switch (verdict) {
+                    case ViewDocuments.Current cur -> reconcileView(tenant, g, context, terminalByNorm,
+                        ledger.get(d.key()), d.key(), cur.row(), now);
+                    case ViewDocuments.Unreadable u -> unreadable.add(d.key());
+                    case ViewDocuments.Ambiguous a -> ambiguous.add(d.key());
+                }
+                if (!(verdict instanceof ViewDocuments.Current) && ledger.containsKey(d.key()))
+                    suspend.add(d.key());   // only what is observed
+            }
+            observations.suspend(tenant, g.name(), suspend, now);
+        });
+        conditions.noteKeys(tenant, g.name(), WorkflowConditions.UNREADABLE, unreadable,
+            WorkflowConditions.UNREADABLE_WHY);
+        conditions.noteKeys(tenant, g.name(), WorkflowConditions.AMBIGUOUS, ambiguous, WorkflowConditions.AMBIGUOUS_WHY);
+    }
+
+    /** One view document, isolated like a stream row: a poison key is logged and skipped, never the page. */
+    private void reconcileView(long tenant, WorkflowGraph g, CitedColumns context, Map<String, String> terminalByNorm,
+                               WorkflowObservationStore.Observation obs, String key, ViewDocuments.Row row,
+                               Instant now) {
+        try {
+            reconcileOne(tenant, g, context.read(row.extra(), 0), terminalByNorm, obs, key, row.raw(), now);
+        } catch (RuntimeException ex) {
+            LOG.warnf(ex, "dormancy: document skipped (tenant %d, workflow %s, key %s)", tenant, g.name(), key);
         }
     }
 
+    /** Rows per page on a fused view; package-private so an IT can prove a key is never cut across pages. */
+    void pageRows(int rows) {
+        pageRows = rows;
+    }
+
     /** One row of the stream: the document, its latest raw state, and the ledger's entry for it (or none). */
-    private void reconcileDocument(long tenant, WorkflowGraph g, Map<String, String> terminalByNorm,
-                                   ResultSet rs, Instant now) throws SQLException {
+    private void reconcileDocument(long tenant, WorkflowGraph g, CitedColumns context, Map<String, String> terminalByNorm,
+                                   ResultSet rs, int ledger, Instant now) throws SQLException {
         String key = rs.getString(1);
         String raw = rs.getString(2);
         // Per-DOCUMENT isolation, the project's per-row DLQ posture: a single poison key escaping to
@@ -211,17 +315,17 @@ public class WorkflowDormancySweep {
         // tick, forever. Reading its ledger entry is part of its work.
         try {
             // doc_key is NULL when the LEFT JOIN found no ledger entry: a document seen for the first time
-            WorkflowObservationStore.Observation obs = rs.getString(3) == null ? null
-                : WorkflowObservationStore.Observation.fromRow(rs, 3);
-            reconcileOne(tenant, g, terminalByNorm, obs, key, raw, now);
+            WorkflowObservationStore.Observation obs = rs.getString(ledger) == null ? null
+                : WorkflowObservationStore.Observation.fromRow(rs, ledger);
+            reconcileOne(tenant, g, context.read(rs, 4), terminalByNorm, obs, key, raw, now);
         } catch (RuntimeException ex) {
             LOG.warnf(ex, "dormancy: document skipped (tenant %d, workflow %s, key %s)",
                 tenant, g.name(), key);
         }
     }
 
-    private void reconcileOne(long tenant, WorkflowGraph g, Map<String, String> terminalByNorm,
-                              WorkflowObservationStore.Observation obs,
+    private void reconcileOne(long tenant, WorkflowGraph g, Map<String, Object> context,
+                              Map<String, String> terminalByNorm, WorkflowObservationStore.Observation obs,
                               String key, String raw, Instant now) {
         String state = resolve(g, raw);
         if (obs == null) {
@@ -246,7 +350,7 @@ public class WorkflowDormancySweep {
         boolean terminal = terminalByNorm.containsKey(norm(state));
         boolean overdue = now.isAfter(obs.since().plus(g.dormancy().duration()));
         if (!terminal && overdue && obs.alertedAt() == null) {
-            emit(tenant, g, obs);
+            emit(tenant, g, obs, context);
             observations.markAlerted(tenant, g.name(), key, now);
         }
     }
@@ -278,26 +382,22 @@ public class WorkflowDormancySweep {
      * copy of the result, which grow with the table), and no longer for the reconciliation, which
      * writes one document at a time and is the slower half.
      */
-    private void declareStream(Connection c, String cursor, long tenant, WorkflowGraph g) throws SQLException {
+    private void declareStream(Connection c, String cursor, long tenant, WorkflowGraph g, OrderColumn order,
+                               CitedColumns context) throws SQLException {
         // JDBC cannot bind an identifier, so each one is interpolated QUOTED — the escaping is the
         // guard, and the name is whatever the source called it ("Statut Commande", "N° Commande").
         // Bare, those are not a miss but a SYNTAX ERROR, and the per-workflow net above would
         // swallow it as a logged skip: a declared dormancy that never fires, on every tick, forever.
         String key = quoteIdent(g.key());
         String column = quoteIdent(g.column());
+        String current = OrderColumn.currentOnTable(order, order == null ? null : quoteIdent(g.order()), key,
+            key + "::text AS k, " + column + "::text AS v" + context.projected(), g.table(),
+            " WHERE tenant_id = ? AND " + key + " IS NOT NULL AND btrim(" + key + "::text) <> '' AND " + column
+                + " IS NOT NULL AND btrim(" + column + "::text) <> ''");
         String sql = "DECLARE " + cursor + " CURSOR WITH HOLD FOR "
-            + "SELECT s.k, s.v, " + WorkflowObservationStore.Observation.columns("o.") + " FROM ("
-            + "SELECT DISTINCT ON (" + key + ") " + key + "::text AS k, "
-            + column + "::text AS v FROM " + quoteTable(g.table())
-            + " WHERE tenant_id = ? AND " + key + " IS NOT NULL AND btrim(" + key + "::text) <> '' AND "
-            + column + " IS NOT NULL AND btrim(" + column + "::text) <> '' "
-            // `id DESC` is not decoration: `_ingested_at` defaults to now(), the TRANSACTION
-            // timestamp, so every row of one ingest chunk shares it EXACTLY — and two rows for the
-            // same business key in one chunk is routine in legacy exports. Without a tiebreaker
-            // DISTINCT ON picks arbitrarily, the sweep flip-flops between the two versions, and the
-            // append-only journal fills with transitions that never happened. Every dynamic table
-            // has `id BIGSERIAL PRIMARY KEY` (DynamicTableWriter), so this is a total order.
-            + "ORDER BY " + key + ", _ingested_at DESC, id DESC) s "
+            + "SELECT s.k, s.v, s.unreadable" + context.carried() + ", " + WorkflowObservationStore.Observation.columns("o.")
+            + " FROM ("
+            + current + ") s "
             + "LEFT JOIN core.workflow_observation o "
             + "ON o.tenant_id = ? AND o.workflow_name = ? AND o.doc_key = s.k";
         // The DECLARE must commit by itself: inside a transaction left open it would keep the table
@@ -320,8 +420,11 @@ public class WorkflowDormancySweep {
         }
     }
 
-    private void emit(long tenant, WorkflowGraph g, WorkflowObservationStore.Observation obs) {
-        String message = DormancyMessage.render(g, obs);
+    /** The decision, with the columns of the version it is about: in the sentence when cited, in {@code fields}
+     *  when cited or declared — absent when neither, so a workflow that cites nothing sends the payload of before. */
+    private void emit(long tenant, WorkflowGraph g, WorkflowObservationStore.Observation obs,
+                      Map<String, Object> context) {
+        String message = DormancyMessage.render(g, obs, context);
         String payload;
         try {
             Map<String, Object> p = new LinkedHashMap<>();
@@ -332,11 +435,12 @@ public class WorkflowDormancySweep {
             p.put("since", obs.since().toString());
             p.put("first_observed_at", obs.firstObservedAt().toString());
             p.put("threshold", g.dormancy().after());
+            if (!context.isEmpty()) p.put("fields", DecisionContext.fields(context));
             payload = json.writeValueAsString(p);
         } catch (Exception e) {
             throw new RuntimeException("WorkflowDormancySweep.emit: payload build failed", e);
         }
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(EMIT_SQL)) {
+        Jdbc.update(adminDs, "WorkflowDormancySweep.emit", EMIT_SQL, ps -> {
             ps.setLong(1, tenant);
             ps.setString(2, "decision.dormant." + g.name());
             ps.setString(3, "workflow:" + g.name());
@@ -345,10 +449,7 @@ public class WorkflowDormancySweep {
             ps.setString(6, payload);
             ps.setString(7, bounded(
                 "dormant:" + g.name() + ":" + obs.docKey() + ":" + obs.since().toEpochMilli()));
-            ps.executeUpdate();
-        } catch (Exception e) {
-            throw new RuntimeException("WorkflowDormancySweep.emit: " + e.getMessage(), e);
-        }
+        });
     }
 
     /** {@code core.event_outbox.entity_key} and {@code dedup_key} are VARCHAR(200) (V24), but a
@@ -371,14 +472,6 @@ public class WorkflowDormancySweep {
     }
 
     private List<Long> tenants() {
-        List<Long> out = new ArrayList<>();
-        try (Connection c = adminDs.getConnection();
-             PreparedStatement ps = c.prepareStatement(TENANTS_SQL);
-             ResultSet rs = ps.executeQuery()) {
-            while (rs.next()) out.add(rs.getLong(1));
-        } catch (Exception e) {
-            throw new RuntimeException("WorkflowDormancySweep.tenants: " + e.getMessage(), e);
-        }
-        return out;
+        return Jdbc.query(adminDs, "WorkflowDormancySweep.tenants", TENANTS_SQL, ps -> {}, rs -> rs.getLong(1));
     }
 }

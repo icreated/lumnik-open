@@ -15,6 +15,7 @@ import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mockito;
 
 import java.lang.reflect.Field;
@@ -81,6 +82,7 @@ import static org.hamcrest.Matchers.equalTo;
  * decision it feeds are proven here, genuinely, against real Postgres.
  */
 @QuarkusTest
+@ExtendWith(ProjectionTickPaused.class)
 class SearchProjectionProviderSwitchIT {
 
     @Inject @DataSource("admin") AgroalDataSource adminDs;

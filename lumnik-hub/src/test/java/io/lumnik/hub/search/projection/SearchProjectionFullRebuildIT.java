@@ -12,6 +12,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -51,6 +52,7 @@ import static org.hamcrest.Matchers.equalTo;
  * idiom {@code SearchProjectionWorkerTest} already uses.
  */
 @QuarkusTest
+@ExtendWith(ProjectionTickPaused.class)
 class SearchProjectionFullRebuildIT {
 
     @Inject @DataSource("admin") AgroalDataSource adminDs;
@@ -627,7 +629,7 @@ class SearchProjectionFullRebuildIT {
             assertThat(state.get().lastError())
                 .as("the real diagnostic, not the reaper's later generic 'reaped' message — the failing step and "
                   + "its SQLSTATE, never the database's own text, which can quote values (#1299)")
-                .contains("SearchProjectionWorker.commitMarkCleanupAndMarkReady failed (SQLSTATE P0001)")
+                .contains("SearchProjectionStateStore.markReady failed (SQLSTATE P0001)") // the statement's own label (#1649)
                 .doesNotContain("injected markReady failure");
             assertThat(state.get().liveGeneration()).as("never advanced past the failed write").isNull();
         } finally {

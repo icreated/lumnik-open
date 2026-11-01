@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.mapping.writer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -11,7 +12,6 @@ import org.jboss.logging.Logger;
 import java.sql.Array;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -278,16 +278,12 @@ public class RagWriter {
    */
   private Set<String> probeExistingHashes(String source, List<PendingChunk> pending) {
     Set<String> existing = new HashSet<>();
-    em.runWithConnection((Connection conn) -> {
-      try (PreparedStatement ps = conn.prepareStatement(PROBE_SQL)) {
-        ps.setString(1, source);
-        ps.setArray(2, conn.createArrayOf("text",
-            pending.stream().map(PendingChunk::rowHash).toArray(String[]::new)));
-        try (ResultSet rs = ps.executeQuery()) {
-          while (rs.next()) existing.add(rs.getString(1));
-        }
-      }
-    });
+    em.runWithConnection((Connection conn) -> existing.addAll(Jdbc.query(conn, "RagWriter.probeExistingHashes",
+        PROBE_SQL, ps -> {
+          ps.setString(1, source);
+          ps.setArray(2, conn.createArrayOf("text",
+              pending.stream().map(PendingChunk::rowHash).toArray(String[]::new)));
+        }, rs -> rs.getString(1))));
     return existing;
   }
 

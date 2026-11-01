@@ -52,3 +52,13 @@ func TestAPIErrorBodilessTooLargeNamesTheLimit(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
+
+// #1610: the 401 a dev-bypass hub answers to a context without tenant/user says how to give it one.
+func TestAPIErrorNoTenantSaysHowToSetTheIdentity(t *testing.T) {
+	e := &APIError{Status: 401, Body: `{"error":"no tenant in security context"}`}
+	want := "API error 401: no tenant in security context — if this hub runs dev-bypass (make k8s-up), " +
+		"give the context an identity: lm config set-context NAME --tenant ID --user ID"
+	if got := e.Error(); got != want {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}

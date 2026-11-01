@@ -9,6 +9,7 @@ import java.net.UnknownHostException;
 import java.net.http.HttpConnectTimeoutException;
 import java.net.http.HttpTimeoutException;
 import java.nio.channels.UnresolvedAddressException;
+import java.security.cert.CertificateException;
 import java.util.Comparator;
 
 /**
@@ -30,10 +31,18 @@ public final class OutboundFailure {
         return kind(t).label + " (" + t.getClass().getSimpleName() + ")";
     }
 
+    /**
+     * Whether the handshake failed on the certificate — an untrusted CA, a name that does not match (#1609). Not a
+     * network blip: it fails the same way on every retry.
+     */
+    public static boolean isCertificateRefusal(Throwable t) {
+        return kind(t) == Kind.CERTIFICATE_REFUSED;
+    }
+
     /** A failure's kind, most specific first: the enum's order is the priority across the cause chain. */
     private enum Kind {
         HOST_NOT_RESOLVED("host not resolved"), INVALID_URL("invalid URL"), CONNECT_TIMEOUT("connect timeout"),
-        TIMEOUT("timeout"), TLS("TLS failure"), CONNECTION("connection failed"), IO("I/O error"), OTHER("other");
+        TIMEOUT("timeout"), CERTIFICATE_REFUSED("certificate refused"), TLS("TLS failure"), CONNECTION("connection failed"), IO("I/O error"), OTHER("other");
 
         final String label;
 
@@ -64,6 +73,7 @@ public final class OutboundFailure {
             case IllegalArgumentException i -> Kind.INVALID_URL;   // URI.create, HttpRequest.newBuilder
             case HttpConnectTimeoutException c -> Kind.CONNECT_TIMEOUT;
             case HttpTimeoutException h -> Kind.TIMEOUT;
+            case CertificateException c -> Kind.CERTIFICATE_REFUSED;   // under a handshake the trust refused (#1609)
             case SSLException s -> Kind.TLS;
             case ConnectException c -> Kind.CONNECTION;
             case IOException io -> Kind.IO;

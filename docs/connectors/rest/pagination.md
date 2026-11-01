@@ -1,7 +1,7 @@
 # Pagination
 
 > How an endpoint asks for the next page. Most APIs follow a convention that already has a
-> name: declare its preset. When none fits, write one of six strategies.
+> name: declare its preset. When none fits, write one of seven strategies.
 
 This page serves [REST](../rest.md) and [GraphQL](../graphql.md): both are the same engine, and
 `relay` is what a GraphQL endpoint declares.
@@ -12,7 +12,8 @@ Declare the preset that matches the API's framework:
 
 | Preset | For | Same as |
 |---|---|---|
-| `spring-page` | Spring Data `Page` | `page` (`$.content`, `$.totalPages`, 0-indexed) |
+| `spring-page` | Spring Data `Page`, serialized as is | `page` (`$.content`, `$.totalPages`, 0-indexed) |
+| `spring-paged-model` | Spring Data `Page` under `VIA_DTO` (`PagedModel`) | `page` (`$.content`, `$.page.totalPages`, 0-indexed) |
 | `spring-slice` | Spring Data `Slice` (no total) | `page` + `last_path: $.last` |
 | `spring-hateoas` | Spring Data REST | `body-link` (`$._links.next.href`, `$._embedded.{items}` — needs `items`) |
 | `micronaut` | Micronaut Data `Page` | `page` (`$.content`, `$.totalPages`, 0-indexed) |
@@ -30,8 +31,22 @@ pagination: { kind: spring-page, size: 500 }            # override any expanded 
 pagination: { kind: spring-hateoas, items: products }   # {items} → $._embedded.products
 ```
 
+A Spring `Page` comes in two shapes. Look at one response:
+
+```text
+{"content":[…],"totalPages":65,"totalElements":130,…}               → spring-page
+{"content":[…],"page":{"size":50,"number":0,"totalPages":65,…}}     → spring-paged-model
+```
+
+The second is the shape Spring recommends since Spring Data 3.3
+(`@EnableSpringDataWebSupport(pageSerializationMode = VIA_DTO)`). Read with `spring-page`, it
+still loads every row, but asks for one empty page after the last.
+
 `nestjs` and `json-api` expand identically. Only `spring-hateoas` requires an override:
 `items` fills its `$._embedded.{items}` placeholder.
+
+Spring Data REST puts no id in its items: key them on their self link's last segment,
+[a key read from a link](../rest.md#a-key-read-from-a-link).
 
 ## Strategies
 
@@ -52,6 +67,38 @@ pagination:
   has_more_path: $.has_more
   response_path: $.data
 ```
+
+An API whose cursor is the "more" signal — a token that is empty or absent on the last page, like
+the Kubernetes API's `metadata.continue` — needs no `has_more_path`:
+
+```json
+{ "metadata": { "continue": "eyJ2IjoibWV0YS5rOHMuaW8vdjEi" }, "items": [ … ] }
+```
+
+```yaml
+path: /api/v1/pods?limit=500
+pagination:
+  kind: cursor
+  cursor_param: continue            # sent as ?continue=eyJ2…
+  cursor_path: $.metadata.continue  # empty on the last page: the read stops
+  response_path: $.items
+```
+
+- With `has_more_path`, the flag decides, and it must read a boolean: a string there is refused
+  as `pagination.has_more_path must read a boolean, not a string`. A flag saying "more" on a page
+  whose cursor is empty is refused too (`… says more pages, but cursor_path reads no cursor`):
+  the rest of the source would otherwise go unread with the run reported complete.
+- Without it, the cursor decides: an empty or absent cursor ends the read, and so does an empty
+  page, whatever cursor it carries. `lm validate` says which mode the endpoint is in.
+- A source that sends back the cursor it was just given, while saying there is more, fails the
+  run: `Endpoint 'events': the source sent back the cursor it was given while saying more pages —
+  the cursor is not reaching it (check cursor_binding, and cursor_param or cursor_var)`. The usual
+  cause is a cursor sent where the API does not read it: in the query when it expects a header, or
+  under another variable name for a GraphQL `relay` ([Cursor binding](#cursor-binding)).
+- A path reads one value. A slice such as `$.data[-1:].id` is fine — empty on an empty page; a
+  path that reads several values (`$..endCursor` across nested connections) is refused rather
+  than one of them picked.
+- `total_path` and `total_pages_path` read a number, or its digits sent as text (`"1234"`).
 
 **`page`** — page numbers:
 
@@ -101,13 +148,35 @@ pagination:
   response_path: $.results
 ```
 
+The link is a URL, or a link object carrying it as `href` — JSON:API allows both, and Drupal writes
+the object (`"next": { "href": "…" }`): `link_path: $.links.next` reads either. Anything else is
+refused, naming the JSON type it read: `pagination.link_path must read a URL or a link object with
+href, not an object` for an object without `href`, `… not a number` for a number.
+
+**`none`** — the answer holds the whole list, and there is no next page. Older applications
+often answer this way, such as Spring PetClinic before Spring Boot:
+
+```json
+{ "vetList": [ {"id": 1, "lastName": "Carter"}, {"id": 3, "lastName": "Douglas"} ] }
+```
+
+```yaml
+pagination:
+  kind: none
+  response_path: $.vetList
+```
+
+One request, every row it holds. If the source does page, `none` reads the first page only:
+check the count against the application, or declare `total_path`.
+
 **`link-header`** — the next URL is in the `Link` header (GitHub style). Only `response_path` is
 needed: [the example below](#a-full-example-link-header).
 
 **`relay`** — GraphQL Connections: [GraphQL](../graphql.md).
 
 `total_path` is accepted by every strategy. It checks the run's row count against what the API
-declares: [The declared total](../rest.md#the-declared-total-a-witness-on-the-count).
+declares: [The declared total](../rest.md#the-declared-total-a-witness-on-the-count). When the API
+sends that count in a response header (`X-Total-Count`), name it with `total_header` instead.
 
 !!! warning "Page size is a knob on `page` and `offset` only"
     `cursor`, `body-link` and `link-header` send **no size parameter**: the server's default
@@ -161,12 +230,13 @@ pagination:
 
 | Strategy | Required fields | Optional fields (default) |
 |---|---|---|
-| `cursor` | cursor_param, cursor_path, has_more_path, response_path | cursor_binding (query), total_path |
-| `page` | page_param, response_path | size_param, size (50), start_page (1), total_pages_path, total_path, has_more_path, last_path, empty_check (true) |
-| `offset` | offset_param, limit_param, response_path | limit (100), total_path |
-| `link-header` | response_path | rel (next), total_path |
-| `body-link` | link_path, response_path | total_path |
-| `relay` | cursor_path, has_more_path, response_path; plus cursor_param **or** cursor_var | cursor_binding (query), total_path |
+| `cursor` | cursor_param, cursor_path, response_path | has_more_path (none: a non-empty cursor means more), cursor_binding (query), total_path or total_header |
+| `page` | page_param, response_path | size_param, size (50), start_page (1), total_pages_path, total_path or total_header, has_more_path, last_path, empty_check (true) |
+| `offset` | offset_param, limit_param, response_path | limit (100), total_path or total_header |
+| `link-header` | response_path | rel (next), total_header or total_path |
+| `body-link` | link_path, response_path | total_path or total_header |
+| `none` | response_path | total_path or total_header |
+| `relay` | cursor_path, has_more_path, response_path; plus cursor_param **or** cursor_var | cursor_binding (query), total_path or total_header |
 
 ## See also
 

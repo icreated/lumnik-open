@@ -15,7 +15,6 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
 
 import java.util.List;
 import java.util.Map;
@@ -33,6 +32,9 @@ public class EntityApplyResource {
 
   public record ApplyResult(String name, String view) {}
 
+  /** 63 bytes, PostgreSQL's identifier limit, less the view's {@code v_} prefix (names are ASCII). */
+  static final int MAX_NAME_LENGTH = 61;
+
   @POST
   @Consumes("application/yaml")
   @Produces(MediaType.APPLICATION_JSON)
@@ -48,11 +50,18 @@ public class EntityApplyResource {
     // View, Process and Workflow doors: one refusal, not one per kind.
     List<String> unknown = parser.unknownKeys(body);
     if (!unknown.isEmpty()) {
-      throw new WebApplicationException(Response.status(400)
-          .type(MediaType.APPLICATION_JSON)
-          .entity(ApiErrors.error("unknown key(s) in the manifest: " + String.join(", ", unknown)
-              + " — kind:Entity honors " + EntityManifestParser.honoredSurface()))
-          .build());
+      throw new WebApplicationException(ApiErrors.badRequest(
+          "unknown key(s) in the manifest: " + String.join(", ", unknown)
+              + " — kind:Entity honors " + EntityManifestParser.honoredSurface()));
+    }
+
+    // #1604: PostgreSQL truncates an identifier past 63 bytes in silence, and every reader that maps
+    // a view back to its entity (entityNameFromView, the #1600 widening's exact match) then misses
+    // it. Refused here, not in the parser: an entity already stored must stay readable.
+    if (m.name().length() > MAX_NAME_LENGTH) {
+      throw new WebApplicationException(ApiErrors.badRequest("name has " + m.name().length()
+          + " characters; at most " + MAX_NAME_LENGTH
+          + " — its view v_<name> must fit PostgreSQL's 63-byte names"));
     }
 
     // A WRITE door asks allowsAll, not allowsAny. EntityReadResource is right to accept an overlap
@@ -82,11 +91,7 @@ public class EntityApplyResource {
           compiler.apply(m, body, ScopeGrants.granted().orElse(null)));
     } catch (MissingSourceTableException e) {
       // Predictable fresh-install state — an honest refusal, not an anonymous 500.
-      throw new WebApplicationException(
-          Response.status(409)
-              .type(MediaType.APPLICATION_JSON)
-              .entity(ApiErrors.error(e.getMessage()))
-              .build());
+      throw new WebApplicationException(ApiErrors.conflict(e.getMessage()));
     } catch (MissingSourceColumnException | MissingLookupColumnException e) {
       throw new WebApplicationException(ApiErrors.badRequest(e.getMessage()));
     }

@@ -14,13 +14,21 @@ import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 
 // Runs with live schedulers on purpose: its it-* cursors are private, so the webhook/email ticks can't interfere — and it doubles as proof that consumers coexist.
@@ -49,10 +57,67 @@ class EventSpineIT {
         em.persist(EventOutboxRow.of(tenantId, type, Map.of("k", "v")));
     }
 
+    /**
+     * Waits until every event written so far is decided (#1662): the spine reads only rows older than the oldest
+     * transaction still open anywhere in the database, and a test that sweeps before that reads nothing. Under
+     * {@code -Psearch} the projection worker holds long transactions on this same PostgreSQL, so how long it takes
+     * is not the test's to know.
+     */
+    private void awaitDecided() {
+        await().atMost(60, SECONDS).pollInterval(25, MILLISECONDS).until(() -> scalar(
+            "SELECT count(*) FROM core.event_outbox WHERE NOT (" + EventOutboxRow.DECIDED + ")") == 0);
+    }
+
+    /**
+     * For the tests that open a transaction of their own on purpose: waits until no transaction that began before
+     * now is still open, so the only blocker left is theirs. A transaction's id is taken (and committed) here, then
+     * the horizon is awaited past it; this needs no event to be written first.
+     */
+    private void awaitQuietHorizon() {
+        long marker = scalar("SELECT txid_current()");
+        await().atMost(60, SECONDS).pollInterval(25, MILLISECONDS).until(() -> scalar(EventOutboxRow.HORIZON) > marker);
+    }
+
+    private long scalar(String sql) {
+        try (Connection c = adminDs.getConnection(); Statement st = c.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+            rs.next();
+            return rs.getLong(1);
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** Another session's open transaction holds the horizon back for a while: the read waits for it, it does not lose the event. */
+    @Test
+    void aForeignOpenTransactionDelaysTheReadButNeverLosesTheEvent() throws Exception {
+        CountDownLatch holding = new CountDownLatch(1);
+        CompletableFuture<Void> blocker = CompletableFuture.runAsync(() -> {
+            try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
+                c.setAutoCommit(false);
+                st.execute("SELECT txid_current()");           // takes an id: from here the horizon stands behind it
+                holding.countDown();
+                Thread.sleep(800);
+                c.commit();
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        assertTrue(holding.await(10, SECONDS));
+        seed(1L, "spine.test.behind");
+        awaitDecided();
+        List<String> seen = new CopyOnWriteArrayList<>();
+
+        TenantContext.runAsSystem(() -> sweeper.sweep("it-behind", 100, r -> seen.add(r.getEventType())));
+
+        blocker.get(10, SECONDS);
+        assertTrue(seen.contains("spine.test.behind"), "read once the blocker ended, not lost");
+    }
+
     @Test
     void twoConsumersAdvanceIndependently() {
         seed(1L, "spine.test.a");
         seed(2L, "spine.test.b");
+        awaitDecided();
 
         List<String> seenByOne = new CopyOnWriteArrayList<>();
         List<String> seenByTwo = new CopyOnWriteArrayList<>();
@@ -78,6 +143,7 @@ class EventSpineIT {
      */
     @Test
     void anEventALongTransactionCommitsLateIsStillRead() throws Exception {
+        awaitQuietHorizon();
         List<String> seen = new CopyOnWriteArrayList<>();
         try (Connection open = adminDs.getConnection()) {
             open.setAutoCommit(false);
@@ -100,6 +166,7 @@ class EventSpineIT {
      */
     @Test
     void theWatchCountsEventsAnOpenTransactionHasHeldTooLong() throws Exception {
+        awaitQuietHorizon();
         try (Connection open = adminDs.getConnection()) {
             open.setAutoCommit(false);
             insert(open, "spine.test.blocker");               // the older transaction, still open
@@ -137,6 +204,7 @@ class EventSpineIT {
     @Test
     void rewindReplays() {
         seed(1L, "spine.test.replay");
+        awaitDecided();
         List<String> seen = new CopyOnWriteArrayList<>();
         TenantContext.runAsSystem(() -> sweeper.sweep("it-rewind", 100, r -> seen.add(r.getEventType())));
         assertEquals(1, seen.stream().filter("spine.test.replay"::equals).count());
@@ -186,6 +254,7 @@ class EventSpineIT {
         seed(1L, "spine.test.ok1");
         seed(1L, "spine.test.dbpoison");
         seed(1L, "spine.test.ok2");
+        awaitDecided();
         List<String> seen = new CopyOnWriteArrayList<>();
 
         for (int sweep = 0; sweep < 3; sweep++) {
@@ -212,6 +281,7 @@ class EventSpineIT {
         seed(1L, "spine.test.w1");
         seed(1L, "spine.test.wthrow");
         seed(1L, "spine.test.w2");
+        awaitDecided();
 
         TenantContext.runAsSystem(() -> sweeper.sweep("it-writethrow", 100, r -> {
             em.createNativeQuery("INSERT INTO core.event_outbox (tenant_id, event_type, source, payload, occurred_at, created_at) "
@@ -243,6 +313,7 @@ class EventSpineIT {
     @Test
     void oneTickDrainsTheBacklogBatchByBatchEachInItsOwnTransaction() {
         seedBulk(1000);
+        awaitDecided();
         AtomicInteger bulkSeen = new AtomicInteger();
         AtomicInteger batches = new AtomicInteger();
         List<Object> committedCursors = new CopyOnWriteArrayList<>();
@@ -272,6 +343,7 @@ class EventSpineIT {
     @Test
     void aSpentBudgetEndsTheTickAfterOneBatch() {
         seedBulk(1000);
+        awaitDecided();
         AtomicInteger seen = new AtomicInteger();
 
         TenantContext.runAsSystem(() -> sweeper.drain("it-budget", 100, Duration.ZERO, () -> r -> seen.incrementAndGet()));
@@ -284,6 +356,7 @@ class EventSpineIT {
     void aFailedBatchEndsTheTickRatherThanReplayingWithinIt() {
         seed(1L, "spine.test.before");
         seed(1L, "spine.test.dbfail");
+        awaitDecided();
         List<String> seen = new CopyOnWriteArrayList<>();
 
         try {
@@ -306,6 +379,7 @@ class EventSpineIT {
     void poisonPillDoesNotBlockTheCursor() {
         seed(1L, "spine.test.poison");
         seed(1L, "spine.test.after");
+        awaitDecided();
         List<String> seen = new CopyOnWriteArrayList<>();
         TenantContext.runAsSystem(() -> sweeper.sweep("it-poison", 100, r -> {
             if (r.getEventType().equals("spine.test.poison")) throw new IllegalStateException("boom");

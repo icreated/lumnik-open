@@ -3,6 +3,7 @@ package io.lumnik.hub.source.csv;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.common.tenant.TenantContext;
+import io.lumnik.common.tx.SuspendedTransaction;
 import io.lumnik.hub.api.sources.CsvIngestForm;
 import io.lumnik.hub.api.sources.CsvIngestResult;
 import io.lumnik.hub.api.sources.CsvIngestResult.PromoteColumn;
@@ -43,11 +44,13 @@ import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
 import jakarta.transaction.Status;
 import jakarta.transaction.Synchronization;
+import jakarta.transaction.TransactionManager;
 import jakarta.transaction.TransactionSynchronizationRegistry;
 import jakarta.ws.rs.WebApplicationException;
 import org.jboss.logging.Logger;
 
 import java.io.File;
+import java.util.Locale;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
@@ -136,6 +139,7 @@ public class CsvIngestService {
     @Inject @Analytic Instance<ChatPort> analyticChat;
     @Inject DynamicTableRegistry dynamicTables;
     @Inject TransactionSynchronizationRegistry txSync;
+    @Inject TransactionManager transactionManager;
     @Inject MultiTargetWriter writer;
     @Inject FileSourceRegistry fileSourceRegistry;
     @Inject FileSourceHookRunner hooks;
@@ -256,7 +260,7 @@ public class CsvIngestService {
         int rowsWritten = rowsRead;  // all rows read are written (no skip logic in v1)
 
         List<PromoteColumn> resultCols = promoted.stream()
-            .map(pc -> new PromoteColumn(pc.name(), pc.type().name().toLowerCase(), sampleLimit))
+            .map(pc -> new PromoteColumn(pc.name(), pc.type().name().toLowerCase(Locale.ROOT), sampleLimit))
             .toList();
 
         // The askable moves ride AFTER the commit (the registry-retry posture): the card
@@ -363,7 +367,7 @@ public class CsvIngestService {
             StringBuilder text = new StringBuilder("Table ").append(tableName)
                 .append(" (one-shot CSV ingest, ").append(rows).append(" rows). Columns: external_id");
             for (PromotedColumn pc : promoted) {
-                text.append(", ").append(pc.name()).append(" (").append(pc.type().name().toLowerCase()).append(")");
+                text.append(", ").append(pc.name()).append(" (").append(pc.type().name().toLowerCase(Locale.ROOT)).append(")");
             }
             text.append(", data (jsonb). Tags: ").append(String.join(", ", tags)).append(".");
             ExtractedChunk chunk = new ExtractedChunk("table", "csv-oneshot", tableName,
@@ -381,7 +385,7 @@ public class CsvIngestService {
                 // associated with it, and the credential resolver cannot join that. Suspend it, so
                 // the resolver opens its own and the reads of the source's AD run with nothing open (#938).
                 TenantContext.callAsSystem(() ->
-                    QuarkusTransaction.suspendingExisting().call(() -> discovery.rediscover(tenantId, tag)));
+                    SuspendedTransaction.call(transactionManager, () -> discovery.rediscover(tenantId, tag)));
             } catch (Exception e) {
                 LOG.warnf("one-shot rediscover failed for scope '%s' — manual `lm source rediscover` remains available: %s",
                     tag, e.getMessage());
@@ -778,7 +782,7 @@ public class CsvIngestService {
         Map<String, SqlType> types = new LinkedHashMap<>();
         for (Map<String, Object> row : sample) {
             row.forEach((k, v) -> {
-                if (!RESERVED_COLUMNS.contains(k.toLowerCase())) {
+                if (!RESERVED_COLUMNS.contains(k.toLowerCase(Locale.ROOT))) {
                     types.putIfAbsent(k, null);
                     SqlType t = inferType(v);
                     if (t != null) {
@@ -848,7 +852,7 @@ public class CsvIngestService {
                     "promote", promoted.stream().map(pc -> Map.of(
                         "name", pc.name(),
                         "path", pc.jsonPath(),
-                        "type", pc.type().name().toLowerCase()
+                        "type", pc.type().name().toLowerCase(Locale.ROOT)
                     )).toList()
                 )
             ));

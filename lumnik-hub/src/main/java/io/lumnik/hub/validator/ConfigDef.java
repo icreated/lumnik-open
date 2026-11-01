@@ -6,7 +6,8 @@ import java.util.function.Function;
 
 public final class ConfigDef {
 
-    public enum Type { STRING, INT, LONG, BOOLEAN, LIST, NESTED }
+    /** {@code STRING_OR_NESTED}: a string as it is, or an object checked by the field's sub-def ({@code unique_key}, #1630). */
+    public enum Type { STRING, INT, LONG, BOOLEAN, LIST, NESTED, STRING_OR_NESTED }
     public enum Importance { HIGH, MEDIUM, LOW }
 
     private final LinkedHashMap<String, FieldSpec> fields = new LinkedHashMap<>();
@@ -89,6 +90,14 @@ public final class ConfigDef {
      * so {@link ConfigDefRunner}'s recursion (and the unknown-key sweep with it) is unreachable for
      * the whole block, and the sweep has to be called by hand from a cross-field rule instead.
      */
+    /** A required field written as a non-blank string, or as an object with the key set {@code sub} (#1630). */
+    public ConfigDef requireStringOrNested(String name, Importance imp, String doc, ConfigDef sub) {
+        Function<JsonNode, Optional<String>> notBlank = v -> v.isTextual() && v.asText().isBlank()
+            ? Optional.of("must not be blank") : Optional.empty();
+        fields.put(name, new FieldSpec(name, Type.STRING_OR_NESTED, imp, doc, null, true, notBlank, null, List.of(), sub));
+        return this;
+    }
+
     public ConfigDef optionalNested(String name, Importance imp, String doc, ConfigDef sub) {
         fields.put(name, new FieldSpec(name, Type.NESTED, imp, doc, null, false, null, null, List.of(), sub));
         return this;

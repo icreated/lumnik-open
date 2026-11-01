@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.sql.SQLException;
 import java.util.List;
 
+import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.advanceFailsOnce;
 import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.fireRun;
 import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.joinEntityYaml;
 import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.createTable;
@@ -22,12 +23,6 @@ import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.watermarkR
 import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.yaml;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doCallRealMethod;
-import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.spy;
 
 /**
  * #847: one physical table can be a source of one entity and the lookup of another, and one lookup can serve
@@ -128,24 +123,16 @@ class SearchProjectionLookupSharedTableIT {
         exec(adminDs, "INSERT INTO connector." + prods + " (tenant_id, pid, cid, pname) VALUES (847303, 'P1', 'C1', 'n')");
         exec(adminDs, "INSERT INTO connector." + cats + " (tenant_id, cid, cname) VALUES (847303, 'C1', 'Pumps')");
 
-        SearchProjectionWatermarkStore failing = spy(new SearchProjectionWatermarkStore());
-        failing.ds = adminDs;
-        doThrow(new SQLException("boom")).when(failing).advance(any(), anyLong(), anyString(), any());
-        SearchProjectionRunHook direct = new SearchProjectionRunHook();
-        direct.ds = adminDs;
-        direct.registry = registry;
-        direct.markStore = markStore;
-        direct.watermarkStore = failing;
+        SearchProjectionRunHook direct = advanceFailsOnce(adminDs, registry, markStore, new RuntimeException("boom", new SQLException("boom")));
 
         assertThatThrownBy(() -> direct.processTable(tenant, cats, direct.targetsByTable(tenant).get(cats)))
-            .isInstanceOf(SQLException.class);
+            .hasRootCauseInstanceOf(SQLException.class);   // the statement's own Jdbc failure (#1649)
 
         assertThat(markedKeys(adminDs, tenant, idx, "lookup-change"))
             .as("the whole transaction rolled back: no mark survives").isEmpty();
         assertThat(watermark(adminDs, tenant, "connector." + cats))
             .as("and the watermark did not move").isNull();
 
-        doCallRealMethod().when(failing).advance(any(), anyLong(), anyString(), any());
         direct.processTable(tenant, cats, direct.targetsByTable(tenant).get(cats));
 
         assertThat(markedKeys(adminDs, tenant, idx, "lookup-change")).containsExactly(key("P1"));

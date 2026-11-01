@@ -115,6 +115,7 @@ func TestExplicitToken_IsUsedWithoutRunningTheRefresh(t *testing.T) {
 // absence.
 func TestWithoutExplicitToken_TheStoredContextStillRefreshesAndFails(t *testing.T) {
 	rig := newTokenTestRig(t)
+	t.Setenv("LUMNIK_TOKEN", "") // a token in the developer's shell would pin it (#1586)
 
 	c, err := ClientFromCmd(NewRootCmd())
 	if err != nil {
@@ -199,6 +200,7 @@ func TestExplicitToken_A401DoesNotSignalAuthLost(t *testing.T) {
 // signals anything.
 func TestWithoutExplicitToken_A401OnALiveSessionStillSignalsAuthLost(t *testing.T) {
 	_ = newTokenTestRigReturning(t, http.StatusUnauthorized, futureExpiry)
+	t.Setenv("LUMNIK_TOKEN", "") // a token in the developer's shell would pin it (#1586)
 
 	c, err := ClientFromCmd(NewRootCmd())
 	if err != nil {
@@ -213,5 +215,52 @@ func TestWithoutExplicitToken_A401OnALiveSessionStillSignalsAuthLost(t *testing.
 	}
 	if !lost {
 		t.Error("an OIDC session rejected by the server must still raise the re-login signal")
+	}
+}
+
+// LUMNIK_TOKEN is the same kind of value as --token: given for this run, not left in a file. It
+// was copied into ctx.Token only, so a stored `lm login` session, live or expired, still went
+// first, and an expired one died on its refresh before the variable was read (#1586).
+func TestEnvToken_IsUsedWithoutRunningTheRefresh(t *testing.T) {
+	rig := newTokenTestRig(t)
+	t.Setenv("LUMNIK_TOKEN", "FROM-ENV")
+
+	c, err := ClientFromCmd(NewRootCmd())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out map[string]any
+	if err := c.GET("/api/platform/whoami", &out); err != nil {
+		t.Fatalf("the call must succeed on LUMNIK_TOKEN alone: %v", err)
+	}
+	if got := rig.gotAuth.Load().(string); got != "Bearer FROM-ENV" {
+		t.Errorf("hub saw %q, want %q", got, "Bearer FROM-ENV")
+	}
+	if n := rig.refreshes.Load(); n != 0 {
+		t.Errorf("the token endpoint was called %d time(s); LUMNIK_TOKEN must not refresh", n)
+	}
+}
+
+// --token, typed on the command line, still wins over the environment.
+func TestExplicitToken_WinsOverEnvToken(t *testing.T) {
+	rig := newTokenTestRig(t)
+	t.Setenv("LUMNIK_TOKEN", "FROM-ENV")
+
+	root := NewRootCmd()
+	if err := root.ParseFlags([]string{"--token", "OVERRIDE"}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := ClientFromCmd(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out map[string]any
+	if err := c.GET("/api/platform/whoami", &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := rig.gotAuth.Load().(string); got != "Bearer OVERRIDE" {
+		t.Errorf("hub saw %q, want %q", got, "Bearer OVERRIDE")
 	}
 }

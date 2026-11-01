@@ -148,3 +148,90 @@ func TestSetContextSameOidcIssuerKeepsTokens(t *testing.T) {
 		t.Errorf("endpoint wiped on unchanged issuer: %s", s)
 	}
 }
+
+// #1610: a dev-bypass hub (make k8s-up) identifies the caller by X-Tenant-ID / X-User-ID, which the client
+// sends from the context's tenant/user — set here, not by hand-editing config.yaml.
+func TestSetContextStoresDevBypassIdentity(t *testing.T) {
+	path := writeConfig(t, "")
+	cmd := NewRootCmd()
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetArgs([]string{"config", "set-context", "kind", "--server", "http://localhost:18090", "--tenant", "1", "--user", "1"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	s := string(data)
+	if !strings.Contains(s, `tenant: "1"`) || !strings.Contains(s, `user: "1"`) {
+		t.Errorf("dev-bypass identity not stored: %s", s)
+	}
+}
+
+func TestSetContextEmptyTenantClearsTheIdentity(t *testing.T) {
+	path := writeConfig(t, "current-context: kind\ncontexts:\n  kind:\n    server: http://localhost:18090\n    tenant: \"1\"\n    user: \"1\"\n")
+	cmd := NewRootCmd()
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetArgs([]string{"config", "set-context", "kind", "--tenant", "", "--user", ""})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if s := string(data); strings.Contains(s, "tenant:") || strings.Contains(s, "user:") {
+		t.Errorf("identity not cleared: %s", s)
+	}
+}
+
+// The hub reads the headers as numbers and ignores anything else in silence. Refused here, by the flag's name.
+func TestSetContextRefusesANonPositiveIdentity(t *testing.T) {
+	writeConfig(t, "")
+	for _, args := range [][]string{{"--tenant", "acme"}, {"--user", "-3"}, {"--tenant", "0"}} {
+		cmd := NewRootCmd()
+		cmd.SetOut(new(bytes.Buffer))
+		cmd.SetErr(new(bytes.Buffer))
+		cmd.SetArgs(append([]string{"config", "set-context", "kind"}, args...))
+		err := cmd.Execute()
+		if err == nil || !strings.Contains(err.Error(), args[0]+" must be a positive integer") {
+			t.Errorf("%v: want a refusal naming %s, got %v", args, args[0], err)
+		}
+	}
+}
+
+// #1610 (code-review): the dev-bypass identity stays off a remote https hub — a production context must not carry it.
+func TestSetContextRefusesAnIdentityForARemoteHttpsServer(t *testing.T) {
+	writeConfig(t, "")
+	cmd := NewRootCmd()
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"config", "set-context", "prod", "--server", "https://ops:s3cr3t@hub.customer.example/", "--tenant", "1"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "dev-bypass identity") || !strings.Contains(err.Error(), "hub.customer.example") {
+		t.Fatalf("want a refusal naming the host, got %v", err)
+	}
+	if strings.Contains(err.Error(), "s3cr3t") {
+		t.Errorf("the refusal must not echo the URL's credentials: %v", err)
+	}
+	for _, server := range []string{"http://localhost:18090", "https://lumnik.local:8443", "https://127.0.0.1:8443", "http://hub.lan:8080",
+		"https://localhost.:8443", "https://lumnik.local.:8443"} { // a fully-qualified name keeps its trailing dot
+		cmd := NewRootCmd()
+		cmd.SetOut(new(bytes.Buffer))
+		cmd.SetArgs([]string{"config", "set-context", "dev", "--server", server, "--tenant", "1"})
+		if err := cmd.Execute(); err != nil {
+			t.Errorf("%s: a local or plain-http dev hub must accept an identity: %v", server, err)
+		}
+	}
+}
+
+// #1610 (Copilot on #1614): the hub strips the header before parsing it; a pasted space is trimmed, and the trimmed
+// value is what is stored and sent.
+func TestSetContextTrimsTheIdentity(t *testing.T) {
+	path := writeConfig(t, "")
+	cmd := NewRootCmd()
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetArgs([]string{"config", "set-context", "kind", "--server", "http://localhost:18090", "--tenant", " 1 ", "--user", "\t2"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if s := string(data); !strings.Contains(s, `tenant: "1"`) || !strings.Contains(s, `user: "2"`) {
+		t.Errorf("identity not trimmed: %s", s)
+	}
+}

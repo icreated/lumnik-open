@@ -13,6 +13,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -66,6 +67,7 @@ import static org.hamcrest.Matchers.equalTo;
  * together cover both directions of the race without duplicating either.
  */
 @QuarkusTest
+@ExtendWith(ProjectionTickPaused.class)
 class SearchProjectionTwoWorkersIT {
 
     @Inject @DataSource("admin") AgroalDataSource adminDs;

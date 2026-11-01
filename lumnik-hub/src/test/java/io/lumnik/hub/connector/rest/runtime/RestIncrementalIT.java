@@ -223,4 +223,35 @@ class RestIncrementalIT {
         assertEquals(3L, count(table), "run 3 (no new data) leaves count at 3");
         assertEquals("2026-01-03", persistedWatermark(epId), "watermark unchanged when no items");
     }
+
+    /** #1633: a Link header echoing the watermark param (Gitea, GitHub) — every page carries it once, not once more per page. */
+    @Test
+    void link_header_pages_carry_the_watermark_once() {
+        String path = "/v1/lh";
+        String table = "ext.c2_lh_" + Math.abs(System.nanoTime());
+        String base = "http://localhost:" + wm.port();
+        stubFor(get(urlPathEqualTo(path)).withQueryParam("since", absent())
+            .willReturn(okJson("[{\"id\":\"a\",\"updated_at\":\"2026-01-02\"}]")));
+        stubFor(get(urlPathEqualTo(path)).withQueryParam("since", equalTo("2026-01-02")).withQueryParam("page", absent())
+            .willReturn(okJson("[{\"id\":\"b\",\"updated_at\":\"2026-01-03\"}]")
+                .withHeader("Link", "<" + base + path + "?page=2&since=2026-01-02>; rel=\"next\"")));
+        stubFor(get(urlPathEqualTo(path)).withQueryParam("page", equalTo("2"))
+            .willReturn(okJson("[{\"id\":\"c\",\"updated_at\":\"2026-01-03\"}]")
+                .withHeader("Link", "<" + base + path + "?page=3&since=2026-01-02>; rel=\"next\"")));
+        stubFor(get(urlPathEqualTo(path)).withQueryParam("page", equalTo("3")).willReturn(okJson("[]")));
+
+        UUID connId = seed("{\"kind\":\"rest-generic\",\"base_url\":\"" + base + "\",\"default_rate_limit\":\"100/s\"}", path,
+            "{\"pagination\":{\"kind\":\"link-header\",\"response_path\":\"$\"},"
+                + "\"incremental\":{\"mode\":\"watermark\",\"watermark_path\":\"$.updated_at\",\"param\":\"since\"},"
+                + "\"target\":{\"kind\":\"hybrid\",\"table\":\"" + table + "\",\"unique_key\":\"$.id\",\"promote\":[]}}")[0];
+
+        assertInstanceOf(RunStatus.Completed.class, TenantContext.callAsSystem(() -> engine.runSync(connId, new RunTrigger.Manual(1L))));
+        assertInstanceOf(RunStatus.Completed.class, TenantContext.callAsSystem(() -> engine.runSync(connId, new RunTrigger.Manual(1L))));
+
+        assertEquals(3L, count(table));
+        List<String> paged = wm.getAllServeEvents().stream().map(e -> e.getRequest().getUrl())
+            .filter(u -> u.contains("page=")).toList();
+        assertEquals(2, paged.size(), () -> "pages 2 and 3, got " + paged);
+        paged.forEach(u -> assertEquals(1, u.split("since=", -1).length - 1, () -> "since once in " + u));
+    }
 }

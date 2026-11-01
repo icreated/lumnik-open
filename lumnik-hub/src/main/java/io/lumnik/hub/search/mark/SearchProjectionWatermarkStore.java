@@ -7,9 +7,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Optional;
@@ -30,33 +27,31 @@ public class SearchProjectionWatermarkStore {
 
     @Inject @DataSource("admin") AgroalDataSource ds;
 
-    public Optional<Instant> watermark(Connection c, long tenantId, String tableName) throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement(
-                "SELECT watermark FROM core.search_projection_mark_watermark "
-              + "WHERE tenant_id = ? AND table_name = ?")) {
-            ps.setLong(1, tenantId);
-            ps.setString(2, tableName);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) return Optional.empty();
-                return Optional.of(Jdbc.instant(rs, 1));
-            }
-        }
+    public Optional<Instant> watermark(Connection c, long tenantId, String tableName) {
+        return Jdbc.queryOne(c, "SearchProjectionWatermarkStore.watermark",
+            "SELECT watermark FROM core.search_projection_mark_watermark "
+          + "WHERE tenant_id = ? AND table_name = ?",
+            ps -> {
+                ps.setLong(1, tenantId);
+                ps.setString(2, tableName);
+            },
+            rs -> Jdbc.instant(rs, 1));
     }
 
     /**
      * Advances the watermark to {@code to}, never backwards: a race between two scans of the same
      * table must not regress an already-advanced watermark.
      */
-    public void advance(Connection c, long tenantId, String tableName, Instant to) throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement(
-                "INSERT INTO core.search_projection_mark_watermark (tenant_id, table_name, watermark) "
-              + "VALUES (?, ?, ?) "
-              + "ON CONFLICT (tenant_id, table_name) DO UPDATE SET watermark = excluded.watermark "
-              + "WHERE core.search_projection_mark_watermark.watermark < excluded.watermark")) {
-            ps.setLong(1, tenantId);
-            ps.setString(2, tableName);
-            ps.setTimestamp(3, Timestamp.from(to));
-            ps.executeUpdate();
-        }
+    public void advance(Connection c, long tenantId, String tableName, Instant to) {
+        Jdbc.update(c, "SearchProjectionWatermarkStore.advance",
+            "INSERT INTO core.search_projection_mark_watermark (tenant_id, table_name, watermark) "
+          + "VALUES (?, ?, ?) "
+          + "ON CONFLICT (tenant_id, table_name) DO UPDATE SET watermark = excluded.watermark "
+          + "WHERE core.search_projection_mark_watermark.watermark < excluded.watermark",
+            ps -> {
+                ps.setLong(1, tenantId);
+                ps.setString(2, tableName);
+                ps.setTimestamp(3, Timestamp.from(to));
+            });
     }
 }

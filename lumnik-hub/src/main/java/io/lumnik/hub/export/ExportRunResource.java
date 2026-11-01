@@ -25,7 +25,6 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -134,10 +133,8 @@ public class ExportRunResource {
         return switch (result) {
             case StartResult.Started s -> Response.accepted(Map.of("runId", s.runId())).build();
             case StartResult.AlreadyRunning a -> {
-                Map<String, Object> body = new LinkedHashMap<>(
-                    ApiErrors.error("export '" + name + "' already has a run in flight"));
-                if (a.runId() != null) body.put("runId", a.runId());
-                yield Response.status(Response.Status.CONFLICT).entity(body).build();
+                String why = "export '" + name + "' already has a run in flight";
+                yield a.runId() == null ? ApiErrors.conflict(why) : ApiErrors.conflict(why, "runId", a.runId());
             }
             case StartResult.OccurrenceTaken o -> ApiErrors.conflict("already delivered");
             case StartResult.NotFound n -> ApiErrors.notFound("no export named '" + name + "'");

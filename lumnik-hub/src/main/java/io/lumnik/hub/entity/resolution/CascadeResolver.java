@@ -13,7 +13,6 @@ import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 
 import java.sql.Connection;
-import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -705,26 +704,21 @@ public class CascadeResolver {
    */
   private void markResolutionKeys(Connection c, long tenantId, String entityType, UUID finalEntityId,
       UUID priorResolvedEntityId) {
-    try {
-      List<String> indexNames = markStore.validIndexNamesForEntity(c, tenantId, entityType);
-      if (indexNames.isEmpty()) return;
+    List<String> indexNames = markStore.validIndexNamesForEntity(c, tenantId, entityType);
+    if (indexNames.isEmpty()) return;
 
-      // Both the new and (on a merge/split/lost-resolution) the retracted key belong to the same
-      // index, so one batched multi-row INSERT per index covers both — not one INSERT per key.
-      List<String> keys = new ArrayList<>(2);
-      if (finalEntityId != null) keys.add(finalEntityId.toString());
-      if (priorResolvedEntityId != null
-          && (finalEntityId == null || !priorResolvedEntityId.equals(finalEntityId))) {
-        keys.add(priorResolvedEntityId.toString());
-      }
-      if (keys.isEmpty()) return;
+    // Both the new and (on a merge/split/lost-resolution) the retracted key belong to the same
+    // index, so one batched multi-row INSERT per index covers both — not one INSERT per key.
+    List<String> keys = new ArrayList<>(2);
+    if (finalEntityId != null) keys.add(finalEntityId.toString());
+    if (priorResolvedEntityId != null
+        && (finalEntityId == null || !priorResolvedEntityId.equals(finalEntityId))) {
+      keys.add(priorResolvedEntityId.toString());
+    }
+    if (keys.isEmpty()) return;
 
-      for (String indexName : indexNames) {
-        markStore.markKeys(c, tenantId, indexName, entityType, keys, "resolution-decision");
-      }
-    } catch (SQLException e) {
-      throw new RuntimeException("CascadeResolver: search projection mark production failed for tenant "
-          + tenantId + " entityType " + entityType, e);
+    for (String indexName : indexNames) {
+      markStore.markKeys(c, tenantId, indexName, entityType, keys, "resolution-decision");
     }
   }
 

@@ -336,22 +336,30 @@ public class SearchProjectionWorker {
      * query has zero lag.
      */
     private void recordLagGauges() {
-        Map<Long, Map<String, Instant>> oldestByTenant = markStore.oldestPendingMarkedAtAdmin();
+        LagReading reading = lagOf(markStore.oldestPendingMarkedAtAdmin(), Instant.now());
+        metrics.recordLag(reading.maxSeconds(), reading.laggingIndexes());
+    }
+
+    /** What the two lag gauges report: the largest lag in seconds, and how many (tenant, index) pairs are lagging. */
+    record LagReading(long maxSeconds, long laggingIndexes) {}
+
+    /**
+     * The gauges' arithmetic, apart from the store so a test can drive it with the pairs it chooses (#1661). Every entry
+     * already has at least one pending, undrained mark — {@code oldestPendingMarkedAtAdmin}'s own GROUP BY only returns
+     * pairs that do — so presence alone is what counts as lagging (Copilot finding): gating on lagSeconds > 0
+     * undercounted a mark landed within the same second as {@code now}, briefly reporting lagging=0 during a burst even
+     * though work was genuinely pending.
+     */
+    static LagReading lagOf(Map<Long, Map<String, Instant>> oldestByTenant, Instant now) {
         long maxLag = 0;
         long lagging = 0;
-        Instant now = Instant.now();
         for (Map<String, Instant> byIndex : oldestByTenant.values()) {
             for (Instant oldest : byIndex.values()) {
-                // Every entry here already has at least one pending, undrained mark —
-                // oldestPendingMarkedAtAdmin's own GROUP BY only returns pairs that do — so presence
-                // alone is what counts as lagging (Copilot finding): gating on lagSeconds > 0
-                // undercounted a mark landed within the same second as `now`, briefly reporting
-                // lagging=0 during a burst even though work was genuinely pending.
                 lagging++;
                 maxLag = Math.max(maxLag, Math.max(0, Duration.between(oldest, now).getSeconds()));
             }
         }
-        metrics.recordLag(maxLag, lagging);
+        return new LagReading(maxLag, lagging);
     }
 
     /** Returns the first catch-up attempt's result ({@code IDLE} when none ran), so the tick can queue progressing pairs.
@@ -672,13 +680,10 @@ public class SearchProjectionWorker {
 
     /**
      * §5b step 5's mark-cleanup + markReady tail, in ONE explicit transaction (I3 fix, #671 final
-     * review) via {@link Jdbc#transaction} — the same setAutoCommit/commit/rollback shape {@code
-     * io.lumnik.hub.search.SearchIndexRevalidator}'s own {@code invalidateIfUnchanged} still hand-rolls
-     * separately (pre-existing, untouched by #671, so left as its own copy rather than migrated here).
-     * Two independently-autocommitted statements would let the mark-cleanup commit alone if the state
-     * write then failed transiently: {@code publish} above has already dropped the OLD generation
-     * from the provider's side, so a state row left pointing at it (with the {@code ALL} mark that
-     * would force a fresh rebuild already deleted) would be stuck forever.
+     * review) via {@link Jdbc#transaction}. Two independently-autocommitted statements would let the
+     * mark-cleanup commit alone if the state write then failed transiently: {@code publish} above has
+     * already dropped the OLD generation from the provider's side, so a state row left pointing at it
+     * (with the {@code ALL} mark that would force a fresh rebuild already deleted) would be stuck forever.
      *
      * <p>The same transaction releases a withheld index (#1219) when {@code built} — the declaration this
      * generation was built from — serves nothing the declaration stored now leaves out. It runs FIRST: a
@@ -736,13 +741,14 @@ public class SearchProjectionWorker {
     }
 
     /** What {@code Last error} shows: the failure itself, not the transaction wrapper around it — and, for
-     *  a raw database failure, only what {@link SqlFailureText#rootMessage} lets an API caller read (#1299).
+     *  a database failure, raw or pasted into a wrapper, only what {@link SqlFailureText#rootMessage} lets an
+     *  API caller read (#1299, #1648).
      *  The message alone: the exception's class is the engine's word, and the log keeps it. */
     static String shortDiagnostic(Exception e) {
         List<Throwable> chain = Throwables.causeChain(e);
         Throwable t = chain.stream().filter(c -> !(c instanceof QuarkusTransactionException)).findFirst()
             .orElse(chain.getLast());
-        String message = t instanceof SQLException ? SqlFailureText.rootMessage(t) : t.getMessage();
+        String message = t instanceof SQLException ? SqlFailureText.rootMessage(t) : SqlFailureText.ownMessage(t);
         return message == null || message.isBlank() ? "no detail — see the hub log" : message;
     }
 
@@ -808,15 +814,12 @@ public class SearchProjectionWorker {
             // Like every raw read on this datasource: the tenant bound and an empty search_path. The caller is
             // still inside the scan's JTA transaction, which is what applyTo requires.
             TenantRlsScope.applyTo(c, tenantId);
-            try (PreparedStatement ps = c.prepareStatement(
-                    "SELECT 1 FROM pg_attribute WHERE attrelid = ?::regclass AND attname = ? AND attnum > 0 AND NOT attisdropped")) {
-                ps.setString(1, EntityViewCompiler.viewName(entity));
-                ps.setString(2, keyCol);
-                try (ResultSet rs = ps.executeQuery()) {
-                    if (rs.next()) return failure; // the key column is there: another column is what is missing
-                }
+            if (Jdbc.exists(c, "SearchProjectionWorker.explainUnreadableView",
+                    "SELECT 1 FROM pg_attribute WHERE attrelid = ?::regclass AND attname = ? AND attnum > 0 AND NOT attisdropped",
+                    ps -> { ps.setString(1, EntityViewCompiler.viewName(entity)); ps.setString(2, keyCol); })) {
+                return failure; // the key column is there: another column is what is missing
             }
-        } catch (SQLException probe) {
+        } catch (SQLException | RuntimeException probe) { // RuntimeException: the probe's own Jdbc failure
             return failure;
         }
         return new IllegalStateException("entity '" + entity + "' cannot be indexed: its view has no \"" + keyCol

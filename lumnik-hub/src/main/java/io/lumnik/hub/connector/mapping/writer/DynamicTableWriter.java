@@ -3,10 +3,13 @@ package io.lumnik.hub.connector.mapping.writer;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.connector.event.RunTableStats;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget;
+import io.lumnik.hub.entity.EntityManifest;
+import io.lumnik.hub.entity.EntityViewCompiler;
 import io.lumnik.hub.event.RowEventGate;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -62,6 +65,7 @@ public class DynamicTableWriter {
   @Inject ObjectMapper mapper;
   @Inject DriftDetector driftDetector;
   @Inject SourceKeyIndex keyIndex;
+  @Inject EntityViewCompiler viewCompiler;
 
   @Inject
   @DataSource("admin")
@@ -105,9 +109,9 @@ public class DynamicTableWriter {
     String mappingId = (String) systemContexts.get(0).get("_mapping");
 
     Map<String, String> registered = registry.findSchema(tenantId, mappingId, connectorId);
-    registered = registered == null
-        ? createSchema(spec, rows, sourceTypeHints, tenantId, mappingId, connectorId)
-        : evolveSchema(spec, rows, registered, sourceTypeHints, tenantId, mappingId, connectorId);
+    // A first write creates, then evolves: a widening is the evolve step's, in its own transaction (#1600).
+    if (registered == null) registered = createSchema(spec, rows, sourceTypeHints, tenantId, mappingId, connectorId);
+    registered = evolveSchema(spec, rows, registered, sourceTypeHints, tenantId, mappingId, connectorId);
     if (spec.key() != null) {
       stats.recordRemoved(runIdOf(systemContexts), keyIndex.ensure(spec, sourceOf(systemContexts), tenantId));
       keyIndex.refuseRepeatedKeyInRun(spec, rows, systemContexts, registered, tenantId, sourceOf(systemContexts),
@@ -150,9 +154,8 @@ public class DynamicTableWriter {
   private Map<String, String> createSchema(MappingTarget.Table spec, List<Map<String, Object>> rows,
                                            Map<String, String> sourceTypeHints, Long tenantId,
                                            String mappingId, UUID connectorId) {
-    try (Connection c = adminDs.getConnection()) {
-      c.setAutoCommit(false);
-      try {
+    try {
+      return Jdbc.transaction(adminDs, "DynamicTableWriter.createSchema", c -> {
         firstWriteLock(c, spec.schema(), spec.name());
         refuseSecondWriter(c, spec, tenantId, connectorId);
 
@@ -164,20 +167,18 @@ public class DynamicTableWriter {
         Map<String, String> actual = driftDetector.actualSchema(c, spec.schema(), spec.name());
         actual.keySet().removeAll(SYSTEM_COLUMNS);
         if (spec.marksSeen()) actual.keySet().remove(SEEN_RUN);   // elsewhere a column of that name is the source's
-        Map<String, String> reconciled = applyDrift(c, spec, rows, actual, sourceTypeHints);
+        // Never widen here (#1600): enableRLS holds the table, and a widening may rebuild entity views, whose locks
+        // come first. write() runs evolveSchema right after this commits; it widens in a transaction of its own.
+        Map<String, String> reconciled = applyDrift(c, spec, rows, actual, sourceTypeHints, null);
 
         registry.register(c, tenantId, mappingId, spec.schema(), spec.name(), reconciled, connectorId);
-        c.commit();
         return reconciled;
-      } catch (ConfigValidationException e) {
-        rollbackQuietly(c);
-        throw e;
-      } catch (Exception e) {
-        rollbackQuietly(c);
-        throw new ConnectorException("DynamicTableWriter.createSchema: " + e.getMessage(), e);
-      }
-    } catch (SQLException e) {
-      throw new ConnectorException("DynamicTableWriter.createSchema: " + e.getMessage(), e);
+      });
+    } catch (ConfigValidationException e) {
+      throw e;   // refuseSecondWriter's refusal, rolled back
+    } catch (RuntimeException e) {
+      // The body's database failures arrive labelled by Jdbc.transaction: one text for all, as SourceKeyIndex.ensure.
+      throw new ConnectorException(Jdbc.failureText("DynamicTableWriter.createSchema", e), e);
     }
   }
 
@@ -200,15 +201,6 @@ public class DynamicTableWriter {
         + "jdbc: source.tables[].target; "
         + "csv: the table is named after the connector, rename it; "
         + "kafka: the endpoint's name");
-  }
-
-  /** Best-effort: the original failure above already carries the real cause. */
-  private void rollbackQuietly(Connection c) {
-    try {
-      c.rollback();
-    } catch (SQLException ignore) {
-      // best-effort
-    }
   }
 
   /** The lock a table's first write holds; a connector delete takes it too before dropping the table. */
@@ -271,11 +263,21 @@ public class DynamicTableWriter {
    *  {@link #evolveSchema}'s unlocked call, where no wider transaction is already in hand. */
   private Map<String, String> applyDrift(MappingTarget.Table spec, List<Map<String, Object>> rows,
                                          Map<String, String> base, Map<String, String> sourceTypeHints) {
-    try (Connection c = adminDs.getConnection()) {
-      return applyDrift(c, spec, rows, base, sourceTypeHints);
-    } catch (SQLException e) {
-      throw new ConnectorException("DynamicTableWriter.applyDrift: " + e.getMessage(), e);
+    List<EntityManifest> rebuilt = new ArrayList<>();
+    Map<String, String> drifted;
+    try {
+      try (Connection c = adminDs.getConnection()) {
+        drifted = applyDrift(c, spec, rows, base, sourceTypeHints, rebuilt);
+      } catch (SQLException e) {
+        throw new ConnectorException(Jdbc.failureText("DynamicTableWriter.applyDrift", e), e);
+      }
+    } finally {
+      // Once c is back (the cards are read on the admin pool too), and even when a later step of this drift failed:
+      // a reshape that committed must still recycle the plans and refresh the cards. Best-effort, it never hides
+      // that failure (#1600).
+      viewCompiler.afterRebuilt(rebuilt);
     }
+    return drifted;
   }
 
   /**
@@ -286,19 +288,31 @@ public class DynamicTableWriter {
    * place #525 found the two disagreeing.
    */
   private Map<String, String> applyDrift(Connection c, MappingTarget.Table spec, List<Map<String, Object>> rows,
-                                         Map<String, String> base, Map<String, String> sourceTypeHints)
-                                         throws SQLException {
+                                         Map<String, String> base, Map<String, String> sourceTypeHints,
+                                         List<EntityManifest> rebuilt) throws SQLException {
     Set<String> newCols = detectNewColumns(rows, base);
-    Set<String> tooNarrow = widenings(rows, base);
+    // rebuilt == null: never widen here (createSchema); otherwise the entities a widening rebuilt are added to it.
+    Set<String> tooNarrow = rebuilt != null ? widenings(rows, base) : Set.of();
     if (newCols.isEmpty() && tooNarrow.isEmpty()) return base;
 
     Map<String, String> updated = new LinkedHashMap<>(base);
 
     if (!tooNarrow.isEmpty()) {
-      widenColumns(c, spec, tooNarrow);
-      for (String col : tooNarrow) updated.put(col, NUMERIC);
-      LOG.infof("%s.%s: %d column(s) widened to %s by this chunk's first fractional value: %s",
-          spec.schema(), spec.name(), tooNarrow.size(), NUMERIC, String.join(", ", tooNarrow));
+      // The physical type decides (#1600): the table is shared, and another tenant may have widened it already —
+      // then only this tenant's registry is behind, and no DDL is due.
+      Map<String, String> actual = driftDetector.actualSchema(c, spec.schema(), spec.name());
+      Set<String> narrow = new LinkedHashSet<>();
+      for (String col : tooNarrow) {
+        String physical = actual == null ? null : actual.get(col);
+        if (BIGINT.equals(physical)) narrow.add(col);
+        else if (physical != null) updated.put(col, physical);
+      }
+      if (!narrow.isEmpty()) {
+        rebuilt.addAll(widenColumns(c, spec, narrow));
+        for (String col : narrow) updated.put(col, WIDENED_NUMERIC);
+        LOG.infof("%s.%s: %d column(s) widened to %s by this chunk's first fractional value: %s",
+            spec.schema(), spec.name(), narrow.size(), WIDENED_NUMERIC, String.join(", ", narrow));
+      }
     }
 
     if (!newCols.isEmpty()) {
@@ -349,6 +363,7 @@ public class DynamicTableWriter {
   /** The widening pair, read from the inferrer that emits them: {@code bigint -> numeric(18,4)}. */
   private static final String BIGINT = SchemaInferrer.BIGINT;
   private static final String NUMERIC = SchemaInferrer.NUMERIC;
+  private static final String WIDENED_NUMERIC = SchemaInferrer.WIDENED_NUMERIC;
 
   /**
    * The registered {@code BIGINT} columns this chunk feeds a number that is not whole.
@@ -385,11 +400,13 @@ public class DynamicTableWriter {
    * comma-separated form and pays for one. (Its {@code ADD COLUMN} neighbour above stays a
    * statement per column on purpose: adding a column without a default is metadata-only.)
    */
-  private void widenColumns(Connection c, MappingTarget.Table spec, Set<String> columns) throws SQLException {
+  private List<EntityManifest> widenColumns(Connection c, MappingTarget.Table spec, Set<String> columns) {
     String alters = columns.stream()
-        .map(col -> "ALTER COLUMN " + quoteIdent(col) + " TYPE " + NUMERIC)
+        .map(col -> "ALTER COLUMN " + quoteIdent(col) + " TYPE " + WIDENED_NUMERIC)
         .collect(Collectors.joining(", "));
-    exec(c, "ALTER TABLE " + fqn(spec) + " " + alters);
+    // On the connection applyDrift already holds: a second one from the admin pool while it waits would starve it.
+    return viewCompiler.reshape(c, spec.schema(), spec.name(), columns,
+        conn -> exec(conn, "ALTER TABLE " + fqn(spec) + " " + alters));
   }
 
   // ── DDL ────────────────────────────────────────────────────────────────────
@@ -531,7 +548,7 @@ public class DynamicTableWriter {
     try (Connection c = adminDs.getConnection()) {
       enableRLS(c, spec);
     } catch (SQLException e) {
-      throw new ConnectorException("DDL failed: " + e.getMessage(), e);
+      throw new ConnectorException(Jdbc.failureText("DynamicTableWriter.enableRLS", e), e);
     }
   }
 
@@ -582,7 +599,7 @@ public class DynamicTableWriter {
         ps.executeUpdate();
       }
     } catch (SQLException e) {
-      throw new ConnectorException("DynamicTableWriter.markSeen failed: " + e.getMessage(), e);
+      throw new ConnectorException(Jdbc.failureText("DynamicTableWriter.markSeen", e), e);
     }
   }
 
@@ -642,24 +659,19 @@ public class DynamicTableWriter {
         if (n != 0) written++; else skipped++;
       }
       return new Written(written, skipped);
-    } catch (Exception e) {
-      throw new ConnectorException("DynamicTableWriter.insertRows failed: " + e.getMessage(), e);
+    } catch (SQLException | RuntimeException e) {
+      throw new ConnectorException(Jdbc.failureText("DynamicTableWriter.insertRows", e), e);
     }
   }
 
   /**
    * Gated path: a multi-row {@code INSERT … RETURNING _row_hash, (xmax = 0)} detects genuinely-new
-   * rows and writes one {@code data.row.changed} outbox event per insert — all on ONE admin
-   * connection with a manual transaction, so data rows and their events commit atomically.
+   * rows and writes one {@code data.row.changed} outbox event per insert — all in ONE admin
+   * {@link Jdbc#transaction}, so data rows and their events commit atomically.
    *
    * <p>{@code xmax = 0} is true for a freshly inserted row, false for a DO UPDATE touch; DO NOTHING
    * conflicts return no row at all. So conflicts are event-silent and re-ingesting a file emits nothing.
    */
-  // S1141: the nested try is the deliberate transaction shape — outer try-with-resources owns the
-  // admin Connection, the inner one owns the outbox PreparedStatement and carries the rollback/
-  // setAutoCommit(true) so data rows and events commit atomically. Extracting it would hand a helper
-  // ~11 parameters (a worse S107), so the nesting stays.
-  @SuppressWarnings("java:S1141")
   private Written insertRowsEmitting(MappingTarget.Table spec, List<Map<String, Object>> rows,
                                      List<Map<String, Object>> sys, Long tenantId,
                                      Map<String, String> schema, UUID connectorId) {
@@ -685,36 +697,29 @@ public class DynamicTableWriter {
     int colsPerRow = FIXED_COLS.size() + schemaCols.size();
     int sub = subBatchSize(colsPerRow);
 
-    int written = 0;
-    int returned = 0;
-    try (Connection c = adminDs.getConnection()) {
-      c.setAutoCommit(false);
-      try (PreparedStatement outbox = c.prepareStatement(OUTBOX_SQL)) {
-        for (int start = 0; start < idx.size(); start += sub) {
-          int end = Math.min(start + sub, idx.size());
-          SubBatchResult sb = writeSubBatch(c, outbox, spec, rows, sys, tenantId, schemaCols, schema,
-                                            idx, start, end, fqn, source, runId);
-          written += sb.written();
-          returned += sb.returned();
-          // Flush the staged events per sub-batch so the outbox JDBC batch never grows past `sub`
-          // rows — a 100k-row chunk would otherwise hold 100k addBatch() entries before one flush.
-          // Still ONE transaction (commit once below): data + events stay atomic.
-          outbox.executeBatch();
+    try {
+      return Jdbc.transaction(adminDs, "DynamicTableWriter.insertRows", c -> {
+        int written = 0;
+        int returned = 0;
+        try (PreparedStatement outbox = c.prepareStatement(OUTBOX_SQL)) {
+          for (int start = 0; start < idx.size(); start += sub) {
+            int end = Math.min(start + sub, idx.size());
+            SubBatchResult sb = writeSubBatch(c, outbox, spec, rows, sys, tenantId, schemaCols, schema,
+                                              idx, start, end, fqn, source, runId);
+            written += sb.written();
+            returned += sb.returned();
+            // Flush the staged events per sub-batch so the outbox JDBC batch never grows past `sub`
+            // rows — a 100k-row chunk would otherwise hold 100k addBatch() entries before one flush.
+            // Still ONE transaction (commit once): data + events stay atomic.
+            outbox.executeBatch();
+          }
         }
-        c.commit();
-      } catch (Exception e) {
-        c.rollback();
-        throw e;
-      } finally {
-        c.setAutoCommit(true);
-      }
-    } catch (Exception e) {
-      throw new ConnectorException("DynamicTableWriter.insertRows failed: " + e.getMessage(), e);
+        // skipped = dropped intra-chunk dups + cross-run conflicts (uniques that didn't come back).
+        return new Written(written, droppedDups + (idx.size() - returned));
+      });
+    } catch (RuntimeException e) {
+      throw new ConnectorException(Jdbc.failureText("DynamicTableWriter.insertRows", e), e);
     }
-
-    // skipped = dropped intra-chunk dups + cross-run conflicts (uniques that didn't come back).
-    int skipped = droppedDups + (idx.size() - returned);
-    return new Written(written, skipped);
   }
 
   /** First-occurrence-wins ordered index list over the chunk, keyed by {@code _row_hash}. */

@@ -90,9 +90,10 @@ what may be absent — a missing reference fails the render and the mail is skip
   the message referenced, with their values) **only when the message references any**.
 - **[Dormancy watches](apps/workflows.md)** (`decision.dormant.<workflow>`): `message`,
   `workflow`, `doc_key`, `state`, `since`, `first_observed_at`, `threshold` — never
-  `process`, `entity_key` or `fields`.
+  `process` or `entity_key`; `fields` only when the message cites columns or the workflow
+  [declares some](apps/workflows.md#what-a-decision-carries).
 - **[Due dates](apps/workflows.md#due-date-a-deadline-the-data-carries)** (`decision.overdue.<workflow>`): `message`, `workflow`,
-  `doc_key`, `state`, `due`, `due_at`.
+  `doc_key`, `state`, `due`, `due_at`; `fields` on the same terms.
 
 ### Add your own template
 

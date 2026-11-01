@@ -12,12 +12,14 @@ import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 import static io.lumnik.hub.search.projection.SearchProjectionItSupport.unique;
 import static io.lumnik.hub.search.projection.SearchProjectionItSupport.workerWith;
@@ -48,6 +50,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * seen first would fail exactly this second assertion.
  */
 @QuarkusTest
+@ExtendWith(ProjectionTickPaused.class)
 class SearchProjectionLagMetricsIT {
 
     @Inject @DataSource("admin") AgroalDataSource adminDs;
@@ -137,38 +140,33 @@ class SearchProjectionLagMetricsIT {
     }
 
     /**
-     * Copilot finding: {@code recordLagGauges} used to gate the {@code lagging} COUNT on {@code
-     * lagSeconds > 0}, so a mark landed within the same second as {@code now()} reported
-     * laggingIndexes=0 for its own pair even though it is genuinely pending — {@code
-     * oldestPendingMarkedAtAdmin}'s own {@code GROUP BY} only ever returns a pair that HAS pending
-     * work, so presence alone must count, not a lag threshold.
+     * Copilot finding: {@code recordLagGauges} used to gate the {@code lagging} COUNT on {@code lagSeconds > 0}, so a
+     * mark landed within the same second as {@code now()} reported laggingIndexes=0 for its own pair even though it is
+     * genuinely pending — {@code oldestPendingMarkedAtAdmin}'s own {@code GROUP BY} only ever returns a pair that HAS
+     * pending work, so presence alone must count, not a lag threshold.
      *
-     * <p>Same delta technique as the test above, for the same reason (shared DB, other tests' own
-     * leftover marks): removing exactly THIS pair's own mark is what proves it was the one counted,
-     * not incidental noise.
+     * <p>Two halves, neither reading the deployment-wide gauge's difference (#1661): under {@code -Psearch} the real
+     * projection worker drains other tests' pairs behind any exact count of it. Here, the store returns THIS pair while
+     * its same-second mark is pending and no longer once removed — the pair the gauges are computed from; and the
+     * arithmetic that counts such a pair is {@code SearchProjectionLagReadingTest}'s.
      */
     @Test
-    void recordLagGaugesCountsAPendingMarkFromTheSameSecond() throws Exception {
+    void aPendingMarkFromTheSameSecondIsAPairTheLagGaugesReadWhilePresentOnly() throws Exception {
         long tenant = unique("703015").hashCode() & 0x7fffffffL;
         String index = unique("lag-same-second-");
 
         insertMarkWithMarkedAt(tenant, index, Instant.now()); // lagSeconds == 0 for this pair
 
         try {
-            SearchProjectionWorker worker =
-                workerWith(new RecordingSink(), markStore, stateStore, adminDs, readonlyDs, entityRegistry);
-            worker.metrics = metrics;
-
-            worker.discoveryTick();
-            double laggingWithMark = registry.get("lumnik_search_projection_lagging_indexes").gauge().value();
+            assertThat(markStore.oldestPendingMarkedAtAdmin())
+                .as("this pair's own same-second mark is a pending pair the gauges read")
+                .hasEntrySatisfying(tenant, byIndex -> assertThat(byIndex).containsKey(index));
 
             deleteMark(tenant, index);
-            worker.discoveryTick();
-            double laggingWithoutMark = registry.get("lumnik_search_projection_lagging_indexes").gauge().value();
 
-            assertThat(laggingWithMark - laggingWithoutMark)
-                .as("this pair's own same-second mark must count while present, and no longer once removed")
-                .isEqualTo(1);
+            assertThat(markStore.oldestPendingMarkedAtAdmin().getOrDefault(tenant, Map.of()))
+                .as("and no longer once removed")
+                .doesNotContainKey(index);
         } finally {
             deleteMark(tenant, index);
         }

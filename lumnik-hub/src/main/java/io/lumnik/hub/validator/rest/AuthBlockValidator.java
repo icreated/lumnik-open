@@ -29,6 +29,8 @@ public final class AuthBlockValidator {
                 "Bearer token source: lm secret name, else env var (bearer)", null)
             .optional("token_value", Type.STRING, Importance.LOW,
                 "Literal bearer token (dev only — prefer token_env)", null)
+            .optional("scheme", Type.STRING, Importance.LOW,
+                "The Authorization header's scheme word (bearer): Bearer by default, Token for Django REST Framework", "Bearer")
             .requireWhen("token_url", Type.STRING, Importance.HIGH,
                 "OAuth2 token endpoint (client-credentials grant)", "kind", OAUTH2)
             .requireWhen("client_id", Type.STRING, Importance.HIGH,

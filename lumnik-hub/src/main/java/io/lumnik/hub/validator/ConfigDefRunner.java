@@ -67,7 +67,7 @@ public final class ConfigDefRunner {
                 out.add(new ValidationError(full, Severity.ERROR, s, f.recommendations())));
         }
 
-        if (f.type() == Type.NESTED && f.nested() != null) {
+        if ((f.type() == Type.NESTED || f.type() == Type.STRING_OR_NESTED) && value.isObject() && f.nested() != null) {
             out.addAll(run(f.nested(), value, full));
         }
     }
@@ -90,6 +90,7 @@ public final class ConfigDefRunner {
             case BOOLEAN -> v.isBoolean()           ? null : "expected boolean, got " + v.getNodeType();
             case LIST    -> v.isArray()             ? null : "expected list, got "    + v.getNodeType();
             case NESTED  -> v.isObject()            ? null : "expected object, got "  + v.getNodeType();
+            case STRING_OR_NESTED -> v.isTextual() || v.isObject() ? null : "expected string or object, got " + v.getNodeType();
         };
     }
 }

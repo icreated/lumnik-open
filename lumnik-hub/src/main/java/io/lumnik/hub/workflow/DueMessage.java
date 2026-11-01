@@ -1,7 +1,5 @@
 package io.lumnik.hub.workflow;
 
-import io.lumnik.hub.process.MessageTemplate;
-
 import java.util.Map;
 import java.util.Set;
 
@@ -13,7 +11,7 @@ import java.util.Set;
  */
 public final class DueMessage {
 
-    /** What a declared message may name; anything else is refused at apply. */
+    /** The reserved names a declared message may use; any other name is a column of the watched relation (#1588). */
     public static final Set<String> PLACEHOLDERS =
         Set.of("doc_key", "state", "state_label", "due", "workflow");
 
@@ -21,10 +19,11 @@ public final class DueMessage {
 
     private DueMessage() {}
 
-    /** The sentence for {@code docKey}, overdue in {@code state} since {@code due}, in {@code g}'s message or the default. */
-    static String render(WorkflowGraph g, String docKey, String state, String due) {
+    /** The sentence for {@code docKey}, overdue in {@code state} since {@code due}, in {@code g}'s message or the default,
+     *  with the version's cited columns ({@link DecisionContext#render}). */
+    static String render(WorkflowGraph g, String docKey, String state, String due, Map<String, Object> context) {
         String template = g.due().message();
-        return MessageTemplate.render(template != null ? template : DEFAULT, Map.of(
+        return DecisionContext.render(template != null ? template : DEFAULT, context, Map.of(
             "doc_key", docKey, "state", state, "state_label", g.labelOf(state), "due", due, "workflow", g.name()));
     }
 }

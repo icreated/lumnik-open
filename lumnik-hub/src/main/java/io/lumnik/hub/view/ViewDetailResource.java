@@ -48,7 +48,7 @@ public class ViewDetailResource {
         long tenant = RequireTenant.current();
 
         if (key == null || key.isBlank()) {
-            return Response.status(400).entity(ApiErrors.error("the 'key' query param is required")).build();
+            return ApiErrors.badRequest("the 'key' query param is required");
         }
 
         ViewManifest manifest = ApiErrors.orBadRequest(() -> parser.parse(body));
@@ -59,8 +59,7 @@ public class ViewDetailResource {
 
         Optional<SchemaCard> card = cards.load(tenant, manifest.scope());
         if (card.isEmpty()) {
-            return Response.status(404).entity(ApiErrors.error(
-                "no schema for scope '" + manifest.scope() + "' — run discovery first")).build();
+            return ApiErrors.notFound("no schema for scope '" + manifest.scope() + "' — run discovery first");
         }
 
         ResolvedView rv = ApiErrors.orBadRequest(() -> resolver.resolve(manifest, card.get()));
@@ -68,12 +67,10 @@ public class ViewDetailResource {
         String firstCol = rv.columns().get(0).name();
         ViewDetailReader.DetailRead read = ApiErrors.orBadRequest(() -> reader.read(tenant, rv, key));
         if (read.rows().isEmpty()) {
-            return Response.status(404).entity(ApiErrors.error(
-                "no record where " + firstCol + "=" + key)).build();
+            return ApiErrors.notFound("no record where " + firstCol + "=" + key);
         }
         if (read.rows().size() > 1) {
-            return Response.status(400).entity(ApiErrors.error(
-                "ambiguous: " + firstCol + " is not unique — 2+ records match " + key)).build();
+            return ApiErrors.badRequest("ambiguous: " + firstCol + " is not unique — 2+ records match " + key);
         }
 
         ViewDetailReader.DetailRow row = read.rows().get(0);

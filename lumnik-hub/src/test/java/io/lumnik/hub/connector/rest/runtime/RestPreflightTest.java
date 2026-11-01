@@ -20,6 +20,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import javax.net.ssl.SSLHandshakeException;
 import java.io.IOException;
+import java.security.cert.CertificateException;
 import java.lang.reflect.RecordComponent;
 import java.net.ConnectException;
 import java.net.http.HttpTimeoutException;
@@ -291,7 +292,10 @@ class RestPreflightTest {
             arguments(new ConnectException("Connection refused: " + SOURCE), "connection failed (ConnectException)"),
             arguments(new HttpTimeoutException("request timed out: /p/SECRET?k=v"), "timeout (HttpTimeoutException)"),
             arguments(new IOException("https://api.example/p/%53ECRET?k%3Dv", new SSLHandshakeException(SOURCE)),
-                      "TLS failure (IOException)"));
+                      "TLS failure (IOException)"),
+            // #1609: a handshake the trust refused says so — the operator forgot spec.tls, not the network
+            arguments(new SSLHandshakeException(SOURCE).initCause(new CertificateException("PKIX path building failed: " + SOURCE)),
+                      "certificate refused (SSLHandshakeException)"));
     }
 
     /**

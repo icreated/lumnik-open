@@ -14,11 +14,9 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
-import java.sql.*;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -127,22 +125,13 @@ public class ConnectorScheduler {
   }
 
   List<DueConnector> listDueConnectors() {
-    List<DueConnector> result = new ArrayList<>();
-    try (Connection conn = adminDs.getConnection();
-         Statement st = conn.createStatement();
-         ResultSet rs = st.executeQuery(SELECT_DUE)) {
-      while (rs.next()) {
-        result.add(new DueConnector(
+    return Jdbc.query(adminDs, "ConnectorScheduler.listDueConnectors", SELECT_DUE, ps -> {},
+        rs -> new DueConnector(
             UUID.fromString(rs.getString("id")),
             rs.getString("schedule"),
             rs.getString("run_window"),
             Jdbc.instant(rs, "created_at"),
             Jdbc.instant(rs, "last_started")));
-      }
-    } catch (Exception e) {
-      throw new RuntimeException("ConnectorScheduler: listDueConnectors failed", e);
-    }
-    return result;
   }
 
   record DueConnector(UUID id, String schedule, String window, Instant createdAt, Instant lastStarted) {}

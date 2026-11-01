@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.jdbc;
 
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.connector.api.ConnectorType;
 import io.lumnik.hub.connector.api.ItemReader;
 import io.lumnik.hub.connector.api.ItemWriter;
@@ -179,8 +180,8 @@ public class JdbcConnectorType implements ConnectorType {
       SourceUnreachableException unreachable = JdbcUnreachable.of(w.schema() + "." + w.table(), e);
       if (unreachable != null) throw unreachable;
       if (e instanceof RuntimeException r) throw r;
-      throw new RuntimeException("could not measure the run's target on "
-          + w.schema() + "." + w.table() + ": " + e.getMessage(), e);
+      throw new RuntimeException(
+          Jdbc.failureText("measuring the run's target on " + w.schema() + "." + w.table(), e), e);
     }
   }
 

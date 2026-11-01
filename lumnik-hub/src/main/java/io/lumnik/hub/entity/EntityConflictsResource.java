@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.sql.TemporalText;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.narayana.jta.QuarkusTransactionException;
@@ -151,9 +152,8 @@ public class EntityConflictsResource {
   /** SET LOCAL is transaction-scoped; issued once per entity transaction, and only for an entity actually scanned. */
   private void setStatementTimeout() {
     em.runWithConnection((Connection c) -> {
-      try (var st = c.createStatement()) {
-        st.execute("SET LOCAL statement_timeout = " + STATEMENT_TIMEOUT_MS);
-      }
+      Jdbc.update(c, "EntityConflictsResource.setStatementTimeout", "SET LOCAL statement_timeout = " + STATEMENT_TIMEOUT_MS,
+          ps -> {});
       // A ledger value of a date column is text written in the session's zone: UTC, as every read (#1325).
       TemporalText.utcSession(c);
     });

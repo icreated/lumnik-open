@@ -6,11 +6,16 @@ import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.sql.SQLException;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Stream;
 
+import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.advanceFailsOnce;
 import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.createTable;
 import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.exec;
 import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.fireRun;
@@ -24,13 +29,7 @@ import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.watermark;
 import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.watermarkRowCount;
 import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.yaml;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doCallRealMethod;
-import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.spy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 
 /**
  * #850: one lookup table serving a match: entity AND a resolution: entity. One scan, every family of marks written,
@@ -84,28 +83,31 @@ class SearchProjectionResolvedLookupSharedTableIT {
         assertThat(watermarkRowCount(adminDs, f.tenant(), "connector." + f.lookup())).isEqualTo(1L);
     }
 
-    @Test
-    void a_failure_before_the_advance_rolls_back_both_families_and_a_retry_recreates_them() throws Exception {
-        Fx f = fixture(850_402);
-        exec(adminDs, "INSERT INTO connector." + f.lookup() + " (tenant_id, cid, cname) VALUES (850402, 'C1', 'Pumps')");
+    static Stream<Arguments> failuresBeforeTheAdvance() {
+        return Stream.of(
+            Arguments.of(850_402L, new RuntimeException("boom", new SQLException("boom"))),
+            // #1649: an Error skipped the rollback, and the finally that restored autocommit committed the marks. Not an
+            // OutOfMemoryError: one escaping by mistake would stop the whole JUnit run.
+            Arguments.of(850_403L, new StackOverflowError("injected")));
+    }
+
+    @ParameterizedTest
+    @MethodSource("failuresBeforeTheAdvance")
+    void a_failure_before_the_advance_rolls_back_both_families_and_a_retry_recreates_them(long tenant, Throwable failure)
+            throws Exception {
+        Fx f = fixture(tenant);
+        exec(adminDs, "INSERT INTO connector." + f.lookup() + " (tenant_id, cid, cname) VALUES (" + tenant + ", 'C1', 'Pumps')");
         var before = watermark(adminDs, f.tenant(), "connector." + f.lookup());
+        SearchProjectionRunHook direct = advanceFailsOnce(adminDs, registry, markStore, failure);
 
-        SearchProjectionWatermarkStore failing = spy(new SearchProjectionWatermarkStore());
-        failing.ds = adminDs;
-        doThrow(new SQLException("boom")).when(failing).advance(any(), anyLong(), anyString(), any());
-        SearchProjectionRunHook direct = new SearchProjectionRunHook();
-        direct.ds = adminDs;
-        direct.registry = registry;
-        direct.markStore = markStore;
-        direct.watermarkStore = failing;
-
-        assertThatThrownBy(() -> direct.processTable(f.tenant(), f.lookup(), direct.targetsByTable(f.tenant()).get(f.lookup())))
-            .isInstanceOf(SQLException.class);
+        Throwable thrown = catchThrowable(
+            () -> direct.processTable(f.tenant(), f.lookup(), direct.targetsByTable(f.tenant()).get(f.lookup())));
+        // An Error leaves as itself; a database failure comes back labelled by Jdbc.transaction, as its cause.
+        assertThat(failure instanceof Error ? thrown : thrown.getCause()).isSameAs(failure);
         assertThat(markedKeys(adminDs, f.tenant(), f.matchIndex(), "lookup-change")).isEmpty();
         assertThat(markedKeys(adminDs, f.tenant(), f.resIndex(), "lookup-change")).isEmpty();
         assertThat(watermark(adminDs, f.tenant(), "connector." + f.lookup())).isEqualTo(before);
 
-        doCallRealMethod().when(failing).advance(any(), anyLong(), anyString(), any());
         direct.processTable(f.tenant(), f.lookup(), direct.targetsByTable(f.tenant()).get(f.lookup()));
 
         assertThat(markedKeys(adminDs, f.tenant(), f.matchIndex(), "lookup-change")).hasSize(1);

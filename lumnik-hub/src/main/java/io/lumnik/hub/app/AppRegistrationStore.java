@@ -11,11 +11,9 @@ import jakarta.inject.Inject;
 
 import java.sql.Array;
 import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -124,29 +122,15 @@ public class AppRegistrationStore {
         // Two whole statements rather than one with a conditionally-appended WHERE, the
         // SavedViewStore.list reasoning: each placeholder sits in the same expression as the value
         // bound to it, which is what a reader — and a static analyser — can follow.
-        try (Connection c = adminDs.get().getConnection()) {
-            if (scopes == null) {
-                try (PreparedStatement ps = c.prepareStatement(
-                         "SELECT " + COLUMNS + " FROM connector.app_registration ORDER BY name")) {
-                    return rows(ps);
-                }
-            }
-            try (PreparedStatement ps = c.prepareStatement("SELECT " + COLUMNS
-                     + " FROM connector.app_registration WHERE scope = ANY (?) ORDER BY name")) {
-                ps.setArray(1, c.createArrayOf("text", scopes.toArray()));
-                return rows(ps);
-            }
-        } catch (SQLException e) {
-            throw new IllegalStateException("AppRegistrationStore.list: " + e, e);
+        if (scopes == null) {
+            return Jdbc.query(adminDs.get(), "AppRegistrationStore.list",
+                "SELECT " + COLUMNS + " FROM connector.app_registration ORDER BY name",
+                ps -> {}, AppRegistrationStore::read);
         }
-    }
-
-    private static List<Row> rows(PreparedStatement ps) throws SQLException {
-        List<Row> out = new ArrayList<>();
-        try (ResultSet rs = ps.executeQuery()) {
-            while (rs.next()) out.add(read(rs));
-        }
-        return out;
+        return Jdbc.query(adminDs.get(), "AppRegistrationStore.list",
+            "SELECT " + COLUMNS + " FROM connector.app_registration WHERE scope = ANY (?) ORDER BY name",
+            ps -> ps.setArray(1, ps.getConnection().createArrayOf("text", scopes.toArray())),
+            AppRegistrationStore::read);
     }
 
     private static Row read(ResultSet rs) throws SQLException {
@@ -189,7 +173,7 @@ public class AppRegistrationStore {
      * Deletes this app, refusing atomically — in the DELETE statement's own {@code WHERE}, not a
      * read-then-act check — when the row is outside the caller's grants or currently carries the
      * default flag. One statement is enough here, unlike {@link #upsert}: there is nothing to
-     * compose with the delete, so this needs none of {@code upsert}'s hand-managed transaction,
+     * compose with the delete, so this needs none of {@code upsert}'s {@code Jdbc.transaction},
      * and goes through the ordinary {@link Jdbc} helpers every other read in this store uses.
      *
      * <p>Zero rows affected is ambiguous the same way the conflict arm's is — unknown name, scope
@@ -255,8 +239,9 @@ public class AppRegistrationStore {
      * that shape is always the last default, never merely one of several.
      *
      * <p>The admin datasource is configured {@code transactions=disabled} (no JTA enlistment), so
-     * {@code @Transactional} would do nothing here and the unit of work is taken by hand — the
-     * WorkflowObservationStore.recordTransition idiom. <b>Demote before insert, never after:</b>
+     * {@code @Transactional} would do nothing here: the unit of work is {@code Jdbc.transaction}'s, and a
+     * refusal that must undo the demote leaves it as {@link Refused} (#1649).
+     * <b>Demote before insert, never after:</b>
      * {@code app_registration_one_default} is a partial UNIQUE index, so two rows carrying
      * {@code is_default} is a constraint violation even for the length of one statement, not a
      * transient state Postgres will tolerate until commit.
@@ -276,10 +261,10 @@ public class AppRegistrationStore {
      */
     public Upserted upsert(AppManifest m, String yaml, Set<String> callerScopes) {
         String key = m.name().toLowerCase(Locale.ROOT);
-        try (Connection c = adminDs.get().getConnection()) {
-            boolean previousAutoCommit = c.getAutoCommit();
-            c.setAutoCommit(false);
-            try {
+        // One transaction: any failure rolls back, an Error included (#1649). Left open, the pool's reset would COMMIT
+        // a demote whose write never came: a deployment with no default app. A refusal undoes the demote too.
+        try {
+            return Jdbc.transaction(adminDs.get(), "AppRegistrationStore.upsert", c -> {
                 Optional<String> demoted = Optional.empty();
                 if (m.isDefault()) {
                     demoted = demoteCurrentDefault(c, key, callerScopes);
@@ -291,8 +276,7 @@ public class AppRegistrationStore {
                     // the empty result can only mean an empty flag, and asking again would turn the
                     // known concurrent-apply 500 below into a mystery 403.
                     if (demoted.isEmpty() && callerScopes != null && defaultIsHeld(c, key)) {
-                        c.rollback();
-                        return new Upserted.DefaultHeldOutOfScope();
+                        throw new Refused(new Upserted.DefaultHeldOutOfScope());
                     }
                 }
                 // The conflict arm carries the same predicate, against the EXISTING row — which in
@@ -306,55 +290,62 @@ public class AppRegistrationStore {
                 // row losing the flag with nothing taking it — the last default, since the partial
                 // unique index admits no second holder. When the manifest itself says default:true
                 // the clause cannot fire, so it never interferes with the demote above.
-                try (PreparedStatement ps = c.prepareStatement(
-                         "INSERT INTO connector.app_registration (" + COLUMNS + ", yaml_text) "
-                             + "VALUES (?,?,?,?,?,?,?,?,?) "
-                             + "ON CONFLICT (name) DO UPDATE SET scope = EXCLUDED.scope, "
-                             + "title = EXCLUDED.title, icon = EXCLUDED.icon, "
-                             + "accent_color = EXCLUDED.accent_color, "
-                             + "background_color = EXCLUDED.background_color, "
-                             + "is_default = EXCLUDED.is_default, tabs = EXCLUDED.tabs, "
-                             + "yaml_text = EXCLUDED.yaml_text, updated_at = now() "
-                             + "WHERE (?::text[] IS NULL "
-                             + "OR connector.app_registration.scope = ANY (?::text[])) "
-                             + "AND NOT (connector.app_registration.is_default "
-                             + "AND NOT EXCLUDED.is_default)")) {
-                    ps.setString(1, key);
-                    ps.setString(2, m.scope());
-                    ps.setString(3, m.title());
-                    ps.setString(4, m.icon());
-                    ps.setString(5, m.accentColor());
-                    ps.setString(6, m.backgroundColor());
-                    ps.setBoolean(7, m.isDefault());
-                    if (m.tabs() == null) ps.setNull(8, Types.ARRAY);
-                    else ps.setArray(8, c.createArrayOf("text", m.tabs().toArray(new String[0])));
-                    ps.setString(9, yaml);
-                    ScopeGuardedUpsert.bindGrants(ps, 10, callerScopes);
-                    // Zero rows used to be UNAMBIGUOUS here — one predicate, one reason — and the
-                    // comment that stood in this place said so, and said no second read was needed.
-                    // The floor clause made that false: zero rows now means the name was taken and
-                    // ONE OF THE TWO predicates refused, and the door owes a different answer for
-                    // each (a frozen 403 for the scope, a plain 400 for the floor). What survives
-                    // from the old reasoning is why no read is needed on the SUCCESS path: the
-                    // conflict itself proves the row exists, so the ambiguity is only ever about
-                    // WHICH clause said no, never about whether a row was there.
-                    if (ps.executeUpdate() == 0) {
-                        Upserted refusal =
-                            whyTheConflictArmRefused(c, key, callerScopes, m.isDefault());
-                        c.rollback();
-                        return refusal;
-                    }
+                int written = Jdbc.update(c, "AppRegistrationStore.upsert",
+                    "INSERT INTO connector.app_registration (" + COLUMNS + ", yaml_text) "
+                        + "VALUES (?,?,?,?,?,?,?,?,?) "
+                        + "ON CONFLICT (name) DO UPDATE SET scope = EXCLUDED.scope, "
+                        + "title = EXCLUDED.title, icon = EXCLUDED.icon, "
+                        + "accent_color = EXCLUDED.accent_color, "
+                        + "background_color = EXCLUDED.background_color, "
+                        + "is_default = EXCLUDED.is_default, tabs = EXCLUDED.tabs, "
+                        + "yaml_text = EXCLUDED.yaml_text, updated_at = now() "
+                        + "WHERE (?::text[] IS NULL "
+                        + "OR connector.app_registration.scope = ANY (?::text[])) "
+                        + "AND NOT (connector.app_registration.is_default "
+                        + "AND NOT EXCLUDED.is_default)",
+                    ps -> {
+                        ps.setString(1, key);
+                        ps.setString(2, m.scope());
+                        ps.setString(3, m.title());
+                        ps.setString(4, m.icon());
+                        ps.setString(5, m.accentColor());
+                        ps.setString(6, m.backgroundColor());
+                        ps.setBoolean(7, m.isDefault());
+                        if (m.tabs() == null) ps.setNull(8, Types.ARRAY);
+                        else ps.setArray(8, c.createArrayOf("text", m.tabs().toArray(new String[0])));
+                        ps.setString(9, yaml);
+                        ScopeGuardedUpsert.bindGrants(ps, 10, callerScopes);
+                    });
+                // Zero rows used to be UNAMBIGUOUS here — one predicate, one reason — and the
+                // comment that stood in this place said so, and said no second read was needed.
+                // The floor clause made that false: zero rows now means the name was taken and
+                // ONE OF THE TWO predicates refused, and the door owes a different answer for
+                // each (a frozen 403 for the scope, a plain 400 for the floor). What survives
+                // from the old reasoning is why no read is needed on the SUCCESS path: the
+                // conflict itself proves the row exists, so the ambiguity is only ever about
+                // WHICH clause said no, never about whether a row was there.
+                if (written == 0) {
+                    throw new Refused(whyTheConflictArmRefused(c, key, callerScopes, m.isDefault()));
                 }
-                c.commit();
                 return new Upserted.Applied(demoted);
-            } catch (SQLException | RuntimeException e) {
-                c.rollback();
-                throw e;
-            } finally {
-                c.setAutoCommit(previousAutoCommit);
-            }
-        } catch (SQLException e) {
-            throw new IllegalStateException("AppRegistrationStore.upsert: " + e, e);
+            });
+        } catch (Refused refused) {
+            // A cleanup that failed (the rollback, the autocommit restore after it, or ending the session) rides on
+            // the refusal as suppressed. Nothing landed either way, but that is no clean refusal to answer with.
+            if (refused.getSuppressed().length > 0)
+                throw new IllegalStateException(Jdbc.failureText("AppRegistrationStore.upsert", refused.getSuppressed()[0]),
+                    refused.getSuppressed()[0]);
+            return refused.outcome;
+        }
+    }
+
+    /** A refusal that must undo what the transaction already wrote. {@code Jdbc.transaction} rolls back and lets it
+     *  through untouched (it is no database failure), and {@link #upsert} answers with its outcome. */
+    private static final class Refused extends RuntimeException {
+        final Upserted outcome;
+
+        Refused(Upserted outcome) {
+            this.outcome = outcome;
         }
     }
 
@@ -368,19 +359,17 @@ public class AppRegistrationStore {
      * {@link ScopeGuardedUpsert#bindGrants}.
      */
     private static Optional<String> demoteCurrentDefault(Connection c, String key,
-                                                         Set<String> callerScopes)
-            throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement(
-                 "UPDATE connector.app_registration SET is_default = false, updated_at = now() "
-                     + "WHERE is_default AND name <> ? "
-                     + "AND (?::text[] IS NULL OR scope = ANY (?::text[])) "
-                     + "RETURNING name")) {
-            ps.setString(1, key);
-            ScopeGuardedUpsert.bindGrants(ps, 2, callerScopes);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? Optional.of(rs.getString(1)) : Optional.empty();
-            }
-        }
+                                                         Set<String> callerScopes) {
+        return Jdbc.queryOne(c, "AppRegistrationStore.demoteCurrentDefault",
+            "UPDATE connector.app_registration SET is_default = false, updated_at = now() "
+                + "WHERE is_default AND name <> ? "
+                + "AND (?::text[] IS NULL OR scope = ANY (?::text[])) "
+                + "RETURNING name",
+            ps -> {
+                ps.setString(1, key);
+                ScopeGuardedUpsert.bindGrants(ps, 2, callerScopes);
+            },
+            rs -> rs.getString(1));
     }
 
     /**
@@ -405,41 +394,31 @@ public class AppRegistrationStore {
      */
     private static Upserted whyTheConflictArmRefused(Connection c, String key,
                                                      Set<String> callerScopes,
-                                                     boolean incomingIsDefault)
-            throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement(
-                 "SELECT scope, is_default FROM connector.app_registration WHERE name = ?")) {
-            ps.setString(1, key);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) {
-                    throw new IllegalStateException("AppRegistrationStore.upsert: the conflict arm "
-                        + "refused but no row holds the name " + key + " — the row it conflicted "
-                        + "with should still be locked by this transaction");
-                }
-                String scope = rs.getString(1);
-                boolean holdsDefault = rs.getBoolean(2);
-                if (callerScopes != null && !callerScopes.contains(scope)) {
-                    return new Upserted.NameHeldOutOfScope();
-                }
-                if (holdsDefault && !incomingIsDefault) {
-                    return new Upserted.LastDefaultWouldBeRemoved();
-                }
-                throw new IllegalStateException("AppRegistrationStore.upsert: the conflict arm "
-                    + "refused " + key + " for neither of its two predicates — scope and flag both "
-                    + "read as writable, so the WHERE and this read disagree");
-            }
+                                                     boolean incomingIsDefault) {
+        record Holder(String scope, boolean holdsDefault) {}
+        Holder holder = Jdbc.queryOne(c, "AppRegistrationStore.whyTheConflictArmRefused",
+            "SELECT scope, is_default FROM connector.app_registration WHERE name = ?",
+            ps -> ps.setString(1, key),
+            rs -> new Holder(rs.getString(1), rs.getBoolean(2)))
+            .orElseThrow(() -> new IllegalStateException("AppRegistrationStore.upsert: the conflict arm "
+                + "refused but no row holds the name " + key + " — the row it conflicted "
+                + "with should still be locked by this transaction"));
+        if (callerScopes != null && !callerScopes.contains(holder.scope())) {
+            return new Upserted.NameHeldOutOfScope();
         }
+        if (holder.holdsDefault() && !incomingIsDefault) {
+            return new Upserted.LastDefaultWouldBeRemoved();
+        }
+        throw new IllegalStateException("AppRegistrationStore.upsert: the conflict arm "
+            + "refused " + key + " for neither of its two predicates — scope and flag both "
+            + "read as writable, so the WHERE and this read disagree");
     }
 
     /** Does any app other than this one hold the default flag? No scope predicate: the question is
      *  whether a holder EXISTS, which is exactly what the demote's empty result cannot say. */
-    private static boolean defaultIsHeld(Connection c, String key) throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement(
-                 "SELECT name FROM connector.app_registration WHERE is_default AND name <> ?")) {
-            ps.setString(1, key);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next();
-            }
-        }
+    private static boolean defaultIsHeld(Connection c, String key) {
+        return Jdbc.exists(c, "AppRegistrationStore.defaultIsHeld",
+            "SELECT 1 FROM connector.app_registration WHERE is_default AND name <> ?",
+            ps -> ps.setString(1, key));
     }
 }

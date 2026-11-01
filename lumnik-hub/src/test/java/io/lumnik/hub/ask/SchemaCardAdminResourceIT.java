@@ -92,9 +92,10 @@ class SchemaCardAdminResourceIT {
     }
 
     @Test
-    void zeroSentinelTenant_returns401() {
+    void zeroSentinelTenant_isRefusedAtTheDoor() {
+        // #1615: 0 is the system sentinel — refused by the auth filter before any door, not let through to a 401.
         given().header("X-Tenant-ID", "0")
         .when().get("/api/platform/rag/schema?scope=atelierC")
-        .then().statusCode(401);
+        .then().statusCode(400);
     }
 }

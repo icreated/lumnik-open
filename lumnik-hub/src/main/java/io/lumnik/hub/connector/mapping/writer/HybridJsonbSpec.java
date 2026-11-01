@@ -4,6 +4,7 @@ import io.lumnik.hub.sql.SqlIdentifiers;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 
@@ -13,8 +14,14 @@ import java.util.Optional;
  * @param table         Fully-qualified target table, e.g. {@code ext.stripe_charges}
  * @param uniqueKeyPath JsonPath to extract the external idempotency key from each item
  * @param promote       Columns to extract and store in typed Postgres columns
+ * @param uniqueKeyTransform the transform the key's value goes through, as a promote entry's (#1630)
  */
-public record HybridJsonbSpec(String table, String uniqueKeyPath, List<PromotedColumn> promote) {
+public record HybridJsonbSpec(String table, String uniqueKeyPath, List<PromotedColumn> promote,
+                              Optional<Transform> uniqueKeyTransform) {
+
+    public HybridJsonbSpec(String table, String uniqueKeyPath, List<PromotedColumn> promote) {
+        this(table, uniqueKeyPath, promote, Optional.empty());
+    }
 
     /**
      * The one parser of the endpoint {@code target} block — every reader consumes THIS,
@@ -31,21 +38,25 @@ public record HybridJsonbSpec(String table, String uniqueKeyPath, List<PromotedC
                 "target.table must be a plain identifier or schema.table pair (letters, digits, underscore; "
                     + "not starting with a digit): " + table);
         }
-        String key = (String) t.get("unique_key");
+        // A path, or { path, transform } (#1630): Spring Data REST names an item only by its self link.
+        Object rawKey = t.get("unique_key");
+        Map<String, Object> keyObject = rawKey instanceof Map<?, ?> m ? (Map<String, Object>) m : Map.of();
+        String key = rawKey instanceof Map ? (String) keyObject.get("path") : (String) rawKey;
         List<Map<String, Object>> rawPromote =
             (List<Map<String, Object>>) t.getOrDefault("promote", List.of());
         List<PromotedColumn> promote = new ArrayList<>();
         for (Map<String, Object> p : rawPromote) {
-            Object transformRaw = p.get("transform");
             promote.add(new PromotedColumn(
                 (String) p.get("name"),
                 (String) p.get("path"),
-                SqlType.valueOf(String.valueOf(p.get("type")).toUpperCase()),
-                transformRaw != null
-                    ? Optional.of(Transform.valueOf(String.valueOf(transformRaw).toUpperCase()))
-                    : Optional.empty()));
+                SqlType.valueOf(String.valueOf(p.get("type")).toUpperCase(Locale.ROOT)),
+                transform(p.get("transform"))));
         }
-        return new HybridJsonbSpec(table, key, promote);
+        return new HybridJsonbSpec(table, key, promote, transform(keyObject.get("transform")));
+    }
+
+    private static Optional<Transform> transform(Object raw) {
+        return raw != null ? Optional.of(Transform.valueOf(String.valueOf(raw).toUpperCase(Locale.ROOT))) : Optional.empty();
     }
 
     public record PromotedColumn(String name, String jsonPath, SqlType type, Optional<Transform> transform) {}
@@ -72,6 +83,10 @@ public record HybridJsonbSpec(String table, String uniqueKeyPath, List<PromotedC
         TO_LOWER,
         TO_UPPER,
         TRIM,
-        TO_JSON_STRING
+        TO_JSON_STRING,
+        /** A number with a unit suffix ({@code 100m}, {@code 64Mi}, {@code 99827146n}) in its base unit (#1618). */
+        PARSE_QUANTITY,
+        /** The last segment of a link's path, percent-decoded — the id of a resource named by its URL (#1630). */
+        LAST_PATH_SEGMENT
     }
 }

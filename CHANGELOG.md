@@ -7,6 +7,102 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.10.2 — 2026-11-02
+
+REST connectors read more real APIs, and stop with a clear message when an answer cannot be read,
+instead of syncing nothing. Workflows re-check their declaration after each ingestion. Error
+messages no longer carry the values of a row. One small migration.
+
+### Before you upgrade
+- **Take a backup.** This release carries one migration, V86: a new table,
+  `core.workflow_undeclared_value`. It is a plain `CREATE TABLE`, with no lock on existing tables.
+  Migrations are forward-only. See `docs/operations/upgrade.md`.
+- **A rest-generic run that used to end `Completed` can now end `Failed`.** Each case below lost
+  data in silence. Run `lm validate` on your connectors, then watch the first runs.
+  - The endpoint answers `200` with XML or an HTML login page. The run stops with
+    `the response is not JSON (Content-Type application/xml) — rest-generic reads JSON`. Before, it
+    showed `Completed` with 0 records. SOAP is unchanged.
+  - The source sends back the cursor it was given and still says there are more pages. The run stops
+    with `Endpoint 'events': the source sent back the cursor it was given while saying more pages —
+    the cursor is not reaching it (check cursor_binding, and cursor_param or cursor_var)`. Before, it
+    showed `Completed` with the first pages only.
+  - A `cursor` or `relay` page says "more" but carries no cursor. The run stops. Before, it showed
+    `Completed` with the rest unread.
+  - A pagination flag (`has_more_path`, `last_path`) that is not a boolean, a count path that is not a
+    number, or a pagination path that selects several values is refused. The message names the key and
+    the JSON type, never the value.
+- **An entity name of 62 characters or more is refused** when you apply it:
+  `name has 62 characters; at most 61 — its view v_<name> must fit PostgreSQL's 63-byte names`.
+  Before, PostgreSQL cut the view name without a word. An entity already stored under a longer name
+  still loads.
+- **The hub refuses a malformed identity at the door.**
+  - On a `dev-bypass` hub, an `X-Tenant-ID`, `X-User-ID` or `X-Impersonate-Tenant` that is not a
+    positive integer gets `400 {"error":"X-Tenant-ID must be a positive integer"}`. `X-Tenant-ID: 0`
+    is refused too: leave the header out for a caller without a tenant. Before, the header was
+    dropped and the request ran with no tenant and every dev role.
+  - A token whose `tenant_id`, `user_id` or `acting_as_tenant` is zero, negative, fractional or too
+    large gets `401`. Before, `1.9` was cut to tenant 1.
+- **Fix scripts that read error bodies.**
+  - Refusals from the connector, entity, view, process, workflow, export, secret and source doors,
+    and from the rate limiter, are always JSON: `{"error": …}`. Before, some came as YAML or text,
+    following the request. Status codes and messages are unchanged.
+  - `lm run get` (`error_message`), an export's `failure_reason`, the `502` bodies of the JDBC source
+    doors and the batch writers' reasons no longer quote the database driver, which could repeat a
+    value of the row. They read `<what failed> failed (SQLSTATE 23505)`. A syntax or structure error
+    keeps its sentence. The full text stays in `error_stack` and in the hub log.
+
+### After you upgrade
+- **A `promote` path with a filter or a wildcard stores one value.**
+  `$.status.conditions[?(@.type=='Ready')].status` now stores `False`, not `["False"]` (or NULL in a
+  boolean column). Several values give an empty cell and one cell error. Rows already written keep
+  their old text until they are read again. `jsonb` columns and plain paths are unchanged.
+- **A whole-number column that receives a decimal now widens under a view.** An entity's views are
+  rebuilt around the change. Before, PostgreSQL refused it and every later run failed on the same
+  chunk. A widened column is a plain `numeric`.
+
+### Added
+- **Workflow re-check after each ingestion.** `spec.check.trigger: ingestion` re-reads the status
+  values after every completed run that writes the watched table. A spelling no earlier report named
+  raises one `workflow.undeclared.<workflow>` event: `--events 'workflow.undeclared.*'`. It is not a
+  decision, so it is not in the inbox.
+- **Workflow `spec.on.order`** names the column that orders a document's versions. Dormancy and due
+  sweeps then work on a fused entity view, and read the latest version. `apply` reports
+  `invalidOrderValues`, `keysWithSeveralRows` and `columnsUnverified`.
+- **Dormancy and due messages carry your columns.** `{name}` in `message` reads a column of the
+  watched table, and `fields: [...]` adds columns to the payload. A reserved name (`{state}`,
+  `{since}`) wins. Whoever receives `fields` sees those columns.
+- **rest-generic**:
+  - `spec.tls.ca_secret` trusts an internal CA, per connector. There is no skip-verify switch.
+  - An endpoint `mapping` runs hooks, Kotlin included, over its promoted columns.
+  - `transform: parse_quantity` reads `100m` as `0.1` and `64Mi` as `67108864`.
+  - `unique_key: { path, transform: last_path_segment }` keys an item by its self link.
+  - `pagination.total_header: X-Total-Count` checks the declared total from a response header.
+  - `pagination: { kind: none, response_path: … }` reads a list returned in one answer.
+  - The preset `spring-paged-model` reads a Spring `PagedModel`.
+  - `cursor` pagination no longer needs `has_more_path`: an empty cursor ends the read.
+  - `body-link` and `json-api` follow a link object by its `href`.
+  - `auth: { kind: bearer, scheme: Token, … }` sends `Authorization: Token …`.
+  - `lm source rest probe` finds a lone list under an unknown key, and always drafts `response_path`.
+- **`lm config set-context NAME --tenant ID --user ID`** gives a context the identity a `dev-bypass`
+  hub needs. A remote `https://` context refuses it. The `401` now says how to fix it.
+- **`deploy/helm/up.sh`**: `KIND_CONFIG=<file>` and `LUMNIK_HOOKS_CONFIGMAP=<name>`.
+
+### Fixed
+- `LUMNIK_TOKEN` works on a machine with an expired `lm login` session. Before: `auth: refresh failed`.
+- After a column changed type, the readonly pool and the table browser could fail once per pooled
+  connection with `cached plan must not change result type` (a `500` in the browser). They no longer
+  keep a prepared plan.
+- Dormancy and due sweeps over a fused view are much faster: a repeat sweep over 100,000 documents
+  went from 87 s to 1.9 s.
+- An entity apply or delete that fails while rolling back reports the real cause. Before, a precise
+  `409` could turn into a generic `500`.
+- On a host set to Turkish, `parse_email lower: true` emptied the cell and `after_process: archive`
+  became `LEAVE`. Case is now folded the same way everywhere.
+- Deleting a rest-generic connector drops its hybrid table under `connector.*`.
+- A next link that already carries the query parameters no longer gets them added again.
+- A transaction left half-done by an abnormal failure is rolled back, not committed by the pool: the
+  take-down of a connector, an app apply, a run cancel, an entity apply, a table creation.
+
 ## v1.10.1 — 2026-10-25
 
 Fixes for a first install and for clearer messages. No migration, nothing to do before upgrading:

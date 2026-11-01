@@ -15,8 +15,6 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -49,8 +47,7 @@ public class ViewGenerateResource {
         long tenant = RequireTenant.current();
         if (req == null || req.scope() == null || req.scope().isBlank()
                 || req.description() == null || req.description().isBlank()) {
-            return Response.status(400).type(MediaType.APPLICATION_JSON)
-                .entity(ApiErrors.error("scope and description are required")).build();
+            return ApiErrors.badRequest("scope and description are required");
         }
         String scope = req.scope().strip();
 
@@ -66,14 +63,8 @@ public class ViewGenerateResource {
         ViewGenerateAgent.Outcome out = agent.generate(card.get(), scope, req.description());
         return switch (out.status()) {
             case OK -> Response.ok(out.yaml(), "application/yaml").build();
-            case ABSTAINED -> Response.status(400).type(MediaType.APPLICATION_JSON)
-                .entity(ApiErrors.error("generation abstained: " + out.message())).build();
-            case FAILED -> {
-                Map<String, Object> body = new LinkedHashMap<>();
-                body.put(ApiErrors.KEY, "generation failed: " + out.message());
-                body.put("raw", out.raw());
-                yield Response.status(400).type(MediaType.APPLICATION_JSON).entity(body).build();
-            }
+            case ABSTAINED -> ApiErrors.badRequest("generation abstained: " + out.message());
+            case FAILED -> ApiErrors.status(400, "generation failed: " + out.message(), "raw", out.raw()).build();
         };
     }
 }

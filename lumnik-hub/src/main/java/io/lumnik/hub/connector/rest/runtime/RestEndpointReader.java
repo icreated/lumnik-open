@@ -12,6 +12,7 @@ import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.exceptions.RunCancelledException;
 import io.lumnik.hub.connector.exceptions.SourceCallException;
+import io.lumnik.hub.connector.rest.CaTrust;
 import io.lumnik.hub.connector.rest.RestHttpClient;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
@@ -215,8 +216,8 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         // Lifted out of the strategies for the same reason cursorHeaderName is: reading a JsonPath
         // out of a response body does not vary by pagination shape, so nothing here is per-strategy.
         String totalPath = str(pagCfg.get("total_path"));
-        AuthProvider auth = authReg.build(authSpecFor(cfg, new AuthSpec.Owner(ctx.tenantId(), ctx.connectorId())));
-        auth.probe();
+        String totalHeader = str(pagCfg.get("total_header"));
+        RestConnection conn = connect(cfg, new AuthSpec.Owner(ctx.tenantId(), ctx.connectorId()), authReg, http, secrets);
 
         RateLimiter rl = rateRegistry.forConnector(ctx.connectorId(),
             (String) cfg.getOrDefault("default_rate_limit", "100/s"));
@@ -230,7 +231,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
             // made every SOAP+watermark run re-fetch the same window forever. Computed over ALL
             // items exactly as the pre-PR-B single fetch did, since a SOAP fetch is never partial.
             RestRequest req = firstRequest(pag, cfg, ep, inc, parsed, secrets::lookup);
-            List<Map<String, Object>> all = fetchAllPages(auth, rl, retry, pag, req, bodyParser, ctx.scope());
+            List<Map<String, Object>> all = fetchAllPages(ep, conn, rl, retry, pag, req, bodyParser, ctx.scope());
             // maxWatermark carries the prior watermark through when the path is null or no item
             // matches (see its own guard), so a path-less watermark misconfig preserves the prior
             // value instead of nulling it — matching the chunking branch and pre-PR-B single fetch.
@@ -247,9 +248,9 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         Instant runStarted = resuming && parsed.runStartedAt != null ? parsed.runStartedAt : readStarted;
         RestRequest start = resuming ? resumeRequest(parsed.resume, cfg, ep, secrets::lookup)
                                      : firstRequest(pag, cfg, ep, inc, parsed, secrets::lookup);
-        PageWindow window = fetchPageWindow(auth, rl, retry, pag, start, bodyParser,
+        PageWindow window = fetchPageWindow(ep, conn, rl, retry, pag, start, bodyParser,
             chunkSize, resuming ? parsed.pages : 0,
-            resuming ? parsed.declaredTotal : DeclaredTotal.NONE, totalPath);
+            resuming ? parsed.declaredTotal : DeclaredTotal.NONE, totalPath, totalHeader);
 
         // `resuming` gates the running tally for the same reason it gates `pages` above: a cursor
         // left behind by a DEAD run makes this run start from page 1, so its counts are not ours.
@@ -401,7 +402,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * apply. This used to be a bare cast, i.e. a ClassCastException; the message is the only change.
      */
     @SuppressWarnings("unchecked")
-    static Map<String, Object> mapConfig(Map<String, Object> cfg, String key) {
+    public static Map<String, Object> mapConfig(Map<String, Object> cfg, String key) {
         Object v = cfg.get(key);
         if (v == null) return Map.of();
         if (v instanceof Map<?, ?> m) return (Map<String, Object>) m;
@@ -428,10 +429,10 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * One page request: signed by the credential, which may sign it again after a 401 (#1393), and each send
      * rate-limited and retried. The request handed in stays unsigned.
      */
-    private RestResponse send(AuthProvider auth, RateLimiter rl, RetryExecutor retry, RestRequest req) throws Exception {
-        return auth.send(req, signed -> {
+    private RestResponse send(RestConnection conn, RateLimiter rl, RetryExecutor retry, RestRequest req) throws Exception {
+        return conn.send(req, signed -> {
             rl.acquire();
-            return retry.execute(() -> http.exchange(signed, retry.validator()));
+            return retry.execute(() -> conn.client().exchange(signed, retry.validator()));
         });
     }
 
@@ -440,8 +441,8 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * is one chunk, so the run's cancel is read here before each page, as the engine reads it before each chunk: a
      * cancelled fetch throws what it read away, never written (#1444).
      */
-    private List<Map<String, Object>> fetchAllPages(AuthProvider auth, RateLimiter rl, RetryExecutor retry,
-                                                    PaginationStrategy pag, RestRequest first,
+    private List<Map<String, Object>> fetchAllPages(ConnectorEndpoint ep, RestConnection conn, RateLimiter rl,
+                                                    RetryExecutor retry, PaginationStrategy pag, RestRequest first,
                                                     BodyParser bodyParser, RunScope scope) {
         List<Map<String, Object>> all = new ArrayList<>();
         RestRequest req = first;
@@ -449,11 +450,11 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         try {
             while (req != null && pages < MAX_PAGES) {
                 if (scope.cancelRequested()) throw new RunCancelledException();
-                RestResponse resp = send(auth, rl, retry, req);
+                RestResponse resp = send(conn, rl, retry, req);
                 ResponseStatusGuard.refuseNonSuccess(resp);   // a non-2xx must never read as an empty page
                 resp = bodyParser.reparse(resp);   // SOAP: XML→JSON; JSON/GraphQL: identity
                 all.addAll(pag.items(resp));
-                req = advancing(req, pag.next(resp, req));   // unsigned, as in fetchPageWindow: next never inherits auth
+                req = advancing(ep, req, pag.next(resp, req), pages == 0);   // unsigned, as in fetchPageWindow: next never inherits auth
                 pages++;
             }
         } catch (InterruptedException ie) {
@@ -504,12 +505,17 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
     }
 
     /**
-     * NEXT, unless it is the request just SENT: the same request brings the same page back, so asking
-     * again only re-reads it up to {@link #MAX_PAGES} — a SOAP body with no paging placeholder, a
-     * cursor the source repeats (#1387).
+     * NEXT, unless it is the request just SENT: the same request brings the same page back. Asked again as the read's
+     * very FIRST request, it carries no paging at all — a SOAP body with no paging placeholder, a service that does not
+     * page — and the read ends (#1387). Asked again LATER, the source sent back the cursor it was given while saying
+     * there is more: stopping there would report a partial read as complete, so the read fails (#1635), naming the
+     * strategy's keys, never the cursor's value.
      */
-    private static RestRequest advancing(RestRequest sent, RestRequest next) {
-        return sent.equals(next) ? null : next;
+    private static RestRequest advancing(ConnectorEndpoint ep, RestRequest sent, RestRequest next, boolean firstOfRead) {
+        if (!sent.equals(next)) return next;
+        if (firstOfRead) return null;
+        throw new ConnectorException(named(ep) + ": the source sent back the cursor it was given while saying more pages"
+            + " — the cursor is not reaching it (check cursor_binding, and cursor_param or cursor_var)");
     }
 
     /**
@@ -521,22 +527,22 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * one: it is what the resume cursor persists, and a persisted request must never carry
      * credentials — auth is re-applied per page anyway, so nothing is lost.
      */
-    private PageWindow fetchPageWindow(AuthProvider auth, RateLimiter rl, RetryExecutor retry,
+    private PageWindow fetchPageWindow(ConnectorEndpoint ep, RestConnection conn, RateLimiter rl, RetryExecutor retry,
                                        PaginationStrategy pag, RestRequest first, BodyParser bodyParser,
                                        int chunkSize, int pagesAlreadyFetched,
-                                       DeclaredTotal carriedTotal, String totalPath) {
+                                       DeclaredTotal carriedTotal, String totalPath, String totalHeader) {
         List<Map<String, Object>> items = new ArrayList<>();
         RestRequest req = first;
         int pages = pagesAlreadyFetched;
         DeclaredTotal total = carriedTotal;
         try {
             while (req != null && pages < MAX_PAGES && items.size() < chunkSize) {
-                RestResponse resp = send(auth, rl, retry, req);
+                RestResponse resp = send(conn, rl, retry, req);
                 ResponseStatusGuard.refuseNonSuccess(resp);   // a non-2xx must never read as an empty page
                 resp = bodyParser.reparse(resp);   // SOAP: XML→JSON; JSON/GraphQL: identity
                 items.addAll(pag.items(resp));
-                total = total.observe(PaginationSupport.declaredItems(resp.json(), totalPath));
-                req = advancing(req, pag.next(resp, req));
+                total = total.observe(PaginationSupport.declaredItems(resp, totalPath, totalHeader));
+                req = advancing(ep, req, pag.next(resp, req), pages == 0);
                 pages++;
             }
         } catch (InterruptedException ie) {
@@ -787,6 +793,20 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      */
     public static AuthSpec authSpecFor(Map<String, Object> cfg, AuthSpec.Owner owner) {
         return toAuthSpec(mapConfig(cfg, "auth"), owner);
+    }
+
+    /**
+     * The credential, built and checked, then the client trusting the connector's CA (#1609): what a run, the
+     * pre-flight and the probe all send through. One order everywhere — a missing credential is refused before a
+     * missing CA — where three call sites each picked theirs, and the probe once forgot the CA.
+     */
+    public static RestConnection connect(Map<String, Object> cfg, AuthSpec.Owner owner, AuthProviderRegistry authReg,
+                                         RestHttpClient http, SecretRefs secrets) {
+        AuthProvider auth = authReg.build(authSpecFor(cfg, owner));
+        auth.probe();
+        // Absent and empty are not the same here: an empty or blank tls block fails closed (CaTrust), absence is public.
+        Map<String, Object> tls = cfg.get("tls") == null ? null : mapConfig(cfg, "tls");
+        return new RestConnection(auth, CaTrust.clientFor(tls, http, secrets));
     }
 
     /** Builds the {@link AuthSpec} from the connector's auth config block, for the connector it authenticates. */

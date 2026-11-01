@@ -10,9 +10,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -54,24 +51,15 @@ public class RegistrySchemaBuilder {
      * Exposed for level-2 (needs sourceEntity per table).
      */
     public List<HubTable> resolve(long tenantId, String scope) {
-        List<UUID> connectorIds = new ArrayList<>();
         String connSql =
             "SELECT id FROM connector.connector " +
             "WHERE tenant_id = ? AND ? = ANY(tags) AND deleted_at IS NULL";
-        try (Connection cx = adminDs.getConnection();
-             PreparedStatement ps = cx.prepareStatement(connSql)) {
+        List<UUID> connectorIds = Jdbc.query(adminDs, "RegistrySchemaBuilder.resolve(connectors)", connSql, ps -> {
             ps.setLong(1, tenantId);
             ps.setString(2, scope);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) connectorIds.add((UUID) rs.getObject("id"));
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("RegistrySchemaBuilder.resolve(connectors): " + e.getMessage(), e);
-        }
+        }, rs -> (UUID) rs.getObject("id"));
         if (connectorIds.isEmpty()) return List.of();
 
-        List<PendingTable> pending = new ArrayList<>();
-        Set<String> seenFqn = new HashSet<>();
         // A table another connector also writes holds that connector's rows too (#1186): it enters
         // the card only when every connector writing it carries the scope.
         String dtSql =
@@ -81,29 +69,27 @@ public class RegistrySchemaBuilder {
             "LEFT JOIN connector.connector oc ON oc.id = o.connector_id AND oc.tenant_id = o.tenant_id " +
             "WHERE o.tenant_id = dt.tenant_id AND o.table_schema = dt.table_schema " +
             "AND o.table_name = dt.table_name AND (? = ANY(oc.tags)) IS NOT TRUE)";
-        try (Connection cx = adminDs.getConnection();
-             PreparedStatement ps = cx.prepareStatement(dtSql)) {
+        List<PendingTable> rows = Jdbc.query(adminDs, "RegistrySchemaBuilder.resolve(dynamic_table)", dtSql, ps -> {
             ps.setLong(1, tenantId);
-            ps.setArray(2, cx.createArrayOf("uuid", connectorIds.toArray()));
+            ps.setArray(2, ps.getConnection().createArrayOf("uuid", connectorIds.toArray()));
             ps.setString(3, scope);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    String schema = rs.getString("table_schema");
-                    String tableName = rs.getString("table_name");
-                    if (!seenFqn.add(schema + "." + tableName)) {
-                        LOG.warnf("duplicate hub table %s.%s for scope %s — keeping first", schema, tableName, scope);
-                        continue;
-                    }
-                    Map<String,String> types =
-                        M.readValue(rs.getString("schema_json"), new TypeReference<LinkedHashMap<String,String>>() {});
-                    // Source entity for level-2 AD enrichment = the source table, i.e. the hub
-                    // table name without the "t_" dump prefix (t_c_order → c_order).
-                    String sourceEntity = tableName.startsWith("t_") ? tableName.substring(2) : tableName;
-                    pending.add(new PendingTable(schema, tableName, types, sourceEntity));
-                }
+        }, rs -> {
+            String tableName = rs.getString("table_name");
+            Map<String,String> types =
+                M.readValue(rs.getString("schema_json"), new TypeReference<LinkedHashMap<String,String>>() {});
+            // Source entity for level-2 AD enrichment = the source table, i.e. the hub
+            // table name without the "t_" dump prefix (t_c_order → c_order).
+            String sourceEntity = tableName.startsWith("t_") ? tableName.substring(2) : tableName;
+            return new PendingTable(rs.getString("table_schema"), tableName, types, sourceEntity);
+        });
+        List<PendingTable> pending = new ArrayList<>();
+        Set<String> seenFqn = new HashSet<>();
+        for (PendingTable p : rows) {
+            if (!seenFqn.add(p.schema() + "." + p.table())) {
+                LOG.warnf("duplicate hub table %s.%s for scope %s — keeping first", p.schema(), p.table(), scope);
+                continue;
             }
-        } catch (Exception e) {
-            throw new RuntimeException("RegistrySchemaBuilder.resolve(dynamic_table): " + e.getMessage(), e);
+            pending.add(p);
         }
         if (pending.isEmpty()) return List.of();
 

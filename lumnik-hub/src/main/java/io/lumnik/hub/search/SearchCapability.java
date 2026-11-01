@@ -2,7 +2,6 @@ package io.lumnik.hub.search;
 
 import io.lumnik.extraction.spi.search.SearchAvailability;
 import io.lumnik.hub.api.ApiErrors;
-import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 /**
@@ -37,11 +36,9 @@ public record SearchCapability(SearchAvailability state, String provider, String
      */
     public Response unavailableResponse(Integer retryAfterSeconds) {
         if (state == SearchAvailability.UNAVAILABLE) {
-            return Response.status(501).type(MediaType.APPLICATION_JSON)
-                .entity(ApiErrors.error("search not installed")).build();
+            return ApiErrors.status(501, "search not installed").build();
         }
-        Response.ResponseBuilder b = Response.status(503).type(MediaType.APPLICATION_JSON)
-            .entity(ApiErrors.error("search degraded", "reason", reason));
+        Response.ResponseBuilder b = ApiErrors.status(503, "search degraded", "reason", reason);
         if (retryAfterSeconds != null) b.header("Retry-After", String.valueOf(retryAfterSeconds));
         return b.build();
     }

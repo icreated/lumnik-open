@@ -61,9 +61,25 @@ public class WorkflowRegistry {
      * still fails the pass instead of passing for a refused manifest.
      */
     public List<WorkflowGraph> allParsable(long tenantId) {
-        List<WorkflowGraph> out = new ArrayList<>();
+        return parsable(tenantId, table -> true).stream().map(WorkflowGraph::from).toList();
+    }
+
+    /**
+     * The enabled workflows declaring {@code spec.check.trigger: ingestion} (#1589), read the way
+     * {@link #allParsable} reads them — the ingestion check is a background pass too — but only those
+     * whose watched table passes: tested on the stored {@code on_table} before the parse, as {@link #all}
+     * tests the scope, so a run that wrote nothing watched parses nothing. The graph served is still the
+     * parsed one.
+     */
+    public List<WorkflowGraph> checkedOnIngestion(long tenantId, Predicate<String> table) {
+        return parsable(tenantId, table).stream().filter(WorkflowManifest::checkOnIngestion)
+            .map(WorkflowGraph::from).toList();
+    }
+
+    private List<WorkflowManifest> parsable(long tenantId, Predicate<String> table) {
+        List<WorkflowManifest> out = new ArrayList<>();
         for (WorkflowManifestStore.StoredWorkflow w : store.listByTenant(tenantId)) {
-            if (!w.enabled()) continue;
+            if (!w.enabled() || !table.test(w.table())) continue;
             WorkflowManifest manifest;
             try {
                 manifest = parser.parse(w.yaml());
@@ -72,7 +88,7 @@ public class WorkflowRegistry {
                     + " parses (%s) — re-apply it", tenantId, w.name(), e.getClass().getSimpleName());
                 continue;
             }
-            out.add(WorkflowGraph.from(manifest));
+            out.add(manifest);
         }
         return out;
     }

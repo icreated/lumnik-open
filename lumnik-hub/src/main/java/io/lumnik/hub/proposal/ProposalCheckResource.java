@@ -62,8 +62,7 @@ public class ProposalCheckResource {
             read = DossierReader.read(DossierReader.decode(body == null ? new byte[0] : body));
         } catch (DossierReader.Refused e) {
             // The contract's reason, never a value from the dossier.
-            return Response.status(400).type(MediaType.APPLICATION_JSON)
-                .entity(ApiErrors.error(e.reason().code())).build();
+            return ApiErrors.badRequest(e.reason().code());
         }
         long tenant = RequireTenant.current();
         Dossier checked = DossierChecker.check(read, trusted, designate(tenant, workflow),

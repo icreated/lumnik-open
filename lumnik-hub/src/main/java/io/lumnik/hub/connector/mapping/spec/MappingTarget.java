@@ -4,6 +4,7 @@ import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -79,8 +80,13 @@ public record MappingTarget(
       String table,
       String uniqueKeyPath,
       List<HybridJsonbSpec.PromotedColumn> promote,
-      UUID endpointId
-  ) {}
+      UUID endpointId,
+      Optional<HybridJsonbSpec.Transform> uniqueKeyTransform
+  ) {
+    public HybridJsonb(String table, String uniqueKeyPath, List<HybridJsonbSpec.PromotedColumn> promote, UUID endpointId) {
+      this(table, uniqueKeyPath, promote, endpointId, Optional.empty());
+    }
+  }
 
   public static MappingTarget jpaOnly(String entity) {
     return new MappingTarget(null, null, new Jpa(entity), null);

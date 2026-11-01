@@ -1,6 +1,7 @@
 package io.lumnik.hub.entity.resolution;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -10,7 +11,6 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -54,7 +54,7 @@ public class CrosswalkStatistics {
       for (String table : pending) {
         try {
           if (analyse(c, schema, table)) settled.add(schema + "." + table);
-        } catch (SQLException e) {
+        } catch (SQLException | RuntimeException e) {
           // Logged once, not once per page: autovacuum will do it, this was only to be sooner.
           settled.add(schema + "." + table);
           LOG.warnf(e, "CrosswalkStatistics: could not analyse %s.%s — the planner keeps guessing until "
@@ -82,9 +82,7 @@ public class CrosswalkStatistics {
     if (!tryLock(c, schema + "." + table)) return false;
     try {
       if (!hasColumnStatistics(c, schema, table)) {
-        try (Statement st = c.createStatement()) {
-          st.execute("ANALYZE " + qualified);
-        }
+        Jdbc.update(c, "CrosswalkStatistics.analyse", "ANALYZE " + qualified, ps -> {});
       }
       return true;
     } finally {
@@ -108,35 +106,31 @@ public class CrosswalkStatistics {
     }
   }
 
-  private static boolean hasColumnStatistics(Connection c, String schema, String table) throws SQLException {
-    try (PreparedStatement ps = c.prepareStatement(
-        "SELECT EXISTS (SELECT 1 FROM pg_stats WHERE schemaname = ? AND tablename = ?)")) {
-      ps.setString(1, schema);
-      ps.setString(2, table);
-      try (ResultSet rs = ps.executeQuery()) {
-        return rs.next() && rs.getBoolean(1);
-      }
-    }
+  private static boolean hasColumnStatistics(Connection c, String schema, String table) {
+    return Jdbc.exists(c, "CrosswalkStatistics.hasColumnStatistics",
+        "SELECT 1 FROM pg_stats WHERE schemaname = ? AND tablename = ? LIMIT 1",
+        ps -> {
+          ps.setString(1, schema);
+          ps.setString(2, table);
+        });
   }
 
   /** {@code null} when the table does not exist. */
-  private static Boolean neverAnalysed(Connection c, String schema, String table) throws SQLException {
-    try (PreparedStatement ps = c.prepareStatement("SELECT last_analyze IS NULL AND last_autoanalyze IS NULL "
-        + "FROM pg_stat_user_tables WHERE schemaname = ? AND relname = ?")) {
-      ps.setString(1, schema);
-      ps.setString(2, table);
-      try (ResultSet rs = ps.executeQuery()) {
-        return rs.next() ? rs.getBoolean(1) : null;
-      }
-    }
+  private static Boolean neverAnalysed(Connection c, String schema, String table) {
+    return Jdbc.queryOne(c, "CrosswalkStatistics.neverAnalysed", "SELECT last_analyze IS NULL AND last_autoanalyze IS NULL "
+        + "FROM pg_stat_user_tables WHERE schemaname = ? AND relname = ?",
+        ps -> {
+          ps.setString(1, schema);
+          ps.setString(2, table);
+        },
+        rs -> rs.getBoolean(1)).orElse(null);
   }
 
   /** Counted, not read from the statistics: a table nothing has analysed has none to read. */
-  private static boolean holdsAtLeast(Connection c, String schema, String table, int rows) throws SQLException {
-    try (Statement st = c.createStatement();
-         ResultSet rs = st.executeQuery("SELECT count(*) FROM (SELECT 1 FROM " + quoteIdent(schema) + "."
-             + quoteIdent(table) + " LIMIT " + rows + ") s")) {
-      return rs.next() && rs.getLong(1) >= rows;
-    }
+  private static boolean holdsAtLeast(Connection c, String schema, String table, int rows) {
+    return Jdbc.queryOne(c, "CrosswalkStatistics.holdsAtLeast", "SELECT count(*) FROM (SELECT 1 FROM "
+        + quoteIdent(schema) + "." + quoteIdent(table) + " LIMIT " + rows + ") s",
+        ps -> {},
+        rs -> rs.getLong(1)).orElse(0L) >= rows;
   }
 }

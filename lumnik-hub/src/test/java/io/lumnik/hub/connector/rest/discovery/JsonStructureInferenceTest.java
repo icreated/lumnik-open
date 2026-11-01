@@ -33,6 +33,65 @@ class JsonStructureInferenceTest {
         assertEquals(Optional.of("$.data"), inf.inferItemsPath(root));
     }
 
+    /** #1650: Spring PetClinic's {"vetList": [...]} — no known key, one array of objects: that is the list. */
+    @Test void finds_the_one_array_of_objects_under_an_unknown_key() throws Exception {
+        var root = M.readTree("{\"vetList\":[{\"id\":1}],\"generatedAt\":\"2026-10-31\",\"tags\":[\"a\",\"b\"]}");
+        assertEquals(Optional.of("$.vetList"), inf.inferItemsPath(root));
+    }
+
+    @Test void two_arrays_of_objects_under_unknown_keys_are_not_guessed_between() throws Exception {
+        var root = M.readTree("{\"vets\":[{\"id\":1}],\"owners\":[{\"id\":2}]}");
+        assertEquals(Optional.empty(), inf.inferItemsPath(root));
+    }
+
+    @Test void a_list_key_that_needs_brackets_is_written_as_a_path_that_reads_it() throws Exception {
+        var root = M.readTree("{\"vet list\":[{\"id\":1}]}");
+        String path = inf.inferItemsPath(root).orElseThrow();
+        assertEquals(1, ((List<?>) JsonPath.read(M.writeValueAsString(root), path)).size());
+    }
+
+    /** #1650: the whole list at once is a positive absence — a list found, and no paging signal at all. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+        "{\"vetList\":[{\"id\":1}]}",                                   // Spring PetClinic of before Boot
+        "[{\"id\":1},{\"id\":2}]"                                        // a bare array, no Link header
+    })
+    void a_list_with_no_paging_signal_is_the_whole_list(String body) throws Exception {
+        assertEquals(JsonStructureInference.PaginationKind.NONE, inf.inferPagination(M.readTree(body), Map.of()));
+    }
+
+    /** Envelopes the five detectors do not name are paged all the same: they stay unknown, never none. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+        "{\"count\":120,\"next\":\"http://x/?page=2\",\"previous\":null,\"results\":[{\"id\":1}]}",   // DRF
+        "{\"data\":[{\"id\":\"1\"}],\"links\":{\"next\":\"http://x/?page[offset]=10\"}}",          // JSON:API
+        "{\"items\":[{\"id\":1}],\"total\":120,\"page\":1,\"size\":50,\"pages\":3}",               // FastAPI
+        "{\"data\":[{\"id\":1}],\"meta\":{\"currentPage\":1}}",                                  // NestJS
+        "{\"count\":120,\"rows\":[{\"id\":1}]}",                                                // Sequelize
+        "{\"content\":[{\"id\":1}],\"last\":false,\"number\":0}",                                // Spring Slice
+        "{\"items\":[{\"id\":1}],\"metadata\":{\"continue\":\"eyJ2\"}}"                             // Kubernetes
+    })
+    void a_paged_envelope_the_detectors_do_not_name_stays_unknown(String body) throws Exception {
+        assertEquals(JsonStructureInference.PaginationKind.UNKNOWN, inf.inferPagination(M.readTree(body), Map.of()));
+    }
+
+    @Test void a_top_level_array_of_scalars_is_no_list_of_records() throws Exception {
+        assertEquals(Optional.empty(), inf.inferItemsPath(M.readTree("[\"a\",\"b\"]")));
+        assertEquals(Optional.of("$"), inf.inferItemsPath(M.readTree("[]")));
+    }
+
+    /** The same rule under a known key: {"data": ["a","b"]} holds no records, so it is never the whole list. */
+    @Test void a_known_key_holding_scalars_is_no_list_of_records() throws Exception {
+        var root = M.readTree("{\"data\":[\"a\",\"b\"]}");
+        assertEquals(Optional.empty(), inf.inferItemsPath(root));
+        assertEquals(JsonStructureInference.PaginationKind.UNKNOWN, inf.inferPagination(root, Map.of()));
+    }
+
+    @Test void a_total_count_header_is_a_paging_signal() throws Exception {
+        assertEquals(JsonStructureInference.PaginationKind.UNKNOWN,
+            inf.inferPagination(M.readTree("[{\"id\":1}]"), Map.of("X-Total-Count", List.of("120"))));
+    }
+
     @Test void infers_unique_key_id() throws Exception {
         var item = M.readTree("{\"id\":\"x\",\"name\":\"y\"}");
         assertEquals(Optional.of("$.id"), inf.inferUniqueKey(item));

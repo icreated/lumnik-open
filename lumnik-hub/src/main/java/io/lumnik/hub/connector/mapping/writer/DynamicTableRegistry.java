@@ -1,6 +1,5 @@
 package io.lumnik.hub.connector.mapping.writer;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
@@ -17,6 +16,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -52,10 +52,39 @@ public class DynamicTableRegistry {
    *  with no schema registers under {@code public}, and a mapping may target any schema). */
   static final String HYBRID_MAPPING_PREFIX = "hybrid:";
 
+  /** The columns every table {@link HybridJsonbWriter#createTable} makes carries, with their types. */
+  private static final Map<String, String> HYBRID_SIGNATURE = Map.of(
+      "tenant_id", "bigint", "external_id", "text", "row_hash", "text", "data", "jsonb",
+      "connector_id", "uuid", "endpoint_id", "uuid");
+
   static boolean isHubDynamicTable(String schema, String name) {
     if (name == null) return false;
     return (DYNAMIC_SCHEMA.equals(schema) && name.startsWith(DYNAMIC_PREFIX))
         || HYBRID_SCHEMA.equals(schema);
+  }
+
+  /**
+   * May purge take this registered table? A {@code connector.t_*} or {@code ext.*} one, or a hybrid
+   * target under {@code connector} — the only schema an Entity fuses (#1627): its registry row carries
+   * the writer's marker for exactly this table, and the table has the writer's columns, so a row
+   * pointing a marker at one of the hub's own tables still cannot have it dropped.
+   */
+  private static boolean droppable(Connection c, String schema, String table, String mappingId) throws SQLException {
+    return isHubDynamicTable(schema, table)
+        || (DYNAMIC_SCHEMA.equals(schema) && (HYBRID_MAPPING_PREFIX + schema + "." + table).equals(mappingId)
+            && hasHybridSignature(c, quoteIdent(schema) + "." + quoteIdent(table)));
+  }
+
+  private static boolean hasHybridSignature(Connection c, String rel) throws SQLException {
+    Map<String, String> columns = new HashMap<>();
+    try (PreparedStatement ps = c.prepareStatement("SELECT attname, format_type(atttypid, atttypmod) "
+        + "FROM pg_catalog.pg_attribute WHERE attrelid = to_regclass(?) AND attnum > 0 AND NOT attisdropped")) {
+      ps.setString(1, rel);
+      try (ResultSet rs = ps.executeQuery()) {
+        while (rs.next()) columns.put(rs.getString(1), rs.getString(2));
+      }
+    }
+    return columns.entrySet().containsAll(HYBRID_SIGNATURE.entrySet());
   }
 
   @Inject
@@ -85,18 +114,12 @@ public class DynamicTableRegistry {
     String sql = "SELECT 1 FROM connector.dynamic_table "
         + "WHERE tenant_id = ? AND table_schema = ? AND table_name = ? "
         + "AND mapping_id NOT LIKE ? LIMIT 1";
-    try (Connection c = adminDs.getConnection();
-         PreparedStatement ps = c.prepareStatement(sql)) {
+    return Jdbc.exists(adminDs, "DynamicTableRegistry.emitsRowEvents", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, fqn.substring(0, dot));
       ps.setString(3, fqn.substring(dot + 1));
       ps.setString(4, HYBRID_MAPPING_PREFIX + "%");
-      try (ResultSet rs = ps.executeQuery()) {
-        return rs.next();
-      }
-    } catch (Exception e) {
-      throw new RuntimeException("DynamicTableRegistry.emitsRowEvents: " + e.getMessage(), e);
-    }
+    });
   }
 
   /**
@@ -139,20 +162,11 @@ public class DynamicTableRegistry {
   public Map<String, String> findSchema(Long tenantId, String mappingId, UUID connectorId) {
     String sql = "SELECT schema_inferred::text FROM connector.dynamic_table " +
                  "WHERE tenant_id = ? AND mapping_id = ? AND connector_id IS NOT DISTINCT FROM ?";
-    try (Connection c = adminDs.getConnection();
-         PreparedStatement ps = c.prepareStatement(sql)) {
+    return Jdbc.queryOne(adminDs, "DynamicTableRegistry.findSchema", sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, mappingId);
       ps.setObject(3, connectorId);
-      try (ResultSet rs = ps.executeQuery()) {
-        if (rs.next()) {
-          return M.readValue(rs.getString(1), new TypeReference<Map<String, String>>() {});
-        }
-      }
-    } catch (Exception e) {
-      throw new RuntimeException("DynamicTableRegistry.findSchema: " + e.getMessage(), e);
-    }
-    return null;
+    }, rs -> M.readValue(rs.getString(1), new TypeReference<Map<String, String>>() {})).orElse(null);
   }
 
   /**
@@ -185,17 +199,10 @@ public class DynamicTableRegistry {
       + "JOIN pg_catalog.pg_namespace vns ON vns.oid = v.relnamespace "
       + "WHERE dt.connector_id = ? "
       + "ORDER BY dt.table_schema, dt.table_name, vns.nspname, v.relname";
-    try (Connection c = adminDs.getConnection();
-         PreparedStatement ps = c.prepareStatement(sql)) {
-      ps.setObject(1, connectorId);
-      try (ResultSet rs = ps.executeQuery()) {
-        while (rs.next()) {
-          byTable.putIfAbsent(rs.getString(1) + "." + rs.getString(2),
-              rs.getString(3) + "." + rs.getString(4));
-        }
-      }
-    } catch (Exception e) {
-      throw new RuntimeException("DynamicTableRegistry.dependentViews: " + e.getMessage(), e);
+    for (String[] edge : Jdbc.query(adminDs, "DynamicTableRegistry.dependentViews", sql,
+        ps -> ps.setObject(1, connectorId),
+        rs -> new String[]{rs.getString(1) + "." + rs.getString(2), rs.getString(3) + "." + rs.getString(4)})) {
+      byTable.putIfAbsent(edge[0], edge[1]);
     }
     return byTable;
   }
@@ -219,67 +226,58 @@ public class DynamicTableRegistry {
    * the SELECT-then-DELETE race where a row registered concurrently (READ COMMITTED)
    * could be deleted without its table being dropped. DROP quotes the stored identifiers
    * the same way the writer created them (DDL cannot be parameterised) and uses IF EXISTS
-   * (idempotent). Only tables matching the hub convention {@code connector.t_*} are
+   * (idempotent). Only the tables {@link #droppable} names are
    * dropped — a corrupted/foreign registry row is skipped (logged), bounding blast
    * radius. Any error propagates so the caller can abort the delete rather than half-clean.
    */
   public void purgeForConnector(UUID connectorId) {
-    try (Connection c = adminDs.getConnection()) {
-      boolean prevAuto = c.getAutoCommit();
-      c.setAutoCommit(false);
-      try {
-        List<String[]> tables = new ArrayList<>();
-        try (PreparedStatement del = c.prepareStatement(
-            "DELETE FROM connector.dynamic_table WHERE connector_id = ? "
-            + "RETURNING table_schema, table_name, tenant_id")) {
-          del.setObject(1, connectorId);
-          try (ResultSet rs = del.executeQuery()) {
-            while (rs.next()) tables.add(new String[]{rs.getString(1), rs.getString(2), rs.getString(3)});
-          }
+    // One transaction: any failure rolls back, an Error included (#1649). Left open, the pool's reset would COMMIT
+    // the registry delete without the drops, every table left behind with no row naming it.
+    List<String[]> dropped = Jdbc.transaction(adminDs, "DynamicTableRegistry.purgeForConnector", c -> {
+      List<String[]> tables = new ArrayList<>();
+      try (PreparedStatement del = c.prepareStatement(
+          "DELETE FROM connector.dynamic_table WHERE connector_id = ? "
+          + "RETURNING table_schema, table_name, tenant_id, mapping_id")) {
+        del.setObject(1, connectorId);
+        try (ResultSet rs = del.executeQuery()) {
+          while (rs.next()) tables.add(new String[]{rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4)});
         }
-        List<String[]> dropped = new ArrayList<>();
-        for (String[] t : tables) {
-          if (!isHubDynamicTable(t[0], t[1])) {
-            LOG.warnf("purgeForConnector(%s): skipping unexpected registry table %s.%s "
-                + "(neither %s.%s* nor %s.*); not dropping it", connectorId, t[0], t[1],
-                DYNAMIC_SCHEMA, DYNAMIC_PREFIX, HYBRID_SCHEMA);
-            continue;
-          }
-          if (dropIfLastWriter(c, connectorId, t[0], t[1])) dropped.add(t);
-          forgetWatermark(c, Long.parseLong(t[2]), t[0], t[1]);
-        }
-        c.commit();
-        // The DROP above ran on the admin datasource with its own commit (JTA enlistment disabled),
-        // so it is already durable here: this post-drop cleanup is not part of the caller's
-        // transaction and cannot un-drop anything (the delete's atomicity is partial by design).
-        //
-        // Hybrid tables (ext.*) carry two things that must not outlive the table: HybridJsonbWriter's
-        // in-memory schema cache — or a re-ingest under the same name skips CREATE TABLE and fails
-        // with "relation … does not exist" — and the one-shot corpus descriptor keyed
-        // oneshot:<schema.table> (no connector_id on the sink seam, so no fk cascade reaches it).
-        // forget() runs FIRST, before the corpus clear's try/catch, so a corpus-clear failure can
-        // never skip the cache invalidation. connector.t_* tables need neither (DynamicTableWriter
-        // keeps no in-memory cache), so the HYBRID_SCHEMA filter covers both.
-        for (String[] t : dropped) {
-          if (!HYBRID_SCHEMA.equals(t[0])) continue;
-          hybridWriter.forget(t[0] + "." + t[1]);
-          for (ExtractionSink sink : sinks) {
-            try {
-              sink.clear(Long.parseLong(t[2]), "oneshot:" + t[0] + "." + t[1]);
-            } catch (RuntimeException e) {
-              LOG.warnf(e, "purgeForConnector(%s): descriptor clear failed for %s.%s",
-                  connectorId, t[0], t[1]);
-            }
-          }
-        }
-      } catch (Exception e) {
-        c.rollback();
-        throw e;
-      } finally {
-        c.setAutoCommit(prevAuto);
       }
-    } catch (Exception e) {
-      throw new RuntimeException("DynamicTableRegistry.purgeForConnector: " + e.getMessage(), e);
+      List<String[]> drops = new ArrayList<>();
+      for (String[] t : tables) {
+        if (!droppable(c, t[0], t[1], t[3])) {
+          LOG.warnf("purgeForConnector(%s): skipping unexpected registry table %s.%s "
+              + "(neither %s.%s*, %s.* nor a hybrid target under %s); not dropping it", connectorId, t[0], t[1],
+              DYNAMIC_SCHEMA, DYNAMIC_PREFIX, HYBRID_SCHEMA, DYNAMIC_SCHEMA);
+          continue;
+        }
+        if (dropIfLastWriter(c, connectorId, t[0], t[1])) drops.add(t);
+        forgetWatermark(c, Long.parseLong(t[2]), t[0], t[1]);
+      }
+      return drops;
+    });
+    // The DROP above ran on the admin datasource with its own commit (JTA enlistment disabled),
+    // so it is already durable here: this post-drop cleanup is not part of the caller's
+    // transaction and cannot un-drop anything (the delete's atomicity is partial by design).
+    //
+    // Hybrid tables (ext.*, or connector.* under the writer's marker) carry two things that must
+    // not outlive the table: HybridJsonbWriter's in-memory schema cache — or a re-ingest under the same name skips CREATE TABLE and fails
+    // with "relation … does not exist" — and the one-shot corpus descriptor keyed
+    // oneshot:<schema.table> (no connector_id on the sink seam, so no fk cascade reaches it).
+    // forget() runs FIRST, before the corpus clear's try/catch, so a corpus-clear failure can
+    // never skip the cache invalidation. connector.t_* tables need neither (DynamicTableWriter
+    // keeps no in-memory cache).
+    for (String[] t : dropped) {
+      if (!HYBRID_SCHEMA.equals(t[0]) && (t[3] == null || !t[3].startsWith(HYBRID_MAPPING_PREFIX))) continue;
+      hybridWriter.forget(t[0] + "." + t[1]);
+      for (ExtractionSink sink : sinks) {
+        try {
+          sink.clear(Long.parseLong(t[2]), "oneshot:" + t[0] + "." + t[1]);
+        } catch (RuntimeException e) {
+          LOG.warnf(e, "purgeForConnector(%s): descriptor clear failed for %s.%s",
+              connectorId, t[0], t[1]);
+        }
+      }
     }
   }
 
@@ -290,14 +288,14 @@ public class DynamicTableRegistry {
   public Map<String, Long> rowsGoingWith(UUID connectorId) {
     return Jdbc.transaction(adminDs, "DynamicTableRegistry.rowsGoingWith", c -> {
       Map<String, Long> rows = new LinkedHashMap<>();
-      try (PreparedStatement ps = c.prepareStatement("SELECT table_schema, table_name FROM connector.dynamic_table "
+      try (PreparedStatement ps = c.prepareStatement("SELECT table_schema, table_name, mapping_id FROM connector.dynamic_table "
           + "WHERE connector_id = ? ORDER BY table_schema, table_name")) {
         ps.setObject(1, connectorId);
         try (ResultSet rs = ps.executeQuery()) {
           while (rs.next()) {
             String schema = rs.getString(1);
             String table = rs.getString(2);
-            if (isHubDynamicTable(schema, table)) rows.put(schema + "." + table, rowsGoing(c, connectorId, schema, table));
+            if (droppable(c, schema, table, rs.getString(3))) rows.put(schema + "." + table, rowsGoing(c, connectorId, schema, table));
           }
         }
       }
@@ -417,11 +415,8 @@ public class DynamicTableRegistry {
   /** Upsert the schema registry entry, linking it to its owning connector (for scope discovery). */
   public void register(Long tenantId, String mappingId, String tableSchema, String tableName,
                        Map<String, String> schema, UUID connectorId) {
-    try (Connection c = adminDs.getConnection()) {
-      register(c, tenantId, mappingId, tableSchema, tableName, schema, connectorId);
-    } catch (Exception e) {
-      throw new RuntimeException("DynamicTableRegistry.register: " + e.getMessage(), e);
-    }
+    Jdbc.update(adminDs, "DynamicTableRegistry.register", REGISTER_SQL,
+        registerBinder(tenantId, mappingId, tableSchema, tableName, schema, connectorId));
   }
 
   /**
@@ -432,25 +427,29 @@ public class DynamicTableRegistry {
    * starves the admin pool under enough concurrent distinct-table creations).
    */
   public void register(Connection c, Long tenantId, String mappingId, String tableSchema, String tableName,
-                       Map<String, String> schema, UUID connectorId) throws SQLException {
-    String sql = "INSERT INTO connector.dynamic_table " +
-                 "(tenant_id, mapping_id, table_schema, table_name, schema_inferred, connector_id) " +
-                 "VALUES (?, ?, ?, ?, ?::jsonb, ?) " +
-                 "ON CONFLICT (tenant_id, mapping_id, connector_id) DO UPDATE SET " +
-                 "  schema_inferred = EXCLUDED.schema_inferred, " +
-                 "  table_schema = EXCLUDED.table_schema, " +
-                 "  table_name = EXCLUDED.table_name, " +
-                 "  updated_at = now()";
-    try (PreparedStatement ps = c.prepareStatement(sql)) {
+                       Map<String, String> schema, UUID connectorId) {
+    Jdbc.update(c, "DynamicTableRegistry.register", REGISTER_SQL,
+        registerBinder(tenantId, mappingId, tableSchema, tableName, schema, connectorId));
+  }
+
+  private static final String REGISTER_SQL = "INSERT INTO connector.dynamic_table " +
+      "(tenant_id, mapping_id, table_schema, table_name, schema_inferred, connector_id) " +
+      "VALUES (?, ?, ?, ?, ?::jsonb, ?) " +
+      "ON CONFLICT (tenant_id, mapping_id, connector_id) DO UPDATE SET " +
+      "  schema_inferred = EXCLUDED.schema_inferred, " +
+      "  table_schema = EXCLUDED.table_schema, " +
+      "  table_name = EXCLUDED.table_name, " +
+      "  updated_at = now()";
+
+  private static Jdbc.Binder registerBinder(Long tenantId, String mappingId, String tableSchema, String tableName,
+                                            Map<String, String> schema, UUID connectorId) {
+    return ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, mappingId);
       ps.setString(3, tableSchema);
       ps.setString(4, tableName);
       ps.setString(5, M.writeValueAsString(schema));
       ps.setObject(6, connectorId);
-      ps.executeUpdate();
-    } catch (JsonProcessingException e) {
-      throw new RuntimeException("DynamicTableRegistry.register: " + e.getMessage(), e);
-    }
+    };
   }
 }

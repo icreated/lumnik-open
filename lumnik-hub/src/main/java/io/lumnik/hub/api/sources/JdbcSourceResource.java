@@ -6,6 +6,7 @@ import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.connector.ConnectorScope;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.api.sources.JdbcSourceDtos.*;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorCredential;
@@ -65,7 +66,7 @@ public class JdbcSourceResource {
     try {
       cc = JdbcConnectionConfig.parse(req.url(), req.user(), req.password(), dialectRegistry);
     } catch (IllegalArgumentException e) {
-      return Response.status(400).entity(Map.of("ok", false, ApiErrors.KEY, e.getMessage())).build();
+      return ApiErrors.status(400, e.getMessage(), "ok", false).build();
     }
 
     try {
@@ -105,7 +106,7 @@ public class JdbcSourceResource {
       return Response.ok(new DiscoverResponse(tables)).build();
     } catch (Exception e) {
       LOG.errorf(e, "Discovery failed for %s/%s", req.url(), schema);
-      return Response.status(502).entity(ApiErrors.error(e.getMessage())).build();
+      return ApiErrors.status(502, Jdbc.failureText("JDBC discovery", e)).build();
     }
   }
 
@@ -126,7 +127,7 @@ public class JdbcSourceResource {
     if (req.scheduleCron() != null && !req.scheduleCron().isBlank()) {
       Optional<String> badCron = CronField.validCron(req.scheduleCron());
       if (badCron.isPresent()) {
-        return Response.status(400).entity(ApiErrors.error(badCron.get())).build();
+        return ApiErrors.badRequest(badCron.get());
       }
     }
 
@@ -152,11 +153,11 @@ public class JdbcSourceResource {
         TableDescriptor td = introspector.describe(cc, req.schemaOrDefault(), tableReq.table());
         prepared.add(new PreparedTable(tableReq, connectorName, null, td, buildConnectorConfig(req, cc, td, tableReq)));
       } catch (ConfigValidationException refused) {
-        return Response.status(400).entity(ApiErrors.error(refused.getMessage())).build();
+        return ApiErrors.badRequest(refused.getMessage());
       } catch (Exception e) {
         LOG.errorf(e, "Failed to describe table %s", tableReq.table());
-        return Response.status(502).entity(ApiErrors.error(
-            "Failed processing table '" + tableReq.table() + "': " + e.getMessage())).build();
+        return ApiErrors.status(502,
+            "Failed processing table '" + tableReq.table() + "': " + Jdbc.failureText("describe", e)).build();
       }
     }
 
@@ -201,9 +202,8 @@ public class JdbcSourceResource {
         LOG.errorf(e, "Failed to add connector for table %s", p.tableReq().table());
         // Thrown, not returned: the throw rolls back (all or nothing, no half-added source), where
         // setRollbackOnly + return would make QuarkusTransaction's commit fail as a 500.
-        throw new WebApplicationException(Response.status(502).type(MediaType.APPLICATION_JSON)
-            .entity(ApiErrors.error("Failed processing table '" + p.tableReq().table() + "': " + e.getMessage()))
-            .build());
+        throw new WebApplicationException(ApiErrors.status(502,
+            "Failed processing table '" + p.tableReq().table() + "': " + Jdbc.failureText("persist", e)).build());
       }
     }
     // After the loop: a refused table rolls the whole add back, and its connectors with it (#1193).

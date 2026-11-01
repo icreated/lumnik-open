@@ -2,6 +2,9 @@ package io.lumnik.hub.connector.rest.reliability;
 
 import io.lumnik.hub.connector.rest.*;
 import org.junit.jupiter.api.Test;
+import java.io.EOFException;
+import java.security.cert.CertificateException;
+import javax.net.ssl.SSLHandshakeException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -44,5 +47,31 @@ class RetryExecutorTest {
         });
         long elapsed = System.currentTimeMillis() - t0;
         assertTrue(elapsed < 1000, "Retry-After: 0 means immediate retry; got " + elapsed + "ms");
+    }
+
+    /** #1609: a certificate the trust refuses stays refused — retrying it only delays the run's failure. */
+    @Test
+    void a_refused_certificate_is_not_retried() {
+        AtomicInteger n = new AtomicInteger();
+        SSLHandshakeException refused = new SSLHandshakeException("PKIX path building failed");
+        refused.initCause(new CertificateException("unable to find valid certification path"));
+        assertThrows(SSLHandshakeException.class, () -> new RetryExecutor(P).execute(() -> {
+            n.incrementAndGet();
+            throw refused;
+        }));
+        assertEquals(1, n.get());
+    }
+
+    /** A handshake the network cut is transient, like any other network failure. */
+    @Test
+    void a_handshake_cut_by_the_network_is_retried() {
+        AtomicInteger n = new AtomicInteger();
+        SSLHandshakeException cut = new SSLHandshakeException("Remote host terminated the handshake");
+        cut.initCause(new EOFException("SSL peer shut down incorrectly"));
+        assertThrows(SSLHandshakeException.class, () -> new RetryExecutor(P).execute(() -> {
+            n.incrementAndGet();
+            throw cut;
+        }));
+        assertEquals(3, n.get());
     }
 }

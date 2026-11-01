@@ -11,6 +11,8 @@ public record WorkflowManifest(
     String name, String scope, String provenance,
     String table, String column,
     String key,                       // nullable — business key linking versions of one document
+    boolean checkOnIngestion,         // spec.check.trigger: ingestion — re-check after each run on table (#1589)
+    String order,                     // nullable — the column ordering a document's versions (#1588)
     DormancyDef dormancy,             // nullable — requires key (parser-enforced)
     DueDef due,                       // nullable — requires key (parser-enforced, #1448)
     List<StateDef> states,
@@ -22,9 +24,16 @@ public record WorkflowManifest(
 
     /**
      * after matches [0-9]+[mhd] — validated by the parser before construction. message is the
-     * workflow's own dormancy sentence, null for the default (#1363; {@link DormancyMessage}).
+     * workflow's own dormancy sentence, null for the default (#1363; {@link DormancyMessage}); a name in it that is
+     * not reserved is a column of the watched relation (#1588). fields are columns sent in the payload only, never
+     * null.
      */
-    public record DormancyDef(String after, String message) {
+    public record DormancyDef(String after, String message, List<String> fields) {
+
+        /** The columns its decision carries: the message's non-reserved names, then {@code fields} (#1588). */
+        List<String> columns() {
+            return DecisionContext.columns(message, DormancyMessage.PLACEHOLDERS, fields);
+        }
 
         public Duration duration() {
             long n = Long.parseLong(after.substring(0, after.length() - 1));
@@ -40,9 +49,15 @@ public record WorkflowManifest(
      * A watched due date (#1448): a document in one of {@code states} whose {@code column} date has
      * passed is overdue. {@code states} are declared, non-terminal codes, as declared. {@code zone}
      * is the declared one, null when absent; a date-only column is due at the end of its day there.
-     * {@code message} is the workflow's own sentence, null for the default.
+     * {@code message} is the workflow's own sentence, null for the default; {@code fields} are columns sent in the
+     * payload only (#1588), never null.
      */
-    public record DueDef(String column, List<String> states, String zone, String message) {
+    public record DueDef(String column, List<String> states, String zone, String message, List<String> fields) {
+
+        /** The columns its decision carries: the message's non-reserved names, then {@code fields} (#1588). */
+        List<String> columns() {
+            return DecisionContext.columns(message, DueMessage.PLACEHOLDERS, fields);
+        }
 
         public ZoneId zoneId() {
             return Zones.orUtc(zone);

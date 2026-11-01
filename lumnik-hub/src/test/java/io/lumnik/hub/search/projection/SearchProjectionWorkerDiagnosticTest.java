@@ -34,6 +34,15 @@ class SearchProjectionWorkerDiagnosticTest {
         assertThat(diagnostic).startsWith("SQLSTATE 22P02").doesNotContain("abc");
     }
 
+    /** #1648: a wrapper that pasted the driver's text is cut there — the SQLSTATE, never the value. */
+    @Test
+    void a_wrapper_that_pasted_the_drivers_text_names_the_sqlstate_not_the_value() {
+        var failure = new SQLException("ERROR: invalid input syntax for type numeric: \"abc\"", "22P02");
+        var pasted = new IllegalStateException("Store.op: " + failure.getMessage(), failure);
+        String diagnostic = SearchProjectionWorker.shortDiagnostic(new QuarkusTransactionException(pasted));
+        assertThat(diagnostic).doesNotContain("abc").startsWith("Store.op — SQLSTATE 22P02");
+    }
+
     @Test
     void a_wrapper_with_no_cause_is_the_diagnostic() {
         assertThat(SearchProjectionWorker.shortDiagnostic(new QuarkusTransactionException("rolled back")))

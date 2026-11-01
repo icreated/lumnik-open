@@ -1,6 +1,7 @@
 package io.lumnik.hub.search.mark;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.hub.entity.EntityRegistry;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.restassured.specification.RequestSpecification;
@@ -20,6 +21,11 @@ import java.util.function.Supplier;
 
 import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.fail;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
 
 /**
  * Shared fixtures for the #701 {@code core.search_projection_mark}/{@code
@@ -368,5 +374,20 @@ public final class SearchProjectionMarkItSupport {
             ps.setObject(1, run);
             ps.executeUpdate();
         }
+    }
+
+    /** A run hook on the real stores whose watermark advance throws {@code failure} once, after the marks are written,
+     *  then works: the rollback cases and their retry. */
+    static SearchProjectionRunHook advanceFailsOnce(AgroalDataSource adminDs, EntityRegistry registry,
+                                                    SearchProjectionMarkStore markStore, Throwable failure)
+            throws SQLException {
+        SearchProjectionWatermarkStore failing = spy(new SearchProjectionWatermarkStore());
+        doThrow(failure).doCallRealMethod().when(failing).advance(any(), anyLong(), anyString(), any());
+        SearchProjectionRunHook hook = new SearchProjectionRunHook();
+        hook.ds = adminDs;
+        hook.registry = registry;
+        hook.markStore = markStore;
+        hook.watermarkStore = failing;
+        return hook;
     }
 }

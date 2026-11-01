@@ -138,12 +138,13 @@ class ConnectorRunRlsIT {
 
   @Test @Order(4)
   void claimed_tenant_zero_is_not_a_sentinel_backdoor() {
-    // A request CLAIMING tenant 0 must not be elevated to cross-tenant system access.
-    given().headers(TestIdentity.tenantAndUser(0, 0))
+    // A request CLAIMING tenant 0 must not be elevated to cross-tenant system access: since #1615 it is refused at
+    // the door (400), before any role — the interceptor's sentinel guard stays behind it as defence in depth.
+    given().headers(TestIdentity.tenantAndUser(0))
         .get("/api/platform/connectors/" + connectorId)
-        .then().statusCode(404);
-    given().headers(TestIdentity.tenantAndUser(0, 0))
+        .then().statusCode(400);
+    given().headers(TestIdentity.tenantAndUser(0))
         .post("/api/platform/connectors/" + connectorId + "/run")
-        .then().statusCode(404);
+        .then().statusCode(400);
   }
 }

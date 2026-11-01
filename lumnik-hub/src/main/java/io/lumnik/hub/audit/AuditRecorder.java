@@ -2,6 +2,7 @@ package io.lumnik.hub.audit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.tenant.TenantContextFilter;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -13,8 +14,6 @@ import org.jboss.logging.Logger;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.sql.Types;
 import java.util.HexFormat;
 import java.util.Map;
@@ -74,18 +73,18 @@ public class AuditRecorder {
     public void record(long tenantId, Long actorId, String entityType, String entityKey,
                         String operation, Map<String, Object> snapshot) {
         if (tenantId <= 0) return; // no genuine tenant (e.g. an uninitialized 0) — same fail-soft posture as the null-tenant guard above
-        try (Connection c = adminDs.getConnection();
-             PreparedStatement ps = c.prepareStatement(
-                 "INSERT INTO core.audit_outbox "
-               + "(tenant_id, actor_id, entity_type, entity_key, operation, changes, created_at) "
-               + "VALUES (?, ?, ?, ?, ?, cast(? as jsonb), now())")) {
-            ps.setLong(1, tenantId);
-            if (actorId != null) ps.setLong(2, actorId); else ps.setNull(2, Types.BIGINT);
-            ps.setString(3, entityType);
-            ps.setString(4, entityKey);
-            ps.setString(5, operation);
-            ps.setString(6, MAPPER.writeValueAsString(snapshot));
-            ps.executeUpdate();
+        try {
+            Jdbc.update(adminDs, "AuditRecorder.record",
+                "INSERT INTO core.audit_outbox "
+              + "(tenant_id, actor_id, entity_type, entity_key, operation, changes, created_at) "
+              + "VALUES (?, ?, ?, ?, ?, cast(? as jsonb), now())", ps -> {
+                ps.setLong(1, tenantId);
+                if (actorId != null) ps.setLong(2, actorId); else ps.setNull(2, Types.BIGINT);
+                ps.setString(3, entityType);
+                ps.setString(4, entityKey);
+                ps.setString(5, operation);
+                ps.setString(6, MAPPER.writeValueAsString(snapshot));
+            });
         } catch (Exception e) {
             // Fail-soft by contract, but with the full throwable: this line is the only
             // diagnostic anyone will ever get for an audit that stopped recording.

@@ -7,6 +7,8 @@ import jakarta.ws.rs.core.MultivaluedMap;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -22,8 +24,9 @@ import java.util.function.Supplier;
  */
 public final class ApiErrors {
 
-    /** The body key — only for the few bodies carrying more than the message (a hint, an {@code ok}). */
-    public static final String KEY = "error";
+    /** The body key. Package-private with {@link #error}: outside this package a body is built only
+     *  through {@link #status} and its family, so it always goes out as JSON (#1646). */
+    static final String KEY = "error";
 
     private static final Logger LOG = Logger.getLogger(ApiErrors.class);
 
@@ -44,14 +47,12 @@ public final class ApiErrors {
      * the socket under {@code Accept: application/yaml}.
      */
     public static Response scopeNotGranted() {
-        logScopeRefusal(LOG);
-        return Response.status(403).type(MediaType.APPLICATION_JSON)
-            .entity(error(ScopeGrants.REFUSAL)).build();
+        return status(403, ScopeGrants.REFUSAL).build();   // status() leaves the WARN
     }
 
     /**
-     * The one WARN a scope refusal leaves, written where the refusal is built so that no door can
-     * refuse silently. Same register as the role gate's {@code Access denied: required=…}: the
+     * The one WARN a scope refusal leaves, written where the refusal is built — {@link #status}, which
+     * every helper goes through — so that no door can refuse silently, whichever helper it reaches for. Same register as the role gate's {@code Access denied: required=…}: the
      * caller's grants, never row data, never the token. Tenant and user ride the MDC. The rag twin
      * writes the same line through its own logger, so it reads the same from both modules.
      */
@@ -65,7 +66,16 @@ public final class ApiErrors {
      * content type, which is the gap the 403 helper's javadoc above already describes.
      */
     public static Response unauthorized(String reason) {
-        return Response.status(401).type(MediaType.APPLICATION_JSON).entity(error(reason)).build();
+        return status(401, reason).build();
+    }
+
+    /**
+     * A 403 that says why, in the same dress — for a refusal that is NOT the scope one. Never stand
+     * in for {@link #scopeNotGranted()}: the PWA branches on that exact string, so a role or
+     * account refusal must not wear it (#1646).
+     */
+    public static Response forbidden(String why) {
+        return status(403, why).build();
     }
 
     /**
@@ -73,34 +83,60 @@ public final class ApiErrors {
      * reaches {@code lm} as "no details from the server".
      */
     public static Response notFound(String what) {
-        return Response.status(404).type(MediaType.APPLICATION_JSON).entity(error(what)).build();
+        return status(404, what).build();
     }
 
     /**
-     * A 409 that says which name is taken, in the same dress — the missing member of the family
-     * above. Two of the hub's hand-built 409s already omit the content type, which is the drift
-     * this class exists to end (see {@link #scopeNotGranted()}); the rest repeat these four lines.
+     * A 409 that says which name is taken, in the same dress.
      */
     public static Response conflict(String what) {
-        return Response.status(409).type(MediaType.APPLICATION_JSON).entity(error(what)).build();
+        return status(409, what).build();
     }
 
     /** {@link #conflict(String)}'s own twin for the few 409s that carry one extra field (a hint id)
      *  alongside the message (code review finding) — same dress, via {@link #error(String, String,
      *  Object)}, so a future change to it is never missed by a hand-built body. */
     public static Response conflict(String what, String extraKey, Object extraValue) {
-        return Response.status(409).type(MediaType.APPLICATION_JSON).entity(error(what, extraKey, extraValue)).build();
+        return status(409, what, extraKey, extraValue).build();
     }
 
     /**
-     * A 400 that says what the caller got wrong, in the same dress — the last member of the family,
-     * added for {@link ConfigValidationExceptionMapper}. Around the hub some forty 400s still build
-     * these lines by hand; most pass {@link #error} but omit the content type, which is how a refusal
-     * ends up in a different dress from its 403 neighbour (see {@link #scopeNotGranted()}). Reaching
-     * for this helper is what stops that drift spreading.
+     * A 400 that says what the caller got wrong, in the same dress.
      */
     public static Response badRequest(String why) {
-        return Response.status(400).type(MediaType.APPLICATION_JSON).entity(error(why)).build();
+        return status(400, why).build();
+    }
+
+    /**
+     * The dress itself, for any status: {@code {"error": why}} typed JSON. Every helper above is this
+     * plus a status; a status with no helper of its own (422, 429, 5xx) calls it directly. A builder,
+     * not a {@code Response}, so a door can still add a header ({@code Retry-After}).
+     *
+     * <p>Why the type is always written: a door that assembled the body by hand tended to forget it,
+     * and the refusal then negotiated its dress from the resource's {@code @Produces} — YAML, text or
+     * markdown on some doors. With {@link #error} package-private, this is the only way to build the
+     * body outside this package; a door can still override the type on the builder, but only on
+     * purpose, never by omission (#1646).
+     *
+     * <p>A blank {@code why} — a door passing {@code e.getMessage()} of an exception that has none —
+     * says the status's own reason phrase rather than trading the refusal for an NPE-shaped 500.
+     */
+    public static Response.ResponseBuilder status(int code, String why) {
+        return status(code, why, null, null);
+    }
+
+    /** {@link #status(int, String)} for a body that carries one extra field beside the message (a hint,
+     *  a run id, the raw model output), after it and possibly null. */
+    public static Response.ResponseBuilder status(int code, String why, String extraKey, Object extraValue) {
+        String message = why == null || why.isBlank() ? reasonPhrase(code) : why;
+        if (code == 403 && ScopeGrants.REFUSAL.equals(message)) logScopeRefusal(LOG);
+        Map<String, Object> body = extraKey == null ? error(message) : error(message, extraKey, extraValue);
+        return Response.status(code).type(MediaType.APPLICATION_JSON).entity(body);
+    }
+
+    private static String reasonPhrase(int code) {
+        Response.Status known = Response.Status.fromStatusCode(code);
+        return known != null ? known.getReasonPhrase() : "HTTP " + code;
     }
 
     /**
@@ -166,13 +202,16 @@ public final class ApiErrors {
     }
 
     /** The {@code {"error": message}} body. */
-    public static Map<String, Object> error(String message) {
+    static Map<String, Object> error(String message) {
         return Map.of(KEY, message);
     }
 
     /** {@link #error(String)}'s own twin for a body carrying one extra field (a hint id, a reason)
-     *  alongside the message. */
-    public static Map<String, Object> error(String message, String extraKey, Object extraValue) {
-        return Map.of(KEY, message, extraKey, extraValue);
+     *  alongside the message — in that order, and the value may be null. */
+    static Map<String, Object> error(String message, String extraKey, Object extraValue) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put(KEY, message);
+        body.put(extraKey, extraValue);
+        return Collections.unmodifiableMap(body);
     }
 }

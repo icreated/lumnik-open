@@ -92,6 +92,17 @@ public final class Jdbc {
         }
     }
 
+    /**
+     * A transaction-scoped advisory lock on the hash of {@code key}, held until the connection's transaction ends:
+     * writers of one logical row that SQL cannot lock (a DELETE then an INSERT over rows that may not exist yet) queue
+     * behind it (#1658). The key shares one database-wide space with every other user of the idiom, so it carries its
+     * owner as a prefix ({@code "rag.chunk:" + ...}, as {@code EntityDefinitionLock} does). The wait has no bound of its
+     * own: set {@code lock_timeout} where a holder can stall.
+     */
+    public static void advisoryXactLock(Connection c, String label, String key) {
+        queryOne(c, label, "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", ps -> ps.setString(1, key), rs -> true);
+    }
+
     /** {@link #queryOne(DataSource, String, String, Binder, RowMapper)} on a connection the caller holds. */
     public static <T> Optional<T> queryOne(Connection c, String label, String sql,
                                            Binder binder, RowMapper<T> mapper) {
@@ -154,18 +165,27 @@ public final class Jdbc {
      * through: this message has no audience to judge, so it says nothing the SQLSTATE does not.
      */
     private static RuntimeException failure(String label, Exception e) {
-        boolean database = Throwables.causeChain(e).stream().anyMatch(SQLException.class::isInstance);
         return switch (e) {
             // A statement inside a transaction body already said which one failed (#1300).
             case Failure statement -> statement;
-            case RuntimeException own when !database -> own;
-            default -> {
-                String state = sqlStateOf(e);
-                String why = !database ? e.getClass().getSimpleName()
-                    : state == null ? "no SQLSTATE" : "SQLSTATE " + state;
-                yield new Failure(label + " failed (" + why + ")", e);
-            }
+            case RuntimeException own when !isDatabase(e) -> own;
+            default -> new Failure(failureText(label, e), e);
         };
+    }
+
+    /** The message {@link #failure} builds, for a block that cannot use these helpers (a batch, a cursor)
+     *  and keeps its own exception type: {@code throw new X(Jdbc.failureText("Cls.op", e), e)} (#1648). */
+    public static String failureText(String label, Throwable e) {
+        String state = sqlStateOf(e);
+        // A caller re-labelling one of these helpers' failures names what it wraps, not the wrapper (Copilot on #1666).
+        Throwable named = e instanceof Failure && e.getCause() != null ? e.getCause() : e;
+        String why = !isDatabase(e) ? named.getClass().getSimpleName()
+            : state == null ? "no SQLSTATE" : "SQLSTATE " + state;
+        return label + " failed (" + why + ")";
+    }
+
+    private static boolean isDatabase(Throwable e) {
+        return Throwables.causeChain(e).stream().anyMatch(SQLException.class::isInstance);
     }
 
     /** What {@link #failure} builds — a plain RuntimeException to every caller, recognisable here only. */
@@ -187,7 +207,8 @@ public final class Jdbc {
 
     /**
      * Runs {@code body} in one explicit transaction on a fresh connection: commit on success,
-     * rollback and rethrow (as {@link #failure} says) on failure, autocommit restored either way.
+     * rollback and rethrow (as {@link #failure} says) on failure — {@link #transaction(Connection, String, TxFunction)}
+     * on a connection it opens and closes, which the pool must hand out in autocommit.
      * For a multi-statement unit of work that must land atomically: the body runs each statement
      * through the {@code Connection} forms of {@link #update}/{@link #query}/{@link #queryOne}.
      */
@@ -204,31 +225,76 @@ public final class Jdbc {
      *  out with the commit. */
     public static <T> T transaction(DataSource ds, String label, TxFunction<T> body) {
         try (Connection c = ds.getConnection()) {
-            boolean autoCommit = c.getAutoCommit();
-            c.setAutoCommit(false);
-            T result = null;
-            Exception failure = null;
-            try {
-                result = body.apply(c);
-                c.commit();
-            } catch (Exception e) {
-                failure = e;
-                try {
-                    c.rollback();
-                } catch (Exception rollbackFailure) {
-                    failure.addSuppressed(rollbackFailure);
-                }
-            }
-            try {
-                c.setAutoCommit(autoCommit);
-            } catch (Exception restoreFailure) {
-                if (failure == null) failure = restoreFailure;
-                else failure.addSuppressed(restoreFailure);
-            }
-            if (failure != null) throw failure;
-            return result;
+            return transaction(c, label, body);
         } catch (Exception e) {
             throw failure(label, e);
         }
+    }
+
+    /**
+     * {@link #transaction(DataSource, String, TxFunction)} on a connection the caller holds and keeps — a check made
+     * before in autocommit, a {@code WITH HOLD} cursor read after the commit (#1649). Refuses a connection already out
+     * of autocommit: it is inside a transaction someone else owns (a JTA one, the caller's), never this helper's to
+     * commit.
+     *
+     * <p>Nothing the body did is committed unless it returned: an {@link Error} rolls back too (#1607's shape), and
+     * leaves as itself. A transaction left open would not be lost but committed: given back to the pool, Agroal resets
+     * the connection with {@code setAutoCommit(true)}, on which pgjdbc COMMITs. So when the rollback or the restore
+     * after it fails, the session is ended instead ({@link #endSession}), as {@code RunQueueClaim} does (#952): the
+     * server rolls back what it held, and the caller's connection is dead. That failure rides on the body's as
+     * suppressed; an Error leaves in its place.
+     */
+    public static <T> T transaction(Connection c, String label, TxFunction<T> body) {
+        try {
+            if (!c.getAutoCommit())
+                throw new IllegalStateException(label + ": Jdbc.transaction owns its transaction — "
+                    + "this connection is already in one");
+            c.setAutoCommit(false);
+            T result;
+            try {
+                result = body.apply(c);
+                c.commit();
+            } catch (Throwable t) {
+                rollBack(c, t);
+                throw t;
+            }
+            c.setAutoCommit(true);
+            return result;
+        } catch (Exception e) {
+            // An Error leaves as itself. The refusal comes back from failure() unchanged.
+            throw failure(label, e);
+        }
+    }
+
+    /** Rolls back the transaction {@code failure} interrupted and restores autocommit — or ends the session. */
+    private static void rollBack(Connection c, Throwable failure) {
+        boolean reset = false;
+        try {
+            c.rollback();
+            c.setAutoCommit(true);
+            reset = true;
+        } catch (Exception cleanupFailure) {
+            // A stub or a driver may throw the body's own exception again: addSuppressed would refuse it (Copilot on #1657).
+            if (cleanupFailure != failure) failure.addSuppressed(cleanupFailure);
+        } finally {
+            if (!reset) {
+                try {
+                    endSession(c);
+                } catch (Exception endFailure) {
+                    if (endFailure != failure) failure.addSuppressed(endFailure);
+                }
+            }
+        }
+    }
+
+    /**
+     * Ends the database session under {@code c}: closes the physical connection beneath a pool's wrapper, and the
+     * server rolls back whatever the session still held — an open transaction, a lock. Closing the wrapper would only
+     * give the session back to the pool, and Agroal's {@code abort} does not reach it. The wrapper stays its owner's
+     * to close: back in the pool, its reset fails on the dead session, which PostgreSQL's exception sorter calls
+     * fatal (SQLSTATE class 08), and the pool discards it.
+     */
+    public static void endSession(Connection c) throws SQLException {
+        c.unwrap(Connection.class).close();
     }
 }

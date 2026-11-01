@@ -124,6 +124,11 @@ type workflowDataTruth struct {
 	CheckUnavailable  bool     `json:"checkUnavailable"`
 	UnavailableReason *string  `json:"unavailableReason"`
 	DueProblem        *string  `json:"dueProblem"`
+	// #1588: rows spec.on.order cannot place, keys a view holds twice (both null: not measured), and the
+	// declared columns an absent table left unverified.
+	InvalidOrderValues  *int     `json:"invalidOrderValues"`
+	KeysWithSeveralRows *int     `json:"keysWithSeveralRows"`
+	ColumnsUnverified   []string `json:"columnsUnverified"`
 }
 
 // printWorkflowApplied writes the applied line, then one line per finding of the data-truth report.
@@ -135,6 +140,9 @@ func printWorkflowApplied(w io.Writer, a workflowApplied) {
 		return
 	case t.TableMissing:
 		fmt.Fprintln(w, "  the table is not there yet: the data was not checked")
+		if len(t.ColumnsUnverified) > 0 {
+			fmt.Fprintln(w, "  not verified until the table exists: "+strings.Join(t.ColumnsUnverified, ", "))
+		}
 		return
 	case t.CheckUnavailable:
 		reason := ""
@@ -166,6 +174,14 @@ func printWorkflowApplied(w io.Writer, a workflowApplied) {
 	}
 	if t.DueProblem != nil {
 		findings = append(findings, *t.DueProblem)
+	}
+	if t.InvalidOrderValues != nil && *t.InvalidOrderValues > 0 {
+		findings = append(findings, "spec.on.order: "+output.RowCount(*t.InvalidOrderValues)+
+			" with no valid order, their documents are never watched")
+	}
+	if t.KeysWithSeveralRows != nil && *t.KeysWithSeveralRows > 0 {
+		findings = append(findings, fmt.Sprintf("%d keys hold several rows: declare spec.on.order to pick one",
+			*t.KeysWithSeveralRows))
 	}
 	if len(findings) == 0 {
 		findings = append(findings, "the data matches the declaration")

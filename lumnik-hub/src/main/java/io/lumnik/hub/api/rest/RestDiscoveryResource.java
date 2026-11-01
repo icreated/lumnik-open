@@ -44,12 +44,12 @@ public class RestDiscoveryResource {
     @Path("/from-openapi")
     public Response fromOpenApi(Map<String, Object> body) {
         String url = Configs.string(body, "url").orElse(null);
-        if (url == null) return refuse(400, "url is required");
+        if (url == null) return ApiErrors.badRequest("url is required");
         // A url that is not a URL is the CALLER's mistake, and a different diagnosis from a URL
         // that holds no spec: fix your command, versus go look at the source. Same structural rule
         // the manifest door applies to base_url, and it names the reason, never the value.
         var notAUrl = Urls.whyNotAbsolute(url);
-        if (notAUrl.isPresent()) return refuse(400, "'url' " + notAUrl.get());
+        if (notAUrl.isPresent()) return ApiErrors.badRequest("'url' " + notAUrl.get());
         String name = Configs.string(body, "name").orElse("connector");
 
         List<String> tags = ApiErrors.orBadRequest(() -> stringList(body, "tags"));
@@ -62,7 +62,7 @@ public class RestDiscoveryResource {
             // dresses it — same gesture as the probe below, and as JdbcSourceResource#discover.
             // Narrow on purpose: a defect in our own manifest build must keep saying 500.
             LOG.warnf("OpenAPI import refused: %s", unreadable.getMessage());   // already redacted
-            return refuse(502, unreadable.getMessage());
+            return ApiErrors.status(502, unreadable.getMessage()).build();
         }
     }
 
@@ -77,7 +77,7 @@ public class RestDiscoveryResource {
     @Path("/probe")
     public Response probe(Map<String, Object> body) throws Exception {
         String connectorId = Configs.string(body, "connectorId").orElse(null);
-        if (connectorId == null) return refuse(400, "connectorId is required");
+        if (connectorId == null) return ApiErrors.badRequest("connectorId is required");
 
         UUID cid = ApiErrors.uuidOrRefuse(connectorId);
         // Read inside a transaction of its own, and only the read: the tenant is bound with
@@ -102,7 +102,7 @@ public class RestDiscoveryResource {
             // or set the secret. `AuthConfigException` extends RuntimeException, not
             // ConnectorException, so without naming it here it would sail past every catch below
             // and land as a 500. `ConfigValidationException` is caught before its supertype.
-            return refuse(400, "connector " + c.getName() + ": " + misconfigured.getMessage());
+            return ApiErrors.badRequest("connector " + c.getName() + ": " + misconfigured.getMessage());
         } catch (ConnectorException refused) {
             // ResponseStatusGuard already named the status and bounded an excerpt of the body —
             // TransientFailureException extends this, so one catch covers the 429 and the 401.
@@ -112,7 +112,7 @@ public class RestDiscoveryResource {
             // goes no further: an application log is broader, longer-lived, and shipped elsewhere.
             LOG.warnf("REST probe refused for connector %s path %s (detail returned to the caller)",
                 cid, Urls.forDisplay(endpointPath));
-            return refuse(502, refused.getMessage());
+            return ApiErrors.status(502, refused.getMessage()).build();
         } catch (IOException unreachable) {
             // A source nobody answers on is the upstream's problem too. Named narrowly rather than
             // by a blanket catch: a NullPointerException in the inference is a hub defect and must
@@ -122,7 +122,7 @@ public class RestDiscoveryResource {
             // The kind, never the exception: its message can quote the source URL (#1164).
             LOG.warnf("REST probe could not reach connector %s path %s: %s",
                 cid, Urls.forDisplay(endpointPath), OutboundFailure.describe(unreachable));
-            return refuse(502, unreachable(unreachable));
+            return ApiErrors.status(502, unreachable(unreachable)).build();
         }
     }
 
@@ -155,11 +155,5 @@ public class RestDiscoveryResource {
             out.add(s);
         }
         return out;
-    }
-
-    /** The JSON refusal, in the class's own YAML-producing context — the type must be explicit. */
-    private static Response refuse(int status, String message) {
-        return Response.status(status).type(MediaType.APPLICATION_JSON)
-            .entity(ApiErrors.error(message)).build();
     }
 }

@@ -2,28 +2,34 @@ package io.lumnik.hub.entity;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.error.Throwables;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.api.ScopeGuardedUpsert;
+import io.lumnik.hub.ask.SchemaCardRefresher;
+import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.sql.JoinKeys;
 import io.lumnik.hub.view.ColumnKind;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
+import org.jboss.logging.Logger;
 
 import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -35,11 +41,27 @@ import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
 @ApplicationScoped
 public class EntityViewCompiler {
 
+  private static final Logger LOG = Logger.getLogger(EntityViewCompiler.class);
+
   @Inject
   @DataSource("admin")
   AgroalDataSource adminDs;
 
   @Inject EntityPlanCacheInvalidator planCaches;
+  @Inject EntityManifestParser parser;
+  @Inject Instance<SchemaCardRefresher> cards;
+
+  /** Test seams of {@link #reshape} (#1600): after the dependency walk, and after the views are dropped. */
+  private volatile ConnectionWork afterWalk = c -> {};
+  private volatile ConnectionWork afterDrops = c -> {};
+
+  void afterWalk(ConnectionWork w) {
+    afterWalk = w;
+  }
+
+  void afterDrops(ConnectionWork w) {
+    afterDrops = w;
+  }
 
   /**
    * Run DROP/CREATE/GRANT + manifest UPSERT atomically on the admin (BYPASSRLS) datasource,
@@ -62,29 +84,29 @@ public class EntityViewCompiler {
    * so nothing here depends on the old order.
    */
   public ScopeGuardedUpsert apply(EntityManifest m, String yaml, Set<String> callerScopes) {
-    try (Connection c = adminDs.getConnection()) {
-      boolean prevAuto = c.getAutoCommit();
-      c.setAutoCommit(false);
-      try {
+    ScopeGuardedUpsert outcome;
+    try {
+      outcome = Jdbc.transaction(adminDs, "EntityViewCompiler.apply", c -> {
         // #669: a SearchIndex write validated against this definition holds the shared side until its
         // commit; rewriting the definition waits for it, so the re-check after this apply sees it.
         EntityDefinitionLock.exclusive(c, m.name());
         // The predicate reads the EXISTING row — which in a DO UPDATE is the one spelled with the
         // table name, `excluded` being the row we proposed.
-        try (var ps = c.prepareStatement(
+        int upserted = Jdbc.update(c, "EntityViewCompiler.apply upsert",
             "INSERT INTO connector.entity_manifest (name, yaml_text, scopes) VALUES (?, ?, ?) "
             + "ON CONFLICT (name) DO UPDATE SET yaml_text = EXCLUDED.yaml_text, "
             + "scopes = EXCLUDED.scopes, updated_at = now() "
             + "WHERE (?::text[] IS NULL OR (connector.entity_manifest.scopes <@ ?::text[] "
-            + "AND cardinality(connector.entity_manifest.scopes) > 0))")) {
-          ps.setString(1, m.name().toLowerCase(Locale.ROOT));
-          ps.setString(2, yaml);
-          ps.setArray(3, c.createArrayOf("text", m.scopes().toArray()));
-          ScopeGuardedUpsert.bindGrants(ps, 4, callerScopes);
-          if (ps.executeUpdate() == 0) {
-            c.rollback();
-            return new ScopeGuardedUpsert.NameHeldOutOfScope();
-          }
+            + "AND cardinality(connector.entity_manifest.scopes) > 0))",
+            ps -> {
+              ps.setString(1, m.name().toLowerCase(Locale.ROOT));
+              ps.setString(2, yaml);
+              ps.setArray(3, c.createArrayOf("text", m.scopes().toArray()));
+              ScopeGuardedUpsert.bindGrants(ps, 4, callerScopes);
+            });
+        // Refused before any change: committing the empty transaction only releases the lock.
+        if (upserted == 0) {
+          return new ScopeGuardedUpsert.NameHeldOutOfScope();
         }
         for (EntityManifest.Source src : m.sources()) preflight(c, src);
         for (EntityManifest.Join j : m.joins()) preflight(c, j);
@@ -93,30 +115,24 @@ public class EntityViewCompiler {
             st.execute(sql);
           }
         }
-        c.commit();
-      } catch (Exception e) {
-        c.rollback();
-        throw e;
-      } finally {
-        c.setAutoCommit(prevAuto);
-      }
-    } catch (MissingSourceTableException | MissingSourceColumnException | MissingLookupColumnException e) {
-      throw e;   // already precise; the generic wrapper below would bury it
-    } catch (Exception e) {
+        return new ScopeGuardedUpsert.Applied();
+      });
+    } catch (RuntimeException e) {
       // 42P01 (undefined_table) naming one of the manifest's OWN source tables is the
       // fresh-install story (connectors never run) — translate it for the door. A
       // missing INTERNAL relation (entity_manifest, a migration fault) must stay a
-      // loud 500: a "run your connectors" 409 there would be a lie.
+      // loud 500: a "run your connectors" 409 there would be a lie. The preflight's own
+      // refusals carry no cause and leave as they are.
       String line = undefinedTableLine(e);
       if (line != null && namesASourceTable(m, line)) {
-        throw new MissingSourceTableException(line);
+        throw new MissingSourceTableException(line, e);
       }
-      throw new RuntimeException("EntityViewCompiler.apply: " + e.toString(), e);
+      throw e;
     }
     // Committed, and outside every transaction: plans prepared on the old view go (#1338). Nothing past the commit may
     // roll the apply back or fail it — the recycle is best-effort and never throws.
-    planCaches.afterEntityApplied(m.name());
-    return new ScopeGuardedUpsert.Applied();
+    if (outcome instanceof ScopeGuardedUpsert.Applied) planCaches.afterEntityApplied(m.name());
+    return outcome;
   }
 
   /** The first line of the first {@code 42P01} (undefined_table) in the cause chain, or null. */
@@ -129,7 +145,7 @@ public class EntityViewCompiler {
     return null;
   }
 
-  /** Extra work a caller needs inside {@link #delete}'s own transaction — see that method. */
+  /** Work on a transaction's own connection: {@link #delete}'s {@code extra}, {@link #reshape}'s {@code ddl}. */
   @FunctionalInterface
   public interface ConnectionWork {
     void run(Connection c) throws SQLException;
@@ -157,29 +173,148 @@ public class EntityViewCompiler {
    */
   public void delete(String name, ConnectionWork extra) {
     String view = viewName(name);
-    try (Connection c = adminDs.getConnection()) {
-      boolean prevAuto = c.getAutoCommit();
-      c.setAutoCommit(false);
-      try {
-        EntityDefinitionLock.exclusive(c, name);
-        try (Statement st = c.createStatement()) {
-          st.execute("DROP VIEW IF EXISTS " + view);
-        }
-        try (var ps = c.prepareStatement("DELETE FROM connector.entity_manifest WHERE name = ?")) {
-          ps.setString(1, name.toLowerCase(Locale.ROOT));
-          ps.executeUpdate();
-        }
-        if (extra != null) extra.run(c);
-        c.commit();
-      } catch (Exception e) {
-        c.rollback();
-        throw e;
-      } finally {
-        c.setAutoCommit(prevAuto);
-      }
-    } catch (Exception e) {
-      throw new RuntimeException("EntityViewCompiler.delete: " + e.toString(), e);
+    Jdbc.transaction(adminDs, "EntityViewCompiler.delete", c -> {
+      EntityDefinitionLock.exclusive(c, name);
+      Jdbc.update(c, "EntityViewCompiler.delete drop view", "DROP VIEW IF EXISTS " + view, ps -> {});
+      Jdbc.update(c, "EntityViewCompiler.delete manifest row", "DELETE FROM connector.entity_manifest WHERE name = ?",
+          ps -> ps.setString(1, name.toLowerCase(Locale.ROOT)));
+      if (extra != null) extra.run(c);
+    });
+  }
+
+  /** A view the walk found: schema-qualified as the catalog names it, and its depth (1 = it reads the columns). */
+  private record Dependent(String view, int depth, boolean materialized) {
+
+    /** How a refusal names it: the gesture differs ({@code DROP VIEW} / {@code DROP MATERIALIZED VIEW}). */
+    String named() {
+      return (materialized ? "materialized view " : "view ") + view;
     }
+  }
+
+  /**
+   * Runs {@code ddl}, a change of {@code columns}' types on {@code schema.table} (the ingestion writer's widening),
+   * with every view that reads them taken care of (#1600, docs/superpowers/specs/2026-10-27-widen-under-view-design.md).
+   *
+   * <ol>
+   *   <li>Every dependent at any depth is classified first. One whose name is exactly an entity's view, for a stored
+   *       manifest, is the entity's; any other refuses the change, named, before any lock or DDL.</li>
+   *   <li>The entity locks are taken by name, and the manifests read again under them, on this connection: an apply in
+   *       progress holds the same lock until its commit, so the committed definition is the one compiled — never this
+   *       instance's cached copy. A manifest gone (a concurrent delete) took its view with it: skipped.</li>
+   *   <li>Views dropped deepest first, {@code ddl}, views compiled again shallowest first — compiled, not re-created
+   *       as they were: a fused column's type follows its sources'.</li>
+   * </ol>
+   *
+   * One {@link Jdbc#transaction(Connection, String, Jdbc.TxFunction)} on {@code c}, the caller's admin connection,
+   * which must be in autocommit. Never a second connection from the pool while the caller holds one — that shape
+   * starves the admin pool under concurrent widenings (the reason {@code DynamicTableWriter.createSchema} keeps one
+   * connection). A view that appears after the walk makes {@code ddl} fail (0A000): rolled back, and the next run walks
+   * again.
+   *
+   * @return the entities rebuilt, for {@link #afterRebuilt} — which the caller runs once it has given {@code c} back:
+   *         the cards are read on the admin pool too.
+   */
+  public List<EntityManifest> reshape(Connection c, String schema, String table, Collection<String> columns, ConnectionWork ddl) {
+    return Jdbc.transaction(c, "EntityViewCompiler.reshape", tx -> {
+      List<Dependent> walk = dependents(tx, schema, table, columns);
+      Map<String, String> stored = storedYaml(tx, walk.stream().map(d -> entityNameFromView(d.view()))
+          .filter(Objects::nonNull).toList());
+      Map<String, Integer> depthByEntity = new TreeMap<>();
+      List<Dependent> foreign = new ArrayList<>();
+      for (Dependent d : walk) {
+        String name = entityNameFromView(d.view());
+        if (name != null && stored.containsKey(name)) depthByEntity.merge(name, d.depth(), Math::max);
+        else foreign.add(d);
+      }
+      if (!foreign.isEmpty()) {
+        throw new ConfigValidationException(schema + "." + table + ": " + String.join(", ", columns)
+            + " cannot widen — " + foreign.stream().map(Dependent::named).collect(Collectors.joining(", "))
+            + " read" + (foreign.size() == 1 ? "s" : "") + " it and the hub did not make "
+            + (foreign.size() == 1 ? "it" : "them") + ". Drop " + (foreign.size() == 1 ? "it" : "them")
+            + ", then run the connector again.");
+      }
+      afterWalk.run(tx);
+      for (String name : depthByEntity.keySet()) EntityDefinitionLock.exclusive(tx, name);
+      Map<String, String> locked = storedYaml(tx, depthByEntity.keySet());
+      List<String> deepestFirst = depthByEntity.keySet().stream()
+          .sorted(Comparator.comparing((String n) -> depthByEntity.get(n)).reversed()).toList();
+      for (String name : deepestFirst) {
+        Jdbc.update(tx, "EntityViewCompiler.reshape drop view", "DROP VIEW IF EXISTS " + viewName(name), ps -> {});
+      }
+      afterDrops.run(tx);
+      ddl.run(tx);
+      List<EntityManifest> rebuilt = new ArrayList<>();
+      for (String name : deepestFirst.reversed()) {
+        String yaml = locked.get(name);
+        if (yaml == null) continue;   // deleted meanwhile: its view went with it
+        EntityManifest m = parser.parse(yaml);
+        for (String sql : buildStatements(m, sources(tx, m))) {
+          try (Statement st = tx.createStatement()) {
+            st.execute(sql);
+          }
+        }
+        rebuilt.add(m);
+      }
+      return rebuilt;
+    });
+  }
+
+  /** After {@link #reshape} committed and its connection is back: plan caches once, the cards, best-effort. */
+  public void afterRebuilt(List<EntityManifest> rebuilt) {
+    if (rebuilt.isEmpty()) return;
+    planCaches.afterEntitiesRebuilt(rebuilt.stream().map(EntityManifest::name).toList());
+    for (EntityManifest m : rebuilt) {
+      try {
+        cards.get().afterEntityChanged(m.name(), null, m.scopes());
+      } catch (RuntimeException e) {
+        LOG.warnf(e, "entity %s rebuilt around a widening, but its cards could not be refreshed", m.name());
+      }
+    }
+  }
+
+  /**
+   * The views and materialized views reading {@code columns} of the table, then those reading them, at any depth.
+   * Deduplicated on (view, depth), never on paths: a lattice of views has exponentially many paths, and enumerating
+   * them was a denial of service. No acyclic chain is longer than the database has views, so that count — a real
+   * bound, not a cap — ends the walk even on a cycle (which the hub never makes).
+   */
+  private static List<Dependent> dependents(Connection c, String schema, String table, Collection<String> columns) {
+    String edge = "JOIN pg_catalog.pg_rewrite rw ON rw.oid = d.objid "
+        + "JOIN pg_catalog.pg_class v ON v.oid = rw.ev_class AND v.relkind IN ('v', 'm') ";
+    String canonical = "d.refclassid = 'pg_catalog.pg_class'::regclass "
+        + "AND d.classid = 'pg_catalog.pg_rewrite'::regclass AND d.deptype = 'n'";
+    return Jdbc.query(c, "EntityViewCompiler.dependents",
+        "WITH RECURSIVE dep(oid, depth) AS ("
+      + "  SELECT v.oid, 1 FROM pg_catalog.pg_class tc "
+      + "  JOIN pg_catalog.pg_namespace tns ON tns.oid = tc.relnamespace AND tns.nspname = ? "
+      + "  JOIN pg_catalog.pg_attribute a ON a.attrelid = tc.oid AND a.attname = ANY (?) "
+      + "  JOIN pg_catalog.pg_depend d ON d.refobjid = tc.oid AND d.refobjsubid = a.attnum AND " + canonical + " "
+      + edge + "AND v.oid <> tc.oid WHERE tc.relname = ? "
+      + "  UNION "
+      + "  SELECT v.oid, dep.depth + 1 FROM dep "
+      + "  JOIN pg_catalog.pg_depend d ON d.refobjid = dep.oid AND " + canonical + " "
+      + edge + "AND v.oid <> dep.oid "
+      + "  WHERE dep.depth < (SELECT count(*) FROM pg_catalog.pg_class WHERE relkind IN ('v', 'm'))) "
+      + "SELECT n.nspname || '.' || r.relname, max(dep.depth), r.relkind = 'm' FROM dep "
+      + "JOIN pg_catalog.pg_class r ON r.oid = dep.oid JOIN pg_catalog.pg_namespace n ON n.oid = r.relnamespace "
+      + "GROUP BY 1, 3 ORDER BY 2, 1",
+        ps -> {
+          ps.setString(1, schema);
+          ps.setArray(2, c.createArrayOf("text", columns.toArray()));
+          ps.setString(3, table);
+        },
+        rs -> new Dependent(rs.getString(1), rs.getInt(2), rs.getBoolean(3)));
+  }
+
+  /** The stored YAML of each of {@code names} (lower-case) that has a manifest row, read on {@code c}. */
+  private static Map<String, String> storedYaml(Connection c, Collection<String> names) {
+    if (names.isEmpty()) return Map.of();
+    Map<String, String> out = new HashMap<>();
+    Jdbc.query(c, "EntityViewCompiler.storedYaml",
+        "SELECT name, yaml_text FROM connector.entity_manifest WHERE name = ANY (?)",
+        ps -> ps.setArray(1, c.createArrayOf("text", names.stream().map(n -> n.toLowerCase(Locale.ROOT)).toArray())),
+        rs -> out.put(rs.getString(1), rs.getString(2)));
+    return out;
   }
 
   /** Names the lookup's physical columns once each; LIMIT 0 reads nothing but keeps the relation locked to commit. */
@@ -225,19 +360,13 @@ public class EntityViewCompiler {
    * REST target upserts by {@code external_id}; a table made by hand) holds one version per row and is
    * read whole. Asked of the catalog, not {@code information_schema}, which hides what the role cannot read.
    */
-  private static Set<String> historyTables(Connection c, EntityManifest m) throws SQLException {
-    String[] tables = tables(m);
-    Set<String> history = new HashSet<>();
-    try (PreparedStatement ps = c.prepareStatement(
+  private static Set<String> historyTables(Connection c, EntityManifest m) {
+    return new HashSet<>(Jdbc.query(c, "EntityViewCompiler.historyTables",
         "SELECT r.relname FROM pg_catalog.pg_class r JOIN pg_catalog.pg_attribute a ON a.attrelid = r.oid"
             + " WHERE r.relnamespace = " + quoteLiteral(SCHEMA) + "::regnamespace AND r.relname = ANY(?)"
-            + " AND a.attname IN ('id', '_run_id') AND NOT a.attisdropped GROUP BY r.relname HAVING count(*) = 2")) {
-      ps.setArray(1, c.createArrayOf("text", tables));
-      try (ResultSet rs = ps.executeQuery()) {
-        while (rs.next()) history.add(rs.getString(1));
-      }
-    }
-    return history;
+            + " AND a.attname IN ('id', '_run_id') AND NOT a.attisdropped GROUP BY r.relname HAVING count(*) = 2",
+        ps -> ps.setArray(1, c.createArrayOf("text", tables(m))),
+        rs -> rs.getString(1)));
   }
 
   private static String[] tables(EntityManifest m) {
@@ -262,23 +391,21 @@ public class EntityViewCompiler {
   }
 
   /** The catalog's answer for {@code m}'s tables, read on {@code c}. */
-  public static Sources sources(Connection c, EntityManifest m) throws SQLException {
+  public static Sources sources(Connection c, EntityManifest m) {
     return new Sources(historyTables(c, m), typedColumns(c, m));
   }
 
-  private static Map<String, Map<String, String>> typedColumns(Connection c, EntityManifest m) throws SQLException {
+  private static Map<String, Map<String, String>> typedColumns(Connection c, EntityManifest m) {
     Map<String, Map<String, String>> typed = new HashMap<>();
-    try (PreparedStatement ps = c.prepareStatement(
+    Jdbc.query(c, "EntityViewCompiler.typedColumns",
         "SELECT r.relname, a.attname, t.typname FROM pg_catalog.pg_class r"
             + " JOIN pg_catalog.pg_attribute a ON a.attrelid = r.oid JOIN pg_catalog.pg_type t ON t.oid = a.atttypid"
             + " WHERE r.relnamespace = " + quoteLiteral(SCHEMA) + "::regnamespace AND r.relname = ANY(?)"
             + " AND a.attnum > 0 AND NOT a.attisdropped AND t.typname IN ('date', 'timestamp', 'timestamptz',"
-            + " 'int2', 'int4', 'int8', 'numeric', 'float4', 'float8')")) {
-      ps.setArray(1, c.createArrayOf("text", tables(m)));
-      try (ResultSet rs = ps.executeQuery()) {
-        while (rs.next()) typed.computeIfAbsent(rs.getString(1), t -> new HashMap<>()).put(rs.getString(2), rs.getString(3));
-      }
-    }
+            + " 'int2', 'int4', 'int8', 'numeric', 'float4', 'float8')",
+        ps -> ps.setArray(1, c.createArrayOf("text", tables(m))),
+        rs -> new String[] {rs.getString(1), rs.getString(2), rs.getString(3)})
+        .forEach(r -> typed.computeIfAbsent(r[0], t -> new HashMap<>()).put(r[1], r[2]));
     return typed;
   }
 
@@ -443,15 +570,10 @@ public class EntityViewCompiler {
   }
 
   /**
-   * The compiled view's column types as the catalog names them — {@code text}, {@code date},
-   * {@code timestamp with time zone} (#1325) — empty when the view is not compiled. What the card
-   * tells Ask and views, and what an entity read filters by.
-   */
-  /**
    * The view's columns whose sources agreed on a date or a timestamp (#1325) or a number (#1338), with their kind —
    * what a reader compares and orders by value rather than as text.
    */
-  public static Map<String, ColumnKind> viewColumnKinds(Connection c, String entityName) throws SQLException {
+  public static Map<String, ColumnKind> viewColumnKinds(Connection c, String entityName) {
     Map<String, ColumnKind> typed = new HashMap<>();
     viewColumnTypes(c, entityName).forEach((column, type) -> {
       ColumnKind kind = ColumnKind.ofType(type);
@@ -460,16 +582,19 @@ public class EntityViewCompiler {
     return typed;
   }
 
-  public static Map<String, String> viewColumnTypes(Connection c, String entityName) throws SQLException {
+  /**
+   * The compiled view's column types as the catalog names them — {@code text}, {@code date},
+   * {@code timestamp with time zone} (#1325) — empty when the view is not compiled. What the card
+   * tells Ask and views, and what an entity read filters by.
+   */
+  public static Map<String, String> viewColumnTypes(Connection c, String entityName) {
     Map<String, String> types = new HashMap<>();
-    try (PreparedStatement ps = c.prepareStatement("SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod)"
+    Jdbc.query(c, "EntityViewCompiler.viewColumnTypes", "SELECT a.attname, pg_catalog.format_type(a.atttypid, a.atttypmod)"
         + " FROM pg_catalog.pg_attribute a WHERE a.attrelid = pg_catalog.to_regclass(?) AND a.attnum > 0"
-        + " AND NOT a.attisdropped")) {
-      ps.setString(1, viewName(entityName));
-      try (ResultSet rs = ps.executeQuery()) {
-        while (rs.next()) types.put(rs.getString(1), rs.getString(2));
-      }
-    }
+        + " AND NOT a.attisdropped",
+        ps -> ps.setString(1, viewName(entityName)),
+        rs -> new String[] {rs.getString(1), rs.getString(2)})
+        .forEach(r -> types.put(r[0], r[1]));
     return types;
   }
 

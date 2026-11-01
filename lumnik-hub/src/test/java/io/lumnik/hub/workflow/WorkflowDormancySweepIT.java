@@ -120,6 +120,8 @@ class WorkflowDormancySweepIT {
         String payload = events.get(0).get("payload");
         assertThat(payload).contains("observed unmoved").contains("first observed");   // #1363: English by default
         assertThat(payload).doesNotContain("stuck");
+        assertThat(payload).as("#1588: no cited or declared column, no fields — the payload of before")
+            .doesNotContain("\"fields\"");
 
         // The Java gate itself fired — alerted_at is actually set on both sleepers, not
         // just "the count happens to still be 2" (which the outbox's own ON CONFLICT would

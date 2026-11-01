@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/icreated/lumnik-open/lm/internal/config"
 	"github.com/spf13/cobra"
@@ -98,6 +99,15 @@ func newConfigCmd() *cobra.Command {
 			if oidcClientID != "" {
 				ctx.OidcClientID = oidcClientID
 			}
+			if err := setIDFlag(cmd, "tenant", &ctx.Tenant); err != nil {
+				return err
+			}
+			if err := setIDFlag(cmd, "user", &ctx.User); err != nil {
+				return err
+			}
+			if err := config.CheckIdentity(ctx); err != nil {
+				return err
+			}
 			cfg.Contexts[args[0]] = ctx
 			return cfg.Save(path)
 		},
@@ -106,6 +116,8 @@ func newConfigCmd() *cobra.Command {
 	setCtx.Flags().String("token", "", "Auth token")
 	setCtx.Flags().String("oidc-issuer", "", "OIDC issuer URL (lm login discovers endpoints from it)")
 	setCtx.Flags().String("oidc-client-id", "", "OIDC client id for device flow (default: lm-cli)")
+	setCtx.Flags().String("tenant", "", "Dev-bypass hub only (make k8s-up): tenant id sent as X-Tenant-ID; empty clears it")
+	setCtx.Flags().String("user", "", "Dev-bypass hub only (make k8s-up): user id sent as X-User-ID; empty clears it")
 	c.AddCommand(setCtx)
 	return c
 }
@@ -124,4 +136,19 @@ func redacted(cfg *config.Config) *config.Config {
 		out.Contexts[name] = ctx
 	}
 	return &out
+}
+
+// setIDFlag copies a given --tenant / --user into dst — the dev-bypass identity sent as X-Tenant-ID / X-User-ID,
+// which an OIDC hub ignores (#1610). Empty clears it; anything but a positive integer is refused by the flag.
+func setIDFlag(cmd *cobra.Command, flag string, dst *string) error {
+	if !cmd.Flags().Changed(flag) {
+		return nil
+	}
+	v, _ := cmd.Flags().GetString(flag)
+	v = strings.TrimSpace(v) // the hub strips the header before parsing it; store what it will read
+	if !config.ValidID(v) {
+		return fmt.Errorf("--%s must be a positive integer (the hub's %s id)", flag, flag)
+	}
+	*dst = v
+	return nil
 }

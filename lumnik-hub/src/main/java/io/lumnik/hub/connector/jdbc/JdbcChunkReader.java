@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.jdbc;
 
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.connector.api.ItemReader;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
@@ -174,7 +175,10 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
       SourceUnreachableException unreachable = JdbcUnreachable.of(schema + "." + table, e);
       if (unreachable != null) throw unreachable;
       if (e instanceof RuntimeException r) throw r;
-      throw new RuntimeException("JDBC read failed on " + schema + "." + table + ": " + e.getMessage(), e);
+      // A provider refusing a column type (JdbcDialect.readColumn) names the column and the type: its words.
+      if (e instanceof SQLFeatureNotSupportedException refused)
+        throw new RuntimeException("JDBC read failed on " + schema + "." + table + ": " + refused.getMessage(), e);
+      throw new RuntimeException(Jdbc.failureText("JDBC read on " + schema + "." + table, e), e);
     }
   }
 

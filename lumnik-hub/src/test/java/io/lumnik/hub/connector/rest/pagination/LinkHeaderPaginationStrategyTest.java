@@ -33,4 +33,17 @@ class LinkHeaderPaginationStrategyTest {
         RestResponse r = RestResponse.of(200, h, "[{}]");
         assertThrows(RuntimeException.class, () -> s.next(r, RestRequest.get("https://api/x")));
     }
+    /** #1633: Gitea and GitHub echo every query param into their next link — the hub's copy is not added again. */
+    @Test void a_param_the_next_link_already_carries_is_not_sent_twice() {
+        Map<String,List<String>> h = Map.of("Link", List.of("<https://api/x?page=2&since=T&state=all>; rel=\"next\""));
+        RestRequest current = RestRequest.get("https://api/x?state=all").withQuery("since", "T");
+        RestRequest next = s.next(RestResponse.of(200, h, "[{}]"), current);
+        assertEquals("https://api/x?page=2&since=T&state=all", next.url());
+        assertEquals(Map.of(), next.queryParams(), "since rides the server's link already");
+    }
+    @Test void a_param_the_next_link_drops_still_rides() {
+        Map<String,List<String>> h = Map.of("Link", List.of("<https://api/x?page=2>; rel=\"next\""));
+        RestRequest next = s.next(RestResponse.of(200, h, "[{}]"), RestRequest.get("https://api/x").withQuery("since", "T"));
+        assertEquals(Map.of("since", "T"), next.queryParams());
+    }
 }

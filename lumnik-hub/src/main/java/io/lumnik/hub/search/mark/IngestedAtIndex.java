@@ -1,6 +1,7 @@
 package io.lumnik.hub.search.mark;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -13,7 +14,6 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.HexFormat;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
@@ -59,10 +59,8 @@ public class IngestedAtIndex {
                 if (!tableExists(c, qualifiedTable)) return;
                 Existing existing = existing(c, index, qualifiedTable);
                 if (existing == null) {
-                    try (Statement st = c.createStatement()) {
-                        st.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS " + quoteIdent(index)
-                            + " ON " + qualifiedTable + " (tenant_id, _ingested_at)");
-                    }
+                    Jdbc.update(c, "IngestedAtIndex.ensure create", "CREATE INDEX CONCURRENTLY IF NOT EXISTS "
+                        + quoteIdent(index) + " ON " + qualifiedTable + " (tenant_id, _ingested_at)", ps -> {});
                 } else if (!existing.ours()) {
                     // Index names are unique per schema: an object under our name that is not our index (valid
                     // or not -- it may be someone's own build in progress) would otherwise be taken for it
@@ -72,9 +70,8 @@ public class IngestedAtIndex {
                 } else if (!existing.valid()) {
                     LOG.warnf("%s.%s is invalid (an interrupted build?) — dropping it; the next tick rebuilds it",
                         SCHEMA, index);
-                    try (Statement st = c.createStatement()) {
-                        st.execute("DROP INDEX CONCURRENTLY IF EXISTS " + SCHEMA + "." + quoteIdent(index));
-                    }
+                    Jdbc.update(c, "IngestedAtIndex.ensure drop invalid",
+                        "DROP INDEX CONCURRENTLY IF EXISTS " + SCHEMA + "." + quoteIdent(index), ps -> {});
                 }
             } finally {
                 unlock(c, index);
@@ -118,14 +115,9 @@ public class IngestedAtIndex {
         }
     }
 
-    private static boolean tableExists(Connection c, String qualifiedTable) throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement("SELECT to_regclass(?) IS NOT NULL")) {
-            ps.setString(1, qualifiedTable);
-            try (ResultSet rs = ps.executeQuery()) {
-                rs.next();
-                return rs.getBoolean(1);
-            }
-        }
+    private static boolean tableExists(Connection c, String qualifiedTable) {
+        return Jdbc.exists(c, "IngestedAtIndex.tableExists", "SELECT 1 WHERE to_regclass(?) IS NOT NULL",
+            ps -> ps.setString(1, qualifiedTable));
     }
 
     /** The index holding our name: {@code valid} is {@code indisvalid}; {@code ours} is "a plain, non-partial
@@ -133,21 +125,21 @@ public class IngestedAtIndex {
     private record Existing(boolean valid, boolean ours) { }
 
     /** Null = no index holds the name. */
-    private static Existing existing(Connection c, String index, String qualifiedTable) throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement(
+    private static Existing existing(Connection c, String index, String qualifiedTable) {
+        return Jdbc.queryOne(c, "IngestedAtIndex.existing",
                 "SELECT i.indisvalid, (i.indrelid = ?::regclass AND NOT i.indisunique AND i.indpred IS NULL "
               + "AND i.indnkeyatts = 2 AND i.indnatts = 2 AND (SELECT array_agg(a.attname ORDER BY k.ord) "
               + "FROM unnest(i.indkey::int2[]) WITH ORDINALITY k(attnum, ord) "
               + "JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum) "
               + "= ARRAY['tenant_id', '_ingested_at']::name[]) "
               + "FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid "
-              + "JOIN pg_namespace n ON n.oid = ic.relnamespace WHERE n.nspname = ? AND ic.relname = ?")) {
-            ps.setString(1, qualifiedTable);
-            ps.setString(2, SCHEMA);
-            ps.setString(3, index);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? new Existing(rs.getBoolean(1), rs.getBoolean(2)) : null;
-            }
-        }
+              + "JOIN pg_namespace n ON n.oid = ic.relnamespace WHERE n.nspname = ? AND ic.relname = ?",
+                ps -> {
+                    ps.setString(1, qualifiedTable);
+                    ps.setString(2, SCHEMA);
+                    ps.setString(3, index);
+                },
+                rs -> new Existing(rs.getBoolean(1), rs.getBoolean(2)))
+            .orElse(null);
     }
 }

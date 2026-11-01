@@ -4,7 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.SqlType;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import org.junit.jupiter.api.Test;
@@ -53,5 +55,16 @@ class HybridJsonbPromoteConversionTest {
         assertThat(HybridJsonbWriter.converted("2026-10-01T00:00:00Z", SqlType.DATE))
             .isEqualTo(LocalDate.of(2026, 10, 1));
         assertThat(HybridJsonbWriter.converted("1e999999999", SqlType.DECIMAL)).isSameAs(HybridJsonbWriter.UNREADABLE);
+    }
+
+    /** #1617: a mapping's hook hands back Java dates (parse-date, a Kotlin script), not only JSON text. */
+    @Test
+    void the_dates_a_hook_hands_back_are_read_as_their_column_type() {
+        assertThat(HybridJsonbWriter.converted(LocalDate.of(2026, 10, 1), SqlType.TIMESTAMPTZ))
+            .isEqualTo(OffsetDateTime.of(2026, 10, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+        assertThat(HybridJsonbWriter.converted(LocalDateTime.of(2026, 10, 1, 8, 1), SqlType.DATE))
+            .isEqualTo(LocalDate.of(2026, 10, 1));
+        assertThat(HybridJsonbWriter.converted(Instant.parse("2026-10-01T08:01:00Z"), SqlType.DATE))
+            .isEqualTo(LocalDate.of(2026, 10, 1));
     }
 }

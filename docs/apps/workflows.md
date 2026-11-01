@@ -7,9 +7,9 @@
 | | |
 |---|---|
 | **Kind** | `Workflow` — `apps.lumnik.io/v1` |
-| **Over** | one column of one table: a raw `connector.t_*`, or a fused `connector.v_*` (taxonomy only) |
+| **Over** | one column of one table: a raw `connector.t_*`, or a fused `connector.v_*` (dormancy there needs `spec.on.order`) |
 | **Declares** | states with aliases, transitions, `provenance: declared`; optionally a business key and a dormancy threshold |
-| **Produces** | a report at apply on what the data holds; answers in the chat (Pro); `decision.dormant.<name>` and `decision.overdue.<name>` alerts, and an observation tape, when watched |
+| **Produces** | a report at apply on what the data holds, and after each import when asked (`workflow.undeclared.<name>`); answers in the chat (Pro); `decision.dormant.<name>` and `decision.overdue.<name>` alerts, and an observation tape, when watched |
 | **Commands** | `lm workflow apply` · `list` · `get` · `disable` · `enable` · `rm` — `lm_integrator`, scope-bound; one lifecycle per column |
 | **Edition** | Open |
 
@@ -24,6 +24,9 @@ declared graph instead of inventing one.
 - **[A data-truth report that never blocks.](#the-data-truth-report-never-blocks)** Apply
   compares the declaration with the column — undeclared values, unobserved codes, blanks — and
   stores the manifest either way.
+- **[The same check after each import.](#after-each-import-speccheck)** `spec.check.trigger: ingestion`
+  re-checks the column when a run writes it, and a value no report named raises
+  `workflow.undeclared.<name>`.
 - **[Grounded answers](#what-the-chat-answers-from-it) (Pro).** The chat answers lifecycle
   questions from the declared graph.
 - **[Dormancy.](#dormancy-the-memory-of-the-breathing)** A key and a threshold turn the
@@ -100,12 +103,16 @@ One `200`, stored and indexed, with what the declaration and the data disagree o
 | `spec.on.table` | yes | the table to watch — an ingest table (`connector.t_<table>`) or a fused entity view (`connector.v_<entity>`, always lower-case) |
 | `spec.on.column` | yes | the column whose values this taxonomy explains — **whatever the source called it** |
 | `spec.on.key` | no (required by `dormancy` and `due`) | the business key linking a document's successive versions |
-| `spec.dormancy.after` | no (required by `dormancy`) | the sweep threshold, `[0-9]+[mhd]` (`30d`) — requires `spec.on.key`, and an ingest table, not a fused view |
-| `spec.dormancy.message` | no | the alert text, in the team's language: `{doc_key}`, `{state}`, `{state_label}`, `{since}`, `{first_observed_at}`, `{threshold}`, `{workflow}`; any other `{name}` is refused at apply. Absent: the English default [below](#the-alert-verbatim) |
+| `spec.on.order` | no (required by `dormancy` on a fused view) | the column ordering a document's versions: a date, a timestamp, a number, or ISO 8601 text with `Z` or an offset — requires `spec.on.key`, [below](#the-current-version-speconorder) |
+| `spec.check.trigger` | no | `ingestion`: re-check the declaration after each completed run that writes `spec.on.table` — [below](#after-each-import-speccheck). The apply always checks; any other value is refused |
+| `spec.dormancy.after` | no (required by `dormancy`) | the sweep threshold, `[0-9]+[mhd]` (`30d`) — requires `spec.on.key`, and `spec.on.order` on a fused view |
+| `spec.dormancy.message` | no | the alert text, in the team's language: `{doc_key}`, `{state}`, `{state_label}`, `{since}`, `{first_observed_at}`, `{threshold}`, `{workflow}`; any other `{name}` is a column of `spec.on.table`, checked at apply when the table exists — [what a decision carries](#what-a-decision-carries). Absent: the English default [below](#the-alert-verbatim) |
+| `spec.dormancy.fields` | no | columns of `spec.on.table` sent in the payload's `fields` and not in the sentence (`[owner_email]`) |
 | `spec.due.column` | no (required by `due`) | the column whose date is the document's deadline — an ingest table or a fused view |
 | `spec.due.states` | no (required by `due`) | the declared, **non-terminal** state codes in which a passed date makes the document overdue (`[CONFIRMED]`); an alias, an undeclared or a terminal state is refused |
 | `spec.due.zone` | no | the time zone a date-only column is read in (`Europe/Paris`): due at the end of that day there. Absent: `UTC`. An unknown zone is refused |
-| `spec.due.message` | no | the alert's sentence: `{doc_key}`, `{state}`, `{state_label}`, `{due}`, `{workflow}`; any other `{name}` is refused at apply |
+| `spec.due.message` | no | the alert's sentence: `{doc_key}`, `{state}`, `{state_label}`, `{due}`, `{workflow}`; any other `{name}` is a column of `spec.on.table`, checked at apply when the table exists |
+| `spec.due.fields` | no | columns of `spec.on.table` sent in the payload's `fields` and not in the sentence |
 | `spec.states[]` | yes (≥ 1) | the declared states |
 | `spec.transitions[]` | no | the allowed edges of the graph |
 
@@ -119,7 +126,7 @@ An unknown key is refused, at every level:
 
 ```
 $ lm workflow apply -f docs/apps/demo/workflows/67-refused-unknown-key.yaml
-Error: API error 400: unknown key(s) in the manifest: spec.after — kind:Workflow honors root {apiVersion, kind, metadata, spec}, metadata {name}, spec {dormancy, due, on, provenance, scope, states, transitions}, spec.on {column, key, table}, spec.dormancy {after, message}, spec.due {column, message, states, zone}, states[] {aliases, code, initial, label, terminal}, transitions[] {from, to}
+Error: API error 400: unknown key(s) in the manifest: spec.after — kind:Workflow honors root {apiVersion, kind, metadata, spec}, metadata {name}, spec {check, dormancy, due, on, provenance, scope, states, transitions}, spec.on {column, key, order, table}, spec.check {trigger}, spec.dormancy {after, fields, message}, spec.due {column, fields, message, states, zone}, states[] {aliases, code, initial, label, terminal}, transitions[] {from, to}
 ```
 
 ### The scope must exist, the table need not
@@ -157,8 +164,8 @@ $ lm workflow apply -f docs/apps/demo/workflows/66-refused-foreign-table.yaml
 Error: API error 400: spec.on.table is required and must name a table in the 'connector' schema that ingestion owns (connector.t_<table>) or a fused entity view (connector.v_<entity>, always lower-case), spelled the way the hub created it (letters, digits and underscores — a space is a typo): identity.app_user
 ```
 
-A fused view can carry a **taxonomy** but not a `dormancy`: declare the dormancy on the ingest
-table the entity fuses, or drop `spec.dormancy`.
+A fused view carries a **taxonomy** as it is. A `dormancy` on one needs `spec.on.order`, because a
+view has no ingest order: [the current version](#the-current-version-speconorder).
 
 ### One column, one lifecycle
 
@@ -222,9 +229,51 @@ Nothing to report: `the data matches the declaration`.
     | `spec.on.key: the table has no such column` | `keyColumnMissing` | `spec.on.key` names a column the table does not have |
     | `key null or blank` | `keyNullOrBlank` | rows with no key: the dormancy watch skips them |
     | `spec.due.column …` | `dueProblem` | why `spec.due.column` cannot give a deadline; `null` when it can |
+    | `spec.on.order: N rows with no valid order, their documents are never watched` | `invalidOrderValues` | rows whose order value cannot place them; `null` without `spec.on.order` |
+    | `N keys hold several rows: declare spec.on.order to pick one` | `keysWithSeveralRows` | a due date over a view without `spec.on.order`: the sweep reads every one of those rows |
+    | `not verified until the table exists: …` | `columnsUnverified` | the declared columns an absent table left unchecked |
     | `the data could not be checked` | `checkUnavailable`, `unavailableReason` | the comparison could not run: the other fields are empty, **not** "the data agrees". Re-apply once fixed |
 
     The comparison reads the 200 most frequent values: a rare undeclared value can be missed.
+
+## After each import — `spec.check`
+
+The report above is computed when you apply. Without more, a spelling that the next night's export
+brings stays unseen until someone re-applies. `spec.check.trigger: ingestion` runs the same comparison after
+each completed run that writes `spec.on.table`:
+
+```yaml
+spec:
+  on:
+    table: connector.t_orders
+    column: status
+  check:
+    trigger: ingestion
+```
+
+- A value that no earlier report named raises **one** `workflow.undeclared.<name>` event.
+- What the last apply reported is not said again: you have read it. A value still undeclared on the
+  next run is not said twice.
+- A re-apply resets what is known to its own report. A value the new declaration covers is forgotten,
+  and is news again if a later declaration drops it.
+- A failed or cancelled run checks nothing. A fused view (`connector.v_*`) is checked after a run that
+  writes a table its entity fuses or looks up.
+
+The event reaches what you subscribe to it, like any other: `lm integration add --events 'workflow.undeclared.*'`
+or an e-mail rule ([Outputs](../outputs.md)). It never appears in the inbox, which holds `decision.*` only.
+Its payload:
+
+| Field | Meaning |
+|---|---|
+| `message` | `1 new value of connector.t_orders.status matches no state of workflow orders-status — declare it as an alias, or correct the source`. It counts the values and never quotes them |
+| `workflow`, `table`, `column` | what was checked |
+| `values` | the new values, each `{value, rows}` |
+| `undeclared` | how many undeclared values the column holds now, new or not |
+| `null_or_blank` | rows with no status |
+| `run_id` | the run that triggered the check |
+
+The comparison costs one `GROUP BY` on the column per completed run of the table. On a large table
+imported every minute, that is one aggregate a minute.
 
 ## What the chat answers from it
 
@@ -416,9 +465,119 @@ ID  WHEN      PROCESS                           MESSAGE                         
   future waits.
 - `zone` says where the deadline falls: a date passes at the end of that day in `zone`. Without
   `zone`, UTC.
-- A fused entity view is accepted, unlike dormancy.
+- A fused entity view is accepted. With several rows per key, declare `spec.on.order`: without it the
+  sweep reads every row, and the apply report counts the keys concerned.
 - Files: `data/acme-deliveries.csv`, `sources/80-deliveries.yaml`,
   `workflows/20-delivery-lifecycle.yaml`, landed like the [demo desk](demo-desk.md#landing-the-sources).
+
+## The current version — `spec.on.order`
+
+A sweep needs one version per document. On an ingest table it takes the last one ingested. That is
+wrong when the source sends events out of order, as Kafka can, and impossible on a fused view, which
+has no ingest order and may hold one row per event. `spec.on.order` names the column that orders a
+document's versions:
+
+```yaml
+spec:
+  on:
+    table: connector.v_freezerdoorevent
+    column: door_state
+    key: door_incident_id
+    order: occurred_at
+  dormancy:
+    after: 1m
+```
+
+| Watched | Without `order` | With `order` |
+|---|---|---|
+| `connector.t_*` | the last version ingested | the greatest `order` value; ingestion breaks a tie |
+| `connector.v_*`, dormancy | refused at apply | the greatest `order` value; a tie follows the rule below |
+| `connector.v_*`, due date | every row, as before | the greatest `order` value; a tie follows the rule below |
+
+**The column.** A date, a timestamp or a number orders as itself, when it is finite: `NaN` and
+`infinity` are no position. Text must be an ISO 8601 instant with an explicit offset, and is
+compared as an instant, never as text:
+
+- read: `2026-10-26T10:00:00Z`, `2026-10-26T10:00:00.123Z`, `2026-10-26T11:00:00+01:00`;
+- never read: `2026-10-26T10:00:00` (no zone), `2026-10-26` (a date, not an instant), `01/07/2026`, a blank.
+
+`2026-10-26T12:00:00+03:00` is `09:00Z`: it comes before `2026-10-26T10:00:00Z`. Two offsets of one
+instant are a tie.
+
+**A tie on a view.** When the latest rows of one document disagree on the state, or on the deadline
+for a due date, the document is ambiguous: nothing is decided about it. When they agree, one row is
+picked by the view's canonical key. That pick is deterministic, not "the latest".
+
+**Unreadable documents.** A document with one version whose order value is invalid or empty is not
+watched: lumnik cannot tell which version is current, and a bad date must never make an older state
+current. It raises nothing, its `SINCE` restarts on every sweep while it stays unreadable, and its
+history stays on the tape. When it is readable again, its clock runs from there.
+
+On an ingest table, a later valid version does not clear the bad one: the table keeps every version.
+
+```text
+OPEN    2026-10-26T10:00:00Z
+CLOSED  not-a-date
+CLOSED  2026-10-26T10:05:00Z     ← the document stays unreadable
+```
+
+Correct or remove the malformed source row, or rebuild the table from a corrected full export. The
+hub log names the documents: `dormancy: 1 documents of tenant 1 workflow … are not watched: a version
+has no valid spec.on.order value — correct or remove the malformed source rows (e.g. DOOR-17)`. It says
+so again only when their number changes.
+
+**What it costs.** At apply, the report reads the whole table to count the invalid values. On a fused
+view, every sweep computes the view once and ranks it: about 2 seconds for 100,000 documents, on top of
+the observations it writes.
+
+## What a decision carries
+
+A dormancy or due decision can say where the document is and who must act. A `{name}` its message
+does not reserve is a column of `spec.on.table`, read from the very version the decision is about;
+on a fused view, that includes the columns its entity joins. `fields` lists columns the payload
+carries and the sentence does not:
+
+```yaml
+spec:
+  on:
+    table: connector.v_freezerdoorevent
+    column: door_state
+    key: door_incident_id
+    order: occurred_at
+  dormancy:
+    after: 1m
+    message: "{freezer_id} ({laboratory}): door {state} since {since}. Owner: {owner}"
+    fields: [owner_email]
+```
+
+```text
+FZ-17 (Cryobiology Lab): door OPEN since 2026-10-26. Owner: Dr. Lina Moreau
+```
+
+The payload keeps its usual keys and gains `fields`: each cited or declared column, once, with its
+value.
+
+- **A reserved name wins in the sentence.** With `message: "{doc_key} is still {state}"` and
+  `fields: [state]`, `{state}` is the workflow's resolved state (`OPEN`) and `fields.state` is the
+  raw value of a source column named `state` (`open `). The two differ by design.
+- An empty value renders as nothing in the sentence and stays `null` in `fields`. A timestamp is
+  its UTC instant in both. A number loses its trailing zeros in the sentence (`-67.4`); `fields`
+  keeps it as the column holds it (`-67.4000`). A [Process](processes.md) decision does the same.
+- The order of the keys in `fields` is not part of the contract: the event log stores the payload
+  as `jsonb`.
+- Without a cited column or `fields`, the payload is exactly what it was before.
+- At apply, a cited or declared name the table lacks is refused, naming it. A sentence's refusal
+  also lists the reserved names, in case one was misspelt (`{sinse}`). A table not ingested yet is
+  not checked: the report says `not verified until the table exists`, with the names.
+- A cited column the table no longer has, after an entity re-apply, renders empty: the alert still
+  fires, and the hub log says so once (`… cites owner, which … no longer has: it renders empty`).
+  Stop citing it and cite it again while it is still missing: the log says it again. So does a
+  workflow disabled or deleted, then applied again.
+
+!!! warning "Who receives `fields`"
+    Fields included in a decision payload can leave the hub through tenant-wide webhooks, e-mail
+    rules and the administrative event stream. Declare only the columns those outputs may receive.
+    The inbox shows a decision to the workflow's scope; the event itself carries no scope.
 
 ## Applying it
 
@@ -487,6 +646,11 @@ the sweep watches it as a declared state. The documents the tape held as `EN LIT
 holds, read the declared code from the next tick; a meaning is not a movement, so their `SINCE`, their alert and
 the transition journal stay as they were.
 
+### Get told when a new spelling arrives
+
+Add `check: { trigger: ingestion }` under `spec` and re-apply. **Result:** the apply reports what is undeclared
+today; each later run that brings a value nobody declared raises `workflow.undeclared.<name>`, once.
+
 ## From a proposal dossier
 
 A business person can describe a problem on lumnik.fr and download a **proposal dossier**. Turning
@@ -501,9 +665,12 @@ it into a workflow, and checking it against your data: [Proposal dossiers](propo
 | apply refused: `column … already has a declared lifecycle: workflow '…'` | a *different* name declares this `on.table` + `on.column` | re-apply under the existing name, or point at a different column |
 | apply refused: `column … already has a declared lifecycle, in a scope you do not hold` | the same, in a scope you do not hold | ask the integrator who owns that scope |
 | apply refused: `spec.dormancy requires spec.on.key …` | `spec.dormancy.after` without `spec.on.key` | add `spec.on.key` |
-| apply refused: `spec.dormancy cannot be declared on a fused entity view …` | `on.table` is a `connector.v_*` view with `spec.dormancy` | declare it on the ingest table, or drop it |
+| apply refused: `spec.dormancy on a fused view needs spec.on.order …` | `on.table` is a `connector.v_*` view with `spec.dormancy` | add `spec.on.order`, the column that orders a document's versions |
+| apply refused: `spec.on.order … is not a column of …` | the table exists and has no such column | name a column it has |
+| apply refused: `spec.on.order … is boolean: a date, a timestamp, a number, or ISO 8601 text with an offset can order versions` | a column of another type | order by a date, a timestamp, a number or an ISO 8601 text column |
 | apply refused: `spec.on.table … must name a table in the 'connector' schema that ingestion owns` | another schema, or one of the hub's own tables | `connector.t_<the connector's target>` |
 | apply refused: `alias '…' … collides with state code` / `exactly one state must be initial` / `terminal state '…' has an outgoing transition` | a contradiction in the declaration | fix the graph |
+| apply refused: `spec.check.trigger must be 'ingestion' …` | another trigger, `apply` included: the apply always checks | write `ingestion`, or drop `spec.check` |
 | apply refused: `spec.due requires spec.on.key …` | `spec.due` without `spec.on.key` | add `spec.on.key` |
 | apply refused: `spec.due.states names …` | an alias, an undeclared or a terminal state, or one named twice | name the declared, non-terminal codes once |
 | apply refused: `spec.due.zone has no effect on …` | a `zone` over a `timestamptz` column | drop `spec.due.zone` |
@@ -511,6 +678,11 @@ it into a workflow, and checking it against your data: [Proposal dossiers](propo
 | dormancy declared, but no alert ever arrives | `spec.on.key` names a column the table does not have | the apply report says `spec.on.key: the table has no such column` |
 | a document stuck for weeks does not alert on day one | the threshold counts from lumnik's first sighting | wait `after` from the apply date; `lm observations list` shows `SINCE` |
 | a document is missing from `lm observations list` | its key or its status is `NULL` or blank | fix it at the source; the apply report counts them: `key null or blank`, `<column> null or blank` |
+| with `spec.on.order`, a document's `SINCE` keeps restarting and it never alerts | one of its versions has no valid order, or its latest versions disagree | the hub log names it (`… are not watched: …`); correct or remove the source row |
+| apply refused: `spec.dormancy.message references {…} — not a column of …` (or `spec.due.message`) | the message cites a column the table does not have | fix the name, or use a reserved one |
+| apply refused: `spec.dormancy.fields names … — not a column of …` (or `spec.due.fields`) | a declared field the table does not have | fix the name, or drop it |
+| a decision's sentence has an empty gap where a column was | the column left the table after apply | the hub log names it (`… cites …, which … no longer has`); re-ingest, or re-apply without it |
+| apply refused: `spec.on.order requires spec.on.key …` | an order with no key | add `spec.on.key`: the order sorts the versions of the document the key names |
 | a status value never shows up in chat answers | undeclared | the apply report lists it under `in the data, not declared`; add it, re-apply |
 | `lm ask` abstains on a "why can't I close it" question | `lm ask` reads the rows, not the lifecycle | `lm chat` with the scope |
 | `403 … scope not granted` | you do not hold the `spec.scope` role | ask for that `scope:` role |
@@ -556,7 +728,8 @@ it into a workflow, and checking it against your data: [Proposal dossiers](propo
     ```
 
     `{state_label}` is the state's declared `label` (its code when the state is undeclared); dates
-    are the UTC day. A placeholder outside the seven is refused at apply, naming it.
+    are the UTC day. Any other `{name}` is a column of the watched table:
+    [what a decision carries](#what-a-decision-carries).
 
     ### Re-alert semantics
 

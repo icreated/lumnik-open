@@ -176,7 +176,9 @@ in the journal like any delivery.
 
 The hub's governed vocabulary — what `--events` patterns match against and what each
 payload carries. `decision.<name>` types are **dynamic**: your processes mint them, and your
-workflows mint `decision.dormant.<name>` and `decision.overdue.<name>`.
+workflows mint `decision.dormant.<name>`, `decision.overdue.<name>` and
+`workflow.undeclared.<name>`. A workflow decision carries `fields` like a Process's when its
+message cites columns or it declares some ([what a decision carries](apps/workflows.md#what-a-decision-carries)).
 
 ??? note "Every event type, from the registry the hub ships (`events.yaml`)"
 

@@ -64,6 +64,12 @@ public class SchemaInferrer {
    */
   static final String BIGINT = "BIGINT";
   static final String NUMERIC = "NUMERIC(18,4)";
+  /**
+   * A {@link #BIGINT} column widened by a fraction (#1600): {@code numeric} without precision or scale, so whole values
+   * keep scale 0 ({@code 1000}, not {@code 1000.0000}) and nothing overflows at 10^14. The registry says it as it is —
+   * the raw tables' schema cards publish this label.
+   */
+  static final String WIDENED_NUMERIC = "NUMERIC";
 
   /**
    * Candidate column types in priority order. A column gets the first type whose predicate holds

@@ -63,6 +63,26 @@ public final class TenantRlsScope {
                 + "Wrap the read in QuarkusTransaction.requiringNew() or make the caller "
                 + "@Transactional.");
         }
+        bind(c, tenantId);
+    }
+
+    /**
+     * {@link #applyTo} for a transaction the connection holds itself ({@code setAutoCommit(false)}), outside any JTA
+     * transaction: a cursor declared {@code WITH HOLD} is computed at that transaction's commit, under these settings,
+     * then fetched after it on the same connection with nothing left open (#1595). The precondition is the same, asked
+     * of the connection instead of the transaction manager — without its own transaction, {@code SET LOCAL} would be
+     * discarded and RLS goes unenforced.
+     */
+    public static void applyToOwnTransaction(Connection c, long tenantId) throws SQLException {
+        if (c.getAutoCommit()) {
+            throw new IllegalStateException(
+                "TenantRlsScope.applyToOwnTransaction requires the connection's own transaction "
+                + "(setAutoCommit(false)): SET LOCAL is transaction-scoped, and without one RLS goes unenforced.");
+        }
+        bind(c, tenantId);
+    }
+
+    private static void bind(Connection c, long tenantId) throws SQLException {
         // No JDBC setReadOnly here, deliberately: Agroal (since Quarkus 3.33) refuses to
         // modify read-only state on a JTA-enlisted connection — every production caller is
         // enlisted, so the call 500'd all four readers (caught by the OTK publish proof,

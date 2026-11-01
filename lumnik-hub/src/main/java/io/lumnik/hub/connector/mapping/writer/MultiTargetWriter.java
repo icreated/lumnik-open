@@ -69,11 +69,31 @@ public class MultiTargetWriter {
 
     // Hybrid JSONB target
     if (target.hybridJsonb() != null) {
-      var hj = target.hybridJsonb();
-      HybridJsonbSpec spec = new HybridJsonbSpec(hj.table(), hj.uniqueKeyPath(), hj.promote());
-      return hybridJsonbWriter.write(spec, rows, systemContexts, tenantId, connectorId, hj.endpointId());
+      return writeHybrid(target.hybridJsonb(), rows, null, systemContexts, tenantId, connectorId);
     }
     return 0;
+  }
+
+  /**
+   * A hybrid write whose promoted columns a mapping computed (#1617): {@code cells.get(i)} holds item {@code i}'s;
+   * {@code null} reads each column by its path. The row identity is the item's, as in {@link #write}: what a mapping
+   * computes is compared column by column.
+   *
+   * @return the promoted cells that did not read as their column's type (#1398)
+   */
+  public long writeHybrid(MappingTarget.HybridJsonb hj, List<Map<String, Object>> items,
+                          List<Map<String, Object>> cells, Long tenantId, UUID runId, String mappingId,
+                          String source, UUID connectorId) {
+    if (items.isEmpty()) return 0;
+    return writeHybrid(hj, items, cells, buildSystemContexts(items, tenantId, runId, mappingId, 1, source), tenantId,
+        connectorId);
+  }
+
+  private long writeHybrid(MappingTarget.HybridJsonb hj, List<Map<String, Object>> items,
+                           List<Map<String, Object>> cells, List<Map<String, Object>> systemContexts,
+                           Long tenantId, UUID connectorId) {
+    HybridJsonbSpec spec = new HybridJsonbSpec(hj.table(), hj.uniqueKeyPath(), hj.promote(), hj.uniqueKeyTransform());
+    return hybridJsonbWriter.write(spec, items, cells, systemContexts, tenantId, connectorId, hj.endpointId());
   }
 
   /**

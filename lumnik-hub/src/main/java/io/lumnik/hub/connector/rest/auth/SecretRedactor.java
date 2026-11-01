@@ -27,6 +27,15 @@ public final class SecretRedactor {
 
     private SecretRedactor() {}
 
+    /**
+     * Whether {@code word} is an Authorization scheme this redactor recognises — the one definition the validator's
+     * {@code auth.scheme} check reads too (#1641): a scheme it would not recognise leaves "scheme key" as one value,
+     * and a source echoing the bare key would escape redaction.
+     */
+    public static boolean isSchemeWord(String word) {
+        return word != null && SCHEME.matcher(word).matches();
+    }
+
     public static String redactHeader(String name, String value) {
         if (!SECRET.matcher(name).matches()) return value;
         if (value != null && value.startsWith("Bearer ")) return "Bearer <redacted>";

@@ -96,6 +96,34 @@ class JdbcSourceResourceIT {
               .body("tables.name", not(hasItems("t_temp", "ad_meta")));
   }
 
+  /** The driver's words for a refused login quote the user; the 502 names the SQLSTATE only (#1679). */
+  @Test
+  @Order(3)
+  void discover_502_body_does_not_carry_the_driver_message() {
+    given().headers(TestIdentity.tenantAndUser(1))
+        .contentType(ContentType.JSON)
+        .body(Map.of("url", jdbcUrl, "user", "ghost-7391", "password", "wrong-password-7391", "schema", "public"))
+        .when().post("/api/platform/sources/jdbc/discover")
+        .then().statusCode(502)
+              .body("error", containsString("28P01"))
+              .body("error", not(containsString("password authentication")))
+              .body("error", not(containsString("wrong-password-7391")));
+  }
+
+  @Test
+  @Order(3)
+  void add_502_body_does_not_carry_the_driver_message() {
+    given().headers(TestIdentity.tenantAndUser(1))
+        .contentType(ContentType.JSON)
+        .body(Map.of("url", jdbcUrl, "user", "ghost-7391", "password", "wrong-password-7391", "schema", "public",
+            "sourceName", "bad-login", "tables", List.of(Map.of("table", "m_product"))))
+        .when().post("/api/platform/sources/jdbc/add")
+        .then().statusCode(502)
+              .body("error", containsString("Failed processing table 'm_product'"))
+              .body("error", containsString("28P01"))
+              .body("error", not(containsString("password authentication")));
+  }
+
   @Test
   @Order(4)
   void add_creates_n_connectors() {

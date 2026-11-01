@@ -2,6 +2,7 @@ package io.lumnik.hub.api.data;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.entity.EntityRegistry;
 import io.lumnik.hub.sql.TemporalText;
@@ -12,6 +13,7 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
+import org.postgresql.PGStatement;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -60,6 +62,13 @@ public class DataTablesResource {
   /** rowCount is the caller's rows, null when the table could not be counted (gone, too slow, or past the list's budget). */
   public record TableInfo(String mappingId, String tableSchema, String tableName, Long rowCount) {}
 
+  /** One registry row: a mapping, the table it writes, and whether the writer's scope is granted. */
+  private record Registered(String mappingId, String schema, String table, boolean granted) {
+    String fqn() {
+      return schema + "." + table;
+    }
+  }
+
   /**
    * Every table registered for the caller, with the caller's row count. It answered {@code -1} for
    * every table and turned any failure into an empty list — "nothing landed" — the opposite of an
@@ -73,26 +82,23 @@ public class DataTablesResource {
     try (Connection c = ds.getConnection()) {
       // One entry per mapping — each connector writing it registers it once. The table holds every
       // writer's rows, so a mapping is listed only when the caller may read every writer of its table.
-      Map<String, String[]> mappings = new LinkedHashMap<>();
+      List<Registered> registered = Jdbc.query(c, "DataTablesResource.list",
+          DynamicTableScope.REGISTERED + " ORDER BY dt.table_name, dt.mapping_id", ps -> ps.setLong(1, t),
+          rs -> new Registered(rs.getString(1), rs.getString(2), rs.getString(3),
+              ScopeGrants.allowsAny(EntityRegistry.scopes(rs.getArray(4)))));
+      Map<String, Registered> mappings = new LinkedHashMap<>();
       Set<String> refused = new HashSet<>();
-      try (PreparedStatement ps = c.prepareStatement(DynamicTableScope.REGISTERED + " ORDER BY dt.table_name, dt.mapping_id")) {
-        ps.setLong(1, t);
-        try (ResultSet rs = ps.executeQuery()) {
-          while (rs.next()) {
-            if (!ScopeGrants.allowsAny(EntityRegistry.scopes(rs.getArray(4)))) {
-              refused.add(rs.getString(2) + "." + rs.getString(3));
-            }
-            mappings.putIfAbsent(rs.getString(1), new String[] {rs.getString(1), rs.getString(2), rs.getString(3)});
-          }
-        }
+      for (Registered r : registered) {
+        if (!r.granted()) refused.add(r.fqn());
+        mappings.putIfAbsent(r.mappingId(), r);
       }
-      mappings.values().removeIf(v -> refused.contains(v[1] + "." + v[2]));
+      mappings.values().removeIf(r -> refused.contains(r.fqn()));
       // Each count is bounded, and so is their sum: many slow tables must not hold the door for
       // COUNT_TIMEOUT_SECONDS apiece. Past the budget, a table is reported unknown, not counted.
       long deadline = System.currentTimeMillis() + COUNT_BUDGET_MILLIS;
-      for (String[] v : mappings.values()) {
-        Long n = System.currentTimeMillis() < deadline ? count(c, v[1], v[2], t) : null;
-        out.add(new TableInfo(v[0], v[1], v[2], n));
+      for (Registered r : mappings.values()) {
+        Long n = System.currentTimeMillis() < deadline ? count(c, r.schema(), r.table(), t) : null;
+        out.add(new TableInfo(r.mappingId(), r.schema(), r.table(), n));
       }
     }
     return out;
@@ -132,26 +138,26 @@ public class DataTablesResource {
     try (Connection c = ds.getConnection()) {
       Optional<String> table = DynamicTableScope.readableTable(c, mappingId, t);
       if (table.isEmpty()) return ApiErrors.notFound("no dynamic table under mapping " + mappingId);
-      try (PreparedStatement ps = c.prepareStatement(
-          "SELECT * FROM " + table.get() + " WHERE tenant_id = ? ORDER BY id LIMIT ? OFFSET ?")) {
+      List<Map<String, Object>> out = Jdbc.query(c, "DataTablesResource.rows",
+          "SELECT * FROM " + table.get() + " WHERE tenant_id = ? ORDER BY id LIMIT ? OFFSET ?", ps -> {
+        // #1599: never a server-named statement. Its result is the table's row type, which any DDL changes (a column
+        // widened or added mid-run); a plan prepared before it answers "cached plan must not change result type" in
+        // this transaction, once per pooled connection. Unnamed, it is planned on the table as it is (as #966 does).
+        ps.unwrap(PGStatement.class).setPrepareThreshold(0);
         ps.setLong(1, t);
         ps.setInt(2, Math.min(Math.max(limit, 1), 1000));
         ps.setInt(3, Math.max(offset, 0));
-        try (ResultSet rs = ps.executeQuery()) {
-          ResultSetMetaData meta = rs.getMetaData();
-          List<Map<String, Object>> out = new ArrayList<>();
-          while (rs.next()) {
-            Map<String, Object> row = new LinkedHashMap<>();
-            for (int i = 1; i <= meta.getColumnCount(); i++) {
-              String col = meta.getColumnLabel(i);
-              if ("tenant_id".equals(col)) continue;
-              row.put(col, TemporalText.render(rs.getObject(i)));
-            }
-            out.add(row);
-          }
-          return Response.ok(out).build();
+      }, rs -> {
+        ResultSetMetaData meta = rs.getMetaData();
+        Map<String, Object> row = new LinkedHashMap<>();
+        for (int i = 1; i <= meta.getColumnCount(); i++) {
+          String col = meta.getColumnLabel(i);
+          if ("tenant_id".equals(col)) continue;
+          row.put(col, TemporalText.render(rs.getObject(i)));
         }
-      }
+        return row;
+      });
+      return Response.ok(out).build();
     }
   }
 }

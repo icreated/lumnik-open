@@ -140,8 +140,7 @@ public class RunAdminResource {
             .entity(Map.of("status", "cancelled", "runId", id.toString())).build();
       }
       if (outcome == ConnectorRunDispatcher.QueuedCancel.BUSY) {
-        return Response.status(409).type(MediaType.APPLICATION_JSON)
-            .entity(ApiErrors.error("run " + id + " is being started; try again in a moment")).build();
+        return ApiErrors.conflict("run " + id + " is being started; try again in a moment");
       }
       // It started or ended while the cancel waited: read what it is now and go on as for any other run.
       repo.getEntityManager().clear();
@@ -150,8 +149,7 @@ public class RunAdminResource {
     }
 
     if (!ConnectorRunStatus.isRunning(r.getStatus())) {
-      return Response.status(409).type(MediaType.APPLICATION_JSON)
-          .entity(ApiErrors.error("run " + id + " already ended (" + r.getStatus() + ")")).build();
+      return ApiErrors.conflict("run " + id + " already ended (" + r.getStatus() + ")");
     }
 
     // engine.cancel() mutates in-JVM state (liveRuns) that a transaction rollback cannot undo —
@@ -168,11 +166,9 @@ public class RunAdminResource {
       repo.getEntityManager().clear();
       var after = repo.findByIdForTenant(id, TenantContextFilter.current());
       if (after != null && !ConnectorRunStatus.isRunning(after.getStatus())) {
-        return Response.status(409).type(MediaType.APPLICATION_JSON)
-            .entity(ApiErrors.error("run " + id + " already ended (" + after.getStatus() + ")")).build();
+        return ApiErrors.conflict("run " + id + " already ended (" + after.getStatus() + ")");
       }
-      return Response.status(409).type(MediaType.APPLICATION_JSON)
-          .entity(ApiErrors.error("run " + id + " is not in flight on this hub")).build();
+      return ApiErrors.conflict("run " + id + " is not in flight on this hub");
     }
 
     return Response.status(202).type(MediaType.APPLICATION_JSON)

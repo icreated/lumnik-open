@@ -250,7 +250,7 @@ public class SearchProjectionRunHook {
     /**
      * One (tenant, table) pair, its own transaction, shared by every entity that sources it (design
      * doc's scan-then-mark-then-advance, widened from "one entity" to "every entity on this table" to
-     * close the race described on {@link #process}): a crash between marking and advancing the
+     * close the race described in {@link #targetsByTable}): a crash between marking and advancing the
      * watermark re-scans (safe, idempotent) rather than advancing without having actually marked
      * (unsafe — would silently skip rows for whichever entity had not yet been marked).
      *
@@ -259,7 +259,7 @@ public class SearchProjectionRunHook {
      * so a younger transaction's committed row could drag the watermark past an older, still-open one
      * and hide that transaction's rows from every future {@code _ingested_at > watermark} scan.
      */
-    void processTable(long tenantId, String tableName, List<TableTarget> targets) throws SQLException {
+    void processTable(long tenantId, String tableName, List<TableTarget> targets) {
         // Two different spellings on purpose: `table` is what goes in the SQL FROM clause (quoted,
         // escaped); `qualifiedTableName` is the bookkeeping key stored in
         // core.search_projection_mark_watermark.table_name, which V56 documents as "schema-qualified
@@ -271,48 +271,40 @@ public class SearchProjectionRunHook {
         // Fresh, and BEFORE the scan (and before this method takes its own pooled connection): any transaction
         // that started at or before `bound` had already committed when it was read, so the scan below sees its rows.
         Instant bound = safeBoundAdmin();
-        try (Connection c = ds.getConnection()) {
-            boolean autoCommit = c.getAutoCommit();
-            c.setAutoCommit(false);
-            try {
-                // A key's text in UTC, as the projection reads the view's _canonical_key (#1325).
-                TemporalText.utcSession(c);
-                Optional<Instant> watermark = watermarkStore.watermark(c, tenantId, qualifiedTableName);
-                Instant maxIngested = maxIngestedAt(c, table, tenantId, watermark);
-                if (maxIngested != null) {
-                    // Every entity sourcing this table is marked from the SAME scanned range before the
-                    // watermark moves — the fix for the shared-table race: none of them can see the
-                    // watermark already advanced past rows they had not yet been marked for.
-                    // Every distinct key in range is marked when this loop ends, uncommitted until the advance below.
-                    for (TableTarget target : targets) {
-                        // #847: a lookup's targets mark through its sources, in the same transaction as the advance below.
-                        switch (target) {
-                            case SourceTarget s -> markMatchKeys(c, s, table, tenantId, watermark);
-                            case LookupTarget l -> markLookupKeys(c, l, table, tenantId, watermark);
-                            case ResolvedLookupTarget r -> markResolvedLookupKeys(c, r, table, tenantId, watermark);
-                        }
+        // Any failure rolls back the marks, an Error included (#1649): left open, the pool's reset would COMMIT
+        // them without the advance.
+        Jdbc.transaction(ds, "SearchProjectionRunHook.processTable", c -> {
+            // A key's text in UTC, as the projection reads the view's _canonical_key (#1325).
+            TemporalText.utcSession(c);
+            Optional<Instant> watermark = watermarkStore.watermark(c, tenantId, qualifiedTableName);
+            Instant maxIngested = maxIngestedAt(c, table, tenantId, watermark);
+            if (maxIngested != null) {
+                // Every entity sourcing this table is marked from the SAME scanned range before the
+                // watermark moves — the fix for the shared-table race: none of them can see the
+                // watermark already advanced past rows they had not yet been marked for.
+                // Every distinct key in range is marked when this loop ends, uncommitted until the advance below.
+                for (TableTarget target : targets) {
+                    // #847: a lookup's targets mark through its sources, in the same transaction as the advance below.
+                    switch (target) {
+                        case SourceTarget s -> markMatchKeys(c, s, table, tenantId, watermark);
+                        case LookupTarget l -> markLookupKeys(c, l, table, tenantId, watermark);
+                        case ResolvedLookupTarget r -> markResolvedLookupKeys(c, r, table, tenantId, watermark);
                     }
-                    // Advance to the max _ingested_at actually observed, never to now(): advancing to
-                    // now() risks missing a row committed between this scan and now() under a
-                    // concurrent write to the SAME table from a DIFFERENT run. Design doc §3. Also never
-                    // past `bound`: a still-open transaction older than `bound` may yet commit rows
-                    // stamped earlier than maxIngested — advancing past it would hide them forever.
-                    Instant target = maxIngested.isBefore(bound) ? maxIngested : bound;
-                    watermarkStore.advance(c, tenantId, qualifiedTableName, target);
-                } else {
-                    // #730: nothing after the watermark. Without this an idle table's watermark froze at
-                    // its last row and froze every asOf built on it. Monotone (advance() never goes
-                    // backwards).
-                    watermarkStore.advance(c, tenantId, qualifiedTableName, bound);
                 }
-                c.commit();
-            } catch (SQLException | RuntimeException ex) {
-                c.rollback();
-                throw ex;
-            } finally {
-                c.setAutoCommit(autoCommit);
+                // Advance to the max _ingested_at actually observed, never to now(): advancing to
+                // now() risks missing a row committed between this scan and now() under a
+                // concurrent write to the SAME table from a DIFFERENT run. Design doc §3. Also never
+                // past `bound`: a still-open transaction older than `bound` may yet commit rows
+                // stamped earlier than maxIngested — advancing past it would hide them forever.
+                Instant target = maxIngested.isBefore(bound) ? maxIngested : bound;
+                watermarkStore.advance(c, tenantId, qualifiedTableName, target);
+            } else {
+                // #730: nothing after the watermark. Without this an idle table's watermark froze at
+                // its last row and froze every asOf built on it. Monotone (advance() never goes
+                // backwards).
+                watermarkStore.advance(c, tenantId, qualifiedTableName, bound);
             }
-        }
+        });
     }
 
     /**
@@ -492,18 +484,16 @@ public class SearchProjectionRunHook {
             .isPresent();
     }
 
-    private Instant maxIngestedAt(Connection c, String table, long tenantId, Optional<Instant> watermark)
-            throws SQLException {
+    private Instant maxIngestedAt(Connection c, String table, long tenantId, Optional<Instant> watermark) {
         String sql = "SELECT max(_ingested_at) FROM " + table + " WHERE tenant_id = ?"
             + (watermark.isPresent() ? " AND _ingested_at > ?" : "");
-        try (PreparedStatement ps = c.prepareStatement(sql)) {
-            ps.setLong(1, tenantId);
-            if (watermark.isPresent()) ps.setTimestamp(2, Timestamp.from(watermark.get()));
-            try (ResultSet rs = ps.executeQuery()) {
-                rs.next();
-                return Jdbc.instant(rs, 1);
-            }
-        }
+        return Jdbc.queryOne(c, "SearchProjectionRunHook.maxIngestedAt", sql,
+                ps -> {
+                    ps.setLong(1, tenantId);
+                    if (watermark.isPresent()) ps.setTimestamp(2, Timestamp.from(watermark.get()));
+                },
+                rs -> Jdbc.instant(rs, 1))
+            .orElse(null);
     }
 
     private void markMatchKeys(Connection c, SourceTarget target, String table, long tenantId,
@@ -596,7 +586,7 @@ public class SearchProjectionRunHook {
         }
     }
 
-    private void markSlice(Connection c, long tenantId, TableTarget target, List<String> slice) throws SQLException {
+    private void markSlice(Connection c, long tenantId, TableTarget target, List<String> slice) {
         for (String indexName : target.indexNames()) {
             markStore.markKeysAsAdmin(c, tenantId, indexName, target.entity(), slice, target.reason());
         }

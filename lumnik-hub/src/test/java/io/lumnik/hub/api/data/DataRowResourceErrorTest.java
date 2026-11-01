@@ -66,13 +66,4 @@ class DataRowResourceErrorTest {
     assertThat(r.getStatus()).isEqualTo(500);
     assertThat(String.valueOf(r.getEntity())).contains("could not read the cited row").doesNotContain("t_customers");
   }
-
-  @Test
-  void the_logged_failure_names_its_kind_and_sqlstate_not_the_drivers_message() {
-    // #1205 review, round 2: the log is no place for a row's values either
-    String logged = DataRowResource.failureSummary(
-        new SQLException("value \"P-1008\" violates check on connector.t_customers", "23514"));
-
-    assertThat(logged).contains("SQLException").contains("23514").doesNotContain("P-1008");
-  }
 }

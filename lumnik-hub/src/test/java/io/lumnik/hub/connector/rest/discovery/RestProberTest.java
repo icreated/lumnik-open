@@ -3,6 +3,7 @@ package io.lumnik.hub.connector.rest.discovery;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
+import io.lumnik.hub.connector.rest.InternalCaApi;
 import io.lumnik.hub.connector.rest.RestHttpClient;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
@@ -11,12 +12,17 @@ import io.lumnik.hub.connector.rest.auth.AuthProvider;
 import io.lumnik.hub.connector.rest.auth.AuthProviderRegistry;
 import io.lumnik.hub.connector.rest.auth.AuthSpec;
 import io.lumnik.hub.connector.secret.SecretRefs;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
+import io.lumnik.hub.validator.ConfigDefRunner;
+import io.lumnik.hub.validator.rest.EndpointsBlockValidator;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import static java.util.stream.Collectors.joining;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -210,11 +216,13 @@ class RestProberTest {
      * {@code StringIndexOutOfBoundsException} the operator read as {@code Internal Server Error}.
      *
      * <p>{@code $} means the document itself. When it is not a collection, the document IS the
-     * sample: probing one record's path is a legitimate way to describe its fields.
+     * sample: probing one record's path is a legitimate way to describe its fields. (Since #1650 a
+     * lone array of objects under an unknown key is the list — {@code {"partners": [...]}} no longer
+     * lands here; an object holding no such array still does.)
      */
     @Test
     void anObjectWithNoKnownCollectionKeyIsDescribedAsItself() throws Exception {
-        answer(200, "{\"partners\": [{\"id\": 1}], \"generated_at\": \"2026-09-09\"}");
+        answer(200, "{\"partner\": {\"id\": 1}, \"tags\": [\"a\"], \"generated_at\": \"2026-09-09\"}");
 
         String yaml = prober.probe(connector(Map.of("base_url", "http://erp.invalid")),
                                    "/partners", "draft");
@@ -379,4 +387,69 @@ class RestProberTest {
         assertThat(Thread.interrupted()).as("the interrupt flag must survive the catch").isTrue();
     }
 
+    /** #1609: a connector trusting an internal CA is probed through that trust, as its runs are. */
+    @Test
+    void aConnectorTrustingAnInternalCa_isProbedThroughThatTrust() throws Exception {
+        String pem = "cluster CA";
+        InternalCaApi api = new InternalCaApi("{\"items\":[{\"uid\":\"a\"}]}");
+        prober.http = api;
+        prober.secrets = SecretRefs.environmentOnly(name -> "CLUSTER_CA".equals(name) ? pem : null);
+
+        prober.probe(connector(Map.of("base_url", "https://kubernetes.default.svc",
+            "tls", Map.of("ca_secret", "CLUSTER_CA"))), "/api/v1/pods", "draft");
+
+        assertThat(api.trustedPems).containsExactly(pem);
+        assertThat(api.sent.url()).isEqualTo("https://kubernetes.default.svc/api/v1/pods");
+    }
+
+    /** #1650: Spring PetClinic of before Boot — the whole list at once, under a key the probe did not know. */
+    @Test
+    void aWholeListUnderAnUnknownKeyIsDraftedAsNoPagesWithItsPathAndColumns() throws Exception {
+        answer(200, "{\"vetList\":[{\"id\":1,\"firstName\":\"James\"},{\"id\":3,\"firstName\":\"Linda\"}]}");
+        String draft = prober.probe(connector(Map.of("base_url", "http://clinic.invalid/petclinic")), "/vets.json", "clinic");
+        assertThat(draft)
+            .contains("  pagination: { kind: none, response_path: $.vetList }   "
+                + "# 2 items, no paging signal in the answer: if the source pages, declare how\n")
+            .contains("- { name: firstname, path: $.firstName, type: text }");
+    }
+
+    /**
+     * A key that needs bracket notation: read by the run's own reader, and written as a YAML value the hub parses —
+     * {@code $['vet list']} bare in a flow map is not YAML. The draft is parsed and held to the per-endpoint contract.
+     */
+    @Test
+    void aListUnderABracketKeyIsDraftedAsYamlTheHubAccepts() throws Exception {
+        answer(200, "{\"vet list\":[{\"id\":1,\"Last name\":\"Carter\"}]}");
+        String draft = prober.probe(connector(Map.of("base_url", "http://clinic.invalid")), "/vets", "clinic");
+        JsonNode endpoint = new YAMLMapper().readTree(draft.lines().filter(l -> !l.startsWith("#")).collect(joining("\n"))).get(0);
+        assertThat(endpoint.path("pagination").path("response_path").asText()).isEqualTo("$['vet list']");
+        assertThat(endpoint.path("target").path("promote").findValuesAsText("path")).contains("$['Last name']");
+        assertThat(ConfigDefRunner.run(EndpointsBlockValidator.perEndpointDef(), endpoint, "spec.endpoints[]")).isEmpty();
+    }
+
+    /** A top-level array of scalars is no list of records: no columns, and no crash. */
+    @Test
+    void aTopLevelArrayOfScalarsDraftsNoColumnsInsteadOfFailing() throws Exception {
+        answer(200, "[\"a\",\"b\"]");
+        assertThat(prober.probe(connector(Map.of("base_url", "http://erp.invalid")), "/codes", "draft"))
+            .contains("  pagination: { kind: unknown }\n")
+            .contains("    promote:\n");
+    }
+
+    /** A paged envelope the detectors do not name (Django REST) is never drafted as the whole list. */
+    @Test
+    void aDjangoRestPageIsNotDraftedAsTheWholeList() throws Exception {
+        answer(200, "{\"count\":120,\"next\":\"http://erp.invalid/partners?page=2\",\"previous\":null,\"results\":[{\"id\":1}]}");
+        assertThat(prober.probe(connector(Map.of("base_url", "http://erp.invalid")), "/partners", "draft"))
+            .contains("  pagination: { kind: unknown, response_path: $.results }\n")
+            .doesNotContain("kind: none");
+    }
+
+    /** An answer whose list the probe cannot find still leaves the kind to the integrator. */
+    @Test
+    void anAnswerWithNoListStaysUnknown() throws Exception {
+        answer(200, "{\"status\":\"ok\"}");
+        assertThat(prober.probe(connector(Map.of("base_url", "http://erp.invalid")), "/health", "draft"))
+            .contains("  pagination: { kind: unknown }\n");
+    }
 }

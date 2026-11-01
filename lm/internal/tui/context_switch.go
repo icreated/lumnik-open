@@ -91,6 +91,9 @@ func (a *App) useContext(name string) *App {
 	if err == nil {
 		ctx, err = cfg.Resolve(name)
 	}
+	if err == nil {
+		err = config.CheckIdentity(ctx) // LUMNIK_URL may have made the server remote (#1610)
+	}
 	if err != nil {
 		a.restoreRoot()
 		a.showError("context: " + err.Error())

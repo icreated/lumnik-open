@@ -11,6 +11,7 @@ import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -43,6 +44,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * alternative bean.
  */
 @QuarkusTest
+@ExtendWith(ProjectionTickPaused.class)
 class SearchProjectionPurgeDrainIT {
 
     @Inject @DataSource("admin") AgroalDataSource adminDs;

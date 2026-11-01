@@ -1,14 +1,12 @@
 package io.lumnik.hub.api.data;
 
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.entity.EntityRegistry;
 import jakarta.ws.rs.WebApplicationException;
 
 import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.util.Optional;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
@@ -41,22 +39,17 @@ final class DynamicTableScope {
    *
    * @throws WebApplicationException 403 {@link ScopeGrants#REFUSAL}, when a writer's scope is not granted
    */
-  static Optional<String> readableTable(Connection c, String mappingId, long tenant) throws SQLException {
-    try (PreparedStatement ps = c.prepareStatement(REGISTERED + " AND EXISTS (SELECT 1 FROM connector.dynamic_table m "
+  static Optional<String> readableTable(Connection c, String mappingId, long tenant) {
+    return Jdbc.query(c, "DynamicTableScope.readableTable", REGISTERED + " AND EXISTS (SELECT 1 FROM connector.dynamic_table m "
         + "WHERE m.tenant_id = dt.tenant_id AND m.mapping_id = ? "
-        + "AND m.table_schema = dt.table_schema AND m.table_name = dt.table_name)")) {
+        + "AND m.table_schema = dt.table_schema AND m.table_name = dt.table_name)", ps -> {
       ps.setLong(1, tenant);
       ps.setString(2, mappingId);
-      try (ResultSet rs = ps.executeQuery()) {
-        if (!rs.next()) return Optional.empty();
-        String fqn = quoteIdent(rs.getString(2)) + "." + quoteIdent(rs.getString(3));
-        do {
-          if (!ScopeGrants.allowsAny(EntityRegistry.scopes(rs.getArray(4)))) {
-            throw new WebApplicationException(ApiErrors.scopeNotGranted());
-          }
-        } while (rs.next());
-        return Optional.of(fqn);
+    }, rs -> {
+      if (!ScopeGrants.allowsAny(EntityRegistry.scopes(rs.getArray(4)))) {
+        throw new WebApplicationException(ApiErrors.scopeNotGranted());
       }
-    }
+      return quoteIdent(rs.getString(2)) + "." + quoteIdent(rs.getString(3));
+    }).stream().findFirst();
   }
 }

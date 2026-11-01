@@ -9,9 +9,6 @@ import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.time.Instant;
 import java.util.Optional;
 
@@ -49,14 +46,12 @@ public class ScopeFreshness {
      *  condition Partial exists to report — EVERY run ends Partial, and excluding them would print
      *  a stale "data as of" (or nothing) while fresh rows land on every run. */
     public Optional<Instant> lastCompletedRun(long tenantId, String scope) {
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(SQL)) {
-            ps.setLong(1, tenantId);   // the runs
-            ps.setLong(2, tenantId);   // the connectors
-            ps.setString(3, scope);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) return Optional.empty();
-                return Optional.ofNullable(Jdbc.instant(rs, 1));
-            }
+        try {
+            return Jdbc.queryOne(adminDs, "ScopeFreshness.lastCompletedRun", SQL, ps -> {
+                ps.setLong(1, tenantId);   // the runs
+                ps.setLong(2, tenantId);   // the connectors
+                ps.setString(3, scope);
+            }, rs -> Jdbc.instant(rs, 1));
         } catch (Exception e) {
             // Freshness must never fail an answer — absent beats broken.
             return Optional.empty();

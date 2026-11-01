@@ -91,4 +91,43 @@ class AppNameOverwriteScopeIT {
         assertThat(outcome).isInstanceOf(AppRegistrationStore.Upserted.Applied.class);
         assertThat(store.find("neuf-name-toctou").orElseThrow().scope()).isEqualTo(INTRUDER);
     }
+
+    /**
+     * #1649: the one refusal that must undo a write. A bound caller's {@code default: true} first demotes the default
+     * its grants reach, then the conflict arm refuses the name held outside them. The refusal leaves the transaction as
+     * an exception, so the demote rolls back with it; returned as a value, it would commit, and leave no default app.
+     */
+    @Test
+    void aRefusedNameUndoesTheDemoteItsDefaultFlagMade() {
+        AppRegistrationStore.Row before = given("vitrine-default-toctou");
+        // The current default, read rather than assumed: the caller is granted ITS scope, so the demote reaches it.
+        AppRegistrationStore.Row holder = store.find(store.findDefaultName().orElseThrow()).orElseThrow();
+        Throwable failure = null;
+        try {
+            AppRegistrationStore.Upserted outcome = store.upsert(
+                new AppManifest("vitrine-default-toctou", holder.scope(), "Stolen", "event", "#8b7ff0", "#14121f", true),
+                manifest("vitrine-default-toctou", holder.scope(), "  default: true\n"),
+                Set.of(holder.scope()));
+
+            assertThat(outcome).isInstanceOf(AppRegistrationStore.Upserted.NameHeldOutOfScope.class);
+            assertThat(store.findDefaultName()).as("the demote rolled back with the refusal").contains(holder.name());
+            assertThat(store.find("vitrine-default-toctou").orElseThrow()).isEqualTo(before);
+        } catch (Throwable t) {
+            failure = t;
+            throw t;
+        } finally {
+            if (!store.findDefaultName().orElse("").equals(holder.name())) {
+                // A regression here must not leave the module's other tests without a default app, nor hide
+                // the failure that says so behind one from the restore.
+                try {
+                    store.upsert(new AppManifest(holder.name(), holder.scope(), holder.title(), holder.icon(),
+                            holder.accentColor(), holder.backgroundColor(), true, holder.tabs()),
+                        manifest(holder.name(), holder.scope(), "  default: true\n"), null);
+                } catch (RuntimeException restoreFailure) {
+                    if (failure == null) throw restoreFailure;
+                    failure.addSuppressed(restoreFailure);
+                }
+            }
+        }
+    }
 }

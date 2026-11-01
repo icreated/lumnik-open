@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.pagination;
 
+import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
 import org.junit.jupiter.api.Test;
@@ -52,6 +53,42 @@ class BodyLinkPaginationStrategyTest {
         assertEquals("http://api/v1/items?cursor=abc", next.url());
         assertEquals("secret", next.headers().get("X-Api-Key"), "header dropped across pages");
         assertEquals("acme", next.queryParams().get("tenant"), "query param dropped across pages");
+    }
+
+    /** #1633: a next URL that echoes a query param carries it once — the server's URL is authoritative. */
+    @Test
+    void next_does_not_repeat_a_param_the_next_url_carries() {
+        RestRequest current = RestRequest.get("http://api/v1/items").withQuery("tenant", "acme").withQuery("since", "T");
+        RestRequest next = strategy().next(
+            resp("{\"next\":\"http://api/v1/items?cursor=abc&since=T\",\"results\":[]}"), current);
+        assertEquals(Map.of("tenant", "acme"), next.queryParams(), "since is in the next URL; tenant is not");
+    }
+
+    /** #1638: Drupal writes JSON:API links as link objects — {"href": …} — which the spec allows beside strings. */
+    @Test
+    void a_link_object_is_followed_by_its_href() {
+        BodyLinkPaginationStrategy jsonApi = new BodyLinkPaginationStrategy(Map.of("link_path", "$.links.next", "response_path", "$.data"));
+        RestRequest next = jsonApi.next(resp("{\"links\":{\"next\":{\"href\":\"http://api/v1/items?page%5Boffset%5D=10\"}},\"data\":[]}"),
+            RestRequest.get("http://api/v1/items"));
+        assertEquals("http://api/v1/items?page%5Boffset%5D=10", next.url());
+    }
+
+    @Test
+    void a_link_object_without_href_ends_nothing_silently_and_is_refused_by_its_key() {
+        BodyLinkPaginationStrategy jsonApi = new BodyLinkPaginationStrategy(Map.of("link_path", "$.links.next", "response_path", "$.data"));
+        for (String link : List.of("{\"url\":\"http://api/v1/items?p=2\"}", "42")) {
+            var e = assertThrows(ConnectorException.class, () -> jsonApi.next(
+                resp("{\"links\":{\"next\":" + link + "},\"data\":[]}"), RestRequest.get("http://api/v1/items")));
+            assertTrue(e.getMessage().startsWith("pagination.link_path must read a URL or a link object with href, not a"), e.getMessage());
+            assertFalse(e.getMessage().contains("p=2") || e.getMessage().contains("42"), "never the value: " + e.getMessage());
+        }
+    }
+
+    @Test
+    void a_link_object_whose_href_is_absent_or_blank_is_the_last_page() {
+        BodyLinkPaginationStrategy jsonApi = new BodyLinkPaginationStrategy(Map.of("link_path", "$.links.next", "response_path", "$.data"));
+        assertNull(jsonApi.next(resp("{\"links\":{\"next\":{\"href\":\"\"}},\"data\":[]}"), RestRequest.get("http://api/v1/items")));
+        assertNull(jsonApi.next(resp("{\"links\":{\"self\":{\"href\":\"http://api/v1/items\"}},\"data\":[]}"), RestRequest.get("http://api/v1/items")));
     }
 
     @Test

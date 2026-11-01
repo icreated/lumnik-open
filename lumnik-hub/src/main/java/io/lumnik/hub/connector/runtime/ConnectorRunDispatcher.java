@@ -20,10 +20,7 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -237,17 +234,16 @@ public class ConnectorRunDispatcher {
         return new Verdict(c, endpoint, null);
     }
 
-    private boolean start(RunQueueClaim<Queued> claim, Instant startedAt) throws SQLException {
+    private boolean start(RunQueueClaim<Queued> claim, Instant startedAt) {
         Queued q = claim.row();
-        try (PreparedStatement ps = claim.connection().prepareStatement(START)) {
+        return Jdbc.update(claim.connection(), "ConnectorRunDispatcher.start", START, ps -> {
             ps.setObject(1, startedAt.atOffset(ZoneOffset.UTC));
             ps.setObject(2, q.endpointId());
             ps.setLong(3, q.tenantId());
             ps.setLong(4, q.tenantId());
             ps.setObject(5, q.runId());
             ps.setLong(6, q.tenantId());
-            return ps.executeUpdate() == 1;
-        }
+        }) == 1;
     }
 
     /**
@@ -257,20 +253,15 @@ public class ConnectorRunDispatcher {
     private void end(RunQueueClaim<Queued> claim, String reason) throws SQLException {
         Queued q = claim.row();
         OffsetDateTime at = Instant.now().atOffset(ZoneOffset.UTC);
-        try (PreparedStatement run = claim.connection().prepareStatement(END);
-             PreparedStatement endpoint = claim.connection().prepareStatement(STAMP)) {
-            run.setObject(1, at);
-            run.setObject(2, at);
-            run.setString(3, reason);
-            run.setObject(4, q.runId());
-            run.setLong(5, q.tenantId());
-            if (run.executeUpdate() == 1) {
-                endpoint.setObject(1, at);
-                endpoint.setObject(2, q.endpointId());
-                endpoint.setLong(3, q.tenantId());
-                endpoint.executeUpdate();
-            }
-        }
+        Connection conn = claim.connection();
+        int ended = Jdbc.update(conn, "ConnectorRunDispatcher.end", END, ps -> {
+            ps.setObject(1, at);
+            ps.setObject(2, at);
+            ps.setString(3, reason);
+            ps.setObject(4, q.runId());
+            ps.setLong(5, q.tenantId());
+        });
+        if (ended == 1) stamp(conn, at, q.endpointId(), q.tenantId());
         claim.commit();
         metrics.recordRunFinished(ConnectorRunStatus.CANCELLED.sqlValue());
         LOG.warnf("queued run %s ended Cancelled without running: %s", q.runId(), reason);
@@ -308,62 +299,42 @@ public class ConnectorRunDispatcher {
      */
     public QueuedCancel cancelQueued(UUID runId, long tenantId) {
         OffsetDateTime at = Instant.now().atOffset(ZoneOffset.UTC);
-        try (Connection conn = adminDs.getConnection()) {
-            conn.setAutoCommit(false);
-            try (PreparedStatement run = conn.prepareStatement(CANCEL);
-                 PreparedStatement endpoint = conn.prepareStatement(STAMP)) {
-                try (Statement st = conn.createStatement()) {
-                    st.execute("SET LOCAL lock_timeout = '5s'");
-                }
-                run.setObject(1, at);
-                run.setObject(2, at);
-                run.setString(3, "cancelled by user");
-                run.setObject(4, runId);
-                run.setLong(5, tenantId);
-                UUID endpointId;
-                try (ResultSet rs = run.executeQuery()) {
-                    if (!rs.next()) {
-                        rollbackQuietly(conn, null);   // nothing was written; hand the connection back clean
-                        return QueuedCancel.NOT_QUEUED;
-                    }
-                    endpointId = rs.getObject(1, UUID.class);
-                }
+        QueuedCancel outcome;
+        try {
+            // One transaction: any failure rolls back, an Error included (#1649). Left open, the pool's reset would
+            // COMMIT the run's ending without its endpoint's stamp.
+            outcome = Jdbc.transaction(adminDs, "ConnectorRunDispatcher.cancelQueued", conn -> {
+                Jdbc.update(conn, "ConnectorRunDispatcher.cancelQueued lock_timeout 5s", "SET LOCAL lock_timeout = '5s'", ps -> {});
+                List<UUID> ended = Jdbc.query(conn, "ConnectorRunDispatcher.cancelQueued", CANCEL, ps -> {
+                    ps.setObject(1, at);
+                    ps.setObject(2, at);
+                    ps.setString(3, "cancelled by user");
+                    ps.setObject(4, runId);
+                    ps.setLong(5, tenantId);
+                }, rs -> rs.getObject(1, UUID.class));
+                if (ended.isEmpty()) return QueuedCancel.NOT_QUEUED;   // nothing was written: its commit is a no-op
+                UUID endpointId = ended.get(0);
                 if (endpointId != null) {
                     // The five seconds were for the dispatcher's row; the endpoint row is held only briefly by an ending.
-                    try (Statement st = conn.createStatement()) {
-                        st.execute("SET LOCAL lock_timeout = 0");
-                    }
-                    endpoint.setObject(1, at);
-                    endpoint.setObject(2, endpointId);
-                    endpoint.setLong(3, tenantId);
-                    endpoint.executeUpdate();
+                    Jdbc.update(conn, "ConnectorRunDispatcher.cancelQueued lock_timeout reset", "SET LOCAL lock_timeout = 0", ps -> {});
+                    stamp(conn, at, endpointId, tenantId);
                 }
-                conn.commit();
-                metrics.recordRunFinished(ConnectorRunStatus.CANCELLED.sqlValue());
                 return QueuedCancel.CANCELLED;
-            } catch (SQLException | RuntimeException e) {
-                rollbackQuietly(conn, e);
-                if (LOCK_NOT_AVAILABLE.equals(Jdbc.sqlStateOf(e))) return QueuedCancel.BUSY;
-                throw e;
-            }
-        } catch (SQLException e) {
+            });
+        } catch (RuntimeException e) {
+            if (LOCK_NOT_AVAILABLE.equals(Jdbc.sqlStateOf(e))) return QueuedCancel.BUSY;
             throw new IllegalStateException("could not cancel queued run " + runId, e);
         }
+        if (outcome == QueuedCancel.CANCELLED) metrics.recordRunFinished(ConnectorRunStatus.CANCELLED.sqlValue());
+        return outcome;
     }
 
-    /**
-     * A failed rollback must not replace the failure that sent us here: it rides along as suppressed. With no such
-     * failure (the nothing-to-cancel path) it is the failure, so it is thrown rather than handing a connection in an
-     * unknown state back to the pool.
-     */
-    private static void rollbackQuietly(Connection conn, Exception cause) {
-        try {
-            conn.rollback();
-        } catch (SQLException rollbackFailure) {
-            if (cause == null) {
-                throw new IllegalStateException("could not roll back", rollbackFailure);
-            }
-            cause.addSuppressed(rollbackFailure);
-        }
+    /** Stamps the endpoint's last-run time, in the caller's transaction. */
+    private static void stamp(Connection conn, OffsetDateTime at, UUID endpointId, long tenantId) {
+        Jdbc.update(conn, "ConnectorRunDispatcher.stamp", STAMP, ps -> {
+            ps.setObject(1, at);
+            ps.setObject(2, endpointId);
+            ps.setLong(3, tenantId);
+        });
     }
 }

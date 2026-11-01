@@ -1,5 +1,7 @@
 package io.lumnik.hub.workflow;
 
+import io.lumnik.hub.entity.EntityViewCompiler;
+
 import java.util.List;
 
 /**
@@ -18,10 +20,16 @@ public record WorkflowGraph(
     List<StateDto> states,
     String initialState,
     List<TransitionDto> transitions,
-    WorkflowManifest.DueDef due        // nullable — a watched due date (#1448)
+    WorkflowManifest.DueDef due,       // nullable — a watched due date (#1448)
+    String order                       // nullable — the column ordering a document's versions (#1588)
 ) {
     public record StateDto(String code, String label, List<String> aliases, boolean terminal) {}
     public record TransitionDto(List<String> from, String to) {}
+
+    /** Watches a fused entity view rather than an ingest table: no ingest order, no {@code tenant_id} (#1588). */
+    public boolean onFusedView() {
+        return EntityViewCompiler.entityNameFromView(table) != null;
+    }
 
     /** The declared label of {@code state}, or the code itself when it has none (or is undeclared). */
     public String labelOf(String state) {
@@ -40,6 +48,7 @@ public record WorkflowGraph(
             m.transitions().stream()
                 .map(t -> new TransitionDto(t.from(), t.to()))
                 .toList(),
-            m.due());
+            m.due(),
+            m.order());
     }
 }

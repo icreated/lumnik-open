@@ -92,17 +92,16 @@ public class ProcessApplyResource {
 
         Optional<SchemaCard> card = cards.load(tenant, m.scope());
         if (card.isEmpty()) {
-            return Response.status(404).entity(ApiErrors.error(
-                "no schema for scope '" + m.scope() + "' — run discovery first")).build();
+            return ApiErrors.notFound("no schema for scope '" + m.scope() + "' — run discovery first");
         }
         SchemaCard.Table table = card.get().tables().stream()
                 .filter(t -> t.name().equals(m.onTable())).findFirst().orElse(null);
         if (table == null) {
-            return Response.status(400).entity(ApiErrors.error(
-                "spec.on.table '" + m.onTable() + "' is not in the '" + m.scope() + "' scope")).build();
+            return ApiErrors.badRequest(
+                "spec.on.table '" + m.onTable() + "' is not in the '" + m.scope() + "' scope");
         }
         if (!tables.emitsRowEvents(tenant, m.onTable())) {
-            return Response.status(400).entity(ApiErrors.error(cannotFireOn(m.onTable()))).build();
+            return ApiErrors.badRequest(cannotFireOn(m.onTable()));
         }
         ApiErrors.checkOrBadRequest(() -> {
             ProcessConditionResolver.resolve(m.when(), table);
@@ -146,8 +145,7 @@ public class ProcessApplyResource {
     }
 
     /** The stored manifest, as applied — lets the TUI's edit loop round-trip a process.
-     *  No method-level @Produces: only the 200 carries yaml (set explicitly), so error
-     *  responses — incl. RequireTenant's 401 Map entity — keep their JSON negotiation. */
+     *  Only the 200 carries yaml (set explicitly); every refusal is typed JSON by ApiErrors. */
     @GET
     @Path("/{name}/manifest")
     @Transactional
@@ -157,9 +155,7 @@ public class ProcessApplyResource {
         if (refusal != null) return refusal;
         return store.findYaml(tenant, name)
                 .map(yaml -> Response.ok(yaml).type("application/yaml").build())
-                // JSON via the class-level @Produces — consistent with every other error here.
-                .orElseGet(() -> Response.status(404)
-                        .entity(ApiErrors.error("unknown process: " + name)).build());
+                .orElseGet(() -> ApiErrors.notFound("unknown process: " + name));
     }
 
     public record EnabledRequest(Boolean enabled) {}
@@ -200,8 +196,7 @@ public class ProcessApplyResource {
     public Response setEnabled(@PathParam("name") String name, EnabledRequest body) {
         long tenant = RequireTenant.current();
         if (body == null || body.enabled() == null) {
-            return Response.status(400).entity(ApiErrors.error(
-                "body must carry {\"enabled\": true|false}")).build();
+            return ApiErrors.badRequest("body must carry {\"enabled\": true|false}");
         }
         Optional<String> scope = store.findScope(tenant, name);
         Response refusal = refuseUnlessHeld(name, scope);
@@ -218,7 +213,7 @@ public class ProcessApplyResource {
      *  exclude it, else null. The caller reads the scope, so a write can record it afterwards. */
     private Response refuseUnlessHeld(String name, Optional<String> scope) {
         if (scope.isEmpty()) {
-            return Response.status(404).entity(ApiErrors.error("unknown process: " + name)).build();
+            return ApiErrors.notFound("unknown process: " + name);
         }
         return ScopeGrants.allows(scope.get()) ? null : ApiErrors.scopeNotGranted();
     }

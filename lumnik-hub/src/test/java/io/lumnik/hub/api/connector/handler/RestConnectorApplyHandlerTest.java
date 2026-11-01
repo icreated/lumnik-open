@@ -147,6 +147,29 @@ class RestConnectorApplyHandlerTest {
             "variables", Map.of("locale", "fr")), existing.getConfig());
     }
 
+    /** #1609: spec.tls reaches the run — validated, then dropped by this door, it trusted nothing. */
+    @Test
+    void apply_carries_tls_into_connector_config() throws Exception {
+        Connector conn = applyAndCapture(
+            "{\"metadata\":{\"name\":\"c1\"},"
+            + "\"spec\":{\"base_url\":\"https://kubernetes.default.svc\",\"tls\":{\"ca_secret\":\"CLUSTER_CA\"}}}");
+        assertEquals(Map.of("ca_secret", "CLUSTER_CA"), conn.getConfig().get("tls"));
+    }
+
+    @Test
+    void reapply_without_tls_drops_the_trust() throws Exception {
+        Connector existing = new Connector();
+        existing.setConfig(new HashMap<>(Map.of("kind", "rest-generic", "base_url", "https://api.example.com",
+            "tls", Map.of("ca_secret", "CLUSTER_CA"))));
+        ConnectorRepository connRepo = mock(ConnectorRepository.class);
+        when(connRepo.byAddressForUpdate(1L, "c1")).thenReturn(Optional.of(existing));
+
+        apply("{\"metadata\":{\"name\":\"c1\"},\"spec\":{\"base_url\":\"https://api.example.com\"}}",
+            connRepo, mock(ConnectorEndpointRepository.class));
+
+        assertFalse(existing.getConfig().containsKey("tls"), "a manifest without tls trusts the public CAs again");
+    }
+
     /** The method stored for the one endpoint of {@code endpoint} (JSON), when the manifest leaves it to the default. */
     private static String storedMethod(String endpoint) throws Exception {
         ConnectorEndpointRepository epRepo = mock(ConnectorEndpointRepository.class);

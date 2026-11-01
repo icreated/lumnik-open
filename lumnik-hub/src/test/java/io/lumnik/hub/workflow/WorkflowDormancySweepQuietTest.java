@@ -1,5 +1,6 @@
 package io.lumnik.hub.workflow;
 
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.testsupport.LogProbe;
 import org.junit.jupiter.api.Test;
 
@@ -31,7 +32,7 @@ class WorkflowDormancySweepQuietTest {
     private static final long TENANT = 1L;
 
     // JUnit 5's default PER_METHOD lifecycle gives a fresh instance per test, so these fields carry
-    // exactly the isolation `stoodDown` needs — no @BeforeEach, no repetition in five bodies.
+    // exactly the isolation `conditions` needs — no @BeforeEach, no repetition in five bodies.
     private final WorkflowDormancySweep sweep = new WorkflowDormancySweep();
     private final WorkflowGraph g = graph();
 
@@ -63,7 +64,7 @@ class WorkflowDormancySweepQuietTest {
     /** The shape sweepOne throws: a RuntimeException carrying the SQLException as cause. */
     private static RuntimeException wrapped(String sqlState, String message) {
         SQLException sql = new SQLException(message, sqlState);
-        return new RuntimeException("WorkflowDormancySweep.sweepOne: " + message, sql);
+        return new RuntimeException(Jdbc.failureText("WorkflowDormancySweep.sweepOne", sql), sql);
     }
 
     /**

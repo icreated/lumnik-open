@@ -57,7 +57,7 @@ class RestConnectorValidatorTest {
         + "\"response_path\":\"$.data\"},"
         + "\"target\":{\"kind\":\"hybrid\",\"table\":\"ext.contacts\",\"unique_key\":\"$.id\"}";
 
-    /** #1437: rest-generic transforms through promote[].transform only, so a mapping block would never run. Refused. */
+    /** #1437, #1617: a mapping runs over one endpoint's promoted columns, so spec.mapping would run nowhere. Refused. */
     @Test void mappingBlock_isRefused() throws Exception {
         JsonNode doc = mapper.readTree(REST_HEAD.formatted(
             "{\"id\":\"contacts\",\"method\":\"GET\",\"path\":\"/v1/contacts\"," + EP_TAIL + "}"));
@@ -66,7 +66,7 @@ class RestConnectorValidatorTest {
 
         assertFalse(r.isValid(), "a mapping block on rest-generic must be refused");
         assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.mapping")
-            && String.join(" ", e.recommendations()).contains("promote")), () -> "refused by name, got: " + r.errors());
+            && String.join(" ", e.recommendations()).contains("endpoints[].mapping")), () -> "refused by name, got: " + r.errors());
         assertEquals(List.of(), ValidationWarnings.unknownKeyPaths(r), "refused once, not also warned as unknown");
     }
 
@@ -82,6 +82,56 @@ class RestConnectorValidatorTest {
         + "\"body\":\"<In><PageSize>{{page_size}}</PageSize></In>\","
         + "\"pagination\":{\"kind\":\"soap\",\"page_size\":100,\"response_path\":\"$.Body.Out.Item\"},"
         + "\"target\":{\"table\":\"ext.cust\",\"unique_key\":\"$.Id\"}";
+
+    /** An endpoint whose target is keyed by {@code uniqueKey} (raw JSON). */
+    private ValidationResult validateUniqueKey(String uniqueKey) throws Exception {
+        return service.validate(mapper.readTree(REST_HEAD.formatted(
+            "{\"id\":\"contacts\",\"method\":\"GET\",\"path\":\"/v1/contacts\","
+            + EP_TAIL.replace("\"unique_key\":\"$.id\"", "\"unique_key\":" + uniqueKey) + "}")));
+    }
+
+    /** #1630: the key read from the item's self link, through a promote transform. */
+    @Test void uniqueKey_objectForm_withATransform_isValid() throws Exception {
+        ValidationResult r = validateUniqueKey("{\"path\":\"$._links.self.href\",\"transform\":\"last_path_segment\"}");
+
+        assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
+        assertEquals(List.of(), ValidationWarnings.unknownKeyPaths(r));
+    }
+
+    @Test void uniqueKey_objectForm_isCheckedLikeAPromoteEntry() throws Exception {
+        String base = "spec.endpoints[0].target.unique_key";
+        assertTrue(validateUniqueKey("{\"path\":\"$.id\",\"transform\":\"last_segment\"}").errors().stream()
+            .anyMatch(e -> e.path().equals(base + ".transform") && e.message().contains("last_path_segment")),
+            "an unknown transform is refused, naming the allowed ones");
+        assertTrue(validateUniqueKey("{\"transform\":\"trim\"}").errors().stream()
+            .anyMatch(e -> e.path().equals(base + ".path")), "the object form needs its path");
+        assertTrue(validateUniqueKey("42").errors().stream().anyMatch(e -> e.path().equals(base)),
+            "neither a path nor an object");
+        assertTrue(validateUniqueKey("\" \"").errors().stream().anyMatch(e -> e.path().equals(base)),
+            "a blank path is refused here, not by JsonPath.compile mid-run (Copilot on #1631)");
+        assertEquals(List.of(base + ".tranform"), ValidationWarnings.unknownKeyPaths(
+            validateUniqueKey("{\"path\":\"$.id\",\"tranform\":\"trim\"}")), "a misspelled key is named");
+    }
+
+    /** #1632: the count is read from the body or from a header, never both — the two could disagree. */
+    @Test void totalPath_and_totalHeader_together_are_refused() throws Exception {
+        String both = EP_TAIL.replace("\"response_path\":\"$.data\"}",
+            "\"response_path\":\"$.data\",\"total_path\":\"$.total\",\"total_header\":\"X-Total-Count\"}");
+        ValidationResult r = service.validate(mapper.readTree(REST_HEAD.formatted(
+            "{\"id\":\"contacts\",\"method\":\"GET\",\"path\":\"/v1/contacts\"," + both + "}")));
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.endpoints[0].pagination.total_header")),
+            () -> "named by the header key, got: " + r.errors());
+        String header = EP_TAIL.replace("\"response_path\":\"$.data\"}", "\"response_path\":\"$.data\",\"total_header\":\"X-Total-Count\"}");
+        ValidationResult alone = service.validate(mapper.readTree(REST_HEAD.formatted(
+            "{\"id\":\"contacts\",\"method\":\"GET\",\"path\":\"/v1/contacts\"," + header + "}")));
+        assertTrue(alone.isValid(), () -> "total_header alone is valid, got: " + alone.errors());
+        // A blank one is none named, as the run reads it: validator == runtime (Copilot on #1637).
+        String blankPath = EP_TAIL.replace("\"response_path\":\"$.data\"}",
+            "\"response_path\":\"$.data\",\"total_path\":\"\",\"total_header\":\"X-Total-Count\"}");
+        ValidationResult blank = service.validate(mapper.readTree(REST_HEAD.formatted(
+            "{\"id\":\"contacts\",\"method\":\"GET\",\"path\":\"/v1/contacts\"," + blankPath + "}")));
+        assertTrue(blank.isValid(), () -> "a blank total_path is none, got: " + blank.errors());
+    }
 
     /** #1438: the per-endpoint key set was open — a misspelled key validated clean and was dropped. Each shape names it. */
     @Test void unknownEndpointKey_isNamedByPath_inEveryRequestShape() throws Exception {
@@ -126,16 +176,100 @@ class RestConnectorValidatorTest {
         assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
     }
 
-    /** #1437 at the endpoint tier (#1438): a mapping block there would never run either. Refused by path, not also warned. */
-    @Test void endpointMappingBlock_isRefused() throws Exception {
-        ValidationResult r = service.validate(mapper.readTree(REST_HEAD.formatted(
+    /** An endpoint whose target promotes {@code promote}, with the mapping {@code mapping} (none when null). */
+    private ValidationResult validateEndpointMapping(String promote, String mapping) throws Exception {
+        return service.validate(mapper.readTree(REST_HEAD.formatted(
             "{\"id\":\"contacts\",\"method\":\"GET\",\"path\":\"/v1/contacts\","
-            + "\"mapping\":{\"cell\":[{\"kotlin\":{\"script\":\"hooks:check.kts\"}}]}," + EP_TAIL + "}")));
+            + (mapping == null ? "" : "\"mapping\":" + mapping + ",")
+            + EP_TAIL.replace("\"unique_key\":\"$.id\"}", "\"unique_key\":\"$.id\",\"promote\":" + promote + "}") + "}")));
+    }
 
-        assertFalse(r.isValid(), "a mapping block on a rest-generic endpoint must be refused");
-        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.endpoints[0].mapping")
-            && String.join(" ", e.recommendations()).contains("promote")), () -> "refused by path, got: " + r.errors());
-        assertEquals(List.of(), ValidationWarnings.unknownKeyPaths(r), "refused once, not also warned as unknown");
+    private static final String PROMOTE_WITH_A_FILLED_COLUMN = "[{\"name\":\"restarts\",\"path\":\"$.restarts\","
+        + "\"type\":\"integer\"},{\"name\":\"priority\",\"type\":\"text\"}]";
+
+    /** #1617: an endpoint's mapping runs over its promoted columns; a column it fills is declared without a path. */
+    @Test void endpointMappingBlock_isAccepted_besideAColumnItFills() throws Exception {
+        ValidationResult r = validateEndpointMapping(PROMOTE_WITH_A_FILLED_COLUMN,
+            "{\"cell\":[{\"kotlin\":{\"script\":\"classpath:mapping/restart-priority.kts\",\"context\":{\"threshold\":5}}}]}");
+
+        assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
+        assertEquals(List.of(), ValidationWarnings.unknownKeyPaths(r), () -> "mapping is a known key: " + r.warnings());
+    }
+
+    /** #1617: the csv checks, at the endpoint's path — here a hook reading a column no promote entry brings. */
+    @Test void endpointMapping_hookReadingAnUnpromotedColumn_isRefusedByPath() throws Exception {
+        ValidationResult r = validateEndpointMapping(PROMOTE_WITH_A_FILLED_COLUMN,
+            "{\"cell\":[{\"lower\":{\"columns\":[\"phase\"]}}]}");
+
+        assertEquals(List.of("spec.endpoints[0].mapping.cell[0].lower.columns[0]"),
+            r.errors().stream().map(ValidationError::path).toList(), () -> "refused by path: " + r.errors());
+    }
+
+    /** #1621 (Copilot): the column walk reads a hook's columns — a map written there is refused, never a crash. */
+    @Test void endpointMapping_aMapWhereColumnsAreListed_isRefused_notACrash() throws Exception {
+        ValidationResult r = validateEndpointMapping(PROMOTE_WITH_A_FILLED_COLUMN,
+            "{\"cell\":[{\"lower\":{\"columns\":{\"a\":\"restarts\"}}}]}");
+
+        assertFalse(r.isValid(), () -> "refused: " + r.errors());
+    }
+
+    @Test void endpointMapping_unknownKey_isRefusedByPath() throws Exception {
+        ValidationResult r = validateEndpointMapping(PROMOTE_WITH_A_FILLED_COLUMN, "{\"cel\":[]}");
+
+        assertEquals(List.of("spec.endpoints[0].mapping.cel"), r.errors().stream().map(ValidationError::path).toList(),
+            () -> "refused by path: " + r.errors());
+    }
+
+    /**
+     * #1617: each item is mapped on its own, its row landing beside it — a hook that splits rows or merges them has
+     * nowhere to land, and a sort orders nothing.
+     */
+    @Test void endpointMapping_splitRowAggregatorAndSortBy_areRefused() throws Exception {
+        ValidationResult r = validateEndpointMapping(PROMOTE_WITH_A_FILLED_COLUMN,
+            "{\"dataset\":[{\"sort-by\":{\"columns\":[\"restarts\"]}}],"
+            + "\"row\":[{\"split-row\":{\"by\":\"restarts\"}},{\"aggregator\":{\"emit-on-change\":\"restarts\"}}]}");
+
+        assertEquals(List.of("spec.endpoints[0].mapping.row[0].split-row", "spec.endpoints[0].mapping.row[1].aggregator",
+                "spec.endpoints[0].mapping.dataset[0].sort-by"),
+            r.errors().stream().map(ValidationError::path).toList(), () -> "refused by path: " + r.errors());
+    }
+
+    /** #1617, code review: fill-down carries a value from one item to the next, and REST keeps no carry between chunks. */
+    @Test void endpointMapping_fillDown_isRefused() throws Exception {
+        ValidationResult r = validateEndpointMapping(PROMOTE_WITH_A_FILLED_COLUMN,
+            "{\"cell\":[{\"fill-down\":{\"columns\":[\"restarts\"]}}]}");
+
+        assertEquals(List.of("spec.endpoints[0].mapping.cell[0].fill-down"),
+            r.errors().stream().map(ValidationError::path).toList(), () -> "refused by path: " + r.errors());
+    }
+
+    /** #1617, code review: a hook that writes a column no promote entry declares would fail the first run. */
+    @Test void endpointMapping_hookWritingAnUndeclaredColumn_isRefusedByPath() throws Exception {
+        ValidationResult r = validateEndpointMapping(PROMOTE_WITH_A_FILLED_COLUMN,
+            "{\"cell\":[{\"regex-extract\":{\"column\":\"restarts\",\"pattern\":\"(.)\",\"groups\":{\"1\":\"initial\"}}}]}");
+
+        assertEquals(List.of("spec.endpoints[0].mapping.cell[0].regex-extract"),
+            r.errors().stream().map(ValidationError::path).toList(), () -> "refused by path: " + r.errors());
+        assertTrue(r.errors().getFirst().message().contains("'initial'"), () -> "names the column: " + r.errors());
+    }
+
+    /** #1617, code review: `path:` left empty reads as no path, as the run reads it; a transform needs a path. */
+    @Test void promoteWithAnEmptyPath_isAColumnTheMappingFills_butATransformNeedsAPath() throws Exception {
+        ValidationResult r = validateEndpointMapping("[{\"name\":\"restarts\",\"path\":\"$.restarts\",\"type\":\"integer\"},"
+            + "{\"name\":\"priority\",\"path\":null,\"type\":\"text\"},"
+            + "{\"name\":\"seen\",\"type\":\"timestamptz\",\"transform\":\"parse_iso8601\"}]",
+            "{\"cell\":[{\"kotlin\":{\"script\":\"classpath:mapping/restart-priority.kts\",\"context\":{\"threshold\":5}}}]}");
+
+        assertEquals(List.of("spec.endpoints[0].target.promote[2].transform"),
+            r.errors().stream().map(ValidationError::path).toList(), () -> "refused by path: " + r.errors());
+    }
+
+    /** #1617: a promote entry without a path is a column a mapping fills — without a mapping, it would stay empty. */
+    @Test void promoteWithoutPath_withoutAMapping_isRefused() throws Exception {
+        ValidationResult r = validateEndpointMapping(PROMOTE_WITH_A_FILLED_COLUMN, null);
+
+        assertEquals(List.of("spec.endpoints[0].target.promote[1].path"),
+            r.errors().stream().map(ValidationError::path).toList(), () -> "refused by path: " + r.errors());
     }
 
     /** A connector whose spec.defaults is {@code defaultsJson}, over one REST endpoint. */
@@ -164,13 +298,13 @@ class RestConnectorValidatorTest {
             () -> "the typo named by its path, got: " + r.warnings());
     }
 
-    /** #1437 at spec.defaults (#1461): flattened under every endpoint, a mapping block there would never run either. */
+    /** #1437 at spec.defaults (#1461, #1617): a mapping reads one endpoint's promoted columns, so it is declared there. */
     @Test void defaultsMappingBlock_isRefused() throws Exception {
         ValidationResult r = validateWithDefaults("{\"mapping\":{\"cell\":[{\"kotlin\":{\"script\":\"hooks:check.kts\"}}]}}");
 
         assertFalse(r.isValid(), "a mapping block in spec.defaults must be refused");
         assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.defaults.mapping")
-            && String.join(" ", e.recommendations()).contains("promote")), () -> "refused by path, got: " + r.errors());
+            && String.join(" ", e.recommendations()).contains("endpoints[].mapping")), () -> "refused by path, got: " + r.errors());
         assertEquals(List.of(), ValidationWarnings.unknownKeyPaths(r), "refused once, not also warned as unknown");
     }
 
@@ -343,7 +477,9 @@ class RestConnectorValidatorTest {
                 checked++;
                 ValidationResult r = service.validate(doc);
                 String rel = repo.relativize(f).toString();
-                r.errors().forEach(e -> findings.add(rel + ": " + e.path() + " " + e.message()));
+                // A hooks: script is on the operator's hub (#1617), and this one has no hooks directory: not the manifest's.
+                r.errors().stream().filter(e -> !e.message().contains("this hub has no hooks directory"))
+                    .forEach(e -> findings.add(rel + ": " + e.path() + " " + e.message()));
                 ValidationWarnings.unknownKeyPaths(r).forEach(p -> findings.add(rel + ": unknown " + p));
             }
         }
@@ -590,6 +726,26 @@ class RestConnectorValidatorTest {
                      "endpoints":[{"id":"contacts","method":"GET","path":"/v1/contacts",%s}]}}""".formatted(auth, EP_TAIL)));
     }
 
+    /** #1640: a bearer credential under another scheme word — one word, checked under bearer, only named elsewhere. */
+    @Test void scheme_isOneWord_underBearer_andOnlyWarnedAboutElsewhere() throws Exception {
+        assertTrue(withAuth("{\"kind\":\"bearer\",\"token_env\":\"T\",\"scheme\":\"Token\"}").isValid());
+        for (String bad : List.of("\"Token abc\"", "\"\"", "\"Tok:en\"", "\"1abc\"", "\"-x\"")) {   // a letter first, as the redactor reads one (Copilot on #1641)
+            ValidationResult r = withAuth("{\"kind\":\"bearer\",\"token_env\":\"T\",\"scheme\":" + bad + "}");
+            assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.auth.scheme")), () -> bad + " refused, got: " + r.errors());
+        }
+        for (String notText : List.of("123", "true")) {   // refused by the declaration's type (Copilot on #1641)
+            ValidationResult r = withAuth("{\"kind\":\"bearer\",\"token_env\":\"T\",\"scheme\":" + notText + "}");
+            assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.auth.scheme") && e.message().startsWith("type mismatch")),
+                () -> notText + " refused by its type, got: " + r.errors());
+        }
+        assertTrue(withAuth("{\"kind\":\"bearer\",\"token_env\":\"T\",\"scheme\":null}").isValid(), "null is absent: Bearer");
+        ValidationResult tooLong = withAuth("{\"kind\":\"bearer\",\"token_env\":\"T\",\"scheme\":\"" + "A".repeat(33) + "\"}");
+        assertTrue(tooLong.errors().stream().anyMatch(e -> e.path().equals("spec.auth.scheme")), "at most 32");
+        ValidationResult basic = withAuth("{\"kind\":\"basic\",\"username\":\"u\",\"password_env\":\"P\",\"scheme\":\"Token\"}");
+        assertTrue(basic.isValid(), () -> "ignored, not refused: " + basic.errors());
+        assertTrue(basic.warnings().stream().anyMatch(w -> w.path().equals("spec.auth.scheme")), () -> "but named: " + basic.warnings());
+    }
+
     /** Copilot on #1394: client_auth is checked where it means something — under oauth2 — and only warned about elsewhere. */
     @Test void clientAuth_isBasicOrPost_underOAuth2_andOnlyWarnedAboutElsewhere() throws Exception {
         ValidationResult oauth2 = withAuth("""
@@ -679,11 +835,13 @@ class RestConnectorValidatorTest {
             () -> "expected a missing page_param error, got: " + r.errors());
     }
 
-    @Test void cursorPagination_withoutHasMorePath_isError() throws Exception {
-        // without has_more_path, next() stops after page 1 → silent partial ingestion
+    @Test void cursorPagination_withoutHasMorePath_isValid() throws Exception {
+        // #1611: without has_more_path the cursor says when to stop (CursorPaginationStrategyTest).
         ValidationResult r = service.validate(load("rest-cursor-no-hasmore.yaml"));
-        assertTrue(r.errors().stream().anyMatch(e -> e.path().contains("pagination.has_more_path")),
-            () -> "expected a missing has_more_path error, got: " + r.errors());
+        assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
+        // ...and said, so a misspelled flag key does not switch modes in silence (code-review of #1611)
+        assertTrue(r.warnings().stream().anyMatch(w -> w.path().endsWith("pagination.has_more_path")
+            && w.message().contains("the cursor decides")), () -> "got: " + r.warnings());
     }
 
     @Test void linkHeaderPagination_withoutResponsePath_isError() throws Exception {
@@ -815,6 +973,18 @@ class RestConnectorValidatorTest {
             () -> "expected link_path required for body-link, got: " + r.errors());
     }
 
+    /** #1650: an endpoint answering its whole list at once. */
+    @Test void none_validates_with_a_response_path() throws Exception {
+        ValidationResult r = service.validate(load("rest-none-valid.yaml"));
+        assertTrue(r.isValid(), () -> "expected kind: none valid, got: " + r.errors());
+    }
+
+    @Test void none_requires_responsePath() throws Exception {
+        ValidationResult r = service.validate(load("rest-none-no-response-path.yaml"));
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().endsWith(".response_path")),
+            () -> "expected response_path required for none, got: " + r.errors());
+    }
+
     @Test void preset_springPage_validates() throws Exception {
         ValidationResult r = service.validate(load("rest-preset-spring-page.yaml"));
         assertTrue(r.isValid(), () -> "expected spring-page preset valid, got: " + r.errors());
@@ -894,5 +1064,72 @@ class RestConnectorValidatorTest {
         assertFalse(r.isValid());
         assertEquals(1, r.errors().stream().filter(e -> e.path().equals("spec.headers")).count(),
             () -> "one defect, one refusal: " + r.errors());
+    }
+
+    // ── #1609: spec.tls — a connector's trust in an internal CA ──
+
+    private ValidationResult withTls(String tls) throws Exception {
+        JsonNode doc = mapper.readTree(REST_HEAD.formatted(
+            "{\"id\":\"pods\",\"method\":\"GET\",\"path\":\"/api/v1/pods\"," + EP_TAIL + "}"));
+        ((ObjectNode) doc.path("spec")).set("tls", mapper.readTree(tls));
+        return service.validate(doc);
+    }
+
+    @Test void tls_withACaSecret_isValid_andNotCalledUnknown() throws Exception {
+        ValidationResult r = withTls("{\"ca_secret\":\"CLUSTER_CA\"}");
+        assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
+        assertEquals(List.of(), ValidationWarnings.unknownKeyPaths(r), () -> "tls is honored: " + r.warnings());
+    }
+
+    @Test void tls_withoutACaSecret_isRefusedByPath() throws Exception {
+        ValidationResult r = withTls("{}");
+        assertFalse(r.isValid());
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.tls.ca_secret")), () -> "got: " + r.errors());
+    }
+
+    /** Copilot/review on #1612: a blank ca_secret validated clean, then fell back to the public trust. */
+    @Test void tls_withABlankCaSecret_isRefusedByPath() throws Exception {
+        ValidationResult r = withTls("{\"ca_secret\":\"  \"}");
+        assertFalse(r.isValid());
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.tls.ca_secret")
+            && e.message().contains("blank")), () -> "got: " + r.errors());
+    }
+
+    @Test void tls_notAnObject_isRefused() throws Exception {
+        ValidationResult r = withTls("\"CLUSTER_CA\"");
+        assertFalse(r.isValid());
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.tls")), () -> "got: " + r.errors());
+    }
+
+    @Test void tls_unknownKey_isNamedByPath() throws Exception {
+        ValidationResult r = withTls("{\"ca_secret\":\"CLUSTER_CA\",\"insecure\":true}");
+        assertEquals(List.of("spec.tls.insecure"), ValidationWarnings.unknownKeyPaths(r), () -> "got: " + r.warnings());
+    }
+
+    /** #1609: an endpoint's tls is read by its run (the endpoint config lies over the connector's): sent up, not "ignored". */
+    @Test void tls_onAnEndpoint_isSentUpToSpec_notCalledUnknown() throws Exception {
+        ValidationResult r = service.validate(mapper.readTree(REST_HEAD.formatted(
+            "{\"id\":\"pods\",\"method\":\"GET\",\"path\":\"/api/v1/pods\",\"tls\":{\"ca_secret\":\"CLUSTER_CA\"}," + EP_TAIL + "}")));
+        assertEquals(List.of(), ValidationWarnings.unknownKeyPaths(r), () -> "got: " + r.warnings());
+        assertTrue(r.warnings().stream().anyMatch(w -> w.path().equals("spec.endpoints[0].tls")
+            && w.message().contains("spec.tls")), () -> "sent up by path, got: " + r.warnings());
+    }
+
+    @Test void tls_inDefaults_isRefused() throws Exception {
+        JsonNode doc = mapper.readTree(REST_HEAD.formatted(
+            "{\"id\":\"pods\",\"method\":\"GET\",\"path\":\"/api/v1/pods\"," + EP_TAIL + "}"));
+        ((ObjectNode) doc.path("spec")).set("defaults", mapper.readTree("{\"tls\":{\"ca_secret\":\"CLUSTER_CA\"}}"));
+        ValidationResult r = service.validate(doc);
+        assertFalse(r.isValid());
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.defaults.tls")), () -> "got: " + r.errors());
+    }
+
+    // ── #1611: relay still declares hasNextPage, which the spec guarantees ──
+
+    @Test void relay_withoutHasMorePath_isStillRefused() throws Exception {
+        ValidationResult r = service.validate(mapper.readTree(REST_HEAD.formatted(
+            GRAPHQL_EP.replace(",\"has_more_path\":\"$.data.x.pageInfo.hasNextPage\"", "") + "}")));
+        assertFalse(r.isValid());
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().endsWith("pagination.has_more_path")), () -> "got: " + r.errors());
     }
 }

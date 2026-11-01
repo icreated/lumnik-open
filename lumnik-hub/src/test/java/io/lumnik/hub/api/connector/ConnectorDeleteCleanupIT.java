@@ -8,6 +8,8 @@ import io.lumnik.hub.connector.api.types.RunTrigger;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
+import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
+import io.lumnik.hub.connector.mapping.writer.HybridJsonbWriter;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.runtime.ConnectorEngine;
@@ -17,13 +19,17 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -40,6 +46,7 @@ class ConnectorDeleteCleanupIT {
     @Inject ConnectorRepository connectors;
     @Inject ConnectorEndpointRepository endpoints;
     @Inject DynamicTableRegistry registry;
+    @Inject HybridJsonbWriter hybridWriter;
     @Inject UserTransaction utx;
 
     @Inject
@@ -231,7 +238,7 @@ class ConnectorDeleteCleanupIT {
         execSql("DROP TABLE IF EXISTS ext.shared_probe");
         execSql("CREATE TABLE ext.shared_probe (tenant_id bigint NOT NULL, connector_id uuid NOT NULL, v text)");
         UUID mine = persistBareConnector("extmine");
-        UUID theirs = persistBareConnector("exttheirs");
+        UUID theirs = persistBareConnector(2L, "exttheirs");
         registry.register(1L, "hybrid:ext.shared_probe", "ext", "shared_probe", Map.of("v", "text"), mine);
         registry.register(2L, "hybrid:ext.shared_probe", "ext", "shared_probe", Map.of("v", "text"), theirs);
         execSql("INSERT INTO ext.shared_probe VALUES (1, '" + mine + "', 'a'), (2, '" + theirs + "', 'b')");
@@ -261,6 +268,77 @@ class ConnectorDeleteCleanupIT {
         assertThat(scalar("SELECT count(*) FROM connector.dynamic_table WHERE connector_id='" + id + "'"))
             .as("the connector's registry rows are still deleted").isEqualTo(0L);
         execSql("DROP TABLE IF EXISTS connector.guard_probe");
+    }
+
+    @Test
+    void a_hybrid_table_under_connector_goes_with_its_connector_and_the_dry_run_counts_it() throws Exception {
+        // #1627: an Entity fuses connector.<name> only, so a REST hybrid target lives there — and delete
+        // must take it like an ext.* one: dry run, drop, and the writer's cache, or a re-ingest under
+        // the same name skips CREATE TABLE and fails on a relation that no longer exists.
+        execSql("DROP TABLE IF EXISTS connector.hyb1627");
+        HybridJsonbSpec spec = new HybridJsonbSpec("connector.hyb1627", "$.id", List.of());
+        UUID id = persistBareConnector("hyb1627");
+        writeHybrid(spec, id, "a", "b");
+
+        assertThat(registry.rowsGoingWith(id)).containsExactly(Map.entry("connector.hyb1627", 2L));
+        registry.purgeForConnector(id);
+        assertThat(tables("hyb1627")).as("the hybrid table goes with its connector").isZero();
+
+        UUID again = persistBareConnector("hyb1627");
+        writeHybrid(spec, again, "c");
+        assertThat(scalar("SELECT count(*) FROM connector.hyb1627"))
+            .as("a connector re-created under the same name starts empty").isEqualTo(1L);
+        registry.purgeForConnector(again);
+    }
+
+    @Test
+    void a_delete_keeps_the_rows_another_connector_wrote_into_a_shared_hybrid_table() throws Exception {
+        execSql("DROP TABLE IF EXISTS connector.hybshared1627");
+        UUID mine = persistBareConnector("hybmine");
+        UUID theirs = persistBareConnector(2L, "hybtheirs");
+        writeHybrid(new HybridJsonbSpec("connector.hybshared1627", "$.id", List.of()), mine, "a");
+        registry.register(2L, "hybrid:connector.hybshared1627", "connector", "hybshared1627", Map.of(), theirs);
+        execSql("INSERT INTO connector.hybshared1627 (tenant_id, external_id, data, connector_id, endpoint_id) "
+            + "VALUES (2, 'b', '{}', '" + theirs + "', '" + UUID.randomUUID() + "')");
+
+        assertThat(registry.rowsGoingWith(mine)).containsExactly(Map.entry("connector.hybshared1627", 1L));
+        registry.purgeForConnector(mine);
+
+        assertThat(scalar("SELECT count(*) FROM connector.hybshared1627 WHERE connector_id = '" + theirs + "'"))
+            .as("the other connector's row survives").isEqualTo(1L);
+        assertThat(scalar("SELECT count(*) FROM connector.hybshared1627")).as("this connector's row goes").isEqualTo(1L);
+        execSql("DROP TABLE IF EXISTS connector.hybshared1627");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(delimiter = '|', value = {
+        "an ordinary table under a hybrid marker | hybrid:connector.fake1627 | id bigint",
+        "a lookalike missing endpoint_id | hybrid:connector.fake1627 | tenant_id bigint, external_id text, row_hash text, data jsonb, connector_id uuid",
+        "a lookalike with data as text | hybrid:connector.fake1627 | tenant_id bigint, external_id text, row_hash text, data text, connector_id uuid, endpoint_id uuid",
+        "the full shape under another mapping | m-fake1627 | tenant_id bigint, external_id text, row_hash text, data jsonb, connector_id uuid, endpoint_id uuid",
+        "the full shape under a marker naming another table | hybrid:connector.other1627 | tenant_id bigint, external_id text, row_hash text, data jsonb, connector_id uuid, endpoint_id uuid",
+    })
+    void purge_keeps_a_connector_table_that_is_not_the_hybrid_writers(String why, String mappingId, String columns)
+            throws Exception {
+        execSql("DROP TABLE IF EXISTS connector.fake1627");
+        execSql("CREATE TABLE connector.fake1627 (" + columns + ")");
+        UUID id = persistBareConnector("fake1627");
+        registry.register(1L, mappingId, "connector", "fake1627", Map.of(), id);
+
+        assertThat(registry.rowsGoingWith(id)).as("the dry run does not count it").isEmpty();
+        registry.purgeForConnector(id);
+
+        assertThat(tables("fake1627")).as(why + " is not dropped").isEqualTo(1L);
+        execSql("DROP TABLE IF EXISTS connector.fake1627");
+    }
+
+    /**
+     * The hybrid writer's own write, as a REST run makes it: creates, registers and fills the table. On the admin
+     * datasource, which takes no part in JTA, so no transaction around it.
+     */
+    private void writeHybrid(HybridJsonbSpec spec, UUID connectorId, String... ids) {
+        TenantContext.runAsSystem(() -> hybridWriter.write(spec,
+            Arrays.stream(ids).<Map<String, Object>>map(i -> Map.of("id", i)).toList(), 1L, connectorId, UUID.randomUUID()));
     }
 
     /** A csv connector of {@code tenant} whose one endpoint writes {@code body} into {@code t_<table>}, run once. */
@@ -314,11 +392,15 @@ class ConnectorDeleteCleanupIT {
     }
 
     private UUID persistBareConnector(String name) {
+        return persistBareConnector(1L, name);
+    }
+
+    private UUID persistBareConnector(long tenant, String name) {
         return TenantContext.callAsSystem(() -> {
             try {
                 utx.begin();
                 Connector c = new Connector();
-                c.setTenantId(1L);
+                c.setTenantId(tenant);
                 c.setName(name + "-" + System.nanoTime());
                 c.setTypeId("csv-file");
                 c.setConfig(Map.of("kind", "csv-file"));

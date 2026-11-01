@@ -3,6 +3,7 @@ package io.lumnik.hub.ask;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.extraction.spi.ask.NoSchemaException;
 import io.lumnik.llm.spi.Analytic;
 import io.lumnik.llm.spi.AnswerLanguage;
@@ -594,7 +595,7 @@ public class AskToSqlAgent implements AskPort {
             TenantRlsScope.applyTo(c, tenantId);
             return select(c, sql);
         } catch (SQLException e) {
-            throw new RuntimeException("AskToSqlAgent.runReadOnly: " + e.getMessage(), e);
+            throw new RuntimeException(Jdbc.failureText("AskToSqlAgent.runReadOnly", e), e);
         }
     }
 
@@ -656,7 +657,7 @@ public class AskToSqlAgent implements AskPort {
                     List<Map<String,Object>> rows = select(c, safeSql);
                 return new Read(rows, probeDisputed(c, card, pp, rows.size()));
             } catch (SQLException e) {
-                throw new RuntimeException("AskToSqlAgent.runReadOnly: " + e.getMessage(), e);
+                throw new RuntimeException(Jdbc.failureText("AskToSqlAgent.readWithProbes", e), e);
             }
         });
     }
@@ -738,7 +739,7 @@ public class AskToSqlAgent implements AskPort {
         try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
             st.execute(sql);
         } catch (SQLException e) {
-            throw new RuntimeException("seedDdl: " + e.getMessage(), e);
+            throw new RuntimeException(Jdbc.failureText("AskToSqlAgent.seedDdl", e), e);
         }
     }
 }

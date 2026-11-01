@@ -32,7 +32,7 @@ public class LinkHeaderPaginationStrategy implements PaginationStrategy {
         Matcher m = LINK.matcher(link.get());
         while (m.find()) {
             // The Link header came from the upstream response — untrusted. Vet it before following (SSRF).
-            if (rel.equalsIgnoreCase(m.group(2))) return current.withUrl(PaginationUrlGuard.vet(m.group(1), current.url()));
+            if (rel.equalsIgnoreCase(m.group(2))) return current.following(PaginationUrlGuard.vet(m.group(1), current.url()));
         }
         return null;
     }

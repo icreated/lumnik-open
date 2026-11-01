@@ -185,9 +185,8 @@ class SearchProjectionWorkerRebuildTest {
         worker.rowScanner = (tenantId, index, entity, manifest, s, gen, rid) -> s.upsert(tenantId, index, gen, List.of());
         // commitMarkCleanupAndMarkReady (unchanged by this task) needs a Connection it can open,
         // commit and restore autoCommit on — markStore/stateStore never touch it themselves (both
-        // mocked), so a bare mock Connection is enough to let the untouched tail reach 'ready'.
-        worker.adminDs = mock(AgroalDataSource.class);
-        when(worker.adminDs.getConnection()).thenReturn(mock(Connection.class));
+        // mocked), so a pool's connection (in autocommit) is enough to let the untouched tail reach 'ready'.
+        worker.adminDs = autocommitPool();
 
         SearchIndexManifest manifest = new SearchIndexManifest("idx", "widget", "simple",
             List.of(new SearchIndexManifest.Field("name", SearchIndexManifest.Match.TEXT, false)));
@@ -344,8 +343,7 @@ class SearchProjectionWorkerRebuildTest {
         worker.metrics = new SearchProjectionMetrics();
         worker.metrics.registry = new SimpleMeterRegistry();
         worker.rowScanner = (tenantId, index, entity, manifest, s, gen, rid) -> { };
-        worker.adminDs = mock(AgroalDataSource.class);
-        when(worker.adminDs.getConnection()).thenReturn(mock(Connection.class));
+        worker.adminDs = autocommitPool();
 
         SearchIndexManifest manifest = new SearchIndexManifest("idx", "widget", "simple",
             List.of(new SearchIndexManifest.Field("name", SearchIndexManifest.Match.TEXT, false)));
@@ -356,5 +354,14 @@ class SearchProjectionWorkerRebuildTest {
         worker.runBuild(1L, "idx", decl, List.of(42L), base, new SearchProjectionWorker.ClaimedRun(runId, Instant.now()));
 
         verify(sink).publish(1L, "idx", "gen-1", base);
+    }
+
+    /** A pool whose connection comes out as Agroal hands it: in autocommit, which Jdbc.transaction requires (#1649). */
+    private static AgroalDataSource autocommitPool() throws SQLException {
+        Connection c = mock(Connection.class);
+        when(c.getAutoCommit()).thenReturn(true);
+        AgroalDataSource ds = mock(AgroalDataSource.class);
+        when(ds.getConnection()).thenReturn(c);
+        return ds;
     }
 }

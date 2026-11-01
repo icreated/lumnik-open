@@ -6,6 +6,7 @@ import io.lumnik.hub.connector.api.ItemReader;
 import io.lumnik.hub.connector.api.ItemWriter;
 import io.lumnik.hub.connector.api.types.*;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
+import io.lumnik.hub.connector.mapping.MappingEngine;
 import io.lumnik.hub.connector.mapping.writer.MultiTargetWriter;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
@@ -44,6 +45,7 @@ public class RestConnectorType implements ConnectorType {
     @Inject RateLimiterRegistry rateRegistry;
     @Inject RestHttpClient http;
     @Inject MultiTargetWriter multiTargetWriter;
+    @Inject MappingEngine mappingEngine;
     @Inject ObjectMapper mapper;
     @Inject SecretRefs secrets;
 
@@ -96,9 +98,9 @@ public class RestConnectorType implements ConnectorType {
             authReg, paginationFactory, rateRegistry, http, mapper, secrets);
     }
 
-    /** ItemWriter bridge: writes the collected batch via the runtime's hybrid JSONB write path. */
+    /** ItemWriter bridge: writes the collected batch via the runtime's hybrid JSONB write path, through the endpoint's mapping when it has one (#1617). */
     @Override
     public ItemWriter<?> writer(ConnectorContext ctx) {
-        return new RestEndpointWriter(multiTargetWriter);
+        return new RestEndpointWriter(multiTargetWriter, mappingEngine, mapper);
     }
 }

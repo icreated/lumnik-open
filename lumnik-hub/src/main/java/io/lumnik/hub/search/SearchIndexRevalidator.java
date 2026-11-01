@@ -95,22 +95,8 @@ public class SearchIndexRevalidator {
      * that has already moved on. Best-effort like the sweep: a failure rolls back and is rethrown.
      */
     boolean invalidateIfUnchanged(Declared d, String reason, String entityName, String entityYaml) {
-        try (Connection c = ds.getConnection()) {
-            boolean autoCommit = c.getAutoCommit();
-            c.setAutoCommit(false);
-            try {
-                boolean invalidated = invalidateIfUnchanged(c, d, reason, entityName, entityYaml);
-                c.commit();
-                return invalidated;
-            } catch (SQLException | RuntimeException e) {
-                c.rollback();
-                throw e;
-            } finally {
-                c.setAutoCommit(autoCommit);
-            }
-        } catch (SQLException e) {
-            throw new IllegalStateException("SearchIndexRevalidator.invalidate: " + e.getMessage(), e);
-        }
+        return Jdbc.transaction(ds, "SearchIndexRevalidator.invalidate",
+            (Jdbc.TxFunction<Boolean>) c -> invalidateIfUnchanged(c, d, reason, entityName, entityYaml));
     }
 
     /** The same, inside the caller's open transaction on {@code c}; the lock is held to its commit. */

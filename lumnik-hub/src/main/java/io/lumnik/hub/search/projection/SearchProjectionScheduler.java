@@ -19,10 +19,13 @@ public class SearchProjectionScheduler {
 
     private static final Logger LOG = Logger.getLogger(SearchProjectionScheduler.class);
 
+    /** The tick's name: a test pauses the job by it (#1672). */
+    static final String TICK_IDENTITY = "search-projection-tick";
+
     @Inject SearchProjectionRunReaper reaper;
     @Inject SearchProjectionWorker worker;
 
-    @Scheduled(every = "1m", concurrentExecution = SKIP)
+    @Scheduled(identity = TICK_IDENTITY, every = "1m", concurrentExecution = SKIP)
     void scheduledTick() {
         runStep("reap", reaper::reap);
         runStep("purgeDrain", worker::purgeDrain);

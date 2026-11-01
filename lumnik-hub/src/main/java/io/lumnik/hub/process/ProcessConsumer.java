@@ -3,12 +3,12 @@ package io.lumnik.hub.process;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.event.EventOutboxRow;
 import io.lumnik.hub.event.RowEventGate;
 import io.lumnik.hub.event.consumer.BatchProcessor;
 import io.lumnik.hub.event.consumer.OutboxSweeper;
-import io.lumnik.hub.sql.TemporalText;
 import io.lumnik.hub.view.ViewFilter;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.scheduler.Scheduled;
@@ -16,9 +16,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -105,19 +102,15 @@ public class ProcessConsumer {
 
     private Map<String, Object> fetchRow(String table, Long tenantId, String rowHash) {
         String sql = "SELECT * FROM " + quoteTable(table) + " WHERE _row_hash = ? AND tenant_id = ? LIMIT 1";
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+        return Jdbc.queryOne(adminDs, "ProcessConsumer.fetchRow", sql, ps -> {
             ps.setString(1, rowHash);
             ps.setLong(2, tenantId);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) return null;
-                ResultSetMetaData md = rs.getMetaData();
-                Map<String, Object> out = new LinkedHashMap<>();
-                for (int i = 1; i <= md.getColumnCount(); i++) out.put(md.getColumnLabel(i), rs.getObject(i));
-                return out;
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("ProcessConsumer.fetchRow: " + e.getMessage(), e);
-        }
+        }, rs -> {
+            ResultSetMetaData md = rs.getMetaData();
+            Map<String, Object> out = new LinkedHashMap<>();
+            for (int i = 1; i <= md.getColumnCount(); i++) out.put(md.getColumnLabel(i), rs.getObject(i));
+            return out;
+        }).orElse(null);
     }
 
     private void emit(EventOutboxRow trigger, ProcessManifestStore.StoredProcess p,
@@ -129,7 +122,7 @@ public class ProcessConsumer {
         } catch (JsonProcessingException e) {
             throw new RuntimeException("ProcessConsumer.emit: payload build failed: " + e.getMessage(), e);
         }
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(EMIT_SQL)) {
+        Jdbc.update(adminDs, "ProcessConsumer.emit", EMIT_SQL, ps -> {
             ps.setLong(1, trigger.getTenantId());
             ps.setString(2, p.emitType());
             ps.setString(3, "process:" + p.name());
@@ -137,10 +130,7 @@ public class ProcessConsumer {
             ps.setString(5, trigger.getEntityKey());
             ps.setString(6, payload);
             ps.setString(7, "process:" + p.name() + ":" + trigger.getId());
-            ps.executeUpdate();
-        } catch (Exception e) {
-            throw new RuntimeException("ProcessConsumer.emit: " + e.getMessage(), e);
-        }
+        });
     }
 
     /** The decision event payload as valid JSON — Jackson-escaped so any message text is safe.
@@ -157,11 +147,7 @@ public class ProcessConsumer {
         m.put("entity_key", entityKey);
         Set<String> refs = new LinkedHashSet<>(MessageTemplate.placeholders(template));
         refs.addAll(extra);
-        if (!refs.isEmpty()) {
-            Map<String, Object> fields = new LinkedHashMap<>();
-            for (String r : refs) fields.put(r, TemporalText.wire(row.get(r)));
-            m.put("fields", fields);
-        }
+        if (!refs.isEmpty()) m.put("fields", MessageTemplate.fields(refs, row));
         return json.writeValueAsString(m);
     }
 

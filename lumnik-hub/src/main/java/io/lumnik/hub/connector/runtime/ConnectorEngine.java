@@ -27,6 +27,7 @@ import io.lumnik.hub.connector.repository.ConnectorRunRepository;
 import io.lumnik.hub.run.RunLock;
 import io.lumnik.hub.run.RunQueueSettings;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.hub.sql.SqlFailureText;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.arc.Arc;
 import io.quarkus.narayana.jta.QuarkusTransaction;
@@ -400,7 +401,8 @@ public class ConnectorEngine {
                     cancelOutstanding(handles, i);
                     return new RunStatus.Failed(Instant.now(), "interrupted", false);
                 } catch (Exception e) {
-                    summary = new RunStatus.Failed(Instant.now(), e.getMessage(), false);
+                    // An ExecutionException's message is its cause's toString(): never the driver's words (#1648).
+                    summary = new RunStatus.Failed(Instant.now(), SqlFailureText.ownMessage(e), false);
                 }
             }
             return summary;
@@ -476,13 +478,14 @@ public class ConnectorEngine {
                 default -> LOG.errorf(e, "Connector run %s (endpoint %s) failed unexpectedly", runId, endpointId);
             }
             Instant endedAt = Instant.now();   // one instant for the row and the returned status
-            boolean ended = TenantContext.callAsSystem(() -> finalizeRun(runId, FAILED, e.getMessage(), e, endedAt));
+            String why = SqlFailureText.ownMessage(e);   // what the status may say: never the driver's words
+            boolean ended = TenantContext.callAsSystem(() -> finalizeRun(runId, FAILED, why, e, endedAt));
             // Lost the race (a cancel or a normal ending committed first): report what the row says,
             // not a Failed that never happened. Read before the flag is restored, like the write above.
             ConnectorRun winner = ended ? null : rereadRun(runId);
             RunStatus outcome = winner != null
-                    ? toRunStatus(winner, e.getMessage())
-                    : new RunStatus.Failed(endedAt, e.getMessage(), false);
+                    ? toRunStatus(winner, why)
+                    : new RunStatus.Failed(endedAt, why, false);
             if (interrupted) {
                 Thread.currentThread().interrupt();
             }
@@ -681,7 +684,7 @@ public class ConnectorEngine {
                                     SQLException lockError) {
         Instant endedAt = Instant.now();
         boolean failed = lockError != null;
-        String msg = failed ? "advisory lock error: " + lockError.getMessage()
+        String msg = failed ? Jdbc.failureText("advisory lock", lockError)
                 : "skipped: another run is already active for this endpoint";
         ConnectorRunStatus status = failed ? FAILED : CANCELLED;
         // Born terminal, never Running: V68's unique index counts Running, and a live run may hold this
@@ -926,7 +929,10 @@ public class ConnectorEngine {
         EventOutboxRow.Position highWater = EventOutboxRow.highWater(appDs, "ConnectorEngine.outboxHighWater", r.getTenantId());
         r.setOutboxHighWaterXact(highWater.xact());
         r.setOutboxHighWater(highWater.id());
-        if (errorMessage != null) r.setErrorMessage(errorMessage);
+        // The one place error_message is written: a message pasted from a database failure is cut here,
+        // whichever path brought it (#1648) — the cause, with every word, goes to error_stack.
+        if (errorMessage != null) r.setErrorMessage(
+            errorStack == null ? errorMessage : SqlFailureText.withoutDriverText(errorMessage, errorStack));
         if (errorStack != null)   r.setErrorStack(throwableToString(errorStack));
         ConnectorCursorEntity cursorEnt = r.getEndpointId() != null
                 ? cursors.findByEndpoint(r.getEndpointId()) : null;
@@ -1005,8 +1011,9 @@ public class ConnectorEngine {
         try {
             lock = RunLock.tryAcquire(adminDs, endpoint.getId());
         } catch (SQLException e) {
-            TenantContext.callAsSystem(() -> finalizeNeverRan(runId, FAILED, "advisory lock error: " + e.getMessage(), e, Instant.now()));
-            return new RunStatus.Failed(Instant.now(), "advisory lock error: " + e.getMessage(), true);
+            String msg = Jdbc.failureText("advisory lock", e);
+            TenantContext.callAsSystem(() -> finalizeNeverRan(runId, FAILED, msg, e, Instant.now()));
+            return new RunStatus.Failed(Instant.now(), msg, true);
         }
         if (lock == null) {
             // Same known transient as endedAtBirth: the endpoint reads Cancelled until the live run ends.

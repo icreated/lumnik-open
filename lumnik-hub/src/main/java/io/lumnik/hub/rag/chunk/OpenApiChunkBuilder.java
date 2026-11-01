@@ -8,6 +8,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import org.jboss.logging.Logger;
 
 import java.io.IOException;
+import java.util.Locale;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
@@ -51,9 +52,9 @@ public class OpenApiChunkBuilder {
                         ? op.get("tags").get(0).asText() : "";
 
                     chunks.add(new ExtractedChunk("operation", null,
-                        method.toUpperCase() + " " + path,
-                        String.format("%s %s — tag: %s — %s", method.toUpperCase(), path, tag, summary),
-                        Map.of("method", method.toUpperCase(), "path", path, "tag", tag)));
+                        method.toUpperCase(Locale.ROOT) + " " + path,
+                        String.format("%s %s — tag: %s — %s", method.toUpperCase(Locale.ROOT), path, tag, summary),
+                        Map.of("method", method.toUpperCase(Locale.ROOT), "path", path, "tag", tag)));
                 }
             });
         } catch (IOException e) {

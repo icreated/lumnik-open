@@ -1,9 +1,12 @@
 package io.lumnik.hub.connector.mapping.writer;
 
+import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.SqlType;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.Transform;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -33,6 +36,21 @@ class HybridJsonbTransformLocaleTest {
       assertThat(HybridJsonbWriter.applyTransform("i", Optional.of(Transform.TO_UPPER), "title"))
           .as("ASCII 'i' must upper-case to ASCII 'I', not the dotted 'İ'")
           .isEqualTo("I");
+    } finally {
+      Locale.setDefault(previous);
+    }
+  }
+
+  /** The promote type and transform names too (#1621, Copilot): "integer" upper-cased under `tr` is "İNTEGER". */
+  @Test
+  void promote_type_and_transform_names_read_alike_in_every_locale() {
+    Locale previous = Locale.getDefault();
+    try {
+      Locale.setDefault(Locale.forLanguageTag("tr"));
+      HybridJsonbSpec spec = HybridJsonbSpec.fromTargetConfig(Map.of("table", "ext.t", "unique_key", "$.id",
+          "promote", List.of(Map.of("name", "n", "path", "$.n", "type", "integer", "transform", "trim"))));
+      assertThat(spec.promote().getFirst().type()).isEqualTo(SqlType.INTEGER);
+      assertThat(spec.promote().getFirst().transform()).contains(Transform.TRIM);
     } finally {
       Locale.setDefault(previous);
     }

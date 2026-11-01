@@ -1,6 +1,7 @@
 package io.lumnik.hub.audit;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.scheduler.Scheduled;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -8,7 +9,6 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.sql.*;
-import java.util.ArrayList;
 import java.util.List;
 
 import static io.quarkus.scheduler.Scheduled.ConcurrentExecution.SKIP;
@@ -28,7 +28,7 @@ public class AuditDispatcher {
 
     // SKIP LOCKED: a row another drain holds (a second replica, or a direct call next to the
     // scheduled one) is left to it, never copied a second time (#1311). The lock lasts until
-    // drain()'s commit, so it needs autoCommit off, which drain() sets.
+    // drain()'s commit: the whole drain is one transaction.
     private static final String SELECT_PENDING = """
             SELECT id, tenant_id, actor_id, entity_type, entity_key, operation, changes, created_at
               FROM core.audit_outbox
@@ -53,38 +53,30 @@ public class AuditDispatcher {
 
     @Scheduled(every = "2s", concurrentExecution = SKIP)
     void drain() {
-        try (Connection conn = adminDs.getConnection()) {
-            conn.setAutoCommit(false);
-            List<Row> pending = fetchPending(conn);
-            if (pending.isEmpty()) {
-                conn.rollback();
-                return;
-            }
-            dispatch(conn, pending);
-            conn.commit();
-            LOG.debugf("AuditDispatcher: dispatched %d event(s)", pending.size());
-        } catch (Exception e) {
+        try {
+            // An Error between the two batches rolls back too (#1649): left open, the pool's reset would COMMIT the
+            // events without the rows marked, and the next drain would copy them again.
+            int dispatched = Jdbc.transaction(adminDs, "AuditDispatcher.drain", conn -> {
+                List<Row> pending = fetchPending(conn);
+                if (!pending.isEmpty()) dispatch(conn, pending);
+                return pending.size();
+            });
+            if (dispatched > 0) LOG.debugf("AuditDispatcher: dispatched %d event(s)", dispatched);
+        } catch (RuntimeException e) {
             LOG.errorf(e, "AuditDispatcher: drain failed");
         }
     }
 
-    private List<Row> fetchPending(Connection conn) throws SQLException {
-        List<Row> rows = new ArrayList<>();
-        try (Statement st = conn.createStatement();
-             ResultSet rs = st.executeQuery(SELECT_PENDING)) {
-            while (rs.next()) {
-                rows.add(new Row(
-                        rs.getLong("id"),
-                        rs.getLong("tenant_id"),
-                        rs.getObject("actor_id", Long.class),
-                        rs.getString("entity_type"),
-                        rs.getString("entity_key"),
-                        rs.getString("operation"),
-                        rs.getString("changes"),
-                        rs.getTimestamp("created_at")));
-            }
-        }
-        return rows;
+    private List<Row> fetchPending(Connection conn) {
+        return Jdbc.query(conn, "AuditDispatcher.fetchPending", SELECT_PENDING, ps -> {}, rs -> new Row(
+                rs.getLong("id"),
+                rs.getLong("tenant_id"),
+                rs.getObject("actor_id", Long.class),
+                rs.getString("entity_type"),
+                rs.getString("entity_key"),
+                rs.getString("operation"),
+                rs.getString("changes"),
+                rs.getTimestamp("created_at")));
     }
 
     private void dispatch(Connection conn, List<Row> rows) throws SQLException {

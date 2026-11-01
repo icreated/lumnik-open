@@ -16,6 +16,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 
+import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.advanceFailsOnce;
 import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.createMatchSourceTable;
 import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.insertRow;
 import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.markCount;
@@ -23,11 +24,6 @@ import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.markedKeys
 import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.watermarkRowCount;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.doThrow;
-import static org.mockito.Mockito.spy;
 
 /**
  * #895: a scan with no watermark (the first one after a SearchIndex apply) reads the table's whole history. One query
@@ -84,13 +80,12 @@ class SearchProjectionKeyStreamIT {
         String index = "key-stream-rb-" + System.nanoTime();
         createMatchSourceTable(adminDs, table);
         for (String code : List.of("c1", "c2", "c3", "c4", "c5")) insertRow(adminDs, table, tenant, code, "n");
-        SearchProjectionWatermarkStore failingAdvance = spy(new SearchProjectionWatermarkStore());
-        doThrow(new SQLException("advance failed")).when(failingAdvance).advance(any(), anyLong(), anyString(), any());
         List<List<String>> slices = new ArrayList<>();
-        SearchProjectionRunHook hook = hook(adminDs, recordingSlices(slices), failingAdvance);
+        SearchProjectionRunHook hook = advanceFailsOnce(adminDs, null, recordingSlices(slices), new RuntimeException("advance failed", new SQLException("advance failed")));
+        hook.matchKeysBatchSize = SLICE;
 
         assertThatThrownBy(() -> hook.processTable(tenant, table, List.of(target(table, index))))
-            .hasMessage("advance failed");
+            .cause().hasMessage("advance failed");   // labelled by Jdbc.transaction (#1649)
 
         assertThat(slices).as("every slice was written before the advance failed").hasSize(3);
         assertThat(markCount(adminDs, tenant, index, REASON)).as("no slice survives the rollback").isZero();
@@ -118,7 +113,7 @@ class SearchProjectionKeyStreamIT {
         return new SearchProjectionMarkStore() {
             @Override
             public void markKeysAsAdmin(Connection c, long tenantId, String searchIndex, String entity,
-                                        List<String> canonicalKeys, String reason) throws SQLException {
+                                        List<String> canonicalKeys, String reason) {
                 slices.add(List.copyOf(canonicalKeys));
                 super.markKeysAsAdmin(c, tenantId, searchIndex, entity, canonicalKeys, reason);
             }

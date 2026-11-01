@@ -38,6 +38,12 @@
             <artifactId>hibernate-core</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!-- The JTA API for SuspendedTransaction — the implementation is each Quarkus module's -->
+        <dependency>
+            <groupId>jakarta.transaction</groupId>
+            <artifactId>jakarta.transaction-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>jakarta.validation</groupId>
             <artifactId>jakarta.validation-api</artifactId>

@@ -6,7 +6,6 @@ import io.lumnik.hub.connector.mapping.MappingValidationException;
 import io.lumnik.hub.connector.mapping.Zones;
 import io.lumnik.hub.manifest.ManifestKeys;
 import io.lumnik.hub.manifest.ManifestSurface;
-import io.lumnik.hub.process.MessageTemplate;
 import io.lumnik.hub.sql.SqlIdentifiers;
 
 import java.util.ArrayList;
@@ -31,18 +30,20 @@ public class WorkflowManifestParser {
     private static final Set<String> ROOT_KEYS = Set.of("apiVersion", "kind", METADATA, "spec");
     private static final Set<String> METADATA_KEYS = Set.of("name");
     private static final Set<String> SPEC_KEYS =
-        Set.of("scope", "provenance", "on", "states", "transitions", "dormancy", "due");
-    private static final Set<String> ON_KEYS = Set.of("table", "column", "key");
+        Set.of("scope", "provenance", "on", "check", "states", "transitions", "dormancy", "due");
+    private static final Set<String> ON_KEYS = Set.of("table", "column", "key", "order");
+    private static final Set<String> CHECK_KEYS = Set.of("trigger");
     private static final Set<String> STATE_KEYS = Set.of("code", "label", "aliases", "initial", "terminal");
     private static final Set<String> TRANSITION_KEYS = Set.of("from", "to");
-    private static final Set<String> DORMANCY_KEYS = Set.of("after", "message");
-    private static final Set<String> DUE_KEYS = Set.of("column", "states", "zone", "message");
+    private static final Set<String> DORMANCY_KEYS = Set.of("after", "message", "fields");
+    private static final Set<String> DUE_KEYS = Set.of("column", "states", "zone", "message", "fields");
 
     private static final ManifestSurface SURFACE = ManifestSurface.builder()
         .group("", "root", ROOT_KEYS)
         .group(METADATA, "metadata", METADATA_KEYS)
         .group("spec", "spec", SPEC_KEYS)
         .group("spec.on", "spec.on", ON_KEYS)
+        .group("spec.check", "spec.check", CHECK_KEYS)
         .group("spec.dormancy", "spec.dormancy", DORMANCY_KEYS)
         .group("spec.due", "spec.due", DUE_KEYS)
         .group("spec.states[]", "states[]", STATE_KEYS)
@@ -61,6 +62,8 @@ public class WorkflowManifestParser {
      *  legal here and illegal under {@code t_}: the two prefixes do not share an alphabet. */
     private static final String FUSED_VIEW_NAME_RX = "[a-z0-9_]+";
     private static final String AFTER_RX = "[0-9]+[mhd]";
+    /** The one trigger {@code spec.check} knows besides the apply, which always checks. */
+    private static final String INGESTION_TRIGGER = "ingestion";
 
     /** Alias/code matching normalization — trim + lowercase. Excel reality is dirty input, not error. */
     public static String norm(String s) {
@@ -94,11 +97,13 @@ public class WorkflowManifestParser {
         WorkflowManifest.DueDef due = optionalDue(spec, watched, declared);
 
         return new WorkflowManifest(name, scope, provenance, watched.table(), watched.column(),
-            watched.key(), dormancy, due, List.copyOf(declared.states()), List.copyOf(transitions));
+            watched.key(), checkOnIngestion(spec), watched.order(), dormancy, due, List.copyOf(declared.states()),
+            List.copyOf(transitions));
     }
 
-    /** The column this workflow watches, and the optional business key linking a document's versions. */
-    private record Watched(String table, String column, String key) {}
+    /** The column this workflow watches, the optional business key linking a document's versions, and the
+     *  optional column ordering those versions (#1588). */
+    private record Watched(String table, String column, String key, String order) {}
 
     /** The declared states, with their codes normalized once for every later membership test. */
     private record Declared(List<WorkflowManifest.StateDef> states, Set<String> codes) {}
@@ -177,7 +182,32 @@ public class WorkflowManifestParser {
         String column = requireNamed(ManifestKeys.text(on, "column"), "spec.on.column");
         String key = ManifestKeys.text(on, "key");
         if (key != null) requireNamed(key, "spec.on.key");
-        return new Watched(table, column, key);
+        String order = ManifestKeys.text(on, "order");
+        if (order != null) {
+            requireNamed(order, "spec.on.order");
+            if (key == null)
+                throw new IllegalArgumentException("spec.on.order requires spec.on.key: it orders the versions of one "
+                    + "document, and the key names the document");
+        }
+        return new Watched(table, column, key, order);
+    }
+
+    /**
+     * When the declaration is confronted with the data besides the apply, which always does it (#1589).
+     * {@code spec.check} says WHEN; {@code spec.on} says WHAT is watched. A trigger is a word, so a new
+     * one is a new value rather than a new switch, and an unknown one is refused, never ignored.
+     */
+    private static boolean checkOnIngestion(JsonNode spec) {
+        JsonNode check = spec.path("check");
+        if (check.isMissingNode() || check.isNull()) return false;
+        if (!check.isObject())
+            throw new IllegalArgumentException("spec.check must be a map {trigger} (got "
+                + MappingValidationException.typeName(check) + ")");
+        String trigger = ManifestKeys.strictRequiredText(check, "trigger", "spec.check.trigger");
+        if (!INGESTION_TRIGGER.equals(trigger))
+            throw new IllegalArgumentException("spec.check.trigger must be '" + INGESTION_TRIGGER + "' (got '"
+                + trigger + "'): the apply always checks, and 'ingestion' re-checks after each completed run");
+        return true;
     }
 
     /**
@@ -256,13 +286,11 @@ public class WorkflowManifestParser {
     /**
      * Dormancy is the WATCHED half of a workflow, and not every watchable target can carry it.
      *
-     * <p>A fused entity view cannot: the sweep is per-document, picking a key's latest version with
-     * {@code ORDER BY key, _ingested_at DESC, id DESC} under {@code tenant_id = ?}, and an
-     * {@code EntityViewCompiler} view projects the canonical columns plus {@code _conflicts} — none
-     * of those three. Declared anyway, it applies with a clean 200 and then fails 42703 on every
-     * tick inside the sweep's per-workflow net: an alert that can never arrive, and nothing for the
-     * integrator to look at. Unlike {@code tableMissing} or {@code keyColumnMissing}, the condition
-     * can never resolve — it is what a view IS — so this is a refusal, not a report.
+     * <p>A fused entity view carries no ingest order, and may hold several rows per key (one per event,
+     * say): the sweep cannot tell a document's latest version on its own. Dormancy on a view therefore
+     * needs {@code spec.on.order}, the column that orders a document's versions (#1588); the ties and the
+     * unreadable keys are the sweep's business. Without it the declaration could never fire, which never
+     * resolves, so it is a refusal, not a report.
      *
      * <p>It is checked BEFORE the key: sending someone to add {@code spec.on.key} when no key can
      * help is the wrong errand. (An entity manifest could in principle map a canonical column
@@ -273,11 +301,10 @@ public class WorkflowManifestParser {
     private static WorkflowManifest.DormancyDef optionalDormancy(JsonNode spec, Watched watched) {
         JsonNode dorm = spec.path("dormancy");
         if (dorm.isMissingNode() || dorm.isNull()) return null;
-        if (watched.table().startsWith(FUSED_VIEW_PREFIX))
-            throw new IllegalArgumentException("spec.dormancy cannot be declared on a fused entity "
-                + "view (" + watched.table() + "): the sweep orders a document's versions by their "
-                + "ingest, and a view carries none. Declare it on the ingest table the entity fuses, "
-                + "or drop spec.dormancy and keep the taxonomy");
+        if (watched.table().startsWith(FUSED_VIEW_PREFIX) && watched.order() == null)
+            throw new IllegalArgumentException("spec.dormancy on a fused view needs spec.on.order: a view has "
+                + "no ingest order, so name the column that orders a document's versions ("
+                + watched.table() + ")");
         String key = watched.key();
         if (key == null)
             throw new IllegalArgumentException(
@@ -289,15 +316,16 @@ public class WorkflowManifestParser {
                 "spec.dormancy.after is required and must match " + AFTER_RX
                     + " (e.g. 30d, 12h, 2m): " + after);
         String message = ManifestKeys.text(dorm, "message");
-        if (message != null) requireKnownPlaceholders(message, "spec.dormancy.message", DormancyMessage.PLACEHOLDERS);
-        return new WorkflowManifest.DormancyDef(after, message);
+        if (message != null) requireSaysSomething(message, "spec.dormancy.message");
+        return new WorkflowManifest.DormancyDef(after, message,
+            ManifestKeys.columnNames(dorm.path("fields"), "spec.dormancy.fields"));
     }
 
     /**
      * A watched due date (#1448) — the clock is a date the DATA carries, where dormancy's is our
-     * first sighting. Unlike dormancy it is admitted on a fused view: a view has one row per key,
-     * so there are no versions to order, and the view is where a lifecycle spread over several
-     * flows lives.
+     * first sighting. It is admitted on a fused view without {@code spec.on.order}, read row by row as
+     * before #1588: the view is where a lifecycle spread over several flows lives. A view holding several
+     * rows per key needs the order to pick one, and the apply report counts the keys concerned.
      *
      * <p>Its states must be declared codes (an alias is a raw value, not a state) and non-terminal:
      * a terminal document can never be late, so naming one is a contradiction, not a wish. Whether
@@ -308,7 +336,7 @@ public class WorkflowManifestParser {
         JsonNode due = spec.path("due");
         if (due.isMissingNode() || due.isNull()) return null;
         if (!due.isObject())
-            throw new IllegalArgumentException("spec.due must be a map {column, states, zone, message} (got "
+            throw new IllegalArgumentException("spec.due must be a map {column, states, zone, message, fields} (got "
                 + MappingValidationException.typeName(due) + ")");
         if (watched.key() == null)
             throw new IllegalArgumentException(
@@ -319,8 +347,9 @@ public class WorkflowManifestParser {
         Zones.whyNot(zone).ifPresent(why -> { throw new IllegalArgumentException("spec.due: " + why); });
         if (zone != null && zone.isBlank()) zone = null;   // blank is no zone, as Zones reads it
         String message = ManifestKeys.text(due, "message");
-        if (message != null) requireKnownPlaceholders(message, "spec.due.message", DueMessage.PLACEHOLDERS);
-        return new WorkflowManifest.DueDef(column, states, zone, message);
+        if (message != null) requireSaysSomething(message, "spec.due.message");
+        return new WorkflowManifest.DueDef(column, states, zone, message,
+            ManifestKeys.columnNames(due.path("fields"), "spec.due.fields"));
     }
 
     private static List<String> requireDueStates(JsonNode node, Declared declared) {
@@ -345,18 +374,17 @@ public class WorkflowManifestParser {
         return List.copyOf(states);
     }
 
-    /** A declared sentence must say something, and may name only what its renderer knows. */
-    private static void requireKnownPlaceholders(String message, String path, Set<String> known) {
+    /**
+     * A declared sentence must say something. A name in it that is not reserved is a column of the watched relation
+     * (#1588): whether the relation has it is the apply door's question, asked of the catalog, since declaring before
+     * ingesting is legitimate.
+     */
+    private static void requireSaysSomething(String message, String path) {
         if (message.isBlank())
             throw new IllegalArgumentException(path + " must not be blank — omit it for the default sentence");
-        List<String> unknown = MessageTemplate.placeholders(message).stream()
-            .filter(p -> !known.contains(p)).toList();
-        if (!unknown.isEmpty())
-            throw new IllegalArgumentException(path + " references "
-                + unknown.stream().map(p -> "{" + p + "}").toList() + " — it may name "
-                + known.stream().sorted().toList());
     }
 
+    /** {@code fields}: columns of the watched relation sent in the payload, never in the sentence (#1588). */
     private static Declared requireStates(JsonNode spec) {
         List<WorkflowManifest.StateDef> states = new ArrayList<>();
         Set<String> codes = new HashSet<>();

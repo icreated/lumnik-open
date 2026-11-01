@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class RestEndpointWriterHybridTableValidationTest {
 
-    private final RestEndpointWriter writer = new RestEndpointWriter(null);
+    private final RestEndpointWriter writer = new RestEndpointWriter(null, null, null);
 
     @Test
     void rejects_a_table_containing_a_single_quote() {

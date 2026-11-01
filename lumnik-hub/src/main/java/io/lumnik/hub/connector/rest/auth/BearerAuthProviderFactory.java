@@ -22,9 +22,11 @@ public class BearerAuthProviderFactory implements AuthProviderFactory {
         // one: naming a secret that nothing holds is a misconfiguration, and silently using the
         // literal beside it would hide exactly that.
         String token = envName == null ? inline : secrets.lookup(envName);
+        // The word before the token (#1640): Bearer, or what the API wants — Token for Django REST Framework.
+        String scheme = spec.config().getOrDefault("scheme", "Bearer");
         return new AuthProvider() {
             @Override public RestRequest apply(RestRequest r) {
-                return token == null ? r : r.withHeader("Authorization", "Bearer " + token);
+                return token == null ? r : r.withHeader("Authorization", scheme + " " + token);
             }
             @Override public void probe() {
                 if (token == null || token.isBlank())

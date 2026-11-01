@@ -46,11 +46,9 @@ public class RelayPaginationStrategy implements PaginationStrategy {
 
     @Override
     public RestRequest next(RestResponse resp, RestRequest current) {
-        Boolean hm = JsonPathExtractor.read(resp.json(), hasMorePath);
+        Boolean hm = PaginationSupport.flag(resp.json(), hasMorePath, "has_more_path");
         if (!Boolean.TRUE.equals(hm)) return null;
-        Object cur = JsonPathExtractor.read(resp.json(), cursorPath);
-        if (cur == null) return null;
-        return binding.bind(current, String.valueOf(cur));
+        return binding.bind(current, PaginationSupport.cursorWhileMore(resp.json(), cursorPath));
     }
 
     @Override

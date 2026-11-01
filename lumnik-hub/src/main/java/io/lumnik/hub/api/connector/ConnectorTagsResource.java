@@ -47,7 +47,7 @@ public class ConnectorTagsResource {
     for (String t : tags) {
       var problem = ScopeGrants.nameProblem(t);
       if (problem.isPresent()) {
-        return Response.status(400).entity(Map.of("error", problem.get())).build();
+        return ApiErrors.badRequest(problem.get());
       }
     }
     ConnectorScope.refuseUnlessHolds(tags);   // and the scopes it moves into (#1208)

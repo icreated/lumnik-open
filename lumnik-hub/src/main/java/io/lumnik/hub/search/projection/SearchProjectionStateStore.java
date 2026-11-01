@@ -8,7 +8,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -210,41 +209,32 @@ public class SearchProjectionStateStore {
      *  No shared binder with the plain 5-arg {@code markReady} any more — the two SQL strings no
      *  longer share column order, so sharing one was only ever a coincidence. */
     public void markReady(Connection c, long tenantId, String searchIndex, String providerName, String generation,
-                           long position, UUID runId) throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement(MARK_READY_ENDING_RUN_SQL)) {
+                           long position, UUID runId) {
+        Jdbc.update(c, "SearchProjectionStateStore.markReady", MARK_READY_ENDING_RUN_SQL, ps -> {
             ps.setString(1, providerName);
             ps.setString(2, generation);
             ps.setLong(3, position);
             ps.setObject(4, runId);
             ps.setLong(5, tenantId);
             ps.setString(6, searchIndex);
-            ps.executeUpdate();
-        }
+        });
     }
 
     /** #1219: releases a withheld index once {@code built}, the definition just published, narrows nothing the
      *  stored declaration holds. FOR UPDATE, as the apply door reads it: no re-apply lands between the two. */
     public void releaseIfServingTheDeclaration(Connection c, long tenantId, String index,
-                                               ProjectionDefinition built) throws SQLException {
-        String yaml;
-        try (PreparedStatement ps = c.prepareStatement("SELECT manifest_yaml FROM core.search_index "
-                + "WHERE tenant_id = ? AND name = ? AND withheld FOR UPDATE")) {
-            ps.setLong(1, tenantId);
-            ps.setString(2, index);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) return;
-                yaml = rs.getString(1);
-            }
-        }
-        boolean served = ProjectionDefinitions.fromStored(yaml)
+                                               ProjectionDefinition built) {
+        Optional<String> yaml = Jdbc.queryOne(c, "SearchProjectionStateStore.releaseIfServingTheDeclaration read",
+            "SELECT manifest_yaml FROM core.search_index WHERE tenant_id = ? AND name = ? AND withheld FOR UPDATE",
+            ps -> { ps.setLong(1, tenantId); ps.setString(2, index); },
+            rs -> rs.getString(1));
+        if (yaml.isEmpty()) return;
+        boolean served = ProjectionDefinitions.fromStored(yaml.get())
             .map(declared -> !ProjectionDefinitions.narrows(built, declared)).orElse(false);
         if (!served) return;
-        try (PreparedStatement ps = c.prepareStatement(
-                "UPDATE core.search_index SET withheld = false WHERE tenant_id = ? AND name = ?")) {
-            ps.setLong(1, tenantId);
-            ps.setString(2, index);
-            ps.executeUpdate();
-        }
+        Jdbc.update(c, "SearchProjectionStateStore.releaseIfServingTheDeclaration release",
+            "UPDATE core.search_index SET withheld = false WHERE tenant_id = ? AND name = ?",
+            ps -> { ps.setLong(1, tenantId); ps.setString(2, index); });
     }
 
     /** §3.1 step 4 / §2: written the instant sink.beginGeneration returns, so the reaper (Task 7) can
@@ -504,31 +494,26 @@ public class SearchProjectionStateStore {
             (Jdbc.TxFunction<CancelResult>) c -> requestCancel(c, tenantId, searchIndex));
     }
 
-    private CancelResult requestCancel(Connection c, long tenantId, String searchIndex) throws SQLException {
-        UUID activeRunId;
-        String activeRunPhase;
-        try (PreparedStatement ps = c.prepareStatement(
-                "SELECT active_run_id, active_run_phase FROM core.search_projection_state "
-              + "WHERE tenant_id = ? AND search_index = ? FOR UPDATE")) {
-            ps.setLong(1, tenantId);
-            ps.setString(2, searchIndex);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) return new CancelResult.NoActiveRun(); // no row at all — Review Focus
-                activeRunId = rs.getObject(1, UUID.class);
-                activeRunPhase = rs.getString(2);
-            }
-        }
-        if (activeRunId == null) return new CancelResult.NoActiveRun();
-        if ("publishing".equals(activeRunPhase)) return new CancelResult.PastCancellablePoint(activeRunId);
+    private record ActiveRun(UUID id, String phase) {}
 
-        try (PreparedStatement ps = c.prepareStatement(
-                "UPDATE core.search_projection_state SET cancel_requested_run_id = ?, updated_at = now() "
-              + "WHERE tenant_id = ? AND search_index = ?")) {
-            ps.setObject(1, activeRunId);
-            ps.setLong(2, tenantId);
-            ps.setString(3, searchIndex);
-            ps.executeUpdate();
-        }
+    private CancelResult requestCancel(Connection c, long tenantId, String searchIndex) {
+        ActiveRun run = Jdbc.queryOne(c, "SearchProjectionStateStore.requestCancel read",
+            "SELECT active_run_id, active_run_phase FROM core.search_projection_state "
+          + "WHERE tenant_id = ? AND search_index = ? FOR UPDATE",
+            ps -> { ps.setLong(1, tenantId); ps.setString(2, searchIndex); },
+            rs -> new ActiveRun(rs.getObject(1, UUID.class), rs.getString(2))).orElse(null);
+        if (run == null || run.id() == null) return new CancelResult.NoActiveRun(); // no row at all — Review Focus
+        UUID activeRunId = run.id();
+        if ("publishing".equals(run.phase())) return new CancelResult.PastCancellablePoint(activeRunId);
+
+        Jdbc.update(c, "SearchProjectionStateStore.requestCancel write",
+            "UPDATE core.search_projection_state SET cancel_requested_run_id = ?, updated_at = now() "
+          + "WHERE tenant_id = ? AND search_index = ?",
+            ps -> {
+                ps.setObject(1, activeRunId);
+                ps.setLong(2, tenantId);
+                ps.setString(3, searchIndex);
+            });
         return new CancelResult.Requested(activeRunId);
     }
 }

@@ -286,8 +286,7 @@ public class ConnectorAdminResource {
         ? "table " + table + " feeds entity " + entity
             + " — remove the entity first (lm entity delete " + entity + ")"
         : "table " + table + " has a dependent view " + view + " — drop it first";
-    return Response.status(409).type(MediaType.APPLICATION_JSON)
-        .entity(ApiErrors.error(detail)).build();
+    return ApiErrors.conflict(detail);
   }
 
   /**
@@ -303,8 +302,7 @@ public class ConnectorAdminResource {
   private Response refuseBadMapColumns(Map<String, Object> config) {
     if (config == null) return null;
     return MapColumnsRules.firstStoredConfigViolation(json.valueToTree(config))
-        .map(v -> Response.status(400).type(MediaType.APPLICATION_JSON)
-            .entity(ApiErrors.error("config '" + v.path() + "' " + v.reason())).build())
+        .map(v -> ApiErrors.badRequest("config '" + v.path() + "' " + v.reason()))
         .orElse(null);
   }
 
@@ -379,8 +377,7 @@ public class ConnectorAdminResource {
     // worker (a separate transaction) can read the row it must finalize.
     var runIds = engine.submitRun(id, new RunTrigger.Manual(RequireUser.current()));
     if (runIds.isEmpty()) {
-      return Response.status(422)
-          .entity(Map.of("error", "no runnable endpoint for connector " + id)).build();
+      return ApiErrors.status(422, "no runnable endpoint for connector " + id).build();
     }
     dispatcher.wake();   // a no-op unless the door queued (lumnik.run-queue.enabled)
     // Single-endpoint (flat) connectors return one run id under "runId"; multi-endpoint fan-out also

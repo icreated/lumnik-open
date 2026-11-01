@@ -22,7 +22,6 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 import java.util.List;
-import java.util.Map;
 
 /**
  * The write path notification_rule never had (chantier C3): EmailConsumer has swept this
@@ -79,15 +78,15 @@ public class NotificationRuleResource {
         // not yet turned away. Same order as the schema-card door and both process write doors.
         long tenant = RequireTenant.current();
         if (in == null || in.eventPattern() == null || in.eventPattern().isBlank())
-            return bad("eventPattern is required (an exact type, or a prefix ending in .*)");
+            return ApiErrors.badRequest("eventPattern is required (an exact type, or a prefix ending in .*)");
         if (in.recipient() == null || in.recipient().isBlank())
-            return bad("recipient is required");
+            return ApiErrors.badRequest("recipient is required");
         String template = in.template() == null || in.template().isBlank()
             ? "event-notification" : in.template();
         // Same guard as the consumer (one truth): a template name is a kebab-case token,
         // never a path — refused at the door instead of skipped at delivery time.
         if (!EmailConsumer.SAFE_TEMPLATE.matcher(template).matches())
-            return bad("template must match [a-z0-9-]+ (a template name, not a path)");
+            return ApiErrors.badRequest("template must match [a-z0-9-]+ (a template name, not a path)");
         String entityFilter = blankToNull(in.entityFilter());
         // Only for data.row.changed is the entity a table a connector's row writer fills. Other
         // families stamp their own: a decision.dormant.* carries the workflow's watched table,
@@ -96,7 +95,7 @@ public class NotificationRuleResource {
         // this same column with it.
         if (entityFilter != null && RowEventGate.matchesRowChanged(in.eventPattern().strip())
                 && !tables.emitsRowEvents(tenant, entityFilter))
-            return bad("entityFilter '" + entityFilter + "' names no table that emits"
+            return ApiErrors.badRequest("entityFilter '" + entityFilter + "' names no table that emits"
                 + " data.row.changed — that event's entity is the full name of the table a"
                 + " connector's row writer fills (connector.t_<name>). Run the connector once, or"
                 + " leave entityFilter out to match every entity");
@@ -121,9 +120,5 @@ public class NotificationRuleResource {
 
     private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s.strip();
-    }
-
-    private static Response bad(String message) {
-        return Response.status(400).entity(Map.of("error", message)).build();
     }
 }

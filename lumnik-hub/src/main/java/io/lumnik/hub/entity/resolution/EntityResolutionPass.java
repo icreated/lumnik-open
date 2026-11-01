@@ -1,6 +1,7 @@
 package io.lumnik.hub.entity.resolution;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityRegistry;
 import io.quarkus.agroal.DataSource;
@@ -457,13 +458,12 @@ public class EntityResolutionPass {
   }
 
   private List<Map<String, String>> page(String sql, ResolveTarget t, List<Object> fixedParams, long[] keys) {
-    try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
-      int n = bind(ps, fixedParams);
-      ps.setArray(n + 1, c.createArrayOf("bigint", Arrays.stream(keys).boxed().toArray()));
-      return runQuery(ps, t.physicalCols());
-    } catch (SQLException e) {
-      throw queryFailed(t, e);
-    }
+    return Jdbc.query(adminDs, "EntityResolutionPass: pagination query for source '" + t.source().table() + "'", sql,
+        ps -> {
+          int n = bind(ps, fixedParams);
+          ps.setArray(n + 1, ps.getConnection().createArrayOf("bigint", Arrays.stream(keys).boxed().toArray()));
+        },
+        rs -> row(rs, t.physicalCols()));
   }
 
   private static int bind(PreparedStatement ps, List<Object> params) throws SQLException {
@@ -515,15 +515,9 @@ public class EntityResolutionPass {
    * them — so a name-based lookup per column per row would only pay for a label search this fixed
    * layout never needs.
    */
-  private List<Map<String, String>> runQuery(PreparedStatement ps, List<String> physicalCols) throws SQLException {
-    try (ResultSet rs = ps.executeQuery()) {
-      List<Map<String, String>> rows = new ArrayList<>();
-      while (rs.next()) {
-        Map<String, String> values = new LinkedHashMap<>();
-        for (int i = 0; i < physicalCols.size(); i++) values.put(physicalCols.get(i), rs.getString(i + 2));
-        rows.add(values);
-      }
-      return rows;
-    }
+  private static Map<String, String> row(ResultSet rs, List<String> physicalCols) throws SQLException {
+    Map<String, String> values = new LinkedHashMap<>();
+    for (int i = 0; i < physicalCols.size(); i++) values.put(physicalCols.get(i), rs.getString(i + 2));
+    return values;
   }
 }

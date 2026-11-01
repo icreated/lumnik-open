@@ -30,6 +30,7 @@ import java.net.ConnectException;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
 import java.time.Instant;
+import java.util.function.UnaryOperator;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -94,7 +95,7 @@ class RestEndpointReaderCursorTest {
         final List<RestRequest> calls = new ArrayList<>();
         @Override public RestResponse execute(RestRequest req) {
             calls.add(req);
-            return new RestResponse(200, Map.of(), "{}", null);
+            return RestResponse.of(200, Map.of(), "{}");
         }
     }
 
@@ -187,6 +188,15 @@ class RestEndpointReaderCursorTest {
             "the message names the endpoint it could not find: " + e.getMessage());
     }
 
+    /** #1641: a scheme written null (YAML `scheme:` left empty) is absent, so bearer keeps its Bearer word. */
+    @Test
+    void a_null_auth_value_is_dropped_so_its_default_holds() {
+        Map<String, Object> raw = new HashMap<>(Map.of("kind", "bearer", "token_env", "TB"));
+        raw.put("scheme", null);
+        AuthSpec spec = RestEndpointReader.toAuthSpec(raw, new AuthSpec.Owner(1L, CONNECTOR));
+        assertFalse(spec.config().containsKey("scheme"), () -> "null dropped, got: " + spec.config());
+    }
+
     @Test
     void every_page_is_followed_and_the_items_arrive_as_one_batch() {
         pagination.pages = List.of(
@@ -197,6 +207,45 @@ class RestEndpointReaderCursorTest {
 
         assertEquals(2, http.calls.size(), "two pages, two requests");
         assertEquals(3, more.records().size(), "one endpoint = one chunk: every page lands in a single batch");
+    }
+
+    /** A strategy whose every next request is {@code next.apply(sent)}: the source's answer never moves it on. */
+    private RestEndpointReader readerWhoseNextIs(UnaryOperator<RestRequest> next) {
+        PaginationFactory stuck = new PaginationFactory() {
+            @Override public PaginationStrategy build(Map<String, Object> cfg) {
+                return new PaginationStrategy() {
+                    @Override public RestRequest first(EndpointConfig c, Object incremental) {
+                        return RestRequest.get("https://erp.test/events");
+                    }
+                    @Override public List<Map<String, Object>> items(RestResponse resp) { return List.of(item("2026-01-01")); }
+                    @Override public RestRequest next(RestResponse resp, RestRequest current) { return next.apply(current); }
+                };
+            }
+        };
+        return new RestEndpointReader(endpoint, new PassThroughAuth(), stuck, new RateLimiterRegistry(), http, mapper,
+            SecretRefs.environmentOnly(name -> null));
+    }
+
+    /** #1635: the source sends back the cursor it was given while saying more — a partial read, never Completed. */
+    @Test
+    void a_source_repeating_the_cursor_it_was_given_fails_the_read() {
+        endpoint.setName("events");
+        RestEndpointReader reader = readerWhoseNextIs(sent -> sent.withQuery("cursor", "c-100"));
+
+        var e = assertThrows(ConnectorException.class, () -> reader.read(100, null, ctx(Map.of("base_url", "https://erp.test"))));
+
+        assertEquals(2, http.calls.size(), "the first page, then the cursor once");
+        assertTrue(e.getMessage().startsWith("Endpoint 'events': the source sent back the cursor it was given"), e.getMessage());
+        assertFalse(e.getMessage().contains("c-100"), "never the cursor's value: " + e.getMessage());
+    }
+
+    /** #1387 unchanged: a first request asked again as it is carries no paging — one request, the read ends. */
+    @Test
+    void a_first_request_asked_again_unchanged_is_a_service_that_does_not_page() {
+        var more = hasMore(readerWhoseNextIs(sent -> sent).read(100, null, ctx(Map.of("base_url", "https://erp.test"))));
+
+        assertEquals(1, http.calls.size());
+        assertEquals(1, more.records().size());
     }
 
     /**

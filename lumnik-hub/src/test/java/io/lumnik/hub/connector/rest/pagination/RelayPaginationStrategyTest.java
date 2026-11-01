@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.pagination;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.rest.*;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
@@ -42,5 +43,13 @@ class RelayPaginationStrategyTest {
         var body = new ObjectMapper().readTree(req.body());
         Assertions.assertEquals(
             "query Orders($after:String){ orders }", body.path("query").asText());
+    }
+
+    /** code-review of #1611: hasNextPage true and no endCursor is refused — the rest was silently never read. */
+    @Test void more_pages_without_a_cursor_is_refused() {
+        RestResponse r = RestResponse.of(200, Map.of(),
+            "{\"data\":{\"x\":{\"pageInfo\":{\"hasNextPage\":true},\"nodes\":[{}]}}}");
+        var e = assertThrows(ConnectorException.class, () -> s.next(r, RestRequest.get("https://x")));
+        assertEquals("pagination.has_more_path says more pages, but cursor_path reads no cursor", e.getMessage());
     }
 }

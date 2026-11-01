@@ -1,6 +1,7 @@
 package io.lumnik.hub.view;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.sql.TenantRlsScope;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -279,7 +280,7 @@ public class ViewDataReader {
             return new IllegalArgumentException(
                 "the view took longer than " + TIMEOUT_S + " s to render — "
                 + "narrow it with filters or declare fewer columns");
-        return new RuntimeException("ViewDataReader.read: " + e.getMessage(), e);
+        return new RuntimeException(Jdbc.failureText("ViewDataReader.read", e), e);
     }
 
     static String buildSql(ResolvedView rv, List<ViewFilter> filters) {

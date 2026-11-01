@@ -1,6 +1,7 @@
 package io.lumnik.hub.run;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import org.jboss.logging.Logger;
 
 import java.sql.Connection;
@@ -96,7 +97,7 @@ public final class RunLock implements AutoCloseable {
    */
   static void destroy(Connection conn) {
     try {
-      conn.unwrap(Connection.class).close();
+      Jdbc.endSession(conn);
     } catch (SQLException e) {
       LOG.warnf("Could not close the session holding an advisory lock: %s", e.getMessage());
     } finally {

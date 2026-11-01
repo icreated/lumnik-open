@@ -90,8 +90,7 @@ public class ViewApplyResource {
 
     Optional<SchemaCard> card = cards.load(tenant, manifest.scope());
     if (card.isEmpty()) {
-      return Response.status(404).entity(ApiErrors.error(
-          "no schema for scope '" + manifest.scope() + "' — run discovery first")).build();
+      return ApiErrors.notFound("no schema for scope '" + manifest.scope() + "' — run discovery first");
     }
 
     ResolvedView rv = ApiErrors.orBadRequest(() -> resolver.resolve(manifest, card.get()));

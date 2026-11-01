@@ -1,14 +1,13 @@
 package io.lumnik.hub.event;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 import java.sql.Array;
 import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 
 /**
  * Emission gate for per-row data events: does ANY active subscription on this tenant
@@ -31,40 +30,25 @@ public class RowEventGate {
 
     public boolean enabled(Long tenantId, String table) {
         try (Connection c = adminDs.getConnection()) {
-            try (PreparedStatement ps = c.prepareStatement(
-                    "SELECT event_types, entity_filter FROM core.webhook_endpoint "
-                    + "WHERE tenant_id = ? AND enabled = TRUE AND archived_at IS NULL AND deleted_at IS NULL")) {
-                ps.setLong(1, tenantId);
-                try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) {
-                        Array arr = rs.getArray(1);
-                        if (arr == null) continue; // event_types is NOT NULL, but never NPE on drift
-                        String[] types = (String[]) arr.getArray();
-                        String filter = rs.getString(2);
-                        if (EntityFilters.passes(filter, table) && matchesAny(types)) return true;
-                    }
-                }
-            }
-            try (PreparedStatement ps = c.prepareStatement(
-                    "SELECT event_pattern, entity_filter FROM core.notification_rule "
-                    + "WHERE tenant_id = ? AND enabled = TRUE")) {
-                ps.setLong(1, tenantId);
-                try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) {
-                        if (matchesRowChanged(rs.getString(1)) && EntityFilters.passes(rs.getString(2), table)) return true;
-                    }
-                }
-            }
-            try (PreparedStatement ps = c.prepareStatement(
-                    "SELECT 1 FROM core.process_manifest "
-                    + "WHERE tenant_id = ? AND enabled AND on_table = ? LIMIT 1")) {
-                ps.setLong(1, tenantId);
-                ps.setString(2, table);
-                try (ResultSet rs = ps.executeQuery()) {
-                    if (rs.next()) return true;
-                }
-            }
-            return false;
+            if (Jdbc.query(c, "RowEventGate webhook endpoints",
+                "SELECT event_types, entity_filter FROM core.webhook_endpoint "
+                + "WHERE tenant_id = ? AND enabled = TRUE AND archived_at IS NULL AND deleted_at IS NULL",
+                ps -> ps.setLong(1, tenantId), rs -> {
+                    Array arr = rs.getArray(1);
+                    if (arr == null) return false; // event_types is NOT NULL, but never NPE on drift
+                    return EntityFilters.passes(rs.getString(2), table) && matchesAny((String[]) arr.getArray());
+                }).contains(true)) return true;
+            if (Jdbc.query(c, "RowEventGate notification rules",
+                "SELECT event_pattern, entity_filter FROM core.notification_rule "
+                + "WHERE tenant_id = ? AND enabled = TRUE",
+                ps -> ps.setLong(1, tenantId),
+                rs -> matchesRowChanged(rs.getString(1)) && EntityFilters.passes(rs.getString(2), table)).contains(true)) return true;
+            return Jdbc.exists(c, "RowEventGate process manifests",
+                "SELECT 1 FROM core.process_manifest "
+                + "WHERE tenant_id = ? AND enabled AND on_table = ? LIMIT 1", ps -> {
+                    ps.setLong(1, tenantId);
+                    ps.setString(2, table);
+                });
         } catch (Exception e) {
             // Fail closed: no events rather than a failed ingestion run. Log so a gate
             // error is visible — a silent swallow would hide a misconfigured subscription path.

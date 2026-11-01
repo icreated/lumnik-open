@@ -1,5 +1,6 @@
 package io.lumnik.hub.export;
 
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityViewCompiler;
 import io.lumnik.hub.export.format.ColumnFormatter;
@@ -244,7 +245,7 @@ public class EntitySnapshotStreamer {
                 try {
                     hasNextCache = rs.next();
                 } catch (SQLException e) {
-                    throw new RuntimeException("EntitySnapshotStreamer: " + e.getMessage(), e);
+                    throw new RuntimeException(Jdbc.failureText("EntitySnapshotStreamer.hasNext", e), e);
                 }
             }
             return hasNextCache;
@@ -259,7 +260,7 @@ public class EntitySnapshotStreamer {
                 for (int i = 0; i < columnCount; i++) row[i] = rs.getString(i + 1);
                 return row;
             } catch (SQLException e) {
-                throw new RuntimeException("EntitySnapshotStreamer: " + e.getMessage(), e);
+                throw new RuntimeException(Jdbc.failureText("EntitySnapshotStreamer.next", e), e);
             }
         }
     }

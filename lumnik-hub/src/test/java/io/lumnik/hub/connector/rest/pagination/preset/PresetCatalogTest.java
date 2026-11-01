@@ -29,7 +29,8 @@ class PresetCatalogTest {
     void every_catalogue_preset_expands_to_a_real_kind() throws Exception {
         record P(String name, String extra) {}
         var presets = List.of(
-            new P("spring-page", null), new P("spring-slice", null), new P("micronaut", null),
+            new P("spring-page", null), new P("spring-paged-model", null), new P("spring-slice", null),
+            new P("micronaut", null),
             new P("drf-page", null), new P("drf-limit-offset", null), new P("fastapi", null),
             new P("nestjs", null), new P("json-api", null), new P("sequelize", null),
             new P("stripe", null), new P("spring-hateoas", "\"items\":\"products\""));
@@ -48,6 +49,16 @@ class PresetCatalogTest {
         assertEquals("body-link", out.path("kind").asText());
         assertEquals("$.next", out.path("link_path").asText());
         assertEquals("$.results", out.path("response_path").asText());
+    }
+
+    /** #1642: Spring Data's PagedModel (VIA_DTO) puts its counters under "page". */
+    @Test
+    void spring_paged_model_reads_its_total_under_page() throws Exception {
+        var out = expand("spring-paged-model", null);
+        assertEquals("page", out.path("kind").asText());
+        assertEquals("0", out.path("start_page").asText());
+        assertEquals("$.page.totalPages", out.path("total_pages_path").asText());
+        assertEquals("$.content", out.path("response_path").asText());
     }
 
     @Test

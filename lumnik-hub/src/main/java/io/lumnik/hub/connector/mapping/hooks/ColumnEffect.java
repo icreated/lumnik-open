@@ -49,7 +49,7 @@ public record ColumnEffect(List<Step> steps, boolean unknownAfter) {
    */
   public static ColumnEffect readsColumns(JsonNode params) {
     JsonNode columns = params.path("columns");
-    if (columns.size() == 1 && "*".equals(columns.get(0).asText())) return NONE;
+    if (columns.isArray() && columns.size() == 1 && "*".equals(columns.get(0).asText())) return NONE;
     return builder().readsEach("columns", columns).build();
   }
 
@@ -77,6 +77,8 @@ public record ColumnEffect(List<Step> steps, boolean unknownAfter) {
 
     /** Reads each column of the list {@code value}, element {@code i} at {@code key[i]}. */
     public Builder readsEach(String key, JsonNode list) {
+      // Not a list: the hook's own refusal (#1621) — an object's size() counts its fields, and get(i) is null.
+      if (!list.isArray()) return this;
       for (int i = 0; i < list.size(); i++) reads(key + "[" + i + "]", list.get(i));
       return this;
     }

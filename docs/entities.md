@@ -119,7 +119,7 @@ the ERP had no city for it, the CRM did, and the fused row simply carries Aarhus
 | Field | Required | Meaning |
 |---|---|---|
 | `kind` | yes | must be `Entity` |
-| `name` | yes | a simple identifier (letters, digits, `_`) — becomes the view `connector.v_<name>`, lower-cased, and the name the chat advertises |
+| `name` | yes | a simple identifier (letters, digits, `_`), at most 61 characters — becomes the view `connector.v_<name>`, lower-cased, and the name the chat advertises |
 | `label` | no | the entity's human name — a `kind: View` that declares no `title:` is headed with it, and the schema card shows it beside the view name. Without one, both fall back to `name` |
 | `description` | no | free text for humans |
 | `match` | yes (≥ 1) | the canonical column(s) that identify the same real-world row across sources; several make a composite key. **Every source must map every match column, in the same case** |
@@ -528,6 +528,7 @@ The last one is a `409`, not a `400`: the manifest is fine, the world is not rea
 |---|---|---|
 | `kind must be 'Entity'` | wrong or missing `kind` | `kind: Entity` |
 | `name must be a simple identifier (letters, digits, _) — it becomes the SQL view name v_<name> advertised to the chat: …` | the name flows into SQL and the chat | rename |
+| `name has 62 characters; at most 61 — its view v_<name> must fit PostgreSQL's 63-byte names` | PostgreSQL would cut the view's name short | shorten the name |
 | `match must declare at least one column` | v1 needs one match rule | declare the join key |
 | `match declares a duplicate column (case-insensitive): …` | the same key listed twice | remove the duplicate |
 | `sources must have at least one source` / `source '…' map must have at least one column` | an entity fuses real tables | declare table + map |

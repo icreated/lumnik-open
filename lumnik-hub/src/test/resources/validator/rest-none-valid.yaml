@@ -1,0 +1,11 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata: { name: none-valid, connector_type: rest-generic, scopes: [x] }
+spec:
+  base_url: https://clinic.example.com
+  endpoints:
+    - id: vets
+      path: /vets.json
+      method: GET
+      pagination: { kind: none, response_path: "$.vetList" }
+      target: { kind: hybrid, table: x_vets, unique_key: "$.id" }

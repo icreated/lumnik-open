@@ -6,6 +6,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -52,6 +53,20 @@ public class EntityPlanCacheInvalidator {
       }
     }
     LOG.debugf("entity %s applied: the entity readers' pools are recycled (plans prepared on the old view go)", entity);
+  }
+
+  /**
+   * Called once after entity views were rebuilt around a widening of their sources (#1600): one flush, not one per
+   * entity. The readonly pool keeps no server-side plan since #1594, so only {@code default}, which serves the entity
+   * reads, is recycled. Best-effort, as after an apply.
+   */
+  public void afterEntitiesRebuilt(Collection<String> entities) {
+    try {
+      defaultDs.flush(AgroalDataSource.FlushMode.GRACEFUL);
+    } catch (RuntimeException e) {
+      LOG.warnf(e, "entities %s rebuilt, but the default pool could not be recycled: a read prepared on an old view"
+          + " may fail once on its connections", entities);
+    }
   }
 
   /** The pools whose connections may hold a prepared read of an entity view. */

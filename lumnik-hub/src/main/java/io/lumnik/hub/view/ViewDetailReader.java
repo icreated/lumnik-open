@@ -1,14 +1,13 @@
 package io.lumnik.hub.view;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.sql.TenantRlsScope;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
@@ -52,38 +51,30 @@ public class ViewDetailReader {
             sql.append(" FROM ").append(quoteTable(rv.table()))
                .append(" WHERE ").append(quoteIdent(firstCol)).append("::text = ? LIMIT 2");
 
-            List<DetailRow> rows = new ArrayList<>();
-            try (PreparedStatement ps = c.prepareStatement(sql.toString())) {
+            List<DetailRow> rows = Jdbc.query(c, "ViewDetailReader.read", sql.toString(), ps -> {
                 ps.setQueryTimeout(TIMEOUT_S);
                 ps.setString(1, key);
-                try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) {
-                        List<Object> values = new ArrayList<>(cols.size());
-                        for (int i = 1; i <= cols.size(); i++) values.add(rs.getObject(i));
-                        String conflictsJson = ledgerPresent ? rs.getString(cols.size() + 1) : null;
-                        rows.add(new DetailRow(values, conflictsJson));
-                    }
-                }
-            }
+            }, rs -> {
+                List<Object> values = new ArrayList<>(cols.size());
+                for (int i = 1; i <= cols.size(); i++) values.add(rs.getObject(i));
+                return new DetailRow(values, ledgerPresent ? rs.getString(cols.size() + 1) : null);
+            });
             return new DetailRead(ledgerPresent, rows);
         } catch (SQLException e) {
-            throw new RuntimeException("ViewDetailReader.read: " + e.getMessage(), e);
+            throw new RuntimeException(Jdbc.failureText("ViewDetailReader.read", e), e);
         }
     }
 
-    private static boolean hasConflictsColumn(Connection c, String fqn) throws SQLException {
+    static boolean hasConflictsColumn(Connection c, String fqn) {
         int dot = fqn.indexOf('.');
         String schema = dot < 0 ? "" : fqn.substring(0, dot);
         String table = dot < 0 ? fqn : fqn.substring(dot + 1);
         String q = "SELECT 1 FROM information_schema.columns "
                  + "WHERE table_schema = ? AND table_name = ? AND column_name = '_conflicts'";
-        try (PreparedStatement ps = c.prepareStatement(q)) {
+        return Jdbc.exists(c, "ViewDetailReader.hasConflictsColumn", q, ps -> {
             ps.setString(1, schema);
             ps.setString(2, table);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next();
-            }
-        }
+        });
     }
 
 }

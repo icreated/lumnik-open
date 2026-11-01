@@ -18,7 +18,7 @@ spec:
         cursor_param: starting_after
         cursor_path: $.data[-1:].id
         response_path: $.data
-        # has_more_path omitted → next() stops after page 1 (silent partial ingestion)
+        # has_more_path omitted → the cursor says when to stop: absent on an empty last page (#1611)
       target:
         kind: hybrid
         table: x_items

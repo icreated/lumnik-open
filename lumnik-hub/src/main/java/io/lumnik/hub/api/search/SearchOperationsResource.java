@@ -172,8 +172,7 @@ public class SearchOperationsResource {
                 // rebuildExecutor rejecting the submit) — never surfaced to the caller as a bare 500
                 // (design doc §4). worker/store keep throwing their own technical exception types; the
                 // REST layer is the one place that maps them to the spec's mandated 503.
-                return Response.status(503).type(MediaType.APPLICATION_JSON)
-                    .entity(ApiErrors.error("search rebuild unavailable")).build();
+                return ApiErrors.status(503, "search rebuild unavailable").build();
             }
             return switch (claim) {
                 case RebuildClaim.Started s -> {
@@ -204,8 +203,7 @@ public class SearchOperationsResource {
                 // Same posture as rebuild()'s own catch: requestCancel throws IllegalStateException for a
                 // genuine connection/transaction failure, never for a legitimate "nothing to cancel" —
                 // those are CancelResult values, not exceptions.
-                return Response.status(503).type(MediaType.APPLICATION_JSON)
-                    .entity(ApiErrors.error("search cancel unavailable")).build();
+                return ApiErrors.status(503, "search cancel unavailable").build();
             }
             return switch (result) {
                 case CancelResult.Requested r -> {

@@ -13,7 +13,7 @@ public class CursorPaginationStrategy implements PaginationStrategy {
 
     public CursorPaginationStrategy(Map<String, String> cfg) {
         this.cursorPath   = cfg.get("cursor_path");
-        this.hasMorePath  = cfg.get("has_more_path");
+        this.hasMorePath  = PaginationSupport.optional(cfg.get("has_more_path"));
         this.responsePath = cfg.get("response_path");
         String kind = cfg.getOrDefault("cursor_binding", "query");
         this.binding = switch (kind) {
@@ -28,14 +28,19 @@ public class CursorPaginationStrategy implements PaginationStrategy {
         return PaginationSupport.baseGet(cfg);
     }
 
+    /**
+     * The next page while there is one. With {@code has_more_path} the flag decides, and a flag saying "more" with no
+     * cursor is refused. Without it the cursor decides (#1611) — and an empty page ends the read, whatever cursor it
+     * carries, or a source handing a fresh token past its last row would be followed to MAX_PAGES.
+     */
     @Override
     public RestRequest next(RestResponse resp, RestRequest current) {
-        Boolean hasMore = JsonPathExtractor.read(resp.json(), hasMorePath);
-        if (!Boolean.TRUE.equals(hasMore)) return null;
-        Object cursorVal = JsonPathExtractor.read(resp.json(), cursorPath);
-        if (cursorVal instanceof List<?> l && !l.isEmpty()) cursorVal = l.get(0);
-        if (cursorVal == null) return null;
-        return binding.bind(current, String.valueOf(cursorVal));
+        if (hasMorePath == null) {
+            String cursor = PaginationSupport.next(resp.json(), cursorPath, "cursor_path");
+            return cursor == null || items(resp).isEmpty() ? null : binding.bind(current, cursor);
+        }
+        if (!Boolean.TRUE.equals(PaginationSupport.flag(resp.json(), hasMorePath, "has_more_path"))) return null;
+        return binding.bind(current, PaginationSupport.cursorWhileMore(resp.json(), cursorPath));
     }
 
     @Override

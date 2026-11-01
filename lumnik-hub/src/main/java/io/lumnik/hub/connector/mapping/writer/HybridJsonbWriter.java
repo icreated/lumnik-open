@@ -3,9 +3,12 @@ package io.lumnik.hub.connector.mapping.writer;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jayway.jsonpath.Configuration;
 import com.jayway.jsonpath.JsonPath;
+import com.jayway.jsonpath.JsonPathException;
 import com.jayway.jsonpath.Option;
 import com.jayway.jsonpath.ReadContext;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.hub.connector.exceptions.ConnectorException;
+import io.lumnik.hub.connector.mapping.MappingValidationException;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.PromotedColumn;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.SqlType;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.Transform;
@@ -19,10 +22,13 @@ import jakarta.transaction.TransactionSynchronizationRegistry;
 import org.jboss.logging.Logger;
 
 import java.math.BigDecimal;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.sql.*;
 import java.time.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.IntConsumer;
 import java.util.regex.Pattern;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
@@ -94,17 +100,28 @@ public class HybridJsonbWriter {
     public long write(HybridJsonbSpec spec, List<Map<String, Object>> items,
                       List<Map<String, Object>> systemContexts,
                       long tenantId, UUID connectorId, UUID endpointId) {
+        return write(spec, items, null, systemContexts, tenantId, connectorId, endpointId);
+    }
+
+    /**
+     * @param cells the promoted columns a mapping computed, aligned with {@code items} (#1617): column values are read
+     *              from them by name and converted to their type, {@code data} and the key from the item. {@code null}:
+     *              each column is read from its item by its path, as without a mapping.
+     */
+    public long write(HybridJsonbSpec spec, List<Map<String, Object>> items, List<Map<String, Object>> cells,
+                      List<Map<String, Object>> systemContexts,
+                      long tenantId, UUID connectorId, UUID endpointId) {
         if (items.isEmpty()) return 0;
+        if (cells != null) refuseUndeclared(spec, cells);
         // Pre-compile JsonPath expressions once per write call to avoid recompilation per row
         JsonPath uniqueKey = JsonPath.compile(spec.uniqueKeyPath());
-        List<JsonPath> colPaths = spec.promote().stream()
-            .map(p -> JsonPath.compile(p.jsonPath()))
-            .toList();
+        List<JsonPath> colPaths = paths(spec);
         String[] target = schemaAndTable(spec);
         try (Connection c = adminDs.getConnection()) {
             DynamicTableWriter.writeLock(c, target[0], target[1]);
             try {
-                return writeLocked(c, spec, items, systemContexts, tenantId, connectorId, endpointId, uniqueKey, colPaths);
+                return writeLocked(c, spec, items, cells, systemContexts, tenantId, connectorId, endpointId, uniqueKey,
+                    colPaths);
             } finally {
                 DynamicTableWriter.releaseWriteLock(c, target[0], target[1]);
             }
@@ -113,7 +130,86 @@ public class HybridJsonbWriter {
         }
     }
 
+    /**
+     * Each item's promoted columns, read by their paths and transformed, before a mapping runs over them (#1617).
+     * Every column with a path is in the row, null when the item has no value for it — as every header is in a csv
+     * row. A column without a path is the mapping's to fill: absent until a hook writes it. A value its transform
+     * cannot read is null, and counted on {@code unreadableAt} with its item's index.
+     */
+    public static List<Map<String, Object>> promoted(HybridJsonbSpec spec, List<Map<String, Object>> items,
+                                                     IntConsumer unreadableAt) {
+        List<JsonPath> colPaths = paths(spec);
+        List<Map<String, Object>> rows = new ArrayList<>(items.size());
+        for (int i = 0; i < items.size(); i++) {
+            ReadContext ctx = JsonPath.using(JP).parse(json(items.get(i)));
+            Map<String, Object> row = new LinkedHashMap<>();
+            for (int ci = 0; ci < colPaths.size(); ci++) {
+                if (colPaths.get(ci) == null) continue;
+                Object val = pathValue(ctx, colPaths.get(ci), spec.promote().get(ci));
+                if (val == UNREADABLE) unreadableAt.accept(i);
+                row.put(spec.promote().get(ci).name(), val == UNREADABLE ? null : val);
+            }
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    /** A column read by its path and transformed; {@code null} without a path, {@link #UNREADABLE} if unreadable. */
+    private static Object pathValue(ReadContext ctx, JsonPath path, PromotedColumn col) {
+        if (path == null) return null;
+        Object raw;
+        try {
+            raw = ctx.read(path, Object.class);
+        } catch (JsonPathException unreadable) {
+            return UNREADABLE;   // a function over an empty array throws, whatever the options (#1620): one cell
+        }
+        Object value = oneValue(raw, path, col);
+        return value == UNREADABLE ? value : transformed(value, col);
+    }
+
+    /**
+     * A path with a filter or a wildcard selects a list, even of one value (#1619): it reads that value, nothing when
+     * the list is empty, and several values are one unreadable cell — the rule a pagination path follows (#1611).
+     * A path without one keeps what it points at, an array included; so does a {@code jsonb} column.
+     */
+    private static Object oneValue(Object raw, JsonPath path, PromotedColumn col) {
+        if (path.isDefinite() || col.type() == SqlType.JSONB || !(raw instanceof List<?> values)) return raw;
+        return switch (values.size()) {
+            case 0 -> null;
+            case 1 -> values.getFirst();
+            default -> UNREADABLE;
+        };
+    }
+
+    /** A mapping writes only the columns the table has: each one a promote entry declares (#1617). */
+    private static void refuseUndeclared(HybridJsonbSpec spec, List<Map<String, Object>> cells) {
+        Set<String> declared = new HashSet<>();
+        for (PromotedColumn col : spec.promote()) declared.add(col.name());
+        for (Map<String, Object> row : cells) {
+            if (declared.containsAll(row.keySet())) continue;
+            String column = row.keySet().stream().filter(c -> !declared.contains(c)).findFirst().orElseThrow();
+            throw new MappingValidationException("the mapping writes column '" + column + "', which no promote entry "
+                + "declares — declare it in target.promote with its type, without a path");
+        }
+    }
+
+    /** One compiled path per promoted column, {@code null} for a column a mapping fills. */
+    private static List<JsonPath> paths(HybridJsonbSpec spec) {
+        List<JsonPath> paths = new ArrayList<>(spec.promote().size());
+        for (PromotedColumn p : spec.promote()) paths.add(p.jsonPath() == null ? null : JsonPath.compile(p.jsonPath()));
+        return paths;
+    }
+
+    private static String json(Map<String, Object> item) {
+        try {
+            return JSON.writeValueAsString(item);
+        } catch (Exception e) {
+            throw new IllegalStateException("HybridJsonbWriter: JSON serialization failed", e);
+        }
+    }
+
     private long writeLocked(Connection c, HybridJsonbSpec spec, List<Map<String, Object>> items,
+                             List<Map<String, Object>> cells,
                              List<Map<String, Object>> systemContexts, long tenantId, UUID connectorId,
                              UUID endpointId, JsonPath uniqueKey, List<JsonPath> colPaths) throws SQLException {
         boolean schemaChanged = ensureTable(c, spec);
@@ -125,8 +221,8 @@ public class HybridJsonbWriter {
             for (int r = 0; r < items.size(); r++) {
                 String rowHash = systemContexts == null ? null
                     : (String) systemContexts.get(r).get("_row_hash");
-                unreadable += bind(ps, spec, uniqueKey, colPaths, items.get(r), rowHash,
-                     tenantId, connectorId, endpointId);
+                unreadable += bind(ps, spec, uniqueKey, colPaths, items.get(r), cells == null ? null : cells.get(r),
+                     rowHash, tenantId, connectorId, endpointId);
             }
             ps.executeBatch();
         }
@@ -171,7 +267,7 @@ public class HybridJsonbWriter {
             String mapping = DynamicTableRegistry.HYBRID_MAPPING_PREFIX + spec.table();
             if (c == null) registry.register(tenantId, mapping, schema, table, cols, connectorId);
             else registry.register(c, tenantId, mapping, schema, table, cols, connectorId);
-        } catch (RuntimeException | SQLException e) {
+        } catch (RuntimeException e) {
             // Registration must never fail a data write. The known case: the one-shot CSV path
             // writes rows INSIDE the transaction that creates its connector row, so the registry
             // FK (dynamic_table_connector_fk, admin DS, outside that tx) cannot see it yet. It
@@ -357,15 +453,17 @@ public class HybridJsonbWriter {
 
     private int bind(PreparedStatement ps, HybridJsonbSpec spec,
                       JsonPath uniqueKey, List<JsonPath> colPaths,
-                      Map<String, Object> item, String rowHash,
+                      Map<String, Object> item, Map<String, Object> cells, String rowHash,
                       long tenantId, UUID connectorId, UUID endpointId) throws SQLException {
         // Serialize to JSON string first so JsonPath operates on a well-known input type
-        String jsonStr;
-        try { jsonStr = JSON.writeValueAsString(item); }
-        catch (Exception e) { throw new SQLException("HybridJsonbWriter: JSON serialization failed", e); }
+        String jsonStr = json(item);
         ReadContext ctx = JsonPath.using(JP).parse(jsonStr);
-        Object rawId = ctx.read(uniqueKey, Object.class);
-        String externalId = (rawId == null) ? null : rawId.toString();
+        String externalId = keyOf(ctx.read(uniqueKey, Object.class), spec);
+        // Named here, before the NOT NULL column refuses it with a SQLSTATE whose message is withheld (#1630).
+        if (externalId == null) {
+            throw new ConnectorException("unique_key '" + spec.uniqueKeyPath() + "' reads no value on an item of "
+                + spec.table() + ": every item needs a key");
+        }
 
         int i = 1;
         ps.setLong(i++, tenantId);
@@ -375,8 +473,9 @@ public class HybridJsonbWriter {
         int unreadable = 0;
         for (int ci = 0; ci < promote.size(); ci++) {
             PromotedColumn col = promote.get(ci);
-            Object raw = ctx.read(colPaths.get(ci), Object.class);
-            Object val = converted(transformed(raw, col), col.type());
+            // A mapping's row is already read and transformed.
+            Object raw = cells != null ? cells.get(col.name()) : pathValue(ctx, colPaths.get(ci), col);
+            Object val = converted(raw, col.type());
             if (val == UNREADABLE) {
                 unreadable++;
                 val = null;   // the row is written; its payload keeps the value whole in `data`
@@ -390,6 +489,12 @@ public class HybridJsonbWriter {
         ps.setObject(i,   endpointId);
         ps.addBatch();
         return unreadable;
+    }
+
+    /** The row's {@code external_id}: the value at the key's path through its transform; {@code null} when none. */
+    static String keyOf(Object rawId, HybridJsonbSpec spec) {
+        Object key = applyTransform(rawId, spec.uniqueKeyTransform(), "unique_key");
+        return key == null ? null : key.toString();
     }
 
     /** The transform's result, or {@link #UNREADABLE} when the value is not one it reads — one cell, not the run. */
@@ -434,12 +539,17 @@ public class HybridJsonbWriter {
                     case Instant t -> t;
                     case ZonedDateTime t -> t;
                     case LocalDateTime t -> t;
+                    // A mapping's hook hands back Java dates (#1617): a date alone is midnight UTC, as parse_iso8601 reads it.
+                    case LocalDate d -> d.atStartOfDay().atOffset(ZoneOffset.UTC);
                     default -> UNREADABLE;
                 };
                 case DATE -> switch (val) {
                     case String text -> dateOf(text);
                     case LocalDate d -> d;
                     case OffsetDateTime t -> t.toLocalDate();
+                    case LocalDateTime t -> t.toLocalDate();
+                    case ZonedDateTime t -> t.withZoneSameInstant(ZoneOffset.UTC).toLocalDate();
+                    case Instant t -> t.atOffset(ZoneOffset.UTC).toLocalDate();
                     default -> UNREADABLE;
                 };
                 case JSONB -> val;
@@ -489,11 +599,31 @@ public class HybridJsonbWriter {
             case TO_LOWER      -> String.valueOf(raw).toLowerCase(Locale.ROOT);
             case TO_UPPER      -> String.valueOf(raw).toUpperCase(Locale.ROOT);
             case TRIM          -> String.valueOf(raw).trim();
+            case PARSE_QUANTITY -> Quantity.parse(String.valueOf(raw));
+            case LAST_PATH_SEGMENT -> lastPathSegment(raw);
             case TO_JSON_STRING -> {
                 try { yield JSON.writeValueAsString(raw); }
                 catch (Exception e) { throw new RuntimeException("TO_JSON_STRING failed", e); }
             }
         };
+    }
+
+    /**
+     * The last non-empty segment of a link's path, percent-decoded after the split ({@code SKU%2F7} is one segment);
+     * {@code null} for a value that is not text, not a URI, or has no segment — never an empty key.
+     */
+    private static String lastPathSegment(Object raw) {
+        if (!(raw instanceof CharSequence text)) return null;
+        try {
+            String path = new URI(text.toString().strip()).getRawPath();
+            String[] segments = path == null ? new String[0] : path.split("/");
+            for (int i = segments.length - 1; i >= 0; i--) {
+                if (!segments[i].isEmpty()) return new URI("/" + segments[i]).getPath().substring(1);
+            }
+            return null;
+        } catch (URISyntaxException notALink) {
+            return null;
+        }
     }
 
     private void bindTyped(PreparedStatement ps, int idx, Object val, SqlType type) throws SQLException {

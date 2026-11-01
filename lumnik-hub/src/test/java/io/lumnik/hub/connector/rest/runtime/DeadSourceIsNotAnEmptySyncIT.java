@@ -146,6 +146,29 @@ class DeadSourceIsNotAnEmptySyncIT {
             "a credential failure is permanent — retrying the chunk cannot fix it");
     }
 
+    /**
+     * #1644, observed on a live hub: a 200 answered in XML (an older Spring MVC or Struts service) ran
+     * {@code Completed · IN 0 · OUT 0} — the unparsed body stood in as an empty object, read as an empty page.
+     */
+    @Test
+    void a_source_answering_xml_fails_the_run_naming_its_content_type_never_its_body() {
+        String path = "/v1/orders.xml";
+        String table = "ext.dead_xml_" + Math.abs(System.nanoTime());
+        stubFor(get(urlPathEqualTo(path)).willReturn(aResponse().withStatus(200)
+            .withHeader("Content-Type", "application/xml")
+            .withBody("<orders><order><id>SECRET</id><name>k=v</name></order></orders>")));
+
+        UUID connectorId = seed(path, table);
+        RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(connectorId, new RunTrigger.Manual(1L)));
+
+        RunStatus.Failed failed = assertInstanceOf(RunStatus.Failed.class, s,
+            "an XML answer must not read as an empty page");
+        String stored = storedFailure(connectorId);
+        assertTrue(stored.contains("not JSON (Content-Type application/xml)"), stored);
+        assertQuotesNothingOfTheSource(stored);
+        assertFalse(failed.retryable(), "the same request answers XML again — retrying cannot fix it");
+    }
+
     // ── what the run's failure text may quote (#1166) ─────────────────────────────────────────
 
     private static final List<String> SECRETS = List.of("user", "pw", "ECRET", "k=v");

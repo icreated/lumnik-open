@@ -61,12 +61,10 @@ public class WorkflowApplyResource {
                               WorkflowDataTruth.Report dataTruth) {}
     public record WorkflowInfo(String name, String table, String column, String scope, boolean enabled) {}
 
-    // Deliberately NOT @Transactional. index() hands the chunk to the RAG sink, which takes a
-    // connection from the default (JTA-enlisted) datasource and calls setAutoCommit(false) on
-    // it — illegal while a transaction is active, and it fails the whole index with
-    // XAER_RMERR. Only truth.check needs a transaction, and it gets its own below. The stores
-    // here use the admin datasource, which is configured transactions=disabled, so they never
-    // needed the ambient one.
+    // Deliberately NOT @Transactional: index() must run with no ambient transaction (its javadoc
+    // says why). Only truth.check needs a transaction, and it gets its own below. The stores here
+    // use the admin datasource, which is configured transactions=disabled, so they never needed
+    // the ambient one.
     @POST
     @Path("/apply")
     @Consumes({"application/yaml", "text/yaml", MediaType.APPLICATION_JSON})
@@ -112,8 +110,7 @@ public class WorkflowApplyResource {
         // one kind for no reason. kind:Workflow is kind:Process's sibling in the same house.
         Optional<SchemaCard> card = cards.load(tenant, m.scope());
         if (card.isEmpty()) {
-            return Response.status(404).entity(ApiErrors.error(
-                "no schema for scope '" + m.scope() + "' — run discovery first")).build();
+            return ApiErrors.notFound("no schema for scope '" + m.scope() + "' — run discovery first");
         }
 
         // …and the table must not belong to a scope this caller does not hold. The scope check
@@ -129,10 +126,10 @@ public class WorkflowApplyResource {
         // several cards, so "mine" is checked first rather than inferred from the other query.
         if (!card.get().tableNames().contains(m.table())
                 && cards.findOtherScopeAdvertising(tenant, m.scope(), m.table()).isPresent()) {
-            return Response.status(400).entity(ApiErrors.error(
+            return ApiErrors.badRequest(
                 "spec.on.table " + m.table() + " belongs to another scope — a workflow may "
                     + "only watch a table of its own scope. Declare it in the scope that owns the "
-                    + "table, or point at a table of '" + m.scope() + "'")).build();
+                    + "table, or point at a table of '" + m.scope() + "'");
         }
 
         // A column has exactly one lifecycle. Without this, renaming a workflow and re-applying
@@ -163,6 +160,13 @@ public class WorkflowApplyResource {
                 return ApiErrors.badRequest("spec.due.zone has no effect on " + m.table() + "." + m.due().column()
                     + ": a timestamp with time zone carries its own instant — drop spec.due.zone");
             }
+            // An order the relation cannot give is refused before storing, and only when the relation is there
+            // to say so (#1588): a relation not yet ingested is the report's business, as for the due column.
+            String orderProblem = truth.orderProblem(m);
+            if (orderProblem != null) return ApiErrors.badRequest(orderProblem);
+            // …and so is a cited or declared column it lacks, named the way a Process door names it.
+            String contextProblem = truth.contextProblem(m);
+            if (contextProblem != null) return ApiErrors.badRequest(contextProblem);
             ApplyScopeBoundary.refuseUnlessApplied(
                 store.upsert(tenant, m, body, ScopeGrants.granted().orElse(null)));
             WorkflowGraph g = WorkflowGraph.from(m);
@@ -171,6 +175,12 @@ public class WorkflowApplyResource {
             // alone is what separates them — see the javadoc on index().
             WorkflowDataTruth.Report report =
                 QuarkusTransaction.requiringNew().call(() -> truth.check(tenant, g));
+            // What this answer reports is what the next ingestion check already knows (#1589). A probe
+            // that could not run reported nothing, so it leaves the memory as it was.
+            if (!report.checkUnavailable()) {
+                store.rememberReported(tenant, m.name(),
+                    report.undeclared().stream().map(WorkflowDataTruth.ValueCount::value).toList());
+            }
             index(tenant, g);
             // Audit P4: same rationale as ViewApplyResource — the store writes raw JDBC,
             // nothing else records the apply.
@@ -195,13 +205,13 @@ public class WorkflowApplyResource {
             // SQLSTATE, not by message text, because the store's wrapping is free to change its
             // wording without this becoming a silent regression to 500.
             if (isUniqueViolation(e)) {
-                return Response.status(400).entity(ApiErrors.error(
+                return ApiErrors.badRequest(
                     "column " + m.table() + "." + m.column() + " already has a declared lifecycle"
                         + " — a column has exactly one lifecycle; re-apply under its existing name"
-                        + " to update it")).build();
+                        + " to update it");
             }
             LOG.errorf(e, "workflow apply failed for tenant %d, workflow %s", tenant, m.name());
-            return Response.status(500).entity(ApiErrors.error("workflow apply failed")).build();
+            return ApiErrors.status(500, "workflow apply failed").build();
         }
     }
 
@@ -258,8 +268,7 @@ public class WorkflowApplyResource {
         if (refusal != null) return refusal;
         return store.findYaml(tenant, name)
             .map(yaml -> Response.ok(yaml).type("application/yaml").build())
-            .orElseGet(() -> Response.status(404)
-                .entity(ApiErrors.error("unknown workflow: " + name)).build());
+            .orElseGet(() -> ApiErrors.notFound("unknown workflow: " + name));
     }
 
     public record EnabledRequest(Boolean enabled) {}
@@ -311,8 +320,7 @@ public class WorkflowApplyResource {
     public Response setEnabled(@PathParam("name") String name, EnabledRequest body) {
         long tenant = RequireTenant.current();
         if (body == null || body.enabled() == null) {
-            return Response.status(400).entity(ApiErrors.error(
-                "body must carry {\"enabled\": true|false}")).build();
+            return ApiErrors.badRequest("body must carry {\"enabled\": true|false}");
         }
         Optional<String> scope = store.findScope(tenant, name);
         Response refusal = refuseUnlessHeld(name, scope);
@@ -349,7 +357,7 @@ public class WorkflowApplyResource {
      *  exclude it, else null. The caller reads the scope, so a write can record it afterwards. */
     private Response refuseUnlessHeld(String name, Optional<String> scope) {
         if (scope.isEmpty()) {
-            return Response.status(404).entity(ApiErrors.error("unknown workflow: " + name)).build();
+            return ApiErrors.notFound("unknown workflow: " + name);
         }
         return ScopeGrants.allows(scope.get()) ? null : ApiErrors.scopeNotGranted();
     }
@@ -357,13 +365,16 @@ public class WorkflowApplyResource {
     /**
      * Replace this workflow's chunks for this tenant; sink.index is idempotent per (tenant, source).
      *
-     * <p><b>Must be called with NO ambient JTA transaction.</b> The RAG sink takes a connection
-     * from the default (JTA-enlisted) datasource and calls {@code setAutoCommit(false)} on it,
-     * which throws {@code XAER_RMERR: Enlisted connection used without active transaction} while
-     * a transaction is active. {@code PlatformIndexer.reindex()} is not transactional, so startup
-     * indexing always worked and this was invisible until a live run of the WOW act hit it — the
-     * failure is swallowed below, so apply still answers 200 and only a WARN marks the corpus
-     * silently missing its chunk. {@code WorkflowIndexClosedIT} pins the invariant.
+     * <p><b>Must be called with NO ambient JTA transaction.</b> The RAG sink runs its own
+     * transaction on a connection from the default datasource, and while a JTA transaction is
+     * active Agroal enlists that connection as soon as it hands it out. Enlisted, the sink refuses
+     * it before writing anything (#1649). When the transaction already holds another datasource
+     * (truth.check's readonly), the enlistment itself fails, the caller's transaction is marked
+     * rollback-only, and Narayana logs {@code XAER_RMERR} rolling it back.
+     * {@code PlatformIndexer.reindex()} is not transactional, so startup indexing always worked and
+     * this was invisible until a live run of the WOW act hit it — the failure is swallowed below,
+     * so apply still answers 200 and only a WARN marks the corpus silently missing its chunk.
+     * {@code WorkflowIndexClosedIT} pins the invariant.
      */
     private void index(long tenant, WorkflowGraph g) {
         for (ExtractionSink sink : sinks) {

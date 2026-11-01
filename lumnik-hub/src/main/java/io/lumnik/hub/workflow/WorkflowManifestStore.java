@@ -122,7 +122,8 @@ public class WorkflowManifestStore {
     }
 
     /**
-     * Removes one workflow for good — the manifest AND its ledgers, dormancy's and the due date's (V81). Existence is the caller's
+     * Removes one workflow for good — the manifest AND its ledgers, dormancy's, the due date's (V81) and the
+     * undeclared values' (V86). Existence is the caller's
      * question, answered by findScope.
      *
      * <p>Neither {@code core.workflow_observation} nor {@code core.workflow_transition} carries
@@ -149,7 +150,33 @@ public class WorkflowManifestStore {
                 "DELETE FROM core.workflow_transition WHERE tenant_id = ? AND workflow_name = ?", tenantAndName);
             Jdbc.update(c, "WorkflowManifestStore.delete(due alerts)",
                 "DELETE FROM core.workflow_due_alert WHERE tenant_id = ? AND workflow_name = ?", tenantAndName);
+            Jdbc.update(c, "WorkflowManifestStore.delete(undeclared values)",
+                "DELETE FROM core.workflow_undeclared_value WHERE tenant_id = ? AND workflow_name = ?", tenantAndName);
             return removed;
+        });
+    }
+
+    /**
+     * The undeclared values an apply has just reported become what the ingestion check knows (#1589,
+     * V86): the integrator has read them, so the next run says only what is new. A value the new
+     * declaration now covers leaves the memory, and is news again if a later declaration drops it.
+     * One transaction, so a concurrent check finds the old memory or the new one, never half of each.
+     */
+    public void rememberReported(long tenantId, String name, List<String> undeclared) {
+        Jdbc.Binder tenantAndName = ps -> {
+            ps.setLong(1, tenantId);
+            ps.setString(2, name);
+        };
+        Jdbc.transaction(adminDs, "WorkflowManifestStore.rememberReported", c -> {
+            Jdbc.update(c, "WorkflowManifestStore.rememberReported(forget)",
+                "DELETE FROM core.workflow_undeclared_value WHERE tenant_id = ? AND workflow_name = ?", tenantAndName);
+            if (undeclared.isEmpty()) return;
+            Jdbc.update(c, "WorkflowManifestStore.rememberReported(remember)",
+                "INSERT INTO core.workflow_undeclared_value (tenant_id, workflow_name, value) "
+                    + "SELECT ?, ?, unnest(?::text[])", ps -> {
+                    tenantAndName.bind(ps);
+                    ps.setArray(3, c.createArrayOf("text", undeclared.toArray()));
+                });
         });
     }
 

@@ -20,7 +20,7 @@ class WorkflowChunkBuilderTest {
             "BROUILLON",
             List.of(new WorkflowGraph.TransitionDto(List.of("BROUILLON"), "EN_COURS"),
                     new WorkflowGraph.TransitionDto(List.of("EN_COURS"), "TERMINE")),
-            null);
+            null, null);
 
         List<ExtractedChunk> chunks = new WorkflowChunkBuilder().build(g);
 

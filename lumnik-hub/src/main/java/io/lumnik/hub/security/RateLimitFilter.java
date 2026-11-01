@@ -2,6 +2,7 @@ package io.lumnik.hub.security;
 
 import io.lumnik.common.ratelimit.RateLimited;
 import io.lumnik.common.tenant.CurrentTenantHolder;
+import io.lumnik.hub.api.ApiErrors;
 import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -10,14 +11,11 @@ import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.container.ContainerRequestFilter;
 import jakarta.ws.rs.container.ResourceInfo;
 import jakarta.ws.rs.core.Context;
-import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.Provider;
 import org.eclipse.microprofile.config.Config;
 import org.jboss.logging.Logger;
 
 import java.time.Clock;
-import java.util.Map;
 
 /**
  * Enforces @RateLimited buckets per (name, tenant) in a fixed 60s window.
@@ -62,10 +60,8 @@ public class RateLimitFilter implements ContainerRequestFilter {
             LOG.warnf("rate limit exceeded: bucket=%s tenant=%s rpm=%d retryAfter=%ds",
                 ann.value(), tenant == null ? "system" : tenant, rpm, d.retryAfterSeconds());
             metrics.recordLimited(ann.value());
-            ctx.abortWith(Response.status(429)
+            ctx.abortWith(ApiErrors.status(429, "rate limit exceeded")
                 .header("Retry-After", String.valueOf(d.retryAfterSeconds()))
-                .type(MediaType.APPLICATION_JSON)
-                .entity(Map.of("error", "rate limit exceeded"))
                 .build());
         }
     }

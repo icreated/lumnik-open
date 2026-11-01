@@ -12,6 +12,7 @@ import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -32,6 +33,7 @@ import static org.hamcrest.Matchers.equalTo;
  * now ambiguous, slice 1's contract) re-projects it with NULL — never with either name.
  */
 @QuarkusTest
+@ExtendWith(ProjectionTickPaused.class)
 class SearchProjectionLookupProjectionIT {
 
     @Inject @DataSource("admin") AgroalDataSource adminDs;

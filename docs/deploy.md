@@ -236,7 +236,7 @@ Mail then shows at `http://127.0.0.1:8025`. A failed send is not retried:
 
 ### Offer Kotlin scripts to the integrators
 
-A `csv-file` connector can run a Kotlin script by naming it, `script: hooks:<name>.kts`
+A `csv-file` connector or a REST endpoint can run a Kotlin script by naming it, `script: hooks:<name>.kts`
 ([Kotlin hooks](connectors/kotlin-hooks.md)). The scripts come from
 you: copy the `.kts` files into `deploy/selfhost/hooks/`.
 

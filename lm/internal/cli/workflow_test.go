@@ -153,6 +153,28 @@ func TestWorkflowApply_reportNamesEveryFinding(t *testing.T) {
 	}
 }
 
+// #1588: what spec.on.order cannot place, the keys a view holds twice, and what an absent table left unverified.
+func TestWorkflowApply_reportNamesTheOrderFindings(t *testing.T) {
+	const head = `{"name":"w","scope":"desk","table":"connector.t_x","column":"status","dataTruth":`
+	const clean = `"undeclared":[],"unobserved":[],"nullOrBlank":0,"keyColumnMissing":false,"keyNullOrBlank":null,` +
+		`"checkUnavailable":false,"unavailableReason":null,"dueProblem":null`
+	for name, c := range map[string]struct{ truth, want string }{
+		"invalid order values": {`{` + clean + `,"tableMissing":false,"invalidOrderValues":2,"keysWithSeveralRows":null,` +
+			`"columnsUnverified":[]}`,
+			"  spec.on.order: 2 rows with no valid order, their documents are never watched\n"},
+		"keys with several rows": {`{` + clean + `,"tableMissing":false,"invalidOrderValues":null,"keysWithSeveralRows":3,` +
+			`"columnsUnverified":[]}`,
+			"  3 keys hold several rows: declare spec.on.order to pick one\n"},
+		"columns unverified": {`{` + clean + `,"tableMissing":true,"invalidOrderValues":null,"keysWithSeveralRows":null,` +
+			`"columnsUnverified":["occurred_at"]}`,
+			"  the table is not there yet: the data was not checked\n" +
+				"  not verified until the table exists: occurred_at\n"},
+	} {
+		out := applyWorkflow(t, head+c.truth+"}")
+		assert.Equal(t, "Applied workflow \"w\" → connector.t_x.status, scope desk\n"+c.want, out, name)
+	}
+}
+
 // -o json keeps the hub's answer whole, dataTruth included: `| jq .dataTruth` reads it.
 func TestWorkflowApply_outputJSON_keepsTheHubAnswer(t *testing.T) {
 	out := applyWorkflow(t, orderLifecycleApplied, "-o", "json")

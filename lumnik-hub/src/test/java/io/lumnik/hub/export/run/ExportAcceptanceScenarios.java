@@ -121,11 +121,13 @@ abstract class ExportAcceptanceScenarios extends ExportAcceptanceITSupport {
                 null, AT, 1, null);
             assertThatThrownBy(() -> runner.launch(request, stored))
                 .isInstanceOf(IllegalArgumentException.class);
-            // The door: no positive tenant, no run.
+            // The door: a non-positive tenant header is refused by the auth filter, by name, before any
+            // door (#1615) — no run.
             given().headers(TestIdentity.tenantAndUser(tenant))
                 .post("/api/exports/" + name + "/runs")
-                .then().statusCode(401);
+                .then().statusCode(400);
         }
+        // No tenant at all passes the filter and meets RequireTenant's 401.
         given().post("/api/exports/" + name + "/runs").then().statusCode(401);
 
         // The scheduler: a stored definition carrying a non-positive tenant is never executed.

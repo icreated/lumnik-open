@@ -47,6 +47,18 @@ if not pages:
     print(f"✗ no HTML under '{site}' — did the build run?", file=sys.stderr)
     sys.exit(2)
 
+# Retired public URLs stay useful instead of turning into Search Console 404s. This checks the
+# built artifact, where a configured redirect can still disappear through a missing plugin or a
+# publish path that did not install it.
+redirects = {
+    'hooks-cookbook/index.html': '../connectors/kotlin-hooks/',
+}
+broken_redirects = []
+for old, target in redirects.items():
+    page = site / old
+    if not page.is_file() or target not in page.read_text(encoding='utf-8', errors='replace'):
+        broken_redirects.append((old, target))
+
 table_in_pre, literal_markup, lost_emphasis = [], [], []
 dangling, ambiguous = set(), set()
 ids, authored = {}, {}
@@ -168,6 +180,14 @@ for page in pages:
             ambiguous.add((str(page), href, frag + '_1'))
 
 fail = False
+
+if broken_redirects:
+    print("✗ a retired public URL has no redirect in the built site:", file=sys.stderr)
+    for old, target in broken_redirects:
+        print(f"    {old}  ->  {target}", file=sys.stderr)
+    fail = True
+else:
+    print("✓ retired public URLs redirect to their current pages")
 
 if table_in_pre:
     print("✗ a markdown table rendered as a code block in:", file=sys.stderr)

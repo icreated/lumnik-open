@@ -161,8 +161,7 @@ public class InboxResource {
             ps -> { ps.setLong(1, id); ps.setLong(2, tenant); ScopeGuardedUpsert.bindGrants(ps, 3, sources); },
             rs -> new String[]{rs.getString(1), rs.getString(2)});
         if (decision.isEmpty()) {
-            return Response.status(404).entity(Map.of("error",
-                "no decision " + id + " in your inbox")).build();
+            return ApiErrors.notFound("no decision " + id + " in your inbox");
         }
 
         Jdbc.update(adminDs, "InboxResource.ack", ACK_SQL, ps -> {

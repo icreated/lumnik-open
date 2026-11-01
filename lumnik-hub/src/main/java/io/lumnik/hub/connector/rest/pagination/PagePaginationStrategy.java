@@ -23,14 +23,13 @@ public class PagePaginationStrategy implements PaginationStrategy {
         if (pageParam == null || pageParam.isBlank()) {
             throw new IllegalArgumentException("page pagination requires 'page_param'");
         }
-        // size_param is optional; treat a blank value as absent so first() never emits an empty-name param.
-        String sp = c.get("size_param");
-        this.sizeParam      = (sp == null || sp.isBlank()) ? null : sp;
+        // size_param is optional; a blank one is absent, so first() never emits an empty-name param.
+        this.sizeParam      = PaginationSupport.optional(c.get("size_param"));
         this.size           = Integer.parseInt(c.getOrDefault("size", "50"));
         this.startPage      = Integer.parseInt(c.getOrDefault("start_page", "1"));
-        this.totalPagesPath = c.get("total_pages_path");
-        this.hasMorePath    = c.get("has_more_path");
-        this.lastPath       = c.get("last_path");
+        this.totalPagesPath = PaginationSupport.optional(c.get("total_pages_path"));
+        this.hasMorePath    = PaginationSupport.optional(c.get("has_more_path"));
+        this.lastPath       = PaginationSupport.optional(c.get("last_path"));
         this.emptyCheck     = Boolean.parseBoolean(c.getOrDefault("empty_check", "true"));
         this.responsePath   = c.get("response_path");
     }
@@ -49,17 +48,17 @@ public class PagePaginationStrategy implements PaginationStrategy {
     public RestRequest next(RestResponse resp, RestRequest current) {
         int currentPage = Integer.parseInt(current.queryParams().getOrDefault(pageParam, String.valueOf(startPage)));
         if (totalPagesPath != null) {
-            Number tp = JsonPathExtractor.read(resp.json(), totalPagesPath);
+            Long tp = PaginationSupport.number(resp.json(), totalPagesPath, "total_pages_path");
             // Stop once every page is fetched. pages-fetched = currentPage - startPage + 1, which is
             // correct for both 0-indexed (start_page=0) and 1-indexed APIs — no over-fetch past the last.
             if (tp != null && currentPage - startPage + 1 >= tp.intValue()) return null;
         }
         if (hasMorePath != null) {
-            Boolean hm = JsonPathExtractor.read(resp.json(), hasMorePath);
+            Boolean hm = PaginationSupport.flag(resp.json(), hasMorePath, "has_more_path");
             if (!Boolean.TRUE.equals(hm)) return null;
         }
         if (lastPath != null) {
-            Boolean last = JsonPathExtractor.read(resp.json(), lastPath);
+            Boolean last = PaginationSupport.flag(resp.json(), lastPath, "last_path");
             if (Boolean.TRUE.equals(last)) return null;
         }
         if (emptyCheck && items(resp).isEmpty()) return null;

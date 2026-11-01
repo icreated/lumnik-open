@@ -16,7 +16,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Duration;
@@ -204,29 +203,27 @@ public class ExportRunDispatcher {
         return new Verdict(found.get(), null);
     }
 
-    private boolean start(RunQueueClaim<Queued> claim, Instant startedAt) throws SQLException {
+    private boolean start(RunQueueClaim<Queued> claim, Instant startedAt) {
         Queued q = claim.row();
-        try (PreparedStatement ps = claim.connection().prepareStatement(START)) {
+        return Jdbc.update(claim.connection(), "ExportRunDispatcher.start", START, ps -> {
             ps.setObject(1, startedAt.atOffset(ZoneOffset.UTC));
             ps.setObject(2, q.runId());
             ps.setLong(3, q.tenantId());
-            return ps.executeUpdate() == 1;
-        }
+        }) == 1;
     }
 
     /** Ends a run that will not start, in the claim's own transaction. An export carries no endpoint-style summary to stamp. */
     private void end(RunQueueClaim<Queued> claim, String reason) throws SQLException {
         Queued q = claim.row();
         OffsetDateTime at = Instant.now().atOffset(ZoneOffset.UTC);
-        try (PreparedStatement ps = claim.connection().prepareStatement(END)) {
+        Jdbc.update(claim.connection(), "ExportRunDispatcher.end", END, ps -> {
             ps.setObject(1, at);
             ps.setObject(2, at);
             ps.setString(3, ExportFailureCode.DEFINITION.sqlValue());
             ps.setString(4, reason);
             ps.setObject(5, q.runId());
             ps.setLong(6, q.tenantId());
-            ps.executeUpdate();
-        }
+        });
         claim.commit();
         LOG.warnf("queued export run %s ended Failed/definition without running: %s", q.runId(), reason);
     }

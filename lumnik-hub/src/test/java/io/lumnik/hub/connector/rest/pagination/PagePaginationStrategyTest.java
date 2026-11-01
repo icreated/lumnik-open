@@ -1,4 +1,5 @@
 package io.lumnik.hub.connector.rest.pagination;
+import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.rest.*;
 import org.junit.jupiter.api.Test;
 import java.util.HashMap;
@@ -83,5 +84,27 @@ class PagePaginationStrategyTest {
 
         assertNotNull(s.next(notLast, cur));   // more pages
         assertNull(s.next(last, cur));         // last page → stop
+    }
+
+    /** #1611: a flag that reads no boolean is refused by its key. */
+    @Test void a_has_more_path_that_reads_no_boolean_is_refused_by_its_key() {
+        PagePaginationStrategy p = new PagePaginationStrategy(Map.of(
+            "page_param", "page", "has_more_path", "$.more", "response_path", "$.content"));
+        RestResponse r = RestResponse.of(200, Map.of(), "{\"more\":\"yes\",\"content\":[{}]}");
+        ConnectorException e = assertThrows(
+            ConnectorException.class, () -> p.next(r, p.first(null, null)));
+        assertEquals("pagination.has_more_path must read a boolean, not a string", e.getMessage());
+    }
+
+    /** code-review of #1611: a blank total_pages_path is none, and a total sent as text still counts. */
+    @Test void a_blank_total_pages_path_is_none_and_a_text_total_counts() {
+        PagePaginationStrategy blank = new PagePaginationStrategy(Map.of(
+            "page_param", "page", "total_pages_path", "", "response_path", "$.content"));
+        RestResponse page = RestResponse.of(200, Map.of(), "{\"content\":[{}]}");
+        assertEquals("2", blank.next(page, blank.first(null, null)).queryParams().get("page"));
+
+        PagePaginationStrategy text = new PagePaginationStrategy(Map.of(
+            "page_param", "page", "total_pages_path", "$.pages", "response_path", "$.content"));
+        assertNull(text.next(RestResponse.of(200, Map.of(), "{\"pages\":\"1\",\"content\":[{}]}"), text.first(null, null)));
     }
 }

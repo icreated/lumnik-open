@@ -10,7 +10,6 @@ import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
 import io.lumnik.hub.connector.rest.Snippets;
 import io.lumnik.hub.connector.rest.Urls;
-import io.lumnik.hub.connector.rest.auth.AuthProvider;
 import io.lumnik.hub.connector.rest.auth.AuthConfigException;
 import io.lumnik.hub.connector.rest.auth.AuthProviderRegistry;
 import io.lumnik.hub.connector.rest.auth.AuthSpec;
@@ -85,10 +84,9 @@ public class RestPreflight {
             return new Verdict(ep.getName(), ep.getMethod(), "", 0, false, 0, describe(unbuildable), "");
         }
 
-        AuthProvider auth;
+        RestConnection conn;
         try {
-            auth = authReg.build(authSpec(cfg, owner(c)));
-            auth.probe();
+            conn = RestEndpointReader.connect(cfg, owner(c), authReg, http, secrets);
         } catch (Exception refused) {
             // The credential is what failed, and the request was already composed: report the shape
             // a run would have sent. Falling back to the endpoint row here would print GET for a
@@ -100,7 +98,7 @@ public class RestPreflight {
         RestResponse resp;
         try {
             ResponseValidator validator = RestEndpointReader.validatorFor(cfg);
-            resp = auth.send(req, signed -> http.exchange(signed, validator));
+            resp = conn.send(req, signed -> conn.client().exchange(signed, validator));
         } catch (InterruptedException cancelled) {
             throw interrupted(cancelled);
         } catch (AuthConfigException refused) {

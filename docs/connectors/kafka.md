@@ -328,9 +328,28 @@ ID        CONNECTOR         ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTE
   that disappears leaves its column `NULL` for later rows.
 - **The new column takes its type from the first messages that carry it.** If they all hold
   `null`, it lands as text.
-- **A column keeps its type.** To change it once the producer has settled: delete the connector,
-  apply it again, run. The table is created again.
+- **A column keeps its type**, with one exception: [a whole number that receives a
+  decimal](#a-whole-number-column-that-receives-a-decimal). To change it otherwise once the producer
+  has settled: delete the connector, apply it again, run. The table is created again.
 - The chat knows the new column after the run (Pro).
+
+### A whole-number column that receives a decimal
+
+A column whose first messages held whole numbers is `bigint`. The first message with a decimal
+value widens it to `numeric`:
+
+- Earlier values do not change: `1000` stays `1000`.
+- The column then reads `NUMERIC` in the schema cards, not `NUMERIC(18,4)`.
+- **Under an entity, nothing to do.** The entity's view is rebuilt with the widened column, in the
+  same step.
+- **Under a view you made** (a report, a BI view), the run fails and names it:
+
+    ```text
+    connector.t_orders_x: amount cannot widen — view connector.v_sales_report reads it and the hub did not make it. Drop it, then run the connector again.
+    ```
+
+    Drop the view, run the connector again, then create the view again. The failed chunk is read
+    again: no row is lost.
 
 ### Names the producer chose stay — and stay askable
 

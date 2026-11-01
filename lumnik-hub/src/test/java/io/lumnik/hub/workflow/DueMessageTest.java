@@ -7,6 +7,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -15,19 +16,19 @@ class DueMessageTest {
     private static WorkflowGraph graph(String message) {
         return new WorkflowGraph("order-line", "adv", "connector.v_order_line", "stage", "declared", "line",
             null, List.of(new WorkflowGraph.StateDto("CONFIRMED", "confirmée", List.of(), false)), "CONFIRMED",
-            List.of(), new WorkflowManifest.DueDef("confirmed_date", List.of("CONFIRMED"), null, message));
+            List.of(), new WorkflowManifest.DueDef("confirmed_date", List.of("CONFIRMED"), null, message, List.of()), null);
     }
 
     @Test
     void the_default_sentence_is_english_and_says_what_the_data_says() {
-        assertThat(DueMessage.render(graph(null), "L-7", "CONFIRMED", "2026-10-14"))
+        assertThat(DueMessage.render(graph(null), "L-7", "CONFIRMED", "2026-10-14", Map.of()))
             .isEqualTo("L-7: due 2026-10-14, still in \"CONFIRMED\" — declared due date in order-line");
     }
 
     @Test
     void a_declared_sentence_names_the_label() {
         assertThat(DueMessage.render(graph("Ligne {doc_key} : livraison confirmée pour le {due}, toujours {state_label}"),
-                "L-7", "CONFIRMED", "2026-10-14"))
+                "L-7", "CONFIRMED", "2026-10-14", Map.of()))
             .isEqualTo("Ligne L-7 : livraison confirmée pour le 2026-10-14, toujours confirmée");
     }
 
@@ -40,5 +41,13 @@ class DueMessageTest {
             .isEqualTo(Instant.parse("2026-10-25T23:00:00Z"));
         assertThat(WorkflowDueSweep.endOfDay(LocalDate.parse("2026-10-25"), ZoneOffset.UTC))
             .isEqualTo(Instant.parse("2026-10-26T00:00:00Z"));
+    }
+
+    /** #1588: a name the sentence does not reserve renders from the version's columns; a reserved one still wins. */
+    @Test
+    void a_cited_column_renders_from_the_version_and_a_reserved_name_wins() {
+        assertThat(DueMessage.render(graph("{doc_key} chez {customer}: {state}"), "L-7", "CONFIRMED", "2026-10-14",
+                Map.of("customer", "Atelier Orion", "state", "confirmée")))
+            .isEqualTo("L-7 chez Atelier Orion: CONFIRMED");
     }
 }

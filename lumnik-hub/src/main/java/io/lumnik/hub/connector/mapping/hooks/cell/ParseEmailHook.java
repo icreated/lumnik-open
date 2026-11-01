@@ -9,6 +9,7 @@ import io.lumnik.hub.connector.mapping.hooks.HookId;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.Map;
+import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -33,7 +34,7 @@ public class ParseEmailHook implements CellHook {
     if (v == null) return;
 
     String str = v.toString().trim();
-    if (lower) str = str.toLowerCase();
+    if (lower) str = str.toLowerCase(Locale.ROOT);
 
     if (EMAIL.matcher(str).matches()) {
       row.put(col, str);

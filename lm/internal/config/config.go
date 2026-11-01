@@ -2,8 +2,12 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -95,4 +99,42 @@ func (c *Config) Resolve(name string) (Context, error) {
 		ctx.Token = v
 	}
 	return ctx, nil
+}
+
+// ValidID reports whether v can be sent as X-Tenant-ID / X-User-ID: empty (not sent), or a positive integer.
+func ValidID(v string) bool {
+	if v == "" {
+		return true
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	return err == nil && n > 0
+}
+
+// CheckIdentity refuses a dev-bypass identity (Tenant / User, sent as X-Tenant-ID / X-User-ID) on a context whose
+// server is a remote https hub: no dev-bypass hub runs there, and a production context must not carry one (#1610).
+// Checked on the effective server — after --server and LUMNIK_URL — wherever a client is built.
+func CheckIdentity(ctx Context) error {
+	if ctx.Tenant == "" && ctx.User == "" {
+		return nil
+	}
+	if host, remote := RemoteHTTPS(ctx.Server); remote {
+		return fmt.Errorf("a dev-bypass identity (--tenant/--user) is for a local hub; %s is a remote https server", host)
+	}
+	return nil
+}
+
+// RemoteHTTPS reports whether server is an https URL whose host is not local, and returns the host alone — the URL
+// may carry credentials. Plain http and local names (localhost, a loopback address, *.local, *.localhost, *.test,
+// with or without a fully-qualified name's trailing dot) are not remote: make k8s-up and its gateway variant run there.
+func RemoteHTTPS(server string) (string, bool) {
+	u, err := url.Parse(server)
+	if err != nil || u.Scheme != "https" {
+		return "", false
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "localhost" || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".test") {
+		return host, false
+	}
+	ip := net.ParseIP(host)
+	return host, ip == nil || !ip.IsLoopback()
 }

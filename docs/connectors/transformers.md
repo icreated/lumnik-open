@@ -8,9 +8,11 @@ Every parameter, on one page: [Transformers — reference](transformers-referenc
 
 ## Where it applies
 
-- **`csv-file` connectors only.** Transformers go in the manifest's `spec.mapping` block.
+- **A `csv-file` connector** reads them in the manifest's `spec.mapping` block.
+- **A REST, GraphQL or SOAP endpoint** reads them in its own `mapping`, over its promoted
+  columns: [Run hooks over the promoted columns](rest.md#run-hooks-over-the-promoted-columns).
+  One value alone takes [`transform:`](rest.md#transform-a-promoted-value).
 - **Not `lm csv ingest`.** The one-shot load never transforms. Apply a `csv-file` connector.
-- **A REST, GraphQL or SOAP endpoint** has its own short list: [`transform:`](rest.md#transform-a-promoted-value).
 - **A JDBC or Kafka connector** writes what it reads. A JDBC table can only rename a column:
   [JDBC: the hub table](jdbc.md#the-hub-table).
 - **Dirty status values** (`fini`, `TERMINE `) are not repaired here. Declare them as

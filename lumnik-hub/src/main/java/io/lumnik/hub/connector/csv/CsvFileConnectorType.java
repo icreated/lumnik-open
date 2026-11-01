@@ -10,7 +10,6 @@ import io.lumnik.hub.connector.api.types.*;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.mapping.MappingEngine;
 import io.lumnik.hub.connector.mapping.carry.StaleCarryException;
-import io.lumnik.hub.connector.mapping.spec.ErrorPolicy;
 import io.lumnik.hub.connector.mapping.spec.HookInvocation;
 import io.lumnik.hub.connector.mapping.spec.MappingSpec;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget;
@@ -326,24 +325,7 @@ public class CsvFileConnectorType implements ConnectorType {
     }
     MappingTarget target = new MappingTarget(null,
         tableOf(table, config, CsvFullRefresh.stateFile(config).isPresent()), null, null);
-
-    List<HookInvocation> datasetHooks = List.of();
-    List<HookInvocation> cellHooks = List.of();
-    List<HookInvocation> rowHooks  = List.of();
-    ErrorPolicy onError = ErrorPolicy.soft();
-    JsonNode mappingNode = mappingOf(config);
-    if (mappingNode != null) {
-      // Shared with MappingLoader so csv and manifest/jdbc mappings refuse a malformed hook the same
-      // way (this used to silently DROP a bad entry, where MappingLoader threw).
-      datasetHooks = HookInvocation.parseList(mappingNode, "dataset");
-      cellHooks = HookInvocation.parseList(mappingNode, "cell");
-      rowHooks  = HookInvocation.parseList(mappingNode, "row");
-      onError = ErrorPolicy.parse(mappingNode.path("on-error"));
-    }
-    return new MappingSpec(
-        sourceOf(table), 1, target, MappingSpec.StreamMode.STREAM,
-        "dump of " + table,
-        datasetHooks, rowHooks, cellHooks, onError);
+    return MappingSpec.fromBlock(sourceOf(table), target, "dump of " + table, mappingOf(config));
   }
 
   // -----------------------------------------------------------------------

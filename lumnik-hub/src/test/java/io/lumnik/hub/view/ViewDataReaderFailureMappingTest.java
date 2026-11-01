@@ -27,8 +27,16 @@ class ViewDataReaderFailureMappingTest {
     }
 
     @Test void anythingElse_staysAGenericFailure() {
-        RuntimeException ex = ViewDataReader.mapSqlFailure(new SQLException("boom", "08006"));
+        SQLException boom = new SQLException("boom", "08006");
+        RuntimeException ex = ViewDataReader.mapSqlFailure(boom);
         assertFalse(ex instanceof IllegalArgumentException);
-        assertTrue(ex.getMessage().contains("boom"));
+        assertSame(boom, ex.getCause());
+    }
+
+    /** #1648: a data exception other than the date ones quotes the cell — the message says its SQLSTATE. */
+    @Test void anotherDataException_namesItsSqlstate_neverTheCell() {
+        RuntimeException ex = ViewDataReader.mapSqlFailure(
+            new SQLException("ERROR: invalid input syntax for type numeric: \"4111-1111\"", "22P02"));
+        assertEquals("ViewDataReader.read failed (SQLSTATE 22P02)", ex.getMessage());
     }
 }

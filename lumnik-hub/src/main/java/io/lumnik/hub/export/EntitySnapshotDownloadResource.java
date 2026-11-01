@@ -3,6 +3,7 @@ package io.lumnik.hub.export;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.entity.EntityManifest;
@@ -68,7 +69,7 @@ public class EntitySnapshotDownloadResource {
                     TenantRlsScope.applyTo(c, tenantId);
                     return streamer.stream(c, entity, SnapshotShape.canonical(cols), cols, ExportManifest.Format.DEFAULT, os);
                 } catch (SQLException e) {
-                    throw new RuntimeException("EntitySnapshotDownloadResource: " + e.getMessage(), e);
+                    throw new RuntimeException(Jdbc.failureText("EntitySnapshotDownloadResource.download", e), e);
                 }
             });
             recordEgress(tenantId, actorId, entity, stats);

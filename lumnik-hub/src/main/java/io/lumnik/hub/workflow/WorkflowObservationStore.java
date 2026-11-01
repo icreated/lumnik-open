@@ -7,13 +7,11 @@ import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -77,24 +75,16 @@ public class WorkflowObservationStore {
             + "  FILTER (WHERE alerted_at IS NOT NULL) AS median_detection_seconds "
             + "FROM core.workflow_observation o WHERE o.tenant_id = ? " + inGrantedWorkflows("o")
             + "GROUP BY workflow_name ORDER BY workflow_name";
-        List<StatsRow> out = new ArrayList<>();
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+        return Jdbc.query(adminDs, "WorkflowObservationStore.stats", sql, ps -> {
             ps.setLong(1, tenantId);
             ScopeGuardedUpsert.bindGrants(ps, 2, granted);
             ps.setLong(4, tenantId);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    double median = rs.getDouble("median_detection_seconds");
-                    boolean noMedian = rs.wasNull();
-                    out.add(new StatsRow(rs.getString("workflow_name"),
-                        rs.getLong("watched"), rs.getLong("dormant"),
-                        noMedian ? null : Math.round(median)));
-                }
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("workflow observation stats failed", e);
-        }
-        return out;
+        }, rs -> {
+            double median = rs.getDouble("median_detection_seconds");
+            boolean noMedian = rs.wasNull();
+            return new StatsRow(rs.getString("workflow_name"), rs.getLong("watched"), rs.getLong("dormant"),
+                noMedian ? null : Math.round(median));
+        });
     }
 
     /** The tape, flattened across workflows: tenant-bound, stillest first, bounded in SQL.
@@ -105,24 +95,15 @@ public class WorkflowObservationStore {
             + "FROM core.workflow_observation o WHERE o.tenant_id = ? " + inGrantedWorkflows("o")
             + "AND (?::text IS NULL OR o.workflow_name = ?) "
             + "ORDER BY since ASC, workflow_name, doc_key LIMIT ?";
-        List<ObservationRow> out = new ArrayList<>();
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+        return Jdbc.query(adminDs, "WorkflowObservationStore.listAll", sql, ps -> {
             ps.setLong(1, tenantId);
             ScopeGuardedUpsert.bindGrants(ps, 2, granted);
             ps.setLong(4, tenantId);
             ps.setString(5, workflow);
             ps.setString(6, workflow);
             ps.setInt(7, limit);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    out.add(new ObservationRow(rs.getString(1), rs.getString(2), rs.getString(3),
-                        Jdbc.instant(rs, 4), Jdbc.instant(rs, 5), Jdbc.instant(rs, 6)));
-                }
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("WorkflowObservationStore.listAll: " + e.getMessage(), e);
-        }
-        return out;
+        }, rs -> new ObservationRow(rs.getString(1), rs.getString(2), rs.getString(3),
+            Jdbc.instant(rs, 4), Jdbc.instant(rs, 5), Jdbc.instant(rs, 6)));
     }
 
     /** One move of the journal (#1368). {@code enteredFromAt}: when the document entered {@code from} —
@@ -148,8 +129,7 @@ public class WorkflowObservationStore {
             + "WHERE t.tenant_id = ? " + inGrantedWorkflows("t")
             + "AND (?::text IS NULL OR t.workflow_name = ?) AND (?::text IS NULL OR t.doc_key = ?) "
             + "ORDER BY t.observed_at DESC, t.id DESC LIMIT ?";
-        List<TransitionRow> out = new ArrayList<>();
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+        return Jdbc.query(adminDs, "WorkflowObservationStore.transitions", sql, ps -> {
             ps.setLong(1, tenantId);
             ScopeGuardedUpsert.bindGrants(ps, 2, granted);
             ps.setLong(4, tenantId);
@@ -158,16 +138,8 @@ public class WorkflowObservationStore {
             ps.setString(7, doc);
             ps.setString(8, doc);
             ps.setInt(9, limit);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    out.add(new TransitionRow(rs.getString(1), rs.getString(2), rs.getString(3),
-                        rs.getString(4), Jdbc.instant(rs, 5), Jdbc.instant(rs, 6)));
-                }
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("WorkflowObservationStore.transitions failed", e);
-        }
-        return out;
+        }, rs -> new TransitionRow(rs.getString(1), rs.getString(2), rs.getString(3),
+            rs.getString(4), Jdbc.instant(rs, 5), Jdbc.instant(rs, 6)));
     }
 
     /** The whole ledger of one workflow as a map: for tests and small reads — the sweep streams it (#905). */
@@ -175,32 +147,55 @@ public class WorkflowObservationStore {
         String sql = "SELECT " + Observation.columns("")
             + " FROM core.workflow_observation WHERE tenant_id = ? AND workflow_name = ?";
         Map<String, Observation> out = new HashMap<>();
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+        Jdbc.query(adminDs, "WorkflowObservationStore.loadAll", sql, ps -> {
             ps.setLong(1, tenantId);
             ps.setString(2, workflow);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    out.put(rs.getString(1), Observation.fromRow(rs, 1));
-                }
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("WorkflowObservationStore.loadAll: " + e.getMessage(), e);
-        }
+        }, rs -> Observation.fromRow(rs, 1)).forEach(o -> out.put(o.docKey(), o));
         return out;
+    }
+
+    /** These documents' observations, by key — a view page's share of the ledger (#1588). */
+    public Map<String, Observation> load(long tenantId, String workflow, Collection<String> keys) {
+        Map<String, Observation> out = new HashMap<>();
+        if (keys.isEmpty()) return out;
+        Jdbc.query(adminDs, "WorkflowObservationStore.load", "SELECT " + Observation.columns("")
+                + " FROM core.workflow_observation WHERE tenant_id = ? AND workflow_name = ? AND doc_key = ANY (?)",
+            ps -> {
+                ps.setLong(1, tenantId);
+                ps.setString(2, workflow);
+                ps.setArray(3, ps.getConnection().createArrayOf("text", keys.toArray()));
+            }, rs -> Observation.fromRow(rs, 1)).forEach(o -> out.put(o.docKey(), o));
+        return out;
+    }
+
+    /**
+     * Suspends these documents' observations (#1588): a key whose current version cannot be told is not watched.
+     * Its clock restarts on every unreadable tick and its alert is cleared, so no threshold counts a period lumnik
+     * could not read, and when it is readable again the clock runs from there. The row stays, so the tape keeps the
+     * document's history and its first sighting.
+     */
+    public void suspend(long tenantId, String workflow, Collection<String> keys, Instant now) {
+        if (keys.isEmpty()) return;
+        Jdbc.update(adminDs, "WorkflowObservationStore.suspend",
+            "UPDATE core.workflow_observation SET since = ?, alerted_at = NULL, updated_at = NOW() "
+                + "WHERE tenant_id = ? AND workflow_name = ? AND doc_key = ANY (?)",
+            ps -> {
+                ps.setTimestamp(1, Timestamp.from(now));
+                ps.setLong(2, tenantId);
+                ps.setString(3, workflow);
+                ps.setArray(4, ps.getConnection().createArrayOf("text", keys.toArray()));
+            });
     }
 
     public void insertNew(long tenantId, String workflow, String docKey, String state, Instant now) {
         String sql = "INSERT INTO core.workflow_observation "
             + "(tenant_id, workflow_name, doc_key, state, since, first_observed_at) "
             + "VALUES (?, ?, ?, ?, ?, ?)";
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+        Jdbc.update(adminDs, "WorkflowObservationStore.insertNew", sql, ps -> {
             ps.setLong(1, tenantId); ps.setString(2, workflow); ps.setString(3, docKey);
             ps.setString(4, state);
             ps.setTimestamp(5, Timestamp.from(now)); ps.setTimestamp(6, Timestamp.from(now));
-            ps.executeUpdate();
-        } catch (Exception e) {
-            throw new RuntimeException("WorkflowObservationStore.insertNew: " + e.getMessage(), e);
-        }
+        });
     }
 
     /** State change: update the observation (since resets, alert flag clears) and append
@@ -208,37 +203,24 @@ public class WorkflowObservationStore {
      *  ledger cannot drift apart. */
     public void recordTransition(long tenantId, String workflow, String docKey,
                                  String fromState, String toState, Instant now) {
-        try (Connection c = adminDs.getConnection()) {
-            boolean auto = c.getAutoCommit();
-            c.setAutoCommit(false);
-            try {
-                try (PreparedStatement up = c.prepareStatement(
-                        "UPDATE core.workflow_observation SET state = ?, since = ?, "
-                            + "alerted_at = NULL, updated_at = NOW() "
-                            + "WHERE tenant_id = ? AND workflow_name = ? AND doc_key = ?")) {
-                    up.setString(1, toState); up.setTimestamp(2, Timestamp.from(now));
-                    up.setLong(3, tenantId); up.setString(4, workflow); up.setString(5, docKey);
-                    up.executeUpdate();
-                }
-                try (PreparedStatement ins = c.prepareStatement(
-                        "INSERT INTO core.workflow_transition "
-                            + "(tenant_id, workflow_name, doc_key, from_state, to_state, observed_at) "
-                            + "VALUES (?, ?, ?, ?, ?, ?)")) {
-                    ins.setLong(1, tenantId); ins.setString(2, workflow); ins.setString(3, docKey);
-                    ins.setString(4, fromState); ins.setString(5, toState);
-                    ins.setTimestamp(6, Timestamp.from(now));
-                    ins.executeUpdate();
-                }
-                c.commit();
-            } catch (Exception e) {
-                c.rollback();
-                throw e;
-            } finally {
-                c.setAutoCommit(auto);
-            }
-        } catch (Exception e) {
-            throw new RuntimeException("WorkflowObservationStore.recordTransition: " + e.getMessage(), e);
-        }
+        Jdbc.transaction(adminDs, "WorkflowObservationStore.recordTransition", c -> {
+            Jdbc.update(c, "WorkflowObservationStore.recordTransition.observation",
+                "UPDATE core.workflow_observation SET state = ?, since = ?, alerted_at = NULL, updated_at = NOW() "
+                    + "WHERE tenant_id = ? AND workflow_name = ? AND doc_key = ?",
+                ps -> {
+                    ps.setString(1, toState); ps.setTimestamp(2, Timestamp.from(now));
+                    ps.setLong(3, tenantId); ps.setString(4, workflow); ps.setString(5, docKey);
+                });
+            Jdbc.update(c, "WorkflowObservationStore.recordTransition.journal",
+                "INSERT INTO core.workflow_transition "
+                    + "(tenant_id, workflow_name, doc_key, from_state, to_state, observed_at) "
+                    + "VALUES (?, ?, ?, ?, ?, ?)",
+                ps -> {
+                    ps.setLong(1, tenantId); ps.setString(2, workflow); ps.setString(3, docKey);
+                    ps.setString(4, fromState); ps.setString(5, toState);
+                    ps.setTimestamp(6, Timestamp.from(now));
+                });
+        });
     }
 
     /** A declaration now names what the ledger held raw (#1367): the label changes; since, the alert
@@ -246,24 +228,18 @@ public class WorkflowObservationStore {
     public void relabel(long tenantId, String workflow, String docKey, String state) {
         String sql = "UPDATE core.workflow_observation SET state = ?, updated_at = NOW() "
             + "WHERE tenant_id = ? AND workflow_name = ? AND doc_key = ?";
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+        Jdbc.update(adminDs, "WorkflowObservationStore.relabel", sql, ps -> {
             ps.setString(1, state);
             ps.setLong(2, tenantId); ps.setString(3, workflow); ps.setString(4, docKey);
-            ps.executeUpdate();
-        } catch (Exception e) {
-            throw new RuntimeException("WorkflowObservationStore.relabel: " + e.getMessage(), e);
-        }
+        });
     }
 
     public void markAlerted(long tenantId, String workflow, String docKey, Instant now) {
         String sql = "UPDATE core.workflow_observation SET alerted_at = ?, updated_at = NOW() "
             + "WHERE tenant_id = ? AND workflow_name = ? AND doc_key = ?";
-        try (Connection c = adminDs.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+        Jdbc.update(adminDs, "WorkflowObservationStore.markAlerted", sql, ps -> {
             ps.setTimestamp(1, Timestamp.from(now));
             ps.setLong(2, tenantId); ps.setString(3, workflow); ps.setString(4, docKey);
-            ps.executeUpdate();
-        } catch (Exception e) {
-            throw new RuntimeException("WorkflowObservationStore.markAlerted: " + e.getMessage(), e);
-        }
+        });
     }
 }

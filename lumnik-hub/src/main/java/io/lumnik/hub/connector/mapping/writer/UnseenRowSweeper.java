@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.mapping.writer;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget;
 import io.lumnik.hub.search.mark.SearchProjectionRunHook;
@@ -79,7 +80,7 @@ public class UnseenRowSweeper {
         }
       }
     } catch (SQLException e) {
-      throw new ConnectorException("UnseenRowSweeper.count failed: " + e.getMessage(), e);
+      throw new ConnectorException(Jdbc.failureText("UnseenRowSweeper.count", e), e);
     }
   }
 
@@ -95,7 +96,7 @@ public class UnseenRowSweeper {
       if (removed > 0) searchMarks.tableLostRows(tenantId, spec.name());
       return removed;
     } catch (SQLException e) {
-      throw new ConnectorException("UnseenRowSweeper.remove failed: " + e.getMessage(), e);
+      throw new ConnectorException(Jdbc.failureText("UnseenRowSweeper.remove", e), e);
     }
   }
 

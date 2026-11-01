@@ -5,7 +5,6 @@ import io.lumnik.hub.validator.ConfigDef;
 import io.lumnik.hub.validator.ConfigDef.Importance;
 import io.lumnik.hub.validator.ConfigDef.Type;
 import io.lumnik.hub.validator.ConfigDefValidators;
-import io.lumnik.hub.validator.common.NoMappingBlock;
 
 import java.util.List;
 import java.util.Set;
@@ -110,9 +109,10 @@ public final class EndpointsBlockValidator {
                 "Not accepted in spec.defaults — refused by validation; declare it on each endpoint", null);
         }
         for (String key : CONNECTOR_LEVEL_KEYS) {
-            defaults.optional(key, "auth".equals(key) ? Type.NESTED : Type.STRING, Importance.LOW,
+            defaults.optional(key, CONNECTOR_LEVEL_BLOCKS.contains(key) ? Type.NESTED : Type.STRING, Importance.LOW,
                 "Not accepted in spec.defaults — refused by validation; declare it at spec." + key, null);
         }
+        defaults.optional("mapping", Type.NESTED, Importance.LOW, RestConnectorValidator.ON_THE_ENDPOINT, null);
         return defaults
             .optionalAll(perEndpointDef())
             .optionalAll(perGraphQlEndpointDef())
@@ -146,7 +146,10 @@ public final class EndpointsBlockValidator {
      * connector's, so the run looks each one up here first. Declared below so the closed sweep does not call them
      * ignored; {@link RestConnectorValidator} sends them back up to spec, where they are checked.
      */
-    public static final List<String> CONNECTOR_LEVEL_KEYS = List.of("base_url", "auth", "default_rate_limit", "graphql_path");
+    public static final List<String> CONNECTOR_LEVEL_KEYS = List.of("base_url", "auth", "tls", "default_rate_limit", "graphql_path");
+
+    /** The connector-level keys that are blocks, not strings. */
+    private static final Set<String> CONNECTOR_LEVEL_BLOCKS = Set.of("auth", "tls");
 
     /**
      * Every key an endpoint of any request shape reads — the keys a {@code spec.defaults} passthrough could have stored.
@@ -159,12 +162,12 @@ public final class EndpointsBlockValidator {
 
     /**
      * What every request shape reads besides its own keys, then the shape closed: an undeclared key is named instead
-     * of dropped (#1438). {@code headers} and {@code mapping} are declared to be refused, so a refusal is not also
-     * an unknown-key warning.
+     * of dropped (#1438). {@code headers} is declared to be refused, so a refusal is not also an unknown-key warning;
+     * {@code mapping} runs over the endpoint's promoted columns (#1617).
      */
     private static ConfigDef closedWithSharedKeys(ConfigDef shape) {
         for (String key : CONNECTOR_LEVEL_KEYS) {
-            shape.optional(key, "auth".equals(key) ? Type.NESTED : Type.STRING, Importance.LOW,
+            shape.optional(key, CONNECTOR_LEVEL_BLOCKS.contains(key) ? Type.NESTED : Type.STRING, Importance.LOW,
                 "Connector-level — declare it at spec." + key, null);
         }
         return shape
@@ -175,7 +178,8 @@ public final class EndpointsBlockValidator {
                 "incremental is a block, not a scalar: incremental: { mode: watermark, param: ..., watermark_path: ... }")
             .optionalHinted("headers", Type.LIST, Importance.LOW,
                 "Not accepted here — refused by validation; declare headers at spec.headers", null, HEADERS_ADVICE)
-            .optional("mapping", Type.NESTED, Importance.LOW, NoMappingBlock.DOC, null)
+            .optional("mapping", Type.NESTED, Importance.MEDIUM,
+                "Hooks over this endpoint's promoted columns (dataset, row, cell, on-error) — see the transformers page", null)
             .closed();
     }
 
@@ -183,7 +187,17 @@ public final class EndpointsBlockValidator {
     static ConfigDef paginationDef() {
         return new ConfigDef()
             .requireEnum("kind", Importance.HIGH, "Pagination strategy",
-                "offset", "page", "cursor", "link-header", "relay", "body-link", "custom", "soap");
+                "offset", "page", "cursor", "link-header", "relay", "body-link", "none", "custom", "soap");
+    }
+
+    /** The object form of {@code unique_key} (#1630): a path and one of the promote transforms. */
+    static ConfigDef uniqueKeyDef() {
+        return new ConfigDef()
+            .requireCustom("path", Type.STRING, Importance.HIGH, "JSONPath to the value the key is read from",
+                ConfigDefValidators.nonEmpty())
+            .optionalCustom("transform", Type.STRING, Importance.MEDIUM,
+                "A promote transform applied to the value, e.g. last_path_segment", RestConnectorValidator::transformRefusal)
+            .closed();
     }
 
     /** Hybrid target block: a hub table keyed by unique_key, with optional promoted columns. */
@@ -194,8 +208,9 @@ public final class EndpointsBlockValidator {
             .requireCustom("table", Type.STRING, Importance.HIGH,
                 "Hub table name (under ext.*) this endpoint writes to",
                 ConfigDefValidators.plainQualifiedIdentifier())
-            .require("unique_key", Type.STRING, Importance.HIGH,
-                "JSONPath to the natural key used for upsert, e.g. $.id")
+            .requireStringOrNested("unique_key", Importance.HIGH,
+                "JSONPath to the natural key used for upsert, e.g. $.id — or { path, transform } to transform it",
+                uniqueKeyDef())
             .optional("promote", Type.LIST, Importance.MEDIUM,
                 "Columns promoted from the JSON payload to typed hub columns", null);
     }

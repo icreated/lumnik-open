@@ -89,6 +89,31 @@ public class MappingEngine {
   }
 
   /**
+   * The mapping over each row on its own (#1617): element {@code i} of the result is what row {@code i} became, or
+   * {@code null} when a hook dropped it (and recorded why in {@code state.dropped()}). For a target that writes each
+   * row beside the payload it came from — a REST item — so a row is never separated from its payload. A row that
+   * becomes several, or a mapping that buffers rows ({@code aggregator}), has no payload to land beside: refused.
+   */
+  public List<Map<String, Object>> transformEach(MappingSpec spec, List<Map<String, Object>> input,
+                                                 MappingState state) {
+    validateHookParams(spec);
+    if (spec.row().stream().anyMatch(inv -> "aggregator".equals(inv.name()))) {
+      throw new MappingValidationException("aggregator merges rows, and each row here lands beside its own payload");
+    }
+    List<Map<String, Object>> out = new ArrayList<>(input.size());
+    for (Map<String, Object> row : input) {
+      List<Map<String, Object>> rows = applyDatasetHooks(spec, new ArrayList<>(List.of(row)), state);
+      rows = applyCellHooks(spec, applyRowHooks(spec, rows, state), state);
+      if (rows.size() > 1) {
+        throw new MappingValidationException("the mapping made " + rows.size() + " rows of one — each row here lands "
+            + "beside its own payload, so a hook may change or drop a row, not split it");
+      }
+      out.add(rows.isEmpty() ? null : rows.getFirst());
+    }
+    return out;
+  }
+
+  /**
    * Resolve and validate every hook ONCE, before any row. Params are invariant across the
    * chunk, so a param-shape refusal that hooks used to run per row — and that slipped through
    * entirely on an empty chunk, since {@code apply()} never fired — now fires here, exactly once.
@@ -305,6 +330,13 @@ public class MappingEngine {
     return new MappingOutcome(state.dropped(), state.counters().cellErrors().get(), state.scripts());
   }
 
+  /** What a chunk of {@code records} became when the mapping dropped {@code drops}: the engine's conservation input. */
+  public static WriteOutcome writeOutcome(int records, List<MappingState.DroppedRow> drops) {
+    if (drops.isEmpty()) return new WriteOutcome.AllWritten(records);
+    return new WriteOutcome.PartialWrite(records - drops.size(),
+        drops.stream().map(d -> new WriteOutcome.SkippedRecord(d.row(), d.reason())).toList());
+  }
+
   /**
    * Wraps a {@link MappingSpec} into a {@code ChunkExecutor}-ready {@link ItemWriter} — the ONE
    * seam every MappingSpec-driven {@code ConnectorType} (csv-file, jdbc-generic, kafka) should
@@ -405,12 +437,7 @@ public class MappingEngine {
       }
       cellErrors += outcome.cellErrors();
       scripts.addAll(outcome.scripts());
-      var drops = outcome.dropped();
-      if (drops.isEmpty()) {
-        return new WriteOutcome.AllWritten(items.size());
-      }
-      return new WriteOutcome.PartialWrite(items.size() - drops.size(),
-          drops.stream().map(d -> new WriteOutcome.SkippedRecord(d.row(), d.reason())).toList());
+      return writeOutcome(items.size(), outcome.dropped());
     }
 
     @Override

@@ -47,7 +47,7 @@ public class ConnectorApplyResource {
     public Response apply(String body) throws Exception {
         long tenant = RequireTenant.current();
         if (body == null || body.isBlank()) {
-            return Response.status(400).entity(ApiErrors.error("empty body")).build();
+            return ApiErrors.badRequest("empty body");
         }
         JsonNode doc = body.trim().startsWith("{") ? json.readTree(body) : YAML.readTree(body);
 
@@ -55,9 +55,9 @@ public class ConnectorApplyResource {
         // tenant: it must match the authenticated one — never a silent cross-tenant apply.
         if (doc.path(METADATA).has(TENANT)
                 && doc.path(METADATA).path(TENANT).asLong() != tenant) {
-            return Response.status(400).entity(ApiErrors.error(
+            return ApiErrors.badRequest(
                 "manifest metadata.tenant (" + doc.path(METADATA).path(TENANT).asLong()
-                    + ") does not match the authenticated tenant (" + tenant + ")")).build();
+                    + ") does not match the authenticated tenant (" + tenant + ")");
         }
 
         // A WRITE door asks allowsAll, not allowsAny — the same gate EntityApplyResource has, on the
@@ -82,8 +82,7 @@ public class ConnectorApplyResource {
         String kind = doc.path(METADATA).path("connector_type").asText();
         ConnectorApplyHandler handler = findHandler(kind);
         if (handler == null) {
-            return Response.status(400).entity(ApiErrors.error(
-                "no apply handler for kind: " + kind)).build();
+            return ApiErrors.badRequest("no apply handler for kind: " + kind);
         }
 
         ApplyResult result = handler.apply(doc, tenant);

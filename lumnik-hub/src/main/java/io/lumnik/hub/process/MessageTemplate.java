@@ -4,6 +4,8 @@ import io.lumnik.hub.sql.TemporalText;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -52,5 +54,16 @@ public final class MessageTemplate {
 
     private static String text(Object value) {
         return value instanceof BigDecimal d ? d.stripTrailingZeros().toPlainString() : TemporalText.render(value);
+    }
+
+    /**
+     * A decision payload's {@code fields}: each column's value as the wire carries it (a timestamp as its UTC
+     * instant), in the order given. One construction for a Process decision and a Workflow one (#1588), so the two
+     * contracts cannot drift apart.
+     */
+    public static Map<String, Object> fields(Collection<String> columns, Map<String, Object> row) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        for (String c : columns) out.put(c, TemporalText.wire(row.get(c)));
+        return out;
     }
 }

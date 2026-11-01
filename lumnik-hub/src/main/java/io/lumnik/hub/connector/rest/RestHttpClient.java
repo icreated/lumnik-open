@@ -1,5 +1,7 @@
 package io.lumnik.hub.connector.rest;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import io.lumnik.hub.connector.rest.auth.SecretRedactor;
 import io.lumnik.hub.connector.rest.reliability.NoopResponseValidator;
 import io.lumnik.hub.connector.rest.reliability.ResponseValidator;
@@ -16,16 +18,38 @@ import java.util.stream.Collectors;
 @ApplicationScoped
 public class RestHttpClient {
 
-    private final HttpClient client = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(10))
-        // NEVER, not NORMAL: an auto-followed redirect is a second, unvalidated path to an arbitrary host
-        // (PaginationUrlGuard only vets URLs the pagination strategies read out of the response BODY/
-        // headers, not a 3xx Location the JDK client would otherwise chase on its own). No test or shipped
-        // connector manifest relies on redirect-following (grepped for 30x stubs / Location headers /
-        // "redirect" across lumnik-hub/src and the rest-generic connector manifest — none found).
-        // The 3xx that now reaches the caller is refused by ResponseStatusGuard, not chased here.
-        .followRedirects(HttpClient.Redirect.NEVER)
-        .build();
+    private final HttpClient client;
+    /**
+     * The clients trusting an internal CA (#1609), one per PEM: a run must not build a pool per chunk. Bounded and
+     * expiring, so a rotated CA's client is dropped — and its selector thread with it — instead of kept for life.
+     */
+    private final Cache<String, RestHttpClient> trusted =
+        Caffeine.newBuilder().maximumSize(64).expireAfterAccess(Duration.ofHours(1)).build();
+
+    public RestHttpClient() { this(builder().build()); }
+
+    private RestHttpClient(HttpClient client) { this.client = client; }
+
+    private static HttpClient.Builder builder() {
+        return HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10))
+            // NEVER, not NORMAL: an auto-followed redirect is a second, unvalidated path to an arbitrary host
+            // (PaginationUrlGuard only vets URLs the pagination strategies read out of the response BODY/
+            // headers, not a 3xx Location the JDK client would otherwise chase on its own). No test or shipped
+            // connector manifest relies on redirect-following (grepped for 30x stubs / Location headers /
+            // "redirect" across lumnik-hub/src and the rest-generic connector manifest — none found).
+            // The 3xx that now reaches the caller is refused by ResponseStatusGuard, not chased here.
+            .followRedirects(HttpClient.Redirect.NEVER);
+    }
+
+    /**
+     * This client, trusting the CA certificates of {@code caPem} and only them, in place of the JDK's public trust
+     * (#1609, {@link CaTrust}). Same timeouts, same refusal to follow redirects. An unreadable PEM is an
+     * {@link IllegalArgumentException}.
+     */
+    public RestHttpClient trusting(String caPem) {
+        return trusted.get(caPem, pem -> new RestHttpClient(builder().sslContext(CaTrust.sslContext(pem)).build()));
+    }
 
     /**
      * Sends a request a credential signed, and hands back its response without that credential: a source that

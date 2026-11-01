@@ -3,6 +3,7 @@ package io.lumnik.hub.manifest;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -61,6 +62,27 @@ public final class ManifestKeys {
         node.fieldNames().forEachRemaining(f -> {
             if (!declared.contains(f)) out.add(prefix + f);
         });
+    }
+
+    /**
+     * The column names a manifest lists at {@code path}: a Process's {@code spec.emit.fields} (#1365), a workflow's
+     * {@code spec.dormancy.fields} and {@code spec.due.fields} (#1588). Distinct and non-blank; empty when absent.
+     */
+    public static List<String> columnNames(JsonNode node, String path) {
+        if (node.isMissingNode() || node.isNull()) return List.of();
+        if (!node.isArray())
+            throw new IllegalArgumentException(path + " must be a list of column names");
+        List<String> out = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (JsonNode f : node) {
+            String name = f.isTextual() ? f.asText() : null;
+            if (name == null || name.isBlank())
+                throw new IllegalArgumentException(path + " holds a blank or non-text entry");
+            if (!seen.add(name))
+                throw new IllegalArgumentException(path + " names " + name + " twice");
+            out.add(name);
+        }
+        return List.copyOf(out);
     }
 
     /** Reads a scalar text field, {@code null} when absent or explicit null. */

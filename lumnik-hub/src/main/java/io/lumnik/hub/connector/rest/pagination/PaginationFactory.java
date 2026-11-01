@@ -28,6 +28,7 @@ public class PaginationFactory {
             case "relay"       -> new RelayPaginationStrategy(c);
             case "soap"        -> new SoapPaginationStrategy(c, secretRefs::lookup);
             case "body-link"   -> new BodyLinkPaginationStrategy(c);
+            case "none"        -> new NonePaginationStrategy(c);
             case "custom"      -> {
                 String scriptRef = c.get("script_ref");
                 String inline    = c.get("script");

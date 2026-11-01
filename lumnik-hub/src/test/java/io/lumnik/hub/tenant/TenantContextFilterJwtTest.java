@@ -9,6 +9,8 @@ import org.eclipse.microprofile.jwt.JsonWebToken;
 import org.jboss.logging.MDC;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
@@ -406,5 +408,81 @@ class TenantContextFilterJwtTest {
     ArgumentCaptor<Response> cap = ArgumentCaptor.forClass(Response.class);
     verify(ctx).abortWith(cap.capture());
     assertThat(cap.getValue().getStatus()).isEqualTo(403);
+  }
+
+  // ── code-review of #1615: one id rule on the production path too — positive, whole ──
+
+  /** A plain-Number fractional claim (what some providers and the harness mint) is refused like a JsonNumber one. */
+  @Test
+  void plain_double_tenant_id_aborts_401_not_truncated() {
+    JsonWebToken t = mock(JsonWebToken.class);
+    when(t.getClaim("tenant_id")).thenReturn(1.9d);
+    ContainerRequestContext ctx = mock(ContainerRequestContext.class);
+
+    newFilter(t, mock(ExternalIdentityResolver.class)).filter(ctx);
+
+    ArgumentCaptor<Response> cap = ArgumentCaptor.forClass(Response.class);
+    verify(ctx).abortWith(cap.capture());
+    assertThat(cap.getValue().getStatus()).isEqualTo(401);
+    assertThat(CurrentTenantHolder.get()).isNull();
+  }
+
+  /** 0 is the system sentinel and a negative id is no tenant: a token claiming either is refused at the door. */
+  @ParameterizedTest
+  @ValueSource(longs = {0L, -5L})
+  void non_positive_tenant_id_aborts_401(long tenant) {
+    JsonWebToken t = mock(JsonWebToken.class);
+    when(t.getClaim("tenant_id")).thenReturn(tenant);
+    when(t.getClaim("user_id")).thenReturn(99L);
+    ContainerRequestContext ctx = mock(ContainerRequestContext.class);
+
+    newFilter(t, mock(ExternalIdentityResolver.class)).filter(ctx);
+
+    ArgumentCaptor<Response> cap = ArgumentCaptor.forClass(Response.class);
+    verify(ctx).abortWith(cap.capture());
+    assertThat(cap.getValue().getStatus()).isEqualTo(401);
+    assertThat(CurrentTenantHolder.get()).isNull();
+  }
+
+  /** Copilot on #1616: an invalid user_id is refused — read as absent, it fell back to external identity resolution. */
+  @ParameterizedTest
+  @ValueSource(strings = {"0", "-5", "1.9", "acme"})
+  void present_but_invalid_user_id_aborts_401_without_resolution(String userId) {
+    JsonWebToken t = mock(JsonWebToken.class);
+    when(t.getClaim("tenant_id")).thenReturn(7L);
+    when(t.getClaim("user_id")).thenReturn(userId);
+    when(t.getGroups()).thenReturn(Set.of("lm_user"));
+    // A token the resolver WOULD accept: read as absent, the invalid user_id would authenticate as user 5.
+    when(t.getIssuer()).thenReturn("https://idp.example");
+    when(t.getClaim("sub")).thenReturn("subject-1");
+    ExternalIdentityResolver resolver = mock(ExternalIdentityResolver.class);
+    when(resolver.findOrCreate(any(), any(), any(), any())).thenReturn(5L);
+    ContainerRequestContext ctx = mock(ContainerRequestContext.class);
+
+    newFilter(t, resolver).filter(ctx);
+
+    verifyNoInteractions(resolver);
+    ArgumentCaptor<Response> cap = ArgumentCaptor.forClass(Response.class);
+    verify(ctx).abortWith(cap.capture());
+    assertThat(cap.getValue().getStatus()).isEqualTo(401);
+    assertThat(TenantContextFilter.currentUser()).isNull();
+  }
+
+  /** An invalid acting_as_tenant is refused — ignored, a superadmin would believe they act for a tenant they don't. */
+  @ParameterizedTest
+  @ValueSource(longs = {0L, -3L})
+  void present_but_invalid_acting_as_tenant_aborts_401(long actingAs) {
+    JsonWebToken t = mock(JsonWebToken.class);
+    when(t.getClaim("tenant_id")).thenReturn(7L);
+    when(t.getClaim("user_id")).thenReturn(99L);
+    when(t.getClaim("acting_as_tenant")).thenReturn(actingAs);
+    when(t.getGroups()).thenReturn(Set.of("lm_superadmin"));
+    ContainerRequestContext ctx = mock(ContainerRequestContext.class);
+
+    newFilter(t, mock(ExternalIdentityResolver.class)).filter(ctx);
+
+    ArgumentCaptor<Response> cap = ArgumentCaptor.forClass(Response.class);
+    verify(ctx).abortWith(cap.capture());
+    assertThat(cap.getValue().getStatus()).isEqualTo(401);
   }
 }

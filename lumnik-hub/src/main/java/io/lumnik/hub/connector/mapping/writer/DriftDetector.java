@@ -1,11 +1,13 @@
 package io.lumnik.hub.connector.mapping.writer;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.sql.Connection;
+import java.util.Locale;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -58,7 +60,7 @@ public class DriftDetector {
     try (Connection c = adminDs.getConnection()) {
       return actualSchema(c, tableSchema, tableName);
     } catch (SQLException e) {
-      throw new RuntimeException("DriftDetector.actualSchema: " + e.getMessage(), e);
+      throw new RuntimeException(Jdbc.failureText("DriftDetector.actualSchema", e), e);
     }
   }
 
@@ -73,14 +75,15 @@ public class DriftDetector {
     Map<String, String> out = new LinkedHashMap<>();
     boolean exists = false;
     try (PreparedStatement ps = c.prepareStatement(
-        "SELECT column_name, data_type FROM information_schema.columns " +
+        "SELECT column_name, data_type, numeric_precision FROM information_schema.columns " +
         "WHERE table_schema = ? AND table_name = ? ORDER BY ordinal_position")) {
       ps.setString(1, tableSchema);
       ps.setString(2, tableName);
       try (ResultSet rs = ps.executeQuery()) {
         while (rs.next()) {
           exists = true;
-          out.put(rs.getString("column_name"), toDdlType(rs.getString("data_type")));
+          out.put(rs.getString("column_name"),
+              toDdlType(rs.getString("data_type"), rs.getObject("numeric_precision") != null));
         }
       }
     }
@@ -89,12 +92,14 @@ public class DriftDetector {
 
   /** {@code information_schema.columns.data_type} → the DDL string {@link SchemaInferrer} emits
    *  for that same kind of value, so a physical column reads exactly as an inferred one would. */
-  private static String toDdlType(String dataType) {
-    String d = dataType.toLowerCase();
+  private static String toDdlType(String dataType, boolean hasPrecision) {
+    String d = dataType.toLowerCase(Locale.ROOT);
     if (d.contains("timestamp")) return "TIMESTAMPTZ";
     if (d.equals("date")) return "DATE";
     if (d.equals("boolean")) return "BOOLEAN";
     if (d.contains("json")) return "JSONB";
+    // A widened column is numeric without precision (#1600); a decimal created as such keeps NUMERIC(18,4).
+    if (d.equals("numeric") && !hasPrecision) return SchemaInferrer.WIDENED_NUMERIC;
     if (d.contains("numeric") || d.contains("decimal") || d.contains("double") || d.contains("real")) {
       return SchemaInferrer.NUMERIC;
     }
@@ -112,7 +117,7 @@ public class DriftDetector {
       ps.setString(2, name);
       try (ResultSet rs = ps.executeQuery()) {
         while (rs.next()) {
-          out.put(rs.getString(1), rs.getString(2).toUpperCase());
+          out.put(rs.getString(1), rs.getString(2).toUpperCase(Locale.ROOT));
         }
       }
     } catch (Exception e) {
@@ -122,8 +127,8 @@ public class DriftDetector {
   }
 
   private boolean compatible(String expected, String actual) {
-    String e = expected.toUpperCase().replaceAll("\\(.*\\)", "");
-    String a = actual.toUpperCase();
+    String e = expected.toUpperCase(Locale.ROOT).replaceAll("\\(.*\\)", "");
+    String a = actual.toUpperCase(Locale.ROOT);
     if (e.equals(a)) return true;
     if (e.equals("TIMESTAMPTZ") && a.contains("TIMESTAMP")) return true;
     if (e.equals("NUMERIC") && (a.contains("NUMERIC") || a.contains("DECIMAL"))) return true;

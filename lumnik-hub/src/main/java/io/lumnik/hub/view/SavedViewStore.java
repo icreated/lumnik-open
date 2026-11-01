@@ -8,11 +8,8 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -68,29 +65,19 @@ public class SavedViewStore {
     // now sits in the same expression as the value bound to it. That is what a reader checks, and
     // it is what a static analyser can follow — the assembled form read as a bind against a
     // parameterless statement (S2695 BLOCKER, a false positive Sonar had no way to disprove).
-    try (Connection c = adminDs.get().getConnection()) {
-      if (scopes == null) {
-        try (PreparedStatement ps = c.prepareStatement(
-                 "SELECT name, scope, title FROM connector.saved_view ORDER BY name")) {
-          return summaries(ps);
-        }
-      }
-      try (PreparedStatement ps = c.prepareStatement(
-               "SELECT name, scope, title FROM connector.saved_view WHERE scope = ANY (?) ORDER BY name")) {
-        ps.setArray(1, c.createArrayOf("text", scopes.toArray()));
-        return summaries(ps);
-      }
-    } catch (Exception e) {
-      throw new RuntimeException("SavedViewStore.list: " + e, e);
+    if (scopes == null) {
+      return Jdbc.query(adminDs.get(), "SavedViewStore.list",
+          "SELECT name, scope, title FROM connector.saved_view ORDER BY name",
+          ps -> {}, SavedViewStore::summary);
     }
+    return Jdbc.query(adminDs.get(), "SavedViewStore.list",
+        "SELECT name, scope, title FROM connector.saved_view WHERE scope = ANY (?) ORDER BY name",
+        ps -> ps.setArray(1, ps.getConnection().createArrayOf("text", scopes.toArray())),
+        SavedViewStore::summary);
   }
 
-  private static List<Summary> summaries(PreparedStatement ps) throws SQLException {
-    List<Summary> out = new ArrayList<>();
-    try (ResultSet rs = ps.executeQuery()) {
-      while (rs.next()) out.add(new Summary(rs.getString(1), rs.getString(2), rs.getString(3)));
-    }
-    return out;
+  private static Summary summary(ResultSet rs) throws SQLException {
+    return new Summary(rs.getString(1), rs.getString(2), rs.getString(3));
   }
 
   /**

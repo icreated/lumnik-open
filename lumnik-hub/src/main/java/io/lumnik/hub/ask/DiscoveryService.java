@@ -1,6 +1,7 @@
 package io.lumnik.hub.ask;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.connector.api.helpers.CredentialResolver;
 import io.lumnik.hub.connector.api.types.ResolvedCredential;
 import io.lumnik.extraction.spi.ask.DiscoveryPort;
@@ -11,9 +12,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.util.*;
 
 /**
@@ -135,18 +133,13 @@ public class DiscoveryService implements DiscoveryPort {
             "  AND c.type_id LIKE 'jdbc%' AND (c.config->>'url') IS NOT NULL " +
             "  AND c.credential_id IS NOT NULL LIMIT 1";
         try {
-            String url, usr, cid;
-            try (Connection cx = adminDs.getConnection();
-                 PreparedStatement ps = cx.prepareStatement(sql)) {
+            record Source(String url, String usr, String cid) {}
+            Source row = Jdbc.queryOne(adminDs, "DiscoveryService.sourceCreds", sql, ps -> {
                 ps.setLong(1, tenantId);
                 ps.setString(2, scope);
-                try (ResultSet rs = ps.executeQuery()) {
-                    if (!rs.next()) return null;
-                    url = rs.getString("url");
-                    usr = rs.getString("usr");
-                    cid = rs.getString("cid");
-                }
-            }
+            }, rs -> new Source(rs.getString("url"), rs.getString("usr"), rs.getString("cid"))).orElse(null);
+            if (row == null) return null;
+            String url = row.url(), usr = row.usr(), cid = row.cid();
             if (url == null || cid == null) return null;
             // Resolved after the admin connection is released: the resolver opens its own short
             // transaction, so this works for a caller with none (entity apply) and leaves the AD reads

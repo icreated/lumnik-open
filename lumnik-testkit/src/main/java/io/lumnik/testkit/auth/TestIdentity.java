@@ -27,7 +27,7 @@ import java.util.Map;
 public final class TestIdentity {
 
     /**
-     * The spelling {@code TenantContextFilter} actually reads ({@code getHeaderString("X-Tenant-ID")}),
+     * The spelling {@code TenantContextFilter} actually reads (its {@code TENANT_HEADER}),
      * and the majority in the docs. HTTP header names are case-insensitive, so the other casing
      * worked — which is how two spellings lived side by side across 273 call sites. This class is
      * where that stops, so it carries the canonical one.
@@ -55,5 +55,13 @@ public final class TestIdentity {
      */
     public static Map<String, String> tenantOnly(long tenantId) {
         return Map.of(TENANT_HEADER, String.valueOf(tenantId));
+    }
+
+    /**
+     * An actor with no tenant — a platform door that works tenant-less, such as creating a tenant. No X-Tenant-ID at
+     * all: 0 is the system sentinel, refused at the door like any non-positive id (#1615).
+     */
+    public static Map<String, String> userOnly(long userId) {
+        return Map.of(USER_HEADER, String.valueOf(userId));
     }
 }

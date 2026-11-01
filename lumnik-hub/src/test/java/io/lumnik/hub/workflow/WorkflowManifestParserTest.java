@@ -375,25 +375,50 @@ class WorkflowManifestParserTest {
     }
 
     /**
-     * A fused view can carry a TAXONOMY but never a DORMANCY, and the door has to say so — I wrote
-     * that constraint into the page in this very PR and left the parser accepting it.
-     *
-     * <p>The sweep's SQL is per-DOCUMENT: it picks the latest version per business key with
-     * {@code DISTINCT ON (key) … ORDER BY key, _ingested_at DESC, id DESC} and scopes rows with
-     * {@code tenant_id = ?}. An {@code EntityViewCompiler} view projects the canonical columns plus
-     * {@code _conflicts} — none of those three. So a dormancy declared on one applies with a clean
-     * 200 and then fails 42703 on every tick, swallowed by the per-workflow net: an alert the
-     * integrator is waiting for that can never arrive, with nothing to look at.
-     *
-     * <p>Unlike {@code tableMissing} or {@code keyColumnMissing}, this condition can never resolve
-     * — it is what a view IS — so it is refused rather than reported.
+     * A fused view has no ingest order: the sweep cannot tell a document's latest version on its own (#1588).
+     * Dormancy on one therefore needs {@code spec.on.order}, the column that orders a document's versions.
+     * Without it the declaration could never fire, and that never resolves, so it is refused rather than
+     * reported.
      */
     @Test
-    void dormancy_on_a_fused_view_is_refused_because_a_view_has_no_versions() {
+    void dormancy_on_a_fused_view_without_an_order_is_refused() {
         assertThatThrownBy(() -> parser.parse(
                 WITH_DORMANCY.replace("connector.t_commandes_csv", "connector.v_commandes")))
             .isInstanceOf(IllegalArgumentException.class)
-            .hasMessageContaining("spec.dormancy");
+            .hasMessageContaining("spec.dormancy on a fused view needs spec.on.order");
+    }
+
+    @Test
+    void dormancy_on_a_fused_view_with_an_order_is_declarable() {
+        WorkflowManifest m = parser.parse(WITH_DORMANCY.replace("connector.t_commandes_csv", "connector.v_commandes")
+            .replace("key: num", "key: num\n    order: occurred_at"));
+        assertThat(m.dormancy().after()).isEqualTo("30d");
+        assertThat(m.order()).isEqualTo("occurred_at");
+    }
+
+    /** #1588: the column that orders a document's versions, declared or absent. */
+    @Test
+    void order_is_read_when_declared() {
+        String ordered = VALID.replace("column: statut", "column: statut\n    key: num\n    order: occurred_at");
+        assertThat(parser.parse(VALID).order()).isNull();
+        assertThat(parser.parse(ordered).order()).isEqualTo("occurred_at");
+        assertThat(WorkflowGraph.from(parser.parse(ordered)).order()).isEqualTo("occurred_at");
+        assertThat(parser.unknownKeys(ordered)).isEmpty();
+    }
+
+    /** An order orders the versions of one document, which the key names: without one it would do nothing. */
+    @Test
+    void an_order_without_a_key_is_refused() {
+        assertThatThrownBy(() -> parser.parse(VALID.replace("column: statut", "column: statut\n    order: occurred_at")))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("spec.on.order requires spec.on.key");
+    }
+
+    @Test
+    void a_blank_order_names_nothing() {
+        assertThatThrownBy(() -> parser.parse(VALID.replace("column: statut", "column: statut\n    order: \" \"")))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("spec.on.order must name a column");
     }
 
     /** …and the same view without dormancy stays declarable: the taxonomy is the point. */
@@ -473,20 +498,46 @@ class WorkflowManifestParserTest {
         }
     }
 
-    /** #1363: the workflow writes its own dormancy sentence, over what the sweep knows. */
+    /**
+     * #1363: the workflow writes its own dormancy sentence, over what the sweep knows. #1588: a name that is not
+     * reserved is a column of the watched relation, checked at apply against the relation, not here.
+     */
     @Test
-    void a_declared_dormancy_message_is_kept_and_its_placeholders_are_checked() {
+    void a_declared_dormancy_message_is_kept_and_may_cite_columns() {
         String withMessage = WITH_DORMANCY.replace("after: 30d",
             "after: 30d\n    message: \"{doc_key} attend en {state_label} depuis le {since}\"");
         assertThat(parser.parse(withMessage).dormancy().message())
             .isEqualTo("{doc_key} attend en {state_label} depuis le {since}");
         assertThat(parser.parse(WITH_DORMANCY).dormancy().message()).isNull();
-
-        assertThatThrownBy(() -> parser.parse(withMessage.replace("{since}", "{amount}")))
-            .hasMessageContaining("spec.dormancy.message").hasMessageContaining("{amount}")
-            .hasMessageContaining("doc_key");
+        assertThat(parser.parse(withMessage.replace("{since}", "{laboratory}")).dormancy().message())
+            .contains("{laboratory}");
         assertThatThrownBy(() -> parser.parse(WITH_DORMANCY.replace("after: 30d", "after: 30d\n    message: \"  \"")))
             .hasMessageContaining("spec.dormancy.message");
+    }
+
+    /** #1588: columns sent in the payload, never in the sentence — a list of names, empty when absent. */
+    @Test
+    void dormancy_and_due_declare_fields() {
+        assertThat(parser.parse(WITH_DORMANCY.replace("after: 30d", "after: 30d\n    fields: [owner_email, contents]"))
+            .dormancy().fields()).containsExactly("owner_email", "contents");
+        assertThat(parser.parse(WITH_DORMANCY).dormancy().fields()).isEmpty();
+        assertThat(parser.parse(WITH_DUE.replace("states: [en_cours]", "states: [en_cours]\n    fields: [owner]"))
+            .due().fields()).containsExactly("owner");
+        assertThat(parser.parse(WITH_DUE).due().fields()).isEmpty();
+        assertThat(parser.unknownKeys(WITH_DORMANCY.replace("after: 30d", "after: 30d\n    fields: [owner]"))).isEmpty();
+    }
+
+    /** Read as a Process reads spec.emit.fields: a list of distinct, non-blank names. */
+    @Test
+    void fields_is_read_as_a_process_reads_emit_fields() {
+        assertThatThrownBy(() -> parser.parse(WITH_DORMANCY.replace("after: 30d", "after: 30d\n    fields: owner")))
+            .hasMessageContaining("spec.dormancy.fields must be a list of column names");
+        assertThatThrownBy(() -> parser.parse(WITH_DORMANCY.replace("after: 30d", "after: 30d\n    fields: [\" \"]")))
+            .hasMessageContaining("spec.dormancy.fields holds a blank or non-text entry");
+        assertThatThrownBy(() -> parser.parse(WITH_DUE.replace("states: [en_cours]", "states: [en_cours]\n    fields: [42]")))
+            .hasMessageContaining("spec.due.fields holds a blank or non-text entry");
+        assertThatThrownBy(() -> parser.parse(WITH_DORMANCY.replace("after: 30d", "after: 30d\n    fields: [owner, owner]")))
+            .hasMessageContaining("spec.dormancy.fields names owner twice");
     }
 
     @Test
@@ -497,9 +548,9 @@ class WorkflowManifestParserTest {
 
     @Test
     void duration_units_map_correctly() {
-        assertThat(new WorkflowManifest.DormancyDef("2m", null).duration())
+        assertThat(new WorkflowManifest.DormancyDef("2m", null, List.of()).duration())
             .isEqualTo(Duration.ofMinutes(2));
-        assertThat(new WorkflowManifest.DormancyDef("12h", null).duration())
+        assertThat(new WorkflowManifest.DormancyDef("12h", null, List.of()).duration())
             .isEqualTo(Duration.ofHours(12));
     }
 
@@ -567,9 +618,6 @@ class WorkflowManifestParserTest {
                 "spec.due: 'zone' is not a time zone: \"Mars/Olympus\""),
             Arguments.of("a blank message", WITH_DUE.replace("states: [en_cours]", "states: [en_cours]\n    message: \"  \""),
                 "spec.due.message must not be blank"),
-            Arguments.of("an unknown placeholder", WITH_DUE.replace("states: [en_cours]",
-                    "states: [en_cours]\n    message: \"{doc_key} {since}\""),
-                "spec.due.message references [{since}]"),
             Arguments.of("due is a map", WITH_DUE.replace("due:\n    column: date_confirmee\n    states: [en_cours]", "due: tomorrow"),
                 "spec.due must be a map"));
     }
@@ -594,5 +642,39 @@ class WorkflowManifestParserTest {
     void unknown_keys_under_due_are_reported() {
         assertThat(parser.unknownKeys(WITH_DUE.replace("states: [en_cours]", "states: [en_cours]\n    zones: UTC")))
             .containsExactly("spec.due.zones");
+    }
+
+    private static final String CHECKED = VALID.replace("  states:", "  check:\n    trigger: ingestion\n  states:");
+
+    /** #1589: the check after each import is asked for, never assumed. */
+    @Test
+    void the_check_runs_after_each_import_only_when_declared() {
+        assertThat(parser.parse(VALID).checkOnIngestion()).isFalse();
+        assertThat(parser.parse(CHECKED).checkOnIngestion()).isTrue();
+        assertThat(parser.unknownKeys(CHECKED)).isEmpty();
+        assertThat(parser.unknownKeys(CHECKED.replace("trigger:", "triggr:"))).containsExactly("spec.check.triggr");
+    }
+
+    static Stream<Arguments> checkRefusals() {
+        return Stream.of(
+            Arguments.of("the apply always checks", CHECKED.replace("trigger: ingestion", "trigger: apply"),
+                "spec.check.trigger must be 'ingestion'"),
+            Arguments.of("an unknown trigger", CHECKED.replace("trigger: ingestion", "trigger: schedule"),
+                "spec.check.trigger must be 'ingestion'"),
+            Arguments.of("a boolean is not a trigger", CHECKED.replace("trigger: ingestion", "trigger: true"),
+                "spec.check.trigger must be a string"),
+            Arguments.of("a trigger is required", CHECKED.replace("    trigger: ingestion\n", "    {}\n"),
+                "spec.check.trigger is required"),
+            Arguments.of("check is a map", CHECKED.replace("check:\n    trigger: ingestion", "check: ingestion"),
+                "spec.check must be a map {trigger}"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("checkRefusals")
+    void refuses_a_malformed_check(String rule, String manifest, String expected) {
+        assertThatThrownBy(() -> parser.parse(manifest))
+            .as(rule)
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining(expected);
     }
 }

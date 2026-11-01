@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.sources;
 
+import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.connector.ConnectorScope;
 import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.source.csv.CsvIngestService;
@@ -51,6 +52,12 @@ public class CsvIngestResource {
         return result;
     }
 
+    /** A taken ingest name is a conflict with its own gestures, not an anonymous 500. */
+    @ServerExceptionMapper
+    public Response duplicate(CsvIngestService.DuplicateIngestName e) {
+        return ApiErrors.conflict(e.getMessage());
+    }
+
     /**
      * The service refuses unusable request shapes with {@link IllegalArgumentException} — a missing
      * upload, or a name over a multi-file source (A11). Unmapped, those surface as a 500 whose
@@ -58,23 +65,12 @@ public class CsvIngestResource {
      * this resource (declared inside it), so no other endpoint's error contract moves, and the
      * shape matches the house's — {@code {"error": "..."}}.
      */
-    /** A taken ingest name is a conflict with its own gestures, not an anonymous 500. */
-    @ServerExceptionMapper
-    public Response duplicate(CsvIngestService.DuplicateIngestName e) {
-        return Response.status(Response.Status.CONFLICT)
-            .entity(Map.of("error", e.getMessage()))
-            .build();
-    }
-
     @ServerExceptionMapper
     public Response refused(IllegalArgumentException e) {
-        // A message-less IllegalArgumentException is legal Java, and Map.of rejects null values —
-        // the mapper that exists to prevent unreadable 500s must not become the cause of one.
-        // Falling back to toString() keeps the answer truthful rather than inventing a reason;
-        // /api/platform/* is integrator-only, so the type name is no leak.
+        // A message-less IllegalArgumentException is legal Java: toString() names its type, which
+        // says more than ApiErrors' generic "Bad Request" fallback would; /api/platform/* is
+        // integrator-only, so the type name is no leak.
         String reason = e.getMessage() != null ? e.getMessage() : e.toString();
-        return Response.status(Response.Status.BAD_REQUEST)
-            .entity(Map.of("error", reason))
-            .build();
+        return ApiErrors.badRequest(reason);
     }
 }

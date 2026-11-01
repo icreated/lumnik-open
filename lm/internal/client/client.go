@@ -24,6 +24,18 @@ type APIError struct {
 	RetryAfter string // seconds, from the Retry-After header (rate limiting); "" if absent
 }
 
+// noTenant is the hub's refusal when no tenant could be resolved for a request. A dev-bypass hub answers it to a
+// context without tenant/user, whatever bearer it carries — the hub never reads one (#1610).
+const noTenant = "no tenant in security context"
+
+// isNoTenant reports whether body is the hub's no-tenant refusal.
+func isNoTenant(body []byte) bool {
+	var m struct {
+		Err string `json:"error"`
+	}
+	return json.Unmarshal(body, &m) == nil && m.Err == noTenant
+}
+
 // Error renders a human-readable message for the API failure: it surfaces the
 // hub's uniform {"error": …} body when present, and falls back to guidance for
 // the common bodyless 401/403 responses Quarkus returns.
@@ -43,6 +55,10 @@ func (e *APIError) Error() string {
 				}
 				return fmt.Sprintf("rate limited (429): %s", m.Err)
 			default:
+				if e.Status == 401 && m.Err == noTenant {
+					return fmt.Sprintf("API error 401: %s — if this hub runs dev-bypass (make k8s-up), "+
+						"give the context an identity: lm config set-context NAME --tenant ID --user ID", m.Err)
+				}
 				return fmt.Sprintf("API error %d: %s", e.Status, m.Err)
 			}
 		}
@@ -285,9 +301,10 @@ func (c *Client) doOnCtx(ctx context.Context, hc *http.Client, timeout time.Dura
 	c.mu.Lock()
 	oidcSession := !c.staticToken && c.ctx.Access != ""
 	c.mu.Unlock()
-	if resp.StatusCode == 401 && oidcSession {
+	if resp.StatusCode == 401 && oidcSession && !isNoTenant(data) {
 		// OIDC session rejected by the server — re-login can fix it. A static-token
-		// 401 is NOT signalled (device-flow login can't help it).
+		// 401 is NOT signalled (device-flow login can't help it), nor a "no tenant" one: a
+		// dev-bypass hub ignored the bearer, and only the context's tenant/user fix that (#1610).
 		c.signalAuthLost()
 	}
 	if resp.StatusCode < 400 && oidcSession {
@@ -355,11 +372,15 @@ func (c *Client) authorize(req *http.Request) error {
 		c.ctx.Access, c.ctx.Refresh, c.ctx.ExpiresAt = r.Access, r.Refresh, r.ExpiresAt
 		c.persistRefresh(r)
 	}
-	if c.ctx.Tenant != "" {
-		req.Header.Set("X-Tenant-ID", c.ctx.Tenant)
-	}
-	if c.ctx.User != "" {
-		req.Header.Set("X-User-ID", c.ctx.User)
+	// The dev-bypass identity never leaves for a remote https hub, whatever path built this client (#1610): the
+	// factories refuse such a context, and this is the one place the headers are set.
+	if _, remote := config.RemoteHTTPS(c.ctx.Server); !remote {
+		if c.ctx.Tenant != "" {
+			req.Header.Set("X-Tenant-ID", c.ctx.Tenant)
+		}
+		if c.ctx.User != "" {
+			req.Header.Set("X-User-ID", c.ctx.User)
+		}
 	}
 	return nil
 }

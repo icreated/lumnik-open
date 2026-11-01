@@ -3,6 +3,7 @@ package io.lumnik.hub.api.validator;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
+import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.manifest.HubYaml;
 import io.lumnik.hub.validator.*;
 import jakarta.inject.Inject;
@@ -46,9 +47,7 @@ public class ConnectorValidatorResource {
     public Response describe(@PathParam("kind") String kind) {
         return service.configDefFor(kind)
             .map(def -> Response.ok(ConfigDefSerializer.toJson(def)).build())
-            .orElseGet(() -> Response.status(404).entity(Map.of(
-                "error", "unknown connector type: " + kind,
-                "available", service.availableKinds()
-            )).build());
+            .orElseGet(() -> ApiErrors.status(404,
+                "unknown connector type: " + kind, "available", service.availableKinds()).build());
     }
 }

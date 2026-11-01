@@ -534,6 +534,40 @@ class CsvFileConnectorValidatorTest {
             () -> "code exists, got: " + r.errors());
     }
 
+    /** #1621 (Copilot): indexes written as a map is the declaration's refusal — not a crash of the column walk. */
+    @Test void indexesThatAreNotAList_areRefused_notACrash() throws Exception {
+        ObjectNode doc = headerless("{\"row\":[{\"map-columns\":{\"rename\":{\"status\":\"state\"}}}]}");
+        ((ObjectNode) doc.path("spec")).set("target", mapper.readTree("{\"indexes\":{\"columns\":[\"code\"]}}"));
+        ValidationResult r = service.validate(doc);
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().startsWith("spec.target.indexes")),
+            () -> "the shape refused by its path, got: " + r.errors());
+    }
+
+    /**
+     * #1621 (Copilot, three rounds): a map written where a list of columns is expected is refused — at every depth the
+     * column walk reads, never a crash of validation. The walk runs here because the source's columns are known.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "{\"cell\":[{\"lower\":{\"columns\":{\"a\":\"code\"}}}]}",
+        "{\"cell\":[{\"fill-down\":{\"columns\":{\"a\":\"code\"}}}]}",
+        "{\"dataset\":[{\"sort-by\":{\"columns\":{\"a\":\"code\"}}}]}",
+        "{\"dataset\":[{\"require-headers\":{\"columns\":{\"a\":\"code\"}}}]}",
+        "{\"row\":[{\"validate-row\":{\"required\":{\"a\":\"code\"}}}]}",
+        "{\"row\":[{\"coalesce\":{\"from\":{\"a\":\"code\"},\"into\":\"x\"}}]}"})
+    void aMapWhereColumnsAreListed_isRefused_notACrash(String mapping) throws Exception {
+        ValidationResult r = service.validate(headerless(mapping));
+        assertFalse(r.isValid(), () -> "refused: " + mapping);
+    }
+
+    @Test void indexColumnsThatAreNotAList_areRefused_notACrash() throws Exception {
+        ObjectNode doc = headerless("{\"cell\":[]}");
+        ((ObjectNode) doc.path("spec")).set("target", mapper.readTree("{\"indexes\":[{\"columns\":{\"a\":\"code\"}}]}"));
+        ValidationResult r = service.validate(doc);
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().startsWith("spec.target.indexes[0]")),
+            () -> "the shape refused by its path, got: " + r.errors());
+    }
+
     /** #1500: a column dropped is gone for the hooks after the drop. */
     @Test void aColumnDropped_isRefusedToTheHooksAfter() throws Exception {
         ValidationResult r = service.validate(headerless("{\"row\":[{\"map-columns\":{\"drop\":[\"amount\"]}}],"

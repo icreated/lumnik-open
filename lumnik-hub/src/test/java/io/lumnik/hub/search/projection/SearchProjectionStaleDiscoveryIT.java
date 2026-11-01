@@ -11,6 +11,7 @@ import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -55,6 +56,7 @@ import static org.hamcrest.Matchers.equalTo;
  * javadoc for why.
  */
 @QuarkusTest
+@ExtendWith(ProjectionTickPaused.class)
 class SearchProjectionStaleDiscoveryIT {
 
     @Inject @DataSource("admin") AgroalDataSource adminDs;

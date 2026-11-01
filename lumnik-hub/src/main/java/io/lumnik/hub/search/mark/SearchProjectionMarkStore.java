@@ -8,7 +8,6 @@ import jakarta.inject.Inject;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -83,7 +82,7 @@ public class SearchProjectionMarkStore {
         try (Connection c = ds.getConnection()) {
             markKeys(c, tenantId, searchIndex, entity, canonicalKeys, reason);
         } catch (SQLException e) {
-            throw new RuntimeException("SearchProjectionMarkStore.markKeys: " + e.getMessage(), e);
+            throw new RuntimeException(Jdbc.failureText("SearchProjectionMarkStore.markKeys", e), e);
         }
     }
 
@@ -93,7 +92,7 @@ public class SearchProjectionMarkStore {
      *  already-pending row rather than duplicating it), so a caller whose connection dies partway
      *  through a large batch loses nothing already written and can safely retry the whole call. */
     public void markKeys(Connection c, long tenantId, String searchIndex, String entity,
-                          List<String> canonicalKeys, String reason) throws SQLException {
+                          List<String> canonicalKeys, String reason) {
         insertKeys(c, tenantId, searchIndex, entity, canonicalKeys, reason, false);
     }
 
@@ -103,12 +102,12 @@ public class SearchProjectionMarkStore {
      *  widening {@code markAll}'s admin path got in #719. Never call it on a request-scoped {@code lumnik_app}
      *  connection: V57 grants that role {@code UPDATE (id, marked_at)} only, and the statement would fail. */
     public void markKeysAsAdmin(Connection c, long tenantId, String searchIndex, String entity,
-                                List<String> canonicalKeys, String reason) throws SQLException {
+                                List<String> canonicalKeys, String reason) {
         insertKeys(c, tenantId, searchIndex, entity, canonicalKeys, reason, true);
     }
 
     private void insertKeys(Connection c, long tenantId, String searchIndex, String entity,
-                            List<String> canonicalKeys, String reason, boolean relabel) throws SQLException {
+                            List<String> canonicalKeys, String reason, boolean relabel) {
         if (searchIndex == null || searchIndex.isBlank())
             throw new IllegalArgumentException("searchIndex must not be blank");
         if (entity == null || entity.isBlank())
@@ -133,10 +132,8 @@ public class SearchProjectionMarkStore {
         List<String> distinctKeys = new ArrayList<>(new LinkedHashSet<>(canonicalKeys));
         for (int offset = 0; offset < distinctKeys.size(); offset += MAX_KEYS_PER_INSERT) {
             List<String> chunk = distinctKeys.subList(offset, Math.min(offset + MAX_KEYS_PER_INSERT, distinctKeys.size()));
-            try (PreparedStatement ps = c.prepareStatement(keysInsertSql(chunk.size(), relabel))) {
-                bindKeys(ps, tenantId, searchIndex, entity, chunk, reason);
-                ps.executeUpdate();
-            }
+            Jdbc.update(c, "SearchProjectionMarkStore.markKeys", keysInsertSql(chunk.size(), relabel),
+                ps -> bindKeys(ps, tenantId, searchIndex, entity, chunk, reason));
         }
     }
 
@@ -175,22 +172,18 @@ public class SearchProjectionMarkStore {
         mark(tenantId, searchIndex, entity, MarkKind.ALL, reason);
     }
 
-    public void markAll(Connection c, long tenantId, String searchIndex, String entity, String reason)
-            throws SQLException {
+    public void markAll(Connection c, long tenantId, String searchIndex, String entity, String reason) {
         mark(c, tenantId, searchIndex, entity, MarkKind.ALL, reason);
     }
 
     private void mark(long tenantId, String searchIndex, String entity, MarkKind kind, String reason) {
-        Jdbc.update(ds, "SearchProjectionMarkStore.mark" + kind.sqlValue(), ADMIN_INSERT_SQL,
+        Jdbc.update(ds, "SearchProjectionMarkStore.mark(" + kind.sqlValue() + ")", ADMIN_INSERT_SQL,
             ps -> bindOne(ps, tenantId, searchIndex, entity, kind, reason));
     }
 
-    private void mark(Connection c, long tenantId, String searchIndex, String entity, MarkKind kind, String reason)
-            throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement(INSERT_SQL)) {
-            bindOne(ps, tenantId, searchIndex, entity, kind, reason);
-            ps.executeUpdate();
-        }
+    private void mark(Connection c, long tenantId, String searchIndex, String entity, MarkKind kind, String reason) {
+        Jdbc.update(c, "SearchProjectionMarkStore.mark(" + kind.sqlValue() + ")", INSERT_SQL,
+            ps -> bindOne(ps, tenantId, searchIndex, entity, kind, reason));
     }
 
     private static void bindOne(PreparedStatement ps, long tenantId, String searchIndex, String entity,
@@ -216,17 +209,13 @@ public class SearchProjectionMarkStore {
      * <p>The key is {@code lower(entity)}, not {@code core.search_index.entity} verbatim — see
      * {@link #validIndexNamesForEntity}'s javadoc for why.
      */
-    public Map<String, List<String>> validIndexNamesByEntity(Connection c, long tenantId) throws SQLException {
+    public Map<String, List<String>> validIndexNamesByEntity(Connection c, long tenantId) {
         Map<String, List<String>> byEntity = new LinkedHashMap<>();
-        try (PreparedStatement ps = c.prepareStatement(
-                "SELECT lower(entity), name FROM core.search_index WHERE tenant_id = ? AND status = 'valid'")) {
-            ps.setLong(1, tenantId);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    byEntity.computeIfAbsent(rs.getString(1), k -> new ArrayList<>()).add(rs.getString(2));
-                }
-            }
-        }
+        Jdbc.query(c, "SearchProjectionMarkStore.validIndexNamesByEntity",
+                "SELECT lower(entity), name FROM core.search_index WHERE tenant_id = ? AND status = 'valid'",
+                ps -> ps.setLong(1, tenantId),
+                rs -> new String[] {rs.getString(1), rs.getString(2)})
+            .forEach(row -> byEntity.computeIfAbsent(row[0], k -> new ArrayList<>()).add(row[1]));
         return byEntity;
     }
 
@@ -244,18 +233,15 @@ public class SearchProjectionMarkStore {
      * differently-cased declaration. Mirrors the same {@code lower(entity)} comparison
      * {@code SearchIndexStore} and {@code SearchIndexRevalidator} already use in SQL.
      */
-    public List<String> validIndexNamesForEntity(Connection c, long tenantId, String entityType) throws SQLException {
-        List<String> names = new ArrayList<>();
-        try (PreparedStatement ps = c.prepareStatement(
-                "SELECT name FROM core.search_index "
-              + "WHERE tenant_id = ? AND status = 'valid' AND lower(entity) = lower(?)")) {
-            ps.setLong(1, tenantId);
-            ps.setString(2, entityType);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) names.add(rs.getString(1));
-            }
-        }
-        return names;
+    public List<String> validIndexNamesForEntity(Connection c, long tenantId, String entityType) {
+        return Jdbc.query(c, "SearchProjectionMarkStore.validIndexNamesForEntity",
+            "SELECT name FROM core.search_index "
+          + "WHERE tenant_id = ? AND status = 'valid' AND lower(entity) = lower(?)",
+            ps -> {
+                ps.setLong(1, tenantId);
+                ps.setString(2, entityType);
+            },
+            rs -> rs.getString(1));
     }
 
     /**
@@ -265,14 +251,10 @@ public class SearchProjectionMarkStore {
      * itself starts from {@code core.search_index} exactly once, not duplicated between this store and
      * the hook.
      */
-    public List<Long> tenantsWithValidIndex(Connection c) throws SQLException {
-        List<Long> tenantIds = new ArrayList<>();
-        try (PreparedStatement ps = c.prepareStatement(
-                "SELECT DISTINCT tenant_id FROM core.search_index WHERE status = 'valid'");
-             ResultSet rs = ps.executeQuery()) {
-            while (rs.next()) tenantIds.add(rs.getLong(1));
-        }
-        return tenantIds;
+    public List<Long> tenantsWithValidIndex(Connection c) {
+        return Jdbc.query(c, "SearchProjectionMarkStore.tenantsWithValidIndex",
+            "SELECT DISTINCT tenant_id FROM core.search_index WHERE status = 'valid'", ps -> {},
+            rs -> rs.getLong(1));
     }
 
     /**
@@ -453,25 +435,23 @@ public class SearchProjectionMarkStore {
         try (Connection c = ds.getConnection()) {
             return deleteByExactIds(c, tenantId, searchIndex, ids);
         } catch (SQLException e) {
-            throw new RuntimeException("SearchProjectionMarkStore.deleteByExactIds: " + e.getMessage(), e);
+            throw new RuntimeException(Jdbc.failureText("SearchProjectionMarkStore.deleteByExactIds", e), e);
         }
     }
 
     /** {@link #deleteByExactIds(long, String, List)}, on the caller's own open connection/transaction —
      *  {@code SearchProjectionWorker.runBuild}'s atomic mark-cleanup + markReady tail (I3 fix, #969). */
-    public long deleteByExactIds(Connection c, long tenantId, String searchIndex, List<Long> ids) throws SQLException {
+    public long deleteByExactIds(Connection c, long tenantId, String searchIndex, List<Long> ids) {
         if (ids.isEmpty()) return 0L;
-        long maxDeleted = 0L;
-        try (PreparedStatement ps = c.prepareStatement(
-                 "DELETE FROM core.search_projection_mark WHERE tenant_id = ? AND search_index = ? "
-               + "AND id = ANY(?) RETURNING id")) {
-            ps.setLong(1, tenantId);
-            ps.setString(2, searchIndex);
-            ps.setArray(3, c.createArrayOf("bigint", ids.toArray()));
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) maxDeleted = Math.max(maxDeleted, rs.getLong(1));
-            }
-        }
-        return maxDeleted;
+        return Jdbc.query(c, "SearchProjectionMarkStore.deleteByExactIds",
+                "DELETE FROM core.search_projection_mark WHERE tenant_id = ? AND search_index = ? "
+              + "AND id = ANY(?) RETURNING id",
+                ps -> {
+                    ps.setLong(1, tenantId);
+                    ps.setString(2, searchIndex);
+                    ps.setArray(3, c.createArrayOf("bigint", ids.toArray()));
+                },
+                rs -> rs.getLong(1))
+            .stream().mapToLong(Long::longValue).max().orElse(0L);
     }
 }
