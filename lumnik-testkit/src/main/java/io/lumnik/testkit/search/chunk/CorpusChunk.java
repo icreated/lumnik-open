@@ -1,5 +1,6 @@
 package io.lumnik.testkit.search.chunk;
 
+import io.lumnik.common.text.Text;
 import java.util.List;
 
 /** One retrievable chunk. {@code type} is {@code connector} (an ingested row) or {@code workflow}. */
@@ -17,7 +18,7 @@ public record CorpusChunk(String id, long tenantId, String corpus, List<String> 
         if (tenantId != q.tenantId()) {
             return false;
         }
-        if (q.corpus() != null && !q.corpus().isBlank() && !q.corpus().equals(corpus)) {
+        if (Text.present(q.corpus()) && !q.corpus().equals(corpus)) {
             return false;
         }
         return q.scopeTags().isEmpty() || tags.stream().anyMatch(q.scopeTags()::contains);

@@ -23,7 +23,7 @@ public class ParsePhoneHook implements CellHook {
     String col = params.path("column").asText();
     String region = params.path("default-region").asText("US");
     Object v = row.get(col);
-    if (v == null) return;
+    if (v == null || BlankCell.emptied(row, col, v)) return;
 
     try {
       var num = util.parse(v.toString(), region);

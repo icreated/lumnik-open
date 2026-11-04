@@ -1,6 +1,6 @@
 # The demo broker
 
-> One Redpanda in a container and one Python file that fills it with ten topics, plus one name kept absent on purpose, over the
+> One Redpanda in a container and one Python file that fills it with eleven topics, plus one name kept absent on purpose, over the
 > same 2 400 fictional ACME partners the [REST demo API](../rest/demo-api.md) serves — the
 > source every screen of the [Kafka](../kafka.md) page reads.
 
@@ -19,11 +19,12 @@ python3 docs/connectors/kafka/demo/acme-topics.py
   ▸ created acme.partners-compacted
   ▸ created acme.partners-reserved
   ▸ created acme.partners-raw
+  ▸ created acme.probes
   ▸ created acme.partners-trimmed
   ▸ created acme.empty
   ▸ created acme.live
   ✓ filled
-  ✓ eleven topics as declared (acme.absent is absent)
+  ✓ twelve topics as declared (acme.absent is absent)
 ```
 
 The script needs the Kafka client for Python: `python3 -m pip install confluent-kafka`.
@@ -42,6 +43,7 @@ the Kafka page:
 | `acme.partners-compacted` | `cleanup.policy=compact`; 1 000 rows then **300 tombstones** | [Tombstones](when-the-topic-misbehaves.md#tombstones-a-deletion-is-not-garbage) |
 | `acme.partners-reserved` | 500, each carrying a top-level `id` — the REST record verbatim | [Seven reserved names](../kafka.md#seven-column-names-are-reserved) |
 | `acme.partners-raw` | 500 with `Partner Name`, `credit.limit`, `MONTANT_€`, an object and an array | [Names the producer chose](../kafka.md#names-the-producer-chose-stay-and-stay-askable) |
+| `acme.probes` | 500 ChirpStack events: 450 `up` with the reading under `object`, 50 `status`; one reading is the text `sensor-fault` | [A value nested in the message](../kafka.md#a-value-nested-in-the-message-promote) |
 | `acme.partners-trimmed` | 5 000, and `trim` moves its log start on demand | [A log that moved under the cursor](when-the-topic-misbehaves.md#a-log-that-moved-under-the-cursor) |
 | `acme.empty` | created, zero messages | [An empty poll](when-the-topic-misbehaves.md#an-empty-poll-and-what-it-does-not-prove) |
 | `acme.live` | empty until `feed` writes to it while a run reads | [The head is the target](../kafka.md#the-head-is-the-target) |

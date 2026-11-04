@@ -2,6 +2,7 @@ package io.lumnik.hub.view;
 
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.audit.AuditRecorder;
 import jakarta.inject.Inject;
@@ -39,7 +40,7 @@ public class SavedViewsResource {
   @Produces(MediaType.APPLICATION_JSON)
   public Response list(@QueryParam("scope") String scope) {
     Set<String> granted = ScopeGrants.granted().orElse(null);
-    if (scope != null && !scope.isBlank()) {
+    if (Text.present(scope)) {
       String s = scope.strip();
       if (!ScopeGrants.allows(s)) {
         return ApiErrors.scopeNotGranted();

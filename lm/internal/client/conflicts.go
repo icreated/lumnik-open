@@ -1,6 +1,9 @@
 package client
 
-import "fmt"
+import (
+	"net/url"
+	"strconv"
+)
 
 // Conflict is one fused-entity row with a source conflict or a lookup ambiguity: which entity,
 // which record, which columns, and what each source (or each duplicate lookup row) said for them.
@@ -37,10 +40,16 @@ func (c Conflict) Ledger() []DetailConflict {
 }
 
 // ConflictList returns the open fusion conflicts across every entity the caller may
-// read; the server silently skips entities outside the caller's scope grants.
-func (c *Client) ConflictList(limit int) ([]Conflict, error) {
+// read; the server silently skips entities outside the caller's scope grants. A non-empty
+// entity narrows the list to that entity, the whole limit spent on it; naming one the caller
+// may not read is refused (403), not skipped, and an unknown one is a 404.
+func (c *Client) ConflictList(limit int, entity string) ([]Conflict, error) {
+	q := url.Values{"limit": {strconv.Itoa(limit)}}
+	if entity != "" {
+		q.Set("entity", entity)
+	}
 	var out []Conflict
-	if err := c.GET(fmt.Sprintf("/api/entities/conflicts?limit=%d", limit), &out); err != nil {
+	if err := c.GET("/api/entities/conflicts?"+q.Encode(), &out); err != nil {
 		return nil, err
 	}
 	return out, nil

@@ -32,12 +32,4 @@ public record MappingSpec(
         HookInvocation.parseList(block, "dataset"), HookInvocation.parseList(block, "row"),
         HookInvocation.parseList(block, "cell"), ErrorPolicy.parse(block.path("on-error")));
   }
-
-  /** Legacy accessor — returns the JPA entity name if JPA is the only target, else null. */
-  public String target() {
-    if (targets != null && targets.jpa() != null && targets.rag() == null && targets.table() == null) {
-      return targets.jpa().entity();
-    }
-    return null;
-  }
 }

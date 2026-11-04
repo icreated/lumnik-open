@@ -60,6 +60,8 @@ class TemporalTextTest {
         "2026-08-01T14:30:00+02:00,       2026-08-01T12:30:00Z",
         "2026-08-01T12:30:00+00,          2026-08-01T12:30:00Z",   // short offset, padded
         "2026-08-01T10:04:56-05,          2026-08-01T15:04:56Z",   // short NEGATIVE offset — the trap
+        "2026-08-01T12:30:00.019386+00,   2026-08-01T12:30:00.019386Z",  // short offset after a fraction
+        "2026-08-01T12:30:00-04:56:02,     2026-08-01T17:26:02Z",   // an offset with seconds (historical zones)
         "2026-07-05 10:04:56.019386+05:30, 2026-07-05T04:34:56.019386Z",
     })
     void eachShapeReachesItsOwnParser(String raw, String expected) {

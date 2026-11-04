@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.mapping;
 
+import io.lumnik.common.text.Text;
 import java.time.DateTimeException;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
@@ -31,6 +32,6 @@ public final class Zones {
     }
 
     private static boolean none(String declared) {
-        return declared == null || declared.isBlank();
+        return Text.blank(declared);
     }
 }

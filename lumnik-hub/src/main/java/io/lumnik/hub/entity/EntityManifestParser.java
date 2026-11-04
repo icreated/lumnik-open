@@ -1,9 +1,9 @@
 package io.lumnik.hub.entity;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.entity.resolution.NormalizerAllowlist;
 import io.lumnik.hub.manifest.HubYaml;
 import io.lumnik.hub.manifest.ManifestKeys;
@@ -129,8 +129,7 @@ public class EntityManifestParser {
     return String.join(", ", new TreeSet<>(keys));
   }
 
-  private final ObjectMapper yaml = HubYaml.mapper()
-      .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+  private final ObjectMapper yaml = HubYaml.lenientMapper();
 
   /**
    * The refusal catalogue. Each rule below is independent — this method's job is to name them in
@@ -165,7 +164,7 @@ public class EntityManifestParser {
   private static void requireKindAndName(EntityManifest m) {
     if (m.kind() == null || !"Entity".equals(m.kind()))
       throw new IllegalArgumentException("kind must be 'Entity'");
-    if (m.name() == null || m.name().isBlank())
+    if (Text.blank(m.name()))
       throw new IllegalArgumentException("name is required");
     if (!m.name().matches("[A-Za-z0-9_]+"))
       throw new IllegalArgumentException(
@@ -184,7 +183,7 @@ public class EntityManifestParser {
       throw new IllegalArgumentException("match must declare at least one column");
     Set<String> matchSeen = new HashSet<>();
     for (String mc : m.match()) {
-      if (mc == null || mc.isBlank())
+      if (Text.blank(mc))
         throw new IllegalArgumentException("match contains a blank column");
       if (!matchSeen.add(mc.toLowerCase(Locale.ROOT)))
         throw new IllegalArgumentException("match declares a duplicate column (case-insensitive): " + mc);
@@ -226,7 +225,7 @@ public class EntityManifestParser {
       EntityManifest.Join j = m.joins().get(i);
       String at = "joins[" + i + "]";
       if (j == null) throw new IllegalArgumentException(at + " is null");
-      if (j.table() == null || j.table().isBlank())
+      if (Text.blank(j.table()))
         throw new IllegalArgumentException(at + ".table is required");
       String t = j.table().toLowerCase(Locale.ROOT);
       if (sourceTables.contains(t))
@@ -237,13 +236,13 @@ public class EntityManifestParser {
       if (j.from() == null || !fused.contains(j.from()))
         throw new IllegalArgumentException(at + ".from '" + j.from()
             + "' is not a canonical column produced by sources[] (known: " + fused + ")");
-      if (j.to() == null || j.to().isBlank())
+      if (Text.blank(j.to()))
         throw new IllegalArgumentException(at + ".to is required");
       if (j.map() == null || j.map().isEmpty())
         throw new IllegalArgumentException(at + ".map must have at least one column");
       Set<String> seen = new HashSet<>();
       for (Map.Entry<String, String> e : j.map().entrySet()) {
-        if (e.getKey() == null || e.getKey().isBlank() || e.getValue() == null || e.getValue().isBlank())
+        if (Text.blank(e.getKey()) || Text.blank(e.getValue()))
           throw new IllegalArgumentException(at + ".map has a blank column");
         String canon = e.getValue().toLowerCase(Locale.ROOT);
         if (RESERVED.contains(canon) || LOOKUP_INTERNAL.contains(canon))
@@ -268,7 +267,7 @@ public class EntityManifestParser {
   private static void requireSourceShape(EntityManifest.Source s) {
     if (s == null)
       throw new IllegalArgumentException("sources contains a null entry");
-    if (s.table() == null || s.table().isBlank())
+    if (Text.blank(s.table()))
       throw new IllegalArgumentException("source table is required");
     if (s.map() == null || s.map().isEmpty())
       throw new IllegalArgumentException("source '" + s.table() + "' map must have at least one column");
@@ -277,9 +276,9 @@ public class EntityManifestParser {
   private static void requireMappedColumns(EntityManifest.Source s, Map<String, String> canonAcrossSources) {
     Set<String> seen = new HashSet<>();
     for (Map.Entry<String, String> e : s.map().entrySet()) {
-      if (e.getKey() == null || e.getKey().isBlank())
+      if (Text.blank(e.getKey()))
         throw new IllegalArgumentException("source '" + s.table() + "' has a blank source column key");
-      if (e.getValue() == null || e.getValue().isBlank())
+      if (Text.blank(e.getValue()))
         throw new IllegalArgumentException("source '" + s.table() + "' has a blank canonical value for key: " + e.getKey());
       String canon = e.getValue().toLowerCase(Locale.ROOT);
       if (RESERVED.contains(canon))
@@ -328,7 +327,7 @@ public class EntityManifestParser {
       EntityManifest.ColumnMeta meta = e.getValue();
       if (meta == null) continue; // a declared key with no grounding (YAML `col:`) — harmless
       for (String v : meta.values()) {
-        if (v == null || v.isBlank())
+        if (Text.blank(v))
           throw new IllegalArgumentException("column '" + e.getKey() + "' has a blank allowed value");
         if (!v.equals(v.strip()))
           throw new IllegalArgumentException("column '" + e.getKey()
@@ -403,7 +402,7 @@ public class EntityManifestParser {
 
     for (EntityManifest.Source s : m.sources()) {
       String col = identity.get(s.table());
-      if (col == null || col.isBlank())
+      if (Text.blank(col))
         throw new IllegalArgumentException(
             "resolution.identity column for source '" + s.table() + "' is blank");
       if (!sourceMapsColumn(s, col))
@@ -426,7 +425,7 @@ public class EntityManifestParser {
     for (EntityManifest.CascadeRule rule : cascade) {
       if (rule == null)
         throw new IllegalArgumentException("resolution.cascade contains a null entry");
-      if (rule.id() == null || rule.id().isBlank())
+      if (Text.blank(rule.id()))
         throw new IllegalArgumentException("resolution.cascade rule is missing an id");
       if (!seenIds.add(rule.id().toLowerCase(Locale.ROOT)))
         throw new IllegalArgumentException(
@@ -448,7 +447,7 @@ public class EntityManifestParser {
       throw new IllegalArgumentException(
           "resolution.cascade rule '" + ruleId + "' exact.fields must declare at least one field");
     for (String f : exact.fields()) {
-      if (f == null || f.isBlank())
+      if (Text.blank(f))
         throw new IllegalArgumentException(
             "resolution.cascade rule '" + ruleId + "' exact.fields contains a blank field");
       if (!canonical.contains(f))
@@ -467,7 +466,7 @@ public class EntityManifestParser {
   }
 
   private static void requirePropose(String ruleId, EntityManifest.Propose propose) {
-    if (propose.provider() == null || propose.provider().isBlank())
+    if (Text.blank(propose.provider()))
       throw new IllegalArgumentException(
           "resolution.cascade rule '" + ruleId + "' propose.provider is required");
     if (propose.acceptAbove() == null || propose.reviewAbove() == null)

@@ -1,5 +1,6 @@
 package io.lumnik.common.security;
 
+import io.lumnik.common.text.Text;
 import java.util.Collection;
 import java.util.Optional;
 import java.util.Set;
@@ -35,7 +36,7 @@ public final class ScopeGrants {
      * cannot drift between them.
      */
     public static Optional<String> nameProblem(String name) {
-        if (name == null || name.isBlank()) return Optional.of("scope must not be blank");
+        if (Text.blank(name)) return Optional.of("scope must not be blank");
         if (!IDENTIFIER.matcher(name).matches()) {
             return Optional.of("scope must be lowercase, start with a letter, then letters/digits/_/- (max 41): " + name);
         }

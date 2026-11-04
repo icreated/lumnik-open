@@ -35,6 +35,7 @@
 | `lookup` | `column`; `table` (map); `on-missing` (`keep`; or `null` / `error` / any value) | translates a code with the map |
 | `parse-date` | `column`; `formats` (list of date patterns); `zone` (UTC) | first matching format wins; a pattern with a time gives a timestamp, otherwise a date |
 | `parse-number` | `column`; `decimal-separator` (`auto`; or `","` / `"."`); `negatives-in-parens` (false); `integer` (false) | `1 234,56 €` → `1234.56`; with `integer`, a whole number |
+| `parse-boolean` | `column`; `true` (`1, true, yes, y, oui, o, vrai, t`); `false` (`0, false, no, n, non, faux, f`) | `O`/`N`, `0`/`1` → a boolean, case and spaces ignored; declared lists replace the defaults |
 | `parse-email` | `column`; `lower` (false) | trims, optionally lowercases, checks the shape |
 | `parse-phone` | `column`; `default-region` (`US`) | `06 12 34 56 78` → `+33612345678` with `FR` |
 | `mask` | `column`; `keep-first` (0); `keep-last` (0); `mask-char` (`*`) | masks the middle of the value |
@@ -67,20 +68,27 @@
 
 ## When a hook cannot deliver: `cell_errors` and `on-error`
 
-`cell_errors` counts the cells a hook could not deliver — one per cell:
+`cell_errors` counts the cells not delivered as declared — one per cell. Almost all come from a hook:
 
 | The cell is | Hooks |
 |---|---|
-| **emptied** | `parse-date`, `parse-number`, `parse-email`, `parse-phone`, `lookup` with `on-missing: null`, `to-uuid` with `on-invalid: null`, `regex-extract` with `required: true` |
+| **emptied** | `parse-date`, `parse-number`, `parse-boolean`, `parse-email`, `parse-phone`, `lookup` with `on-missing: null`, `to-uuid` with `on-invalid: null`, `regex-extract` with `required: true` |
 | **left as it arrived** | `fix-mojibake` declined; `split` found more or fewer parts than `into` |
 | **replaced** by a value the source never sent | `to-uuid` with `on-invalid: generate` |
 | **overwritten** | `map-columns` renamed onto a column the row already had |
 | **declared unreadable** | `kotlin`, by the script |
 
+A `promote` entry is the other origin, and no hook is involved: a value that does not read as its declared type
+(`"sensor-fault"` where a `decimal` was declared) is written as an empty cell and counted, on a `rest-generic` or a
+`kafka` connector.
+
+A blank cell — empty, or only whitespace: spaces, tabs — is not a value a `parse-*` hook could not read: it stays empty and
+is not counted.
+
 `lm run get` prints the alert when the count is above zero:
 
 ```
-⚠ 1 cell(s) a hook did not deliver as declared — the rows were still written
+⚠ 1 cell(s) not delivered as declared (a hook, or a promoted value of the wrong type) — the rows were still written
 ```
 
 `lm run get <id> -o json` (or `-o yaml`) carries the count as `cellErrors`. What happens to the row, per column:
@@ -88,7 +96,7 @@
 | `on-error` mode | The row |
 |---|---|
 | `soft` (default) | is written, the cell emptied; `cell_errors` counts it |
-| `dlq` | goes to the dead letters as it was read (`MappingFailed`) — [example](transformers.md#an-empty-amount-is-a-wrong-row-on-error-dlq) |
+| `dlq` | goes to the dead letters as it was read (`MappingFailed`) — [example](transformers.md#an-unreadable-amount-is-a-wrong-row-on-error-dlq) |
 | `fail` | stops the run |
 
 - `fields` names the `column:` of a single-column hook. Every other hook follows `default`.

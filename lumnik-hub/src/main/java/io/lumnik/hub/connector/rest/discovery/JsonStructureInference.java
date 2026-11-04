@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.rest.discovery;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
 import io.lumnik.hub.connector.naming.Identifiers;
 import io.lumnik.hub.connector.naming.JsonPaths;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -88,7 +89,8 @@ public class JsonStructureInference {
 
     public List<Map<String,Object>> inferPromotes(JsonNode item) {
         List<Map<String,Object>> out = new ArrayList<>();
-        Identifiers.Unique columns = new Identifiers.Unique();
+        // The hybrid table's own columns are taken: a field `id` is drafted as `id_2`, read from its own key.
+        Identifiers.Unique columns = new Identifiers.Unique(HybridJsonbSpec.RESERVED_COLUMNS);
         item.fields().forEachRemaining(e -> {
             JsonNode v = e.getValue();
             if (v.isValueNode()) {

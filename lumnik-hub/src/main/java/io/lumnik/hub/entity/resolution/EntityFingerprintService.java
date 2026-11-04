@@ -1,5 +1,6 @@
 package io.lumnik.hub.entity.resolution;
 
+import io.lumnik.common.text.Text;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -56,7 +57,7 @@ public class EntityFingerprintService {
     domain.add(ruleId);
     for (String field : fields) {
       String normalized = orchestrator.normalize(normalizeHookIds, field, rawFieldValues.get(field));
-      if (normalized == null || normalized.isBlank()) return Optional.empty();
+      if (Text.blank(normalized)) return Optional.empty();
       domain.add(normalized);
     }
 

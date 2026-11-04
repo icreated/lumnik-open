@@ -2,6 +2,7 @@ package io.lumnik.hub.proposal;
 
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.hub.workflow.WorkflowDataTruth;
@@ -72,7 +73,7 @@ public class ProposalCheckResource {
 
     /** The scope first, the YAML after; every "no" is the same empty answer. */
     private Optional<WorkflowGraph> designate(long tenant, String name) {
-        if (name == null || name.isBlank()) return Optional.empty();
+        if (Text.blank(name)) return Optional.empty();
         Optional<String> scope = store.findScope(tenant, name);
         if (scope.isEmpty() || !ScopeGrants.allows(scope.get())) return Optional.empty();
         try {

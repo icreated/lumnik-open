@@ -23,7 +23,8 @@ func newConflictsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			items, err := c.ConflictList(pageLimit(cmd))
+			entity, _ := cmd.Flags().GetString("entity")
+			items, err := c.ConflictList(pageLimit(cmd), entity)
 			if err != nil {
 				return err
 			}
@@ -31,6 +32,7 @@ func newConflictsCmd() *cobra.Command {
 		},
 	}
 	addPageLimitFlag(list, 200, client.ConflictsPageCap, "max conflicts to list")
+	list.Flags().String("entity", "", "only this entity's conflicts")
 	root.AddCommand(list)
 	return root
 }

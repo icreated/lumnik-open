@@ -1,6 +1,7 @@
 package io.lumnik.hub.export.format;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.lumnik.common.text.Text;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.time.DateTimeException;
@@ -53,7 +54,7 @@ public class FormatDateFormatterFactory implements ColumnFormatterFactory {
     public ColumnFormatter compile(JsonNode params) {
         FormatterParams.refuseUnknown(params, PARAMS);
         String pattern = FormatterParams.text(params, "pattern");
-        if (pattern == null || pattern.isBlank()) throw new IllegalArgumentException("pattern is required");
+        if (Text.blank(pattern)) throw new IllegalArgumentException("pattern is required");
         DateTimeFormatter write;
         try {
             write = DateTimeFormatter.ofPattern(pattern, Locale.ROOT);

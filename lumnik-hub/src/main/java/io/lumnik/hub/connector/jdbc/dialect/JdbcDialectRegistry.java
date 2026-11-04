@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.jdbc.dialect;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.jdbc.spi.JdbcDialect;
 import io.quarkus.runtime.Startup;
 import jakarta.annotation.PostConstruct;
@@ -100,7 +101,7 @@ public class JdbcDialectRegistry {
    * accepts), else the only installed provider that accepts the URL.
    */
   public JdbcDialect resolveFor(String url, String explicitDialect) {
-    if (explicitDialect != null && !explicitDialect.isBlank()) {
+    if (Text.present(explicitDialect)) {
       JdbcDialect d = resolve(explicitDialect);
       if (!d.acceptsUrl(url)) {
         throw new IllegalArgumentException("JDBC dialect '" + normalize(explicitDialect)

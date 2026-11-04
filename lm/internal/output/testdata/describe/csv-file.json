@@ -1,0 +1,325 @@
+{
+  "fields" : [ {
+    "name" : "transport",
+    "type" : "NESTED",
+    "importance" : "HIGH",
+    "required" : true,
+    "doc" : "Transport block",
+    "nested" : {
+      "fields" : [ {
+        "name" : "kind",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : true,
+        "doc" : "Transport mechanism",
+        "allowed" : [ "local", "sftp", "s3" ]
+      }, {
+        "name" : "path",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : false,
+        "doc" : "File path (local) or glob path (sftp)",
+        "required_when" : {
+          "when" : "kind is local or sftp"
+        },
+        "recommendations" : [ "Set path: /imports/*.csv (local) or a remote glob (sftp)" ]
+      }, {
+        "name" : "host",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : false,
+        "doc" : "SFTP host",
+        "required_when" : {
+          "field" : "kind",
+          "equals" : "sftp",
+          "when" : "kind = sftp"
+        }
+      }, {
+        "name" : "user",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : false,
+        "doc" : "SFTP user",
+        "required_when" : {
+          "field" : "kind",
+          "equals" : "sftp",
+          "when" : "kind = sftp"
+        }
+      }, {
+        "name" : "port",
+        "type" : "INT",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "SFTP port",
+        "default" : 22
+      }, {
+        "name" : "strict_host_key",
+        "type" : "BOOLEAN",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Verify the SFTP host key against host_key_fingerprint",
+        "default" : true
+      }, {
+        "name" : "host_key_fingerprint",
+        "type" : "STRING",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "SFTP host key fingerprint (SHA256:… as ssh-keygen -lf prints it)",
+        "default" : "",
+        "required_when" : {
+          "when" : "kind is sftp and strict_host_key is not off"
+        },
+        "recommendations" : [ "Read it with `ssh-keyscan -p <port> <host> | ssh-keygen -lf -` (the run's refusal prints the same), confirm it out of band, then set host_key_fingerprint: \"SHA256:…\"" ]
+      }, {
+        "name" : "bucket",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : false,
+        "doc" : "S3 bucket name",
+        "required_when" : {
+          "field" : "kind",
+          "equals" : "s3",
+          "when" : "kind = s3"
+        }
+      }, {
+        "name" : "prefix",
+        "type" : "STRING",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "S3 key prefix filter",
+        "default" : ""
+      }, {
+        "name" : "region",
+        "type" : "STRING",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "AWS region for S3",
+        "default" : "eu-west-3"
+      }, {
+        "name" : "endpoint",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "S3-compat endpoint (MinIO, R2)"
+      }, {
+        "name" : "suffix",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "File suffix filter for s3 (empty = no filter)",
+        "default" : ""
+      }, {
+        "name" : "archive_path",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Relocation target for after_process=archive|move — canonical home is spec level; a transport-level value wins if both are set (one-shot style)"
+      }, {
+        "name" : "archive_bucket",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "S3 archive bucket for after_process=archive|move (default: source bucket)"
+      }, {
+        "name" : "archive_prefix",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "S3 archive key prefix for after_process=archive|move",
+        "default" : "archive/"
+      }, {
+        "name" : "key_env",
+        "type" : "STRING",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "Env var for SSH private key (SFTP)"
+      }, {
+        "name" : "password_env",
+        "type" : "STRING",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "Env var for SSH password (SFTP)"
+      }, {
+        "name" : "access_key_env",
+        "type" : "STRING",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "Env var for AWS access key (S3)",
+        "default" : "AWS_ACCESS_KEY_ID"
+      }, {
+        "name" : "secret_key_env",
+        "type" : "STRING",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "Env var for AWS secret key (S3)",
+        "default" : "AWS_SECRET_ACCESS_KEY"
+      } ],
+      "at_least_one_of" : [ {
+        "fields" : [ "key_env", "password_env" ],
+        "when" : "kind is sftp",
+        "hint" : "Use `lm secret set <NAME> ...` then reference it via key_env: <NAME>"
+      } ],
+      "refused" : [ {
+        "name" : "file_filter",
+        "message" : "file_filter is not read by connector runs",
+        "recommendations" : [ "Drop it from the connector manifest" ]
+      }, {
+        "name" : "pre_process",
+        "message" : "pre_process is not read by connector runs",
+        "recommendations" : [ "Drop it from the connector manifest" ]
+      }, {
+        "name" : "post_process",
+        "message" : "post_process is not read by connector runs",
+        "recommendations" : [ "Drop it from the connector manifest" ]
+      }, {
+        "name" : "max_file_size",
+        "message" : "max_file_size is not read by connector runs",
+        "recommendations" : [ "Drop it from the connector manifest" ]
+      } ]
+    }
+  }, {
+    "name" : "parser",
+    "type" : "NESTED",
+    "importance" : "HIGH",
+    "required" : false,
+    "doc" : "CSV parser config",
+    "nested" : {
+      "fields" : [ {
+        "name" : "delimiter",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Field delimiter (single char) — auto-detected if absent"
+      }, {
+        "name" : "encoding",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Character encoding — auto-detected if absent"
+      }, {
+        "name" : "has_header",
+        "type" : "BOOLEAN",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "First row is header",
+        "default" : true
+      }, {
+        "name" : "bom_strip",
+        "type" : "BOOLEAN",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Strip BOM from UTF-8",
+        "default" : true
+      }, {
+        "name" : "null_values",
+        "type" : "LIST",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Strings treated as null",
+        "default" : [ "", "NULL", "null", "#N/A" ]
+      }, {
+        "name" : "lines",
+        "type" : "BOOLEAN",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "One line = one row, one column (`line`): no delimiter, no quoting — fixed-width files, logs",
+        "default" : false
+      }, {
+        "name" : "columns",
+        "type" : "LIST",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "Column names in file order",
+        "required_when" : {
+          "when" : "has_header is false and lines is off"
+        },
+        "recommendations" : [ "Add parser.columns: [code, name, ...] in file order" ]
+      } ]
+    }
+  }, {
+    "name" : "schedule",
+    "type" : "STRING",
+    "importance" : "MEDIUM",
+    "required" : false,
+    "doc" : "Cron expression for recurring ingestion"
+  }, {
+    "name" : "after_process",
+    "type" : "STRING",
+    "importance" : "MEDIUM",
+    "required" : true,
+    "doc" : "What to do after a file is processed",
+    "allowed" : [ "archive", "delete", "move", "none" ]
+  }, {
+    "name" : "archive_path",
+    "type" : "STRING",
+    "importance" : "LOW",
+    "required" : false,
+    "doc" : "Destination for `move` action",
+    "required_when" : {
+      "field" : "after_process",
+      "equals" : "move",
+      "when" : "after_process = move"
+    },
+    "recommendations" : [ "Set archive_path: /path/to/archive/" ]
+  }, {
+    "name" : "mapping",
+    "type" : "NESTED",
+    "importance" : "MEDIUM",
+    "required" : false,
+    "doc" : "Dataset/row/cell transformer hooks — see the transformers page"
+  }, {
+    "name" : "window",
+    "type" : "STRING",
+    "importance" : "MEDIUM",
+    "required" : false,
+    "doc" : "Fence scheduled runs to a UTC time window, HH:MM-HH:MM (a manual run bypasses it)"
+  }, {
+    "name" : "refresh",
+    "type" : "NESTED",
+    "importance" : "MEDIUM",
+    "required" : false,
+    "doc" : "Full refresh of one local file: the removal guard",
+    "nested" : {
+      "fields" : [ {
+        "name" : "max_removed",
+        "type" : "STRING",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "Largest share of the table one run may remove: a percentage (30% by default), or off"
+      } ]
+    }
+  }, {
+    "name" : "target",
+    "type" : "NESTED",
+    "importance" : "HIGH",
+    "required" : false,
+    "doc" : "Target persistence",
+    "nested" : {
+      "fields" : [ {
+        "name" : "indexes",
+        "type" : "LIST",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Postgres indexes on the hub table",
+        "recommendations" : [ "indexes is a list of { columns: [...], unique?: bool } objects — e.g. indexes: [{ columns: [email] }]" ],
+        "items" : {
+          "fields" : [ {
+            "name" : "columns",
+            "type" : "LIST",
+            "importance" : "HIGH",
+            "required" : true,
+            "doc" : "Columns of the index, in order",
+            "recommendations" : [ "e.g. columns: [email] or [bpartner_id, dateordered]" ]
+          }, {
+            "name" : "unique",
+            "type" : "BOOLEAN",
+            "importance" : "LOW",
+            "required" : false,
+            "doc" : "Unique index (default false)",
+            "default" : false
+          } ]
+        }
+      } ]
+    }
+  } ]
+}

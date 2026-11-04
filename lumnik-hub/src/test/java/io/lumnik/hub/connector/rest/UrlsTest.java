@@ -1,6 +1,8 @@
 package io.lumnik.hub.connector.rest;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
@@ -164,5 +166,22 @@ class UrlsTest {
         assertThat(Urls.whyNotHttp("ftp://auth.example/token")).contains("must be an http or https URL");
         assertThat(Urls.whyNotHttp("/oauth/token")).contains("must be an absolute URL (scheme + host)");
         assertThat(Urls.whyNotHttp(" ")).contains("must not be blank");
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+        "http://Clinic.Test/app,          http://clinic.test:80",
+        "http://clinic.test.:80/x,        http://clinic.test:80",
+        "HTTPS://clinic.test/x,           https://clinic.test:443",
+        "http://clinic.test:8443/x,       http://clinic.test:8443"})
+    void origin_is_the_scheme_host_and_effective_port(String url, String origin) {
+        assertThat(Urls.origin(url)).contains(origin);
+    }
+
+    @Test
+    void a_url_without_a_host_or_unreadable_has_no_origin() {
+        assertThat(Urls.origin("/app/vets.json")).isEmpty();
+        assertThat(Urls.origin("http://clinic.test/a b")).isEmpty();
+        assertThat(Urls.origin(null)).isEmpty();
     }
 }

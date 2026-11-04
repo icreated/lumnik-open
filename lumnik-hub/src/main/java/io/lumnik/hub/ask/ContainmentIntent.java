@@ -1,5 +1,6 @@
 package io.lumnik.hub.ask;
 
+import io.lumnik.common.text.Text;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -62,7 +63,7 @@ final class ContainmentIntent {
     private ContainmentIntent() {}
 
     static boolean in(String question) {
-        if (question == null || question.isBlank()) return false;
+        if (Text.blank(question)) return false;
         String folded = QuestionWords.fold(question);
         return TEXT_COLUMN_THEN_VERB.matcher(folded).find() || IN_A_TEXT_COLUMN.matcher(folded).find();
     }
@@ -73,7 +74,7 @@ final class ContainmentIntent {
      * « contient badu dans la catégorie Pompes » name no single text a follow-up could replace.
      */
     static Optional<String> searched(String question) {
-        if (question == null || question.isBlank()) return Optional.empty();
+        if (Text.blank(question)) return Optional.empty();
         String folded = QuestionWords.fold(question);
         // one search in the question: « contient badu et dont le nom contient pentair » ends one clause on a text, not two
         long searches = TEXT_COLUMN_THEN_VERB.matcher(folded).results().count()

@@ -10,6 +10,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import java.text.Normalizer;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Strips combining diacritical marks for systems requiring ASCII-only identifiers.
@@ -18,6 +19,8 @@ import java.util.Set;
 @ApplicationScoped
 @HookId("remove-diacritics")
 public class RemoveDiacriticsHook implements CellHook {
+
+  private static final Pattern MARKS = Pattern.compile("\\p{InCombiningDiacriticalMarks}+");
 
   @Override
   public void apply(Map<String, Object> row, JsonNode params, MappingState s) {
@@ -30,7 +33,7 @@ public class RemoveDiacriticsHook implements CellHook {
 
   private String transform(String input) {
     String nfd = Normalizer.normalize(input, Normalizer.Form.NFD);
-    return nfd.replaceAll("\\p{InCombiningDiacriticalMarks}+", "");
+    return MARKS.matcher(nfd).replaceAll("");
   }
 
   @Override

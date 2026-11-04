@@ -1,6 +1,7 @@
 package io.lumnik.hub.ask;
 
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.jdbc.HikariPoolRegistry;
 import io.lumnik.hub.connector.jdbc.JdbcConnectionConfig;
 import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
@@ -63,7 +64,7 @@ public class AdLabelProvider implements SchemaLabelProvider {
             }, rs -> new String[]{ rs.getString("columnname"), rs.getString("label") });
             for (String[] row : rows) {
                 String col = row[0], label = row[1];
-                if (col != null && label != null && !label.isBlank()) {
+                if (col != null && Text.present(label)) {
                     out.put(col.toLowerCase(Locale.ROOT), label);
                 }
             }

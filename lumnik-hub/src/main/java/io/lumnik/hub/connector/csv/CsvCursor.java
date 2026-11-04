@@ -3,6 +3,7 @@ package io.lumnik.hub.connector.csv;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.transport.FileDescriptor;
 
 import java.time.Instant;
@@ -135,7 +136,7 @@ public record CsvCursor(String file, long rowsProcessed,
   }
 
   public static CsvCursor fromJson(String json) {
-    if (json == null || json.isBlank()) return empty();
+    if (Text.blank(json)) return empty();
     try {
       return M.readValue(json, CsvCursor.class);
     } catch (Exception e) {

@@ -139,12 +139,16 @@ public class ViewApplyResource {
     return out;
   }
 
-  private static boolean roundTripsAsText(String pgType) {
+  /** Exact type names whose text form is the value itself. */
+  private static final Set<String> TEXT_ROUND_TRIP_TYPES = Set.of(
+      "integer", "int", "int2", "int4", "smallint", "bigint", "int8", "uuid", "boolean", "bool");
+
+  /** Text-like families, by prefix: {@code char} also covers {@code character} and {@code character varying}. */
+  private static final List<String> TEXT_ROUND_TRIP_PREFIXES = List.of("text", "char", "varchar", "bpchar");
+
+  static boolean roundTripsAsText(String pgType) {
     String t = pgType == null ? "" : pgType.toLowerCase(Locale.ROOT).strip();
-    return t.startsWith("text") || t.startsWith("char") || t.startsWith("varchar") || t.startsWith("bpchar")
-        || t.startsWith("character") || t.equals("integer") || t.equals("int") || t.equals("int2")
-        || t.equals("int4") || t.equals("smallint") || t.equals("bigint") || t.equals("int8") || t.equals("uuid") || t.equals("boolean")
-        || t.equals("bool");
+    return TEXT_ROUND_TRIP_TYPES.contains(t) || TEXT_ROUND_TRIP_PREFIXES.stream().anyMatch(t::startsWith);
   }
 
   /**

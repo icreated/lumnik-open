@@ -1,7 +1,6 @@
 package io.lumnik.hub.view;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.manifest.LinkTemplate;
 import io.lumnik.hub.manifest.ManifestKeys;
 import io.lumnik.hub.manifest.ManifestSurface;
@@ -50,13 +49,7 @@ public class ViewManifestParser {
      * reading a view already saved with an extra key. The apply door refuses; the read stays kind.
      */
     public List<String> unknownKeys(String yaml) {
-        JsonNode root;
-        try {
-            root = SURFACE.readTree(yaml);
-        } catch (Exception e) {
-            return List.of();
-        }
-        return unknownKeys(root);
+        return SURFACE.unknownKeys(yaml);
     }
 
     public List<String> unknownKeys(JsonNode root) {
@@ -81,11 +74,7 @@ public class ViewManifestParser {
      * and reuse the node for both parse() and unknownKeys().
      */
     JsonNode readTree(String yaml) {
-        try {
-            return SURFACE.readTree(yaml);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("invalid kind:View manifest: " + e.getMessage(), e);
-        }
+        return SURFACE.readTree(yaml, "View");
     }
 
     public ViewManifest parse(String yaml) {
@@ -107,14 +96,7 @@ public class ViewManifestParser {
         if (columns.isEmpty())
             throw new IllegalArgumentException("spec.columns must declare at least one column");
 
-        // scope is normalized at the threshold: accidental whitespace must not leak into
-        // authorization (a bound user would get a lying 403) or the SchemaCard lookup.
-        String tag = scope.strip();
-
-        // …and the normalized tag still has to be a NAME a scope can have — the same rule
-        // AppManifestParser, ScopesValidator and EntityManifestParser already ask (#577).
-        ScopeGrants.nameProblem(tag)
-            .ifPresent(problem -> { throw new IllegalArgumentException("spec.scope: " + problem); });
+        String tag = ManifestKeys.scopeTag(scope);
 
         return new ViewManifest(name, tag, table, title, columns, parseLinks(spec.path("links"), columns));
     }

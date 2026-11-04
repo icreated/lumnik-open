@@ -1,6 +1,7 @@
 package io.lumnik.hub.source.csv;
 
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.SqlType;
+import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.api.Test;
@@ -9,6 +10,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeSet;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -76,6 +78,16 @@ class CsvTypeInferenceTest {
                 .stream().map(p -> p.name()).toList()).containsExactly("amount");
         } finally {
             Locale.setDefault(previous);
+        }
+    }
+
+    /** #1783: every column the hybrid table already has is left out of the promoted ones, not only the first seven. */
+    @Test
+    void a_header_named_as_a_column_of_the_hybrid_table_is_not_promoted() {
+        for (String reserved : new TreeSet<>(HybridJsonbSpec.RESERVED_COLUMNS)) {
+            assertThat(new CsvIngestService().inferSchema(List.of(Map.of(reserved, "7", "amount", "12")))
+                .stream().map(p -> p.name()).toList())
+                .as("%s stays out of the promoted columns", reserved).containsExactly("amount");
         }
     }
 

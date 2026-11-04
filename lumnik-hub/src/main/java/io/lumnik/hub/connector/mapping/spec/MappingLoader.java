@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.connector.mapping.MappingValidationException;
 import io.lumnik.hub.connector.mapping.ScalarParams;
+import io.lumnik.hub.json.JsonNodes;
 import io.lumnik.hub.manifest.HubYaml;
 import io.lumnik.hub.sql.SqlIdentifiers;
 
@@ -136,7 +137,7 @@ public final class MappingLoader {
 
   private static String requireText(JsonNode n, String key) {
     JsonNode v = n.get(key);
-    if (v == null || v.isNull() || v.asText().isBlank()) {
+    if (JsonNodes.blankOrNull(v)) {
       throw new MappingValidationException(key + " is required");
     }
     return v.asText();

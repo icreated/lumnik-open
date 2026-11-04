@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.common.error.Throwables;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.tenant.TenantContext;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.api.ConnectorType;
 import io.lumnik.hub.connector.api.types.*;
 import io.lumnik.hub.connector.domain.Connector;
@@ -942,7 +943,7 @@ public class ConnectorEngine {
             endpoint.setLastRunStatus(status.sqlValue());
             endpoint.setLastRunAt(endedAt);
         }
-        String reason = errorMessage != null && !errorMessage.isBlank() ? " — " + errorMessage : "";
+        String reason = Text.present(errorMessage) ? " — " + errorMessage : "";
         Object endpointLabel = endpoint != null ? endpoint.getName() : r.getEndpointId();   // the id when the row is gone
         // Partial is a WARN with Failed: both are endings the operator has to notice. An INFO line
         // is what made the two silences this arc closes invisible in the first place.

@@ -13,10 +13,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 @ApplicationScoped
 @HookId("clean")
 public class CleanHook implements CellHook {
+
+  private static final Pattern CONTROL = Pattern.compile("\\p{Cntrl}");
 
   private static final List<String> FORMS = List.of("NFC", "NFD", "NFKC", "NFKD");
 
@@ -49,7 +52,7 @@ public class CleanHook implements CellHook {
       // Strip BOM (U+FEFF)
       if (!str.isEmpty() && str.charAt(0) == '\uFEFF') str = str.substring(1);
       if (strip) str = str.strip();
-      if (removeCtrl) str = str.replaceAll("\\p{Cntrl}", "");
+      if (removeCtrl) str = CONTROL.matcher(str).replaceAll("");
       if (form != null) str = Normalizer.normalize(str, Normalizer.Form.valueOf(form));
       row.put(col, str);
     }

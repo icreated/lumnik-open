@@ -53,9 +53,9 @@ type DeleteTakes struct {
 // too but never reach the DLQ). A hub older than this field's addition omits
 // recordsSkipped from the JSON; it decodes as 0.
 //
-// CellErrors is orthogonal to the conservation identity above: it counts CELLS a
-// mapping hook (parse-date, parse-number, parse-email, parse-phone, lookup) could not
-// parse and nulled, letting the row through unchanged. The row WAS written — never
+// CellErrors is orthogonal to the conservation identity above: it counts CELLS not delivered as declared -
+// by a mapping hook, or a promoted value that did not read as its declared type (rest, kafka) - letting the
+// row through. The shapes are listed in internal/cli/run.go, where the count is worded. The row WAS written — never
 // add or compare CellErrors against the records_* counts. A hub older than this
 // field's addition omits cellErrors from the JSON; it decodes as 0.
 //

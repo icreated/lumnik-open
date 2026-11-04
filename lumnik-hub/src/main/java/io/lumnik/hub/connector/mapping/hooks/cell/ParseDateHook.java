@@ -8,6 +8,7 @@ import io.lumnik.hub.connector.mapping.Zones;
 import io.lumnik.hub.connector.mapping.hooks.CellHook;
 import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
+import io.lumnik.hub.json.JsonNodes;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.text.ParsePosition;
@@ -77,14 +78,14 @@ public class ParseDateHook implements CellHook {
    *  they count as missing for KotlinCellHook's `script`. */
   private static String zone(JsonNode params) {
     JsonNode zone = params.get("zone");
-    return zone == null || zone.isNull() || zone.asText().isBlank() ? null : zone.asText();
+    return JsonNodes.blankOrNull(zone) ? null : zone.asText();
   }
 
   @Override
   public void apply(Map<String, Object> row, JsonNode params, MappingState s) {
     String col = params.path("column").asText();
     Object v = row.get(col);
-    if (v == null) return;
+    if (v == null || BlankCell.emptied(row, col, v)) return;
     // Already a temporal type — nothing to do. Any java.time value or java.util.Date (a kotlin hook
     // may hand over an Instant or a Timestamp): read as text it would miss, be nulled and counted.
     if (v instanceof TemporalAccessor || v instanceof Date) return;

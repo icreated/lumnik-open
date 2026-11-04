@@ -3,6 +3,7 @@ package io.lumnik.hub.source.csv;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.common.tenant.TenantContext;
+import io.lumnik.common.text.Text;
 import io.lumnik.common.tx.SuspendedTransaction;
 import io.lumnik.hub.api.sources.CsvIngestForm;
 import io.lumnik.hub.api.sources.CsvIngestResult;
@@ -64,8 +65,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * One-shot CSV ingest: schema inference → dormant connector + endpoint → rows written to ext.* table.
@@ -82,6 +83,9 @@ import java.util.UUID;
  */
 @ApplicationScoped
 public class CsvIngestService {
+
+    private static final Pattern INTEGER = Pattern.compile("-?\\d+");
+    private static final Pattern DECIMAL = Pattern.compile("-?\\d+\\.\\d+");
 
     private static final Logger LOG = Logger.getLogger(CsvIngestService.class);
 
@@ -165,7 +169,7 @@ public class CsvIngestService {
         // Four sites disagreed on blank-vs-null; the sharpest passed the blank through buildSubForm
         // until executeLocalFile fell back to the name of the ephemeral TEMP DOWNLOAD, landing rows
         // in ext.csv_ingest_remote_<random> — a different table every run.
-        if (form.name != null && form.name.isBlank()) form.name = null;
+        if (Text.blank(form.name)) form.name = null;
 
         Map<String, Object> transportCfg = form.resolveTransport();
         String kind = (String) transportCfg.getOrDefault("kind", LOCAL);
@@ -177,7 +181,7 @@ public class CsvIngestService {
         // {kind, path} map from an upload, and judging by map size sent every HTTP upload down the
         // FileSource pipeline — which then named the table after RESTEasy's multipart temp file.
         boolean implicitUpload = form.transport == null
-            && (form.transportJson == null || form.transportJson.isBlank());
+            && Text.blank(form.transportJson);
         if (LOCAL.equals(kind) && implicitUpload) {
             // No explicit transport — the request IS the uploaded file.
             File file = form.resolveFile();
@@ -207,10 +211,10 @@ public class CsvIngestService {
         // never the server-side buffer's — RESTEasy names that one resteasy-reactive…upload,
         // and the remote pipeline's twin test already pinned the same rule for temp downloads.
         String callerFile = (form.fileUpload != null
-                && form.fileUpload.fileName() != null && !form.fileUpload.fileName().isBlank())
+                && Text.present(form.fileUpload.fileName()))
             ? form.fileUpload.fileName() : file.getName();
         String name = slugify(
-            (form.name != null && !form.name.isBlank()) ? form.name : stripExt(callerFile)
+            Text.present(form.name) ? form.name : stripExt(callerFile)
         );
         String tableName = "ext." + name;
 
@@ -327,7 +331,7 @@ public class CsvIngestService {
     /** The scope is first (it keys the card), then the caller's extra tags. */
     public static List<String> connectorTags(CsvIngestForm form) {
         List<String> tags = new ArrayList<>();
-        tags.add(form.scope != null && !form.scope.isBlank() ? form.scope.trim() : "system");
+        tags.add(Text.present(form.scope) ? form.scope.trim() : "system");
         if (form.tags != null) {
             for (String t : form.tags.split(",")) {
                 if (!t.isBlank() && !tags.contains(t.trim())) tags.add(t.trim());
@@ -739,7 +743,7 @@ public class CsvIngestService {
     private Config buildConfig(Path file, CsvIngestForm form) {
         // Auto-detect encoding and delimiter, then override with caller hints if provided.
         Config auto = CsvFileReader.autoDetect(file);
-        Charset enc = (form.encoding != null && !form.encoding.isBlank())
+        Charset enc = Text.present(form.encoding)
             ? Charset.forName(form.encoding) : auto.encoding();
         char delim = (form.delimiter != null && !form.delimiter.isEmpty())
             ? form.delimiter.charAt(0) : auto.delimiter();
@@ -765,14 +769,6 @@ public class CsvIngestService {
 
     // ── Schema inference ──────────────────────────────────────────────────────
 
-    /**
-     * Reserved column names already present in every ext.* table created by HybridJsonbWriter.
-     * Promoting a column with one of these names would cause a DDL "column specified more than once" error.
-     */
-    private static final Set<String> RESERVED_COLUMNS = Set.of(
-        "id", "tenant_id", "external_id", "data", "indexed_at", "connector_id", "endpoint_id"
-    );
-
     List<PromotedColumn> inferSchema(List<Map<String, Object>> sample) {   // package-private: pinned by CsvTypeInferenceTest
         if (sample.isEmpty()) return List.of();
         // Collect the widest type per column, preserving header order. Absence is not
@@ -782,7 +778,7 @@ public class CsvIngestService {
         Map<String, SqlType> types = new LinkedHashMap<>();
         for (Map<String, Object> row : sample) {
             row.forEach((k, v) -> {
-                if (!RESERVED_COLUMNS.contains(k.toLowerCase(Locale.ROOT))) {
+                if (!HybridJsonbSpec.RESERVED_COLUMNS.contains(k.toLowerCase(Locale.ROOT))) {
                     types.putIfAbsent(k, null);
                     SqlType t = inferType(v);
                     if (t != null) {
@@ -803,8 +799,8 @@ public class CsvIngestService {
         if (v == null) return null;
         String s = v.toString().trim();
         if (s.isEmpty()) return null;
-        if (s.matches("-?\\d+")) return SqlType.BIGINT;
-        if (s.matches("-?\\d+\\.\\d+")) return SqlType.DECIMAL;
+        if (INTEGER.matcher(s).matches()) return SqlType.BIGINT;
+        if (DECIMAL.matcher(s).matches()) return SqlType.DECIMAL;
         if (s.equalsIgnoreCase("true") || s.equalsIgnoreCase("false")) return SqlType.BOOLEAN;
         // DATE and TIMESTAMPTZ: the HybridJsonbWriter serializes rows via ObjectMapper (bare instance)
         // which cannot handle java.time types without JavaTimeModule. Keep temporal values as TEXT to

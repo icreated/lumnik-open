@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.auth;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.secret.SecretRefs;
 import io.lumnik.hub.connector.rest.RestRequest;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -29,7 +30,7 @@ public class BearerAuthProviderFactory implements AuthProviderFactory {
                 return token == null ? r : r.withHeader("Authorization", scheme + " " + token);
             }
             @Override public void probe() {
-                if (token == null || token.isBlank())
+                if (Text.blank(token))
                     throw new AuthConfigException("Bearer token unavailable (env=" + envName + ")");
             }
         };

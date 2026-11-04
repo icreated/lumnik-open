@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.runtime;
 
+import io.lumnik.common.text.Text;
 import java.time.LocalTime;
 import java.util.Optional;
 import java.util.regex.Matcher;
@@ -24,7 +25,7 @@ public final class RunWindow {
 
     /** Start inclusive, end exclusive; an end at or before the start wraps past midnight. */
     public static boolean contains(String spec, LocalTime now) {
-        if (spec == null || spec.isBlank()) return true;
+        if (Text.blank(spec)) return true;
         LocalTime[] w = parse(spec);
         if (w == null) return true; // fail open — see class javadoc
         LocalTime start = w[0], end = w[1];
@@ -36,7 +37,7 @@ public final class RunWindow {
 
     /** Empty when valid; otherwise the reason, named (the validators' Optional contract). */
     public static Optional<String> validate(String spec) {
-        if (spec == null || spec.isBlank()) return Optional.empty();
+        if (Text.blank(spec)) return Optional.empty();
         LocalTime[] w = parse(spec);
         if (w == null) return Optional.of("invalid window '" + spec + "' — expected HH:MM-HH:MM (UTC), e.g. 22:00-06:00");
         if (w[0].equals(w[1])) return Optional.of("empty window '" + spec + "' — start and end are equal");

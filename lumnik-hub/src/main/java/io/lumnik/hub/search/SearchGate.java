@@ -1,5 +1,6 @@
 package io.lumnik.hub.search;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.search.IndexedSearchPort;
 import io.lumnik.extraction.spi.search.IndexedSearchQuery;
 import io.lumnik.extraction.spi.search.IndexedSearchResult;
@@ -113,7 +114,7 @@ public class SearchGate {
         for (IndexedSearchPort p : providers) installed.add(new Named(p, nameOf(p)));
         if (installed.isEmpty()) return Selection.none(SearchCapability.notInstalled());
 
-        Optional<String> wanted = configuredProvider.map(String::strip).filter(n -> !n.isEmpty());
+        Optional<String> wanted = configuredProvider.map(String::strip).filter(Text::present);
         if (wanted.isPresent()) {
             for (Named n : installed) {
                 if (wanted.get().equals(n.name())) return new Selection(n.provider(), n.name(), null);
@@ -132,7 +133,7 @@ public class SearchGate {
     private static String nameOf(IndexedSearchPort p) {
         try {
             String name = p.name();
-            return name == null || name.isBlank() ? null : name;
+            return Text.blank(name) ? null : name;
         } catch (RuntimeException e) {
             LOG.warnf(e, "Search provider %s failed to report its name", p.getClass().getName());
             return null;

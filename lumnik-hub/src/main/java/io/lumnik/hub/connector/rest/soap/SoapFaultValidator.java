@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.rest.soap;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.rest.RestResponse;
 import io.lumnik.hub.connector.rest.Snippets;
@@ -17,7 +18,7 @@ public final class SoapFaultValidator implements ResponseValidator {
     @Override
     public void validate(RestResponse response) {
         String body = response.body();
-        if (body == null || body.isBlank()) return;
+        if (Text.blank(body)) return;
         JsonNode tree;
         try {
             tree = XmlBodyParser.strippedTree(body);

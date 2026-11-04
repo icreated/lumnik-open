@@ -31,7 +31,7 @@ public class ParseEmailHook implements CellHook {
     String col = params.path("column").asText();
     boolean lower = params.path("lower").asBoolean(false);
     Object v = row.get(col);
-    if (v == null) return;
+    if (v == null || BlankCell.emptied(row, col, v)) return;
 
     String str = v.toString().trim();
     if (lower) str = str.toLowerCase(Locale.ROOT);

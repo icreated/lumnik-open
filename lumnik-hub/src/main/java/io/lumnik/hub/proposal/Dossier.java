@@ -46,6 +46,11 @@ record Dossier(String catalogue, String created, String language, String words,
         return byId;
     }
 
+    /** The hub itself decided this check, by confirming or refuting it — the other two are claims it has not tested. */
+    static boolean established(String check) {
+        return "confirmed".equals(check) || "refuted".equals(check);
+    }
+
     /** Some condition carries evidence: the contract's {@code valid-recheck} cue. */
     boolean carriesEvidence() {
         return leads.stream().flatMap(l -> l.conditions().stream()).anyMatch(c -> c.evidence() != null);

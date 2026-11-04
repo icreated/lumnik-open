@@ -663,6 +663,24 @@ class CsvFileConnectorValidatorTest {
             () -> "expected a path error, got: " + r.errors());
     }
 
+    /** local and sftp read a path; s3 reads a bucket and a prefix, so it asks for none. */
+    @ParameterizedTest(name = "{0}: path required = {2}")
+    @CsvSource({
+        "local, '', true",
+        "sftp, '\"host\":\"h\",\"user\":\"u\",\"key_env\":\"K\",\"strict_host_key\":false,', true",
+        "s3, '\"bucket\":\"b\",', false"})
+    void thePathIsRequiredWhereTheTransportReadsOne(String kind, String own, boolean required) throws Exception {
+        JsonNode manifest = mapper.readTree("""
+            {"apiVersion":"connectors.lumnik.io/v1","kind":"Connector",
+             "metadata":{"name":"no-path","connector_type":"csv-file","scopes":["test"]},
+             "spec":{"transport":{%s"kind":"%s"},"after_process":"none"}}""".formatted(own, kind));
+
+        ValidationResult r = service.validate(manifest);
+
+        assertEquals(required, r.errors().stream().anyMatch(e -> e.path().equals("spec.transport.path")),
+            () -> r.errors().toString());
+    }
+
     @Test void sftp_missingBothKeyAndPwd_isError() throws Exception {
         ValidationResult r = service.validate(load("csv-sftp-no-key.yaml"));
         assertFalse(r.isValid());
@@ -755,7 +773,31 @@ class CsvFileConnectorValidatorTest {
 
         assertFalse(r.isValid(), "the run would refuse to connect");
         assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.transport.host_key_fingerprint")
-            && e.recommendations().stream().anyMatch(s -> s.contains("ssh-keyscan -p 22 sftp.acme.io"))), () -> r.errors().toString());
+            && e.recommendations().stream().anyMatch(s -> s.contains("ssh-keyscan -p <port> <host>"))), () -> r.errors().toString());
+    }
+
+    /** The docs quote these refusals in their terminal captures (connectors/csv.md, how-it-works.md): the words are a contract. */
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(delimiter = '|', textBlock = """
+        sftp without a credential | spec.transport | at least one of key_env, password_env is required when kind is sftp | Use `lm secret set <NAME> ...` then reference it via key_env: <NAME>
+        headerless without names  | spec.parser.columns | required field missing (required when has_header is false and lines is off) | Add parser.columns: [code, name, ...] in file order
+        move without an archive   | spec.archive_path | required field missing (required when after_process = move) | Set archive_path: /path/to/archive/
+        """)
+    void theRefusalsTheDocsQuoteKeepTheirWords(String name, String path, String message, String hint) throws Exception {
+        String transport = name.startsWith("sftp")
+            ? "{\"kind\":\"sftp\",\"host\":\"h\",\"user\":\"u\",\"path\":\"/in/*.csv\",\"strict_host_key\":false}"
+            : "{\"kind\":\"local\",\"path\":\"/in/*.csv\"}";
+        String rest = name.startsWith("headerless") ? ",\"parser\":{\"has_header\":false}" : "";
+        String after = name.startsWith("move") ? "move" : "none";
+        JsonNode manifest = mapper.readTree("""
+            {"apiVersion":"connectors.lumnik.io/v1","kind":"Connector",
+             "metadata":{"name":"quoted","connector_type":"csv-file","scopes":["test"]},
+             "spec":{"transport":%s,"after_process":"%s"%s}}""".formatted(transport, after, rest));
+
+        ValidationResult r = service.validate(manifest);
+
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals(path) && e.message().equals(message)
+            && e.recommendations().equals(List.of(hint))), () -> r.errors().toString());
     }
 
     @Test void sftpWithStrictHostKeyOff_needsNoFingerprint() throws Exception {

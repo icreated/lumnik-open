@@ -8,9 +8,42 @@ import java.util.List;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ManifestSurfaceTest {
+
+    private static final ManifestSurface ROOT_ONLY = ManifestSurface.builder()
+        .group("", "root", Set.of("kind"))
+        .build();
+
+    /** The kind-specific refusal every parser used to write by hand. */
+    @Test
+    void aBodyThatDoesNotParseIsRefusedNamingTheKind() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+            () -> ROOT_ONLY.readTree("kind: [unclosed", "View"));
+
+        assertTrue(e.getMessage().startsWith("invalid kind:View manifest: "), e.getMessage());
+        assertNotNull(e.getCause());
+    }
+
+    @Test
+    void aBodyThatParsesIsReadAsIs() {
+        assertEquals("View", ROOT_ONLY.readTree("kind: View", "View").path("kind").asText());
+    }
+
+    /** Reporting only: a body that does not parse has no unknown keys to report, {@code parse}'s
+     *  error is the one to raise. */
+    @Test
+    void unknownKeysOfABodyThatDoesNotParseIsEmpty() {
+        assertEquals(List.of(), ROOT_ONLY.unknownKeys("kind: [unclosed"));
+    }
+
+    @Test
+    void unknownKeysOfTextNamesTheKeysTheSurfaceDoesNotHonor() {
+        assertEquals(List.of("extra"), ROOT_ONLY.unknownKeys("kind: View\nextra: 1\n"));
+    }
 
     @Test
     void honoredSurfaceJoinsGroupsInDeclarationOrderWithSortedKeys() {

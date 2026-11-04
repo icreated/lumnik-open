@@ -1,0 +1,116 @@
+transport            REQUIRED  [NESTED, HIGH]
+  Transport block
+  kind                 REQUIRED  [STRING, HIGH]
+    Transport mechanism
+    one of: local, sftp, s3
+  path                 optional  [STRING, HIGH]
+    File path (local) or glob path (sftp)
+    required when kind is local or sftp
+    → Set path: /imports/*.csv (local) or a remote glob (sftp)
+  host                 optional  [STRING, HIGH]
+    SFTP host
+    required when kind = sftp
+  user                 optional  [STRING, HIGH]
+    SFTP user
+    required when kind = sftp
+  port                 optional  [INT, LOW]
+    SFTP port
+    default: 22
+  strict_host_key      optional  [BOOLEAN, LOW]
+    Verify the SFTP host key against host_key_fingerprint
+    default: true
+  host_key_fingerprint optional  [STRING, MEDIUM]
+    SFTP host key fingerprint (SHA256:… as ssh-keygen -lf prints it)
+    required when kind is sftp and strict_host_key is not off
+    → Read it with `ssh-keyscan -p <port> <host> | ssh-keygen -lf -` (the run's refusal prints the same), confirm it out of band, then set host_key_fingerprint: "SHA256:…"
+  bucket               optional  [STRING, HIGH]
+    S3 bucket name
+    required when kind = s3
+  prefix               optional  [STRING, MEDIUM]
+    S3 key prefix filter
+  region               optional  [STRING, MEDIUM]
+    AWS region for S3
+    default: eu-west-3
+  endpoint             optional  [STRING, LOW]
+    S3-compat endpoint (MinIO, R2)
+  suffix               optional  [STRING, LOW]
+    File suffix filter for s3 (empty = no filter)
+  archive_path         optional  [STRING, LOW]
+    Relocation target for after_process=archive|move — canonical home is spec level; a transport-level value wins if both are set (one-shot style)
+  archive_bucket       optional  [STRING, LOW]
+    S3 archive bucket for after_process=archive|move (default: source bucket)
+  archive_prefix       optional  [STRING, LOW]
+    S3 archive key prefix for after_process=archive|move
+    default: archive/
+  key_env              optional  [STRING, MEDIUM]
+    Env var for SSH private key (SFTP)
+  password_env         optional  [STRING, MEDIUM]
+    Env var for SSH password (SFTP)
+  access_key_env       optional  [STRING, MEDIUM]
+    Env var for AWS access key (S3)
+    default: AWS_ACCESS_KEY_ID
+  secret_key_env       optional  [STRING, MEDIUM]
+    Env var for AWS secret key (S3)
+    default: AWS_SECRET_ACCESS_KEY
+  at least one of key_env, password_env when kind is sftp
+    → Use `lm secret set <NAME> ...` then reference it via key_env: <NAME>
+  refused when given — the runtime never reads these:
+    file_filter          file_filter is not read by connector runs
+      → Drop it from the connector manifest
+    pre_process          pre_process is not read by connector runs
+      → Drop it from the connector manifest
+    post_process         post_process is not read by connector runs
+      → Drop it from the connector manifest
+    max_file_size        max_file_size is not read by connector runs
+      → Drop it from the connector manifest
+parser               optional  [NESTED, HIGH]
+  CSV parser config
+  delimiter            optional  [STRING, LOW]
+    Field delimiter (single char) — auto-detected if absent
+  encoding             optional  [STRING, LOW]
+    Character encoding — auto-detected if absent
+  has_header           optional  [BOOLEAN, MEDIUM]
+    First row is header
+    default: true
+  bom_strip            optional  [BOOLEAN, LOW]
+    Strip BOM from UTF-8
+    default: true
+  null_values          optional  [LIST, LOW]
+    Strings treated as null
+    default: "", "NULL", "null", "#N/A"
+  lines                optional  [BOOLEAN, MEDIUM]
+    One line = one row, one column (`line`): no delimiter, no quoting — fixed-width files, logs
+    default: false
+  columns              optional  [LIST, MEDIUM]
+    Column names in file order
+    required when has_header is false and lines is off
+    → Add parser.columns: [code, name, ...] in file order
+schedule             optional  [STRING, MEDIUM]
+  Cron expression for recurring ingestion
+after_process        REQUIRED  [STRING, MEDIUM]
+  What to do after a file is processed
+  one of: archive, delete, move, none
+archive_path         optional  [STRING, LOW]
+  Destination for `move` action
+  required when after_process = move
+  → Set archive_path: /path/to/archive/
+mapping              optional  [NESTED, MEDIUM]
+  Dataset/row/cell transformer hooks — see the transformers page
+window               optional  [STRING, MEDIUM]
+  Fence scheduled runs to a UTC time window, HH:MM-HH:MM (a manual run bypasses it)
+refresh              optional  [NESTED, MEDIUM]
+  Full refresh of one local file: the removal guard
+  max_removed          optional  [STRING, MEDIUM]
+    Largest share of the table one run may remove: a percentage (30% by default), or off
+target               optional  [NESTED, HIGH]
+  Target persistence
+  indexes              optional  [LIST, LOW]
+    Postgres indexes on the hub table
+    → indexes is a list of { columns: [...], unique?: bool } objects — e.g. indexes: [{ columns: [email] }]
+    indexes[]
+      columns              REQUIRED  [LIST, HIGH]
+        Columns of the index, in order
+        → e.g. columns: [email] or [bpartner_id, dateordered]
+      unique               optional  [BOOLEAN, LOW]
+        Unique index (default false)
+        default: false

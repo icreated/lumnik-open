@@ -299,13 +299,11 @@ class RestEndpointReaderChunkingTest {
         resume.putObject("query").put("p", "1");
         nearCap.put("pages", 9_999);
 
-        var more = hasMore(reader().read(100, new ConnectorCursor(nearCap, Instant.now()), ctx(fullConfig())));
-
+        // #1753: the cap reached with pages still to read fails the read; it used to finalize the run as complete.
+        var e = assertThrows(ConnectorException.class,
+            () -> reader().read(100, new ConnectorCursor(nearCap, Instant.now()), ctx(fullConfig())));
         assertEquals(1, http.calls.size(), "page 10_000 is the last one the cap allows");
-        assertEquals(4, more.records().size());
-        assertTrue(more.nextCursor().value().path("resume").isMissingNode()
-                || more.nextCursor().value().get("resume").isNull(),
-            "at the cap the run finalizes, mirroring the old loop's stop-at-MAX_PAGES");
+        assertTrue(e.getMessage().contains("reached the page cap (10000 pages)"), e.getMessage());
     }
 
     // ── strategies that cannot resume stay single-fetch ────────────────────────────────────────

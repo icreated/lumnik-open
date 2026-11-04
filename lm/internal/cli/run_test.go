@@ -775,3 +775,13 @@ func TestRunGet_jsonKeepsAnEmptyScriptsList(t *testing.T) {
 		t.Errorf("-o json should keep scripts: [], got %s", outBuf.String())
 	}
 }
+
+// #1778: cell_errors has two origins - a hook, and a promoted value that did not read as its declared type
+// (rest, kafka). The line must not send a reader of a hook-less connector looking for a transformer.
+func TestCellErrorsWarning_NamesBothOrigins(t *testing.T) {
+	got := cellErrorsWarning(3)
+	want := "⚠ 3 cell(s) not delivered as declared (a hook, or a promoted value of the wrong type) — the rows were still written"
+	if got != want {
+		t.Errorf("cellErrorsWarning(3) = %q, want %q", got, want)
+	}
+}

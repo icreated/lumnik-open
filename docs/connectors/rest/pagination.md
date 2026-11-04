@@ -12,23 +12,25 @@ Declare the preset that matches the API's framework:
 
 | Preset | For | Same as |
 |---|---|---|
-| `spring-page` | Spring Data `Page`, serialized as is | `page` (`$.content`, `$.totalPages`, 0-indexed) |
-| `spring-paged-model` | Spring Data `Page` under `VIA_DTO` (`PagedModel`) | `page` (`$.content`, `$.page.totalPages`, 0-indexed) |
+| `spring-page` | Spring Data `Page`, serialized as is | `page` (`$.content`, `$.totalPages`, 0-indexed, total `$.totalElements`) |
+| `spring-paged-model` | Spring Data `Page` under `VIA_DTO` (`PagedModel`) | `page` (`$.content`, `$.page.totalPages`, 0-indexed, total `$.page.totalElements`) |
 | `spring-slice` | Spring Data `Slice` (no total) | `page` + `last_path: $.last` |
-| `spring-hateoas` | Spring Data REST | `body-link` (`$._links.next.href`, `$._embedded.{items}` — needs `items`) |
-| `micronaut` | Micronaut Data `Page` | `page` (`$.content`, `$.totalPages`, 0-indexed) |
-| `drf-page` | Django REST `PageNumberPagination` | `body-link` (`$.next`, `$.results`) |
+| `spring-hateoas` | Spring Data REST | `body-link` (`$._links.next.href`, `$._embedded.{items}`, total `$.page.totalElements` — needs `items`) |
+| `micronaut` | Micronaut Data `Page` | `page` (`$.content`, 0-indexed, total `$.totalSize`; `$.totalPages` too, which Micronaut 3 sends and 4 does not) |
+| `drf-page` | Django REST `PageNumberPagination` | `body-link` (`$.next`, `$.results`, total `$.count`) |
 | `drf-limit-offset` | Django REST `LimitOffsetPagination` | `offset` (`$.count`, `$.results`) |
-| `fastapi` | fastapi-pagination | `page` (`$.items`, `$.pages`, 1-indexed) |
-| `nestjs` | nestjs-paginate | `body-link` (`$.links.next`, `$.data`) |
+| `fastapi` | fastapi-pagination | `page` (`$.items`, `$.pages`, 1-indexed, total `$.total`) |
+| `nestjs` | nestjs-paginate | `body-link` (`$.links.next`, `$.data`, total `$.meta.totalItems`) |
 | `json-api` | JSON:API | `body-link` (`$.links.next`, `$.data`) |
 | `sequelize` | Node/Sequelize | `offset` (`$.count`, `$.rows`) |
 | `stripe` | Stripe-style cursor | `cursor` (`$.has_more`, `$.data`) |
+| `prestashop` | PrestaShop's Webservice | `offset` in one parameter (`limit=0,50`, `$.{resource}` — needs `resource`) |
 
 ```yaml
 pagination: { kind: spring-page }                       # 7 lines → 1
 pagination: { kind: spring-page, size: 500 }            # override any expanded field
 pagination: { kind: spring-hateoas, items: products }   # {items} → $._embedded.products
+pagination: { kind: prestashop, resource: products, limit: 50 }   # ?limit=0,50 then ?limit=50,50… → $.products
 ```
 
 A Spring `Page` comes in two shapes. Look at one response:
@@ -42,8 +44,13 @@ The second is the shape Spring recommends since Spring Data 3.3
 (`@EnableSpringDataWebSupport(pageSerializationMode = VIA_DTO)`). Read with `spring-page`, it
 still loads every row, but asks for one empty page after the last.
 
-`nestjs` and `json-api` expand identically. Only `spring-hateoas` requires an override:
-`items` fills its `$._embedded.{items}` placeholder.
+`nestjs` and `json-api` differ by one line: `nestjs` also reads the total its pages carry, `json-api` has none by the spec. Two presets require an override: `spring-hateoas` needs
+`items` for its `$._embedded.{items}` placeholder, and `prestashop` needs `resource`, the list's name
+(`products`, `categories`, `customers`…).
+
+PrestaShop answers XML unless asked. Either read it as it answers, with `response_format: xml` and
+`response_path: $.products.product` ([An answer in XML](../rest.md#an-answer-in-xml)), or put
+`output_format=JSON` in the endpoint's `path:`. It gives no total, so the read stops on a short page.
 
 Spring Data REST puts no id in its items: key them on their self link's last segment,
 [a key read from a link](../rest.md#a-key-read-from-a-link).
@@ -135,6 +142,10 @@ pagination:
   response_path: $.data
 ```
 
+Some APIs carry both in one parameter, `offset,count` — PrestaShop's `?limit=0,50`, MySQL's
+`LIMIT 0,50`. Name the same parameter twice: `offset_param: limit` and `limit_param: limit` send
+`?limit=0,500` first, then `?limit=500,500`…
+
 **`body-link`** — the answer carries the next page's URL:
 
 ```json
@@ -186,6 +197,11 @@ sends that count in a response header (`X-Total-Count`), name it with `total_hea
     [`20-two-endpoints.yaml`](../rest.md#one-connector-one-api) does with
     `path: /drf/partners?page_size=500`. `relay` takes its size from `first:` in the query.
 
+!!! warning "Not in `path:`: a parameter the strategy sends itself"
+    `page_param`, `size_param`, `offset_param`, `limit_param` and a query `cursor_param` go out on every
+    request. Written in `path:` too, one would reach the API twice, and the API would keep one of the
+    two. `lm validate` refuses it. Set the page size with `size:` (or `limit:`) instead.
+
 ### A full example: `link-header`
 
 The next page is in the response's `Link` header, and the API wants a key:
@@ -231,7 +247,7 @@ pagination:
 | Strategy | Required fields | Optional fields (default) |
 |---|---|---|
 | `cursor` | cursor_param, cursor_path, response_path | has_more_path (none: a non-empty cursor means more), cursor_binding (query), total_path or total_header |
-| `page` | page_param, response_path | size_param, size (50), start_page (1), total_pages_path, total_path or total_header, has_more_path, last_path, empty_check (true) |
+| `page` | page_param, response_path | size_param, size (50), start_page (1), total_pages_path, total_path (with size_param, the read ends once the rows read reach it) or total_header, has_more_path, last_path, empty_check (true) |
 | `offset` | offset_param, limit_param, response_path | limit (100), total_path or total_header |
 | `link-header` | response_path | rel (next), total_header or total_path |
 | `body-link` | link_path, response_path | total_path or total_header |

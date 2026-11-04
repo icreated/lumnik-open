@@ -66,6 +66,8 @@ public final class NormalizerAllowlist {
       "mask", "default", "lookup", "truncate", "split", "kotlin",
       "parse-phone", "parse-date", "parse-email", "to-uuid", "regex-replace", "regex-extract",
       "parse-number",
+      // Falls back to null on a word it does not know, as parse-number does (#1760).
+      "parse-boolean",
       // Carries a value from one row to the next (#1452): what it writes depends on the rows before, not on the value.
       "fill-down");
 

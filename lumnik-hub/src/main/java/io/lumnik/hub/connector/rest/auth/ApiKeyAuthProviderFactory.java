@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.auth;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.secret.SecretRefs;
 import io.lumnik.hub.connector.rest.RestRequest;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -26,7 +27,7 @@ public class ApiKeyAuthProviderFactory implements AuthProviderFactory {
                 return "query".equalsIgnoreCase(in) ? r.withQuery(name, value) : r.withHeader(name, value);
             }
             @Override public void probe() {
-                if (value == null || value.isBlank())
+                if (Text.blank(value))
                     throw new AuthConfigException("API key unavailable (env=" + envName + ")");
             }
         };

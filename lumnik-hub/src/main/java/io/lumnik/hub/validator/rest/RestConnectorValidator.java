@@ -2,31 +2,33 @@ package io.lumnik.hub.validator.rest;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import io.lumnik.hub.connector.rest.auth.SecretRedactor;
+import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
 import io.lumnik.hub.connector.rest.reliability.RateLimiterRegistry;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.connector.rest.DottedPath;
+import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.pagination.CustomPaginationStrategy;
-import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
+import io.lumnik.hub.connector.rest.pagination.RelayPaginationStrategy;
 import io.lumnik.hub.connector.rest.pagination.preset.PaginationPresetRegistry;
 import io.lumnik.hub.connector.rest.soap.SoapRequestBuilder;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.rest.runtime.RestEndpointReader;
 import io.lumnik.hub.validator.*;
 import io.lumnik.hub.validator.ConfigDef.Importance;
-import static io.lumnik.hub.validator.JsonNodes.absent;
-import static io.lumnik.hub.validator.JsonNodes.blankOrNull;
+import static io.lumnik.hub.json.JsonNodes.absent;
+import static io.lumnik.hub.json.JsonNodes.blankOrNull;
+import static io.lumnik.hub.json.JsonNodes.nonBlank;
 import io.lumnik.hub.validator.ConfigDef.Type;
 import io.lumnik.hub.validator.ValidationError.Severity;
 import io.lumnik.hub.validator.common.CronField;
 import io.lumnik.hub.validator.common.MappingBlockValidator;
+import io.lumnik.hub.validator.common.PromoteEntries;
 import io.lumnik.hub.validator.common.WindowField;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.util.*;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 import static io.lumnik.hub.validator.ConfigDefValidators.*;
 
@@ -53,8 +55,7 @@ public class RestConnectorValidator implements ConnectorValidator {
     public ConfigDef configDef() {
         // base_url + endpoints live at connector level; auth is OPTIONAL (omitted => `none` at
         // runtime) and target lives PER ENDPOINT (see EndpointsBlockValidator + the apply handler),
-        // so neither auth nor target is required here. Auth, when present, is validated in
-        // validateCrossField via AuthBlockValidator.
+        // so neither auth nor target is required here. Auth's rules are declared by AuthBlockValidator.
         return new ConfigDef()
             .requireCustom("base_url", Type.STRING, Importance.HIGH,
                 "Base URL of the API (without trailing slash)", isUrl())
@@ -89,7 +90,7 @@ public class RestConnectorValidator implements ConnectorValidator {
             .optionalNested("defaults", Importance.LOW,
                 "Per-endpoint defaults merged into each endpoint", EndpointsBlockValidator.defaultsDef())
             .optional("graphql_path", Type.STRING, Importance.LOW,
-                "Path appended to base_url for GraphQL endpoints (default /graphql)", null)
+                "Path appended to base_url for GraphQL endpoints", RelayPaginationStrategy.DEFAULT_GRAPHQL_PATH)
             // schedule's twin, read by the SHARED apply preamble (ApplyUpsert); declared and
             // checked through WindowField, which owns both wordings for all four connector types.
             .optional("window", Type.STRING, Importance.MEDIUM, WindowField.DOC, null)
@@ -102,7 +103,6 @@ public class RestConnectorValidator implements ConnectorValidator {
     public List<ValidationError> validateCrossField(JsonNode spec) {
         List<ValidationError> errs = new ArrayList<>();
         mappingOnTheEndpoint(spec.path("mapping"), "spec.mapping", errs);
-        validateAuth(spec.path("auth"), errs);
         validateEndpoints(spec.path("endpoints"), spec.path("defaults"), errs);
         anyShapeRefusals(spec.path("defaults"), "spec.defaults", errs);
         mappingOnTheEndpoint(spec.path("defaults").path("mapping"), "spec.defaults.mapping", errs);
@@ -123,77 +123,6 @@ public class RestConnectorValidator implements ConnectorValidator {
         }
         WindowField.check(spec.path("window"), errs);
         return errs;
-    }
-
-    private static final List<String> OAUTH2_KEYS = List.of("token_url", "client_id", "client_secret_env", "scope", "client_auth");
-
-    /** auth is optional; validate the block only when present (omitting it => `none` at runtime). */
-    private void validateAuth(JsonNode auth, List<ValidationError> errs) {
-        // The block's key set and shape are the declaration's job now (configDef), so only the
-        // cross-field rule is left here. A non-object cannot reach the rule below anyway — a
-        // MissingNode `kind` never equals "bearer" — so this guard is armour, not logic.
-        if (!auth.isObject()) return;
-        // bearer accepts either an env-var name (token_env) or an inline value (token_value).
-        // Missing, explicit null, or blank all count as absent (NullNode.asText() is "null").
-        // The secret itself, in a file the integrator is told to commit and review. Not the same
-        // hazard as jdbc's `password` — BearerAuthProviderFactory reads token_env FIRST and only
-        // falls back to the literal when no reference is named, so nothing is silently overridden
-        // — but it is the same secret in the same repository, and the docs' CI grep is the only
-        // thing that stood between it and a git history (#530).
-        //
-        // Under `kind: bearer` only: the field is declared optional for every kind, and nothing
-        // else reads it, so elsewhere this sentence would name a bearer token that is not one.
-        // A secret in a key the runtime ignores is a different finding — dead knobs have their own
-        // sweep — and the CI grep the docs give bans the line whatever the kind.
-        if ("bearer".equals(auth.path("kind").asText())
-                && !blankOrNull(auth.path("token_value"))) {
-            errs.add(new ValidationError("spec.auth.token_value", Severity.WARNING,
-                "literal bearer token in the manifest — this is the secret itself, not a name, "
-                    + "and a manifest is meant to be committed",
-                List.of("Remove it and name the secret: token_env: <NAME> "
-                            + "(`lm secret set <NAME> …`, else an env var set on the hub)",
-                    "Keep it only in a manifest that is never committed — dev/test")));
-        }
-        // The oauth2 keys are declared for every kind (the block is one closed key set), so under another kind they
-        // validated silently: a manifest whose kind says one thing and whose keys another (Copilot on #1394).
-        String kind = auth.path("kind").asText();
-        // Checked under oauth2 only: elsewhere the runtime ignores the key, and the warning below says so.
-        JsonNode clientAuth = auth.path("client_auth");
-        if ("oauth2".equals(kind) && !clientAuth.isMissingNode()
-                && !"basic".equals(clientAuth.asText()) && !"post".equals(clientAuth.asText())) {
-            errs.add(new ValidationError("spec.auth.client_auth", Severity.ERROR, "client_auth must be basic or post",
-                List.of("basic (the default) sends the client id and secret as HTTP Basic; post puts them in the body")));
-        }
-        // scheme is bearer's alone (#1640): one word before the token, as the header's grammar has it.
-        JsonNode scheme = auth.path("scheme");
-        if (!scheme.isMissingNode()) {
-            if (!"bearer".equals(kind)) {
-                errs.add(new ValidationError("spec.auth.scheme", Severity.WARNING,
-                    "scheme under kind: " + kind + " — the runtime ignores it",
-                    List.of("Remove it: scheme names the word before a bearer token (Authorization: Token <key>)")));
-            } else if (scheme.isTextual() && !(SecretRedactor.isSchemeWord(scheme.asText()) && scheme.asText().length() <= 32)) {
-                // A non-string is the declaration's refusal (Type.STRING); null is absent — Bearer at runtime.
-                errs.add(new ValidationError("spec.auth.scheme", Severity.ERROR,
-                    "scheme must be one word starting with a letter — letters, digits, '-' or '_' — at most 32",
-                    List.of("Bearer (the default), or the word the API expects, e.g. Token for Django REST Framework")));
-            }
-        }
-        if (!"oauth2".equals(kind)) {
-            for (String key : OAUTH2_KEYS) {
-                if (auth.has(key)) {
-                    errs.add(new ValidationError("spec.auth." + key, Severity.WARNING,
-                        "an oauth2 key under kind: " + kind + " — the runtime ignores it",
-                        List.of("Remove it, or set kind: oauth2 if this source hands out OAuth2 tokens")));
-                }
-            }
-        }
-        if ("bearer".equals(auth.path("kind").asText())
-                && blankOrNull(auth.path("token_env"))
-                && blankOrNull(auth.path("token_value"))) {
-            errs.add(new ValidationError("spec.auth.token_env", Severity.ERROR,
-                "bearer auth requires token_env (or inline token_value)",
-                List.of("Use `lm secret set <NAME> ...` then reference via token_env: <NAME>")));
-        }
     }
 
     /**
@@ -369,8 +298,11 @@ public class RestConnectorValidator implements ConnectorValidator {
         validateMapping(endpoint, basePath, errs);
         errs.addAll(connectorLevelKeysStayAtSpec(endpoint, basePath));
         validatePagination(endpoint.path(PAGINATION), basePath + ".pagination", errs);
-        validatePromote(endpoint.path("target").path("promote"), basePath + ".target.promote",
-            endpoint.path("mapping").isObject(), errs);
+        errs.addAll(pathLeavesThePaginationsParametersAlone(endpoint, basePath));
+        PromoteEntries.check(endpoint.path("target").path("promote"), basePath + ".target.promote",
+            endpoint.path("mapping").isObject(),
+            List.of("Without a path, the column is filled by the endpoint's mapping — this endpoint has none"),
+            HybridJsonbSpec.RESERVED_COLUMNS, errs);
     }
 
     /**
@@ -407,12 +339,12 @@ public class RestConnectorValidator implements ConnectorValidator {
                         List.of("lookback: 10m — or 0s to send the mark exactly as stored")));
                 }
             }
-            if (!inc.path("param").isTextual() || inc.path("param").asText().isBlank()) {
+            if (!nonBlank(inc.path("param"))) {
                 errs.add(new ValidationError(basePath + ".incremental.param", Severity.ERROR,
                     "watermark mode requires param — without it the watermark is never applied",
                     List.of("Set incremental.param: the query parameter carrying the watermark")));
             }
-            if (!inc.path("watermark_path").isTextual() || inc.path("watermark_path").asText().isBlank()) {
+            if (!nonBlank(inc.path("watermark_path"))) {
                 errs.add(new ValidationError(basePath + ".incremental.watermark_path", Severity.ERROR,
                     "watermark mode requires watermark_path — without it the watermark never "
                         + "advances and every run re-fetches everything",
@@ -432,8 +364,8 @@ public class RestConnectorValidator implements ConnectorValidator {
         JsonNode inc = endpoint.path("incremental");
         JsonNode param = inc.path("param");
         JsonNode query = endpoint.path("query");
-        if (!isGraphql || !"watermark".equals(inc.path("mode").asText()) || !param.isTextual()
-            || param.asText().isBlank() || !query.isTextual()) {
+        if (!isGraphql || !"watermark".equals(inc.path("mode").asText()) || !nonBlank(param)
+            || !query.isTextual()) {
             return List.of();
         }
         String name = param.asText().strip();
@@ -622,6 +554,39 @@ public class RestConnectorValidator implements ConnectorValidator {
         }
     }
 
+    /**
+     * #1789: the pagination sends its own parameters on every request, so one the path already carries goes out
+     * twice and the API keeps either copy, in silence. Refused where the integrator can fix it: the path.
+     */
+    private List<ValidationError> pathLeavesThePaginationsParametersAlone(JsonNode endpoint, String basePath) {
+        JsonNode pag = endpoint.path(PAGINATION);
+        List<String> owned = new ArrayList<>();
+        switch (pag.path("kind").asText()) {
+            case "page"   -> owned.addAll(List.of(pag.path("page_param").asText(), pag.path("size_param").asText()));
+            case "offset" -> owned.addAll(List.of(pag.path("offset_param").asText(), pag.path("limit_param").asText()));
+            // A header binding names a header, not a query parameter.
+            case "cursor" -> { if (!"header".equals(pag.path(CURSOR_BINDING).asText())) owned.add(pag.path("cursor_param").asText()); }
+            default       -> { /* the other kinds add no query parameter of their own */ }
+        }
+        owned.removeIf(String::isEmpty);
+        List<ValidationError> errs = new ArrayList<>();
+        for (String carried : RestRequest.queryKeys(endpoint.path("path").asText())) {
+            if (!owned.contains(carried)) continue;
+            errs.add(new ValidationError(basePath + ".path", Severity.ERROR,
+                "the path carries `" + carried + "`, which pagination sends itself: it would go out twice and the API "
+                    + "would keep one of the two",
+                List.of("Drop `" + carried + "` from the path; the pagination block sets it" + sizeKnob(pag, carried))));
+        }
+        return errs;
+    }
+
+    /** Where the integrator sets a size instead, when the parameter is the size one: {@code size} or {@code limit}. */
+    private static String sizeKnob(JsonNode pag, String carried) {
+        if (carried.equals(pag.path("size_param").asText())) return " (pagination.size sets the page size)";
+        if (carried.equals(pag.path("limit_param").asText())) return " (pagination.limit sets the page size)";
+        return "";
+    }
+
     private void requireKeys(JsonNode node, String p, List<ValidationError> errs, String... keys) {
         String kind = node.path("kind").asText();
         for (String k : keys) {
@@ -629,81 +594,6 @@ public class RestConnectorValidator implements ConnectorValidator {
                 errs.add(new ValidationError(p + "." + k, Severity.ERROR,
                     k + " is required when pagination.kind = " + kind, List.of()));
             }
-        }
-    }
-
-    private static final Set<String> PROMOTE_TYPES =
-        Set.of("text", "bigint", "integer", "decimal", "boolean", "date", "timestamptz", "jsonb");
-
-    /** promote[] element shape (mirrors TargetBlockValidator.validateIndexes): each entry needs a
-     *  non-blank name + path + a known type, or the ext.* DDL / extraction breaks at runtime. Under a mapping
-     *  ({@code mapped}), an entry without a path is a column the mapping fills (#1617). */
-    private void validatePromote(JsonNode promote, String p, boolean mapped, List<ValidationError> errs) {
-        if (promote.isMissingNode() || promote.isNull()) return;
-        if (!promote.isArray()) {
-            errs.add(new ValidationError(p, Severity.ERROR,
-                "promote must be a list of { name, path, type } objects", List.of()));
-            return;
-        }
-        for (int i = 0; i < promote.size(); i++) {
-            validatePromoteEntry(promote.get(i), p + "[" + i + "]", mapped, errs);
-        }
-    }
-
-    private void validatePromoteEntry(JsonNode e, String p, boolean mapped, List<ValidationError> errs) {
-        if (!e.isObject()) {
-            errs.add(new ValidationError(p, Severity.ERROR,
-                "promote entry must be an object with name/path/type", List.of()));
-            return;
-        }
-        for (String f : List.of("name", "type")) {
-            if (blankOrNull(e.path(f))) {
-                errs.add(new ValidationError(p + "." + f, Severity.ERROR,
-                    f + " is required and must be non-blank", List.of()));
-            }
-        }
-        // Absent or null (`path:` left empty), the column is the mapping's to fill, as the run reads it (#1617);
-        // written, it must say where to read.
-        JsonNode path = e.path("path");
-        boolean none = path.isMissingNode() || path.isNull();
-        if (none ? !mapped : blankOrNull(path)) {
-            errs.add(new ValidationError(p + ".path", Severity.ERROR, "path is required and must be non-blank",
-                none ? List.of("Without a path, the column is filled by the endpoint's mapping — this endpoint has none")
-                     : List.of()));
-        }
-        if (none && mapped && !absent(e.path("transform"))) {
-            errs.add(new ValidationError(p + ".transform", Severity.ERROR,
-                "transform reads the value at path — a column the mapping fills has none to read",
-                List.of("Drop the transform: the mapping writes this column's value")));
-        }
-        String type = e.path("type").asText();
-        if (!type.isBlank() && !PROMOTE_TYPES.contains(type.toLowerCase(Locale.ROOT))) {
-            errs.add(new ValidationError(p + ".type", Severity.ERROR,
-                "unknown promote type '" + type + "' (allowed: " + new TreeSet<>(PROMOTE_TYPES) + ")",
-                List.of()));
-        }
-        // validator == runtime, both ways: the writer's `transformRaw != null` guard treats an
-        // explicit null as absent — but a blank/non-text value reaches Transform.valueOf and
-        // crashes the run, and so does an unknown name.
-        JsonNode transformNode = e.path("transform");
-        if (!transformNode.isMissingNode() && !transformNode.isNull()) {
-            transformRefusal(transformNode).ifPresent(m ->
-                errs.add(new ValidationError(p + ".transform", Severity.ERROR, m, List.of())));
-        }
-    }
-
-    /** Why {@code transform} names no promote transform, if it does not — a promote entry's and the key's (#1630). */
-    static Optional<String> transformRefusal(JsonNode transformNode) {
-        String transform = transformNode.isTextual() ? transformNode.asText() : "";
-        String allowed = Arrays.stream(HybridJsonbSpec.Transform.values())
-            .map(t -> t.name().toLowerCase(Locale.ROOT))
-            .collect(Collectors.joining(", "));
-        if (transform.isBlank()) return Optional.of("transform must be a non-blank string (allowed: " + allowed + ")");
-        try {
-            HybridJsonbSpec.Transform.valueOf(transform.toUpperCase(Locale.ROOT));
-            return Optional.empty();
-        } catch (IllegalArgumentException ex) {
-            return Optional.of("unknown transform '" + transform + "' (allowed: " + allowed + ")");
         }
     }
 

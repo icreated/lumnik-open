@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.runtime;
 
 import io.lumnik.common.tenant.TenantContext;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.domain.ConnectorRun;
@@ -90,7 +91,7 @@ public class FlatConnectorEndpointMigration {
         // here; ensureSyntheticEndpoint itself handles the table-less case for the lazy path.
         Map<String, Object> flatConfig = c.getConfig();
         String tableName = flatConfig != null ? (String) flatConfig.get(TABLE_NAME) : null;
-        if (tableName == null || tableName.isBlank()) {
+        if (Text.blank(tableName)) {
             return 0;
         }
 
@@ -129,11 +130,11 @@ public class FlatConnectorEndpointMigration {
 
         String name;
         Map<String, Object> epConfig;
-        if (tableName != null && !tableName.isBlank()) {
+        if (Text.present(tableName)) {
             name = tableName;
             epConfig = buildEndpointConfig(flatConfig);
         } else {
-            name = (c.getName() != null && !c.getName().isBlank()) ? c.getName() : "default";
+            name = Text.present(c.getName()) ? c.getName() : "default";
             epConfig = new HashMap<>(flatConfig);   // carry count / path / etc. as-is
         }
 

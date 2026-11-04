@@ -11,11 +11,16 @@ import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.PatternSyntaxException;
+import java.util.regex.Pattern;
 
 @ApplicationScoped
 @HookId("regex-replace")
 public class RegexReplaceHook implements CellHook {
+
+  /** Last (pattern source, compiled Pattern) seen — a single slot, as in RegexExtractHook, so a run's cells do not each recompile. */
+  private volatile Compiled cache;
+
+  private record Compiled(String source, Pattern pattern) {}
 
   @Override
   public void validateParams(JsonNode params) {
@@ -36,11 +41,9 @@ public class RegexReplaceHook implements CellHook {
     String repl = params.path("replacement").asText("");
     Object v = row.get(col);
     if (v == null || pat.isEmpty()) return;
+    Pattern compiled = compile(pat);
     try {
-      row.put(col, v.toString().replaceAll(pat, repl));
-    } catch (PatternSyntaxException e) {
-      throw new MappingValidationException(
-          "regex-replace hook: 'pattern' is not a valid regex: " + e.getDescription(), e);
+      row.put(col, compiled.matcher(v.toString()).replaceAll(repl));
     } catch (IllegalArgumentException | IndexOutOfBoundsException e) {
       // A '$' or a '\\' in the replacement is a group reference, not a literal: a lone '$' or a
       // reference to a group the pattern does not have blows up mid-run.
@@ -48,6 +51,14 @@ public class RegexReplaceHook implements CellHook {
           "regex-replace hook: 'replacement' is not usable with this pattern "
               + "(a lone '$' or '\\\\' is a group reference — escape it): " + e.getMessage(), e);
     }
+  }
+
+  private Pattern compile(String pat) {
+    Compiled c = cache;   // one volatile read
+    if (c != null && c.source().equals(pat)) return c.pattern();
+    Pattern p = RegexParams.compileOrRefuse("regex-replace", "pattern", pat);
+    cache = new Compiled(pat, p);
+    return p;
   }
 
   @Override

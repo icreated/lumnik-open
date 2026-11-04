@@ -1,5 +1,6 @@
 package io.lumnik.hub.manifest;
 
+import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
 import io.lumnik.testkit.sources.SourceTree;
 import org.junit.jupiter.api.Test;
 
@@ -11,6 +12,7 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * #1489: the hub reads YAML booleans as YAML 1.2 does — only true/false — and reads YAML in one place.
@@ -23,6 +25,21 @@ class HubYamlTest {
     assertThat(HubYaml.mapper().readTree(yaml).toString()).isEqualTo(
         "{\"column\":\"no\",\"state\":\"OFF\",\"in\":[\"yes\",\"NO\",\"On\",\"off\",\"Y\",\"n\","
             + "true,true,true,false,false,false,\"tRue\"]}");
+  }
+
+  record Named(String name) {}
+
+  @Test
+  void the_default_mapper_refuses_a_key_the_target_does_not_declare() {
+    assertThatThrownBy(() -> HubYaml.mapper().readValue("name: a\nextra: 1\n", Named.class))
+        .isInstanceOf(UnrecognizedPropertyException.class);
+  }
+
+  @Test
+  void the_lenient_mapper_drops_it_and_still_reads_yaml_1_2_booleans() throws IOException {
+    assertThat(HubYaml.lenientMapper().readValue("name: a\nextra: 1\n", Named.class)).isEqualTo(new Named("a"));
+    assertThat(HubYaml.lenientMapper().readTree("column: no\nflag: true\n").toString())
+        .isEqualTo("{\"column\":\"no\",\"flag\":true}");
   }
 
   private static final Pattern BUILDS_A_READER = Pattern.compile(

@@ -177,7 +177,7 @@ final class DossierWriter {
                 out.add("- " + c.label() + " — " + sentence(c, byId));
                 if (c.note() != null) out.add("  " + c.note());
                 if (c.evidence() != null) {
-                    boolean established = c.check().equals("confirmed") || c.check().equals("refuted");
+                    boolean established = Dossier.established(c.check());
                     // Schema 1 cannot tell this run's evidence from imported history, so a condition the hub
                     // established lists its evidence without saying who observed it: the old and the new stay
                     // side by side, and none of it is presented as freshly verified.

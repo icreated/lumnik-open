@@ -2,6 +2,7 @@ package io.lumnik.testkit.search.chunk;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import io.lumnik.common.text.Text;
 import io.lumnik.testkit.search.baseline.BaselineIO;
 import io.lumnik.testkit.search.corpus.CorpusLoader;
 import io.lumnik.testkit.search.corpus.CorpusValidationException;
@@ -75,7 +76,7 @@ public final class ChunkCorpusLoader {
     private static void validate(ChunkCorpus corpus, List<String> problems) {
         Map<String, CorpusChunk> chunksById = new HashMap<>();
         for (CorpusChunk chunk : corpus.chunks()) {
-            if (isBlank(chunk.id())) {
+            if (Text.blank(chunk.id())) {
                 problems.add("a chunk has a null or blank id");
             } else if (chunksById.put(chunk.id(), chunk) != null) {
                 problems.add("duplicate chunk id: " + chunk.id());
@@ -83,10 +84,10 @@ public final class ChunkCorpusLoader {
             if (chunk.tenantId() <= 0) {
                 problems.add("chunk " + chunk.id() + ": tenantId must be positive");
             }
-            if (isBlank(chunk.corpus())) {
+            if (Text.blank(chunk.corpus())) {
                 problems.add("chunk " + chunk.id() + ": corpus must not be blank");
             }
-            if (isBlank(chunk.text())) {
+            if (Text.blank(chunk.text())) {
                 problems.add("chunk " + chunk.id() + ": text must not be blank");
             }
         }
@@ -103,7 +104,7 @@ public final class ChunkCorpusLoader {
             if (query.tenantId() <= 0) {
                 problems.add("query " + query.id() + ": tenantId must be positive");
             }
-            if (isBlank(query.text())) {
+            if (Text.blank(query.text())) {
                 problems.add("query " + query.id() + ": text must not be blank");
             }
             if (query.queryClass() == null) {
@@ -181,9 +182,5 @@ public final class ChunkCorpusLoader {
                     + " is visible to this query, so its absence proves nothing");
             }
         }
-    }
-
-    private static boolean isBlank(String value) {
-        return value == null || value.isBlank();
     }
 }

@@ -122,6 +122,9 @@ spec:
   of `data`".
 - A `promote` entry's `type` is one of `text`, `bigint`, `integer`, `decimal`, `boolean`,
   `date`, `timestamptz`, `jsonb`.
+- A `promote` entry's `name` is a new column: not one the table already has (`id`, `tenant_id`,
+  `external_id`, `row_hash`, `data`, `indexed_at`, `connector_id`, `endpoint_id`), and not the name of
+  another entry. Its `path` must be a JSONPath. `lm validate` refuses all three, naming the entry.
 - A `promote` entry copies one value into a typed column. Values sent as text are read as the
   type says: `"2026-10-01T08:01:00Z"` as a `timestamptz`, `"12"` as a `bigint`, `"true"` as a
   `boolean`. A value that cannot be read leaves that column empty for the row, and the run counts
@@ -343,6 +346,7 @@ mistake in a default once.
 | `basic` | `username` + `password_env: VAR_NAME` |
 | `api-key` | `in: header\|query`, `name`, `value_env: VAR_NAME` |
 | `oauth2` | `token_url`, `client_id`, `client_secret_env: VAR_NAME`; optional `scope`, `client_auth: basic\|post` — [below](#oauth2-client-credentials) |
+| `session` | `login_url`, `username`, `password_env: VAR_NAME`; optional `prime_url`, `username_field`, `password_field`, `csrf_field` — [below](#a-form-login-session) |
 | `none` | no credentials (the default when `auth:` is omitted) |
 
 Every auth `*_env` field names an [`lm secret`](../cli/lm-reference.md#data-runs-answers) entry
@@ -356,7 +360,7 @@ lm secret set ACME_BASIC_PW     # prompts at the keyboard; what you type is not 
   authentication, NetBox for one, wants `Authorization: Token <key>` and refuses `Bearer`:
   `auth: { kind: bearer, scheme: Token, token_env: NETBOX_TOKEN }`. One word that starts with a letter,
   then letters, digits, `-` or `_`, at most 32 characters.
-- `basic` and `api-key` have **no inline field**: the value comes from `password_env` /
+- `basic`, `api-key` and `session` have **no inline field**: the value comes from `password_env` /
   `value_env`, or not at all.
 - `bearer`: when both are set, `token_env` wins and `token_value` is ignored, even if nothing
   resolves under `token_env`. Declare one or the other.
@@ -425,6 +429,80 @@ What `lm source rest test` and a failed run say:
 `invalid_client` and similar codes come from the authorization server. The secret and the token
 are never shown.
 
+### A form login (session)
+
+An older web application often has no API token: a user logs in through a form, and the server
+keeps a session cookie (`JSESSIONID`). Spring MVC behind Spring Security works this way, and so does
+Struts or any servlet application behind the container's own login (`j_security_check`).
+
+Behind the container's login (Tomcat, WebLogic, …):
+
+```yaml
+auth:
+  kind: session
+  login_url: http://clinic.internal/petclinic/j_security_check
+  prime_url: http://clinic.internal/petclinic/vets.json   # a protected page
+  username: lumnik
+  password_env: CLINIC_PASSWORD
+  username_field: j_username
+  password_field: j_password
+```
+
+Behind Spring Security's login form:
+
+```yaml
+auth:
+  kind: session
+  login_url: https://app.internal/login
+  username: lumnik
+  password_env: APP_PASSWORD
+  csrf_field: _csrf             # the hidden input of the login page
+```
+
+- lumnik first reads `prime_url` (by default `login_url`) to get a session cookie. With
+  `csrf_field`, it also reads the token from the page's hidden input of that name.
+- Then it posts `username_field` and `password_field` (by default `username` and `password`) to
+  `login_url`, and keeps the session cookie the login sets.
+- The container's login wants a protected page as `prime_url`: it remembers that page, then
+  accepts the form.
+- lumnik keeps the session for the connector, run after run, while the hub runs. It logs in again when the
+  application stops accepting it, and repeats the request once.
+- The cookie is sent only to the origin of `login_url` (scheme, host, port), as a browser does. An
+  endpoint on another host is refused. `prime_url` must be on the same origin.
+
+With the password set and the login accepted, the pre-flight reads the first page:
+
+```
+$ lm source rest test clinic-vets
+ENDPOINT  METHOD  STATUS  ITEMS  VERDICT
+vets      GET     200     6      ok
+```
+
+With a password the application no longer accepts:
+
+```
+$ lm source rest test clinic-vets-old
+ENDPOINT  METHOD  STATUS  ITEMS  VERDICT
+vets      GET     -       0      session login set no new cookie (HTTP 200): the credentials or the form's field names are refused
+Error: 1 of 1 enabled endpoint(s) did not answer with readable data
+```
+
+A login that works sets a new session cookie, which is how lumnik tells it from a refused one: the
+container answers a wrong password with its error page, not with an error status.
+
+| Cause | Verdict |
+|---|---|
+| `password_env` resolves to nothing | `session password unavailable (env=CLINIC_PASSWORD)` |
+| Wrong password or wrong field names | `session login set no new cookie (HTTP 200): the credentials or the form's field names are refused` |
+| No hidden input named `csrf_field` | `session prime_url page has no input named '_csrf'` |
+| The login answers an error | `session login answered HTTP 500` |
+| Refused again right after a new login | `session refused: the source still answers HTTP 302 after a fresh login` |
+| An endpoint on another origin | `session cookie stays with the login's origin (http://clinic.internal:80): a request to another origin is refused` |
+
+The password and the session cookie are never shown.
+
+Not covered: logins that need JavaScript, a second factor, or a redirect to SAML or CAS.
+
 ## An internal CA
 
 An API served over HTTPS with a certificate your company's CA signed — an in-house service, a
@@ -456,6 +534,68 @@ lm secret set CLUSTER_CA - < ca.crt
 - There is no switch to skip the check.
 - An `oauth2` token request (`token_url`) still uses the public trust.
 
+## An answer in XML
+
+Some APIs answer XML: PrestaShop's Webservice by default, public feeds, older applications. Declare it
+on the endpoint with `response_format: xml`:
+
+```yaml
+endpoints:
+  - id: products
+    path: /dispatcher.php?url=products&display=[id,reference,price,name]
+    method: GET
+    response_format: xml
+    pagination: { kind: prestashop, resource: products, limit: 50, response_path: $.products.product }
+    target:
+      kind: hybrid
+      table: ext.shop_products
+      unique_key: $.id
+      promote:
+        - { name: reference, path: $.reference, type: text }
+        - { name: name, path: "$.name.language['#text']", type: text }
+```
+
+PrestaShop answers this:
+
+```xml
+<prestashop xmlns:xlink="http://www.w3.org/1999/xlink">
+<products>
+<product>
+  <id><![CDATA[1]]></id>
+  <reference><![CDATA[demo_1]]></reference>
+  <name><language id="1" xlink:href="…/api/languages/1"><![CDATA[Hummingbird printed t-shirt]]></language></name>
+</product>
+…
+```
+
+The paths read it like this:
+
+- The root element is left out: the list is `$.products.product`, not `$.prestashop.products.product`.
+- An element with only text is its value: `$.reference` reads `demo_1`.
+- Attributes go under `@`, the text beside them under `#text`: `$.name.language['#text']` reads the
+  name, `$.name.language['@id']` its language.
+- Namespace prefixes are dropped: `xlink:href` is `@href`.
+- The list at `response_path` stays a list, even with one row.
+- Values are text: `$.price` reads `"23.900000"`. Promote it with `type: decimal` to compare it as a number.
+
+```
+$ lm source rest test shop-products
+ENDPOINT  METHOD  STATUS  ITEMS  VERDICT
+products  GET     200     19     ok
+```
+
+Without `response_format: xml`, an XML answer is refused, never read as zero rows:
+
+```
+$ lm source rest test shop-products-json
+ENDPOINT  METHOD  STATUS  ITEMS  VERDICT
+products  GET     200     0      the response is not JSON (Content-Type text/xml;charset=utf-8) — rest-generic reads JSON; an endpoint answering XML declares response_format: xml
+Error: 1 of 1 enabled endpoint(s) did not answer with readable data
+```
+
+A document that declares a DTD or an entity is refused: lumnik never reads one. A body that is not
+XML is refused by its `Content-Type`; the body itself is never shown.
+
 ## Pagination
 
 Every endpoint declares how the source hands back its next page. Most APIs follow a named
@@ -465,8 +605,8 @@ convention, so the usual answer is one line:
 pagination: { kind: spring-page }        # Spring Data Page — seven fields under one word
 ```
 
-Twelve presets name the framework behind the API (Spring Data, Micronaut, Django REST,
-FastAPI, NestJS, JSON:API, Sequelize, Stripe). When none fits, write one of seven strategies
+Thirteen presets name the framework behind the API (Spring Data, Micronaut, Django REST,
+FastAPI, NestJS, JSON:API, Sequelize, Stripe) or the product (PrestaShop). When none fits, write one of seven strategies
 by hand: `cursor`, `page`, `offset`, `link-header`, `body-link`, `relay`, and `none` for an
 answer that holds the whole list.
 
@@ -611,7 +751,7 @@ the source publishes a count — checks the run against it.
 | Guard | Behaviour |
 |---|---|
 | Retry | `429`, `5xx`, timeouts and network errors are retried up to 5 times, with growing pauses. Then the run fails. Other statuses are not retried |
-| Page cap | **10 000 pages** per endpoint per run |
+| Page cap | **10 000 pages** per endpoint per run. Reached before the source's last page, the run fails: `reached the page cap (10000 pages) before the source's last page`. The rows already read stay; the run is not called complete |
 | Rate limit | `default_rate_limit` (default `100/s`): `count/window`, window `s`, `m` or `h` with an optional integer (`100/s`, `100/5m`, `1000/h`). One bucket per connector, shared by all its endpoints — set it to the strictest endpoint's limit |
 
 ### An outage fails the run
@@ -676,10 +816,31 @@ a368b49d  acme-witness  incomplete  Failed  2000  2000  0        0             2
   them.
 
 `total_path` is optional on every strategy; a `soap` endpoint ignores it. It also lets `offset` stop once every row is in.
-The `drf-limit-offset` and `sequelize` presets set it for you (`total_path: $.count`).
+The `drf-page`, `drf-limit-offset` and `sequelize` presets set it for you (`total_path: $.count`).
 
 - Point `total_path` at an exact **row** count: not a page count, not an estimate.
-- The check does not run on an incremental endpoint, or when the total changes during the read.
+- The check does not run on an incremental endpoint.
+
+**A total that changes during the read.** A row deleted on a page already read moves every later
+row up one place. One row then sits on no page, and the read ends without it. The total is the only
+sign, so when it changes between two pages, the run reads the list again from page 1:
+
+- The rows read twice are written once (the `unique_key` upsert). `IN` counts both reads.
+- If the total changes again during the second read, the run fails.
+
+Paperless-ngx, read 10 correspondents per page. During the first run, one correspondent is deleted:
+60 rows read, then the whole list of 100. During the second, new correspondents keep arriving:
+
+```
+$ lm run get cbf6e5fd
+ID        CONNECTOR          ENDPOINT        STATUS     IN   OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+cbf6e5fd  paperless-archive  correspondents  Completed  160  160  0        0             2026-11-03 14:10  2026-11-03 14:11
+
+$ lm run get 1abfa915
+ID        CONNECTOR          ENDPOINT        STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+1abfa915  paperless-archive  correspondents  Failed  20  20   0        0             2026-11-03 14:11  2026-11-03 14:11
+✖ run failed: Endpoint 'correspondents': the list changed while it was read, and again when read a second time (the source declared 103 rows, then 104) — rows may be on no page; refusing to report a partial extract as a complete one (run it when the source is quieter)
+```
 
 **A count in a response header.** Gitea, GitLab or WordPress send it as a header, beside a body
 that is just the list: name the header with `total_header` instead of `total_path`.
@@ -768,7 +929,7 @@ $ lm source rest probe acme-partners --endpoint /spring/partners
     table: ext.acme_partners_spring_partners
     unique_key: $.id
     promote:
-      - { name: id, path: $.id, type: bigint }
+      - { name: id_2, path: $.id, type: bigint }
       - { name: name, path: $.name, type: text }
       - { name: city, path: $.city, type: text }
       - { name: country, path: $.country, type: text }
@@ -789,6 +950,8 @@ $ lm source rest probe acme-partners --endpoint /spring/partners
   `# 6 items, no paging signal in the answer: if the source pages, declare how`. A round count
   such as 20 or 50 is often one page: declare the pagination.
 - The promote list covers the scalar fields of the first record only.
+- A field named like a column the table already has (`id`, `data`, `row_hash`, …) is drafted under
+  another name, `id_2`: the `path` still reads the field by its own key.
 
 A source that pages through a `Link` header needs no other setting, so its draft applies as it is:
 
@@ -804,7 +967,7 @@ $ lm source rest probe acme-header --endpoint '/link/partners?limit=500'
     table: ext.acme_header_link_partners_limit_500
     unique_key: $.id
     promote:
-      - { name: id, path: $.id, type: bigint }
+      - { name: id_2, path: $.id, type: bigint }
       - { name: name, path: $.name, type: text }
       - { name: city, path: $.city, type: text }
       - { name: country, path: $.country, type: text }
@@ -969,6 +1132,9 @@ change, unless you `lm endpoint reset-cursor` first.
 | Not sure the credential is valid | — | `lm source rest test <connector>` — one request per enabled endpoint, nothing written; an unresolved secret is named in `VERDICT` |
 | Run completed, `IN` is 0 | the response arrived but nothing matched `response_path` | `lm source rest test <connector>` shows `200` with `0` items; check `response_path` against the body |
 | Run failed on `the source declared N rows` | `total_path` points at a number the run did not match | check the source; if `total_path` points at a page count or an estimate, see [The declared total](#the-declared-total-a-witness-on-the-count) |
+| Run failed on `the list changed while it was read, and again` | rows are added or deleted faster than the list is read | run it at a quieter hour (`window:`), or raise the page size so the read is shorter |
+| Run failed on `the source answered the same page twice in a row` | the source ignores the paging parameter and answers page one again — PrestaShop, for one, ignores `offset=` | check the pagination's parameter names against the API's documentation, or use the source's preset |
+| Run failed on `reached the page cap` | 10 000 pages and the source still has more — often a page size too small, or a source that never says it is done | raise the page size; if the source really has more, split the endpoint (a filter in `path:`) |
 | `429 Too Many Requests` from the API | `default_rate_limit` exceeds what the API tolerates | lower it (`100/s` → `50/s`); it is one bucket for the whole connector |
 | Sync stops picking up new rows | the stored watermark is stale or points at a column the source does not touch | `lm endpoint reset-cursor <connector>/<endpoint>` → the next run is a full read |
 | A run reads far more pages than expected | `cursor`, `body-link` and `link-header` send no size parameter | put the size in the endpoint's `path:` — see [the page-size warning](rest/pagination.md#strategies) |

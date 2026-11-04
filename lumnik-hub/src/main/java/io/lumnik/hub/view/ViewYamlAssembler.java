@@ -2,6 +2,7 @@ package io.lumnik.hub.view;
 
 import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.manifest.HubYaml;
 
 import java.util.LinkedHashMap;
@@ -41,7 +42,7 @@ public class ViewYamlAssembler {
         Map<String, Object> spec = new LinkedHashMap<>();
         spec.put("scope", m.scope());
         spec.put("table", m.table());
-        if (m.title() != null && !m.title().isBlank()) spec.put("title", m.title());
+        if (Text.present(m.title())) spec.put("title", m.title());
         spec.put("columns", m.columns());
         root.put("spec", spec);
 
@@ -77,7 +78,7 @@ public class ViewYamlAssembler {
      */
     private String header(ViewManifest m, List<String> filters, String description) {
         StringBuilder h = new StringBuilder();
-        if (description != null && !description.isBlank()) {
+        if (Text.present(description)) {
             h.append("# asked for: ").append(oneLine(description)).append('\n');
         }
         if (filters == null || filters.isEmpty()) {
@@ -106,7 +107,7 @@ public class ViewYamlAssembler {
     private String commentLine(ViewManifest m, List<String> filters) {
         StringBuilder cmd = new StringBuilder("# lm view -f ").append(m.name()).append(".yaml");
         for (String f : filters) {
-            if (f == null || f.isBlank())
+            if (Text.blank(f))
                 throw new IllegalArgumentException("filter values must not be null or blank");
             // The comment must stay ONE line: a multi-line value would inject raw YAML above
             // the manifest (e.g. a second `kind:` key). YAML 1.1 (SnakeYAML) also breaks on

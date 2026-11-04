@@ -1,5 +1,6 @@
 package io.lumnik.hub.manifest;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLParser;
 
@@ -26,5 +27,14 @@ public final class HubYaml {
 
     public static YAMLMapper mapper() {
         return builder().build();
+    }
+
+    /**
+     * {@link #mapper()}, for a document read into a typed shape that may carry keys the shape does not
+     * declare: they are dropped instead of refused. For readers that tolerate what a newer file brings —
+     * module manifests, screens, enums. A door that must name the keys it ignores reads the tree.
+     */
+    public static YAMLMapper lenientMapper() {
+        return builder().disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES).build();
     }
 }

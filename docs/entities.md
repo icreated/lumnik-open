@@ -586,6 +586,20 @@ AcmeCustomer  P-1002  city     t_acme_desk_erp,t_acme_desk_crm
 AcmeCustomer  P-1008  city     t_acme_desk_erp,t_acme_desk_crm
 ```
 
+With several entities, `--entity` narrows the list to one, and the whole `--limit` is spent on it:
+
+```
+$ lm conflicts list --entity member_a
+ENTITY    KEY     COLUMNS    SOURCES
+member_a  M-1001  full_name  t_scenario_member_gestion_a,t_scenario_member_portail_a
+member_a  M-1003  plan       t_scenario_member_gestion_a,t_scenario_member_portail_a
+
+$ lm conflicts list --entity no_such_entity
+Error: API error 404: entity no_such_entity not found
+```
+
+An entity outside your scopes answers `403 scope not granted`, as `lm entity get` does.
+
 `lm_user`. One row per record still in dispute, by entity then match key; `--limit N` (default 200,
 up to 1000). The TUI's `:conflicts` page shows the full ledger under `d`.
 

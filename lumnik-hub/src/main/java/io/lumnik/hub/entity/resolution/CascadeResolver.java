@@ -2,6 +2,7 @@ package io.lumnik.hub.entity.resolution;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.entity.CandidateProvider;
 import io.lumnik.extraction.spi.entity.CandidateProviderException;
 import io.lumnik.extraction.spi.entity.CandidateQuery;
@@ -180,9 +181,9 @@ public class CascadeResolver {
    * deliberately not checked here.
    */
   private static void requireAssertionArgs(String entityType, UUID leftRef, UUID rightRef, String assertedBy) {
-    if (entityType == null || entityType.isBlank())
+    if (Text.blank(entityType))
       throw new IllegalArgumentException("an assertion requires a non-blank entityType");
-    if (assertedBy == null || assertedBy.isBlank())
+    if (Text.blank(assertedBy))
       throw new IllegalArgumentException("an assertion requires a non-blank assertedBy");
     if (leftRef == null || rightRef == null)
       throw new IllegalArgumentException("an assertion requires two non-null identity refs");

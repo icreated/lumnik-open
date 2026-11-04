@@ -248,7 +248,7 @@ final class DossierReader {
                 if (!e.get("via").asText().equals(verifier)) throw new Refused(Reason.EVIDENCE_VIA_MISMATCH);
             }
         }
-        boolean outcome = check.equals("confirmed") || check.equals("refuted");
+        boolean outcome = Dossier.established(check);
         if (outcome) {
             if (verifier.equals("none")) throw new Refused(Reason.OUTCOME_ON_UNVERIFIABLE);
             if (evidence == null) throw new Refused(Reason.OUTCOME_WITHOUT_EVIDENCE);

@@ -1,5 +1,6 @@
 package io.lumnik.testkit.search.reference;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.search.IndexedSearchHit;
 import io.lumnik.extraction.spi.search.IndexedSearchPort;
 import io.lumnik.extraction.spi.search.IndexedSearchQuery;
@@ -41,7 +42,7 @@ public final class ReferenceIndexedSearchProvider implements IndexedSearchPort {
 
     private static Set<String> tokenize(String text) {
         return Arrays.stream(TOKEN_SPLIT.split(text.toLowerCase(Locale.ROOT)))
-                .filter(token -> !token.isBlank())
+                .filter(Text::present)
                 .collect(Collectors.toUnmodifiableSet());
     }
 

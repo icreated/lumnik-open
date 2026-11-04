@@ -37,7 +37,7 @@ public interface ItemWriter<T> {
 
   /**
    * Cell-level parse failures the most recent {@link #write} pass nulled — a cell hook
-   * (parse-date, parse-number, parse-email, parse-phone, lookup) that could not parse a value
+   * (parse-date, parse-number, parse-boolean, parse-email, parse-phone, lookup) that could not parse a value
    * writes {@code null} into that cell and lets the row through rather than dropping it. Counts
    * CELLS, not rows: one row can contribute more than one. The engine drains this after a
    * successful write and folds it into the run, exactly the way {@link ItemReader#drainMalformed}

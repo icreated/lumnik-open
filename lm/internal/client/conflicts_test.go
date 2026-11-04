@@ -21,7 +21,7 @@ func TestConflictList_decodesLedgerAndHitsTheScopedPath(t *testing.T) {
 	defer srv.Close()
 
 	c := New(config.Context{Server: srv.URL, Token: "static"})
-	got, err := c.ConflictList(50)
+	got, err := c.ConflictList(50, "")
 	require.NoError(t, err)
 	assert.Equal(t, "/api/entities/conflicts?limit=50", gotPath)
 	require.Len(t, got, 1)
@@ -31,6 +31,21 @@ func TestConflictList_decodesLedgerAndHitsTheScopedPath(t *testing.T) {
 	require.Len(t, vals, 2)
 	assert.Equal(t, "t_erp", vals[0].Src)
 	assert.Equal(t, "MARIE A.", vals[1].Display())
+}
+
+func TestConflictList_entityNarrowsTheQuery(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RequestURI()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	c := New(config.Context{Server: srv.URL, Token: "static"})
+	_, err := c.ConflictList(50, "member a")
+	require.NoError(t, err)
+	assert.Equal(t, "/api/entities/conflicts?entity=member+a&limit=50", gotPath)
 }
 
 // The table's SOURCES column and the describe panel are both derived from the ledger:

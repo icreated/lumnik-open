@@ -13,6 +13,10 @@
 
 The connection is read-only: every query this connector issues is a `SELECT`.
 
+The hub opens at most 5 connections per source and holds none while it is quiet: an idle
+connection closes after about a minute. If you change the source's password, the next connection
+opens with the new one. No restart.
+
 ## Quickstart — one table, three commands, a look at the ledger
 
 ```yaml

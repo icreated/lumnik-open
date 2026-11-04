@@ -198,6 +198,71 @@ class PaginationPresetEngineIT {
         verify(1, getRequestedFor(urlPathEqualTo("/petclinic/vets.json")));
     }
 
+    /** #1754: PrestaShop's Webservice ignores offset=; its limit carries both, limit=offset,count. */
+    @Test
+    void prestashop_pages_with_offset_and_count_in_limit() {
+        String table = "ext.preset_prestashop_" + Long.toUnsignedString(System.nanoTime());
+        String base = "http://localhost:" + wm.port();
+        stubFor(get(urlPathEqualTo("/api/products")).withQueryParam("limit", equalTo("0,2"))
+            .willReturn(okJson("{\"products\":[{\"id\":1,\"reference\":\"demo_1\"},{\"id\":2,\"reference\":\"demo_3\"}]}")));
+        stubFor(get(urlPathEqualTo("/api/products")).withQueryParam("limit", equalTo("2,2"))
+            .willReturn(okJson("{\"products\":[{\"id\":3,\"reference\":\"demo_6\"}]}")));
+
+        UUID id = apply("{\"metadata\":{\"name\":\"ps-" + Long.toUnsignedString(System.nanoTime()) + "\",\"connector_type\":\"rest-generic\"},"
+            + "\"spec\":{\"base_url\":\"" + base + "/api\",\"endpoints\":[{"
+            + "\"id\":\"products\",\"path\":\"/products?output_format=JSON\",\"method\":\"GET\","
+            + "\"pagination\":{\"kind\":\"prestashop\",\"resource\":\"products\",\"limit\":2},"
+            + "\"target\":{\"kind\":\"hybrid\",\"table\":\"" + table + "\",\"unique_key\":\"$.id\","
+            + "\"promote\":[{\"name\":\"reference\",\"path\":\"$.reference\",\"type\":\"text\"}]}}]}}");
+
+        RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(id, new RunTrigger.Manual(1L)));
+        assertInstanceOf(RunStatus.Completed.class, s);
+        assertEquals(3L, count(table));
+        verify(2, getRequestedFor(urlPathEqualTo("/api/products")).withQueryParam("output_format", equalTo("JSON")));
+        verify(0, getRequestedFor(urlPathEqualTo("/api/products")).withQueryParam("offset", matching(".*")));
+    }
+
+    /** #1755: PrestaShop's Webservice as it answers, in XML — response_format: xml, the preset's pagination, attributes under @. */
+    @Test
+    void prestashop_xml_is_read_with_response_format_xml() {
+        String table = "ext.preset_prestashop_xml_" + Long.toUnsignedString(System.nanoTime());
+        String base = "http://localhost:" + wm.port();
+        stubFor(get(urlPathEqualTo("/api/products")).withQueryParam("limit", equalTo("0,2"))
+            .willReturn(aResponse().withHeader("Content-Type", "text/xml;charset=utf-8").withBody(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><prestashop xmlns:xlink=\"http://www.w3.org/1999/xlink\"><products>"
+                    + psProduct(1, "demo_1", "Hummingbird printed t-shirt") + psProduct(2, "demo_3", "Hummingbird printed sweater")
+                    + "</products></prestashop>")));
+        stubFor(get(urlPathEqualTo("/api/products")).withQueryParam("limit", equalTo("2,2"))
+            .willReturn(aResponse().withHeader("Content-Type", "text/xml;charset=utf-8").withBody(
+                "<prestashop xmlns:xlink=\"http://www.w3.org/1999/xlink\"><products>" + psProduct(3, "demo_6", "Mug The best is yet to come")
+                    + "</products></prestashop>")));
+
+        UUID id = apply("{\"metadata\":{\"name\":\"psx-" + Long.toUnsignedString(System.nanoTime()) + "\",\"connector_type\":\"rest-generic\"},"
+            + "\"spec\":{\"base_url\":\"" + base + "/api\",\"endpoints\":[{"
+            + "\"id\":\"products\",\"path\":\"/products?display=full\",\"method\":\"GET\",\"response_format\":\"xml\","
+            + "\"pagination\":{\"kind\":\"prestashop\",\"resource\":\"products\",\"limit\":2,\"response_path\":\"$.products.product\"},"
+            + "\"target\":{\"kind\":\"hybrid\",\"table\":\"" + table + "\",\"unique_key\":\"$.id\","
+            + "\"promote\":[{\"name\":\"reference\",\"path\":\"$.reference\",\"type\":\"text\"},"
+            + "{\"name\":\"name\",\"path\":\"$.name.language['#text']\",\"type\":\"text\"}]}}]}}");
+
+        RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(id, new RunTrigger.Manual(1L)));
+        assertInstanceOf(RunStatus.Completed.class, s, () -> "run was: " + s);
+        assertEquals(3L, count(table));
+        assertEquals("Mug The best is yet to come", TenantContext.callAsSystem(() -> {
+            utx.begin();
+            try {
+                return (String) em.createNativeQuery("SELECT name FROM " + table + " WHERE external_id = '3'").getSingleResult();
+            } finally {
+                utx.commit();
+            }
+        }));
+    }
+
+    private static String psProduct(int id, String reference, String name) {
+        return "<product><id><![CDATA[" + id + "]]></id><reference><![CDATA[" + reference + "]]></reference>"
+            + "<name><language id=\"1\" xlink:href=\"http://shop.test/api/languages/1\"><![CDATA[" + name + "]]></language></name></product>";
+    }
+
     /** #1630: Spring Data REST names an item only by its self link; the key is its last segment, not the host. */
     @Test
     void spring_hateoas_items_are_keyed_by_their_self_link() {

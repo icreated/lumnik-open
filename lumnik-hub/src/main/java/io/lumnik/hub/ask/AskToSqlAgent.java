@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.ask.NoSchemaException;
 import io.lumnik.llm.spi.Analytic;
 import io.lumnik.llm.spi.AnswerLanguage;
@@ -126,7 +127,7 @@ public class AskToSqlAgent implements AskPort {
 
         // #1096: "lumnik, …" addresses the chat; the address is not part of the question.
         String asked = FollowUp.withoutAddress(question);
-        if (previous == null || previous.isBlank()) {
+        if (Text.blank(previous)) {
             return answer(tenantId, scope, card, asked, lang);
         }
         // A follow-up is answered as the question it resolves to — phrasing included, unlike the #918 rewrite: "Et
@@ -164,7 +165,7 @@ public class AskToSqlAgent implements AskPort {
         // the guard accepts: anything else keeps the honest refusal rather than a vaguer one.
         if (abstentionGuard.isAbstention(rawSql)) {
             String rewritten = chatPorts.get().chat(rewritePrompt(question));
-            if (rewritten != null && !rewritten.isBlank() && !abstentionGuard.isAbstention(rewritten)
+            if (Text.present(rewritten) && !abstentionGuard.isAbstention(rewritten)
                     && !rewritten.strip().equalsIgnoreCase(String.valueOf(straightQuotes(question)).strip())) {
                 // the rule follows the ASKER's wording alone: the rewrite is the model's output, it may paraphrase
                 // "inclut" away (the rule stays) but it must not create a text search the asker did not ask for. A resolved
@@ -730,7 +731,7 @@ public class AskToSqlAgent implements AskPort {
     private static String labelOf(SchemaCard card, String view, String column) {
         return card.tables().stream().filter(t -> t.name().equalsIgnoreCase(view)).findFirst()
             .flatMap(t -> t.columns().stream().filter(col -> col.name().equalsIgnoreCase(column)).findFirst())
-            .map(col -> col.label() == null || col.label().isBlank() ? col.name() : col.label())
+            .map(col -> Text.blank(col.label()) ? col.name() : col.label())
             .orElse(column);
     }
 

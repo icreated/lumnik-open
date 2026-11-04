@@ -1,5 +1,6 @@
 package io.lumnik.hub.bff.user;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.tenant.RequireUser;
 import io.lumnik.identity.user.UserRepository;
@@ -35,7 +36,7 @@ public class UserScopeResource {
     var u = users.findById(id);
     if (u == null) return noRow(id);
     String value = body != null ? body.get("defaultScope") : null;
-    u.setDefaultScope(value == null || value.isBlank() ? null : value);
+    u.setDefaultScope(Text.blank(value) ? null : value);
     return Response.status(204).build();
   }
 

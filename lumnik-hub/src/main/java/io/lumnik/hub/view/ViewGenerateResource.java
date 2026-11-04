@@ -3,6 +3,7 @@ package io.lumnik.hub.view;
 import io.lumnik.common.ratelimit.RateLimited;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.ask.SchemaCardStore;
@@ -45,8 +46,8 @@ public class ViewGenerateResource {
     @Consumes(MediaType.APPLICATION_JSON)
     public Response generate(GenerateRequest req) {
         long tenant = RequireTenant.current();
-        if (req == null || req.scope() == null || req.scope().isBlank()
-                || req.description() == null || req.description().isBlank()) {
+        if (req == null || Text.blank(req.scope())
+                || Text.blank(req.description())) {
             return ApiErrors.badRequest("scope and description are required");
         }
         String scope = req.scope().strip();

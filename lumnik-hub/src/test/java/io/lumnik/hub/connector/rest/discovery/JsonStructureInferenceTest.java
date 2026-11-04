@@ -3,8 +3,10 @@ package io.lumnik.hub.connector.rest.discovery;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jayway.jsonpath.JsonPath;
+import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
 import org.junit.jupiter.api.Test;
 import java.util.*;
+import java.util.stream.Collectors;
 import static org.junit.jupiter.api.Assertions.*;
 
 class JsonStructureInferenceTest {
@@ -144,5 +146,27 @@ class JsonStructureInferenceTest {
             Set.copyOf(read),
             "some paths were invalid or pointed at the wrong key: "
                 + promotes.stream().map(p -> p.get("path")).toList());
+    }
+
+    /**
+     * #1785: a field named like a column the hybrid table already has is drafted under another name — the draft
+     * would be refused by {@code lm validate}, and before that died at the first run. The path keeps the key.
+     */
+    @Test void promotes_never_take_a_name_the_hybrid_table_already_has() throws Exception {
+        ObjectNode item = M.createObjectNode();
+        for (String reserved : HybridJsonbSpec.RESERVED_COLUMNS) item.put(reserved, "v_" + reserved);
+
+        var promotes = inf.inferPromotes(item);
+        String json = M.writeValueAsString(item);
+
+        assertEquals(HybridJsonbSpec.RESERVED_COLUMNS.size(), promotes.size());
+        for (var p : promotes) {
+            assertFalse(HybridJsonbSpec.RESERVED_COLUMNS.contains((String) p.get("name")),
+                "drafted a reserved name: " + p.get("name"));
+        }
+        // every field is still read, by its own key
+        assertEquals(
+            HybridJsonbSpec.RESERVED_COLUMNS.stream().map(r -> "v_" + r).collect(Collectors.toSet()),
+            promotes.stream().map(p -> JsonPath.<String>read(json, (String) p.get("path"))).collect(Collectors.toSet()));
     }
 }

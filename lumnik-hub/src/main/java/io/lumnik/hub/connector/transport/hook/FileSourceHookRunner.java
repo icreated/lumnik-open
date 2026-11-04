@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.transport.hook;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.transport.FileDescriptor;
 import io.lumnik.hub.connector.transport.FileSource;
 import io.lumnik.hub.hook.KotlinScriptHost;
@@ -118,7 +119,7 @@ public class FileSourceHookRunner {
      * URL/drive-letter schemes (a {@code ':'} anywhere), and null bytes.
      */
     private static boolean isSafeScriptRef(String scriptRef) {
-        if (scriptRef == null || scriptRef.isBlank()) return false;
+        if (Text.blank(scriptRef)) return false;
         if (scriptRef.indexOf('\0') >= 0) return false;
         if (scriptRef.startsWith("/") || scriptRef.startsWith("\\")) return false;
         if (scriptRef.contains("..")) return false;

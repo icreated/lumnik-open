@@ -1,5 +1,6 @@
 package io.lumnik.hub.export.destination.s3;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.secret.SecretRefs;
 import io.lumnik.hub.connector.transport.s3.S3Clients;
 import io.lumnik.hub.export.destination.FileDestination;
@@ -70,7 +71,7 @@ public class S3FileDestinationFactory implements FileDestinationFactory {
         if (filename.startsWith("/"))
             throw new FileDestinationException("S3 destination: filename " + filename + " starts with '/'"
                 + " — refusing to publish under a leading-slash key");
-        String key = prefix == null || prefix.isEmpty()
+        String key = Text.blank(prefix)
             ? filename
             : (prefix.endsWith("/") ? prefix : prefix + "/") + filename;
         if (key.startsWith("/"))

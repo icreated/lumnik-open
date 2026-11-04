@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.soap;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.Urls;
 
@@ -75,7 +76,7 @@ public final class SoapRequestBuilder {
         String body = subst(bodyTemplate, pageSize, cursor, page, secrets, environment);
         StringBuilder env = new StringBuilder()
             .append("<soap:Envelope xmlns:soap=\"").append(SOAP_NS).append("\">");
-        if (headerTemplate != null && !headerTemplate.isBlank()) {
+        if (Text.present(headerTemplate)) {
             env.append("<soap:Header>").append(subst(headerTemplate, pageSize, cursor, page, secrets, environment)).append("</soap:Header>");
         }
         env.append("<soap:Body>").append(body).append("</soap:Body></soap:Envelope>");

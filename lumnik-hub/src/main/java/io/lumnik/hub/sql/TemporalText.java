@@ -103,9 +103,8 @@ public final class TemporalText {
             if (timeAt < 0) return LocalDate.parse(t).atStartOfDay(ZoneOffset.UTC).toInstant();
             if (!hasZone(t, timeAt))
                 return LocalDateTime.parse(t).atOffset(ZoneOffset.UTC).toInstant();
-            // The second PG-ism: a whole-hour offset rendered as "+00" where ISO wants "+00:00".
-            // Padded only past the 'T' — on a plain date, "-01" is a day of month, not a zone.
-            return OffsetDateTime.parse(t.replaceAll("([+-][0-9]{2})$", "$1:00")).toInstant();
+            // PG renders a whole-hour offset as "+00" / "-05"; OffsetDateTime reads that as it stands (#1727).
+            return OffsetDateTime.parse(t).toInstant();
         } catch (DateTimeParseException notATimestamp) {
             return null;
         }

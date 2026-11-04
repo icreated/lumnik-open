@@ -1,6 +1,7 @@
 package io.lumnik.hub.tenant;
 
 import io.lumnik.common.security.DefaultScopeSource;
+import io.lumnik.common.text.Text;
 import io.lumnik.identity.user.User;
 import io.lumnik.identity.user.UserRepository;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -29,6 +30,6 @@ public class UserDefaultScopeSource implements DefaultScopeSource {
         if (id == null) return Optional.empty();
         return users.findByIdOptional(id)
             .map(User::getDefaultScope)
-            .filter(s -> !s.isBlank());
+            .filter(Text::present);
     }
 }

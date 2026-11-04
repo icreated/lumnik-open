@@ -1,5 +1,6 @@
 package io.lumnik.hub.webhook;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.identity.KnownKeysOnly;
 import io.lumnik.identity.Require;
 
@@ -65,7 +66,7 @@ public class IntegrationResource {
         e.setTargetUrl(in.targetUrl());
         e.setPlatform(in.platform() == null ? "generic" : in.platform());
         e.setAuthMode(in.authMode() == null ? AuthMode.HMAC : in.authMode());
-        if (in.secret() != null && !in.secret().isBlank())
+        if (Text.present(in.secret()))
             e.setSecretEncrypted(cipher.encrypt(in.secret()));
         requireSecretForSigning(e);
         e.setEventTypes(in.eventTypes());
@@ -88,7 +89,7 @@ public class IntegrationResource {
         if (in.authMode()   != null) e.setAuthMode(in.authMode());
         if (in.eventTypes() != null) e.setEventTypes(in.eventTypes());
         if (in.enabled()    != null) e.setEnabled(in.enabled());
-        if (in.secret() != null && !in.secret().isBlank())
+        if (Text.present(in.secret()))
             e.setSecretEncrypted(cipher.encrypt(in.secret()));
         requireSecretForSigning(e);
         return IntegrationDto.from(e);

@@ -1,5 +1,6 @@
 package io.lumnik.hub.secret;
 
+import io.lumnik.common.text.Text;
 import io.quarkus.runtime.Startup;
 import jakarta.annotation.PostConstruct;
 import jakarta.inject.Singleton;
@@ -14,7 +15,7 @@ public class MasterKeyValidator {
 
     @PostConstruct
     void validate() {
-        if (masterKey == null || masterKey.isBlank()) {
+        if (Text.blank(masterKey)) {
             throw new IllegalStateException(
                 "lumnik.secret.master-key is not set. Generate one with `openssl rand -base64 32` " +
                 "and export LUMNIK_SECRET_MASTER_KEY before starting lumnik.");

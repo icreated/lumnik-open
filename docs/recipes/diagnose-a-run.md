@@ -49,7 +49,7 @@ What `lm run get` tells you, and where to go next:
 |---|---|---|
 | `✖ run failed: …` (or `• run cancelled: …`) | the run itself failed: connection, credentials, source gone | read the message; if it is not enough, [the hub logs](logs.md) |
 | `⚠ N rows quarantined` | rows were dead-lettered, each with a reason | [step 2](#2-read-the-quarantine) |
-| `⚠ N cell(s) a hook did not deliver as declared — the rows were still written` | a [transformer](../connectors/transformers.md) left a value blank or changed; the row is there | the table below |
+| `⚠ N cell(s) not delivered as declared (a hook, or a promoted value of the wrong type) — the rows were still written` | a [transformer](../connectors/transformers.md) left a value blank or changed, or a `promote` value did not read as its type; the row is there | the table below |
 | `• N row(s) removed — the source no longer holds them` | the source no longer holds those rows; the table shrank | the source |
 | `• N file(s) unchanged since they were last read — not read again` | the file did not change: `IN 0` is normal | to read it again: `lm endpoint reset-cursor <connector>/<endpoint>` |
 | `• run partial: …` | the run stopped before the end of its source; the reason says why | read it; the next run continues |
@@ -62,7 +62,7 @@ A cell warning, as it appears:
 $ lm run get 4aaff94f
 ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
 4aaff94f  invoices   default   Completed  4   4    0        0             2026-10-19 01:39  2026-10-19 01:39
-⚠ 1 cell(s) a hook did not deliver as declared — the rows were still written
+⚠ 1 cell(s) not delivered as declared (a hook, or a promoted value of the wrong type) — the rows were still written
 ```
 
 Here `parse-date` with format `yyyy-MM-dd` met `03/09/2026` and wrote the cell empty.
@@ -71,7 +71,7 @@ The same count is `cellErrors` in `lm run get -o json` and `cell_errors:` in the
 What each hook does with a value it cannot read: [the reference](../connectors/transformers-reference.md#when-a-hook-cannot-deliver-cell_errors-and-on-error).
 
 To send such a row to the dead letters instead of writing it, declare
-[`on-error: dlq`](../connectors/transformers.md#an-empty-amount-is-a-wrong-row-on-error-dlq) on its column.
+[`on-error: dlq`](../connectors/transformers.md#an-unreadable-amount-is-a-wrong-row-on-error-dlq) on its column.
 
 ## 2. Read the quarantine
 
@@ -105,7 +105,7 @@ Line 9 stopped after two values. The payload is the row as the source sent it: t
 | Reason | What it means | Where to look |
 |---|---|---|
 | `MalformedSource` | the source row itself is broken — encoding, truncated line | the file or export; a [transformer](../connectors/transformers.md) can often repair it at the door |
-| `MappingFailed` | a hook could not read a value, on a column declared [`on-error: dlq`](../connectors/transformers.md#an-empty-amount-is-a-wrong-row-on-error-dlq) | the value the message names, in the row `lm dlq get` shows |
+| `MappingFailed` | a hook could not read a value, on a column declared [`on-error: dlq`](../connectors/transformers.md#an-unreadable-amount-is-a-wrong-row-on-error-dlq) | the value the message names, in the row `lm dlq get` shows |
 | `ValidationFailed` | the row broke a declared expectation | the manifest's declaration against the data |
 | `WriteFailed` | the database write failed | the target table — types, drift; the [hub logs](logs.md) have the SQL error |
 

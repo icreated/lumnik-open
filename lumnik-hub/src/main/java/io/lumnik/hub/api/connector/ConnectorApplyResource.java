@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.api.connector.handler.ApplyResult;
@@ -46,7 +47,7 @@ public class ConnectorApplyResource {
     @Transactional
     public Response apply(String body) throws Exception {
         long tenant = RequireTenant.current();
-        if (body == null || body.isBlank()) {
+        if (Text.blank(body)) {
             return ApiErrors.badRequest("empty body");
         }
         JsonNode doc = body.trim().startsWith("{") ? json.readTree(body) : YAML.readTree(body);

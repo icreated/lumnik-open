@@ -9,7 +9,7 @@
       "type": "object",
       "required": ["kind"],
       "properties": {
-        "kind": { "enum": ["bearer", "basic", "api-key", "oauth2", "none"] }
+        "kind": { "enum": ["bearer", "basic", "api-key", "oauth2", "session", "none"] }
       }
     },
     "default_rate_limit": {

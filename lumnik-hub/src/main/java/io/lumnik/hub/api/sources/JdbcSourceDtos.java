@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.sources;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.jdbc.TableDescriptor;
 
 import java.util.List;
@@ -22,7 +23,7 @@ public class JdbcSourceDtos {
 
   /** The source schema a request names; {@code public} when absent or blank. */
   static String schemaOrDefault(String schema) {
-    return schema == null || schema.isBlank() ? "public" : schema.strip();
+    return Text.blank(schema) ? "public" : schema.strip();
   }
 
   /**

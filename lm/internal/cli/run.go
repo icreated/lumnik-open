@@ -13,6 +13,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// cellErrorsWarning is the stderr line for a run that counted cell errors; the shapes it covers are listed
+// where it is called, in the run get handler.
+func cellErrorsWarning(n int64) string {
+	return fmt.Sprintf("⚠ %d cell(s) not delivered as declared (a hook, or a promoted value of the wrong type) — the rows were still written", n)
+}
+
 func runRow(r types.Run) []string {
 	return []string{
 		shortID(r.ID), r.ConnectorLabel(), r.EndpointLabel(), r.Status,
@@ -106,20 +112,20 @@ func newRunCmd() *cobra.Command {
 					return err
 				}
 			}
-			// cell_errors counts CELLS a hook did not deliver as declared. FIVE shapes: EMPTIED (a
-			// parse hook could not read the value), LEFT AS IT ARRIVED (fix-mojibake declined to
+			// cell_errors counts CELLS not delivered as declared, from two origins. A HOOK, in FIVE shapes: EMPTIED
+			// (a parse hook could not read the value), LEFT AS IT ARRIVED (fix-mojibake declined to
 			// repair it; split left it in place with some `into` columns unfilled), or REPLACED by
 			// a value the source never sent (to-uuid on-invalid: generate), or OVERWRITTEN by a value
 			// it did send from another column (map-columns renaming onto a name the row already had
 			// - the only shape produced outside the cell tier), or DECLARED UNREADABLE by an
 			// operator's Kotlin script (`unreadable`, #1432), the cells as the script left them.
-			// The row was written in all five, so this is a lead, not a quarantine - and the wording
-			// must not claim any one shape for all of them. A PR that adds a counting site extends
-			// this list and the one in docs/connectors/transformers.md.
+			// And a PROMOTED VALUE that did not read as its declared type (rest #1398, kafka #1777), emptied:
+			// a connector with no hook at all counts these.
+			// The row was written in every shape, so this is a lead, not a quarantine - and the wording
+			// must not claim any one shape for all of them. A PR that adds a counting
+			// site extends this list and the one in docs/connectors/transformers.md.
 			if run.CellErrors > 0 {
-				if _, err := fmt.Fprintf(cmd.ErrOrStderr(),
-					"⚠ %d cell(s) a hook did not deliver as declared — the rows were still written\n",
-					run.CellErrors); err != nil {
+				if _, err := fmt.Fprintln(cmd.ErrOrStderr(), cellErrorsWarning(run.CellErrors)); err != nil {
 					return err
 				}
 			}

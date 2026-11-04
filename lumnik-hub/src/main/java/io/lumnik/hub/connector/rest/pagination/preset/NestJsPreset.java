@@ -7,6 +7,7 @@ import java.util.Map;
 public class NestJsPreset implements PaginationPreset {
     @Override public String name() { return "nestjs"; }
     @Override public Map<String, Object> expansion() {
-        return Map.of("kind", "body-link", "link_path", "$.links.next", "response_path", "$.data");
+        return Map.of("kind", "body-link", "link_path", "$.links.next", "response_path", "$.data",
+            "total_path", "$.meta.totalItems");
     }
 }

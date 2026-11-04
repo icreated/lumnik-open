@@ -7,6 +7,7 @@ import com.jayway.jsonpath.JsonPathException;
 import com.jayway.jsonpath.Option;
 import com.jayway.jsonpath.ReadContext;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.mapping.MappingValidationException;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.PromotedColumn;
@@ -138,16 +139,22 @@ public class HybridJsonbWriter {
      */
     public static List<Map<String, Object>> promoted(HybridJsonbSpec spec, List<Map<String, Object>> items,
                                                      IntConsumer unreadableAt) {
-        List<JsonPath> colPaths = paths(spec);
+        return promoted(spec.promote(), items, unreadableAt);
+    }
+
+    /** {@link #promoted(HybridJsonbSpec, List, IntConsumer)} over a bare promote list — kafka's (#1777). */
+    public static List<Map<String, Object>> promoted(List<PromotedColumn> promote, List<Map<String, Object>> items,
+                                                     IntConsumer unreadableAt) {
+        List<JsonPath> colPaths = paths(promote);
         List<Map<String, Object>> rows = new ArrayList<>(items.size());
         for (int i = 0; i < items.size(); i++) {
             ReadContext ctx = JsonPath.using(JP).parse(json(items.get(i)));
             Map<String, Object> row = new LinkedHashMap<>();
             for (int ci = 0; ci < colPaths.size(); ci++) {
                 if (colPaths.get(ci) == null) continue;
-                Object val = pathValue(ctx, colPaths.get(ci), spec.promote().get(ci));
+                Object val = pathValue(ctx, colPaths.get(ci), promote.get(ci));
                 if (val == UNREADABLE) unreadableAt.accept(i);
-                row.put(spec.promote().get(ci).name(), val == UNREADABLE ? null : val);
+                row.put(promote.get(ci).name(), val == UNREADABLE ? null : val);
             }
             rows.add(row);
         }
@@ -195,8 +202,12 @@ public class HybridJsonbWriter {
 
     /** One compiled path per promoted column, {@code null} for a column a mapping fills. */
     private static List<JsonPath> paths(HybridJsonbSpec spec) {
-        List<JsonPath> paths = new ArrayList<>(spec.promote().size());
-        for (PromotedColumn p : spec.promote()) paths.add(p.jsonPath() == null ? null : JsonPath.compile(p.jsonPath()));
+        return paths(spec.promote());
+    }
+
+    private static List<JsonPath> paths(List<PromotedColumn> promote) {
+        List<JsonPath> paths = new ArrayList<>(promote.size());
+        for (PromotedColumn p : promote) paths.add(p.jsonPath() == null ? null : JsonPath.compile(p.jsonPath()));
         return paths;
     }
 
@@ -295,6 +306,24 @@ public class HybridJsonbWriter {
 
     // ── Schema management ────────────────────────────────────────────────────
 
+    /** The {@code CREATE TABLE}: the reserved columns ({@link HybridJsonbSpec#RESERVED_COLUMNS}) with the promoted ones between. */
+    static String createTableSql(String qfqTable, List<PromotedColumn> promote) {
+        StringBuilder sb = new StringBuilder("CREATE TABLE IF NOT EXISTS ")
+            .append(qfqTable).append(" (")
+            .append("id BIGSERIAL PRIMARY KEY, ")
+            .append("tenant_id BIGINT NOT NULL, ")
+            .append("external_id TEXT NOT NULL, ");
+        for (PromotedColumn col : promote) {
+            sb.append(qi(col.name())).append(' ').append(col.type().ddl).append(", ");
+        }
+        return sb.append("row_hash TEXT, ")
+            .append("data JSONB NOT NULL, ")
+            .append("indexed_at TIMESTAMPTZ DEFAULT now(), ")
+            .append("connector_id UUID NOT NULL, ")
+            .append("endpoint_id UUID NOT NULL, ")
+            .append("UNIQUE (tenant_id, external_id))").toString();
+    }
+
     /** @return true when the table was created or any column was added — the caller then
      *  refreshes the registry entry so the schema card follows the drift (DynamicTableWriter
      *  re-registers on evolve; same contract here). */
@@ -370,21 +399,7 @@ public class HybridJsonbWriter {
                 s.execute(RlsDdl.guarded(RlsDdl.grantSchemaUsageReadonly(schemaName)));
             }
 
-            StringBuilder sb = new StringBuilder("CREATE TABLE IF NOT EXISTS ")
-                .append(qfqTable).append(" (")
-                .append("id BIGSERIAL PRIMARY KEY, ")
-                .append("tenant_id BIGINT NOT NULL, ")
-                .append("external_id TEXT NOT NULL, ");
-            for (PromotedColumn col : spec.promote()) {
-                sb.append(qi(col.name())).append(' ').append(col.type().ddl).append(", ");
-            }
-            sb.append("row_hash TEXT, ")
-              .append("data JSONB NOT NULL, ")
-              .append("indexed_at TIMESTAMPTZ DEFAULT now(), ")
-              .append("connector_id UUID NOT NULL, ")
-              .append("endpoint_id UUID NOT NULL, ")
-              .append("UNIQUE (tenant_id, external_id))");
-            s.execute(sb.toString());
+            s.execute(createTableSql(qfqTable, spec.promote()));
 
             String idxName = indexName(tableName, "data_gin");
             s.execute("CREATE INDEX IF NOT EXISTS " + qi(idxName) +
@@ -510,7 +525,7 @@ public class HybridJsonbWriter {
     private static final Pattern DECIMAL_NUMERAL = Pattern.compile("-?\\d{1,38}(\\.\\d{1,38})?");
 
     /** A promoted value that does not read as its column's type: bound NULL, counted as a cell error (#1398). */
-    static final Object UNREADABLE = new Object();
+    public static final Object UNREADABLE = new Object();
 
     /**
      * The value as its declared column type, or {@link #UNREADABLE} (#1398). A JSON API sends instants — and
@@ -519,7 +534,7 @@ public class HybridJsonbWriter {
      * {@code parse_iso8601} and the view filters share), a numeral as a number, {@code true}/{@code false} as a
      * boolean. What does not read is one cell, not the run.
      */
-    static Object converted(Object val, SqlType type) {
+    public static Object converted(Object val, SqlType type) {
         if (val == null || val == UNREADABLE) return val;
         try {
             return switch (type) {
@@ -652,7 +667,7 @@ public class HybridJsonbWriter {
 
     /** A YAML-configured table/column name must be present before it is quoted. */
     private static String qi(String ident) {
-        if (ident == null || ident.isBlank()) throw new IllegalArgumentException("identifier required");
+        if (Text.blank(ident)) throw new IllegalArgumentException("identifier required");
         return quoteIdent(ident);
     }
 
@@ -663,7 +678,7 @@ public class HybridJsonbWriter {
      * Package-visible so the guard can be pinned without a live datasource.
      */
     static String fqn(String fqTable) {
-        if (fqTable == null || fqTable.isBlank()) throw new IllegalArgumentException("identifier required");
+        if (Text.blank(fqTable)) throw new IllegalArgumentException("identifier required");
         if (fqTable.startsWith(".") || fqTable.endsWith(".")) {
             throw new IllegalArgumentException("blank identifier segment");
         }

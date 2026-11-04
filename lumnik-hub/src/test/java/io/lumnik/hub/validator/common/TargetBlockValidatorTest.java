@@ -39,31 +39,15 @@ class TargetBlockValidatorTest {
         assertTrue(errs.isEmpty(), () -> "expected no errors for indexes list, got: " + errs);
     }
 
-    @Test void validateIndexes_validList_noErrors() throws Exception {
-        var node = mapper.readTree("[{\"columns\":[\"email\"]},{\"columns\":[\"a\",\"b\"],\"unique\":true}]");
-        assertTrue(TargetBlockValidator.validateIndexes(node, "spec.target.indexes").isEmpty());
+    @Test void noIndexes_orIndexesWrittenEmpty_isClean() throws Exception {
+        for (String json : List.of("{}", "{\"indexes\":null}", "{\"indexes\":[]}")) {
+            assertTrue(run(json).isEmpty(), () -> json);
+        }
     }
 
-    @Test void validateIndexes_missingOrNull_noErrors() throws Exception {
-        assertTrue(TargetBlockValidator.validateIndexes(mapper.readTree("{}").path("indexes"), "p").isEmpty());
-        assertTrue(TargetBlockValidator.validateIndexes(mapper.readTree("null"), "p").isEmpty());
-    }
-
-    /**
-     * The shape refusal MOVED, so the test follows it. It used to live here, in the per-entry
-     * walker, and the declaration refused the same node one tier up — one mistake, two errors, on
-     * one path. The walker now bails on a non-array and the declaration owns the shape, hint
-     * included; the two tests below assert both halves of that division, so neither can quietly
-     * take the other's job back.
-     */
-    @Test void validateIndexes_notAnArray_isNoLongerThisWalkersRefusal() throws Exception {
-        var errs = TargetBlockValidator.validateIndexes(mapper.readTree("\"nope\""), "spec.target.indexes");
-        assertTrue(errs.isEmpty(), () -> "the declaration refuses the shape, not this walker: " + errs);
-    }
-
+    /** One refusal for what is no list, at the list — not one more per element, which would be the same mistake twice. */
     @Test void indexesThatIsNotAList_isRefusedByTheDeclaration_withItsHint() throws Exception {
-        List<ValidationError> errs = ConfigDefRunner.run(
-            TargetBlockValidator.configDef(), mapper.readTree("{\"indexes\":\"nope\"}"), "spec.target");
+        List<ValidationError> errs = run("{\"indexes\":\"nope\"}");
         assertEquals(1, errs.size(), () -> "exactly one refusal: " + errs);
         assertEquals("spec.target.indexes", errs.get(0).path());
         assertSame(ValidationError.Severity.ERROR, errs.get(0).severity());
@@ -71,13 +55,24 @@ class TargetBlockValidatorTest {
             () -> "the refusal must still teach the shape: " + errs.get(0));
     }
 
-    @Test void validateIndexes_malformedEntries_eachFailsWithError() throws Exception {
+    /** The runtime drops a malformed entry in silence — the user would get a "valid" config with missing indexes. */
+    @Test void malformedEntries_eachFailsOnceAtItsOwnPath() throws Exception {
         // 1=not-object, "x"=not-object, {}=no columns, {columns:[]}=empty,
         // {columns:[123]}=non-string col, {columns:[a],unique:"yes"}=non-boolean unique
-        var node = mapper.readTree(
-            "[1,\"x\",{},{\"columns\":[]},{\"columns\":[123]},{\"columns\":[\"a\"],\"unique\":\"yes\"}]");
-        var errs = TargetBlockValidator.validateIndexes(node, "spec.target.indexes");
-        assertEquals(6, errs.size(), () -> "one error per malformed entry; got: " + errs);
+        var errs = run("{\"indexes\":[1,\"x\",{},{\"columns\":[]},{\"columns\":[123]},{\"columns\":[\"a\"],\"unique\":\"yes\"}]}");
+
+        assertEquals(List.of("spec.target.indexes[0]", "spec.target.indexes[1]", "spec.target.indexes[2].columns",
+                "spec.target.indexes[3].columns", "spec.target.indexes[4].columns", "spec.target.indexes[5].unique"),
+            errs.stream().map(ValidationError::path).toList(), () -> errs.toString());
         assertTrue(errs.stream().allMatch(e -> e.severity() == ValidationError.Severity.ERROR));
+    }
+
+    @Test void anEmptyColumnsTeachesWhatToWrite() throws Exception {
+        var errs = run("{\"indexes\":[{\"columns\":[]}]}");
+        assertTrue(errs.get(0).recommendations().stream().anyMatch(h -> h.contains("columns: [email]")), () -> errs.toString());
+    }
+
+    private List<ValidationError> run(String json) throws Exception {
+        return ConfigDefRunner.run(TargetBlockValidator.configDef(), mapper.readTree(json), "spec.target");
     }
 }

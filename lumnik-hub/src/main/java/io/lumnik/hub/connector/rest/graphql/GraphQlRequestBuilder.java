@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.rest.graphql;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.Urls;
 
@@ -35,7 +36,7 @@ public final class GraphQlRequestBuilder {
     /** Resolves the GraphQL URL: a blank {@code graphql_path} defaults to {@code /graphql}, then
      *  {@link Urls#join} normalizes the slash between {@code base_url} and the path. */
     static String resolveUrl(String baseUrl, String graphqlPath) {
-        String path = (graphqlPath == null || graphqlPath.isBlank()) ? "/graphql" : graphqlPath.trim();
+        String path = Text.blank(graphqlPath) ? "/graphql" : graphqlPath.trim();
         return Urls.join(baseUrl, path);
     }
 }

@@ -25,8 +25,12 @@ public final class ParserBlockValidator {
             .optional("lines", Type.BOOLEAN, Importance.MEDIUM,
                 "One line = one row, one column (`line`): no delimiter, no quoting — fixed-width files, logs", false)
             .optional("columns", Type.LIST, Importance.MEDIUM,
-                "Column names in file order — REQUIRED when has_header: false "
-                    + "(cross-checked by the csv validator)", null)
+                "Column names in file order", null)
+                // lines: true names its one column itself; the parser rule that refuses has_header beside it answers for that.
+                .requiredWhen("has_header is false and lines is off",
+                    p -> p.path("has_header").isBoolean() && !p.path("has_header").asBoolean()
+                        && !p.path("lines").asBoolean(false))
+                .hint("Add parser.columns: [code, name, ...] in file order")
             // C3: every runtime-accepted parser key is declared above — typos warn.
             .closed();
     }

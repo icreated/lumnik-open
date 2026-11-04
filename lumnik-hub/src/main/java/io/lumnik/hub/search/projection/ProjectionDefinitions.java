@@ -42,9 +42,15 @@ public final class ProjectionDefinitions {
         for (ProjectionField f : declared.fields()) now.put(f.name(), f);
         for (ProjectionField was : built.fields()) {
             ProjectionField is = now.get(was.name());
-            if (is == null || (was.mode() != null && was.mode() != is.mode()) || (was.facet() && !is.facet())) return true;
+            if (droppedOrNarrowed(was, is)) return true;
         }
         return false;
+    }
+
+    /** The field is gone, or its search mode changed, or it lost its facet. A null {@code was} mode is no claim
+     *  (a returned-only field), never a change. */
+    private static boolean droppedOrNarrowed(ProjectionField was, ProjectionField is) {
+        return is == null || (was.mode() != null && was.mode() != is.mode()) || (was.facet() && !is.facet());
     }
 
     /** A stored declaration's definition, or empty when its YAML no longer parses (parser-version skew): what

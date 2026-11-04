@@ -17,7 +17,7 @@ class SourceBlockValidatorTest {
         // a supported manifest key (wave-finale inventory refutation); it must not warn.
         List<ValidationError> errs = ConfigDefRunner.run(
             SourceBlockValidator.perTableDef(),
-            mapper.readTree("{\"name\":\"orders\",\"mode\":\"full\",\"schema\":\"public\","
+            mapper.readTree("{\"name\":\"orders\",\"mode\":\"full\",\"schema\":\"public\",\"pk_columns\":[\"id\"],"
                 + "\"indexes\":[{\"columns\":[\"email\"],\"unique\":true}]}"),
             "spec.source.tables[0]");
         assertTrue(errs.isEmpty(), () -> "indexes is honored — no warning allowed, got: " + errs);

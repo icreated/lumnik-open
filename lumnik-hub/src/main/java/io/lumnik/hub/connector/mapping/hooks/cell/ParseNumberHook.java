@@ -12,10 +12,13 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 @ApplicationScoped
 @HookId("parse-number")
 public class ParseNumberHook implements CellHook {
+
+  private static final Pattern NOISE = Pattern.compile("[\\s$€£¥]");
 
   private static final List<String> SEPARATORS = List.of("auto", ".", ",");
 
@@ -42,7 +45,7 @@ public class ParseNumberHook implements CellHook {
   public void apply(Map<String, Object> row, JsonNode params, MappingState s) {
     String col = params.path("column").asText();
     Object v = row.get(col);
-    if (v == null) return;
+    if (v == null || BlankCell.emptied(row, col, v)) return;
     boolean integer = params.path("integer").asBoolean(false);
     if (v instanceof Number && !integer) return; // already numeric
     try {
@@ -85,7 +88,7 @@ public class ParseNumberHook implements CellHook {
     }
 
     // Strip currency symbols, spaces
-    str = str.replaceAll("[\\s$€£¥]", "");
+    str = NOISE.matcher(str).replaceAll("");
 
     BigDecimal n = new BigDecimal(str);
     return negative ? n.negate() : n;

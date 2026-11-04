@@ -255,10 +255,12 @@ class SoapConnectorIT {
             .withRequestBody(containing("<StartRowNum>6</StartRowNum>"))
             .willReturn(aResponse().withHeader("Content-Type", "text/xml")
                 .withBody(page.replace("<LastPage>false</LastPage>", "<LastPage>true</LastPage>"))));
-        // The second page is slow, so the cancel is asked while it is in flight.
+        // The second page is slow, so the cancel is asked while it is in flight. Its own rows: a page answered twice
+        // in a row is refused before the cancel is read (#1753).
         stubFor(post(urlPathEqualTo("/eai")).atPriority(1)
             .withRequestBody(containing("<StartRowNum>2</StartRowNum>"))
-            .willReturn(aResponse().withHeader("Content-Type", "text/xml").withBody(page).withFixedDelay(1500)));
+            .willReturn(aResponse().withHeader("Content-Type", "text/xml")
+                .withBody(page.replace("<Id>a</Id>", "<Id>c</Id>").replace("<Id>b</Id>", "<Id>d</Id>")).withFixedDelay(1500)));
 
         UUID id = seed(connJson(), "/eai", epJson(table));
 

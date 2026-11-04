@@ -2,6 +2,7 @@ package io.lumnik.hub.api.sources;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.common.text.Text;
 import org.jboss.resteasy.reactive.RestForm;
 import org.jboss.resteasy.reactive.multipart.FileUpload;
 
@@ -63,7 +64,7 @@ public class CsvIngestForm {
      */
     public Map<String, Object> resolveTransport() {
         if (transport != null) return transport;
-        if (transportJson != null && !transportJson.isBlank()) {
+        if (Text.present(transportJson)) {
             try {
                 return MAPPER.readValue(transportJson, new TypeReference<Map<String, Object>>() {});
             } catch (Exception e) {

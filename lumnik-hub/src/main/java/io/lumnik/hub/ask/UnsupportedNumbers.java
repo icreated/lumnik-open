@@ -1,5 +1,6 @@
 package io.lumnik.hub.ask;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.ask.SqlLexer;
 import io.lumnik.extraction.spi.ask.SqlLexer.Kind;
 import io.lumnik.extraction.spi.ask.SqlLexer.Token;
@@ -66,7 +67,7 @@ final class UnsupportedNumbers {
 
     /** The unbacked numbers of {@code answer}, as written, each once, in order of appearance; {@code sql} ran. */
     static List<String> in(String answer, List<Map<String, Object>> rows, String sql) {
-        if (answer == null || answer.isBlank()) return List.of();
+        if (Text.blank(answer)) return List.of();
         List<BigDecimal> backed = backedBy(rows);
         backed.addAll(comparedIn(sql));
         String text = LIST_MARKER.matcher(answer).replaceAll(" ");

@@ -9,12 +9,11 @@ import io.lumnik.hub.validator.ConfigDef.Importance;
 import io.lumnik.hub.validator.ConfigDef.Type;
 import io.lumnik.hub.validator.ConfigDefRunner;
 import io.lumnik.hub.validator.ConnectorValidator;
-import io.lumnik.hub.validator.JsonNodes;
+import io.lumnik.hub.json.JsonNodes;
 import io.lumnik.hub.validator.ValidationError;
 import io.lumnik.hub.validator.ValidationError.Severity;
 import io.lumnik.hub.validator.common.CronField;
 import io.lumnik.hub.validator.common.NoMappingBlock;
-import io.lumnik.hub.validator.common.TargetBlockValidator;
 import io.lumnik.hub.validator.common.WindowField;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -43,7 +42,7 @@ public class JdbcConnectorValidator implements ConnectorValidator {
         return new ConfigDef()
             .requireNested("connection", Importance.HIGH, "JDBC connection",
                 ConnectionBlockValidator.configDef())
-            .optional("defaults", Type.NESTED, Importance.LOW, "Per-table defaults", null)
+            .optionalNested("defaults", Importance.LOW, "Per-table defaults", SourceBlockValidator.defaultsDef())
             .requireNested("source", Importance.HIGH, "Source tables",
                 SourceBlockValidator.configDef())
             .optional("schedule", Type.STRING, Importance.MEDIUM,
@@ -119,12 +118,6 @@ public class JdbcConnectorValidator implements ConnectorValidator {
 
     private void validateTables(JsonNode defaults, JsonNode tables, List<ValidationError> errs) {
         if (!tables.isArray()) return;
-        if (tables.isEmpty()) {
-            errs.add(new ValidationError("spec.source.tables", Severity.ERROR,
-                "at least one table is required",
-                List.of("Add a table: { name: 'invoices', mode: 'full', pk_columns: ['id'] }")));
-            return;
-        }
         Set<String> seen = new HashSet<>();
         Map<String, String> hubTables = new HashMap<>();
         for (int i = 0; i < tables.size(); i++) {
@@ -153,37 +146,7 @@ public class JdbcConnectorValidator implements ConnectorValidator {
                 "duplicate table name: " + name, List.of()));
         }
 
-        // Declarative indexes are per-table for jdbc, matching what the runtime parser reads.
-        errs.addAll(TargetBlockValidator.validateIndexes(
-            merged.path("indexes"), basePath + ".indexes"));
-
-        String mode = merged.path("mode").asText();
-        if ("watermark".equals(mode) && merged.path("watermark_column").isMissingNode()) {
-            errs.add(new ValidationError(basePath + ".watermark_column", Severity.ERROR,
-                "watermark_column is required when mode=watermark",
-                List.of("Example: watermark_column: updated_at")));
-        }
-
-        JsonNode pk = merged.path("pk_columns");
-        if (pk.isMissingNode() || (pk.isArray() && pk.isEmpty())) {
-            errs.add(new ValidationError(basePath + ".pk_columns", Severity.ERROR,
-                "pk_columns is required and must be non-empty",
-                List.of("Example: pk_columns: [id]")));
-        }
-
         validateRename(merged.path("rename"), basePath + ".rename", errs);
-
-        // chunk_size was a dead knob — validated here for months while no execution code ever
-        // read it (the engine always reads type.defaultChunkSize() = 500). Refuse it loudly
-        // rather than accept-and-ignore, so no manifest can claim a lever that does not exist
-        // (decision #286; the CSV validator warns for its dead knob — jdbc refuses because its
-        // doc sold the knob as live).
-        JsonNode chunk = merged.path("chunk_size");
-        if (!chunk.isMissingNode()) {
-            errs.add(new ValidationError(basePath + ".chunk_size", Severity.ERROR,
-                "chunk_size is not a knob — jdbc chunking is fixed at 500 rows per read; remove it",
-                List.of("The engine reads its chunk size from the connector type, never from the manifest")));
-        }
     }
 
     /**

@@ -1,7 +1,7 @@
 package io.lumnik.hub.manifest;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.common.text.Text;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -25,8 +25,7 @@ public class ModuleManifestRegistry {
     private static final Logger LOG = Logger.getLogger(ModuleManifestRegistry.class);
     private static final String MANIFEST_PATH = "META-INF/module-manifest.yaml";
 
-    private final ObjectMapper yaml = HubYaml.mapper()
-        .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    private final ObjectMapper yaml = HubYaml.lenientMapper();
 
     private List<ModuleManifest> manifests = List.of();
     private List<ModuleStatus> statuses = List.of();
@@ -109,7 +108,7 @@ public class ModuleManifestRegistry {
     }
 
     private void validate(ModuleManifest m, URL source) {
-        if (m.id() == null || m.id().isBlank())
+        if (Text.blank(m.id()))
             throw new IllegalStateException("Manifest at " + source + " is missing 'id'");
         if (m.manifestVersion() < 1)
             throw new IllegalStateException("Manifest '" + m.id() + "' has invalid manifest_version");

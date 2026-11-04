@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.pagination;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.rest.Urls;
 
@@ -110,7 +111,7 @@ public final class PaginationUrlGuard {
 
     /** Lower-cased, trailing-FQDN-dot stripped. */
     private static String normalizeHost(String host, String url) {
-        if (host == null || host.isBlank()) throw refuse(url, "missing host");
+        if (Text.blank(host)) throw refuse(url, "missing host");
         String h = host.toLowerCase(Locale.ROOT);
         return h.endsWith(".") ? h.substring(0, h.length() - 1) : h;
     }

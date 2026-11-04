@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.rest.pagination;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
@@ -53,7 +54,7 @@ public final class PaginationSupport {
     public static OptionalLong declaredItems(RestResponse resp, String totalPath, String totalHeader) {
         if (optional(totalHeader) == null) return declaredItems(resp.json(), totalPath);
         String text = resp.header(totalHeader).map(String::strip).orElse(null);
-        if (text == null || text.isEmpty()) return OptionalLong.empty();
+        if (Text.blank(text)) return OptionalLong.empty();
         if (!ROW_COUNT.matcher(text).matches()) {
             throw new ConnectorException("pagination.total_header must read a row count: a whole number from 0");
         }
@@ -136,7 +137,7 @@ public final class PaginationSupport {
 
     /** An optional config value: a blank one means none, as an absent one does (a templated manifest leaves {@code ""}). */
     public static String optional(String value) {
-        return value == null || value.isBlank() ? null : value;
+        return Text.blank(value) ? null : value;
     }
 
     private static String jsonType(Object v) {

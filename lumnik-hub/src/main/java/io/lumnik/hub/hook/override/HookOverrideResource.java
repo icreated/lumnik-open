@@ -1,5 +1,6 @@
 package io.lumnik.hub.hook.override;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.hook.HookOverrideStore;
 import io.lumnik.hub.hook.HookTenantOverrideRepository;
@@ -70,7 +71,7 @@ public class HookOverrideResource {
     @POST @Consumes(MediaType.APPLICATION_JSON)
     public Response upsert(UpsertRequest req) {
         if (req.tenantId() == null) throw new BadRequestException("tenantId required");
-        if (req.hookId() == null || req.hookId().isBlank()) throw new BadRequestException("hookId required");
+        if (Text.blank(req.hookId())) throw new BadRequestException("hookId required");
         Require.callerOwnsTenant(req.tenantId());
         store.setScript(req.tenantId(), req.hookId(), req.script());
         return Response.noContent().build();

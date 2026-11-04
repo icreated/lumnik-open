@@ -9,6 +9,9 @@ import java.util.Map;
 
 public class RelayPaginationStrategy implements PaginationStrategy {
 
+    /** Where a GraphQL query goes when {@code graphql_path} is not given; published as that field's default. */
+    public static final String DEFAULT_GRAPHQL_PATH = "/graphql";
+
     private static final String QUERY = "query";
 
     private final String cursorPath, hasMorePath, responsePath;
@@ -37,7 +40,7 @@ public class RelayPaginationStrategy implements PaginationStrategy {
             Object gqlPath = cfg.raw().get("graphql_path");
             return GraphQlRequestBuilder.first(
                 cfg.baseUrl(),
-                gqlPath instanceof String s ? s : "/graphql",
+                gqlPath instanceof String s ? s : DEFAULT_GRAPHQL_PATH,
                 String.valueOf(query),
                 vars instanceof Map<?, ?> m ? (Map<String, Object>) m : Map.of());
         }

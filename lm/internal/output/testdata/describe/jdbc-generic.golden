@@ -1,0 +1,85 @@
+connection           REQUIRED  [NESTED, HIGH]
+  JDBC connection
+  url                  REQUIRED  [STRING, HIGH]
+    JDBC URL — jdbc:<dialect>://... (the dialect's provider must be installed)
+  user                 REQUIRED  [STRING, HIGH]
+    DB user
+  password_env         REQUIRED  [STRING, HIGH]
+    Name of the DB password: a hub environment variable, else an lm secret
+  dialect              optional  [STRING, LOW]
+    JDBC dialect (inferred from url scheme if absent)
+  zone                 optional  [STRING, LOW]
+    Time zone the source writes its dates-and-times without a zone in, for example Europe/Paris (read as UTC if absent)
+  password             optional  [STRING, LOW]
+    Plain-text DB password (dev/test only — wins over password_env; prefer password_env)
+defaults             optional  [NESTED, LOW]
+  Per-table defaults
+  mode                 optional  [STRING, HIGH]
+    Ingest mode (here or in defaults)
+    one of: watermark, full
+  schema               optional  [STRING, HIGH]
+    Table schema (here or in defaults)
+  watermark_column     optional  [STRING, MEDIUM]
+    The column a watermark read moves forward on
+    → Example: watermark_column: updated_at
+  pk_columns           optional  [LIST, HIGH]
+    Primary key columns (non-empty; here or in defaults)
+    → Example: pk_columns: [id]
+  indexes              optional  [LIST, LOW]
+    Secondary indexes on the target table: [{columns: [...], unique?: bool (default false)}]
+    → indexes is a list of { columns: [...], unique?: bool } objects — e.g. indexes: [{ columns: [email] }]
+    indexes[]
+      columns              REQUIRED  [LIST, HIGH]
+        Columns of the index, in order
+        → e.g. columns: [email] or [bpartner_id, dateordered]
+      unique               optional  [BOOLEAN, LOW]
+        Unique index (default false)
+        default: false
+  rename               optional  [NESTED, LOW]
+    Rename source columns before they become hub columns: {source: target}
+  refused when given — the runtime never reads these:
+    chunk_size           chunk_size is not a knob — jdbc chunking is fixed at 500 rows per read; remove it
+      → The engine reads its chunk size from the connector type, never from the manifest
+source               REQUIRED  [NESTED, HIGH]
+  Source tables
+  tables               REQUIRED  [LIST, HIGH]
+    List of tables to ingest (at least one)
+    → Add a table: { name: 'invoices', mode: 'full', pk_columns: ['id'] }
+    tables[]
+      name                 REQUIRED  [STRING, HIGH]
+        Table name — also names the hub table connector.t_<name>, unless target names it
+      target               optional  [STRING, MEDIUM]
+        Names the hub table connector.t_<target> in place of the source table's name (#1199)
+      mode                 REQUIRED  [STRING, HIGH]
+        Ingest mode (here or in defaults)
+        one of: watermark, full
+      schema               REQUIRED  [STRING, HIGH]
+        Table schema (here or in defaults)
+      watermark_column     optional  [STRING, MEDIUM]
+        The column a watermark read moves forward on
+        required when mode = watermark
+        → Example: watermark_column: updated_at
+      pk_columns           REQUIRED  [LIST, HIGH]
+        Primary key columns (non-empty; here or in defaults)
+        → Example: pk_columns: [id]
+      indexes              optional  [LIST, LOW]
+        Secondary indexes on the target table: [{columns: [...], unique?: bool (default false)}]
+        → indexes is a list of { columns: [...], unique?: bool } objects — e.g. indexes: [{ columns: [email] }]
+        indexes[]
+          columns              REQUIRED  [LIST, HIGH]
+            Columns of the index, in order
+            → e.g. columns: [email] or [bpartner_id, dateordered]
+          unique               optional  [BOOLEAN, LOW]
+            Unique index (default false)
+            default: false
+      rename               optional  [NESTED, LOW]
+        Rename source columns before they become hub columns: {source: target}
+      refused when given — the runtime never reads these:
+        chunk_size           chunk_size is not a knob — jdbc chunking is fixed at 500 rows per read; remove it
+          → The engine reads its chunk size from the connector type, never from the manifest
+schedule             optional  [STRING, MEDIUM]
+  Cron expression for recurring ingestion
+window               optional  [STRING, MEDIUM]
+  Fence scheduled runs to a UTC time window, HH:MM-HH:MM (a manual run bypasses it)
+mapping              optional  [NESTED, LOW]
+  Not accepted — refused by validation (rows land as the source holds them)

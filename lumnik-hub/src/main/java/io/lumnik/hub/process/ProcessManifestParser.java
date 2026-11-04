@@ -1,7 +1,7 @@
 package io.lumnik.hub.process;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.manifest.ManifestKeys;
 import io.lumnik.hub.manifest.ManifestSurface;
 
@@ -45,13 +45,7 @@ public class ProcessManifestParser {
      * {@link #parse}'s error to raise, not this check's). Reporting only; the apply door refuses.
      */
     public List<String> unknownKeys(String yaml) {
-        JsonNode root;
-        try {
-            root = SURFACE.readTree(yaml);
-        } catch (Exception e) {
-            return List.of();
-        }
-        return unknownKeys(root);
+        return SURFACE.unknownKeys(yaml);
     }
 
     public List<String> unknownKeys(JsonNode root) {
@@ -76,11 +70,7 @@ public class ProcessManifestParser {
      * once and reuse the node for both parse() and unknownKeys().
      */
     JsonNode readTree(String yaml) {
-        try {
-            return SURFACE.readTree(yaml);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("invalid kind:Process manifest: " + e.getMessage(), e);
-        }
+        return SURFACE.readTree(yaml, "Process");
     }
 
     public ProcessManifest parse(String yaml) {
@@ -101,18 +91,14 @@ public class ProcessManifestParser {
             throw new IllegalArgumentException(
                 "metadata.name must be a simple identifier (a-z, 0-9, -): " + name);
 
-        String scope = ManifestKeys.requiredText(spec, "scope", "spec.scope");
-        // the tag becomes the case-sensitive Keycloak role scope:<tag> — the same rule
-        // AppManifestParser, ViewManifestParser, ScopesValidator and EntityManifestParser ask (#577).
-        ScopeGrants.nameProblem(scope)
-            .ifPresent(problem -> { throw new IllegalArgumentException("spec.scope: " + problem); });
+        String scope = ManifestKeys.scopeTag(ManifestKeys.requiredText(spec, "scope", "spec.scope"));
         JsonNode on = spec.path("on");
         String onEvent = ManifestKeys.text(on, "event");
         if (!TRIGGER.equals(onEvent))
             throw new IllegalArgumentException(
                 "spec.on.event must be '" + TRIGGER + "' (the only v1 trigger), got: " + onEvent);
         String onTable = ManifestKeys.text(on, "table");
-        if (onTable == null || onTable.isBlank())
+        if (Text.blank(onTable))
             throw new IllegalArgumentException("spec.on.table is required (the raw table whose rows trigger)");
         List<String> when = new ArrayList<>();
         for (JsonNode w : spec.path("when")) when.add(w.asText());

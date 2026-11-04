@@ -8,7 +8,7 @@
 #
 # Preset `stripe` expands to kind: cursor (cursor_param starting_after, cursor_path
 # $.data[-1:].id, has_more_path $.has_more, response_path $.data); preset `drf-page` expands to
-# kind: body-link (link_path $.next, response_path $.results). Neither sends a page-size
+# kind: body-link (link_path $.next, response_path $.results, total_path $.count). Neither sends a page-size
 # parameter — see the page-size note in rest.md — so `page_size` rides in the DRF endpoint's
 # own `path:`, which the request builder extends with `&`.
 #

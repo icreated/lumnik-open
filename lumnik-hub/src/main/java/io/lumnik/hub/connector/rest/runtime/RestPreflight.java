@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.runtime;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.domain.EffectiveConfig;
@@ -169,6 +170,6 @@ public class RestPreflight {
 
     private static String describe(Throwable t) {
         String msg = t.getMessage();
-        return msg == null || msg.isBlank() ? t.getClass().getSimpleName() : msg;
+        return Text.blank(msg) ? t.getClass().getSimpleName() : msg;
     }
 }

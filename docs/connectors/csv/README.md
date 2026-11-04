@@ -28,7 +28,7 @@ lm connector run csv-local-simple
 | `45-s3-headerless-archive.yaml` | A headerless, tab-separated export under an S3 prefix (`parser.columns`), archived to another bucket after commit. |
 | `60-s3-every-transformer.yaml` | One S3 export run through most `spec.mapping` transformers, in one manifest. |
 | `70-fill-down.yaml`, `71-fill-down-reset.yaml` | `fill-down` on a bank statement, then with `reset-when` on an order export — [Transformers](../transformers.md#fill-down-a-value-written-once-for-the-rows-that-follow). |
-| `72-on-error-dlq.yaml` | An invoice without a readable amount goes to the dead letters — [Transformers](../transformers.md#an-empty-amount-is-a-wrong-row-on-error-dlq). |
+| `72-on-error-dlq.yaml` | An invoice whose amount cannot be read (`n/a`) goes to the dead letters; a blank amount is `validate-row`'s — [Transformers](../transformers.md#an-unreadable-amount-is-a-wrong-row-on-error-dlq). |
 | `73-lines-fixed-width.yaml` | A fixed-width payroll file read with `lines: true`, cut by position — [CSV & files](../csv.md#parser). |
 
 > **Remote cursor:** remote connectors (`sftp`, `s3`) track a per-file watermark — each run ingests

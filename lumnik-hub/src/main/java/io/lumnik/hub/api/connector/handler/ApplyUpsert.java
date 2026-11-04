@@ -6,7 +6,7 @@ import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
-import io.lumnik.hub.validator.JsonNodes;
+import io.lumnik.hub.json.JsonNodes;
 
 import java.util.List;
 import java.util.Map;

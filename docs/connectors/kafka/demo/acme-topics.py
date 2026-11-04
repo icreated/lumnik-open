@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ACME topics — the broker every screen on docs/connectors/kafka.md reads.
 
-One file that creates, fills and proves eleven topics on the Redpanda started by the
+One file that creates, fills and proves twelve topics on the Redpanda started by the
 docker-compose.yml beside it. The SAME 2 400 fictional ACME partners as the REST demo
 (docs/connectors/rest/demo/acme-api.py), generated from the row number, so a partner has the
 same name and city on both pages and screens can be compared. Nothing is read from disk.
@@ -15,7 +15,7 @@ same name and city on both pages and screens can be compared. Nothing is read fr
 
 Each topic is shaped for one sentence of the page: six partitions for the per-partition
 cursor, deterministic poison for the DLQ, a compacted topic with tombstones, a schema that
-changes halfway, a top-level `id`, names a column cannot be, a log that can be trimmed, an
+changes halfway, a top-level `id`, names a column cannot be, a reading nested in a LoRaWAN event, a log that can be trimmed, an
 empty topic, a live one, and one that must never exist.
 
 Dependency: `python3 -m pip install confluent-kafka` (Kafka has no stdlib client).
@@ -76,6 +76,28 @@ def order(n):
     }
 
 
+def probe_event(i):
+    """A ChirpStack v4 event as its Kafka integration publishes it (JSON): the store's cold-room probes.
+    Every tenth is a `status` event — ChirpStack sends every event type on one topic — and the rest are
+    `up` events whose decoded reading sits under `object`. Uplink 250's codec reports a sensor fault as
+    text, where a number should be."""
+    device = i % 5
+    head = {
+        "deduplicationId": f"00000000-0000-4000-8000-{i:012d}",
+        "time": iso(EPOCH + timedelta(minutes=i)),
+        "deviceInfo": {"tenantName": "ACME Stores", "applicationName": "cold-room-probes",
+                       "deviceProfileName": "haccp-probe", "deviceName": f"PROBE-{device + 1:02d}",
+                       "devEui": f"a84041000181c0{device + 1:02x}", "tags": {}},
+    }
+    if i % 10 == 9:
+        return {**head, "margin": 9, "externalPowerSource": False, "batteryLevel": 87.5 - device}
+    temperature = "sensor-fault" if i == 250 else round(-21 + ((i * 37) % 40) / 10, 1)
+    return {**head, "devAddr": f"01f2a3{device + 1:02x}", "adr": True, "dr": 5, "fCnt": i // 5, "fPort": 2,
+            "confirmed": False, "data": "AH0=", "object": {"temperature": temperature},
+            "rxInfo": [{"gatewayId": "0016c001ff10a235", "rssi": -71, "snr": 9.5}],
+            "txInfo": {"frequency": 868100000}}
+
+
 PARTNERS = [partner(n) for n in range(2_400)]
 POISON = [b'{"broken": ', b'[1, 2, 3]', b'"just a string"']   # truncated, an array, a scalar
 
@@ -100,6 +122,7 @@ TOPICS = [
           shows="1 000 rows then 300 tombstones — a deletion is not garbage"),
     Topic("acme.partners-reserved", 1, 500, shows="a top-level `id`: the reserved column"),
     Topic("acme.partners-raw", 1, 500, shows="names a column cannot be, nested objects, arrays"),
+    Topic("acme.probes", 1, 500, shows="a LoRaWAN network server's topic: the reading nested, promoted"),
     Topic("acme.partners-trimmed", 1, 5_000, shows="a log whose start can be moved under a cursor"),
     Topic("acme.empty", 1, 0, shows="an honest empty run"),
     Topic("acme.live", 1, None, shows="fed while a run reads it — where does the run stop?"),
@@ -171,6 +194,8 @@ def fill(p):
             "address": {"street": f"{i} rue de l'Usine", "city": r["city"]},
             "tags": ["erp", "partner", f"batch-{i % 5}"],
         }))
+    for i in range(500):
+        send(p, "acme.probes", f"device.{i % 5}", j(probe_event(i)))
     for i in range(5_000):
         r = PARTNERS[i % 2_400]
         send(p, "acme.partners-trimmed", str(i), j({"seq": i, "partner_id": r["partner_id"],
@@ -255,7 +280,7 @@ def cmd_verify():
     if failures:
         print(f"\n  {len(failures)} problem(s) — do not run a manifest against this broker")
         return 1
-    print("  ✓ eleven topics as declared (acme.absent is absent)")
+    print("  ✓ twelve topics as declared (acme.absent is absent)")
     return 0
 
 

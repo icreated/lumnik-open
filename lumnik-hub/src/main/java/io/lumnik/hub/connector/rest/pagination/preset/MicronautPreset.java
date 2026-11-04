@@ -8,6 +8,7 @@ public class MicronautPreset implements PaginationPreset {
     @Override public String name() { return "micronaut"; }
     @Override public Map<String, Object> expansion() {
         return Map.of("kind", "page", "page_param", "page", "size_param", "size",
-            "start_page", "0", "total_pages_path", "$.totalPages", "response_path", "$.content");
+            "start_page", "0", "total_pages_path", "$.totalPages", "response_path", "$.content",
+            "total_path", "$.totalSize");
     }
 }

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.api.ItemReader;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
@@ -509,6 +510,12 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
             return new FileDescriptor(path, size, Instant.parse(lastModified), etag);
         }
 
+        /** A block missing what ingestion cannot resume without: where, how far, and how to split a row. */
+        boolean incomplete() {
+            return Text.blank(path) || size < 0 || rowsProcessed < 0
+                || delimiter == null || delimiter.length() != 1;
+        }
+
         /** Complete, sane checkpoint — same sanity bar as {@link CsvCursor#hasCheckpoint()}. */
         boolean hasCheckpoint() {
             return anchorByte != null && anchorByte >= 0
@@ -532,10 +539,7 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
                 InProgress ip = TOLERANT.treeToValue(n, InProgress.class);
                 Charset.forName(ip.encoding());
                 Instant.parse(ip.lastModified());
-                if (ip.path() == null || ip.path().isBlank() || ip.size() < 0 || ip.rowsProcessed() < 0
-                        || ip.delimiter() == null || ip.delimiter().length() != 1) {
-                    throw new IllegalArgumentException("incomplete in-progress fields");
-                }
+                if (ip.incomplete()) throw new IllegalArgumentException("incomplete in-progress fields");
                 return ip;
             } catch (Exception corrupt) {
                 throw new ConnectorException("remote CSV in-progress cursor is unreadable ("

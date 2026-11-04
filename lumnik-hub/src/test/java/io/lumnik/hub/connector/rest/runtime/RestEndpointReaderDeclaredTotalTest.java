@@ -64,20 +64,25 @@ class RestEndpointReaderDeclaredTotalTest {
         int declaredTotal = 20;
         /** What it says from the second page on, when a live source's count moves mid-read. */
         Integer declaredTotalFromSecondPage = null;
+        /** A source whose count moves on every page: rows keep arriving while it is read. */
+        boolean growsOnEveryPage = false;
+        /** The offsets asked, in order — a read that starts again asks offset 0 twice. */
+        final List<Integer> offsets = new ArrayList<>();
         /** An offset where the source hands back fewer rows than are due. */
         int shortPageAtOffset = -1;
 
         @Override public RestResponse execute(RestRequest req) {
             served++;
             int off = Integer.parseInt(req.queryParams().getOrDefault("offset", "0"));
+            offsets.add(off);
             int limit = Integer.parseInt(req.queryParams().getOrDefault("limit", "4"));
             int due = Math.max(0, Math.min(limit, rows - off));
             int n = (off == shortPageAtOffset) ? 2 : due;
             String body = IntStream.range(0, n)
                 .mapToObj(i -> "{\"id\":" + (off + i) + ",\"updated_at\":\"2026-01-01\"}")
                 .collect(Collectors.joining(","));
-            int declared = (served > 1 && declaredTotalFromSecondPage != null)
-                ? declaredTotalFromSecondPage : declaredTotal;
+            int declared = growsOnEveryPage ? declaredTotal + served
+                : (served > 1 && declaredTotalFromSecondPage != null) ? declaredTotalFromSecondPage : declaredTotal;
             return RestResponse.of(200, Map.of(),
                 "{\"data\":[" + body + "],\"total\":" + declared + "}");
         }
@@ -129,10 +134,14 @@ class RestEndpointReaderDeclaredTotalTest {
 
     /** Drives chunk after chunk the way the engine does, feeding each cursor back in. */
     private List<Map<String, Object>> drain(int chunkSize, Map<String, Object> config) {
+        return drain(chunkSize, config, reader());
+    }
+
+    private List<Map<String, Object>> drain(int chunkSize, Map<String, Object> config, RestEndpointReader reader) {
         List<Map<String, Object>> all = new ArrayList<>();
         ConnectorCursor cursor = null;
         for (int guard = 0; guard < 50; guard++) {
-            ReadResult<Map<String, Object>> r = reader().read(chunkSize, cursor, ctx(config));
+            ReadResult<Map<String, Object>> r = reader.read(chunkSize, cursor, ctx(config));
             if (r instanceof ReadResult.EndOfStream<Map<String, Object>> eos) {
                 all.addAll(eos.records());
                 return all;
@@ -186,10 +195,8 @@ class RestEndpointReaderDeclaredTotalTest {
 
     @Test
     void stopping_at_the_page_cap_short_of_the_declared_total_is_refused_like_any_other_short_run() {
-        // The run-wide MAX_PAGES cap ends a read by handing back no next request — the same shape as
-        // real exhaustion. Before this guard that finalized the run green over a truncated extract;
-        // where the source declared a total, it no longer can. (A source that declares none is still
-        // capped silently — pinned as today's behaviour by max_pages_caps_the_total_across_the_run.)
+        // The run-wide MAX_PAGES cap reached with pages still to read: the cap's own refusal (#1753), whether the
+        // source declared a total or not — it used to hand back no next request, the shape of real exhaustion.
         http.rows = 20;
         http.declaredTotal = 20;
 
@@ -206,18 +213,76 @@ class RestEndpointReaderDeclaredTotalTest {
             () -> reader().read(100, new ConnectorCursor(nearCap, Instant.now()), ctx(offsetConfig())),
             "a run cut off at the page cap has lost rows the source declared — it must not report success");
 
-        assertTrue(e.getMessage().contains("4") && e.getMessage().contains("20"), e.getMessage());
+        assertTrue(e.getMessage().contains("reached the page cap (10000 pages)"), e.getMessage());
     }
 
     @Test
-    void a_total_that_moves_during_the_read_is_a_live_source_and_not_a_defect() {
+    void a_total_that_moves_during_the_read_makes_the_run_read_the_list_again_from_page_one() {
+        // #1771: rows deleted while a page-numbered list is read shift every later page — one row is on no page.
+        // The count moving is the only sign of it, so the read starts again once; the upsert absorbs the rows read twice.
         http.rows = 20;
         http.declaredTotal = 24;                  // what page 1 claims
         http.declaredTotalFromSecondPage = 20;    // rows were deleted while we paged
 
         List<Map<String, Object>> all = assertDoesNotThrow(() -> drain(8, offsetConfig()),
-            "a source that changes its own count mid-read has not lost anything — the run must stand");
+            "a second read over a list that stays still is complete — the run must stand");
 
-        assertEquals(20, all.size(), "and every row the source did serve is still returned");
+        assertEquals(2, http.offsets.stream().filter(o -> o == 0).count(), "offset 0 asked twice: " + http.offsets);
+        List<Object> secondPass = all.subList(all.size() - 20, all.size()).stream().map(r -> r.get("id")).toList();
+        assertEquals(IntStream.range(0, 20).boxed().toList(), secondPass, "the second read returns the whole list");
+    }
+
+    @Test
+    void a_page_numbered_list_whose_total_moves_is_read_again_like_an_offset_one() {
+        // #1796: the reader checks the total whatever the strategy, so a page-numbered list declaring one is read again too.
+        List<Integer> pages = new ArrayList<>();
+        int[] served = {0};
+        RestHttpClient pageHttp = new RestHttpClient() {
+            @Override public RestResponse execute(RestRequest req) {
+                int page = Integer.parseInt(req.queryParams().get("page"));
+                pages.add(page);
+                served[0]++;
+                int total = served[0] == 1 ? 12 : 8;   // 4 rows deleted after page 1
+                int from = (page - 1) * 4;
+                String body = IntStream.range(from, Math.min(from + 4, 8))
+                    .mapToObj(i -> "{\"id\":" + i + "}").collect(Collectors.joining(","));
+                return RestResponse.of(200, Map.of(), "{\"items\":[" + body + "],\"total\":" + total + "}");
+            }
+        };
+        Map<String, Object> cfg = new LinkedHashMap<>();
+        cfg.put("base_url", "https://erp.test");
+        cfg.put("pagination", Map.of("kind", "page", "page_param", "page", "size_param", "size", "size", 4,
+            "total_path", "$.total", "response_path", "$.items"));
+        RestEndpointReader reader = new RestEndpointReader(endpoint, new RestEndpointReaderChunkingTest.PassThroughAuth(),
+            new PaginationFactory(), new RateLimiterRegistry(), pageHttp, mapper, SecretRefs.environmentOnly(name -> null));
+
+        drain(100, cfg, reader);
+
+        assertEquals(2, pages.stream().filter(p -> p == 1).count(), "page 1 asked twice: " + pages);
+    }
+
+    @Test
+    void a_total_that_moves_again_during_the_second_read_fails_the_run_with_the_totals() {
+        http.rows = 20;
+        http.declaredTotal = 20;
+        http.growsOnEveryPage = true;   // 21, 22, 23… — the list never stands still
+
+        ConnectorException e = assertThrows(ConnectorException.class, () -> drain(8, offsetConfig()),
+            "a list that moves through two reads cannot be called read in full");
+
+        assertTrue(e.getMessage().startsWith("Endpoint 'partners': the list changed while it was read, and again when"
+            + " read a second time"), e.getMessage());
+        assertTrue(e.getMessage().matches(".*declared \\d+ rows, then \\d+.*"), "both totals named: " + e.getMessage());
+    }
+
+    @Test
+    void a_watermark_read_whose_total_moves_is_not_read_again() {
+        // A watermark read filters: its total is not the list's size, so a moving one proves nothing — as for the reconciliation.
+        http.rows = 20;
+        http.declaredTotal = 20;
+        http.growsOnEveryPage = true;
+
+        assertDoesNotThrow(() -> drain(8, watermarkConfig()));
+        assertEquals(1, http.offsets.stream().filter(o -> o == 0).count(), "offset 0 asked once: " + http.offsets);
     }
 }

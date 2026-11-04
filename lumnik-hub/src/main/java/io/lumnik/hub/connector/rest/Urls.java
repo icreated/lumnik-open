@@ -1,7 +1,9 @@
 package io.lumnik.hub.connector.rest;
 
+import io.lumnik.common.text.Text;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -21,7 +23,7 @@ public final class Urls {
     public static String join(String base, String path) {
         Objects.requireNonNull(base, "base must not be null");
         String b = base.replaceFirst("/+$", "");           // drop any trailing slashes
-        if (path == null || path.isBlank()) {
+        if (Text.blank(path)) {
             return b;
         }
         return b + "/" + path.strip().replaceFirst("^/+", "");   // trim + exactly one separator
@@ -46,7 +48,7 @@ public final class Urls {
      * body, a CLI line and a log, and a {@code base_url} legally carries userinfo.
      */
     public static Optional<String> whyNotAbsolute(String url) {
-        if (url == null || url.isBlank()) return Optional.of("must not be blank");
+        if (Text.blank(url)) return Optional.of("must not be blank");
         try {
             URI u = new URI(url);
             return (u.getScheme() == null || u.getHost() == null)
@@ -101,5 +103,25 @@ public final class Urls {
         // so this strips exactly what URI calls the userinfo.
         return addressOnly.replaceFirst("(?<=://)[^/]*@", "…@")
             .replaceFirst("^(\\s*//)[^/]*@", "$1…@");
+    }
+
+    /**
+     * {@code scheme://host:port} — the scheme and host lower-cased, a trailing FQDN dot dropped, the scheme's default
+     * port written out — as {@code PaginationUrlGuard} compares them: where a credential bound to one site may go.
+     * Empty for a URL with no scheme or host, or one that does not parse; never the URL in a message (#1166).
+     */
+    public static Optional<String> origin(String url) {
+        URI u;
+        try {
+            u = new URI(url);
+        } catch (URISyntaxException | NullPointerException unreadable) {
+            return Optional.empty();
+        }
+        if (u.getScheme() == null || Text.blank(u.getHost())) return Optional.empty();
+        String scheme = u.getScheme().toLowerCase(Locale.ROOT);
+        String host = u.getHost().toLowerCase(Locale.ROOT);
+        if (host.endsWith(".")) host = host.substring(0, host.length() - 1);
+        int port = u.getPort() != -1 ? u.getPort() : scheme.equals("https") ? 443 : 80;
+        return Optional.of(scheme + "://" + host + ":" + port);
     }
 }

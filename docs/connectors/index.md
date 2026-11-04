@@ -109,7 +109,44 @@ A change in the source appears at the next run that reads it.
 |---|---|
 | `lm validate -f manifest.yaml` | Validate without applying. Exit 0 if valid (warnings allowed), 1 if errors. |
 | `lm apply -f manifest.yaml` | Apply. The server runs the same checks: on errors nothing is written and you get the same report. Warnings do not block the apply. |
-| `lm describe connector-type <kind>` | Show the schema (fields, types, required/optional, docs) of a connector type. |
+| `lm describe connector-type <kind>` | Show the schema of a connector type: fields, types, required/optional, docs, and the rules each key carries (see below). |
+
+### What a connector type asks for
+
+`lm describe connector-type <kind>` lists every key with its meaning, and under a key the rules `lm validate`
+will apply to it: `required when …` (a key another key's value makes mandatory), `read only when …` (given under
+another value, it is ignored and `validate` says so), and the hint a refusal teaches. At the end of a block come
+`at least one of …` and the keys that are `refused when given`. Excerpt, from `lm describe connector-type csv-file`:
+
+```
+$ lm describe connector-type csv-file
+Connector type: csv-file
+
+transport            REQUIRED  [NESTED, HIGH]
+  Transport block
+  kind                 REQUIRED  [STRING, HIGH]
+    Transport mechanism
+    one of: local, sftp, s3
+  path                 optional  [STRING, HIGH]
+    File path (local) or glob path (sftp)
+    required when kind is local or sftp
+    → Set path: /imports/*.csv (local) or a remote glob (sftp)
+  host                 optional  [STRING, HIGH]
+    SFTP host
+    required when kind = sftp
+  user                 optional  [STRING, HIGH]
+    SFTP user
+    required when kind = sftp
+  port                 optional  [INT, LOW]
+    SFTP port
+  strict_host_key      optional  [BOOLEAN, LOW]
+    Verify the SFTP host key against host_key_fingerprint
+  host_key_fingerprint optional  [STRING, MEDIUM]
+    SFTP host key fingerprint (SHA256:… as ssh-keygen -lf prints it)
+    required when kind is sftp and strict_host_key is not off
+    → Read it with `ssh-keyscan -p <port> <host> | ssh-keygen -lf -` (the run's refusal prints the same), confirm it out of band, then set host_key_fingerprint: "SHA256:…"
+  …
+```
 
 ### Valid
 
@@ -124,8 +161,8 @@ $ lm validate -f stripe.yaml
 $ lm validate -f bad.yaml
 ✗ bad.yaml — 2 error(s), 0 warning(s)
 
-  ERROR    spec.auth.token_env
-          bearer auth requires token_env (or inline token_value)
+  ERROR    spec.auth
+          at least one of token_env, token_value is required when kind is bearer
           → Use `lm secret set <NAME> ...` then reference via token_env: <NAME>
 
   ERROR    spec.endpoints[0].id

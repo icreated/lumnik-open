@@ -3,6 +3,7 @@ package io.lumnik.hub.view;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import io.lumnik.common.text.Text;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -21,7 +22,7 @@ public final class ConflictLedger {
     public record Conflict(String column, String label, List<SourceValue> sources) {}
 
     public static List<Conflict> parse(String json, ResolvedView rv) {
-        if (json == null || json.isBlank()) return List.of();
+        if (Text.blank(json)) return List.of();
         JsonNode root;
         try {
             root = M.readTree(json);

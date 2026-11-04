@@ -3,6 +3,7 @@ package io.lumnik.hub.connector.rest.runtime;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.lumnik.hub.audit.CanonicalHash;
 import io.lumnik.hub.connector.api.ItemReader;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
@@ -75,7 +76,8 @@ import java.util.regex.Pattern;
  * {@code {"watermark": <string|null>, "emittedByRun": "<runId|null>"}}. Mid-pagination it gains
  * {@code "resume"} (the next-page request: {@code method}, {@code url}, {@code query}, optional
  * {@code body}, and at most the header-bound pagination token under {@code headers}), {@code
- * "pages"} (pages fetched so far, for the run-wide {@link #MAX_PAGES} cap), and — watermark mode
+ * "pages"} (pages fetched so far, for the run-wide {@link #MAX_PAGES} cap), {@code "lastPage"} (the digest of the
+ * last page read, so a page answered again is seen across chunks, #1753), and — watermark mode
  * only — {@code "watermarkCandidate"} (see below). Auth and declarative headers are deliberately
  * NOT persisted — they are re-derived per page, and writing them into
  * {@code connector.connector_cursor} would put secrets at rest. The engine persists the cursor
@@ -143,9 +145,11 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
     private static final String EMITTED_BY_RUN = "emittedByRun";
     private static final String RESUME = "resume";
     private static final String PAGES = "pages";
+    private static final String LAST_PAGE = "lastPage";
     private static final String EMITTED = "emitted";
     private static final String DECLARED_TOTAL = "declaredTotal";
-    private static final String TOTAL_DISPUTED = "declaredTotalDisputed";
+    /** The list is being read a second time, its total having moved during the first read (#1771). */
+    private static final String READ_AGAIN = "readAgain";
     private static final String METHOD = "method";
     private static final String URL = "url";
     private static final String QUERY = "query";
@@ -249,12 +253,23 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         RestRequest start = resuming ? resumeRequest(parsed.resume, cfg, ep, secrets::lookup)
                                      : firstRequest(pag, cfg, ep, inc, parsed, secrets::lookup);
         PageWindow window = fetchPageWindow(ep, conn, rl, retry, pag, start, bodyParser,
-            chunkSize, resuming ? parsed.pages : 0,
+            chunkSize, resuming ? parsed.pages : 0, resuming ? parsed.lastPage : null,
             resuming ? parsed.declaredTotal : DeclaredTotal.NONE, totalPath, totalHeader);
 
         // `resuming` gates the running tally for the same reason it gates `pages` above: a cursor
         // left behind by a DEAD run makes this run start from page 1, so its counts are not ours.
         long emitted = (resuming ? parsed.emitted : 0) + window.items().size();
+        boolean readAgain = resuming && parsed.readAgain;
+        // A total that moved: a row deleted on a page already read shifts every later page, and one row is on no page
+        // (#1771). The list is read once more from page 1; the rows read twice are absorbed by the unique_key upsert.
+        // Moving again during that second read, it cannot be called read in full. A filtering read abstains, as the
+        // reconciliation does: its total is not the list's size.
+        if (!inc.filtersRows() && window.total().disputed()) {
+            if (readAgain) throw listMoved(ep, window.total());
+            window = window.readAgainFrom(firstRequest(pag, cfg, ep, inc, parsed, secrets::lookup));
+            emitted = 0;
+            readAgain = true;
+        }
 
         // Reconcile once, when pagination is exhausted — and only over a read that asked for
         // everything. The exemption is a NAMED condition rather than a consequence of where this
@@ -273,12 +288,12 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
             String candidate = inc.path() != null
                 ? maxWatermark(window.items(), inc.path(), priorCandidate) : priorCandidate;
             return new ReadResult.HasMore<>(window.items(),
-                watermarkCursor(runId, parsed.watermark, candidate, window.next(), window.pages(),
+                watermarkCursor(runId, parsed.watermark, candidate, window,
                     cursorHeaderName(pagCfg), runStarted, ctx));
         }
 
         return new ReadResult.HasMore<>(window.items(),
-            fullCursor(runId, window, emitted, cursorHeaderName(pagCfg)));
+            fullCursor(runId, window, emitted, readAgain, cursorHeaderName(pagCfg)));
     }
 
     /** The incremental block, reduced to what the runtime honours; {@code api_cursor} is deferred → full. */
@@ -390,8 +405,9 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * The {@code response_path} hint drives the force-list (single element → singleton list).
      */
     static BodyParser bodyParserFor(Map<String, Object> cfg) {
-        if (!isSoapEndpoint(cfg)) return JsonBodyParser.INSTANCE;
-        return new XmlBodyParser(str(mapConfig(cfg, "pagination").get("response_path")));
+        String responsePath = str(mapConfig(cfg, "pagination").get("response_path"));
+        if (isSoapEndpoint(cfg)) return new XmlBodyParser(responsePath);
+        return "xml".equals(str(cfg.get("response_format"))) ? new XmlRestBodyParser(responsePath) : JsonBodyParser.INSTANCE;
     }
 
     /**
@@ -437,7 +453,8 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
     }
 
     /**
-     * Follow the pagination chain (signing + rate-limiting + retrying each request) up to MAX_PAGES. The whole fetch
+     * Follow the pagination chain (signing + rate-limiting + retrying each request); reaching MAX_PAGES with pages still to
+     * read fails the read (#1753). The whole fetch
      * is one chunk, so the run's cancel is read here before each page, as the engine reads it before each chunk: a
      * cancelled fetch throws what it read away, never written (#1444).
      */
@@ -447,14 +464,20 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         List<Map<String, Object>> all = new ArrayList<>();
         RestRequest req = first;
         int pages = 0;
+        String lastPage = null;
         try {
-            while (req != null && pages < MAX_PAGES) {
+            while (req != null) {
+                if (pages >= MAX_PAGES) throw pageCapReached(ep);
                 if (scope.cancelRequested()) throw new RunCancelledException();
                 RestResponse resp = send(conn, rl, retry, req);
                 ResponseStatusGuard.refuseNonSuccess(resp);   // a non-2xx must never read as an empty page
                 resp = bodyParser.reparse(resp);   // SOAP: XML→JSON; JSON/GraphQL: identity
-                all.addAll(pag.items(resp));
-                req = advancing(ep, req, pag.next(resp, req), pages == 0);   // unsigned, as in fetchPageWindow: next never inherits auth
+                List<Map<String, Object>> page = pag.items(resp);
+                // The cursor's own echo check first: when the request itself came back, its message is the precise one.
+                RestRequest next = advancing(ep, req, pag.next(resp, req), pages == 0);
+                lastPage = notRepeated(ep, lastPage, page);
+                all.addAll(page);
+                req = next;   // unsigned, as in fetchPageWindow: next never inherits auth
                 pages++;
             }
         } catch (InterruptedException ie) {
@@ -479,8 +502,13 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * One chunk's worth of pages, plus what the next chunk needs: the next request (null =
      * exhausted), the run-wide page count, and what the source has claimed about its own size.
      */
-    private record PageWindow(List<Map<String, Object>> items, RestRequest next, int pages,
-                              DeclaredTotal total) {}
+    private record PageWindow(List<Map<String, Object>> items, RestRequest next, int pages, String lastPage,
+                              DeclaredTotal total) {
+        /** The rows read so far kept, the next request the list's first page, nothing yet declared about it. */
+        PageWindow readAgainFrom(RestRequest first) {
+            return new PageWindow(items, first, pages, null, DeclaredTotal.NONE);
+        }
+    }
 
     /**
      * What the source has said about its own row count so far in this run, and whether it has
@@ -490,18 +518,22 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * or deleted while we paged. There is then no number the run can be measured against, so the
      * reconciliation abstains rather than fail a run that lost nothing. Refusing to judge what we
      * cannot model is the same rule the SQL guards follow; the alternative here is a false red on
-     * every busy ERP.
+     * every busy ERP. But with page-numbered or offset paging a moving total is also the one sign that a
+     * row was skipped, so a full read reads the list again rather than call itself complete (#1771).
+     * {@code moved} is the first total that differed from {@code value}.
      */
-    private record DeclaredTotal(Long value, boolean disputed) {
-        static final DeclaredTotal NONE = new DeclaredTotal(null, false);
+    private record DeclaredTotal(Long value, Long moved) {
+        static final DeclaredTotal NONE = new DeclaredTotal(null, null);
 
         DeclaredTotal observe(OptionalLong seen) {
             if (seen.isEmpty()) return this;
-            if (value == null) return new DeclaredTotal(seen.getAsLong(), disputed);
-            return value == seen.getAsLong() ? this : new DeclaredTotal(value, true);
+            if (value == null) return new DeclaredTotal(seen.getAsLong(), null);
+            return value == seen.getAsLong() ? this : new DeclaredTotal(value, seen.getAsLong());
         }
 
-        boolean usable() { return value != null && !disputed; }
+        boolean disputed() { return moved != null; }
+
+        boolean usable() { return value != null && !disputed(); }
     }
 
     /**
@@ -519,31 +551,66 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
     }
 
     /**
+     * The page just read, as its digest — refused when it is exactly the page before (#1753): a source that ignores the
+     * offset or page parameter answers page one again and again, and following it would read the same rows to the page
+     * cap. The cursor strategies have their own check ({@link #advancing}); this one holds whatever the request did. An
+     * empty page is never a repeat: it ends the read. The digest, not the rows, is what rides in the resume cursor.
+     */
+    private static String notRepeated(ConnectorEndpoint ep, String previous, List<Map<String, Object>> page) {
+        if (page.isEmpty()) return null;
+        String digest = CanonicalHash.of(page);
+        if (digest.equals(previous)) {
+            throw new ConnectorException(named(ep) + ": the source answered the same page twice in a row — the paging"
+                + " parameter is not reaching it (check the pagination's parameter names, or use the source's preset)");
+        }
+        return digest;
+    }
+
+    /** The total moved during the second read too: no read of this list can be called complete (#1771). */
+    private static ConnectorException listMoved(ConnectorEndpoint ep, DeclaredTotal total) {
+        return new ConnectorException(named(ep) + ": the list changed while it was read, and again when read a second"
+            + " time (the source declared " + total.value() + " rows, then " + total.moved() + ") — rows may be on no"
+            + " page; refusing to report a partial extract as a complete one (run it when the source is quieter)");
+    }
+
+    /** The page cap reached with pages still to read: the read is partial, never complete (#1753). */
+    private static ConnectorException pageCapReached(ConnectorEndpoint ep) {
+        return new ConnectorException(named(ep) + ": reached the page cap (" + MAX_PAGES + " pages) before the source's"
+            + " last page — refusing to report a partial extract as a complete one");
+    }
+
+    /**
      * The shared full/watermark chunk loop: follow the pagination chain (signing + rate-limiting +
      * retrying each request) until the accumulated items reach {@code chunkSize} — the page that
-     * crosses the boundary is finished, never split — pagination ends, or the run-wide
-     * {@link #MAX_PAGES} cap is hit (which finalizes the run, mirroring the old loop's
-     * stop-at-MAX_PAGES). The request threaded to {@link PaginationStrategy#next} is the UNSIGNED
+     * crosses the boundary is finished, never split — or pagination ends. The run-wide
+     * {@link #MAX_PAGES} cap reached with pages still to read fails the read (#1753). The request threaded to {@link PaginationStrategy#next} is the UNSIGNED
      * one: it is what the resume cursor persists, and a persisted request must never carry
      * credentials — auth is re-applied per page anyway, so nothing is lost.
      */
     private PageWindow fetchPageWindow(ConnectorEndpoint ep, RestConnection conn, RateLimiter rl, RetryExecutor retry,
                                        PaginationStrategy pag, RestRequest first, BodyParser bodyParser,
-                                       int chunkSize, int pagesAlreadyFetched,
+                                       int chunkSize, int pagesAlreadyFetched, String carriedLastPage,
                                        DeclaredTotal carriedTotal, String totalPath, String totalHeader) {
         List<Map<String, Object>> items = new ArrayList<>();
         RestRequest req = first;
         int pages = pagesAlreadyFetched;
+        String lastPage = carriedLastPage;
         DeclaredTotal total = carriedTotal;
         try {
-            while (req != null && pages < MAX_PAGES && items.size() < chunkSize) {
+            while (req != null && items.size() < chunkSize) {
+                if (pages >= MAX_PAGES) throw pageCapReached(ep);
                 RestResponse resp = send(conn, rl, retry, req);
                 ResponseStatusGuard.refuseNonSuccess(resp);   // a non-2xx must never read as an empty page
                 resp = bodyParser.reparse(resp);   // SOAP: XML→JSON; JSON/GraphQL: identity
-                items.addAll(pag.items(resp));
+                List<Map<String, Object>> page = pag.items(resp);
+                // The cursor's own echo check first: when the request itself came back, its message is the precise one.
+                RestRequest next = advancing(ep, req, pag.next(resp, req), pages == 0);
+                lastPage = notRepeated(ep, lastPage, page);
+                items.addAll(page);
                 total = total.observe(PaginationSupport.declaredItems(resp, totalPath, totalHeader));
-                req = advancing(ep, req, pag.next(resp, req), pages == 0);
+                req = next;
                 pages++;
+                if (total.disputed()) break;   // the list moved: the pages after this one are read again anyway
             }
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
@@ -553,7 +620,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         } catch (Exception call) {
             throw new SourceCallException(call);
         }
-        return new PageWindow(items, pages >= MAX_PAGES ? null : req, pages, total);
+        return new PageWindow(items, req, pages, lastPage, total);
     }
 
     /** The header carrying the pagination token when the strategy binds its cursor to a header, else null. */
@@ -599,19 +666,20 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * per page — persisting them would write secrets into {@code connector.connector_cursor});
      * the one exception is the header-bound pagination token, which is resume state, not a secret.
      */
-    private ConnectorCursor fullCursor(String runId, PageWindow window, long emitted, String cursorHeader) {
+    private ConnectorCursor fullCursor(String runId, PageWindow window, long emitted, boolean readAgain,
+                                       String cursorHeader) {
         if (window.next() == null) return cursor(null, runId, null);
         ObjectNode node = mapper.createObjectNode();
         node.putNull(WATERMARK);
         node.put(EMITTED_BY_RUN, runId);
-        writeResume(node, window.next(), window.pages(), cursorHeader);
+        writeResume(node, window, cursorHeader);
         // The reconciliation's run-wide state. It rides here for the same reason `pages` does: a
         // fresh reader is built per chunk, so only what the cursor carries survives into the next.
         // `emitted` counts rows RETURNED, and equals the run's records_in only while REST isolates
         // no malformed rows at read time — the day it does, these stop being the same number.
         node.put(EMITTED, emitted);
         node.put(DECLARED_TOTAL, window.total().value());   // a null Long lands as JSON null
-        node.put(TOTAL_DISPUTED, window.total().disputed());
+        if (readAgain) node.put(READ_AGAIN, true);
         return new ConnectorCursor(node, Instant.now());
     }
 
@@ -655,21 +723,22 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      * field until exhaustion switches which cursor-builder runs.
      */
     private ConnectorCursor watermarkCursor(String runId, String watermark, String candidate,
-                                            RestRequest next, int pages, String cursorHeader,
+                                            PageWindow window, String cursorHeader,
                                             Instant runStarted, ConnectorContext ctx) {
         // exhausted: promote candidate → watermark, with the run's length the next run looks back by
-        if (next == null) return cursor(candidate, runId, secondsSince(runStarted, ctx));
+        if (window.next() == null) return cursor(candidate, runId, secondsSince(runStarted, ctx));
         ObjectNode node = mapper.createObjectNode();
         if (watermark == null) node.putNull(WATERMARK); else node.put(WATERMARK, watermark);
         if (candidate == null) node.putNull(WATERMARK_CANDIDATE); else node.put(WATERMARK_CANDIDATE, candidate);
         node.put(EMITTED_BY_RUN, runId);
         node.put(RUN_STARTED_AT, runStarted.toString());
-        writeResume(node, next, pages, cursorHeader);
+        writeResume(node, window, cursorHeader);
         return new ConnectorCursor(node, Instant.now());
     }
 
     /** Shared resume-state serialization for the mid-pagination full and watermark cursors. */
-    private static void writeResume(ObjectNode node, RestRequest next, int pages, String cursorHeader) {
+    private static void writeResume(ObjectNode node, PageWindow window, String cursorHeader) {
+        RestRequest next = window.next();
         ObjectNode resume = node.putObject(RESUME);
         resume.put(METHOD, next.method());
         resume.put(URL, next.url());
@@ -679,7 +748,8 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         if (cursorHeader != null && next.headers().containsKey(cursorHeader)) {
             resume.putObject(HEADERS).put(cursorHeader, next.headers().get(cursorHeader));
         }
-        node.put(PAGES, pages);
+        node.put(PAGES, window.pages());
+        if (window.lastPage() != null) node.put(LAST_PAGE, window.lastPage());
     }
 
     private static String text(JsonNode node, String field) {
@@ -737,12 +807,12 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
     }
 
     private record Parsed(String watermark, String watermarkCandidate, String emittedByRun,
-                          JsonNode resume, int pages, long emitted, DeclaredTotal declaredTotal,
-                          Instant runStartedAt, Long runSeconds) {}
+                          JsonNode resume, int pages, String lastPage, long emitted, DeclaredTotal declaredTotal,
+                          boolean readAgain, Instant runStartedAt, Long runSeconds) {}
 
     private Parsed parse(ConnectorCursor cursor) {
         if (cursor == null || cursor.isEmpty()) {
-            return new Parsed(null, null, null, null, 0, 0, DeclaredTotal.NONE, null, null);
+            return new Parsed(null, null, null, null, 0, null, 0, DeclaredTotal.NONE, false, null, null);
         }
         JsonNode v = cursor.value();
         String wm = v.hasNonNull(WATERMARK) ? v.get(WATERMARK).asText() : null;
@@ -750,15 +820,18 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         String run = v.hasNonNull(EMITTED_BY_RUN) ? v.get(EMITTED_BY_RUN).asText() : null;
         JsonNode resume = v.hasNonNull(RESUME) ? v.get(RESUME) : null;
         int pages = v.hasNonNull(PAGES) ? v.get(PAGES).asInt() : 0;
+        String lastPage = v.hasNonNull(LAST_PAGE) ? v.get(LAST_PAGE).asText() : null;
         // Absent on a cursor written by an older hub: read as "nothing counted, nothing declared",
         // which is exactly the state that makes the reconciliation abstain instead of misfire.
         long emitted = v.hasNonNull(EMITTED) ? v.get(EMITTED).asLong() : 0;
+        // A moved total never rides in a cursor: the read starts again (total reset) or the run fails.
         DeclaredTotal declaredTotal = new DeclaredTotal(
-            v.hasNonNull(DECLARED_TOTAL) ? v.get(DECLARED_TOTAL).asLong() : null,
-            v.hasNonNull(TOTAL_DISPUTED) && v.get(TOTAL_DISPUTED).asBoolean());
+            v.hasNonNull(DECLARED_TOTAL) ? v.get(DECLARED_TOTAL).asLong() : null, null);
+        boolean readAgain = v.path(READ_AGAIN).asBoolean(false);
         Instant runStartedAt = v.hasNonNull(RUN_STARTED_AT) ? Instant.parse(v.get(RUN_STARTED_AT).asText()) : null;
         Long runSeconds = v.hasNonNull(RUN_SECONDS) ? v.get(RUN_SECONDS).asLong() : null;
-        return new Parsed(wm, wmCandidate, run, resume, pages, emitted, declaredTotal, runStartedAt, runSeconds);
+        return new Parsed(wm, wmCandidate, run, resume, pages, lastPage, emitted, declaredTotal, readAgain, runStartedAt,
+            runSeconds);
     }
 
     private ConnectorCursor cursor(String watermark, String emittedByRun, Long runSeconds) {

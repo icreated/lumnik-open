@@ -7,6 +7,7 @@ import io.lumnik.hub.connector.mapping.ScalarParams;
 import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
 import io.lumnik.hub.connector.mapping.hooks.RowHook;
+import io.lumnik.hub.json.JsonNodes;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.ArrayList;
@@ -49,7 +50,7 @@ public class SplitRowHook implements RowHook {
     JsonNode position = params.path("position");
     if (position.isMissingNode() || position.isNull()) return;
     String split = params.has("explode") ? params.path("explode").asText() : params.path("by").asText();
-    if (!position.isTextual() || position.asText().isBlank() || position.asText().equals(split)) {
+    if (!JsonNodes.nonBlank(position) || position.asText().equals(split)) {
       String got = position.isTextual() ? "'" + position.asText() + "'" : MappingValidationException.typeName(position);
       throw new MappingValidationException(
           "split-row hook: 'position' must name a column other than the one it splits (got " + got + ")");

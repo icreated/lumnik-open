@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.common.text.Text;
+import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.sql.TemporalText;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.narayana.jta.QuarkusTransactionException;
@@ -17,6 +19,7 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
 import java.sql.Connection;
@@ -61,11 +64,25 @@ public class EntityConflictsResource {
 
   @Inject ObjectMapper mapper;   // the Quarkus-managed one: one JSON behavior app-wide
 
+  /**
+   * Every readable entity's conflicts, or with {@code entity} only that one's — the whole limit spent on it.
+   * A named entity answers like the other entity doors: 404 unknown, the uniform 403 outside the caller's scopes;
+   * a blank name ({@code entity=}) names nothing and is a 400.
+   */
   @GET
-  public List<Map<String, Object>> list(@QueryParam("limit") @DefaultValue("100") int limit) {
+  public Response list(@QueryParam("limit") @DefaultValue("100") int limit, @QueryParam("entity") String entity) {
+    if (entity == null) return Response.ok(conflicts(registry.all(), limit)).build();
+    if (Text.blank(entity)) return ApiErrors.badRequest("entity must not be blank");
+    EntityManifest m = registry.find(entity);
+    if (m == null) return ApiErrors.notFound("entity " + entity + " not found");
+    if (!ScopeGrants.allowsAny(m.scopes())) return ApiErrors.scopeNotGranted();
+    return Response.ok(conflicts(List.of(m), limit)).build();
+  }
+
+  private List<Map<String, Object>> conflicts(List<EntityManifest> entities, int limit) {
     int budget = Math.min(Math.max(limit, 1), 1000);
     List<Map<String, Object>> out = new ArrayList<>();
-    for (EntityManifest m : registry.all()) {
+    for (EntityManifest m : entities) {
       if (out.size() >= budget) break;
       if (!ScopeGrants.allowsAny(m.scopes())) continue; // silent skip BEFORE any DB touch
       AtomicBoolean readDone = new AtomicBoolean();

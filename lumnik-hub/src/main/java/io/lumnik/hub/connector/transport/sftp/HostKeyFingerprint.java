@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.transport.sftp;
 
+import io.lumnik.common.text.Text;
 import org.apache.sshd.common.config.keys.KeyUtils;
 import org.apache.sshd.common.digest.BuiltinDigests;
 
@@ -31,7 +32,7 @@ public final class HostKeyFingerprint {
      * a runbook might hand over. A blank declaration matches nothing: absence is never agreement.
      */
     public static boolean matches(String declared, PublicKey key) {
-        if (declared == null || declared.isBlank()) {
+        if (Text.blank(declared)) {
             return false;
         }
         return normalise(declared).equals(normalise(of(key)));

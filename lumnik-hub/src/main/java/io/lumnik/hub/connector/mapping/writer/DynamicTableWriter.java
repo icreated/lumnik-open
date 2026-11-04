@@ -448,7 +448,12 @@ public class DynamicTableWriter {
    * once here, where the set lives, because three call sites had copied the same subtlety.
    */
   public static String systemColumnList() {
-    return String.join(", ", new TreeSet<>(SYSTEM_COLUMNS));
+    return columnList(SYSTEM_COLUMNS);
+  }
+
+  /** Any set of column names as a message renders them — see {@link #systemColumnList()} for why sorted. */
+  public static String columnList(Set<String> columns) {
+    return String.join(", ", new TreeSet<>(columns));
   }
 
   /**

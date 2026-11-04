@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.soap;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
 import io.lumnik.hub.connector.rest.pagination.EndpointConfig;
@@ -111,7 +112,7 @@ public class SoapPaginationStrategy implements PaginationStrategy {
     private static String str(Object o) { return o == null ? null : String.valueOf(o); }
 
     private static int parsePositive(String s) {
-        if (s == null || s.isBlank())
+        if (Text.blank(s))
             throw new IllegalStateException("SOAP page_size is required and must be a positive integer");
         try {
             int n = Integer.parseInt(s.trim());

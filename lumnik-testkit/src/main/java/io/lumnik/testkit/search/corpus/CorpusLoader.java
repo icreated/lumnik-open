@@ -2,6 +2,7 @@ package io.lumnik.testkit.search.corpus;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import io.lumnik.common.text.Text;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -71,11 +72,11 @@ public final class CorpusLoader {
         Map<String, IndexedRow> rowsById = new HashMap<>();
 
         for (CorpusEntity entity : corpus.entities()) {
-            if (isBlank(entity.name())) {
+            if (Text.blank(entity.name())) {
                 problems.add("entity has a null or blank name");
             }
             for (CorpusRow row : entity.rows()) {
-                if (isBlank(row.id())) {
+                if (Text.blank(row.id())) {
                     problems.add("entity " + entity.name() + ": row has a null or blank id");
                 } else if (rowsById.containsKey(row.id())) {
                     problems.add("duplicate row id: " + row.id());
@@ -134,9 +135,5 @@ public final class CorpusLoader {
         if (!problems.isEmpty()) {
             throw new CorpusValidationException(problems);
         }
-    }
-
-    private static boolean isBlank(String value) {
-        return value == null || value.isBlank();
     }
 }

@@ -1,5 +1,6 @@
 package io.lumnik.hub.validator.rest;
 
+import io.lumnik.hub.validator.common.PromoteEntries;
 import io.lumnik.hub.connector.rest.soap.SoapRequestBuilder;
 import io.lumnik.hub.validator.ConfigDef;
 import io.lumnik.hub.validator.ConfigDef.Importance;
@@ -44,6 +45,9 @@ public final class EndpointsBlockValidator {
                 "URL path appended to base_url, e.g. /v1/customers")
             .requireEnum("method", Importance.MEDIUM, "HTTP method",
                 "GET", "POST", "PUT", "PATCH", "DELETE")
+            .optional("response_format", Type.STRING, Importance.MEDIUM,
+                "What the answer is: json (the default) or xml — attributes under @, text beside them under #text", "json")
+                .oneOf("json", "xml")
             .requireNested(PAGINATION_KEY, Importance.HIGH,
                 PAGINATION_DESC, paginationDef())
             .requireNested(TARGET_KEY, Importance.HIGH,
@@ -133,7 +137,7 @@ public final class EndpointsBlockValidator {
      * the endpoint may leave out. Each endpoint is validated merged with the ones its request shape reads; every other
      * key {@link #defaultsDef} declares is refused there or never read.
      */
-    public static final List<String> INHERITED_FROM_DEFAULTS = List.of("incremental", "variables", "header", "soap_action");
+    public static final List<String> INHERITED_FROM_DEFAULTS = List.of("incremental", "variables", "header", "soap_action", "response_format");
 
     /**
      * The keys the run decides an endpoint's request shape from, on its merged config ({@code RestEndpointReader}'s
@@ -196,7 +200,7 @@ public final class EndpointsBlockValidator {
             .requireCustom("path", Type.STRING, Importance.HIGH, "JSONPath to the value the key is read from",
                 ConfigDefValidators.nonEmpty())
             .optionalCustom("transform", Type.STRING, Importance.MEDIUM,
-                "A promote transform applied to the value, e.g. last_path_segment", RestConnectorValidator::transformRefusal)
+                "A promote transform applied to the value, e.g. last_path_segment", PromoteEntries::transformRefusal)
             .closed();
     }
 

@@ -1,5 +1,6 @@
 package io.lumnik.hub.ask;
 
+import io.lumnik.common.text.Text;
 import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.util.List;
@@ -45,7 +46,7 @@ final class DateIntent {
 
     /** True when the question writes a date the calendar has: {@code 2026-02-31} is not one, and gets no rule. */
     static boolean in(String question) {
-        if (question == null || question.isBlank()) return false;
+        if (Text.blank(question)) return false;
         String folded = QuestionWords.fold(question);
         Matcher iso = ISO_DATE.matcher(folded);
         while (iso.find()) {

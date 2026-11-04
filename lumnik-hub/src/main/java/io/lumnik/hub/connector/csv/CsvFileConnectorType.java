@@ -3,6 +3,7 @@ package io.lumnik.hub.connector.csv;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.api.ConnectorType;
 import io.lumnik.hub.connector.api.ItemReader;
 import io.lumnik.hub.connector.api.ItemWriter;
@@ -103,7 +104,7 @@ public class CsvFileConnectorType implements ConnectorType {
       return result;
     }
     String legacyPath = (String) connectorConfig.get("path");
-    if (legacyPath != null && !legacyPath.isBlank()) {
+    if (Text.present(legacyPath)) {
       Map<String, Object> defaultTransport = new HashMap<>();
       defaultTransport.put("kind", LOCAL);
       defaultTransport.put("path", legacyPath);

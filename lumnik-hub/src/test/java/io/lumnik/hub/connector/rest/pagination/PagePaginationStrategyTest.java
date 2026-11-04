@@ -107,4 +107,34 @@ class PagePaginationStrategyTest {
             "page_param", "page", "total_pages_path", "$.pages", "response_path", "$.content"));
         assertNull(text.next(RestResponse.of(200, Map.of(), "{\"pages\":\"1\",\"content\":[{}]}"), text.first(null, null)));
     }
+
+    /** #1800: Micronaut 4 sends no page count, only the list's total; the rows read so far say when the list is done. */
+    private static PagePaginationStrategy withTotalOnly(boolean sizeParam) {
+        var c = new HashMap<String, String>();
+        c.put("page_param", "page");
+        if (sizeParam) c.put("size_param", "size");
+        c.put("size", "50");
+        c.put("start_page", "0");
+        c.put("total_path", "$.totalSize");
+        c.put("response_path", "$.content");
+        return new PagePaginationStrategy(c);
+    }
+
+    private static String page(int rows) {
+        return "{\"content\":[" + "{},".repeat(rows - 1) + "{}],\"totalSize\":130}";
+    }
+
+    @Test void a_total_and_no_page_count_stops_once_the_rows_read_reach_it() {
+        var s = withTotalOnly(true);
+        assertNotNull(s.next(RestResponse.of(200, Map.of(), page(50)), RestRequest.get("http://api").withQuery("page", "0")));
+        assertNotNull(s.next(RestResponse.of(200, Map.of(), page(50)), RestRequest.get("http://api").withQuery("page", "1")));
+        assertNull(s.next(RestResponse.of(200, Map.of(), page(30)), RestRequest.get("http://api").withQuery("page", "2")),
+            "50 + 50 + 30 = 130 rows read: no empty page 3 to ask for");
+    }
+
+    @Test void a_page_size_the_api_chooses_is_not_counted_against_the_total() {
+        // Without size_param the page size is the API's, not the configured 50: rows read cannot be inferred.
+        var s = withTotalOnly(false);
+        assertNotNull(s.next(RestResponse.of(200, Map.of(), page(30)), RestRequest.get("http://api").withQuery("page", "2")));
+    }
 }

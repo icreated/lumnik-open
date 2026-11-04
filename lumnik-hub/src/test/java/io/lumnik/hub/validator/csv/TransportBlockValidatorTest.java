@@ -32,7 +32,7 @@ class TransportBlockValidatorTest {
         // declaring it would emit a lying "ignored by the runtime" warning (Copilot, PR #169 r3).
         List<ValidationError> errs = ConfigDefRunner.run(
             TransportBlockValidator.configDef(),
-            mapper.readTree("{\"kind\":\"sftp\",\"host\":\"h\",\"user\":\"u\","
+            mapper.readTree("{\"kind\":\"sftp\",\"host\":\"h\",\"user\":\"u\",\"key_env\":\"K\",\"strict_host_key\":false,"
                 + "\"path\":\"/in/*.csv\",\"archive_path\":\"/done/\"}"),
             "spec.transport");
         assertTrue(errs.isEmpty(), () -> "archive_path is honored — no warning allowed, got: " + errs);

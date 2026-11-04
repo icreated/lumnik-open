@@ -2,6 +2,7 @@ package io.lumnik.hub.ask;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityManifestParser;
@@ -87,7 +88,7 @@ public class EntitySchemaBuilder {
      * with nothing after it must not make a card whose heading is a space.
      */
     private static String or(String label, String fallback) {
-        return (label != null && !label.isBlank()) ? label : fallback;
+        return (Text.present(label)) ? label : fallback;
     }
 
     /**

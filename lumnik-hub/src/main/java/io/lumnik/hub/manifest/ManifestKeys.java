@@ -2,6 +2,8 @@ package io.lumnik.hub.manifest;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.text.Text;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -76,7 +78,7 @@ public final class ManifestKeys {
         Set<String> seen = new HashSet<>();
         for (JsonNode f : node) {
             String name = f.isTextual() ? f.asText() : null;
-            if (name == null || name.isBlank())
+            if (Text.blank(name))
                 throw new IllegalArgumentException(path + " holds a blank or non-text entry");
             if (!seen.add(name))
                 throw new IllegalArgumentException(path + " names " + name + " twice");
@@ -100,9 +102,23 @@ public final class ManifestKeys {
      */
     public static String requiredText(JsonNode node, String field, String path) {
         String value = text(node, field);
-        if (value == null || value.isBlank())
+        if (Text.blank(value))
             throw new IllegalArgumentException(path + " is required");
         return value;
+    }
+
+    /**
+     * The scope tag a manifest declares, from the text as written: stripped, then checked against
+     * the one rule every declarer shares ({@link ScopeGrants#nameProblem}, #577). The tag becomes the
+     * case-sensitive Keycloak role {@code scope:<tag>}, and accidental whitespace must not leak into
+     * authorization (a bound user would get a lying 403) — so it is stripped before it is judged.
+     * The caller reads {@code written} with the strictness its kind promises.
+     */
+    public static String scopeTag(String written) {
+        String tag = written.strip();
+        ScopeGrants.nameProblem(tag)
+            .ifPresent(problem -> { throw new IllegalArgumentException("spec.scope: " + problem); });
+        return tag;
     }
 
     /**

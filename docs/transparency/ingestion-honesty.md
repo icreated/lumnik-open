@@ -33,7 +33,7 @@ ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTE
 | Line | Means | Do this |
 |---|---|---|
 | `⚠ N rows quarantined — see: lm dlq list --run …` | rows set aside | [Diagnosing a failed run](../recipes/diagnose-a-run.md) |
-| `⚠ N cell(s) a hook did not deliver as declared — the rows were still written` | a value a hook could not read was emptied, or left as it was | [cell_errors](../connectors/transformers-reference.md#when-a-hook-cannot-deliver-cell_errors-and-on-error) |
+| `⚠ N cell(s) not delivered as declared (a hook, or a promoted value of the wrong type) — the rows were still written` | a value a hook could not read was emptied, or left as it was; or a promoted value did not read as its type and was emptied | [cell_errors](../connectors/transformers-reference.md#when-a-hook-cannot-deliver-cell_errors-and-on-error) |
 | `• N row(s) removed — the source no longer holds them` | a one-file `csv-file` connector followed its file | [Full refresh](../connectors/csv.md#one-file-is-the-table-full-refresh) |
 | `• N file(s) unchanged since they were last read — not read again` | the file did not change: `IN 0` is normal | to read it again: `lm endpoint reset-cursor <connector>/<endpoint>` |
 | `• N file(s) read but not archived — still in the source folder …` | the archive step failed; the rows are in | check the archive folder's rights |

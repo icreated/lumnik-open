@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.sources;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.jdbc.spi.ColumnDescriptor;
 import io.lumnik.hub.sql.SqlIdentifiers;
 import io.quarkus.narayana.jta.QuarkusTransaction;
@@ -124,7 +125,7 @@ public class JdbcSourceResource {
     JdbcConnectionConfig cc = ApiErrors.orBadRequest(
         () -> JdbcConnectionConfig.parse(req.url(), req.user(), req.password(), dialectRegistry));
     // The manifest's own cron check (#1244): a schedule that does not parse would never fire.
-    if (req.scheduleCron() != null && !req.scheduleCron().isBlank()) {
+    if (Text.present(req.scheduleCron())) {
       Optional<String> badCron = CronField.validCron(req.scheduleCron());
       if (badCron.isPresent()) {
         return ApiErrors.badRequest(badCron.get());
@@ -265,7 +266,7 @@ public class JdbcSourceResource {
     connector.setTypeId(JdbcConnectorType.TYPE_ID);
     connector.setConfig(p.config());
     connector.setCredentialId(credentialId);
-    if (req.scheduleCron() != null && !req.scheduleCron().isBlank()) {
+    if (Text.present(req.scheduleCron())) {
       connector.setSchedule(req.scheduleCron());
     }
     connectorRepo.persist(connector);
@@ -285,9 +286,9 @@ public class JdbcSourceResource {
       throw new ConfigValidationException("table " + table
           + " has no primary key — jdbc-generic pages by primary key; declare pk_columns in a manifest instead");
     }
-    String watermarkCol = tableReq.watermark() == null || tableReq.watermark().isBlank()
+    String watermarkCol = Text.blank(tableReq.watermark())
         ? td.suggestedWatermark().orElse(null) : tableReq.watermark();
-    String mode = tableReq.mode() == null || tableReq.mode().isBlank()
+    String mode = Text.blank(tableReq.mode())
         ? (watermarkCol == null ? "full" : "watermark") : tableReq.mode();
     if (!"watermark".equals(mode) && !"full".equals(mode)) {
       throw new ConfigValidationException("table " + table + ": mode '" + mode + "' is not one of watermark, full");

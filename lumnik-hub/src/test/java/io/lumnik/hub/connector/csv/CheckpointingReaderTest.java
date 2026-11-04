@@ -1,6 +1,8 @@
 package io.lumnik.hub.connector.csv;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -183,6 +185,19 @@ class CheckpointingReaderTest {
     assertThat(CheckpointingReader.canCheckpoint(utf16)).isFalse();
     assertThat(CheckpointingReader.canCheckpoint(StandardCharsets.UTF_16LE)).isTrue();
     assertThat(CheckpointingReader.canCheckpoint(StandardCharsets.UTF_16BE)).isTrue();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "UTF-8", "US-ASCII", "UTF-16BE", "UTF-16LE", "ISO-8859-1", "ISO-8859-15", "windows-1250", "windows-1252"})
+  void the_allowlist_names_are_checkpointable(String name) {
+    assertThat(CheckpointingReader.canCheckpoint(Charset.forName(name))).isTrue();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"UTF-16", "UTF-32", "Shift_JIS", "ISO-2022-JP", "GBK", "Big5", "windows-31j", "x-UTF-16LE-BOM"})
+  void charsets_off_the_allowlist_are_not(String name) {
+    assertThat(CheckpointingReader.canCheckpoint(Charset.forName(name))).isFalse();
   }
 
   @Test

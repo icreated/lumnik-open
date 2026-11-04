@@ -1,6 +1,7 @@
 package io.lumnik.hub.search;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.entity.EntityManifestParser;
 import io.lumnik.hub.manifest.LinkTemplate;
 import io.lumnik.hub.manifest.ManifestKeys;
@@ -89,12 +90,7 @@ public class SearchIndexManifestParser {
 
     /** The document root, refused unless it is a YAML mapping (same guard as kind:Export). */
     public JsonNode readTree(String yaml) {
-        JsonNode root;
-        try {
-            root = SURFACE.readTree(yaml);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("invalid kind:SearchIndex manifest: " + e.getMessage(), e);
-        }
+        JsonNode root = SURFACE.readTree(yaml, "SearchIndex");
         if (root == null || !root.isObject())
             throw new IllegalArgumentException(
                 "invalid kind:SearchIndex manifest: expected a YAML mapping (object) at the document root");
@@ -161,7 +157,7 @@ public class SearchIndexManifestParser {
         JsonNode node = spec.path("titleField");
         if (node.isMissingNode() || node.isNull()) return null;
         String title = ManifestKeys.strictText(spec, "titleField", "spec.titleField");
-        if (title == null || title.isBlank())
+        if (Text.blank(title))
             throw new IllegalArgumentException("spec.titleField must name one of spec.fields");
         if (fields.stream().noneMatch(f -> f.name().equals(title)))
             throw new IllegalArgumentException("spec.titleField: '" + title

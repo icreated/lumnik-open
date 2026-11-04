@@ -1,5 +1,6 @@
 package io.lumnik.hub.notify;
 
+import io.lumnik.common.text.Text;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -34,7 +35,7 @@ public class SmtpConfigSanity {
     }
 
     void onStart(@Observes @Priority(9) StartupEvent ev) {
-        switch (verdict(smtpHost.filter(h -> !h.isBlank()).isPresent(), mock)) {
+        switch (verdict(smtpHost.filter(Text::present).isPresent(), mock)) {
             case LIVE -> LOG.infof("email delivery live via %s", smtpHost.orElse("?"));
             case MOCKED_WITH_HOST -> LOG.warn(
                 "LUMNIK_SMTP_HOST is set but delivery is still mocked — set LUMNIK_SMTP_MOCK=false to go live");

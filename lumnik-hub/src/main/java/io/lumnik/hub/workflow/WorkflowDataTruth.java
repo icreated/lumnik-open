@@ -2,6 +2,7 @@ package io.lumnik.hub.workflow;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.process.MessageTemplate;
 import io.lumnik.hub.sql.SqlFailureText;
 import io.lumnik.hub.sql.TenantRlsScope;
@@ -87,7 +88,30 @@ public class WorkflowDataTruth {
     public record Report(List<ValueCount> undeclared, List<String> unobserved, long nullOrBlank,
                          boolean tableMissing, boolean keyColumnMissing, Long keyNullOrBlank,
                          boolean checkUnavailable, String unavailableReason, String dueProblem,
-                         Long invalidOrderValues, Long keysWithSeveralRows, List<String> columnsUnverified) {}
+                         Long invalidOrderValues, Long keysWithSeveralRows, List<String> columnsUnverified) {
+
+        /** Nothing found, nothing missing, nothing unavailable: the base the {@code with…} methods start from. */
+        public static Report empty() {
+            return new Report(List.of(), List.of(), 0L, false, false, null, false, null, null, null, null, List.of());
+        }
+
+        public Report withTableMissing(List<String> columnsUnverified) {
+            return new Report(undeclared, unobserved, nullOrBlank, true, keyColumnMissing, keyNullOrBlank,
+                checkUnavailable, unavailableReason, dueProblem, invalidOrderValues, keysWithSeveralRows,
+                columnsUnverified);
+        }
+
+        public Report withKeyColumnMissing() {
+            return new Report(undeclared, unobserved, nullOrBlank, tableMissing, true, keyNullOrBlank,
+                checkUnavailable, unavailableReason, dueProblem, invalidOrderValues, keysWithSeveralRows,
+                columnsUnverified);
+        }
+
+        public Report withUnavailable(String reason) {
+            return new Report(undeclared, unobserved, nullOrBlank, tableMissing, keyColumnMissing, keyNullOrBlank,
+                true, reason, dueProblem, invalidOrderValues, keysWithSeveralRows, columnsUnverified);
+        }
+    }
 
     /**
      * Three movements: fold the declaration into the values it accepts, confront the data, compare.
@@ -145,7 +169,7 @@ public class WorkflowDataTruth {
             try (PreparedStatement ps = c.prepareStatement(sql); ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     String v = rs.getString(1);
-                    if (v == null || v.isBlank()) nullOrBlank += rs.getLong(2);
+                    if (Text.blank(v)) nullOrBlank += rs.getLong(2);
                     else seen.put(v, rs.getLong(2));
                 }
             }
@@ -168,17 +192,15 @@ public class WorkflowDataTruth {
      */
     static Report degraded(long tenantId, WorkflowGraph g, SQLException e) {
         if (UNDEFINED_TABLE.equals(e.getSQLState())) {
-            return new Report(List.of(), List.of(), 0L, true, false, null, false, null, null, null, null,
-                declaredColumns(g));
+            return Report.empty().withTableMissing(declaredColumns(g));
         }
         LOG.warnf(e, "workflow data-truth check unavailable for tenant %d, workflow %s "
             + "(%s.%s, SQLSTATE %s)", tenantId, g.name(), g.table(), g.column(), e.getSQLState());
         // rootMessage withholds a class that can carry a stored value (22 first) and then names
         // the SQLSTATE itself; a structural message keeps its words behind ours (#1315).
         String said = SqlFailureText.rootMessage(e);
-        return new Report(List.of(), List.of(), 0L, false, false, null, true,
-            said.startsWith("SQLSTATE ") ? said : "SQLSTATE " + e.getSQLState() + ": " + said, null, null, null,
-            List.of());
+        return Report.empty().withUnavailable(
+            said.startsWith("SQLSTATE ") ? said : "SQLSTATE " + e.getSQLState() + ": " + said);
     }
 
     /** What the data says that the manifest does not, and what the manifest says that the data never shows. */

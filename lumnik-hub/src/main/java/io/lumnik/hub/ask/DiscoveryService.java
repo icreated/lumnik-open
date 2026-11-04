@@ -2,6 +2,7 @@ package io.lumnik.hub.ask;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.api.helpers.CredentialResolver;
 import io.lumnik.hub.connector.api.types.ResolvedCredential;
 import io.lumnik.extraction.spi.ask.DiscoveryPort;
@@ -116,7 +117,7 @@ public class DiscoveryService implements DiscoveryPort {
 
     /** "public.c_order" → "c_order"; null when not resolvable. */
     private String sourceTableOf(String targetEntity) {
-        if (targetEntity == null || targetEntity.isBlank()) return null;
+        if (Text.blank(targetEntity)) return null;
         int dot = targetEntity.lastIndexOf('.');
         return dot >= 0 ? targetEntity.substring(dot + 1) : targetEntity;
     }

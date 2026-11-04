@@ -2,6 +2,7 @@ package io.lumnik.hub.api.connector.handler;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
@@ -43,7 +44,7 @@ public class JdbcGenericConnectorApplyHandler implements ConnectorApplyHandler {
         if (tables.isArray()) {
             for (JsonNode tableNode : tables) {
                 String tableName = tableNode.path("name").asText();
-                if (tableName == null || tableName.isBlank()) continue;
+                if (Text.blank(tableName)) continue;
 
                 JsonNode merged = TableDefaultsMerger.merge(defaults, tableNode);
                 Map<String, Object> epCfg = JSON.convertValue(merged, Map.class);

@@ -1,0 +1,235 @@
+{
+  "fields" : [ {
+    "name" : "connection",
+    "type" : "NESTED",
+    "importance" : "HIGH",
+    "required" : true,
+    "doc" : "JDBC connection",
+    "nested" : {
+      "fields" : [ {
+        "name" : "url",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : true,
+        "doc" : "JDBC URL — jdbc:<dialect>://... (the dialect's provider must be installed)"
+      }, {
+        "name" : "user",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : true,
+        "doc" : "DB user"
+      }, {
+        "name" : "password_env",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : true,
+        "doc" : "Name of the DB password: a hub environment variable, else an lm secret"
+      }, {
+        "name" : "dialect",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "JDBC dialect (inferred from url scheme if absent)"
+      }, {
+        "name" : "zone",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Time zone the source writes its dates-and-times without a zone in, for example Europe/Paris (read as UTC if absent)"
+      }, {
+        "name" : "password",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Plain-text DB password (dev/test only — wins over password_env; prefer password_env)"
+      } ]
+    }
+  }, {
+    "name" : "defaults",
+    "type" : "NESTED",
+    "importance" : "LOW",
+    "required" : false,
+    "doc" : "Per-table defaults",
+    "nested" : {
+      "fields" : [ {
+        "name" : "mode",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : false,
+        "doc" : "Ingest mode (here or in defaults)",
+        "allowed" : [ "watermark", "full" ]
+      }, {
+        "name" : "schema",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : false,
+        "doc" : "Table schema (here or in defaults)"
+      }, {
+        "name" : "watermark_column",
+        "type" : "STRING",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "The column a watermark read moves forward on",
+        "recommendations" : [ "Example: watermark_column: updated_at" ]
+      }, {
+        "name" : "pk_columns",
+        "type" : "LIST",
+        "importance" : "HIGH",
+        "required" : false,
+        "doc" : "Primary key columns (non-empty; here or in defaults)",
+        "recommendations" : [ "Example: pk_columns: [id]" ]
+      }, {
+        "name" : "indexes",
+        "type" : "LIST",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Secondary indexes on the target table: [{columns: [...], unique?: bool (default false)}]",
+        "recommendations" : [ "indexes is a list of { columns: [...], unique?: bool } objects — e.g. indexes: [{ columns: [email] }]" ],
+        "items" : {
+          "fields" : [ {
+            "name" : "columns",
+            "type" : "LIST",
+            "importance" : "HIGH",
+            "required" : true,
+            "doc" : "Columns of the index, in order",
+            "recommendations" : [ "e.g. columns: [email] or [bpartner_id, dateordered]" ]
+          }, {
+            "name" : "unique",
+            "type" : "BOOLEAN",
+            "importance" : "LOW",
+            "required" : false,
+            "doc" : "Unique index (default false)",
+            "default" : false
+          } ]
+        }
+      }, {
+        "name" : "rename",
+        "type" : "NESTED",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Rename source columns before they become hub columns: {source: target}"
+      } ],
+      "refused" : [ {
+        "name" : "chunk_size",
+        "message" : "chunk_size is not a knob — jdbc chunking is fixed at 500 rows per read; remove it",
+        "recommendations" : [ "The engine reads its chunk size from the connector type, never from the manifest" ]
+      } ]
+    }
+  }, {
+    "name" : "source",
+    "type" : "NESTED",
+    "importance" : "HIGH",
+    "required" : true,
+    "doc" : "Source tables",
+    "nested" : {
+      "fields" : [ {
+        "name" : "tables",
+        "type" : "LIST",
+        "importance" : "HIGH",
+        "required" : true,
+        "doc" : "List of tables to ingest (at least one)",
+        "recommendations" : [ "Add a table: { name: 'invoices', mode: 'full', pk_columns: ['id'] }" ],
+        "items" : {
+          "fields" : [ {
+            "name" : "name",
+            "type" : "STRING",
+            "importance" : "HIGH",
+            "required" : true,
+            "doc" : "Table name — also names the hub table connector.t_<name>, unless target names it"
+          }, {
+            "name" : "target",
+            "type" : "STRING",
+            "importance" : "MEDIUM",
+            "required" : false,
+            "doc" : "Names the hub table connector.t_<target> in place of the source table's name (#1199)"
+          }, {
+            "name" : "mode",
+            "type" : "STRING",
+            "importance" : "HIGH",
+            "required" : true,
+            "doc" : "Ingest mode (here or in defaults)",
+            "allowed" : [ "watermark", "full" ]
+          }, {
+            "name" : "schema",
+            "type" : "STRING",
+            "importance" : "HIGH",
+            "required" : true,
+            "doc" : "Table schema (here or in defaults)"
+          }, {
+            "name" : "watermark_column",
+            "type" : "STRING",
+            "importance" : "MEDIUM",
+            "required" : false,
+            "doc" : "The column a watermark read moves forward on",
+            "required_when" : {
+              "field" : "mode",
+              "equals" : "watermark",
+              "when" : "mode = watermark"
+            },
+            "recommendations" : [ "Example: watermark_column: updated_at" ]
+          }, {
+            "name" : "pk_columns",
+            "type" : "LIST",
+            "importance" : "HIGH",
+            "required" : true,
+            "doc" : "Primary key columns (non-empty; here or in defaults)",
+            "recommendations" : [ "Example: pk_columns: [id]" ]
+          }, {
+            "name" : "indexes",
+            "type" : "LIST",
+            "importance" : "LOW",
+            "required" : false,
+            "doc" : "Secondary indexes on the target table: [{columns: [...], unique?: bool (default false)}]",
+            "recommendations" : [ "indexes is a list of { columns: [...], unique?: bool } objects — e.g. indexes: [{ columns: [email] }]" ],
+            "items" : {
+              "fields" : [ {
+                "name" : "columns",
+                "type" : "LIST",
+                "importance" : "HIGH",
+                "required" : true,
+                "doc" : "Columns of the index, in order",
+                "recommendations" : [ "e.g. columns: [email] or [bpartner_id, dateordered]" ]
+              }, {
+                "name" : "unique",
+                "type" : "BOOLEAN",
+                "importance" : "LOW",
+                "required" : false,
+                "doc" : "Unique index (default false)",
+                "default" : false
+              } ]
+            }
+          }, {
+            "name" : "rename",
+            "type" : "NESTED",
+            "importance" : "LOW",
+            "required" : false,
+            "doc" : "Rename source columns before they become hub columns: {source: target}"
+          } ],
+          "refused" : [ {
+            "name" : "chunk_size",
+            "message" : "chunk_size is not a knob — jdbc chunking is fixed at 500 rows per read; remove it",
+            "recommendations" : [ "The engine reads its chunk size from the connector type, never from the manifest" ]
+          } ]
+        }
+      } ]
+    }
+  }, {
+    "name" : "schedule",
+    "type" : "STRING",
+    "importance" : "MEDIUM",
+    "required" : false,
+    "doc" : "Cron expression for recurring ingestion"
+  }, {
+    "name" : "window",
+    "type" : "STRING",
+    "importance" : "MEDIUM",
+    "required" : false,
+    "doc" : "Fence scheduled runs to a UTC time window, HH:MM-HH:MM (a manual run bypasses it)"
+  }, {
+    "name" : "mapping",
+    "type" : "NESTED",
+    "importance" : "LOW",
+    "required" : false,
+    "doc" : "Not accepted — refused by validation (rows land as the source holds them)"
+  } ]
+}

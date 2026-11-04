@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.transport.FileDescriptor;
 
 import java.time.Instant;
@@ -65,7 +66,7 @@ public record FileProcessingCursor(Instant watermark, List<Entry> lastBatch) {
      * or legacy {@code {"value":"…"}} payloads.
      */
     public static FileProcessingCursor fromJson(String raw) {
-        if (raw == null || raw.isBlank()) return defaultCursor();
+        if (Text.blank(raw)) return defaultCursor();
         try {
             var node = JSON.readTree(raw);
             if (!node.has(WATERMARK_KEY)) return defaultCursor();

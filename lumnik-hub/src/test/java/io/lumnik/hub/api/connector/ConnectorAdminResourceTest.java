@@ -4,23 +4,32 @@ import io.lumnik.testkit.auth.TestIdentity;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
+import io.lumnik.hub.connector.rest.auth.AuthSpec;
+import io.lumnik.hub.connector.rest.auth.OAuth2Tokens;
+import io.lumnik.hub.connector.rest.auth.SessionCookies;
 import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.junit.mockito.InjectSpy;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
+import java.util.UUID;
 
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 
 @QuarkusTest
 class ConnectorAdminResourceTest {
 
   @Inject ConnectorRepository repo;
   @Inject UserTransaction utx;
+  @InjectSpy OAuth2Tokens oauth2Tokens;
+  @InjectSpy SessionCookies sessionCookies;
 
   @Test
   void list_returns_connectors_for_tenant() throws Exception {
@@ -84,6 +93,33 @@ class ConnectorAdminResourceTest {
       .headers(TestIdentity.tenantAndUser(1))
       .when().delete("/api/platform/connectors/" + created)
       .then().statusCode(204);
+  }
+
+  /** #1775: the connector's token and session slots go with the row, not an hour later with the idle sweep. */
+  @Test
+  void delete_drops_the_connectors_auth_slots_and_a_dry_run_does_not() {
+    String created = given()
+      .headers(TestIdentity.tenantAndUser(1))
+      .contentType("application/json")
+      .body("""
+        {"tenantId":1,"name":"slots-test","typeId":"hello-world","config":{"count":5}}
+        """)
+      .when().post("/api/platform/connectors")
+      .then().statusCode(201)
+        .extract().jsonPath().getString("id");
+    var owner = new AuthSpec.Owner(1L, UUID.fromString(created));
+
+    given().headers(TestIdentity.tenantAndUser(1)).queryParam("dryRun", true)
+      .when().delete("/api/platform/connectors/" + created)
+      .then().statusCode(200);
+    verify(oauth2Tokens, never()).drop(owner);
+    verify(sessionCookies, never()).drop(owner);
+
+    given().headers(TestIdentity.tenantAndUser(1))
+      .when().delete("/api/platform/connectors/" + created)
+      .then().statusCode(204);
+    verify(oauth2Tokens).drop(owner);
+    verify(sessionCookies).drop(owner);
   }
 
   @Test

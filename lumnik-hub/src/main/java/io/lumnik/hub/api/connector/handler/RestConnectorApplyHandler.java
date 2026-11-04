@@ -2,13 +2,14 @@ package io.lumnik.hub.api.connector.handler;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.connector.rest.runtime.RestEndpointReader;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.rest.pagination.preset.PaginationPresetRegistry;
-import io.lumnik.hub.validator.JsonNodes;
+import io.lumnik.hub.json.JsonNodes;
 import io.lumnik.hub.validator.rest.EndpointsBlockValidator;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -89,7 +90,7 @@ public class RestConnectorApplyHandler implements ConnectorApplyHandler {
         int applied = 0;
         for (JsonNode epNode : endpoints) {
             String epName = epNode.path("id").asText();
-            if (epName == null || epName.isBlank()) continue;
+            if (Text.blank(epName)) continue;
             upsertEndpoint(conn, tenant, epName, epNode);
             applied++;
         }

@@ -2,6 +2,7 @@ package io.lumnik.hub.search.mark;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.common.text.Text;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -108,17 +109,17 @@ public class SearchProjectionMarkStore {
 
     private void insertKeys(Connection c, long tenantId, String searchIndex, String entity,
                             List<String> canonicalKeys, String reason, boolean relabel) {
-        if (searchIndex == null || searchIndex.isBlank())
+        if (Text.blank(searchIndex))
             throw new IllegalArgumentException("searchIndex must not be blank");
-        if (entity == null || entity.isBlank())
+        if (Text.blank(entity))
             throw new IllegalArgumentException("entity must not be blank");
-        if (reason == null || reason.isBlank())
+        if (Text.blank(reason))
             throw new IllegalArgumentException("reason must not be blank");
         if (canonicalKeys == null)
             throw new IllegalArgumentException("canonicalKeys must not be null");
         for (int i = 0; i < canonicalKeys.size(); i++) {
             String key = canonicalKeys.get(i);
-            if (key == null || key.isBlank())
+            if (Text.blank(key))
                 // Never interpolate the value itself (Copilot review): a canonical key encodes a
                 // business value, so only its position in the batch is safe to name in a message
                 // that can reach logs or an error surface.

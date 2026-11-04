@@ -100,10 +100,14 @@ spec:
     security_protocol: SASL_SSL     # or SASL_PLAINTEXT for a SASL broker without TLS
   schedule: "*/5 * * * *"           # optional cron, evaluated in UTC by the hub scheduler
   window: "06:00-22:00"             # optional fence for the scheduled slots, UTC, end exclusive
+  promote:                          # optional; a nested value as a typed column
+    - { name: temperature_c, path: $.object.temperature, type: decimal }
 ```
 
 There is no `target` and no `mapping` block: the table is `connector.t_<name>` and messages land
-as they are. Three more keys belong to the [Event Hubs preset](#azure-event-hubs-the-event-hubs-preset):
+as they are. `promote` only adds columns: see
+[A value nested in the message](#a-value-nested-in-the-message-promote). Three more keys belong to
+the [Event Hubs preset](#azure-event-hubs-the-event-hubs-preset):
 `preset`, `namespace`, `connection_string_env`.
 
 ### Configuration reference
@@ -122,6 +126,7 @@ as they are. Three more keys belong to the [Event Hubs preset](#azure-event-hubs
 | `auth.security_protocol` | `SASL_SSL` | `SASL_SSL` or `SASL_PLAINTEXT`. A wrong value is not caught by `lm validate`: the run fails when it connects |
 | `schedule` | — | five-field cron, validated at apply, evaluated in UTC |
 | `window` | — | `HH:MM-HH:MM`, UTC, end exclusive, may cross midnight; a manual run ignores it |
+| `promote` | — | a list of `{ name, path, type, transform? }`, rest's grammar: `path` a JSONPath, `type` one of `text`, `bigint`, `integer`, `decimal`, `boolean`, `date`, `timestamptz` (not `jsonb`); a name used once, never a [reserved one](#seven-column-names-are-reserved) |
 | `metadata.scopes` | — | the business scope(s) the table is askable in; the validator warns when none is declared |
 
 `lm validate` and `lm apply` enforce every rule above. Five mistakes in one file, all named at once:
@@ -392,6 +397,97 @@ There are 500 rows in connector.t_acme_partners_raw. The largest MONTANT_€ is 
 `address` and `tags` landed as `jsonb`, values intact. The order of an object's keys is not
 kept: `{"street", "city"}` comes back `{"city", "street"}`.
 
+### A value nested in the message: `promote`
+
+A LoRaWAN network server nests what a sensor measured. ChirpStack's Kafka integration publishes
+each uplink with the decoded reading under `object`, and every event type on the same topic.
+`acme.probes` carries 500 such events from a store's cold-room probes:
+
+```json
+{"deduplicationId": "00000000-0000-4000-8000-000000000248", "time": "2026-01-01T04:08:00Z",
+ "deviceInfo": {"deviceName": "PROBE-04", "devEui": "a84041000181c004", …},
+ "fCnt": 49, "fPort": 2, "data": "AH0=", "object": {"temperature": -19.4}, …}
+```
+
+Without `promote`, `object` lands as one `jsonb` column. An entity or a Process `when:` compares
+columns, so the temperature is out of their reach. `promote` reads it into a typed column:
+
+```yaml
+--8<-- "docs/connectors/kafka/demo/56-promote.yaml"
+```
+
+```
+$ lm apply -f docs/connectors/kafka/demo/56-promote.yaml
+Applied connector "acme-kafka-probes" — 1 endpoint
+$ lm connector run acme-kafka-probes
+run scheduled: 8cf5834e-7601-4a0e-8468-d5c6f6118564
+$ lm run get 8cf5834e
+ID        CONNECTOR          ENDPOINT  STATUS     IN   OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED             EVALUATED
+8cf5834e  acme-kafka-probes  default   Completed  500  500  0        0             2026-11-03 18:41  2026-11-03 18:41  yes
+⚠ 1 cell(s) not delivered as declared (a hook, or a promoted value of the wrong type) — the rows were still written
+```
+
+The three promoted columns sit beside the top-level fields, with the declared types:
+
+```
+     column_name     |        data_type
+---------------------+--------------------------
+ deduplicationId     | text
+ time                | text
+ deviceInfo          | jsonb
+ …
+ object              | jsonb
+ rxInfo              | jsonb
+ txInfo              | jsonb
+ temperature_c       | numeric
+ device              | text
+ measured_at         | timestamp with time zone
+ margin              | bigint
+ externalPowerSource | boolean
+ batteryLevel        | numeric
+
+  device  |      measured_at       | temperature_c |             object
+----------+------------------------+---------------+---------------------------------
+ PROBE-04 | 2026-01-01 04:08:00+00 |      -19.4000 | {"temperature": -19.4}
+ PROBE-05 | 2026-01-01 04:09:00+00 |               |
+ PROBE-01 | 2026-01-01 04:10:00+00 |               | {"temperature": "sensor-fault"}
+ PROBE-02 | 2026-01-01 04:11:00+00 |      -20.3000 | {"temperature": -20.3}
+```
+
+- **A message without the value gets NULL**, and that is not an error. `PROBE-05` at 04:09 is a
+  `status` event, which carries a battery level and no `object`.
+- **A value that does not read as its type is NULL and one cell error.** The run's warning above
+  is uplink 250, whose codec sent `"sensor-fault"` where a number should be. The row is written
+  and `object` keeps what was sent.
+- **The column is typed from the first run**, even when its first messages have no value: the
+  declared type is used.
+- **A promoted column named like a top-level field replaces it.** `{ name: time, path: $.time,
+  type: timestamptz }` turns the text `time` into a timestamp. Do it before the first run: a
+  column keeps its type.
+- `transform:` works as on rest, e.g. `from_epoch` for a number of seconds.
+
+The two mistakes `lm validate` names:
+
+```yaml
+--8<-- "docs/connectors/kafka/demo/57-promote-refused.yaml"
+```
+
+```
+$ lm validate -f docs/connectors/kafka/demo/57-promote-refused.yaml
+✗ 57-promote-refused.yaml — 2 error(s), 0 warning(s)
+
+  ERROR    spec.promote[0].type
+          kafka promotes a scalar — a nested value already lands as jsonb under its top-level field
+          → Promote the value inside it, e.g. path: $.object.temperature, type: decimal
+
+  ERROR    spec.promote[1].name
+          'id' is a hub system column (_ingested_at, _mapping_version, _row_hash, _run_id, _source, id, tenant_id)
+          → Name the promoted column otherwise
+
+Fix errors above before running 'lm apply -f docs/connectors/kafka/demo/57-promote-refused.yaml'.
+Error: validation failed: 2 error(s)
+```
+
 ### Seven column names are reserved
 
 `id`, `_row_hash`, `_ingested_at`, `_source`, `_run_id`, `_mapping_version`, `tenant_id` are the
@@ -522,8 +618,9 @@ missing input (`preset 'event-hubs' requires 'namespace'`).
   yet supported; `format` accepts only `json`.
 - **One topic per connector**, and no filtering by message key or header: whatever the topic
   carries lands in the table. Message keys, headers and timestamps are not stored as columns.
-- **No mapping block.** No hooks run at ingestion — no rename, no flatten, no filter, no lookup.
-  A field must reach the hub under the name and shape it should land with.
+- **No mapping block.** No hooks run at ingestion — no rename, no filter, no lookup. A nested value
+  reaches a column through [`promote`](#a-value-nested-in-the-message-promote); anything else must
+  reach the hub under the name and shape it should land with.
 - **No pre-flight.** There is no `lm source kafka test`; the first run is the test. A missing
   topic or an unresolved secret fails it at once.
 - **Append-only.** A tombstone is set aside, never applied as a delete; a deletion that must reach

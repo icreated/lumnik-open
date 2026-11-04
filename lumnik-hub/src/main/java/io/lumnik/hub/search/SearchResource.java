@@ -3,6 +3,7 @@ package io.lumnik.hub.search;
 import io.lumnik.common.ratelimit.RateLimited;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.search.FacetCount;
 import io.lumnik.extraction.spi.search.IndexedSearchHit;
 import io.lumnik.extraction.spi.search.IndexedSearchQuery;
@@ -69,7 +70,7 @@ public class SearchResource {
                             @QueryParam("entity") String entityParam,
                             @QueryParam("limit") Integer limit,
                             @QueryParam("cursor") String cursor) {
-        if (q == null || q.isBlank() || q.length() > MAX_Q_LENGTH) {
+        if (Text.blank(q) || q.length() > MAX_Q_LENGTH) {
             return ApiErrors.badRequest("q must be 1-" + MAX_Q_LENGTH + " characters");
         }
         int effectiveLimit = limit == null ? DEFAULT_LIMIT : limit;
@@ -175,7 +176,7 @@ public class SearchResource {
             if (m == null || out.containsKey(entity)) continue;
             Map<String, String> labels = new LinkedHashMap<>();
             m.columns().forEach((column, meta) -> {
-                if (meta != null && meta.label() != null && !meta.label().isBlank()) labels.put(column, meta.label().strip());
+                if (meta != null && Text.present(meta.label())) labels.put(column, meta.label().strip());
             });
             if (!labels.isEmpty()) out.put(entity, labels);
         }
@@ -212,7 +213,7 @@ public class SearchResource {
     private static String titleOf(IndexedSearchHit hit, String titleField) {
         if (titleField == null) return null;
         String value = hit.fields().get(titleField);
-        return value == null || value.isBlank() ? null : value.strip();
+        return Text.blank(value) ? null : value.strip();
     }
 
     private static Map<String, Object> hitBody(IndexedSearchHit hit, HitPresentation presentation) {

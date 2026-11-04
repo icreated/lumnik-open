@@ -2,6 +2,7 @@ package io.lumnik.identity.geo;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.common.text.Text;
 import io.quarkus.arc.lookup.LookupIfProperty;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -78,7 +79,7 @@ public class NominatimGeocoder implements Geocoder {
     }
 
     private static void appendIfPresent(StringBuilder sb, String v) {
-        if (v == null || v.isBlank()) return;
+        if (Text.blank(v)) return;
         if (!sb.isEmpty()) sb.append(", ");
         sb.append(v.strip());
     }

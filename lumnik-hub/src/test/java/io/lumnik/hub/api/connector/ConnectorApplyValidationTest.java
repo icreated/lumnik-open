@@ -27,10 +27,10 @@ class ConnectorApplyValidationTest {
             .header("X-Tenant-Id", "1")   // tenant now required in context before validation
             .when().post("/api/platform/connectors/apply")
             .then().statusCode(400)
-                  .body("errors.path", hasItem("spec.auth.token_env"));
+                  .body("errors.path", hasItem("spec.auth"));
     }
 
-    /** #1489: a scope named no is text through the apply door — only the token_env error is left. */
+    /** #1489: a scope named no is text through the apply door — only the bearer-without-a-token error (on the auth block) is left. */
     @Test void applyReadsYaml11BooleanWordsAsText() {
         String yaml = """
             apiVersion: connectors.lumnik.io/v1
@@ -50,7 +50,7 @@ class ConnectorApplyValidationTest {
             .header("X-Tenant-Id", "1")
             .when().post("/api/platform/connectors/apply")
             .then().statusCode(400)
-                  .body("errors.path", hasItem("spec.auth.token_env"))
+                  .body("errors.path", hasItem("spec.auth"))
                   .body("errors.path", not(hasItem("metadata.scopes[0]")));
     }
 

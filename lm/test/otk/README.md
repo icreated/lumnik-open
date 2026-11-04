@@ -221,6 +221,7 @@ QUARKUS_PROFILE=otkauth \
   DB_URL=jdbc:postgresql://localhost:5433/lumnik \
   LUMNIK_SECRET_MASTER_KEY="$(openssl rand -base64 32)" \
   LUMNIK_CRYPTO_SECRET_KEY="$(openssl rand -base64 32)" \
+  LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET="$(openssl rand -base64 32)" \
   QUARKUS_OTEL_SDK_DISABLED=true \
   java -jar lumnik-hub/target/quarkus-app/quarkus-run.jar &
 
@@ -232,7 +233,8 @@ export OTK_DB_ADMIN_DSN="postgresql://lumnik_admin:lumnik_admin_dev_password@loc
 make otk
 ```
 
-> `%otkauth` (dev-bypass off) hard-fails without `LUMNIK_SECRET_MASTER_KEY` + `LUMNIK_CRYPTO_SECRET_KEY`. The `otk-battery` GitHub workflow does all of the above automatically. The gate enforces **Silver** (`lm/test/otk/tier`); `OTK_TIER` overrides locally.
+> `%otkauth` (dev-bypass off) hard-fails without `LUMNIK_SECRET_MASTER_KEY`, `LUMNIK_CRYPTO_SECRET_KEY` and
+> `LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET` (`FingerprintHmacKey` refuses its placeholder). The `otk-battery` GitHub workflow does all of the above automatically. The gate enforces **Silver** (`lm/test/otk/tier`); `OTK_TIER` overrides locally.
 
 ---
 

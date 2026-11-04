@@ -3,7 +3,7 @@ package io.lumnik.hub.api.connector.handler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.connector.domain.Connector;
-import io.lumnik.hub.validator.JsonNodes;
+import io.lumnik.hub.json.JsonNodes;
 import io.lumnik.hub.connector.naming.Identifiers;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;

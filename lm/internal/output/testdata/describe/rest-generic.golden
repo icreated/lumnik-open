@@ -1,0 +1,127 @@
+base_url             REQUIRED  [STRING, HIGH]
+  Base URL of the API (without trailing slash)
+endpoints            REQUIRED  [LIST, HIGH]
+  Endpoint definitions (at least one)
+default_rate_limit   optional  [STRING, MEDIUM]
+  Max request rate across all endpoints, e.g. "100/s" (count/window; unit s|m|h)
+  default: 100/s
+schedule             optional  [STRING, MEDIUM]
+  Cron expression for recurring runs — the hub scheduler fires it, evaluated in UTC
+auth                 optional  [NESTED, MEDIUM]
+  Authentication for every endpoint (omit => none)
+  kind                 REQUIRED  [STRING, HIGH]
+    Authentication method
+    one of: bearer, basic, api-key, oauth2, session, none
+  username             optional  [STRING, HIGH]
+    Username (basic, session)
+    required when kind is basic or session
+  password_env         optional  [STRING, HIGH]
+    Password source: lm secret name, else env var (basic, session)
+    required when kind is basic or session
+  name                 optional  [STRING, HIGH]
+    Header/query parameter name for API key
+    required when kind = api-key
+  value_env            optional  [STRING, HIGH]
+    API key value source: lm secret name, else env var
+    required when kind = api-key
+  in                   optional  [STRING, MEDIUM]
+    Where to place the API key (header|query)
+    default: header
+  token_env            optional  [STRING, HIGH]
+    Bearer token source: lm secret name, else env var (bearer)
+  token_value          optional  [STRING, LOW]
+    Literal bearer token (dev only — prefer token_env)
+  scheme               optional  [STRING, LOW]
+    The Authorization header's scheme word (bearer): Bearer by default, Token for Django REST Framework
+    default: Bearer
+    read only when kind = bearer
+    → Bearer (the default), or the word the API expects, e.g. Token for Django REST Framework
+  token_url            optional  [STRING, HIGH]
+    OAuth2 token endpoint (client-credentials grant)
+    required when kind = oauth2
+    read only when kind = oauth2
+  client_id            optional  [STRING, HIGH]
+    OAuth2 client id
+    required when kind = oauth2
+    read only when kind = oauth2
+  client_secret_env    optional  [STRING, HIGH]
+    OAuth2 client secret source: lm secret name, else env var
+    required when kind = oauth2
+    read only when kind = oauth2
+  scope                optional  [STRING, MEDIUM]
+    OAuth2 scope, space-separated
+    read only when kind = oauth2
+  client_auth          optional  [STRING, LOW]
+    How the OAuth2 client authenticates to the token endpoint (basic | post)
+    default: basic
+    read only when kind = oauth2
+    one of: basic, post
+    → basic (the default) sends the client id and secret as HTTP Basic; post puts them in the body
+  login_url            optional  [STRING, HIGH]
+    Where the login form posts: Spring Security's /login, the container's j_security_check
+    required when kind = session
+    read only when kind = session
+  prime_url            optional  [STRING, MEDIUM]
+    The page GET first, for the session cookie and the CSRF token; login_url by default
+    read only when kind = session
+  username_field       optional  [STRING, LOW]
+    The form's username field (j_username for the container's login)
+    default: username
+    read only when kind = session
+  password_field       optional  [STRING, LOW]
+    The form's password field (j_password for the container's login)
+    default: password
+    read only when kind = session
+  csrf_field           optional  [STRING, MEDIUM]
+    The hidden input carrying the CSRF token in the primed page (_csrf under Spring Security)
+    read only when kind = session
+  at least one of token_env, token_value when kind is bearer
+    → Use `lm secret set <NAME> ...` then reference via token_env: <NAME>
+tls                  optional  [NESTED, MEDIUM]
+  Trust an internal CA for every endpoint: {ca_secret: the lm secret holding its PEM certificate(s)}
+  ca_secret            REQUIRED  [STRING, HIGH]
+    Name of the lm secret holding the CA's PEM certificate(s); only those CAs are trusted
+headers              optional  [LIST, MEDIUM]
+  Static headers sent on every request, [{name, value | value_env}]
+  → headers is a list of { name, value|value_env } objects
+defaults             optional  [NESTED, LOW]
+  Per-endpoint defaults merged into each endpoint
+  kind                 optional  [STRING, LOW]
+    Not accepted in spec.defaults — refused by validation; declare it on each endpoint
+  query                optional  [STRING, LOW]
+    Not accepted in spec.defaults — refused by validation; declare it on each endpoint
+  base_url             optional  [STRING, LOW]
+    Not accepted in spec.defaults — refused by validation; declare it at spec.base_url
+  auth                 optional  [NESTED, LOW]
+    Not accepted in spec.defaults — refused by validation; declare it at spec.auth
+  tls                  optional  [NESTED, LOW]
+    Not accepted in spec.defaults — refused by validation; declare it at spec.tls
+  default_rate_limit   optional  [STRING, LOW]
+    Not accepted in spec.defaults — refused by validation; declare it at spec.default_rate_limit
+  graphql_path         optional  [STRING, LOW]
+    Not accepted in spec.defaults — refused by validation; declare it at spec.graphql_path
+  mapping              optional  [NESTED, LOW]
+    Not accepted here — refused by validation; declare the mapping on its endpoint
+  response_format      optional  [STRING, MEDIUM]
+    What the answer is: json (the default) or xml — attributes under @, text beside them under #text
+    default: json
+    one of: json, xml
+  incremental          optional  [NESTED, MEDIUM]
+    Incremental strategy (mode full | watermark; defaults to full)
+    → incremental is a block, not a scalar: incremental: { mode: watermark, param: ..., watermark_path: ... }
+  headers              optional  [LIST, LOW]
+    Not accepted here — refused by validation; declare headers at spec.headers
+    → Move the headers block up to spec.headers (connector level)
+  variables            optional  [NESTED, LOW]
+    Static variables sent with every request; the relay cursor is injected on top
+  header               optional  [STRING, LOW]
+    The SOAP header template (inner <Header> content; same placeholders as body)
+  soap_action          optional  [STRING, LOW]
+    Sent as the SOAPAction header (an empty quoted string when absent)
+graphql_path         optional  [STRING, LOW]
+  Path appended to base_url for GraphQL endpoints
+  default: /graphql
+window               optional  [STRING, MEDIUM]
+  Fence scheduled runs to a UTC time window, HH:MM-HH:MM (a manual run bypasses it)
+mapping              optional  [NESTED, LOW]
+  Not accepted here — refused by validation; declare the mapping on its endpoint

@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.mapping.hooks;
 
+import io.lumnik.hub.json.JsonNodes;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
@@ -66,7 +67,7 @@ public record ColumnEffect(List<Step> steps, boolean unknownAfter) {
 
     /** Reads the column {@code value} names, when it names one; a malformed value is the hook's own refusal. */
     public Builder reads(String path, JsonNode value) {
-      if (value.isTextual() && !value.asText().isBlank()) steps.add(new Read(path, value.asText()));
+      if (JsonNodes.nonBlank(value)) steps.add(new Read(path, value.asText()));
       return this;
     }
 
@@ -87,7 +88,7 @@ public record ColumnEffect(List<Step> steps, boolean unknownAfter) {
     public Builder readsAnyOf(String key, JsonNode list) {
       List<String> columns = new ArrayList<>();
       for (JsonNode c : list) {
-        if (c.isTextual() && !c.asText().isBlank()) columns.add(c.asText());
+        if (JsonNodes.nonBlank(c)) columns.add(c.asText());
       }
       if (!columns.isEmpty()) steps.add(new AnyOf(key, List.copyOf(columns)));
       return this;
@@ -100,7 +101,7 @@ public record ColumnEffect(List<Step> steps, boolean unknownAfter) {
 
     /** Adds the column {@code value} names, when it names one. */
     public Builder adds(JsonNode value) {
-      if (value.isTextual() && !value.asText().isBlank()) steps.add(new Add(value.asText()));
+      if (JsonNodes.nonBlank(value)) steps.add(new Add(value.asText()));
       return this;
     }
 

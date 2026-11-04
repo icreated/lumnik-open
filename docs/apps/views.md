@@ -415,7 +415,7 @@ lm view apply -f docs/apps/demo/views/10-customers.yaml
 
 **Result:** anyone holding `scope:desk` finds *Clients ACME* under the **Records** tab of the PWA
 at `/app/`. On the phone, a text column offers *contient* and *=*; ordering (`>`, `<`) needs a
-column typed at the source ([`parse-number`, `parse-date`](../connectors/transformers.md#dates-and-amounts)).
+column typed at the source ([`parse-number`, `parse-date`](../connectors/transformers.md#dates-amounts-and-flags)).
 
 ### Let the AI draft a view, then check it before anyone else sees it
 

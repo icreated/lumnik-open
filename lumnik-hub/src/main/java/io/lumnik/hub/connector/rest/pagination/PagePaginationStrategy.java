@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.pagination;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
 
@@ -14,13 +15,14 @@ public class PagePaginationStrategy implements PaginationStrategy {
     private final int size;
     private final int startPage;
     private final String totalPagesPath;
+    private final String totalPath;
     private final String hasMorePath;
     private final String lastPath;
     private final boolean emptyCheck;
 
     public PagePaginationStrategy(Map<String, String> c) {
         this.pageParam      = c.get("page_param");
-        if (pageParam == null || pageParam.isBlank()) {
+        if (Text.blank(pageParam)) {
             throw new IllegalArgumentException("page pagination requires 'page_param'");
         }
         // size_param is optional; a blank one is absent, so first() never emits an empty-name param.
@@ -28,6 +30,7 @@ public class PagePaginationStrategy implements PaginationStrategy {
         this.size           = Integer.parseInt(c.getOrDefault("size", "50"));
         this.startPage      = Integer.parseInt(c.getOrDefault("start_page", "1"));
         this.totalPagesPath = PaginationSupport.optional(c.get("total_pages_path"));
+        this.totalPath      = PaginationSupport.optional(c.get("total_path"));
         this.hasMorePath    = PaginationSupport.optional(c.get("has_more_path"));
         this.lastPath       = PaginationSupport.optional(c.get("last_path"));
         this.emptyCheck     = Boolean.parseBoolean(c.getOrDefault("empty_check", "true"));
@@ -53,6 +56,15 @@ public class PagePaginationStrategy implements PaginationStrategy {
             // correct for both 0-indexed (start_page=0) and 1-indexed APIs — no over-fetch past the last.
             if (tp != null && currentPage - startPage + 1 >= tp.intValue()) return null;
         }
+        var page = items(resp);   // read once: the total check and the empty check both count it
+        // Only when size_param is sent: the page size is then ours, and the rows read so far are known. An API that
+        // fixes its own page size (no size_param) leaves the configured size a guess, not a count. One that clamps
+        // a larger size ends the read early, and the run is then refused for returning fewer rows than the total declared.
+        if (sizeParam != null) {
+            var total = PaginationSupport.declaredItems(resp.json(), totalPath);
+            long rowsRead = (long) (currentPage - startPage) * size + page.size();
+            if (total.isPresent() && rowsRead >= total.getAsLong()) return null;
+        }
         if (hasMorePath != null) {
             Boolean hm = PaginationSupport.flag(resp.json(), hasMorePath, "has_more_path");
             if (!Boolean.TRUE.equals(hm)) return null;
@@ -61,7 +73,7 @@ public class PagePaginationStrategy implements PaginationStrategy {
             Boolean last = PaginationSupport.flag(resp.json(), lastPath, "last_path");
             if (Boolean.TRUE.equals(last)) return null;
         }
-        if (emptyCheck && items(resp).isEmpty()) return null;
+        if (emptyCheck && page.isEmpty()) return null;
         return current.withQuery(pageParam, String.valueOf(currentPage + 1));
     }
 

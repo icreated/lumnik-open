@@ -1,0 +1,12 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata: { name: response-format-yaml, connector_type: rest-generic, scopes: [x] }
+spec:
+  base_url: https://shop.example.com/api
+  endpoints:
+    - id: products
+      path: /products?display=full
+      method: GET
+      response_format: yaml
+      pagination: { kind: prestashop, resource: products, limit: 50, response_path: $.products.product }
+      target: { kind: hybrid, table: x_products, unique_key: "$.id" }

@@ -1,5 +1,6 @@
 package io.lumnik.hub.api;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.ExceptionMapper;
@@ -69,6 +70,6 @@ public class ConfigValidationExceptionMapper implements ExceptionMapper<ConfigVa
         // own small lie. Pinned so the fallback cannot later be dropped as dead.
         String why = ex.getMessage();
         return ApiErrors.badRequest(
-            why == null || why.isBlank() ? "invalid connector configuration" : why);
+            Text.blank(why) ? "invalid connector configuration" : why);
     }
 }

@@ -1,5 +1,6 @@
 package io.lumnik.hub.ask;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.ask.SqlLexer;
 import io.lumnik.extraction.spi.ask.SqlLexer.Kind;
 import io.lumnik.extraction.spi.ask.SqlLexer.Token;
@@ -32,7 +33,7 @@ final class NamedValues {
     private NamedValues() {}
 
     static String asEqualities(String sql, String question) {
-        if (sql == null || question == null || question.isBlank()) return sql;
+        if (sql == null || Text.blank(question)) return sql;
         String folded = QuestionWords.fold(AskToSqlAgent.straightQuotes(question));
         List<Token> tokens = SqlLexer.tokenize(sql);
         StringBuilder out = new StringBuilder(sql);

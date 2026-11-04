@@ -11,6 +11,7 @@ import io.lumnik.hub.connector.mapping.hooks.HookId;
 import io.lumnik.hub.hook.KotlinScriptHost;
 import io.lumnik.hub.hook.ScriptFailures;
 import io.lumnik.hub.hook.kts.KtsScriptRunner;
+import io.lumnik.hub.json.JsonNodes;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -64,7 +65,7 @@ public class KotlinCellHook implements CellHook {
     // Once per spec, before any row, and at apply. Missing/null/blank all count as absent — a bare
     // `script:` is null, whose asText() is the literal "null", not "".
     JsonNode script = params.path("script");
-    if (script.isMissingNode() || script.isNull() || script.asText().isBlank()) {
+    if (JsonNodes.blankOrNull(script)) {
       throw new MappingValidationException("kotlin hook: 'script' is required");
     }
     JsonNode context = params.path(CONTEXT);

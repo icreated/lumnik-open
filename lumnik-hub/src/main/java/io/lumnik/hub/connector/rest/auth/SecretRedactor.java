@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.auth;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
 import java.net.URLEncoder;
@@ -13,7 +14,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class SecretRedactor {
-    private static final Pattern SECRET = Pattern.compile("(?i).*(key|token|secret|password|auth).*");
+    private static final Pattern SECRET = Pattern.compile("(?i).*(key|token|secret|password|auth|cookie).*");
     /** The scheme word of an Authorization value: {@code Bearer}, {@code Basic}, … */
     private static final Pattern SCHEME = Pattern.compile("[A-Za-z][A-Za-z0-9_-]*");
     /**
@@ -107,6 +108,13 @@ public final class SecretRedactor {
             boolean schemed = space > 0 && SCHEME.matcher(value.substring(0, space)).matches();
             String credential = schemed ? value.substring(space + 1).strip() : value;
             forms(credential, found);
+            // A session cookie (#1751): a source that echoes it writes its value alone, not the header.
+            if (name.equalsIgnoreCase("Cookie")) {
+                for (String pair : value.split(";")) {
+                    int eq = pair.indexOf('=');
+                    if (eq > 0) forms(pair.substring(eq + 1).strip(), found);
+                }
+            }
             if (schemed && value.substring(0, space).equalsIgnoreCase("basic")) {
                 try {
                     String pair = new String(Base64.getDecoder().decode(credential), StandardCharsets.UTF_8);
@@ -136,7 +144,7 @@ public final class SecretRedactor {
     }
 
     private static boolean isCredential(String name, String value) {
-        return value != null && !value.isBlank() && SECRET.matcher(name).matches();
+        return Text.present(value) && SECRET.matcher(name).matches();
     }
 
     private static void forms(String credential, Map<String, String> found) {

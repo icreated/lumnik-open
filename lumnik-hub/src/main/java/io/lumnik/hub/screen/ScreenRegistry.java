@@ -1,6 +1,5 @@
 package io.lumnik.hub.screen;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.manifest.HubYaml;
 import io.lumnik.hub.manifest.ModuleManifest;
@@ -26,8 +25,7 @@ public class ScreenRegistry {
 
     @Inject ModuleManifestRegistry manifestRegistry;
 
-    private final ObjectMapper yaml = HubYaml.mapper()
-        .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    private final ObjectMapper yaml = HubYaml.lenientMapper();
 
     // key: "{moduleId}/{screenId}"
     private Map<String, ScreenDefinition> screens = Map.of();

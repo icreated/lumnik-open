@@ -18,7 +18,7 @@ class MappingLoaderTest {
     MappingSpec spec = MappingLoader.load(yaml);
     assertThat(spec.id()).isEqualTo("test");
     assertThat(spec.version()).isEqualTo(1);
-    assertThat(spec.target()).isEqualTo("business_partner.BusinessPartner");
+    assertThat(spec.targets().jpa().entity()).isEqualTo("business_partner.BusinessPartner");
     assertThat(spec.mode()).isEqualTo(MappingSpec.StreamMode.STREAM);
   }
 

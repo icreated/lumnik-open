@@ -1,6 +1,7 @@
 package io.lumnik.hub.notify;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.TenantWide;
 import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
@@ -77,11 +78,11 @@ public class NotificationRuleResource {
         // Tenant FIRST: a 400 on a malformed body must not be answerable by someone the 401 has
         // not yet turned away. Same order as the schema-card door and both process write doors.
         long tenant = RequireTenant.current();
-        if (in == null || in.eventPattern() == null || in.eventPattern().isBlank())
+        if (in == null || Text.blank(in.eventPattern()))
             return ApiErrors.badRequest("eventPattern is required (an exact type, or a prefix ending in .*)");
-        if (in.recipient() == null || in.recipient().isBlank())
+        if (Text.blank(in.recipient()))
             return ApiErrors.badRequest("recipient is required");
-        String template = in.template() == null || in.template().isBlank()
+        String template = Text.blank(in.template())
             ? "event-notification" : in.template();
         // Same guard as the consumer (one truth): a template name is a kebab-case token,
         // never a path — refused at the door instead of skipped at delivery time.
@@ -119,6 +120,6 @@ public class NotificationRuleResource {
     }
 
     private static String blankToNull(String s) {
-        return s == null || s.isBlank() ? null : s.strip();
+        return Text.blank(s) ? null : s.strip();
     }
 }

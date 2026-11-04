@@ -5,7 +5,7 @@ import io.lumnik.hub.connector.csv.CsvFileReader;
 import io.lumnik.hub.connector.csv.CsvFullRefresh;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.validator.ConfigDef;
-import io.lumnik.hub.validator.JsonNodes;
+import io.lumnik.hub.json.JsonNodes;
 import io.lumnik.hub.validator.ConfigDef.Importance;
 import io.lumnik.hub.validator.ConfigDef.Type;
 import io.lumnik.hub.validator.ConnectorValidator;
@@ -54,6 +54,8 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
                 "archive", "delete", "move", "none")
             .optional("archive_path", Type.STRING, Importance.LOW,
                 "Destination for `move` action", null)
+                .requiredWhen("after_process", "move")
+                .hint("Set archive_path: /path/to/archive/")
             // Two keys the root of a csv spec really carries, declared so closing does not accuse
             // them. `mapping` is consumed by CsvFileConnectorType.buildSpec (and shipped manifests carry it); its
             // keys and hooks are MappingBlockValidator's to check.
@@ -87,18 +89,10 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
         String afterProc = spec.path("after_process").asText();
 
         List<ValidationError> errs = new ArrayList<>();
-        errs.addAll(transportPathRequired(tr, tKind));
-        errs.addAll(sftpNeedsACredential(tr, tKind));
-        errs.addAll(sftpNeedsAFingerprint(tr, tKind));
-        errs.addAll(moveNeedsAnArchivePath(spec, afterProc));
         errs.addAll(localCannotRelocate(tKind, afterProc));
-        errs.addAll(oneShotOnlyTransportKeys(tr));
-        errs.addAll(headerlessNeedsColumns(spec));
         errs.addAll(linesConflicts(spec));
         errs.addAll(scheduleCronIsValid(spec));
         WindowField.check(spec.path("window"), errs);
-        errs.addAll(TargetBlockValidator.validateIndexes(
-            spec.path(TARGET).path("indexes"), "spec.target.indexes"));
         errs.addAll(aggregatorRefused(spec));
         errs.addAll(refreshWithoutAState(spec));
         errs.addAll(mappings.validate(spec.path("mapping"), "spec.mapping"));
@@ -139,52 +133,6 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
             List.of("Remove the refresh block, or point transport.path at the one file that holds the table")));
     }
 
-    private static List<ValidationError> transportPathRequired(JsonNode tr, String tKind) {
-        JsonNode pathNode = tr.path("path");
-        boolean pathBlank = pathNode.isMissingNode() || pathNode.isNull()
-                || pathNode.asText().isBlank();
-        if (!("local".equals(tKind) || "sftp".equals(tKind)) || !pathBlank) return List.of();
-        return List.of(new ValidationError("spec.transport.path", Severity.ERROR,
-            "path is required for local/sftp transport",
-            List.of("Set path: /imports/*.csv (local) or a remote glob (sftp)")));
-    }
-
-    private static List<ValidationError> sftpNeedsACredential(JsonNode tr, String tKind) {
-        if (!"sftp".equals(tKind)) return List.of();
-        // nonBlank, not isMissingNode: these name a SECRET, and `key_env:` written empty — or
-        // written blank — names none. Asking presence let a NullNode satisfy the either-or, so the
-        // manifest applied and the run died reaching for a secret nobody had named: at run time,
-        // which is the tier this apply-time refusal exists to move the failure off (#552).
-        boolean hasKey = JsonNodes.nonBlank(tr.path("key_env"));
-        boolean hasPwd = JsonNodes.nonBlank(tr.path("password_env"));
-        if (hasKey || hasPwd) return List.of();
-        return List.of(new ValidationError("spec.transport", Severity.ERROR,
-            "SFTP transport requires key_env or password_env",
-            List.of("Use `lm secret set <NAME> ...` then reference via key_env: <NAME>")));
-    }
-
-    /** strict_host_key (default true) refuses at every run a server whose key nothing declares (#1251). */
-    private static List<ValidationError> sftpNeedsAFingerprint(JsonNode tr, String tKind) {
-        if (!"sftp".equals(tKind) || !tr.path("strict_host_key").asBoolean(true)
-            || JsonNodes.nonBlank(tr.path("host_key_fingerprint"))) return List.of();
-        return List.of(new ValidationError("spec.transport.host_key_fingerprint", Severity.ERROR,
-            "SFTP transport with strict_host_key (the default) needs host_key_fingerprint — every run would refuse to connect",
-            List.of("Read it with `ssh-keyscan -p " + tr.path("port").asInt(22) + " " + tr.path("host").asText("HOST")
-                + " | ssh-keygen -lf -` (the run's refusal prints the same), confirm it out of band, "
-                + "then set host_key_fingerprint: \"SHA256:…\"")));
-    }
-
-    private static List<ValidationError> moveNeedsAnArchivePath(JsonNode spec, String afterProc) {
-        // blankOrNull, not isMissingNode: a key written with nothing after it is a NullNode —
-        // present by that one question, absent by every other, including ConfigDefRunner's. It
-        // validated green and the apply then stored the literal string "null" as the path, so the
-        // files were moved into a directory named that. The helper exists precisely for this trap.
-        if (!"move".equals(afterProc) || !JsonNodes.blankOrNull(spec.path("archive_path"))) return List.of();
-        return List.of(new ValidationError("spec.archive_path", Severity.ERROR,
-            "archive_path is required when after_process=move",
-            List.of("Set archive_path: /path/to/archive/")));
-    }
-
     /**
      * The local scheduled reader (row-level glob cursor) has no per-file completion tracking:
      * archive/delete/move never execute there — files would silently stay in place. Remote
@@ -199,39 +147,6 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
                 + "files stay in place (sftp and s3 connectors honor it)",
             List.of("Set after_process: none for a local connector, "
                 + "or move the files with an sftp/s3 transport")));
-    }
-
-    /**
-     * Transport hooks and max_file_size are read only by the one-shot ingest service, which no
-     * {@code lm csv ingest} flag feeds; scheduled connector runs never invoke them — refuse rather
-     * than silently ignore. The message names no gesture: there is none to point at.
-     */
-    private static List<ValidationError> oneShotOnlyTransportKeys(JsonNode tr) {
-        List<ValidationError> errs = new ArrayList<>();
-        for (String key : List.of("file_filter", "pre_process", "post_process", "max_file_size")) {
-            // absent, not isMissingNode: this rule TEACHES about a key the reader declared, and
-            // `pre_process:` with nothing after it declares nothing — refusing it taught about a
-            // lever the manifest never pulled (#552).
-            if (!JsonNodes.absent(tr.path(key))) {
-                errs.add(new ValidationError("spec.transport." + key, Severity.ERROR,
-                    key + " is not read by connector runs",
-                    List.of("Drop it from the connector manifest")));
-            }
-        }
-        return errs;
-    }
-
-    /** C5: headerless rows need names — the run used to fail where validate passed clean. */
-    private static List<ValidationError> headerlessNeedsColumns(JsonNode spec) {
-        JsonNode parser = spec.path("parser");
-        boolean headerless = headerless(parser);
-        boolean noColumns = parser.path("columns").isMissingNode()
-                || parser.path("columns").isEmpty();
-        // lines: true names its one column itself; linesConflicts answers for has_header beside it.
-        if (!headerless || !noColumns || parser.path("lines").asBoolean(false)) return List.of();
-        return List.of(new ValidationError("spec.parser.columns", Severity.ERROR,
-            "columns is required when has_header: false — headerless rows need names",
-            List.of("Add parser.columns: [code, name, ...] in file order")));
     }
 
     /**

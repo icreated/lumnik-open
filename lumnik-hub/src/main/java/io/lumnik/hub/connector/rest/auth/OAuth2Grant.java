@@ -1,10 +1,12 @@
 package io.lumnik.hub.connector.rest.auth;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.rest.RestHttpClient;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
 import io.lumnik.hub.connector.rest.Urls;
+import io.lumnik.hub.json.JsonNodes;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -47,12 +49,12 @@ final class OAuth2Grant {
     Optional<String> whyNotUsable() {
         Optional<String> url = Urls.whyNotHttp(tokenUrl);
         if (url.isPresent()) return Optional.of("OAuth2 token_url " + url.get());
-        if (clientId == null || clientId.isBlank()) return Optional.of("OAuth2 client_id is required");
+        if (Text.blank(clientId)) return Optional.of("OAuth2 client_id is required");
         if (!clientAuth.equals("basic") && !clientAuth.equals("post")) {
             return Optional.of("OAuth2 client_auth must be basic or post");
         }
-        if (secretRef == null || secretRef.isBlank()) return Optional.of("OAuth2 client_secret_env is required");
-        if (secret == null || secret.isBlank()) return Optional.of("OAuth2 client secret unavailable (env=" + secretRef + ")");
+        if (Text.blank(secretRef)) return Optional.of("OAuth2 client_secret_env is required");
+        if (Text.blank(secret)) return Optional.of("OAuth2 client secret unavailable (env=" + secretRef + ")");
         return Optional.empty();
     }
 
@@ -71,7 +73,7 @@ final class OAuth2Grant {
     RestRequest tokenRequest() {
         Map<String, String> form = new LinkedHashMap<>();
         form.put("grant_type", "client_credentials");
-        if (scope != null && !scope.isBlank()) form.put("scope", scope);
+        if (Text.present(scope)) form.put("scope", scope);
         RestRequest req = RestRequest.post(tokenUrl, null)
             .withHeader("Content-Type", "application/x-www-form-urlencoded")
             .withHeader("Accept", "application/json");
@@ -89,7 +91,7 @@ final class OAuth2Grant {
 
     static OAuth2Token token(JsonNode body, Instant now) {
         JsonNode value = body.path("access_token");
-        if (!value.isTextual() || value.asText().isBlank()) {
+        if (!JsonNodes.nonBlank(value)) {
             throw new AuthConfigException("OAuth2 token response carries no access_token");
         }
         if (value.asText().length() < SecretRedactor.MIN_LENGTH) {

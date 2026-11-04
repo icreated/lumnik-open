@@ -1,5 +1,6 @@
 package io.lumnik.hub.view;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.AbstentionGuard;
 import io.lumnik.hub.connector.naming.Identifiers;
@@ -116,21 +117,21 @@ public class ViewGenerateAgent {
     private Outcome tryOnce(SchemaCard card, String scope, String description, String raw) {
         ViewSuggestion s = ViewSuggestion.parse(raw);
         if (s.abstain()) {
-            return Outcome.abstained(s.reason() != null && !s.reason().isBlank()
+            return Outcome.abstained(Text.present(s.reason())
                     ? s.reason() : "the scope cannot serve this description");
         }
         if (s.columns() == null || s.columns().isEmpty())
             throw new IllegalArgumentException("\"columns\" must select at least one column");
 
         String name = Identifiers.slug(
-            s.title() != null && !s.title().isBlank() ? s.title() : scope, "view");
+            Text.present(s.title()) ? s.title() : scope, "view");
         // The TABLE first, from the resolver's own lookup: which columns this view ends up
         // declaring depends on the filters, and whether a filter is addable depends on the table.
         SchemaCard.Table table = resolver.findTable(
             new ViewManifest(name, scope, s.table(), s.title(), s.columns()), card);
         List<String> filters = s.filters() == null ? List.of() : s.filters();
         // Jackson yields [null, …] from "filters":[null] — a gate rejection, never an NPE→500.
-        if (filters.stream().anyMatch(f -> f == null || f.isBlank()))
+        if (filters.stream().anyMatch(Text::blank))
             throw new IllegalArgumentException("\"filters\" must not contain null or blank entries");
         // The model spells a value the way SQL does ('GOLD'); the grammar's value is a bare literal.
         // Shed the quotes ONCE, here — before the gate, which refused them on a domain column, and

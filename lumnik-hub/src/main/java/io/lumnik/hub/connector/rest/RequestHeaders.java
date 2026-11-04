@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.rest.auth.AuthConfigException;
 
 import java.util.List;
@@ -32,7 +33,7 @@ public final class RequestHeaders {
             } else if (h.get("value_env") != null) {
                 String envName = String.valueOf(h.get("value_env"));
                 value = secrets.apply(envName);
-                if (value == null || value.isBlank())
+                if (Text.blank(value))
                     throw new AuthConfigException("Header " + name + " unavailable (env=" + envName + ")");
             } else {
                 continue;

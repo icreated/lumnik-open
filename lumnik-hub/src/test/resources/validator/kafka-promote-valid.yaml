@@ -1,0 +1,14 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: store-probes
+  connector_type: kafka
+  scopes: [cold-chain]
+spec:
+  name: store_probes
+  brokers: localhost:9092
+  topic: chirpstack
+  format: json
+  promote:
+    - { name: temperature_c, path: $.object.temperature, type: decimal }
+    - { name: dev_eui, path: $.deviceInfo.devEui, type: text }

@@ -3,6 +3,7 @@ package io.lumnik.hub.view;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.ask.SchemaCardStore;
@@ -83,7 +84,7 @@ public class ViewRenderResource {
 
         String dataAsOf = freshness.lastCompletedRun(tenant, manifest.scope())
             .map(Instant::toString).orElse(null);
-        boolean paged = pageSize != null || (cursor != null && !cursor.isBlank());
+        boolean paged = pageSize != null || Text.present(cursor);
         if (!paged) {
             ViewDataReader.ReadResult read = ApiErrors.orBadRequest(() -> reader.read(tenant, rv, viewFilters));
             return Response.ok(new RenderResponse(rv.title(), rv.columns(), wired(rv, read.rows()), read.truncated(),
@@ -111,7 +112,7 @@ public class ViewRenderResource {
         boolean hasId = ViewPageContract.relationHasId(rv.table());
         String binding = ViewPageContract.binding(tenant, manifest.scope(), manifest.name(), rv,
             ViewPageContract.orderKey(rv, hasId), viewFilters, size);
-        ViewCursor.Boundary after = cursor == null || cursor.isBlank() ? null : cursors.open(binding, cursor);
+        ViewCursor.Boundary after = Text.blank(cursor) ? null : cursors.open(binding, cursor);
         ViewDataReader.PageResult page = reader.readPage(tenant, rv, viewFilters, hasId, new ViewDataReader.Page(size, after));
         return new SealedPage(page, page.next() == null ? null : cursors.seal(binding, page.next()));
     }

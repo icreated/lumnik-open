@@ -1,5 +1,7 @@
 package io.lumnik.hub.connector.naming;
 
+import io.lumnik.common.text.Text;
+
 /**
  * Builds JsonPath expressions that address a single object member by its <em>literal</em> key — even
  * when the key is not a clean dot-path token.
@@ -15,7 +17,7 @@ public final class JsonPaths {
     private JsonPaths() {}
 
     public static String member(String key) {
-        if (key == null || key.isBlank()) {
+        if (Text.blank(key)) {
             throw new IllegalArgumentException("member key required");
         }
         if (key.matches("[A-Za-z_]\\w*")) {

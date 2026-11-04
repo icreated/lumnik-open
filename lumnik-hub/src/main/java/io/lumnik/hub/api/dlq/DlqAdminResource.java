@@ -1,5 +1,6 @@
 package io.lumnik.hub.api.dlq;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.connector.ConnectorScope;
 import io.lumnik.hub.connector.domain.ConnectorDeadLetter;
@@ -102,7 +103,7 @@ public class DlqAdminResource {
     // where list's run/connector filters refuse the same mistake with a 400 (#1294).
     // The hub never re-reads a dead letter: without a run, "replayed" would be a discard under
     // another word, a claim nothing backs (#1377).
-    if (newRunId == null || newRunId.isBlank()) return ApiErrors.badRequest("a replay names the run that carried the row (newRunId);"
+    if (Text.blank(newRunId)) return ApiErrors.badRequest("a replay names the run that carried the row (newRunId);"
         + " an entry no run carried is closed with discard");
     UUID newRun = ApiErrors.uuidOrRefuse(newRunId);
     var run = runs.findByIdForTenant(newRun, TenantContextFilter.current());

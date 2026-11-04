@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Specification for hybrid JSONB storage: promoted typed columns + raw {@code data JSONB} payload.
@@ -18,6 +19,13 @@ import java.util.Optional;
  */
 public record HybridJsonbSpec(String table, String uniqueKeyPath, List<PromotedColumn> promote,
                               Optional<Transform> uniqueKeyTransform) {
+
+    /**
+     * The columns every hybrid table carries around the promoted ones — what {@link HybridJsonbWriter#createTableSql} writes besides
+     * them. A promote entry named like one would die at the first run on "column specified more than once" (#1781).
+     */
+    public static final Set<String> RESERVED_COLUMNS = Set.of(
+        "id", "tenant_id", "external_id", "row_hash", "data", "indexed_at", "connector_id", "endpoint_id");
 
     public HybridJsonbSpec(String table, String uniqueKeyPath, List<PromotedColumn> promote) {
         this(table, uniqueKeyPath, promote, Optional.empty());
@@ -42,8 +50,12 @@ public record HybridJsonbSpec(String table, String uniqueKeyPath, List<PromotedC
         Object rawKey = t.get("unique_key");
         Map<String, Object> keyObject = rawKey instanceof Map<?, ?> m ? (Map<String, Object>) m : Map.of();
         String key = rawKey instanceof Map ? (String) keyObject.get("path") : (String) rawKey;
-        List<Map<String, Object>> rawPromote =
-            (List<Map<String, Object>>) t.getOrDefault("promote", List.of());
+        List<PromotedColumn> promote = promotedColumns((List<Map<String, Object>>) t.getOrDefault("promote", List.of()));
+        return new HybridJsonbSpec(table, key, promote, transform(keyObject.get("transform")));
+    }
+
+    /** The one parser of a {@code promote} list — rest's {@code target.promote}, kafka's {@code spec.promote} (#1777). */
+    public static List<PromotedColumn> promotedColumns(List<Map<String, Object>> rawPromote) {
         List<PromotedColumn> promote = new ArrayList<>();
         for (Map<String, Object> p : rawPromote) {
             promote.add(new PromotedColumn(
@@ -52,7 +64,7 @@ public record HybridJsonbSpec(String table, String uniqueKeyPath, List<PromotedC
                 SqlType.valueOf(String.valueOf(p.get("type")).toUpperCase(Locale.ROOT)),
                 transform(p.get("transform"))));
         }
-        return new HybridJsonbSpec(table, key, promote, transform(keyObject.get("transform")));
+        return promote;
     }
 
     private static Optional<Transform> transform(Object raw) {

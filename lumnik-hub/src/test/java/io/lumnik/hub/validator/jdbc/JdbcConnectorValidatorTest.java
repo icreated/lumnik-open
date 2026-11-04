@@ -9,6 +9,8 @@ import io.lumnik.hub.validator.ValidationResult;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.InputStream;
@@ -86,6 +88,66 @@ class JdbcConnectorValidatorTest {
         assertFalse(r.isValid(), () -> "watermark mode with no column to watermark on");
         assertTrue(r.errors().stream().anyMatch(e -> e.path().endsWith(".watermark_column")),
             () -> "the refusal must name watermark_column, got: " + r.errors());
+    }
+
+    /**
+     * Where a table's keys come from is the defaults' business: jdbc checks the table laid over them, and the shape the
+     * hub describes for a table must never become a second, stricter check of the table as written.
+     */
+    @Test void aTableWhoseSchemaAndKeyComeFromTheDefaults_isValid() throws Exception {
+        ValidationResult r = service.validate(mapper.readTree(JDBC_HEAD
+            .replace("\"defaults\":{\"schema\":\"public\"}", "\"defaults\":{\"schema\":\"public\",\"mode\":\"full\",\"pk_columns\":[\"id\"]}")
+            .formatted("{\"name\":\"invoices\"}")));
+
+        assertTrue(r.isValid(), () -> r.errors().toString());
+    }
+
+    /** One defect, one report: a default the merged table inherits is refused at the table, not also at `defaults`. */
+    @ParameterizedTest(name = "defaults: {0}")
+    @CsvSource(delimiter = '|', textBlock = """
+        "chunk_size":500      | spec.source.tables[0].chunk_size
+        "mode":"bogus"        | spec.source.tables[0].mode
+        """)
+    void aBadDefault_isRefusedOnceAtTheTableThatInheritsIt(String badDefault, String path) throws Exception {
+        ValidationResult r = service.validate(mapper.readTree(JDBC_HEAD
+            .replace("\"defaults\":{\"schema\":\"public\"}", "\"defaults\":{\"schema\":\"public\"," + badDefault + "}")
+            .formatted("{\"name\":\"invoices\",\"pk_columns\":[\"id\"],\"mode\":\"" + (badDefault.contains("mode") ? "bogus" : "full") + "\"}")));
+
+        assertEquals(List.of(path), r.errors().stream().map(ValidationError::path).distinct().toList(), () -> r.errors().toString());
+        assertTrue(r.errors().stream().noneMatch(e -> e.path().startsWith("spec.defaults")), () -> r.errors().toString());
+    }
+
+    /**
+     * The merger drops a NULL, not a blank: {@code watermark_column: "  "} reaches the rule as a value, and a rule that
+     * only asked whether the key was there called it given. The run then watermarks on a column named by spaces.
+     */
+    @Test void watermarkColumnWrittenBlank_isRefused() throws Exception {
+        ValidationResult r = service.validate(mapper.readTree(JDBC_HEAD.formatted(
+            "{\"name\":\"invoices\",\"mode\":\"watermark\",\"watermark_column\":\"  \","
+            + "\"pk_columns\":[\"id\"]}")));
+
+        assertEquals(List.of("spec.source.tables[0].watermark_column"),
+            r.errors().stream().map(ValidationError::path).toList(), () -> r.errors().toString());
+    }
+
+    /** What a refusal teaches is half of it: the example each of these has always carried. */
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(delimiter = '|', textBlock = """
+        no table at all            | []                                                                     | spec.source.tables                      | invoices
+        watermark without a column | {"name":"t","mode":"watermark","pk_columns":["id"]}                    | spec.source.tables[0].watermark_column  | watermark_column: updated_at
+        no primary key             | {"name":"t","mode":"full"}                                             | spec.source.tables[0].pk_columns        | pk_columns: [id]
+        an empty primary key       | {"name":"t","mode":"full","pk_columns":[]}                             | spec.source.tables[0].pk_columns        | pk_columns: [id]
+        the dead chunk_size knob   | {"name":"t","mode":"full","pk_columns":["id"],"chunk_size":500}        | spec.source.tables[0].chunk_size        | never from the manifest
+        """)
+    void aRefusalOfATableKeepsItsExample(String what, String tables, String path, String teaches) throws Exception {
+        String list = tables.startsWith("[") ? tables : "[" + tables + "]";
+        JsonNode manifest = mapper.readTree(JDBC_HEAD.formatted("").replace("[]", list));
+
+        ValidationResult r = service.validate(manifest);
+
+        assertEquals(List.of(path), r.errors().stream().map(ValidationError::path).toList(), () -> what + ": " + r.errors());
+        assertTrue(r.errors().get(0).recommendations().stream().anyMatch(h -> h.contains(teaches)),
+            () -> what + " must still teach " + teaches + ": " + r.errors().get(0));
     }
 
     /**
@@ -207,6 +269,28 @@ class JdbcConnectorValidatorTest {
         assertTrue(r.errors().stream().anyMatch(e -> e.recommendations().stream()
                 .anyMatch(h -> h.contains("columns"))),
             () -> "the refusal must still teach the shape: " + r.errors());
+    }
+
+    /**
+     * The element shape is declared once ({@code TargetBlockValidator.indexEntry}) and the per-table definition
+     * must carry it: the hand-written walk that used to run here is gone, and nothing else would notice the
+     * definition losing it. One defect, one refusal, at the index it sits in.
+     */
+    @ParameterizedTest(name = "{0}")
+    @CsvSource(delimiter = '|', textBlock = """
+        an index that is no object | 1                                   | spec.source.tables[0].indexes[0]
+        an index without columns   | {}                                  | spec.source.tables[0].indexes[0].columns
+        an empty columns list      | {"columns":[]}                      | spec.source.tables[0].indexes[0].columns
+        a column that is no name   | {"columns":[123]}                   | spec.source.tables[0].indexes[0].columns
+        a unique that is no flag   | {"columns":["id"],"unique":"yes"}   | spec.source.tables[0].indexes[0].unique
+        """)
+    void aMalformedIndexOfATable_isRefusedAtItsOwnPath(String what, String index, String path) throws Exception {
+        JsonNode manifest = mapper.readTree(JDBC_HEAD.formatted(
+            "{\"name\":\"invoices\",\"mode\":\"full\",\"pk_columns\":[\"id\"],\"indexes\":[" + index + "]}"));
+
+        ValidationResult r = service.validate(manifest);
+
+        assertEquals(List.of(path), r.errors().stream().map(ValidationError::path).toList(), () -> what + ": " + r.errors());
     }
 
     @Test void watermarkMode_withoutWatermarkColumn_isError() throws Exception {

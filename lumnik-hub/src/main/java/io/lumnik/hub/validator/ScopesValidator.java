@@ -2,6 +2,7 @@ package io.lumnik.hub.validator;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.hub.json.JsonNodes;
 import io.lumnik.hub.validator.ValidationError.Severity;
 
 import java.util.ArrayList;
@@ -83,7 +84,7 @@ public final class ScopesValidator {
         if (old.isMissingNode()) return;
         StringJoiner value = new StringJoiner(", ", "[", "]");
         if (old.isArray()) old.forEach(t -> value.add(t.asText()));
-        else if (old.isTextual() && !old.asText().isBlank()) value.add(old.asText());
+        else if (JsonNodes.nonBlank(old)) value.add(old.asText());
         errs.add(new ValidationError(path, Severity.ERROR,
             path + " moved to metadata.scopes — the scope is a property of the connector, "
                 + "not of where its rows land",

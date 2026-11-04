@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.pagination;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
 
@@ -16,7 +17,7 @@ public class NonePaginationStrategy implements PaginationStrategy {
 
     public NonePaginationStrategy(Map<String, String> c) {
         this.responsePath = c.get("response_path");
-        if (responsePath == null || responsePath.isBlank()) {
+        if (Text.blank(responsePath)) {
             throw new IllegalArgumentException("none pagination requires 'response_path'");
         }
     }

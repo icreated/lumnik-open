@@ -13,6 +13,7 @@ import java.nio.charset.CodingErrorAction;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * A {@link Reader} over an {@link InputStream} + {@link CharsetDecoder} that can name a
@@ -129,12 +130,16 @@ public class CheckpointingReader extends Reader {
     this.chars.limit(0);
   }
 
+  /** Canonical names of the charsets whose decoder is verified stateless. */
+  private static final Set<String> CHECKPOINTABLE_CHARSETS = Set.of("UTF-8", "US-ASCII", "UTF-16BE", "UTF-16LE");
+
+  /** Verified-stateless families, by prefix of the canonical name. */
+  private static final List<String> CHECKPOINTABLE_PREFIXES = List.of("ISO-8859-", "windows-125");
+
   /** True when {@link #checkpoint} will work for this charset — the verified-stateless allowlist. */
   public static boolean canCheckpoint(Charset cs) {
     String n = cs.name();  // canonical name; aliases resolve before we get here
-    return n.equals("UTF-8") || n.equals("US-ASCII")
-        || n.equals("UTF-16BE") || n.equals("UTF-16LE")
-        || n.startsWith("ISO-8859-") || n.startsWith("windows-125");
+    return CHECKPOINTABLE_CHARSETS.contains(n) || CHECKPOINTABLE_PREFIXES.stream().anyMatch(n::startsWith);
   }
 
   /**

@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.rest.reliability;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.rest.RestResponse;
 import io.lumnik.hub.connector.rest.Snippets;
@@ -40,7 +41,7 @@ public final class GraphQlResponseValidator implements ResponseValidator {
             return;
         }
         String body = response.body();
-        if (body == null || body.isBlank()) {
+        if (Text.blank(body)) {
             throw new ConnectorException("GraphQL response body is empty (expected a JSON envelope with data/errors)");
         }
         JsonNode root;

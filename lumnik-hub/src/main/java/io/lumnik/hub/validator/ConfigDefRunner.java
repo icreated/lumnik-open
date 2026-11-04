@@ -1,6 +1,8 @@
 package io.lumnik.hub.validator;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.lumnik.hub.json.JsonNodes;
+import io.lumnik.hub.validator.ConfigDef.AtLeastOneOf;
 import io.lumnik.hub.validator.ConfigDef.FieldSpec;
 import io.lumnik.hub.validator.ConfigDef.RequiredWhen;
 import io.lumnik.hub.validator.ConfigDef.Type;
@@ -8,6 +10,7 @@ import io.lumnik.hub.validator.ValidationError.Severity;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 public final class ConfigDefRunner {
 
@@ -27,6 +30,13 @@ public final class ConfigDefRunner {
                 : pathPrefix + "." + f.name();
             validateField(f, block, full, out);
         }
+        for (AtLeastOneOf rule : def.atLeastOneOf()) {
+            if (rule.test().test(block) && rule.names().stream().noneMatch(n -> JsonNodes.nonBlank(block.get(n)))) {
+                out.add(new ValidationError(pathPrefix == null ? "" : pathPrefix, Severity.ERROR,
+                    "at least one of " + String.join(", ", rule.names()) + " is required when " + rule.text(),
+                    List.of(rule.hint())));
+            }
+        }
         if (def.isClosed()) {
             block.fieldNames().forEachRemaining(k -> {
                 if (!def.declares(k)) {
@@ -42,11 +52,19 @@ public final class ConfigDefRunner {
 
     private static void validateField(FieldSpec f, JsonNode block, String full, List<ValidationError> out) {
         JsonNode value = block.get(f.name());
-        boolean present = value != null && !value.isNull();
+        if (f.refusal() != null) {
+            if (!JsonNodes.absent(value)) {
+                out.add(new ValidationError(full, Severity.ERROR, f.refusal(), f.recommendations()));
+            }
+            return;
+        }
+        boolean conditional = f.requiredWhen() != null && f.requiredWhen().test().test(block);
+        // Where a field is required by a condition, "nothing" has three spellings — the key missing, `key:`
+        // with nothing after it, and a blank string or an empty list — and none of them gives the field a value.
+        boolean present = value != null && !value.isNull() && !(conditional && isEmptyValue(value));
 
         if (!present) {
-            boolean shouldBePresent = f.required()
-                || (f.requiredWhen() != null && isConditionMet(block, f.requiredWhen()));
+            boolean shouldBePresent = f.required() || conditional;
             if (shouldBePresent) {
                 out.add(new ValidationError(full, Severity.ERROR,
                     "required field missing" + describeWhen(f.requiredWhen()),
@@ -62,24 +80,50 @@ public final class ConfigDefRunner {
             return;
         }
 
-        if (f.validator() != null) {
-            f.validator().apply(value).ifPresent(s ->
-                out.add(new ValidationError(full, Severity.ERROR, s, f.recommendations())));
+        if (f.gate() != null && !f.gate().test().test(block)) {
+            out.add(new ValidationError(full, Severity.WARNING,
+                f.name() + " is ignored unless " + f.gate().text() + " — the runtime reads it only then",
+                List.of("Remove it, or set " + f.gate().setTo())));
+            return;
         }
 
+        // The advice speaks of a value that is valid: one the field refused gets the refusal and nothing beside it.
+        boolean refused = false;
+        if (f.validator() != null) {
+            Optional<String> refusal = f.validator().apply(value);
+            refusal.ifPresent(s -> out.add(new ValidationError(full, Severity.ERROR, s, f.recommendations())));
+            refused = refusal.isPresent();
+        }
+
+        if (!refused && f.advice() != null && f.advice().test().test(block) && !isEmptyValue(value)) {
+            out.add(new ValidationError(full, Severity.WARNING, f.advice().message(), f.advice().hints()));
+        }
+
+        if (f.nested() != null && f.nested().isDescribesOnly()) return;   // published, not enforced from here
         if ((f.type() == Type.NESTED || f.type() == Type.STRING_OR_NESTED) && value.isObject() && f.nested() != null) {
             out.addAll(run(f.nested(), value, full));
         }
+        if (f.type() == Type.LIST && f.nested() != null && value.isArray()) {
+            for (int i = 0; i < value.size(); i++) {
+                JsonNode element = value.get(i);
+                String at = full + "[" + i + "]";
+                if (element.isObject()) {
+                    out.addAll(run(f.nested(), element, at));
+                } else {
+                    out.add(new ValidationError(at, Severity.ERROR,
+                        "type mismatch: expected object, got " + element.getNodeType(), f.recommendations()));
+                }
+            }
+        }
     }
 
-    private static boolean isConditionMet(JsonNode block, RequiredWhen rw) {
-        JsonNode other = block.get(rw.otherFieldPath());
-        return other != null && rw.otherFieldValue().equals(other.asText());
+    private static boolean isEmptyValue(JsonNode value) {
+        return (value.isTextual() && value.asText().isBlank()) || (value.isArray() && value.isEmpty());
     }
 
     private static String describeWhen(RequiredWhen rw) {
         return rw == null ? ""
-            : " (required when " + rw.otherFieldPath() + " = " + rw.otherFieldValue() + ")";
+            : " (required when " + rw.text() + ")";
     }
 
     private static String checkType(JsonNode v, Type expected) {

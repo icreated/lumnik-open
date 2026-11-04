@@ -18,7 +18,10 @@ class WorkflowEvidenceTest {
     }
 
     private static Report report(boolean tableMissing, boolean keyColumnMissing, boolean unavailable, String reason) {
-        return new Report(List.of(), List.of(), 0L, tableMissing, keyColumnMissing, null, unavailable, reason, null, null, null, List.of());
+        Report r = Report.empty();
+        if (tableMissing) r = r.withTableMissing(List.of());
+        if (keyColumnMissing) r = r.withKeyColumnMissing();
+        return unavailable ? r.withUnavailable(reason) : r;
     }
 
     private static final Report READ = report(false, false, false, null);

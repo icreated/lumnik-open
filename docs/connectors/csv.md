@@ -162,8 +162,8 @@ $ lm validate -f sftp-nocred.yaml
 ✗ sftp-nocred.yaml — 1 error(s), 0 warning(s)
 
   ERROR    spec.transport
-          SFTP transport requires key_env or password_env
-          → Use `lm secret set <NAME> ...` then reference via key_env: <NAME>
+          at least one of key_env, password_env is required when kind is sftp
+          → Use `lm secret set <NAME> ...` then reference it via key_env: <NAME>
 
 Fix errors above before running 'lm apply -f sftp-nocred.yaml'.
 Error: validation failed: 1 error(s)
@@ -276,7 +276,7 @@ parser:
     ✗ hl.yaml — 1 error(s), 0 warning(s)
 
       ERROR    spec.parser.columns
-              columns is required when has_header: false — headerless rows need names
+              required field missing (required when has_header is false and lines is off)
               → Add parser.columns: [code, name, ...] in file order
 
     Fix errors above before running 'lm apply -f hl.yaml'.
@@ -622,9 +622,9 @@ add `endpoint:` — see `40-s3-prefix.yaml` in `docs/connectors/csv/`.
 |---|---|---|
 | `SFTP host key refused for host:22 — the server presented SHA256:…` | `host_key_fingerprint` absent or wrong, with `strict_host_key: true` (the default) | confirm the presented fingerprint out of band (`ssh-keyscan -p 22 HOST \| ssh-keygen -lf -`), paste it into `host_key_fingerprint` |
 | `SFTP error (SSH_FX_PERMISSION_DENIED): Permission denied` | wrong password/key, or the user cannot read `path` | `lm secret list`, then `lm secret set <NAME>` (a private key is many lines — pipe it with `<NAME> -`); check the folder's rights |
-| `SFTP transport requires key_env or password_env` | neither credential declared | `lm secret set <NAME>`, then `password_env: <NAME>` or `key_env: <NAME>` |
+| `at least one of key_env, password_env is required when kind is sftp` | neither credential declared | `lm secret set <NAME>`, then `password_env: <NAME>` or `key_env: <NAME>` |
 | `S3 403 Forbidden` | invalid S3 credentials | check the secrets named by `access_key_env` / `secret_key_env` |
-| `columns is required when has_header: false` | a headerless parser without names | `parser.columns: [a, b, …]` in file order |
+| `required field missing (required when has_header is false and lines is off)` | a headerless parser without names | `parser.columns: [a, b, …]` in file order |
 | `after_process: archive is not executed on local connector runs` | a relocation on a local transport | `after_process: none`, or an sftp/s3 transport |
 | `… is not read by connector runs` | `file_filter`, `pre_process`, `post_process` or `max_file_size` in a connector manifest | drop the key |
 | run `Failed`: `connector.t_… is already written by connector '…'` | another connector of the tenant already writes the table named after this one | apply it under another `metadata.name`, then `lm connector delete` the refused one — see [JDBC](jdbc.md#two-connectors-reading-a-table-of-the-same-name) |

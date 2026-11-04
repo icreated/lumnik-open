@@ -1,0 +1,372 @@
+{
+  "fields" : [ {
+    "name" : "base_url",
+    "type" : "STRING",
+    "importance" : "HIGH",
+    "required" : true,
+    "doc" : "Base URL of the API (without trailing slash)"
+  }, {
+    "name" : "endpoints",
+    "type" : "LIST",
+    "importance" : "HIGH",
+    "required" : true,
+    "doc" : "Endpoint definitions (at least one)"
+  }, {
+    "name" : "default_rate_limit",
+    "type" : "STRING",
+    "importance" : "MEDIUM",
+    "required" : false,
+    "doc" : "Max request rate across all endpoints, e.g. \"100/s\" (count/window; unit s|m|h)",
+    "default" : "100/s"
+  }, {
+    "name" : "schedule",
+    "type" : "STRING",
+    "importance" : "MEDIUM",
+    "required" : false,
+    "doc" : "Cron expression for recurring runs — the hub scheduler fires it, evaluated in UTC"
+  }, {
+    "name" : "auth",
+    "type" : "NESTED",
+    "importance" : "MEDIUM",
+    "required" : false,
+    "doc" : "Authentication for every endpoint (omit => none)",
+    "nested" : {
+      "fields" : [ {
+        "name" : "kind",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : true,
+        "doc" : "Authentication method",
+        "allowed" : [ "bearer", "basic", "api-key", "oauth2", "session", "none" ]
+      }, {
+        "name" : "username",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : false,
+        "doc" : "Username (basic, session)",
+        "required_when" : {
+          "when" : "kind is basic or session"
+        }
+      }, {
+        "name" : "password_env",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : false,
+        "doc" : "Password source: lm secret name, else env var (basic, session)",
+        "required_when" : {
+          "when" : "kind is basic or session"
+        }
+      }, {
+        "name" : "name",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : false,
+        "doc" : "Header/query parameter name for API key",
+        "required_when" : {
+          "field" : "kind",
+          "equals" : "api-key",
+          "when" : "kind = api-key"
+        }
+      }, {
+        "name" : "value_env",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : false,
+        "doc" : "API key value source: lm secret name, else env var",
+        "required_when" : {
+          "field" : "kind",
+          "equals" : "api-key",
+          "when" : "kind = api-key"
+        }
+      }, {
+        "name" : "in",
+        "type" : "STRING",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "Where to place the API key (header|query)",
+        "default" : "header"
+      }, {
+        "name" : "token_env",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : false,
+        "doc" : "Bearer token source: lm secret name, else env var (bearer)"
+      }, {
+        "name" : "token_value",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Literal bearer token (dev only — prefer token_env)"
+      }, {
+        "name" : "scheme",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "The Authorization header's scheme word (bearer): Bearer by default, Token for Django REST Framework",
+        "default" : "Bearer",
+        "ignored_unless" : {
+          "when" : "kind = bearer"
+        },
+        "recommendations" : [ "Bearer (the default), or the word the API expects, e.g. Token for Django REST Framework" ]
+      }, {
+        "name" : "token_url",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : false,
+        "doc" : "OAuth2 token endpoint (client-credentials grant)",
+        "required_when" : {
+          "field" : "kind",
+          "equals" : "oauth2",
+          "when" : "kind = oauth2"
+        },
+        "ignored_unless" : {
+          "when" : "kind = oauth2"
+        }
+      }, {
+        "name" : "client_id",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : false,
+        "doc" : "OAuth2 client id",
+        "required_when" : {
+          "field" : "kind",
+          "equals" : "oauth2",
+          "when" : "kind = oauth2"
+        },
+        "ignored_unless" : {
+          "when" : "kind = oauth2"
+        }
+      }, {
+        "name" : "client_secret_env",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : false,
+        "doc" : "OAuth2 client secret source: lm secret name, else env var",
+        "required_when" : {
+          "field" : "kind",
+          "equals" : "oauth2",
+          "when" : "kind = oauth2"
+        },
+        "ignored_unless" : {
+          "when" : "kind = oauth2"
+        }
+      }, {
+        "name" : "scope",
+        "type" : "STRING",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "OAuth2 scope, space-separated",
+        "ignored_unless" : {
+          "when" : "kind = oauth2"
+        }
+      }, {
+        "name" : "client_auth",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "How the OAuth2 client authenticates to the token endpoint (basic | post)",
+        "default" : "basic",
+        "ignored_unless" : {
+          "when" : "kind = oauth2"
+        },
+        "allowed" : [ "basic", "post" ],
+        "recommendations" : [ "basic (the default) sends the client id and secret as HTTP Basic; post puts them in the body" ]
+      }, {
+        "name" : "login_url",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : false,
+        "doc" : "Where the login form posts: Spring Security's /login, the container's j_security_check",
+        "required_when" : {
+          "field" : "kind",
+          "equals" : "session",
+          "when" : "kind = session"
+        },
+        "ignored_unless" : {
+          "when" : "kind = session"
+        }
+      }, {
+        "name" : "prime_url",
+        "type" : "STRING",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "The page GET first, for the session cookie and the CSRF token; login_url by default",
+        "ignored_unless" : {
+          "when" : "kind = session"
+        }
+      }, {
+        "name" : "username_field",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "The form's username field (j_username for the container's login)",
+        "default" : "username",
+        "ignored_unless" : {
+          "when" : "kind = session"
+        }
+      }, {
+        "name" : "password_field",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "The form's password field (j_password for the container's login)",
+        "default" : "password",
+        "ignored_unless" : {
+          "when" : "kind = session"
+        }
+      }, {
+        "name" : "csrf_field",
+        "type" : "STRING",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "The hidden input carrying the CSRF token in the primed page (_csrf under Spring Security)",
+        "ignored_unless" : {
+          "when" : "kind = session"
+        }
+      } ],
+      "at_least_one_of" : [ {
+        "fields" : [ "token_env", "token_value" ],
+        "when" : "kind is bearer",
+        "hint" : "Use `lm secret set <NAME> ...` then reference via token_env: <NAME>"
+      } ]
+    }
+  }, {
+    "name" : "tls",
+    "type" : "NESTED",
+    "importance" : "MEDIUM",
+    "required" : false,
+    "doc" : "Trust an internal CA for every endpoint: {ca_secret: the lm secret holding its PEM certificate(s)}",
+    "nested" : {
+      "fields" : [ {
+        "name" : "ca_secret",
+        "type" : "STRING",
+        "importance" : "HIGH",
+        "required" : true,
+        "doc" : "Name of the lm secret holding the CA's PEM certificate(s); only those CAs are trusted"
+      } ]
+    }
+  }, {
+    "name" : "headers",
+    "type" : "LIST",
+    "importance" : "MEDIUM",
+    "required" : false,
+    "doc" : "Static headers sent on every request, [{name, value | value_env}]",
+    "recommendations" : [ "headers is a list of { name, value|value_env } objects" ]
+  }, {
+    "name" : "defaults",
+    "type" : "NESTED",
+    "importance" : "LOW",
+    "required" : false,
+    "doc" : "Per-endpoint defaults merged into each endpoint",
+    "nested" : {
+      "fields" : [ {
+        "name" : "kind",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Not accepted in spec.defaults — refused by validation; declare it on each endpoint"
+      }, {
+        "name" : "query",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Not accepted in spec.defaults — refused by validation; declare it on each endpoint"
+      }, {
+        "name" : "base_url",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Not accepted in spec.defaults — refused by validation; declare it at spec.base_url"
+      }, {
+        "name" : "auth",
+        "type" : "NESTED",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Not accepted in spec.defaults — refused by validation; declare it at spec.auth"
+      }, {
+        "name" : "tls",
+        "type" : "NESTED",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Not accepted in spec.defaults — refused by validation; declare it at spec.tls"
+      }, {
+        "name" : "default_rate_limit",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Not accepted in spec.defaults — refused by validation; declare it at spec.default_rate_limit"
+      }, {
+        "name" : "graphql_path",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Not accepted in spec.defaults — refused by validation; declare it at spec.graphql_path"
+      }, {
+        "name" : "mapping",
+        "type" : "NESTED",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Not accepted here — refused by validation; declare the mapping on its endpoint"
+      }, {
+        "name" : "response_format",
+        "type" : "STRING",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "What the answer is: json (the default) or xml — attributes under @, text beside them under #text",
+        "default" : "json",
+        "allowed" : [ "json", "xml" ]
+      }, {
+        "name" : "incremental",
+        "type" : "NESTED",
+        "importance" : "MEDIUM",
+        "required" : false,
+        "doc" : "Incremental strategy (mode full | watermark; defaults to full)",
+        "recommendations" : [ "incremental is a block, not a scalar: incremental: { mode: watermark, param: ..., watermark_path: ... }" ]
+      }, {
+        "name" : "headers",
+        "type" : "LIST",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Not accepted here — refused by validation; declare headers at spec.headers",
+        "recommendations" : [ "Move the headers block up to spec.headers (connector level)" ]
+      }, {
+        "name" : "variables",
+        "type" : "NESTED",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Static variables sent with every request; the relay cursor is injected on top"
+      }, {
+        "name" : "header",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "The SOAP header template (inner <Header> content; same placeholders as body)"
+      }, {
+        "name" : "soap_action",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Sent as the SOAPAction header (an empty quoted string when absent)"
+      } ]
+    }
+  }, {
+    "name" : "graphql_path",
+    "type" : "STRING",
+    "importance" : "LOW",
+    "required" : false,
+    "doc" : "Path appended to base_url for GraphQL endpoints",
+    "default" : "/graphql"
+  }, {
+    "name" : "window",
+    "type" : "STRING",
+    "importance" : "MEDIUM",
+    "required" : false,
+    "doc" : "Fence scheduled runs to a UTC time window, HH:MM-HH:MM (a manual run bypasses it)"
+  }, {
+    "name" : "mapping",
+    "type" : "NESTED",
+    "importance" : "LOW",
+    "required" : false,
+    "doc" : "Not accepted here — refused by validation; declare the mapping on its endpoint"
+  } ]
+}

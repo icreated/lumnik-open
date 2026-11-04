@@ -1,5 +1,6 @@
 package io.lumnik.hub.hook;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.scheduler.TenantScope;
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -74,7 +75,7 @@ public class HookOverrideStore {
         if (tenantId == null) return Optional.empty();
         return TenantScope.get(tenantId, () -> repo.find(tenantId, hookId)
             .map(HookTenantOverride::getScriptContent)
-            .filter(s -> s != null && !s.isBlank()));
+            .filter(Text::present));
     }
 
     @Transactional

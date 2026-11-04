@@ -1,6 +1,7 @@
 package io.lumnik.hub.api;
 
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.text.Text;
 import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.MultivaluedMap;
@@ -128,7 +129,7 @@ public final class ApiErrors {
     /** {@link #status(int, String)} for a body that carries one extra field beside the message (a hint,
      *  a run id, the raw model output), after it and possibly null. */
     public static Response.ResponseBuilder status(int code, String why, String extraKey, Object extraValue) {
-        String message = why == null || why.isBlank() ? reasonPhrase(code) : why;
+        String message = Text.blank(why) ? reasonPhrase(code) : why;
         if (code == 403 && ScopeGrants.REFUSAL.equals(message)) logScopeRefusal(LOG);
         Map<String, Object> body = extraKey == null ? error(message) : error(message, extraKey, extraValue);
         return Response.status(code).type(MediaType.APPLICATION_JSON).entity(body);
@@ -157,7 +158,7 @@ public final class ApiErrors {
         } catch (IllegalArgumentException e) {
             // BadRequestExceptionMapper's fallback: badRequest(null) would be Map.of(KEY, null), a 500.
             String why = e.getMessage();
-            throw new BadRequestException(badRequest(why == null || why.isBlank() ? "bad request" : why), e);
+            throw new BadRequestException(badRequest(Text.blank(why) ? "bad request" : why), e);
         }
     }
 
@@ -195,7 +196,7 @@ public final class ApiErrors {
         return switch (query.get(key)) {
             case null -> null;
             case List<String> v when v.size() > 1 -> throw new IllegalArgumentException(key + " may be given once");
-            case List<String> v when v.getFirst() == null || v.getFirst().isBlank() ->
+            case List<String> v when Text.blank(v.getFirst()) ->
                 throw new IllegalArgumentException(key + " must not be blank");
             case List<String> v -> v.getFirst();
         };

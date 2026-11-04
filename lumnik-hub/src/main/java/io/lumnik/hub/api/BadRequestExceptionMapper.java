@@ -1,5 +1,6 @@
 package io.lumnik.hub.api;
 
+import io.lumnik.common.text.Text;
 import jakarta.ws.rs.BadRequestException;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.ExceptionMapper;
@@ -44,6 +45,6 @@ public class BadRequestExceptionMapper implements ExceptionMapper<BadRequestExce
         Response existing = ex.getResponse();
         if (existing != null && existing.hasEntity()) return existing;
         String why = ex.getMessage();
-        return ApiErrors.badRequest(why == null || why.isBlank() ? "bad request" : why);
+        return ApiErrors.badRequest(Text.blank(why) ? "bad request" : why);
     }
 }

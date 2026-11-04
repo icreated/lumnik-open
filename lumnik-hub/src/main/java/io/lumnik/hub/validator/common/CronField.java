@@ -5,6 +5,7 @@ import com.cronutils.model.CronType;
 import com.cronutils.model.definition.CronDefinitionBuilder;
 import com.cronutils.parser.CronParser;
 import com.fasterxml.jackson.databind.JsonNode;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.validator.ValidationError;
 import io.lumnik.hub.validator.ValidationError.Severity;
 
@@ -31,7 +32,7 @@ public final class CronField {
 
     /** Empty when valid; otherwise the reason, named (the validators' Optional contract). */
     public static Optional<String> validCron(String expr) {
-        if (expr == null || expr.isBlank()) {
+        if (Text.blank(expr)) {
             return Optional.of("cron expression must not be blank");
         }
         try {

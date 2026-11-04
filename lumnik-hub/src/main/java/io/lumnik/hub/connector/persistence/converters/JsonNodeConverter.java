@@ -3,6 +3,7 @@ package io.lumnik.hub.connector.persistence.converters;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.NullNode;
+import io.lumnik.common.text.Text;
 import jakarta.persistence.AttributeConverter;
 import jakarta.persistence.Converter;
 
@@ -23,7 +24,7 @@ public class JsonNodeConverter implements AttributeConverter<JsonNode, String> {
 
     @Override
     public JsonNode convertToEntityAttribute(String json) {
-        if (json == null || json.isBlank()) return NullNode.instance;
+        if (Text.blank(json)) return NullNode.instance;
         try {
             return M.readTree(json);
         } catch (Exception e) {

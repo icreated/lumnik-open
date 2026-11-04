@@ -2,7 +2,7 @@ package io.lumnik.hub.export;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
-import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.export.run.ArtifactName;
 import io.lumnik.hub.manifest.ManifestKeys;
@@ -109,12 +109,7 @@ public class ExportManifestParser {
     /** The document root, refused unless it is a YAML mapping. Parse it once and hand the same
      *  tree to {@link #parse(JsonNode)} and to whatever else reads the manifest. */
     public JsonNode readTree(String yaml) {
-        JsonNode root;
-        try {
-            root = SURFACE.readTree(yaml);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("invalid kind:Export manifest: " + e.getMessage(), e);
-        }
+        JsonNode root = SURFACE.readTree(yaml, "Export");
         // Jackson's readTree returns a literal null for genuinely empty input, and a NullNode /
         // ArrayNode / scalar node for a document that parses cleanly but isn't a mapping. Refusing
         // both here — rather than letting a later field read stumble into either — is what keeps
@@ -149,10 +144,7 @@ public class ExportManifestParser {
 
         String name = requireText(meta, "name", "metadata.name");
 
-        String scopeRaw = requireText(spec, "scope", "spec.scope");
-        String scope = scopeRaw.strip();
-        ScopeGrants.nameProblem(scope)
-            .ifPresent(problem -> { throw new IllegalArgumentException("spec.scope: " + problem); });
+        String scope = ManifestKeys.scopeTag(requireText(spec, "scope", "spec.scope"));
 
         JsonNode source = spec.path("source");
         String entity = requireText(source, "entity", "spec.source.entity");
@@ -428,8 +420,8 @@ public class ExportManifestParser {
             throw new IllegalArgumentException("spec.destination.key_env must not be blank");
         if (passwordEnv != null && passwordEnv.isBlank())
             throw new IllegalArgumentException("spec.destination.password_env must not be blank");
-        boolean hasKey = keyEnv != null && !keyEnv.isBlank();
-        boolean hasPassword = passwordEnv != null && !passwordEnv.isBlank();
+        boolean hasKey = Text.present(keyEnv);
+        boolean hasPassword = Text.present(passwordEnv);
         if (hasKey && hasPassword)
             throw new IllegalArgumentException("specify only one of key_env or password_env, not both");
         if (!hasKey && !hasPassword)

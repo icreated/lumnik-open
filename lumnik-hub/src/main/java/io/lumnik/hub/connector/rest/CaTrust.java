@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.rest.auth.AuthConfigException;
 import io.lumnik.hub.connector.secret.SecretRefs;
 
@@ -38,7 +39,7 @@ public final class CaTrust {
             throw new AuthConfigException("tls names no CA: ca_secret is missing or blank");
         }
         String pem = secrets.lookup(name);
-        if (pem == null || pem.isBlank()) throw new AuthConfigException("CA certificate unavailable (secret=" + name + ")");
+        if (Text.blank(pem)) throw new AuthConfigException("CA certificate unavailable (secret=" + name + ")");
         try {
             return http.trusting(pem);
         } catch (IllegalArgumentException unreadable) {

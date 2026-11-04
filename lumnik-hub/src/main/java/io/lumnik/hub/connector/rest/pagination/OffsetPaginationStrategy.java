@@ -22,18 +22,35 @@ public class OffsetPaginationStrategy implements PaginationStrategy {
 
     @Override
     public RestRequest first(EndpointConfig cfg, Object incremental) {
-        return PaginationSupport.baseGet(cfg)
-            .withQuery(offsetParam, "0").withQuery(limitParam, String.valueOf(limit));
+        return at(PaginationSupport.baseGet(cfg), 0);
     }
 
     @Override
     public RestRequest next(RestResponse resp, RestRequest current) {
-        int off = Integer.parseInt(current.queryParams().getOrDefault(offsetParam, "0"));
+        int off = offsetOf(current);
         int n = items(resp).size();
         if (n < limit) return null;
         OptionalLong declared = PaginationSupport.declaredItems(resp.json(), totalPath);
         if (declared.isPresent() && off + n >= declared.getAsLong()) return null;
-        return current.withQuery(offsetParam, String.valueOf(off + limit));
+        return at(current, off + limit);
+    }
+
+    /**
+     * One parameter named twice carries both, {@code offset,count} — PrestaShop's {@code limit=0,50} (#1754), MySQL's
+     * {@code LIMIT o,n}. Named apart, each carries its own.
+     */
+    private boolean oneParameter() {
+        return offsetParam.equals(limitParam);
+    }
+
+    private RestRequest at(RestRequest req, int offset) {
+        return oneParameter() ? req.withQuery(offsetParam, offset + "," + limit)
+            : req.withQuery(offsetParam, String.valueOf(offset)).withQuery(limitParam, String.valueOf(limit));
+    }
+
+    private int offsetOf(RestRequest req) {
+        String v = req.queryParams().getOrDefault(offsetParam, "0");
+        return Integer.parseInt(oneParameter() ? v.split(",", 2)[0] : v);
     }
 
     @Override

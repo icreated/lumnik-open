@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.reliability;
 
+import io.lumnik.common.text.Text;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.time.Duration;
 import java.util.Optional;
@@ -20,10 +21,21 @@ public class RateLimiterRegistry {
     private static final String SHAPE = "expected \"count/window\" with unit s, m or h — "
         + "e.g. \"100/s\" or \"10/2m\"";
 
-    private final ConcurrentHashMap<UUID, RateLimiter> byConnector = new ConcurrentHashMap<>();
+    /** A limiter and the spec it was built from. */
+    private record Held(String spec, RateLimiter limiter) {}
 
+    private final ConcurrentHashMap<UUID, Held> byConnector = new ConcurrentHashMap<>();
+
+    /**
+     * The connector's limiter: one budget shared by all its endpoints while the spec holds. The spec comes
+     * from the manifest on every run, so a re-applied rate replaces the limiter instead of waiting for a
+     * restart; one that does not parse fails the call and leaves the current limiter in place.
+     */
     public RateLimiter forConnector(UUID connectorId, String spec) {
-        return byConnector.computeIfAbsent(connectorId, id -> parse(spec));
+        // Trimmed, as parse reads it: padding is not a new rate, and a new limiter would refill the bucket.
+        String read = spec == null ? null : spec.trim();
+        return byConnector.compute(connectorId,
+            (id, held) -> held != null && held.spec().equals(read) ? held : new Held(read, parse(read))).limiter();
     }
 
     /**
@@ -35,7 +47,7 @@ public class RateLimiterRegistry {
      * run — except a negative count, which surfaced as nothing at all.
      */
     public static Optional<String> describeProblem(String spec) {
-        if (spec == null || spec.isBlank()) return Optional.of("must not be blank; " + SHAPE);
+        if (Text.blank(spec)) return Optional.of("must not be blank; " + SHAPE);
 
         Matcher m = SPEC.matcher(spec.trim());
         if (!m.matches()) return Optional.of("must be a rate; " + SHAPE + " (got \"" + spec + "\")");

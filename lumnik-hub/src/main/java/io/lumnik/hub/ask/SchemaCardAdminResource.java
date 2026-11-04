@@ -2,6 +2,7 @@ package io.lumnik.hub.ask;
 
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.ask.DiscoveryResult;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
@@ -92,7 +93,7 @@ public class SchemaCardAdminResource {
      * missing parameter must not be answerable by someone the 401 has not yet turned away.
      */
     private static Response refuseUnlessHeld(String scope) {
-        if (scope == null || scope.isBlank()) return ApiErrors.badRequest("scope is required");
+        if (Text.blank(scope)) return ApiErrors.badRequest("scope is required");
         return ScopeGrants.allows(scope) ? null : ApiErrors.scopeNotGranted();
     }
 }

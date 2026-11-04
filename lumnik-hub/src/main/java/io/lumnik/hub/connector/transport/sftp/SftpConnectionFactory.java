@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.transport.sftp;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import org.apache.sshd.client.SshClient;
 import org.apache.sshd.client.keyverifier.AcceptAllServerKeyVerifier;
@@ -84,7 +85,7 @@ public final class SftpConnectionFactory {
 
     /** The refusal teaches: it carries the fingerprint to paste and how to check it first. */
     private static String hostKeyRefusal(String host, int port, String hostKeyFingerprint, String presented) {
-        String why = (hostKeyFingerprint == null || hostKeyFingerprint.isBlank())
+        String why = Text.blank(hostKeyFingerprint)
             ? "no host_key_fingerprint is declared for this transport"
             : "it does not match the declared " + hostKeyFingerprint.trim();
         return "SFTP host key refused for " + host + ":" + port + " — the server presented "

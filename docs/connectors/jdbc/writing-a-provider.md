@@ -71,8 +71,8 @@ value of key column `parameterIndexes[i]`.
 
 - Names are compared trimmed and lowercased.
 - Two providers claiming the same id or alias stop the hub at startup, naming both.
-- A connection pool is kept per URL, user, tenant, driver **and dialect**: two providers that accept the
-  same URL never share one.
+- A connection pool is kept per URL, user, password, tenant, driver **and dialect**: two providers that accept
+  the same URL never share one. A pool nobody asked for in ten minutes, and that lends no connection, is closed.
 
 ## Build it in, and check it
 

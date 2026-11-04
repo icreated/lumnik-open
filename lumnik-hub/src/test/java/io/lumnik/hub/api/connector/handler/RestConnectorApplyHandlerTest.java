@@ -7,7 +7,7 @@ import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.rest.runtime.RestEndpointReader;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
-import io.lumnik.hub.validator.JsonNodes;
+import io.lumnik.hub.json.JsonNodes;
 import io.quarkus.hibernate.orm.panache.PanacheQuery;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;

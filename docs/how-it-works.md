@@ -103,7 +103,7 @@ $ lm validate -f acme-nightly.yaml
 ✗ acme-nightly.yaml — 1 error(s), 0 warning(s)
 
   ERROR    spec.archive_path
-          archive_path is required when after_process=move
+          required field missing (required when after_process = move)
           → Set archive_path: /path/to/archive/
 
 Fix errors above before running 'lm apply -f acme-nightly.yaml'.

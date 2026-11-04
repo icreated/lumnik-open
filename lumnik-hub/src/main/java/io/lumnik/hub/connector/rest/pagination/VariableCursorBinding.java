@@ -3,6 +3,7 @@ package io.lumnik.hub.connector.rest.pagination;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.rest.RestRequest;
 
 /**
@@ -24,7 +25,7 @@ public final class VariableCursorBinding implements CursorBinding {
     @Override
     public RestRequest bind(RestRequest req, String value) {
         try {
-            JsonNode parsed = (req.body() == null || req.body().isBlank())
+            JsonNode parsed = Text.blank(req.body())
                 ? M.createObjectNode()
                 : M.readTree(req.body());
             // Explicit check for a clearer message than a raw ClassCastException on the cast below.

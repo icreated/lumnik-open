@@ -178,10 +178,10 @@ fc9b4ba6  csv-customers  default   Completed  2   1    1        1             20
 - Fix the source, run again, then close the dead letter:
   [Diagnosing a failed run](../recipes/diagnose-a-run.md#3-fix-re-run-close-the-loop).
 
-### An empty amount is a wrong row: `on-error: dlq`
+### An unreadable amount is a wrong row: `on-error: dlq`
 
-By default, a value a hook cannot read is emptied, and the row lands. For an invoice, a row
-without its amount is wrong. Say so for that column. The file:
+By default, a value a hook cannot read is emptied, and the row lands. For an invoice, an amount
+written but unreadable, such as `n/a`, is wrong. Say so for that column. The file:
 
 ```csv
 --8<-- "docs/connectors/csv/data/invoices.csv"
@@ -218,6 +218,8 @@ Resolution: open
 ```
 
 - Three modes: `soft` (the default) writes the row; `dlq` sets it aside; `fail` stops the run.
+- A blank cell (empty, spaces, tabs) is not unreadable: it stays empty, is not counted, and `on-error`
+  does not see it. A row whose amount is missing is `validate-row`'s: [rows missing mandatory fields](#validate-row-rows-missing-mandatory-fields).
 - `fields` names the `column:` of a hook. Full example: `docs/connectors/csv/72-on-error-dlq.yaml`.
 
 ## Broken text
@@ -309,7 +311,7 @@ cell:
   - titlecase: { columns: [name] }
 ```
 
-## Dates and amounts
+## Dates, amounts and flags
 
 ### `parse-date` — dates are `31/12/2019`
 
@@ -380,10 +382,34 @@ cell:
 | `7.0000` | `7` |
 | `7.1` | *(empty)*, +1 `cell_errors`: not a whole number |
 
+### `parse-boolean` — flags are `0/1`, `O/N` or `Oui/Non`
+
+```yaml
+cell:
+  - parse-boolean: { column: actif }
+```
+
+| In | Out |
+|---|---|
+| `1`, `true`, `yes`, `y`, `oui`, `o`, `vrai`, `t` | `true` |
+| `0`, `false`, `no`, `n`, `non`, `faux`, `f` | `false` |
+| `2`, `peut-être` | *(empty)*, +1 `cell_errors` |
+
+Case and spaces do not count. A new column is a **boolean**: `WHERE actif` filters it.
+
+A source with its own words lists them. They replace the defaults, not add to them:
+
+```yaml
+cell:
+  - parse-boolean: { column: statut, true: [A, Actif], false: [I, Inactif] }
+```
+
+A word in both lists is refused when the manifest is checked.
+
 **A column is typed when the table is created.** Two consequences:
 
 - If the first rows leave the column empty, it is created as text, and stays text.
-- Adding `parse-date` or `parse-number` to a connector that already ran does not change its
+- Adding `parse-date`, `parse-number` or `parse-boolean` to a connector that already ran does not change its
   column. Create the table again: [the four steps](../entities-types.md#type-it-at-the-door-four-steps).
 
 ## Codes and labels
@@ -675,7 +701,7 @@ first. It never sorts the whole file.
 |---|---|
 | Rows missing, and no dead letter | A `filter-where` or `skip-empty-rows` dropped them. Read `SKIPPED` in `lm run get`. |
 | `DEAD-LETTERS` > 0, reason `MalformedSource` | The file itself is broken: wrong column count, unclosed quote. `lm dlq get <id>` shows the line. Fix the export. |
-| A column is empty on some rows, the rows landed | A hook could not read those values. `lm run get` warns with `⚠ N cell(s) a hook did not deliver`. |
+| A column is empty on some rows, the rows landed | A hook could not read those values. `lm run get` warns with `⚠ N cell(s) not delivered as declared`. |
 | A `regex-extract` column is empty on every row | The pattern never matched. Test it on a real value. |
 | The mapping seems to do nothing | You loaded with `lm csv ingest`, which never transforms. |
 | `lm validate`: `unknown cell hook: …` | A typo, or the hook is under the wrong tier. The refusal lists the tier's hooks. |

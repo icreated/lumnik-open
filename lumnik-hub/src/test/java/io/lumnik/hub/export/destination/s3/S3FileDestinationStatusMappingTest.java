@@ -209,6 +209,11 @@ class S3FileDestinationStatusMappingTest {
     }
 
     @Test
+    void a_blank_prefix_is_no_prefix() {
+        assertThat(S3FileDestinationFactory.resolveKey("   ", "x.csv")).isEqualTo("x.csv");
+    }
+
+    @Test
     void prefix_is_joined_as_a_folder() {
         assertThat(S3FileDestinationFactory.resolveKey("", "x.csv")).isEqualTo("x.csv");
         assertThat(S3FileDestinationFactory.resolveKey("customers", "x.csv")).isEqualTo("customers/x.csv");

@@ -9,6 +9,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Removes invisible/zero-width Unicode characters that silently corrupt string comparisons.
@@ -18,6 +19,8 @@ import java.util.Set;
 @ApplicationScoped
 @HookId("strip-invisible")
 public class StripInvisibleHook implements CellHook {
+
+  private static final Pattern INVISIBLE = Pattern.compile("[\\p{Cf}\\u00AD]");
 
   @Override
   public void apply(Map<String, Object> row, JsonNode params, MappingState s) {
@@ -31,7 +34,7 @@ public class StripInvisibleHook implements CellHook {
   private String transform(String input) {
     // \p{Cf} covers all Unicode Format characters (ZWSP, ZWJ, ZWNJ, BOM, word joiner…)
     // U+00AD (soft hyphen) is also Cf in Unicode but explicit for clarity.
-    return input.replaceAll("[\\p{Cf}\\u00AD]", "");
+    return INVISIBLE.matcher(input).replaceAll("");
   }
 
   @Override

@@ -1,5 +1,6 @@
 package io.lumnik.hub.search;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.search.ProjectionSink;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
@@ -47,7 +48,7 @@ public class ProjectionSinkGate {
         for (ProjectionSink p : providers) installed.add(new Named(p, nameOf(p)));
         if (installed.isEmpty()) return Optional.empty();
 
-        Optional<String> wanted = configuredProvider.map(String::strip).filter(n -> !n.isEmpty());
+        Optional<String> wanted = configuredProvider.map(String::strip).filter(Text::present);
         if (wanted.isPresent()) {
             for (Named n : installed) if (wanted.get().equals(n.name())) return Optional.of(n.sink());
             return Optional.empty();
@@ -61,7 +62,7 @@ public class ProjectionSinkGate {
     private static String nameOf(ProjectionSink p) {
         try {
             String name = p.name();
-            return name == null || name.isBlank() ? null : name;
+            return Text.blank(name) ? null : name;
         } catch (RuntimeException e) {
             LOG.warnf(e, "Projection sink %s failed to report its name", p.getClass().getName());
             return null;

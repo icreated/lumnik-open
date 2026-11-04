@@ -44,7 +44,8 @@ public record RestRequest(
         return new RestRequest(method, u, headers, q, body);
     }
 
-    private static Set<String> queryKeys(String url) {
+    /** The names of the query parameters a URL already carries, decoded. */
+    public static Set<String> queryKeys(String url) {
         int at = url.indexOf('?');
         if (at < 0) return Set.of();
         int hash = url.indexOf('#', at);
@@ -53,7 +54,12 @@ public record RestRequest(
         for (String pair : query.split("&")) {
             if (pair.isEmpty()) continue;
             int eq = pair.indexOf('=');
-            keys.add(URLDecoder.decode(eq < 0 ? pair : pair.substring(0, eq), StandardCharsets.UTF_8));
+            String key = eq < 0 ? pair : pair.substring(0, eq);
+            try {
+                keys.add(URLDecoder.decode(key, StandardCharsets.UTF_8));
+            } catch (IllegalArgumentException malformed) {
+                keys.add(key);   // not valid percent-encoding: its raw spelling is the name we can compare
+            }
         }
         return keys;
     }

@@ -85,7 +85,7 @@ The env vars need an existing current context: create it once with
 | `lm workflow rm NAME` | delete a workflow for good (no prompt) |
 | `lm export apply -f FILE` | declare a [`kind: Export`](../apps/exports.md) |
 | `lm proposal draft DOSSIER` | write a draft [`kind: Workflow`](../apps/proposal-dossier.md#draft-a-workflow-from-a-dossier) from a proposal dossier (`-` for stdin); flags `--name --scope --table --column --key --after -o`. Offline, never applies; `-o FILE` refuses an existing file |
-| `lm describe connector-type KIND` | field reference for a connector kind |
+| `lm describe connector-type KIND` | field reference for a connector kind: type, importance, doc, rules, and the `default` a key takes when omitted |
 
 ```
 $ lm validate -f docs/apps/demo/entities/10-customer.yaml
@@ -172,7 +172,7 @@ lm connector apply -f c.yaml
 | `lm run cancel ID` | stop a run. A `Running` run stops at its next chunk; a `Queued` one ends at once. Refusals: [Stopping a run](tui.md#stopping-a-run) |
 | `lm dlq list` / `lm dlq get ID` | dead-letter entries (reason + offending row); `--run RUN`, `--connector NAME`, `list --limit N` |
 | `lm dlq replayed ID --new-run-id RUN` / `lm dlq discard ID` | close an entry: carried again by that run, or dropped — [the rules](../recipes/diagnose-a-run.md) |
-| `lm conflicts list` | fused-entity rows with a source conflict or a lookup ambiguity (`--limit N`) |
+| `lm conflicts list` | fused-entity rows with a source conflict or a lookup ambiguity (`--limit N`, `--entity NAME`) |
 | `lm observations list` | the workflow tape: watched documents, stillest first (`--limit N`); `--workflow NAME` narrows the hub's read to one workflow |
 | `lm observations transitions` | the journal: each observed move, newest first, with the seconds spent in the state it left (`IN_FROM_S`, counted from the first observation for a document's first move); `--workflow NAME`, `--doc KEY`, `--limit N` |
 | `lm observations stats` | the tape per workflow: watched, dormant, median detection delay (seconds; `-` when nothing is dormant) |

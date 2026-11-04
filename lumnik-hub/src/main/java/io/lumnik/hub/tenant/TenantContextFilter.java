@@ -2,6 +2,7 @@ package io.lumnik.hub.tenant;
 
 import io.lumnik.common.security.CurrentRolesHolder;
 import io.lumnik.common.tenant.CurrentTenantHolder;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
 import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -264,7 +265,7 @@ public class TenantContextFilter implements ContainerRequestFilter, ContainerRes
     private boolean resolveExternalIdentity(ContainerRequestContext ctx, JsonWebToken token) {
         String issuer = token.getIssuer();
         String subject = stringClaim(token, subjectClaim, null);
-        if (subject == null || issuer == null || issuer.isBlank()) {
+        if (subject == null || Text.blank(issuer)) {
             abort(ctx, "missing subject/issuer claim");
             return false;
         }

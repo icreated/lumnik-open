@@ -7,6 +7,65 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.10.3 — 2026-11-04
+
+REST connectors refuse to report a partial read as complete. `lm describe connector-type` now tells you
+what each key requires and what it defaults to. No migration.
+
+### Before you upgrade
+- **A rest-generic run that used to end `Completed` can now end `Failed`.** Each case lost rows in
+  silence. Run `lm validate` on your connectors, then watch the first runs.
+  - The source answers the same page twice in a row. The run stops with `the source answered the same
+    page twice in a row — the paging parameter is not reaching it (check offset_param, page_param or
+    the preset)`.
+  - The read reaches the 10,000-page cap with pages left: `reached the page cap (10000 pages) before
+    the source's last page — refusing to report a partial extract as a complete one`.
+  - The list's declared total moves during the read. It is read again once from page 1; if the total
+    moves again the run stops, naming both totals. This now covers the presets `nestjs`, `spring-page`,
+    `spring-paged-model`, `micronaut`, `fastapi`, `spring-hateoas` and `drf-page`.
+- **Manifests refused at `lm validate` that passed before.**
+  - A `path:` query that names the pagination's own parameter (`path: /items?size=500` with
+    `kind: fastapi`). Before, the parameter was sent twice.
+  - A `promote` entry with a reserved column name (`id`, `data`, `row_hash`, …), a duplicate name, or a
+    JSONPath that does not compile. Before, the run died at its first chunk.
+  - A blank value where a rule needs one (for example `watermark_column: "  "` with `mode: watermark`).
+  - An invalid `default_rate_limit` is no longer ignored after the first use.
+- **Wording moved.** A script that reads these must follow: the `lm run get` cell-error line now reads
+  `N cell(s) not delivered as declared (…) — the rows were still written`; a bearer auth missing its
+  token is reported at `spec.auth`; index errors carry `spec.target.indexes[n].columns`.
+- **Stored values.** A CSV header named `row_hash` stays in `data` and no longer becomes a column. An S3
+  export prefix made only of spaces publishes at the bucket root.
+
+### Added
+- **rest-generic**:
+  - `auth: { kind: session }` logs in with a form (Spring Security `_csrf` and Tomcat
+    `j_security_check` shapes), holds the cookie per connector and tenant, and logs in once more and
+    replays when it expires.
+  - `response_format: xml` reads an XML answer. Attributes sit under `@`, text under `#text`; a DTD
+    and external entities are refused.
+  - The preset `prestashop`.
+  - On the `page` strategy, `total_path` with `size_param` ends the read once the rows read reach the
+    total, so a Micronaut 4 list no longer asks for one empty page more.
+- **Cell hook `parse-boolean`** (`0/1`, `O/N`, `Oui/Non`, `true/false`, `yes/no`, `vrai/faux`, `t/f`,
+  or your own `true:` / `false:` lists) gives a real boolean column.
+- **`lm conflicts list --entity NAME`** (and `GET /api/entities/conflicts?entity=NAME`). An unknown
+  entity is `404`; an entity outside your scope is the uniform `403`.
+- **`lm describe connector-type`** prints the rules of each key (`required when`, `ignored unless`,
+  `one of`, `at least one of`, element shapes) and `default:`. `-o json` keeps `default`.
+
+### Fixed
+- A JDBC source no longer keeps idle sessions: a pool closes its idle connections after about 30
+  seconds, and a pool nobody asked for in 10 minutes is closed. The first read after a pause pays one
+  connect. A rotated source password is followed. A slow source no longer stalls other connectors.
+- A deleted connector drops its OAuth2 token and session cookie at once; both are dropped after an
+  hour idle.
+- A whitespace-only cell stays empty under the `parse-*` hooks and is no longer counted in
+  `cell_errors`.
+- `lm source rest probe` drafts `id_2` instead of a reserved promote name.
+- `regex-replace` and the constant patterns of CSV inference compile once.
+- Process and Workflow manifests accept a `spec.scope` with spaces around it, stored stripped, as the
+  other kinds already did.
+
 ## v1.10.2 — 2026-11-02
 
 REST connectors read more real APIs, and stop with a clear message when an answer cannot be read,

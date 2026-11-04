@@ -1,0 +1,11 @@
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata: { name: preset-prestashop-no-resource, connector_type: rest-generic, scopes: [x] }
+spec:
+  base_url: https://shop.example.com/api
+  endpoints:
+    - id: products
+      path: /products?output_format=JSON&display=full
+      method: GET
+      pagination: { kind: prestashop, limit: 50 }
+      target: { kind: hybrid, table: x_products, unique_key: "$.id" }

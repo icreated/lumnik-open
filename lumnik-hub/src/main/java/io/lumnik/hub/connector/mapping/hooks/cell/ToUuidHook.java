@@ -7,6 +7,7 @@ import io.lumnik.hub.connector.mapping.ScalarParams;
 import io.lumnik.hub.connector.mapping.hooks.CellHook;
 import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
+import io.lumnik.hub.json.JsonNodes;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.nio.charset.StandardCharsets;
@@ -72,7 +73,7 @@ public class ToUuidHook implements CellHook {
     ScalarParams.optionalBoolean("to-uuid hook", "generate", params.path("generate"), false);
     JsonNode from = params.path("generate-from");
     if (from.isMissingNode() || from.isNull()) return;
-    if (!from.isTextual() || from.asText().isBlank() || from.asText().equals(params.path("column").asText())) {
+    if (!JsonNodes.nonBlank(from) || from.asText().equals(params.path("column").asText())) {
       String got = from.isTextual() ? "'" + from.asText() + "'" : MappingValidationException.typeName(from);
       throw new MappingValidationException(
           "to-uuid hook: 'generate-from' must name a column other than the id column (got " + got + ")");

@@ -1,5 +1,6 @@
 package io.lumnik.hub.ask;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.llm.spi.ChatPort;
 import io.lumnik.llm.spi.Judge;
@@ -67,11 +68,11 @@ public class FaithfulnessJudge {
         } catch (RuntimeException e) {
             return new Result(Verdict.INCONCLUSIVE, "judge call failed: " + e.getMessage());
         }
-        if (reply == null || reply.isBlank()) return new Result(Verdict.INCONCLUSIVE, "empty judge reply");
+        if (Text.blank(reply)) return new Result(Verdict.INCONCLUSIVE, "empty judge reply");
 
         // The verdict is on the FIRST non-empty line (per the rubric); parse only that line, so a word in a
         // later-line explanation can't flip the verdict and the stored reason stays bounded.
-        String line = reply.lines().map(String::strip).filter(s -> !s.isEmpty()).findFirst().orElse("");
+        String line = reply.lines().map(String::strip).filter(Text::present).findFirst().orElse("");
         String up = line.toUpperCase(Locale.ROOT);
         if (up.contains("UNFAITHFUL")) // check UNFAITHFUL first — it contains "FAITHFUL"
             return new Result(Verdict.UNFAITHFUL, reasonAfter(line, up, "UNFAITHFUL"));

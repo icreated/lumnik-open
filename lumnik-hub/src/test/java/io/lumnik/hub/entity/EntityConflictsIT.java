@@ -140,6 +140,22 @@ class EntityConflictsIT {
   }
 
   @Test
+  void entity_narrows_the_list_to_that_entity() {
+    given().headers(TestIdentity.tenantAndUser(1))
+        .when().get("/api/entities/conflicts?entity=ConflictProbe")
+        .then().statusCode(200)
+        .body("findAll { it.entity != 'ConflictProbe' }", hasSize(0))
+        .body("find { it.key == 'C-200' }.columns", equalTo(List.of("name")));
+  }
+
+  @Test
+  void an_unknown_entity_is_a_404() {
+    given().headers(TestIdentity.tenantAndUser(1))
+        .when().get("/api/entities/conflicts?entity=NoSuchEntity")
+        .then().statusCode(404);
+  }
+
+  @Test
   void limit_caps_the_aggregate() {
     given().headers(TestIdentity.tenantAndUser(1))
         .when().get("/api/entities/conflicts?limit=1")

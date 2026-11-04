@@ -2,6 +2,7 @@ package io.lumnik.hub.sql;
 
 import io.lumnik.common.error.Throwables;
 
+import io.lumnik.common.text.Text;
 import java.sql.SQLException;
 import java.sql.SQLFeatureNotSupportedException;
 import java.util.List;
@@ -80,7 +81,7 @@ public final class SqlFailureText {
             }
         }
         String m = t.getMessage();
-        if (m == null || m.isBlank()) return t.getClass().getSimpleName() + ".";
+        if (Text.blank(m)) return t.getClass().getSimpleName() + ".";
         return firstLine(m);
     }
 
@@ -121,7 +122,7 @@ public final class SqlFailureText {
      */
     public static String ownMessage(Throwable failure) {
         String own = failure.getMessage();
-        return own == null || own.isBlank() ? null : withoutDriverText(own, failure);
+        return Text.blank(own) ? null : withoutDriverText(own, failure);
     }
 
     /**

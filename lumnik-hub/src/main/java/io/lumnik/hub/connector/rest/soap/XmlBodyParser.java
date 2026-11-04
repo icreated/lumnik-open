@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.dataformat.xml.XmlFactory;
 import com.fasterxml.jackson.dataformat.xml.XmlMapper;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.rest.DottedPath;
 import io.lumnik.hub.connector.rest.RestResponse;
@@ -59,13 +60,13 @@ public final class XmlBodyParser implements BodyParser {
         // than kept as a second copy that could drift from it.
         ResponseStatusGuard.refuseNonSuccess(raw);
         JsonNode tree = strippedTree(raw.body());
-        if (tree instanceof ObjectNode obj) forceList(obj, responsePath);
+        if (tree instanceof ObjectNode obj) DottedPath.forceList(obj, responsePath);
         return new RestResponse(raw.status(), raw.headers(), raw.body(), tree);
     }
 
     /** Parse XML → JSON with namespace prefixes stripped. Shared with {@link SoapFaultValidator}. */
     public static JsonNode strippedTree(String body) {
-        if (body == null || body.isBlank()) return JsonNodeFactory.instance.objectNode();
+        if (Text.blank(body)) return JsonNodeFactory.instance.objectNode();
         JsonNode parsed;
         try {
             parsed = XML.readTree(body);
@@ -97,28 +98,4 @@ public final class XmlBodyParser implements BodyParser {
         return node;
     }
 
-    /** Coerce the node at a plain dotted {@code response_path} (after {@code $.}) to an array. No-op
-     *  when the path uses JsonPath operators or is absent in the tree.
-     *  <p>Only the TERMINAL segment is coerced: the walk descends through {@link ObjectNode}
-     *  intermediates only, so if an intermediate path segment is itself a repeated (array) element
-     *  the walk returns early and the force-list is a no-op for that branch (v1 limitation). */
-    private static void forceList(ObjectNode root, String responsePath) {
-        // Same predicate the connector validator enforces up front (validator==runtime): only a
-        // plain dotted path can be walked here — anything else is a deliberate no-op.
-        if (!DottedPath.isPlain(responsePath)) return;
-        String[] segs = DottedPath.segments(responsePath);
-        ObjectNode parent = root;
-        for (int i = 0; i < segs.length - 1; i++) {
-            JsonNode child = parent.get(segs[i]);
-            if (!(child instanceof ObjectNode on)) return; // path absent → no items to coerce
-            parent = on;
-        }
-        String leaf = segs[segs.length - 1];
-        JsonNode leafNode = parent.get(leaf);
-        if (leafNode != null && leafNode.isObject()) {
-            ArrayNode arr = parent.arrayNode();
-            arr.add(leafNode);
-            parent.set(leaf, arr);
-        }
-    }
 }

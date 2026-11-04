@@ -1,5 +1,6 @@
 package io.lumnik.hub.api;
 
+import io.lumnik.common.text.Text;
 import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.ext.ExceptionMapper;
@@ -23,6 +24,6 @@ public class NotFoundExceptionMapper implements ExceptionMapper<NotFoundExceptio
     @Override
     public Response toResponse(NotFoundException ex) {
         String msg = ex.getMessage();
-        return ApiErrors.notFound(msg == null || msg.isBlank() ? "not found" : msg);
+        return ApiErrors.notFound(Text.blank(msg) ? "not found" : msg);
     }
 }

@@ -65,7 +65,7 @@ func (c *Conflicts) setHeader() {
 // whole screen froze that long on arrival (#1171).
 func (c *Conflicts) Refresh() {
 	c.offLoop.run(c.app, func() func() {
-		list, err := c.client.ConflictList(200)
+		list, err := c.client.ConflictList(200, "")
 		return func() { c.renderList(list, err) }
 	})
 }

@@ -1,7 +1,7 @@
 package io.lumnik.hub.workflow;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.mapping.MappingValidationException;
 import io.lumnik.hub.connector.mapping.Zones;
 import io.lumnik.hub.manifest.ManifestKeys;
@@ -116,11 +116,7 @@ public class WorkflowManifestParser {
      * once and reuse the node for both parse() and unknownKeys().
      */
     JsonNode readTree(String yaml) {
-        try {
-            return SURFACE.readTree(yaml);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("invalid kind:Workflow manifest: " + e.getMessage(), e);
-        }
+        return SURFACE.readTree(yaml, "Workflow");
     }
 
     private static void requireWorkflowKind(JsonNode root) {
@@ -142,17 +138,12 @@ public class WorkflowManifestParser {
     }
 
     private static String requireScope(JsonNode spec) {
-        String scope = ManifestKeys.requiredText(spec, "scope", "spec.scope");
-        // the tag becomes the case-sensitive Keycloak role scope:<tag> — the same rule
-        // AppManifestParser, ViewManifestParser, ScopesValidator and EntityManifestParser ask (#577).
-        ScopeGrants.nameProblem(scope)
-            .ifPresent(problem -> { throw new IllegalArgumentException("spec.scope: " + problem); });
-        return scope;
+        return ManifestKeys.scopeTag(ManifestKeys.requiredText(spec, "scope", "spec.scope"));
     }
 
     private static String requireDeclaredProvenance(JsonNode spec) {
         String provenance = ManifestKeys.text(spec, "provenance");
-        if (provenance == null || provenance.isBlank())
+        if (Text.blank(provenance))
             throw new IllegalArgumentException("spec.provenance is required ('declared')");
         if (!"declared".equals(provenance))
             throw new IllegalArgumentException("spec.provenance '" + provenance
@@ -274,7 +265,7 @@ public class WorkflowManifestParser {
      *  Worded for both callers: {@code column} is required, {@code key} is optional but, once
      *  written, must say something. */
     private static String requireNamed(String name, String path) {
-        if (name == null || name.isBlank())
+        if (Text.blank(name))
             throw new IllegalArgumentException(path + " must name a column (got: " + name + ")");
         if (name.indexOf('\0') >= 0)
             throw new IllegalArgumentException(path + " contains a NUL, which no PostgreSQL "
@@ -345,7 +336,7 @@ public class WorkflowManifestParser {
         List<String> states = requireDueStates(due.path("states"), declared);
         String zone = ManifestKeys.text(due, "zone");
         Zones.whyNot(zone).ifPresent(why -> { throw new IllegalArgumentException("spec.due: " + why); });
-        if (zone != null && zone.isBlank()) zone = null;   // blank is no zone, as Zones reads it
+        if (Text.blank(zone)) zone = null;   // blank is no zone, as Zones reads it
         String message = ManifestKeys.text(due, "message");
         if (message != null) requireSaysSomething(message, "spec.due.message");
         return new WorkflowManifest.DueDef(column, states, zone, message,
@@ -391,7 +382,7 @@ public class WorkflowManifestParser {
         int initials = 0;
         for (JsonNode s : spec.path("states")) {
             String code = ManifestKeys.text(s, "code");
-            if (code == null || code.isBlank())
+            if (Text.blank(code))
                 throw new IllegalArgumentException("every state needs a code");
             if (!codes.add(norm(code)))
                 throw new IllegalArgumentException("duplicate state code: " + code);
@@ -466,13 +457,7 @@ public class WorkflowManifestParser {
 
     /** Unknown keys as dotted paths — reporting only; the apply door refuses. Mirror of kind:Process C3. */
     public List<String> unknownKeys(String yaml) {
-        JsonNode root;
-        try {
-            root = SURFACE.readTree(yaml);
-        } catch (Exception e) {
-            return List.of();
-        }
-        return unknownKeys(root);
+        return SURFACE.unknownKeys(yaml);
     }
 
     public List<String> unknownKeys(JsonNode root) {

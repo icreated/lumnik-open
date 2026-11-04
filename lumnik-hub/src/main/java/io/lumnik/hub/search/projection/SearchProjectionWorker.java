@@ -3,6 +3,7 @@ package io.lumnik.hub.search.projection;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.error.Throwables;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.search.ProjectionDefinition;
 import io.lumnik.extraction.spi.search.ProjectionDocument;
 import io.lumnik.extraction.spi.search.ProjectionSink;
@@ -749,7 +750,7 @@ public class SearchProjectionWorker {
         Throwable t = chain.stream().filter(c -> !(c instanceof QuarkusTransactionException)).findFirst()
             .orElse(chain.getLast());
         String message = t instanceof SQLException ? SqlFailureText.rootMessage(t) : SqlFailureText.ownMessage(t);
-        return message == null || message.isBlank() ? "no detail — see the hub log" : message;
+        return Text.blank(message) ? "no detail — see the hub log" : message;
     }
 
     /** Feeds documents to {@code sink.upsert} for a full rebuild's scan (§5b step 4); the real

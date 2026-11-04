@@ -1,6 +1,7 @@
 package io.lumnik.hub.api.connector;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.connector.handler.CsvFileConnectorApplyHandler;
 import io.lumnik.hub.ask.SchemaCardRefresher;
@@ -14,6 +15,9 @@ import io.lumnik.hub.connector.repository.ConnectorCredentialRepository;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.repository.ConnectorRunRepository;
+import io.lumnik.hub.connector.rest.auth.AuthSpec;
+import io.lumnik.hub.connector.rest.auth.OAuth2Tokens;
+import io.lumnik.hub.connector.rest.auth.SessionCookies;
 import io.lumnik.hub.connector.runtime.ConnectorEngine;
 import io.lumnik.hub.connector.runtime.ConnectorRunDispatcher;
 import io.lumnik.hub.entity.EntityRegistry;
@@ -66,6 +70,8 @@ public class ConnectorAdminResource {
   @Inject EntityRegistry entities;
   @Inject ObjectMapper json;
   @Inject AuditRecorder audit;
+  @Inject OAuth2Tokens oauth2Tokens;
+  @Inject SessionCookies sessionCookies;
 
   @GET
   @Transactional
@@ -238,6 +244,10 @@ public class ConnectorAdminResource {
     ConnectorCredential credential = credentialGoingWith(c, LockModeType.PESSIMISTIC_WRITE);
     repo.delete(c);
     if (credential != null) credentials.delete(credential);
+    // A rolled-back delete costs the connector one token fetch; a kept slot would hold its secret for an hour.
+    AuthSpec.Owner owner = new AuthSpec.Owner(c.getTenantId(), id);
+    oauth2Tokens.drop(owner);
+    sessionCookies.drop(owner);
     recordWrite(c, "DELETE");
     cardRefresher.afterCommit(c.getTenantId(), scopes);
     return Response.status(204).build();
@@ -320,7 +330,7 @@ public class ConnectorAdminResource {
    * {@code CronField.check} runs per connector type, so both refuse the same strings.
    */
   private Response refuseBadSchedule(String schedule) {
-    if (schedule == null || schedule.isBlank()) return null;   // no schedule is legal
+    if (Text.blank(schedule)) return null;   // no schedule is legal
     return CronField.validCron(schedule).map(ApiErrors::badRequest).orElse(null);
   }
 
@@ -339,7 +349,7 @@ public class ConnectorAdminResource {
    * #refuseBadSchedule} closes it.
    */
   private Response refuseBadWindow(String window) {
-    if (window == null || window.isBlank()) return null;   // no fence is legal
+    if (Text.blank(window)) return null;   // no fence is legal
     return RunWindow.validate(window).map(ApiErrors::badRequest).orElse(null);
   }
 

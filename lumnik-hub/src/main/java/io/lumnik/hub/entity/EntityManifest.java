@@ -2,6 +2,7 @@ package io.lumnik.hub.entity;
 
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 
+import io.lumnik.common.text.Text;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -91,7 +92,7 @@ public record EntityManifest(String kind, String name, String label,
      */
     public String physicalIdentityColumn(Source s) {
       String identityCanon = identity.get(s.table());
-      if (identityCanon == null || identityCanon.isBlank())
+      if (Text.blank(identityCanon))
         throw new IllegalStateException("source '" + s.table()
             + "' has no resolution.identity column — manifest must be validated before use");
       // Last match wins, not first: mirrors the canonical->physical map this method replaces

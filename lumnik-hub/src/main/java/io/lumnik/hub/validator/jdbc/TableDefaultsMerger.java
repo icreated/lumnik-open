@@ -3,7 +3,7 @@ package io.lumnik.hub.validator.jdbc;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import io.lumnik.hub.validator.JsonNodes;
+import io.lumnik.hub.json.JsonNodes;
 
 import java.util.Iterator;
 import java.util.Map;

@@ -92,6 +92,11 @@ public final class Identifiers {
     public static final class Unique {
         private final Set<String> used = new HashSet<>();
 
+        public Unique() {}
+
+        /** Starts with {@code taken} already claimed: a name among them is never handed out. */
+        public Unique(Set<String> taken) { used.addAll(taken); }
+
         public String take(String name) {
             String candidate = name;
             int n = 2;

@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.jdbc;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
 import io.lumnik.jdbc.spi.JdbcDialect;
 
@@ -28,7 +29,7 @@ public record JdbcConnectionConfig(
 
     JdbcDialect dialect = registry.resolveFor(url, null);
 
-    if (user == null || user.isBlank())
+    if (Text.blank(user))
       throw new IllegalArgumentException("Missing user");
 
     return new JdbcConnectionConfig(url, user, password, dialect.id());

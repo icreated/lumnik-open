@@ -1,5 +1,6 @@
 package io.lumnik.hub.ask;
 
+import io.lumnik.common.text.Text;
 import java.util.List;
 
 /**
@@ -35,7 +36,7 @@ final class DoorRelevance {
     }
 
     private static boolean mentions(String question, List<String> words) {
-        if (question == null || question.isBlank()) return false;
+        if (Text.blank(question)) return false;
         String folded = QuestionWords.fold(question);
         return words.stream().anyMatch(w -> QuestionWords.startsAWord(folded, w));
     }

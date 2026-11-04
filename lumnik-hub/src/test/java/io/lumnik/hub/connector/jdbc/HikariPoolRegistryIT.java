@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.jdbc;
 
+import com.zaxxer.hikari.HikariDataSource;
 import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -9,6 +10,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.Statement;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -66,8 +69,8 @@ class HikariPoolRegistryIT {
 
     // Now simulate a second logical user by checking the Key record distinguishes
     // on the user field.  We use package-visible Key to assert equality semantics.
-    HikariPoolRegistry.Key k1 = new HikariPoolRegistry.Key(PG.getJdbcUrl(), "alice", 1L, "d", "x");
-    HikariPoolRegistry.Key k2 = new HikariPoolRegistry.Key(PG.getJdbcUrl(), "bob", 1L, "d", "x");
+    HikariPoolRegistry.Key k1 = new HikariPoolRegistry.Key(PG.getJdbcUrl(), "alice", 1L, "d", "x", "pw");
+    HikariPoolRegistry.Key k2 = new HikariPoolRegistry.Key(PG.getJdbcUrl(), "bob", 1L, "d", "x", "pw");
     assertNotEquals(k1, k2, "keys with different users must not be equal");
   }
 
@@ -111,6 +114,32 @@ class HikariPoolRegistryIT {
     assertEquals(1, registry.poolCount());
   }
 
+  /**
+   * What {@code HikariPoolRegistryTest} stands for, against a real server: the DBA rotates the password of the
+   * source's user and the integrator updates the secret. The pool built with the old password still holds
+   * sessions, so nothing shows until they end (here: evicted) — then it cannot log in again.
+   */
+  @Test
+  void a_rotated_password_is_served_by_a_pool_that_can_still_log_in() throws Exception {
+    runAsAdmin("DROP ROLE IF EXISTS rotating");   // a retry in the same container starts clean
+    runAsAdmin("CREATE ROLE rotating LOGIN PASSWORD 'old'");
+    HikariDataSource before = registry.acquire(PG.getJdbcUrl(), "rotating", "old", 9L, PG_DIALECT);
+    try (Connection c = before.getConnection()) { assertTrue(c.isValid(1)); }
+
+    runAsAdmin("ALTER ROLE rotating PASSWORD 'new'");
+    before.getHikariPoolMXBean().softEvictConnections();
+
+    HikariDataSource after = registry.acquire(PG.getJdbcUrl(), "rotating", "new", 9L, PG_DIALECT);
+    try (Connection c = after.getConnection()) { assertTrue(c.isValid(1)); }
+  }
+
+  private static void runAsAdmin(String sql) throws Exception {
+    try (Connection c = DriverManager.getConnection(PG.getJdbcUrl(), PG.getUsername(), PG.getPassword());
+         Statement st = c.createStatement()) {
+      st.execute(sql);
+    }
+  }
+
   @Test
   void connections_are_read_only() throws Exception {
     DataSource ds = registry.acquire(PG.getJdbcUrl(), PG.getUsername(), PG.getPassword(), 1L, PG_DIALECT);
@@ -121,8 +150,8 @@ class HikariPoolRegistryIT {
 
   @Test
   void the_driver_is_part_of_the_pool_key() {
-    HikariPoolRegistry.Key a = new HikariPoolRegistry.Key(PG.getJdbcUrl(), "u", 1L, "org.postgresql.Driver", "x");
-    HikariPoolRegistry.Key b = new HikariPoolRegistry.Key(PG.getJdbcUrl(), "u", 1L, "other.Driver", "x");
+    HikariPoolRegistry.Key a = new HikariPoolRegistry.Key(PG.getJdbcUrl(), "u", 1L, "org.postgresql.Driver", "x", "pw");
+    HikariPoolRegistry.Key b = new HikariPoolRegistry.Key(PG.getJdbcUrl(), "u", 1L, "other.Driver", "x", "pw");
     assertNotEquals(a, b);
   }
 

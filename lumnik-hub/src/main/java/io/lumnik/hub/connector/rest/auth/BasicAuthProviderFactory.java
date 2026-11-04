@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.auth;
 
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.secret.SecretRefs;
 import io.lumnik.hub.connector.rest.RestRequest;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -28,7 +29,7 @@ public class BasicAuthProviderFactory implements AuthProviderFactory {
                 return r.withHeader("Authorization", "Basic " + encoded);
             }
             @Override public void probe() {
-                if (pwd == null || pwd.isBlank())
+                if (Text.blank(pwd))
                     throw new AuthConfigException("Basic password unavailable (env=" + envName + ")");
             }
         };

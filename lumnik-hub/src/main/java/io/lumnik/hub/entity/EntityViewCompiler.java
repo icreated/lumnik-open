@@ -3,6 +3,7 @@ package io.lumnik.hub.entity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.error.Throwables;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.lumnik.hub.ask.SchemaCardRefresher;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
@@ -840,7 +841,7 @@ public class EntityViewCompiler {
 
   /** EntityManifestParser owns these refusals; reaching them here means it was skipped. */
   private static void requireCompilable(EntityManifest m) {
-    if (m.name() == null || m.name().isBlank())
+    if (Text.blank(m.name()))
       throw new IllegalStateException("manifest has a null/blank name — validate before compilation");
     boolean hasMatch = m.match() != null && !m.match().isEmpty();
     boolean hasResolution = m.resolution() != null;
@@ -880,7 +881,7 @@ public class EntityViewCompiler {
   private static Map<String, String> validatedCanonToSrc(EntityManifest m, EntityManifest.Source s) {
     if (s == null)
       throw new IllegalStateException("manifest '" + m.name() + "' has a null source entry — validate before compilation");
-    if (s.table() == null || s.table().isBlank())
+    if (Text.blank(s.table()))
       throw new IllegalStateException("a source has a null/blank table — validate before compilation");
     if (s.map() == null)
       throw new IllegalStateException("source '" + s.table()

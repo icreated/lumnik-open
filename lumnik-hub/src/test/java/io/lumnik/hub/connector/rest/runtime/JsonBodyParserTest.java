@@ -23,7 +23,8 @@ class JsonBodyParserTest {
     void an_xml_body_is_refused_naming_its_content_type_never_its_content() {
         RestResponse xml = ok("application/xml", "<orders><order><id>SECRET-1</id></order></orders>");
         ConnectorException e = assertThrows(ConnectorException.class, () -> JsonBodyParser.INSTANCE.reparse(xml));
-        assertEquals("the response is not JSON (Content-Type application/xml) — rest-generic reads JSON", e.getMessage());
+        assertEquals("the response is not JSON (Content-Type application/xml) — rest-generic reads JSON;"
+            + " an endpoint answering XML declares response_format: xml", e.getMessage());
     }
 
     /** An older application whose session expired answers its login page with a 200. */

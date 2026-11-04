@@ -180,6 +180,42 @@ class RestEngineBreadthIT {
         }
     }
 
+    /** #1751: a Spring Security form login — the CSRF token read from the login page, the session cookie kept. */
+    @Test
+    void none_behind_a_form_login() {
+        System.setProperty("C2_SESSION_PW", "clinic-pw");
+        try {
+            String table = "ext.c2_session_" + Math.abs(System.nanoTime());
+            stubFor(get(urlPathEqualTo("/login")).willReturn(aResponse().withStatus(200)
+                .withHeader("Set-Cookie", "JSESSIONID=anon-1; Path=/; HttpOnly")
+                .withBody("<form method=\"post\"><input type=\"hidden\" name=\"_csrf\" value=\"t0k3n-c5rf\"/></form>")));
+            stubFor(post(urlPathEqualTo("/login")).withHeader("Cookie", equalTo("JSESSIONID=anon-1"))
+                .withRequestBody(equalTo("username=lumnik&password=clinic-pw&_csrf=t0k3n-c5rf"))
+                .willReturn(aResponse().withStatus(302).withHeader("Location", "/")
+                    .withHeader("Set-Cookie", "JSESSIONID=s1-a1b2c3d4; Path=/; HttpOnly")));
+            stubFor(get(urlPathEqualTo("/vets")).withHeader("Cookie", equalTo("JSESSIONID=s1-a1b2c3d4"))
+                .willReturn(okJson("{\"vetList\":[{\"id\":1,\"name\":\"Carter\"},{\"id\":3,\"name\":\"Douglas\"}]}")));
+
+            String base = "http://localhost:" + wm.port();
+            UUID id = seed(
+                "{\"kind\":\"rest-generic\",\"base_url\":\"" + base + "\",\"auth\":{\"kind\":\"session\","
+                    + "\"login_url\":\"" + base + "/login\",\"username\":\"lumnik\",\"password_env\":\"C2_SESSION_PW\","
+                    + "\"csrf_field\":\"_csrf\"},\"default_rate_limit\":\"100/s\"}",
+                "/vets",
+                "{\"pagination\":{\"kind\":\"none\",\"response_path\":\"$.vetList\"},"
+                    + "\"incremental\":{\"mode\":\"full\"},"
+                    + "\"target\":{\"kind\":\"hybrid\",\"table\":\"" + table + "\",\"unique_key\":\"$.id\","
+                    + "\"promote\":[{\"name\":\"name\",\"path\":\"$.name\",\"type\":\"text\"}]}}");
+
+            RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(id, new RunTrigger.Manual(1L)));
+            assertInstanceOf(RunStatus.Completed.class, s);
+            assertEquals(2L, count(table));
+            verify(1, postRequestedFor(urlPathEqualTo("/login")));
+        } finally {
+            System.clearProperty("C2_SESSION_PW");
+        }
+    }
+
     /** Link rel="next" header pagination (absolute URL) + X-API-Key header. */
     @Test
     void link_header_apikey() {

@@ -2,6 +2,7 @@ package io.lumnik.hub.view;
 
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.ask.SchemaCardStore;
@@ -47,7 +48,7 @@ public class ViewDetailResource {
     public Response detail(@QueryParam("key") String key, String body) {
         long tenant = RequireTenant.current();
 
-        if (key == null || key.isBlank()) {
+        if (Text.blank(key)) {
             return ApiErrors.badRequest("the 'key' query param is required");
         }
 

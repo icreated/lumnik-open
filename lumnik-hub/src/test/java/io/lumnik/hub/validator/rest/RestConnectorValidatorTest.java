@@ -3,7 +3,9 @@ package io.lumnik.hub.validator.rest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
 import io.lumnik.hub.connector.rest.discovery.OpenApiImporter;
+import io.lumnik.hub.connector.rest.pagination.RelayPaginationStrategy;
 import io.lumnik.hub.validator.ConfigDef;
 import io.lumnik.hub.validator.ConfigDef.FieldSpec;
 import io.lumnik.hub.validator.ConnectorValidationService;
@@ -13,6 +15,8 @@ import io.lumnik.hub.validator.ValidationResult;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
@@ -68,6 +72,62 @@ class RestConnectorValidatorTest {
         assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.mapping")
             && String.join(" ", e.recommendations()).contains("endpoints[].mapping")), () -> "refused by name, got: " + r.errors());
         assertEquals(List.of(), ValidationWarnings.unknownKeyPaths(r), "refused once, not also warned as unknown");
+    }
+
+    /** An endpoint reading {@code path} under the pagination {@code pagination} (raw JSON), the rest as {@link #EP_TAIL}. */
+    private ValidationResult validatePathUnderPagination(String path, String pagination) throws Exception {
+        return service.validate(mapper.readTree(REST_HEAD.formatted(
+            "{\"id\":\"items\",\"method\":\"GET\",\"path\":\"" + path + "\","
+            + "\"pagination\":" + pagination + ","
+            + "\"target\":{\"kind\":\"hybrid\",\"table\":\"ext.items\",\"unique_key\":\"$.id\"}}")));
+    }
+
+    /**
+     * #1789: a parameter written in the path and again by the pagination reaches the API twice, and the API
+     * keeps one of them in silence. Refused at the path, where the integrator can drop it.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "/items?size=500|{\"kind\":\"fastapi\"}|size",
+        "/items?page=3|{\"kind\":\"page\",\"page_param\":\"page\",\"response_path\":\"$.items\"}|page",
+        "/items?limit=500|{\"kind\":\"offset\",\"offset_param\":\"offset\",\"limit_param\":\"limit\",\"response_path\":\"$.items\"}|limit",
+        "/items?status=open&after=x|{\"kind\":\"cursor\",\"cursor_param\":\"after\",\"cursor_path\":\"$.next\",\"response_path\":\"$.items\"}|after"})
+    void a_path_query_naming_the_paginations_own_parameter_is_refused(String row) throws Exception {
+        String[] part = row.split("\\|");
+        ValidationResult r = validatePathUnderPagination(part[0], part[1]);
+
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.endpoints[0].path")
+                && e.message().contains("`" + part[2] + "`") && e.message().contains("pagination")),
+            () -> "expected a refusal at the path naming " + part[2] + ", got: " + r.errors());
+    }
+
+    /** The size knob is named only where there is one: {@code size} on page, {@code limit} on offset. */
+    @Test void the_advice_names_the_knob_the_strategy_has() throws Exception {
+        String page = String.join(" ", validatePathUnderPagination("/items?size=5",
+            "{\"kind\":\"fastapi\"}").errors().get(0).recommendations());
+        String offset = String.join(" ", validatePathUnderPagination("/items?limit=5",
+            "{\"kind\":\"offset\",\"offset_param\":\"offset\",\"limit_param\":\"limit\",\"response_path\":\"$.items\"}")
+            .errors().get(0).recommendations());
+        String pageNumber = String.join(" ", validatePathUnderPagination("/items?page=3",
+            "{\"kind\":\"fastapi\"}").errors().get(0).recommendations());
+
+        assertTrue(page.contains("pagination.size"), page);
+        assertTrue(offset.contains("pagination.limit"), offset);
+        assertFalse(pageNumber.contains("pagination."), pageNumber);
+    }
+
+    /** A path whose query is not valid percent-encoding is the integrator's to read, not a crash of the validator. */
+    @Test void a_malformed_percent_encoding_in_the_path_does_not_crash_the_validator() throws Exception {
+        ValidationResult r = validatePathUnderPagination("/items?%zz=1", "{\"kind\":\"fastapi\"}");
+
+        assertTrue(r.isValid(), () -> "got: " + r.errors());
+    }
+
+    @Test void a_path_query_of_its_own_stays_valid_beside_the_pagination() throws Exception {
+        ValidationResult r = validatePathUnderPagination("/items?status=open",
+            "{\"kind\":\"fastapi\"}");
+
+        assertTrue(r.isValid(), () -> "a parameter the pagination does not own is the integrator's, got: " + r.errors());
     }
 
     private static final String GRAPHQL_EP =
@@ -262,6 +322,42 @@ class RestConnectorValidatorTest {
 
         assertEquals(List.of("spec.endpoints[0].target.promote[2].transform"),
             r.errors().stream().map(ValidationError::path).toList(), () -> "refused by path: " + r.errors());
+    }
+
+    /**
+     * #1781: the hybrid table is created with these columns before the promoted ones, so each of them named by a promote
+     * entry died at the first run on "column specified more than once". Refused at validate, by the entry.
+     */
+    @Test void promoteNamedAsAHybridTableColumn_isRefusedAtValidate() throws Exception {
+        // The writer's own set: HybridJsonbReservedColumnsTest pins it to the CREATE TABLE, so every column is covered.
+        for (String reserved : new TreeSet<>(HybridJsonbSpec.RESERVED_COLUMNS)) {
+            ValidationResult r = validateEndpointMapping(
+                "[{\"name\":\"" + reserved + "\",\"path\":\"$.x\",\"type\":\"text\"}]", null);
+
+            assertEquals(List.of("spec.endpoints[0].target.promote[0].name"),
+                r.errors().stream().map(ValidationError::path).toList(), () -> reserved + " refused: " + r.errors());
+            assertTrue(r.errors().getFirst().message().contains("hub system column"), r.errors()::toString);
+        }
+    }
+
+    /** #1781: two entries of one name made the CREATE TABLE die at the first run. */
+    @Test void promoteNamedTwice_isRefusedAtValidate_bySecondEntry() throws Exception {
+        ValidationResult r = validateEndpointMapping("[{\"name\":\"amount\",\"path\":\"$.a\",\"type\":\"text\"},"
+            + "{\"name\":\"amount\",\"path\":\"$.b\",\"type\":\"text\"}]", null);
+
+        assertEquals(List.of("spec.endpoints[0].target.promote[1].name"),
+            r.errors().stream().map(ValidationError::path).toList(), () -> "refused: " + r.errors());
+        assertTrue(r.errors().getFirst().message().contains("promoted twice"), r.errors()::toString);
+    }
+
+    /** #1781: a path JsonPath cannot compile threw InvalidPathException from the first write. */
+    @Test void promoteWithAPathThatIsNotAJsonPath_isRefusedAtValidate() throws Exception {
+        ValidationResult r = validateEndpointMapping(
+            "[{\"name\":\"amount\",\"path\":\"$.a..\",\"type\":\"text\"}]", null);
+
+        assertEquals(List.of("spec.endpoints[0].target.promote[0].path"),
+            r.errors().stream().map(ValidationError::path).toList(), () -> "refused: " + r.errors());
+        assertTrue(r.errors().getFirst().message().contains("not a JSONPath"), r.errors()::toString);
     }
 
     /** #1617: a promote entry without a path is a column a mapping fills — without a mapping, it would stay empty. */
@@ -626,6 +722,15 @@ class RestConnectorValidatorTest {
         assertEquals(List.of(), undeclared, "descriptor keys the validator does not declare");
     }
 
+    /** #1801: the path the Relay strategy falls back to is published as the field's default, not only said in its doc. */
+    @Test void graphqlPathDeclaresTheDefaultTheRuntimeUses() {
+        Object declared = new RestConnectorValidator().configDef().fields().stream()
+            .filter(f -> f.name().equals("graphql_path")).findFirst().orElseThrow().defaultValue();
+
+        assertEquals("/graphql", declared);
+        assertEquals(RelayPaginationStrategy.DEFAULT_GRAPHQL_PATH, declared);
+    }
+
     /** Same family as headers: the declaration owns the shape, the cross-field rule the value. */
     @Test void rateLimitThatIsNotAString_isRefusedExactlyOnce() throws Exception {
         ValidationResult r = service.validate(load("rest-rate-limit-not-a-string.yaml"));
@@ -658,14 +763,15 @@ class RestConnectorValidatorTest {
     @Test void missingTokenEnv_whenBearer_isError() throws Exception {
         ValidationResult r = service.validate(load("rest-bearer-no-token.yaml"));
         assertFalse(r.isValid());
-        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.auth.token_env")));
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.auth") && e.message().contains("token_env")),
+            () -> "expected the either-or refusal on the auth block, got: " + r.errors());
     }
 
     @Test void bearer_explicitNullTokenEnv_isError() throws Exception {
         // token_env: null — NullNode.asText() is "null"; bearer must still require a usable token.
         ValidationResult r = service.validate(load("rest-bearer-null-token.yaml"));
         assertTrue(r.errors().stream().anyMatch(e ->
-            e.path().equals("spec.auth.token_env") && e.message().contains("bearer")),
+            e.path().equals("spec.auth") && e.message().contains("token_env") && e.message().contains("bearer")),
             () -> "expected bearer null token_env rejected, got: " + r.errors());
     }
 
@@ -716,6 +822,27 @@ class RestConnectorValidatorTest {
         assertEquals(List.of("spec.auth.client_auth", "spec.auth.scope"), r.warnings().stream()
                 .map(ValidationError::path).filter(p -> p.startsWith("spec.auth.")).sorted().toList(),
             () -> "each oauth2 key named: " + r.warnings());
+    }
+
+    /** `connectors/index.md` quotes this refusal in its terminal capture: the words are a contract. */
+    @Test void aBearerWithNoToken_isRefusedInTheWordsTheDocsQuote() throws Exception {
+        ValidationResult r = withAuth("{\"kind\":\"bearer\"}");
+
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.auth")
+            && e.message().equals("at least one of token_env, token_value is required when kind is bearer")
+            && e.recommendations().equals(List.of("Use `lm secret set <NAME> ...` then reference via token_env: <NAME>"))),
+            () -> r.errors().toString());
+    }
+
+    /** Every one of the five, not the two the test above happens to carry; and none of them is checked where it is not read. */
+    @ParameterizedTest(name = "{0}")
+    @ValueSource(strings = {"token_url", "client_id", "client_secret_env", "scope", "client_auth"})
+    void eachOauth2Key_underAnotherKind_isNamedAsIgnoredAndNotChecked(String key) throws Exception {
+        ValidationResult r = withAuth("{\"kind\":\"bearer\",\"token_env\":\"T\",\"" + key + "\":\"jwt\"}");
+
+        assertTrue(r.isValid(), () -> "a warning, not a refusal: " + r.errors());
+        assertEquals(List.of("spec.auth." + key), r.warnings().stream().map(ValidationError::path)
+            .filter(p -> p.startsWith("spec.auth.")).toList(), () -> r.warnings().toString());
     }
 
     private ValidationResult withAuth(String auth) throws Exception {
@@ -988,6 +1115,31 @@ class RestConnectorValidatorTest {
     @Test void preset_springPage_validates() throws Exception {
         ValidationResult r = service.validate(load("rest-preset-spring-page.yaml"));
         assertTrue(r.isValid(), () -> "expected spring-page preset valid, got: " + r.errors());
+    }
+
+    /** #1754: limit=offset,count in one parameter — the same name twice is the declaration, not a mistake. */
+    @Test void preset_prestashop_validates_clean() throws Exception {
+        ValidationResult r = service.validate(load("rest-preset-prestashop.yaml"));
+        assertTrue(r.isValid(), () -> "expected prestashop preset valid, got: " + r.errors());
+        assertEquals(List.of(), r.warnings(), () -> "no key of the preset is unknown, got: " + r.warnings());
+    }
+
+    @Test void preset_prestashop_without_its_resource_is_refused() throws Exception {
+        ValidationResult r = service.validate(load("rest-preset-prestashop-no-resource.yaml"));
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().endsWith(".resource") && e.message().equals("prestashop requires 'resource'")),
+            () -> "expected missing-resource error, got: " + r.errors());
+    }
+
+    /** #1755: an endpoint answering XML says so; nothing else is read for it. */
+    @Test void response_format_xml_validates_clean() throws Exception {
+        ValidationResult r = service.validate(load("rest-response-format-xml.yaml"));
+        assertTrue(r.isValid(), () -> "expected response_format: xml valid, got: " + r.errors());
+        assertEquals(List.of(), r.warnings(), () -> "response_format is a known key, got: " + r.warnings());
+    }
+
+    @Test void response_format_other_than_json_or_xml_is_refused() throws Exception {
+        ValidationResult r = service.validate(load("rest-response-format-unknown.yaml"));
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().endsWith(".response_format")), () -> "expected a response_format refusal, got: " + r.errors());
     }
 
     @Test void preset_hateoas_withoutItems_isError() throws Exception {

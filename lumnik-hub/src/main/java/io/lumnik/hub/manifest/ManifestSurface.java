@@ -49,6 +49,34 @@ public final class ManifestSurface {
         return MAPPER.readTree(yaml);
     }
 
+    /**
+     * {@link #readTree(String)} for a door: any failure — SnakeYAML and Jackson raise a mix of
+     * checked and unchecked ones for a null or malformed body — becomes the one refusal every kind
+     * speaks, {@code invalid kind:<kind> manifest: …}. An empty or blank-only body does not throw
+     * here; the parser's own {@code kind must be} check refuses it.
+     */
+    public JsonNode readTree(String yaml, String kind) {
+        try {
+            return readTree(yaml);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("invalid kind:" + kind + " manifest: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * The keys of {@code yaml} this surface does not honor — empty when it does not parse at all
+     * (that is the parser's error to raise, not this check's).
+     */
+    public List<String> unknownKeys(String yaml) {
+        JsonNode root;
+        try {
+            root = readTree(yaml);
+        } catch (Exception e) {
+            return List.of();
+        }
+        return unknownKeys(root);
+    }
+
     public List<String> unknownKeys(JsonNode root) {
         return ManifestKeys.unknownKeys(root, allowedByPath);
     }

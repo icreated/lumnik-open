@@ -2,6 +2,7 @@ package io.lumnik.hub.api.secret;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.secret.PgcryptoSecretResolver;
 import io.lumnik.hub.secret.SecretEvents;
@@ -78,8 +79,8 @@ public class SecretResource {
     @RequiresPermission("lm_admin")
     public Response create(SecretCreateRequest req) {
         long tid = RequireTenant.current();
-        if (req == null || req.name() == null || req.name().isBlank()
-            || req.value() == null || req.value().isBlank()) {
+        if (req == null || Text.blank(req.name())
+            || Text.blank(req.value())) {
             return ApiErrors.badRequest("name and value required");
         }
 

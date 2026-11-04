@@ -1,5 +1,6 @@
 package io.lumnik.hub.entity.resolution;
 
+import io.lumnik.common.text.Text;
 import io.quarkus.runtime.Startup;
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -40,7 +41,7 @@ public class FingerprintHmacKey {
 
   @PostConstruct
   void init() {
-    if (secret == null || secret.isBlank()) {
+    if (Text.blank(secret)) {
       throw new IllegalStateException(
           "lumnik.entity.resolution.hmac.secret is not set. Generate one with "
           + "`openssl rand -base64 32` and export LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET before "

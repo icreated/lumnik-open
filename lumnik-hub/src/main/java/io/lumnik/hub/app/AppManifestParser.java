@@ -1,7 +1,7 @@
 package io.lumnik.hub.app;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.text.Text;
 import io.lumnik.hub.manifest.ManifestKeys;
 import io.lumnik.hub.manifest.ManifestSurface;
 import io.lumnik.hub.manifest.ModuleManifest;
@@ -62,13 +62,7 @@ public class AppManifestParser {
      * {@link #parse}'s error to raise). Reporting only; the apply door is what refuses.
      */
     public List<String> unknownKeys(String yaml) {
-        JsonNode root;
-        try {
-            root = SURFACE.readTree(yaml);
-        } catch (Exception e) {
-            return List.of();
-        }
-        return unknownKeys(root);
+        return SURFACE.unknownKeys(yaml);
     }
 
     public List<String> unknownKeys(JsonNode root) {
@@ -88,11 +82,7 @@ public class AppManifestParser {
      * and reuse the node for both parse() and unknownKeys().
      */
     JsonNode readTree(String yaml) {
-        try {
-            return SURFACE.readTree(yaml);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("invalid kind:App manifest: " + e.getMessage(), e);
-        }
+        return SURFACE.readTree(yaml, "App");
     }
 
     public AppManifest parse(String yaml) {
@@ -125,18 +115,11 @@ public class AppManifestParser {
                     + WcagContrast.AA_NORMAL_TEXT + ":1, this is "
                     + String.format("%.2f", contrast) + ":1");
 
-        // scope is normalized at the threshold: accidental whitespace must not leak into
-        // authorization (a bound user would get a lying 403) or into the registry the PWA reads.
-        String tag = scope.strip();
-
-        // …and the normalized tag still has to be a NAME a scope can have. It becomes the
-        // case-sensitive Keycloak role `scope:<tag>`, so `CRM` declares an app nobody can ever be
-        // granted: visible to unscoped users, permanently invisible to every bound one — and with
-        // `default: true`, a bare /app/ landing on it. ScopesValidator (Connector) and
-        // EntityManifestParser ask the same question of the same rule; kind:App has a stronger
-        // reason than either, because it alone carries the default flag.
-        ScopeGrants.nameProblem(tag)
-            .ifPresent(problem -> { throw new IllegalArgumentException("spec.scope: " + problem); });
+        // The tag has to be a NAME a scope can have: `CRM` would declare an app nobody can ever be
+        // granted — visible to unscoped users, permanently invisible to every bound one, and with
+        // `default: true`, a bare /app/ landing on it. kind:App has a stronger reason than the
+        // other kinds, because it alone carries the default flag.
+        String tag = ManifestKeys.scopeTag(scope);
 
         return new AppManifest(name, tag, title, icon, accent,
             hexOrDefault(theme, "backgroundColor", DEFAULT_BACKGROUND),
@@ -169,7 +152,7 @@ public class AppManifestParser {
 
     private static String hexOrDefault(JsonNode theme, String field, String fallback) {
         String raw = ManifestKeys.text(theme, field);
-        if (raw == null || raw.isBlank()) return fallback;
+        if (Text.blank(raw)) return fallback;
         String hex = raw.strip();
         if (!HEX_COLOR.matcher(hex).matches())
             throw new IllegalArgumentException("spec.theme." + field
