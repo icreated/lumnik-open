@@ -54,8 +54,8 @@ Assumes a deployed hub and an authenticated `lm` — see [Quickstart](../quickst
 3. `lm apply -f manifest.yaml` — register or update the connector (safe to re-run).
 4. `lm connector run <name>` — run it now. Or schedule it:
     - `spec.schedule: "0 6 * * *"` — cron, evaluated in UTC (here: daily at 06:00 UTC).
-    - `spec.window: "22:00-07:00"` — scheduled runs start only inside this UTC window; the end
-      is exclusive, so `07:00` keeps the `06:00` slot inside.
+    - `spec.window: "22:00-07:00"` — scheduled runs start only inside this UTC window. The end
+      is exclusive: `07:00` keeps the `06:00` slot inside.
 
     What the three commands print, on a small orders export:
 
@@ -82,8 +82,8 @@ Assumes a deployed hub and an authenticated `lm` — see [Quickstart](../quickst
 
     Ten rows read, eight written, two set aside in the dead-letter queue with their reason.
 
-    `lm connector run` prints one run id. A connector with several endpoints starts one run
-    per endpoint: `lm run list --connector <name>` shows them all.
+    A connector with several endpoints starts one run per endpoint. `lm connector run` prints
+    one `run scheduled:` line for each, and `lm run list --connector <name>` shows them all.
 5. Watch it in the TUI ([CLI & TUI](../cli/lm-reference.md)): `:sources` (connectors),
    `:runs` (history), `:dlq` (rejected rows).
 
@@ -113,10 +113,15 @@ A change in the source appears at the next run that reads it.
 
 ### What a connector type asks for
 
-`lm describe connector-type <kind>` lists every key with its meaning, and under a key the rules `lm validate`
-will apply to it: `required when …` (a key another key's value makes mandatory), `read only when …` (given under
-another value, it is ignored and `validate` says so), and the hint a refusal teaches. At the end of a block come
-`at least one of …` and the keys that are `refused when given`. Excerpt, from `lm describe connector-type csv-file`:
+`lm describe connector-type <kind>` lists every key with its meaning. Under a key come the rules
+`lm validate` applies to it:
+
+- `required when …` — another key's value makes this one mandatory.
+- `read only when …` — under any other value, the key is ignored, and `lm validate` says so.
+- `→ …` — the hint a refusal gives.
+
+At the end of a block come `at least one of …` and the keys that are `refused when given`.
+Excerpt, from `lm describe connector-type csv-file`:
 
 ```
 $ lm describe connector-type csv-file

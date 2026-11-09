@@ -6,13 +6,12 @@ that owns the full story.
 
 ## Ingest — sources into the hub
 
-**Hub** — the lumnik application itself: the service on `:8080` that runs the connectors,
-serves the API and the PWA, and owns the multi-tenant PostgreSQL its ingested data lands in.
-Hub and database are two components, not one — the stack starts them side by side. Sources
-are never written to. [Deploy it](deploy.md).
+**Hub** — the lumnik application itself, on `:8080`. It runs the connectors and serves the API
+and the PWA. The ingested data lands in its PostgreSQL database, which the stack starts beside it.
+Sources are never written to. [Deploy it](deploy.md).
 
-**Connector** — a declared ingestion unit: CSV, JDBC, or REST — GraphQL and SOAP are
-request shapes on the same REST engine — plus Kafka for inbound events.
+**Connector** — a declared ingestion unit: CSV, JDBC or REST, plus Kafka (Pro) for inbound
+events. GraphQL and SOAP are REST endpoints of another shape.
 [Overview](connectors/index.md).
 
 **Manifest / `kind:`** — the YAML you apply. Eight kinds in three families: `Connector` and
@@ -21,43 +20,45 @@ request shapes on the same REST engine — plus Kafka for inbound events.
 own command: `lm apply -f` for a connector, `lm <kind> apply -f` for the others (`lm entity`,
 `view`, `app`, `process`, `workflow`, `export`, `search`). [How lumnik works](how-it-works.md).
 
-**Endpoint** — one queryable surface inside a connector (a table, a file, a REST
-resource). A run fans out over the connector's enabled endpoints, and the scheduler,
-cursor and purge all work per endpoint. [CLI](cli/lm-reference.md).
+**Endpoint** — one source inside a connector: a table, a file, a REST resource. A connector
+run reads each enabled endpoint. `lm endpoint disable`, `reset-cursor` and `purge` act on one
+endpoint alone. [CLI](cli/lm-reference.md).
 
-**Run** — one execution of **one endpoint** of a connector: `lm connector run` over a
-two-table source writes two run rows, and each names the endpoint it read. Each run keeps
-its arithmetic in a ledger: records in, records out, records skipped.
+**Run** — one execution of **one endpoint** of a connector. `lm connector run` over a
+two-table source shows two lines in `lm run list`, each naming its endpoint. Each run counts
+its records: in, out, skipped.
 [`lm run list`](cli/lm-reference.md).
 
-**IN = OUT + SKIPPED** — `records in = records out + records skipped`, on every
-run, always. A row is never silently lost; it arrives, is skipped with a counted
-reason, or lands in the DLQ (a declared filter is a counted skip, not a DLQ entry).
+**IN = OUT + SKIPPED** — on every run, always. A row is never silently lost: it is written,
+or skipped and counted. `DEAD-LETTERS` counts the skipped rows set aside in the DLQ with their
+reason. A row a declared filter drops is skipped, with no DLQ entry.
 [Seeing what was ingested](transparency/ingestion-honesty.md).
 
-**DLQ (dead-letter queue)** — where a quarantined row waits, carrying its reason and the
-offending payload, until you close it: `discard`, or `replayed` naming the run that carried the
-row again. The hub never re-reads a dead letter. [`lm dlq`](cli/lm-reference.md).
+**DLQ (dead-letter queue)** — where a set-aside row waits, with its reason and its payload,
+until you close it: `lm dlq discard`, or `lm dlq replayed --new-run-id` naming the run that
+carried the row again. The hub never retries a dead letter on its own.
+[`lm dlq`](cli/lm-reference.md).
 
-**Raw table (`t_*`)** — the dynamic table a `csv-file`, `jdbc-generic` or `kafka`
-connector creates in schema `connector`, one per endpoint. The rest of the system builds on it.
-A `rest-generic` connector (GraphQL and SOAP too) names its table in the manifest, without
-`t_`: the WOW's `connector.cust_siebel` is one. A one-shot `lm csv ingest` lands in
-`ext.<name>`.
+**Raw table (`t_*`)** — the table a `csv-file`, `jdbc-generic` or `kafka` connector creates
+in schema `connector`, one per endpoint. Everything else builds on it.
 
-**Transformer** — a repair applied at ingestion — broken accents, legacy date formats —
-declared in the manifest. `csv-file` connectors only. [Transformers](connectors/transformers.md).
+- A `rest-generic` connector (GraphQL and SOAP too) writes to the table each endpoint names,
+  usually `ext.<name>`. The WOW's `connector.cust_siebel` is one.
+- A one-shot `lm csv ingest` lands in `ext.<name>`.
 
-**Hook** — a Kotlin script (`.kts`) for the cases transformers cannot express. `csv-file`
-connectors only.
-[Kotlin hooks](connectors/kotlin-hooks.md).
+**Transformer** — a repair applied at ingestion: broken accents, legacy date formats. You
+declare it in a `csv-file` connector, or on a REST, GraphQL or SOAP endpoint over its promoted
+columns. [Transformers](connectors/transformers.md).
 
-**Watermark** — the incremental mode of the JDBC connector: a declared column whose
-persisted high-water mark lets the next run fetch only what changed.
+**Hook** — a Kotlin script (`.kts`) for the cases transformers cannot express. Same places as
+transformers. [Kotlin hooks](connectors/kotlin-hooks.md).
+
+**Watermark** — `mode: watermark`, the incremental mode of JDBC and REST. The connector remembers
+the last value of a field that moves on every change. The next run reads only what came after it.
 [JDBC](connectors/jdbc.md).
 
-**File source / transport** — where a CSV physically lives: `local`, `s3` or `sftp`.
-Orthogonal to connector types. [CSV & files](connectors/csv.md).
+**File source / transport** — where a CSV physically lives: `local`, `s3` or `sftp`. A
+`csv-file` connector names it in `spec.transport`. [CSV & files](connectors/csv.md).
 
 ## Fuse — many sources, one truth
 
@@ -69,8 +70,8 @@ one value silently winning. [`lm conflicts list`](cli/lm-reference.md).
 
 ## Ask — questions over your data
 
-**Edition note** — the Open edition has no chat: `lm ask` and `lm chat` find no door on its hub,
-and no chunks are stored.
+**Edition note** — everything in this section is lumnik Pro. On lumnik Open, `lm ask` and a
+question in `lm chat` answer `this hub's build has no Ask`.
 [Which edition am I on?](editions.md#which-edition-am-i-running)
 
 **Analytic mode** — the chat translates your question to SQL and runs it read-only
@@ -80,36 +81,30 @@ the PWA chat. [When Ask refuses](transparency/ask-honesty.md).
 **Semantic mode** — retrieval-only chat: it cites ingested chunks and never generates
 SQL. [HTTP API](rag/http-api.md).
 
-**Chunk** — the retrieval unit: a slice of ingested data embedded into the vector
-store, scoped, and citable as a source. [Models & providers](rag/models.md).
+**Chunk** — the retrieval unit: a slice of ingested data, indexed for the chat in one scope,
+and cited as a source. [Models & providers](rag/models.md).
 
-**Guard** — one of five deterministic checks standing between your question and the
-answer. Four refuse — with a what-to-do-next — rather than guess; the fifth reframes
-an empty result instead of letting it become a confident *"there are none"*.
+**Guard** — a check between your question and the answer. A guard refuses, and says what to do
+next, rather than guess. An empty result is never phrased as a confident *"there are none"*. A
+refusal costs you a retry; a confident wrong answer costs a business decision.
 [When Ask refuses](transparency/ask-honesty.md).
-
-**Asymmetry of harm** — the principle behind the guards: a refusal costs you a retry;
-a confident wrong answer — especially a confident *"there are none"* — costs you a
-business decision. [Ask honesty](transparency/ask-honesty.md).
 
 ## Act — the app ladder
 
-**View (`kind: View`)** — a saved, server-side description of what one scope sees: a
-table, its columns, filters. The PWA and `lm` discover views from the hub — writes are
-curated, reads are scope-bound. [Views](apps/views.md).
+**View (`kind: View`)** — a saved list for one scope: a table, its columns, its filters. It is
+stored in the hub: an integrator applies it, and the users of that scope read it in the PWA or
+with `lm view`. [Views](apps/views.md).
 
-**App (`kind: App`)** — an application's own identity, declared instead of compiled: its
-title, the scope it reads through, one identifier from the curated icon set, and its accent/background
-theme. Applied with `lm app apply` and discovered by the PWA at login. At most one app carries the
-default flag — the one a bare `/app/` opens; once set, it can only be moved to another app.
-[The PWA](apps/pwa.md).
+**App (`kind: App`)** — a business app's identity, declared in a manifest: its title, the scope
+it reads through, an icon from the curated set, and its colours. Applied with `lm app apply`;
+the PWA finds it at login. At most one app is the default, the one a bare `/app/` opens. Once
+set, the default can only move to another app. [The PWA](apps/pwa.md).
 
-**Process (`kind: Process`)** — a declarative reaction: when data matching a
-condition arrives, notify. Refusable by design, like everything on the ladder.
-[Processes](apps/processes.md).
+**Process (`kind: Process`)** — a declared reaction: when a row matching a condition lands or
+changes, it raises a `decision.*` event. [Processes](apps/processes.md).
 
 **Workflow (`kind: Workflow`)** — a declared document lifecycle over a status column:
-states, aliases for dirty legacy spellings, transitions. The chat answers lifecycle
+states, aliases for dirty legacy spellings, transitions. The chat (Pro) answers lifecycle
 questions from the declared graph instead of inventing one. [Workflows](apps/workflows.md).
 
 **Alias** — a dirty-data spelling (`en cours`, `encours`) declared to resolve to one
@@ -141,20 +136,19 @@ runs, DLQ, ask, views, workflows — has its counterpart there.
 manages scopes. Role `lm_integrator`; business users carry `lm_user`.
 [Roles & permissions](security/role-management.md).
 
-**TLS proxy** — the optional Caddy overlay putting hub, PWA and Keycloak behind one
-https origin — one issuer for every device. [Deploy](deploy.md).
+**TLS proxy** — the optional Caddy overlay that puts hub, PWA and Keycloak behind one https
+address, so every device signs in at the same address. [Deploy](deploy.md#one-https-origin-the-tls-proxy).
 
 ## Security & tenancy
 
-**Tenant** — one customer space. Isolation lives in the database, not in the URL:
-every query is filtered by the tenant the connection declares.
+**Tenant** — one customer space. A user belongs to one tenant and sees only its rows. The
+database enforces it, on every query. [RLS & database roles](security/rls.md).
+
+**RLS (Row-Level Security)** — the PostgreSQL feature that enforces the tenant boundary.
 [RLS & database roles](security/rls.md).
 
-**RLS (Row-Level Security)** — the PostgreSQL mechanism enforcing that filter on every
-row of every tenant-stamped table. [RLS & database roles](security/rls.md).
-
-**Scope** — an opt-in boundary inside a tenant, carried as Keycloak roles
-(`scope:<tag>`). No scope roles = tenant-wide access; one or more = bound to exactly
-those scopes. Chat, search, views, workflows, and the inbox all enforce it. `lm` prints the
+**Scope** — an opt-in boundary inside a tenant, carried as Keycloak roles (`scope:<tag>`).
+No scope role = tenant-wide access. One or more = bound to exactly those scopes. Chat, search,
+views, entities, workflows, the inbox and the connectors all enforce it. `lm` prints the
 refusal as `Error: access refused (403): scope not granted`.
 [Scopes](rag/scopes.md).

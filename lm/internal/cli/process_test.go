@@ -79,3 +79,53 @@ func TestProcessMutatingCmds_takeExactlyOneName(t *testing.T) {
 		assert.NotContains(t, err.Error(), "accepts 1 arg", verb)
 	}
 }
+
+// The hub answers a Process or Entity apply with plain-text warnings while an index is still being built
+// (#1838). They go to stderr — stdout under -o json is the body a script pipes into jq — and the exit stays 0.
+func TestProcessApply_printsTheHubsWarningsOnStderr(t *testing.T) {
+	const warning = "managed index on connector.t_acme_desk_erp is pending; Entity Process reads may be slower until it is ready"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/processes/apply" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"name":"lyon-customer","table":"connector.v_acmecustomer","emit":"decision.lyon","warnings":["` + warning + `"]}`))
+	}))
+	defer srv.Close()
+	f := filepath.Join(t.TempDir(), "p.yaml")
+	require.NoError(t, os.WriteFile(f, []byte("kind: Process\n"), 0o600))
+
+	out, errOut, err := runLm(t, srv, "process", "apply", "-f", f)
+	require.NoError(t, err)
+	assert.Equal(t, `Applied process "lyon-customer" → table connector.v_acmecustomer, emits decision.lyon`+"\n", out)
+	assert.Equal(t, "warning: "+warning+"\n", errOut)
+
+	jsonOut, jsonErr, err := runLm(t, srv, "process", "apply", "-f", f, "-o", "json")
+	require.NoError(t, err)
+	assert.Contains(t, jsonOut, `"warnings"`)
+	assert.Empty(t, jsonErr, "under -o json the warnings are in the body, not said twice")
+}
+
+func TestEntityApply_printsTheHubsWarningsOnStderr(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/entities/apply" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"name":"AcmeCustomer","view":"connector.\"v_acmecustomer\"","warnings":["managed index on connector.t_x is pending; Entity Process reads may be slower until it is ready"]}`))
+	}))
+	defer srv.Close()
+	f := filepath.Join(t.TempDir(), "e.yaml")
+	require.NoError(t, os.WriteFile(f, []byte("kind: Entity\n"), 0o600))
+
+	out, errOut, err := runLm(t, srv, "entity", "apply", "-f", f)
+	require.NoError(t, err)
+	assert.Contains(t, out, `Applied entity "AcmeCustomer"`)
+	assert.Equal(t, "warning: managed index on connector.t_x is pending; Entity Process reads may be slower until it is ready\n", errOut)
+
+	// -o json keeps the hub's body for a script, warnings included, and says nothing twice
+	jsonOut, jsonErr, err := runLm(t, srv, "entity", "apply", "-f", f, "-o", "json")
+	require.NoError(t, err)
+	assert.Contains(t, jsonOut, `"warnings"`)
+	assert.Empty(t, jsonErr)
+}

@@ -10,6 +10,7 @@ import io.lumnik.hub.connector.rest.Urls;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -26,6 +27,24 @@ public final class PaginationSupport {
     public static List<Map<String, Object>> items(JsonNode json, String responsePath) {
         Object items = JsonPathExtractor.read(json, responsePath);
         return items instanceof List<?> l ? (List<Map<String, Object>>) (List<?>) l : List.of();
+    }
+
+    /**
+     * What is wrong with the first page's rows, or {@code null} when nothing is (#1806): {@code response_path} reads
+     * nothing (a preset applied to an API that spells the field otherwise), or reads something that is not a list.
+     * A list that is empty is a source that is really empty, and passes. Named by its key and JSON type, never by its
+     * value. Blank {@code responsePath} means none is named, so there is nothing to check.
+     */
+    public static String firstPageRefusal(JsonNode json, String responsePath) {
+        if (optional(responsePath) == null) return null;
+        Object rows = JsonPathExtractor.read(json, responsePath);
+        if (rows == null) {
+            return "pagination.response_path reads nothing on the first page — check it against the source's answer"
+                + " (or use the source's preset)";
+        }
+        if (rows instanceof List<?>) return null;
+        String type = jsonType(rows);
+        return "pagination.response_path must read a list, not " + ("aeiou".indexOf(type.charAt(0)) >= 0 ? "an " : "a ") + type;
     }
 
     /**
@@ -55,14 +74,23 @@ public final class PaginationSupport {
         if (optional(totalHeader) == null) return declaredItems(resp.json(), totalPath);
         String text = resp.header(totalHeader).map(String::strip).orElse(null);
         if (Text.blank(text)) return OptionalLong.empty();
-        if (!ROW_COUNT.matcher(text).matches()) {
-            throw new ConnectorException("pagination.total_header must read a row count: a whole number from 0");
+        Matcher m = HEADER_COUNT.matcher(text);
+        if (!m.matches()) {
+            throw new ConnectorException("pagination.total_header must read a row count: a whole number from 0,"
+                + " or the total of a range (items 0-19/57)");
         }
-        return OptionalLong.of(Long.parseLong(text));
+        return OptionalLong.of(Long.parseLong(m.group(1) != null ? m.group(1) : m.group(2)));
     }
 
-    /** A row count: never negative, never an exponent to expand (#1090). */
-    private static final Pattern ROW_COUNT = Pattern.compile("\\d{1,18}");
+    /**
+     * A row count: never negative, never an exponent to expand (#1090). In a header it is the number alone, or the
+     * total of a range, {@code <unit> <first>-<last>/<total>}, the span possibly {@code *} (RFC 9110 § 14.4; the Domino Data
+     * Service sends {@code items 0-19/57}, #1866). A range whose total is {@code *} is unknown, so no count,
+     * and a {@code bytes} range counts bytes, not rows.
+     */
+    private static final Pattern HEADER_COUNT =
+        Pattern.compile("(\\d{1,18})|(?!bytes\\s)\\S+\\s+(?:\\d{1,18}-\\d{1,18}|\\*)/(\\d{1,18})",
+            Pattern.CASE_INSENSITIVE);
 
     /**
      * A pagination flag at {@code path}: {@code true}, {@code false}, or {@code null} when the body does not carry it.

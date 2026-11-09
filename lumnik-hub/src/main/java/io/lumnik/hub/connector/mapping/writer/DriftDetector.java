@@ -46,7 +46,7 @@ public class DriftDetector {
 
   /**
    * The table's physical column types, translated into the DDL vocabulary {@link SchemaInferrer}
-   * emits ({@code BIGINT}, {@code NUMERIC(18,4)}, {@code TEXT}, ...) rather than {@code
+   * emits ({@code BIGINT}, {@code NUMERIC}, {@code TEXT}, ...) rather than {@code
    * information_schema}'s own spelling, so a caller can register or compare it exactly as an
    * inferred schema would be. {@code null} when the table does not exist at all; a (possibly
    * empty) map otherwise.
@@ -98,8 +98,8 @@ public class DriftDetector {
     if (d.equals("date")) return "DATE";
     if (d.equals("boolean")) return "BOOLEAN";
     if (d.contains("json")) return "JSONB";
-    // A widened column is numeric without precision (#1600); a decimal created as such keeps NUMERIC(18,4).
-    if (d.equals("numeric") && !hasPrecision) return SchemaInferrer.WIDENED_NUMERIC;
+    // numeric(18,4) is what a decimal was created as before #1862: named apart so the writer can widen it.
+    if (d.equals("numeric") && hasPrecision) return SchemaInferrer.LEGACY_NUMERIC;
     if (d.contains("numeric") || d.contains("decimal") || d.contains("double") || d.contains("real")) {
       return SchemaInferrer.NUMERIC;
     }

@@ -187,9 +187,8 @@ Which edition you run decides the rows marked *edition* below. [Editions](../edi
 
 ## The audit trail
 
-Rows land in `core.audit_event`, each with the acting user and the tenant, within about two
-seconds of the gesture. A gesture lands once, also when several hub replicas run: the replica that
-copies it into the trail holds it until that copy is committed, and the others pass over it.
+Rows land in `core.audit_event` within about two seconds of the gesture. Each row carries the
+acting user and the tenant. A gesture lands once, also when several hub replicas run.
 
 | `entity_type` | `operation` | `changes` carries | Written by |
 |---|---|---|---|

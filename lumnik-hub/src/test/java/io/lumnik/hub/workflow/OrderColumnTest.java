@@ -34,6 +34,19 @@ class OrderColumnTest {
         assertThat(OrderColumn.problem("connector.v_x", "occurred_at", "text")).isNull();
     }
 
+    /** #1816: a hybrid table has no {@code _ingested_at}; its {@code indexed_at} is when the row last changed. */
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {
+        "ext.t         | indexed_at    | \"ext\".\"t\".indexed_at DESC, \"ext\".\"t\".id DESC                   | _ingested_at",
+        "connector.t_h | indexed_at    | \"connector\".\"t_h\".indexed_at DESC, \"connector\".\"t_h\".id DESC     | _ingested_at",
+        "connector.t_x | _ingested_at  | \"connector\".\"t_x\"._ingested_at DESC, \"connector\".\"t_x\".id DESC | indexed_at"})
+    void versions_tie_break_by_when_the_row_was_written(String table, String writtenAt, String tail, String absent) {
+        String plain = OrderColumn.currentOnTable(null, null, "\"k\"", "\"k\" AS k", table, writtenAt, "");
+        String ordered = OrderColumn.currentOnTable(OrderColumn.INTEGER, "\"n\"", "\"k\"", "\"k\" AS k", table, writtenAt, "");
+        assertThat(plain).endsWith(tail).doesNotContain(absent);
+        assertThat(ordered).endsWith(tail).doesNotContain(absent);
+    }
+
     @Test
     void a_typed_column_orders_as_itself() {
         assertThat(OrderColumn.INTEGER.expression("\"at\"")).isEqualTo("\"at\"");

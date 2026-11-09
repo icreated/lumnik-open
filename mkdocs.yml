@@ -170,6 +170,7 @@ nav:
     - Backup & restore: operations/backup-restore.md
     - Upgrade: operations/upgrade.md
     - Observability: operations/observability.md
+    - Dead letters: operations/dead-letters.md
     - Rate limits: operations/rate-limits.md
     - Sizing & load tests: operations/sizing.md
   - Recipes:

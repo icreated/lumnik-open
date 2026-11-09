@@ -52,7 +52,8 @@ public final class MessageTemplate {
         return sb.toString();
     }
 
-    private static String text(Object value) {
+    /** One value as a placeholder renders it — also a decision's key (#1823). */
+    static String text(Object value) {
         return value instanceof BigDecimal d ? d.stripTrailingZeros().toPlainString() : TemporalText.render(value);
     }
 

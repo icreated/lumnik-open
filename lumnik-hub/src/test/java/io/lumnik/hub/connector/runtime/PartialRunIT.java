@@ -8,6 +8,7 @@ import io.lumnik.hub.connector.api.ItemReader;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
+import io.lumnik.hub.connector.api.types.RunNotes;
 import io.lumnik.hub.connector.api.types.RunBound;
 import io.lumnik.hub.connector.api.types.RunStart;
 import io.lumnik.hub.connector.api.types.RunStatus;
@@ -48,7 +49,9 @@ import static org.awaitility.Awaitility.await;
  * the dead-letter list and OTK Law 1 already say it in full, and a status answering both questions
  * would end up lying to one of them.
  *
- * <p>It has exactly two producers, both CERTAIN, neither inferring anything about the source:
+ * <p>It has exactly two producers of a shortfall, both CERTAIN, neither inferring anything about the source — and one
+ * more, which is not a shortfall: a reader that read everything and says it cannot be sure it read it right (#1885, a
+ * guessed encoding), through the run's notes.
  * <ol>
  *   <li>the reader stopped on a budget of its own while the target said there was more
  *       ({@link ReadResult.EmptyButOpen}), and</li>
@@ -128,6 +131,24 @@ class PartialRunIT {
         assertThat(errorMessage(s.runId()))
             .as("the operator reads WHAT was lost, not merely that something was")
             .contains("will never be read");
+    }
+
+    @Test
+    void a_run_that_read_every_row_but_was_told_to_say_something_is_partial_and_says_it() {
+        // #1885: a reader can read all of its source and still not be sure it read it RIGHT — a guessed encoding is
+        // the case. It says so through the run's notes; the run ends Partial and the row carries the sentence.
+        ProbeType type = new ProbeType(n -> n == 1
+                ? new ReadResult.HasMore<>(ONE_ROW, cursorAt(1))
+                : new ReadResult.EndOfStream<>(List.of()))
+            .noting("dos.csv: encoding guessed as windows-1252 (confidence 36%) — declare parser.encoding");
+        Seeded s = fixtures.seed(type.id(), "partial-run-");
+
+        RunStatus status = TenantContext.callAsSystem(
+            () -> engine.runChunks(s.connector(), s.endpoint(), s.runId(), type));
+
+        assertThat(status).isInstanceOf(RunStatus.Partial.class);
+        assertThat(persistedStatus(s.runId())).isEqualTo("Partial");
+        assertThat(errorMessage(s.runId())).contains("encoding guessed as windows-1252");
     }
 
     @Test
@@ -300,6 +321,7 @@ class PartialRunIT {
         private final IntFunction<ReadResult<Map<String, Object>>> script;
         private String target;
         private List<String> losses = List.of();
+        private String note;
         private RuntimeException measurementFailure;
         private int reads;
 
@@ -308,6 +330,8 @@ class PartialRunIT {
         ProbeType bounded(String target) { this.target = target; return this; }
 
         ProbeType losing(List<String> losses) { this.losses = losses; return this; }
+
+        ProbeType noting(String note) { this.note = note; return this; }
 
         ProbeType failingToMeasure(RuntimeException e) { this.measurementFailure = e; return this; }
 
@@ -325,7 +349,10 @@ class PartialRunIT {
         }
 
         @Override public ItemReader<Map<String, Object>> reader(ConnectorContext ctx) {
-            return (chunkSize, cursor, c) -> script.apply(++reads);
+            return (chunkSize, cursor, c) -> {
+                if (note != null) RunNotes.of(c.scope()).say(note);
+                return script.apply(++reads);
+            };
         }
     }
 }

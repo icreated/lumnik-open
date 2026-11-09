@@ -19,6 +19,8 @@ Flags:
 
 - `--token` skips the context's stored session and its refresh, so a token from elsewhere works even
   when the stored one has expired.
+- A value written on several lines (a memo, say) shows on one line in a table, the break written `\n`.
+  `-o json` and `-o yaml` give it as it is.
 - Five commands use `-o` for an output **file** instead: `lm source rest from-openapi`, `lm view get`,
   `lm view generate`, `lm entity export` and `lm proposal draft`.
 
@@ -48,14 +50,15 @@ First run? The [deploy page](../deploy.md) walks through standing up a hub and p
 
 | Setting | Where | Effect |
 |---|---|---|
-| `LUMNIK_URL` | env var | replaces the current context's server, per run |
+| `LUMNIK_URL` | env var | replaces the server of the context in use (current, or `--context`), per run; `--server` wins over it |
 | `LUMNIK_TOKEN` | env var | the Bearer token, per run — for CI. Sent as is, ahead of a stored `lm login` session, never refreshed or saved; `--token` wins over it |
 | `ca-file: /path/to/root.crt` | `~/.lm/config.yaml`, by hand | trust an internal CA (the TLS proxy's LAN certificate) |
 | `insecure-skip-verify: true` | `~/.lm/config.yaml`, by hand | disable TLS verification; `ca-file` wins when both are set |
 | `tenant:` / `user:` | `~/.lm/config.yaml` | dev-bypass hubs only; a real hub ignores them |
 
-The env vars need an existing current context: create it once with
-`lm config set-context ci --server … && lm config use-context ci`.
+The env vars need an existing context: create it once with
+`lm config set-context ci --server … && lm config use-context ci`. `set-context` also takes
+`--token`, stored in the context as it is.
 
 ## Manifests
 
@@ -181,6 +184,8 @@ lm connector apply -f c.yaml
 | `lm integration test ID [--event T]` | fire a catalog event at the target and report the delivery; `decision.*` events cannot be fired here |
 | `lm integration rm ID` | remove a target — delivery history is kept |
 | `lm notify add --events T --to EMAIL [--template N]` / `list` / `rm ID` | email rules (needs the deploy's SMTP settings — see the self-host guide) |
+| `lm notify deliveries` | the mails the rules asked for, given-up ones first, with the kind of failure (`--limit N`) |
+| `lm notify replay ID` | send one given-up mail again; prints where it stands |
 | `lm outputs list` | what was sent out and whether it arrived, failures first (`--limit N`) |
 | `lm outputs replay ID` | re-send one failed delivery as a new attempt |
 | `lm data tables` / `lm data row HASH` | dynamic tables with your row count (`unknown` when it could not be counted); the raw row behind a citation, a timestamp as its UTC instant |
@@ -215,24 +220,26 @@ b4176d39  orders     884f487d  MalformedSource  1         /tmp/exports/orders.cs
     | `lm inbox` | 50 | 200 |
     | `lm export runs NAME` | 20 | 200 |
     | `lm outputs list` | 200 | 500 |
+    | `lm notify deliveries` | 200 | 500 |
     | `lm conflicts list` | 200 | 1000 |
     | `lm observations list` / `transitions` | 200 | 1000 |
     | `lm entity get NAME` / `lm entity ambiguous NAME` | 100 | 1000 |
 
-    A full page prints `note: result hit the limit of N — there may be more` on **stderr**, so pipes
-    and `-o json` stay clean. Raise `--limit` to see further back. `--connector` filters on the hub,
-    so a quiet connector's old runs are still found.
+    - A `--limit` above the cap is lowered to the cap. `lm entity get` refuses it instead.
+    - A full page prints `note: result hit the limit of N — there may be more` on **stderr**, so
+      pipes and `-o json` stay clean. Raise `--limit` to see further back.
+    - `--connector` filters on the hub, so a quiet connector's old runs are still found.
 
 ## Ask your data
 
 !!! info "lumnik Pro"
     `lm ask`, `lm chat`, `lm rag` and `lm scopes` need the AI. On lumnik Open, or with the AI off,
-    they answer `Error: API error 404 (no details from the server)`.
+    they say so: `this hub's build has no Ask` on Open, `this hub has the AI switched off` with the AI off.
 
 | Command | What it does |
 |---|---|
 | `lm ask [--scope S] [--lang XX] [--previous "question"] "question"` | analytic text-to-SQL over the fused hub: the answer, a `data as of` line, any [disputed rows](../transparency/ask-rules.md#disputed-rows-a-disclosure-not-a-veto), the rows the query returned and **the SQL that ran** ([the guards](../transparency/ask-honesty.md)). `--lang` sets the answer language (default: from `LC_ALL`, `LC_MESSAGES` or `LANG`). Without `--scope`, asks your default scope. `--previous` names the question this one continues: "Et SUP-004 ?" is answered as the full question, shown on an `understood as` line. `-o json\|yaml` for a script |
-| `lm chat` | interactive REPL chat — in-REPL commands: `:corpus NAME` (or `all`), `:scope TAG` (or `default`), `:topK N` (1 to 50), `:clear`, `:help`, `:exit` |
+| `lm chat` | interactive REPL chat — in-REPL commands: `:corpus NAME` (or `all`), `:scope TAG` (or `default`), `:topK N` (default 10; the hub takes 1 to 50), `:clear`, `:help`, `:exit` |
 | `lm scopes` / `lm scope` / `lm scope set TAG` | list scopes (a scope-bound user sees only granted ones); show/set your default (`404 no user record on this hub…`: see [Tenants, users & scopes](../security/identity-admin.md)) |
 | `lm rag search/status/reindex` | semantic search (`--top-k N`, 1 to 50, default 5); corpus status; re-index of the platform corpus (manifests, API, hooks) |
 

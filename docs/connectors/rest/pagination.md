@@ -18,17 +18,19 @@ Declare the preset that matches the API's framework:
 | `spring-hateoas` | Spring Data REST | `body-link` (`$._links.next.href`, `$._embedded.{items}`, total `$.page.totalElements` — needs `items`) |
 | `micronaut` | Micronaut Data `Page` | `page` (`$.content`, 0-indexed, total `$.totalSize`; `$.totalPages` too, which Micronaut 3 sends and 4 does not) |
 | `drf-page` | Django REST `PageNumberPagination` | `body-link` (`$.next`, `$.results`, total `$.count`) |
-| `drf-limit-offset` | Django REST `LimitOffsetPagination` | `offset` (`$.count`, `$.results`) |
+| `drf-limit-offset` | Django REST `LimitOffsetPagination` | `offset` (`$.results`, total `$.count`) |
 | `fastapi` | fastapi-pagination | `page` (`$.items`, `$.pages`, 1-indexed, total `$.total`) |
 | `nestjs` | nestjs-paginate | `body-link` (`$.links.next`, `$.data`, total `$.meta.totalItems`) |
 | `json-api` | JSON:API | `body-link` (`$.links.next`, `$.data`) |
-| `sequelize` | Node/Sequelize | `offset` (`$.count`, `$.rows`) |
+| `sequelize` | Node/Sequelize | `offset` (`$.rows`, total `$.count`) |
 | `stripe` | Stripe-style cursor | `cursor` (`$.has_more`, `$.data`) |
 | `prestashop` | PrestaShop's Webservice | `offset` in one parameter (`limit=0,50`, `$.{resource}` — needs `resource`) |
+| `odata-v2` | SAP Gateway, OData v2 | `body-link` (`$.d.__next`, `$.d.results`, total `$.d.__count`, which is text: `"130"`) |
+| `odata-v4` | OData v4 | `body-link` (`$['@odata.nextLink']`, `$.value`, total `$['@odata.count']`) |
 
 ```yaml
 pagination: { kind: spring-page }                       # 7 lines → 1
-pagination: { kind: spring-page, size: 500 }            # override any expanded field
+pagination: { kind: spring-page, size: 500 }            # add or override a field
 pagination: { kind: spring-hateoas, items: products }   # {items} → $._embedded.products
 pagination: { kind: prestashop, resource: products, limit: 50 }   # ?limit=0,50 then ?limit=50,50… → $.products
 ```
@@ -44,13 +46,28 @@ The second is the shape Spring recommends since Spring Data 3.3
 (`@EnableSpringDataWebSupport(pageSerializationMode = VIA_DTO)`). Read with `spring-page`, it
 still loads every row, but asks for one empty page after the last.
 
-`nestjs` and `json-api` differ by one line: `nestjs` also reads the total its pages carry, `json-api` has none by the spec. Two presets require an override: `spring-hateoas` needs
-`items` for its `$._embedded.{items}` placeholder, and `prestashop` needs `resource`, the list's name
-(`products`, `categories`, `customers`…).
+`nestjs` and `json-api` differ by one line: `nestjs` also reads the total its pages carry.
+`json-api` has none by the spec.
+
+Two presets require an override:
+
+- `spring-hateoas` needs `items`, the name under `$._embedded`.
+- `prestashop` needs `resource`, the list's name (`products`, `categories`, `customers`…).
 
 PrestaShop answers XML unless asked. Either read it as it answers, with `response_format: xml` and
 `response_path: $.products.product` ([An answer in XML](../rest.md#an-answer-in-xml)), or put
 `output_format=JSON` in the endpoint's `path:`. It gives no total, so the read stops on a short page.
+
+An OData service sends the next link and the total only when asked, so the endpoint's `path:` carries
+the query option. `odata-v2` needs `$format=json&$inlinecount=allpages`, `odata-v4` needs `$count=true`.
+Without it the page has no total: the read still follows the next link, but the run has no count to
+check itself against ([the declared total](../rest.md#the-declared-total-a-witness-on-the-count)).
+
+```yaml
+- id: sales-orders
+  path: /sap/opu/odata/sap/API_SALES_ORDER_SRV/A_SalesOrder?$format=json&$inlinecount=allpages
+  pagination: { kind: odata-v2 }
+```
 
 Spring Data REST puts no id in its items: key them on their self link's last segment,
 [a key read from a link](../rest.md#a-key-read-from-a-link).
@@ -91,20 +108,20 @@ pagination:
   response_path: $.items
 ```
 
-- With `has_more_path`, the flag decides, and it must read a boolean: a string there is refused
-  as `pagination.has_more_path must read a boolean, not a string`. A flag saying "more" on a page
-  whose cursor is empty is refused too (`… says more pages, but cursor_path reads no cursor`):
-  the rest of the source would otherwise go unread with the run reported complete.
-- Without it, the cursor decides: an empty or absent cursor ends the read, and so does an empty
-  page, whatever cursor it carries. `lm validate` says which mode the endpoint is in.
+- With `has_more_path`, the flag decides. It must read a boolean: a string there is refused as
+  `pagination.has_more_path must read a boolean, not a string`.
+- A flag that says "more" on a page with no cursor fails the run:
+  `pagination.has_more_path says more pages, but cursor_path reads no cursor`.
+- Without `has_more_path`, the cursor decides: an empty or absent cursor ends the read. So does an
+  empty page, whatever cursor it carries. `lm validate` warns that the cursor decides.
 - A source that sends back the cursor it was just given, while saying there is more, fails the
   run: `Endpoint 'events': the source sent back the cursor it was given while saying more pages —
   the cursor is not reaching it (check cursor_binding, and cursor_param or cursor_var)`. The usual
   cause is a cursor sent where the API does not read it: in the query when it expects a header, or
   under another variable name for a GraphQL `relay` ([Cursor binding](#cursor-binding)).
-- A path reads one value. A slice such as `$.data[-1:].id` is fine — empty on an empty page; a
-  path that reads several values (`$..endCursor` across nested connections) is refused rather
-  than one of them picked.
+- A path reads one value. A slice such as `$.data[-1:].id` is fine: it is empty on an empty page.
+  A path that reads several values (`$..endCursor` across nested connections) is refused, never
+  one of them picked.
 - `total_path` and `total_pages_path` read a number, or its digits sent as text (`"1234"`).
 
 **`page`** — page numbers:

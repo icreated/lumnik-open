@@ -35,15 +35,32 @@ public final class JoinKeys {
      * {@link #normalised}, exactly as before.
      */
     public static String compared(String column, String type, String other) {
+        return compared(column, type, other, "UTC");
+    }
+
+    /**
+     * {@link #compared(String, String, String)} at the day of {@code zone} (#1881): the zone an Entity declares is the
+     * business's, so a time falls on the day it has there. A naive timestamp is read as UTC wherever the day is taken.
+     */
+    public static String compared(String column, String type, String other, String zone) {
         if (!temporal(type) || !temporal(other)) return normalised(column);
         if ("date".equals(type) || "date".equals(other)) {
             return switch (type) {
                 case "date" -> column;
                 case "timestamp" -> column + "::date";
-                default -> "(" + column + " AT TIME ZONE 'UTC')::date";
+                default -> "(" + column + " AT TIME ZONE '" + zone.replace("'", "''") + "')::date";
             };
         }
         return "timestamp".equals(type) ? "(" + column + " AT TIME ZONE 'UTC')" : column;
+    }
+
+    /**
+     * The SQL type {@link #compared} gives a key of this pair — what a value read back from it is bound as: {@code date} or
+     * {@code timestamptz} when both sides are temporal, {@code text} otherwise (the normalised form is text).
+     */
+    public static String comparedType(String type, String other) {
+        if (!temporal(type) || !temporal(other)) return "text";
+        return "date".equals(type) || "date".equals(other) ? "date" : "timestamptz";
     }
 
     private static boolean temporal(String type) {

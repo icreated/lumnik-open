@@ -3,12 +3,15 @@ package io.lumnik.hub.connector.mapping.writer;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.SqlType;
+import net.minidev.json.JSONArray;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -33,6 +36,18 @@ class HybridJsonbPromoteConversionTest {
         assertThat(HybridJsonbWriter.converted("true", SqlType.BOOLEAN)).isEqualTo(true);
         assertThat(HybridJsonbWriter.converted(12, SqlType.TEXT)).isEqualTo("12");
         assertThat(HybridJsonbWriter.converted(12, SqlType.BIGINT)).isEqualTo(12L);
+    }
+
+    /** #1867: the JSON-path library hands a list back as a json-smart array, which writes {@code /} as {@code \/}. */
+    @Test
+    void a_list_promoted_as_text_is_plain_json_without_escaped_slashes() {
+        JSONArray owners = new JSONArray();
+        owners.add("Marc Roche/QUALITE/Acme");
+        owners.add("Inès Faure/QUALITE/Acme");
+        assertThat(HybridJsonbWriter.converted(owners, SqlType.TEXT))
+            .isEqualTo("[\"Marc Roche/QUALITE/Acme\",\"Inès Faure/QUALITE/Acme\"]");
+        assertThat(HybridJsonbWriter.converted(List.of(Map.of("path", "a/b")), SqlType.TEXT))
+            .isEqualTo("[{\"path\":\"a/b\"}]");
     }
 
     @ParameterizedTest(name = "[{index}] {0} as {1}")

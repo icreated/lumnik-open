@@ -77,16 +77,18 @@ enum OrderColumn {
      * ingestion breaks its ties. A version the order cannot place sorts FIRST, so the row picked carries
      * {@code unreadable = true} exactly when its key has one: one sort, and a bad date never makes an older state
      * current. {@code id DESC} is not decoration: one ingest chunk shares one {@code _ingested_at}.
+     * A hybrid table has no {@code _ingested_at}: its {@code indexed_at}, the time the row last changed (#903), stands
+     * in for it (#1816); the caller names the column, from the registry (#1820).
      *
      * <p>{@code DISTINCT ON} and {@code ORDER BY} name the table's columns qualified: there, a bare name is an output
      * alias first, and a source column may well be called {@code x0} or {@code v}, like one of {@code columns}' aliases.
      */
     static String currentOnTable(OrderColumn order, String quotedOrder, String quotedKey, String columns, String table,
-                                 String where) {
+                                 String writtenAt, String where) {
         String t = quoteTable(table);
         String key = t + "." + quotedKey;
         String from = " FROM " + t + where;
-        String ingestion = t + "._ingested_at DESC, " + t + ".id DESC";
+        String ingestion = t + "." + writtenAt + " DESC, " + t + ".id DESC";
         if (order == null)
             return "SELECT DISTINCT ON (" + key + ") " + columns + ", false AS unreadable" + from
                 + " ORDER BY " + key + ", " + ingestion;

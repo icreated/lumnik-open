@@ -43,7 +43,9 @@ class EnvelopeValidatorTest {
         var errs = validate("""
             {"apiVersion":"connectors.lumnik.io/v1","kind":"Connector",
              "metadata":{"connector_type":"r"}}""");
-        assertTrue(errs.stream().anyMatch(e -> e.path().equals("metadata.name")));
+        var err = errs.stream().filter(e -> e.path().equals("metadata.name")).findFirst().orElseThrow();
+        assertEquals("metadata.name is required", err.message());
+        assertEquals(List.of("To take over a one-shot ingest, use the name `lm connector list` shows."), err.recommendations());
     }
 
     @Test

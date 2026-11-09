@@ -7,6 +7,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 
 /** Shared fixtures for event/webhook/kafka ITs: tx-with-rollback-on-throw, admin-DS SQL, webhook seeding. */
@@ -121,6 +122,13 @@ public final class EventItSupport {
         } catch (Exception cleanupFailure) {
             primary.addSuppressed(cleanupFailure);
         }
+    }
+
+    /** A {@code rest-generic} connector row of scope {@code lab}: the registry row a hybrid write leaves names it. */
+    public static void seedRestConnector(AgroalDataSource adminDs, UUID id, long tenant) {
+        execSql(adminDs, "INSERT INTO connector.connector (id, tenant_id, name, type_id, config, enabled, tags, "
+            + "sync_mode, skip_policy) VALUES ('" + id + "', " + tenant + ", 'lims', 'rest-generic', '{}'::jsonb, "
+            + "true, ARRAY['lab'], 'Incremental', '{\"type\":\"SkipUpTo\",\"maxSkips\":100}'::jsonb)");
     }
 
     public static void execSql(AgroalDataSource adminDs, String sql) {

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.connector.api.ItemWriter;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.ScriptVersion;
+import io.lumnik.hub.connector.api.types.SkipReason;
 import io.lumnik.hub.connector.api.types.WriteOutcome;
 import io.lumnik.hub.connector.mapping.MappingEngine;
 import io.lumnik.hub.connector.mapping.MappingState;
@@ -13,6 +14,7 @@ import io.lumnik.hub.connector.mapping.spec.MappingTarget;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbWriter;
 import io.lumnik.hub.connector.mapping.writer.MultiTargetWriter;
+import io.lumnik.hub.sql.PgText;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -43,8 +45,40 @@ public class RestEndpointWriter implements ItemWriter<Map<String, Object>> {
         this.mapper = mapper;
     }
 
+    /**
+     * An item holding a NUL byte anywhere is dead-lettered alone, before the mapping and whether there is one (#1855):
+     * {@code data} keeps the item whole, so no hook can clean it, and the {@code jsonb} column would refuse it and fail
+     * the whole batch.
+     */
     @Override
     public WriteOutcome write(List<Map<String, Object>> items, ConnectorContext ctx) {
+        List<Map<String, Object>> storable = new ArrayList<>(items.size());
+        List<WriteOutcome.SkippedRecord> refused = new ArrayList<>();
+        for (Map<String, Object> item : items) {
+            if (!PgText.holdsNul(item)) {
+                storable.add(item);
+                continue;
+            }
+            String field = item.entrySet().stream().filter(e -> PgText.holdsNul(e.getKey()) || PgText.holdsNul(e.getValue()))
+                .map(e -> PgText.storable(e.getKey())).findFirst().orElse("item");
+            refused.add(new WriteOutcome.SkippedRecord(item, new SkipReason.MappingFailed(field,
+                "the item holds a NUL byte (0x00), which cannot be stored; it is kept whole, so no hook can remove it")));
+        }
+        WriteOutcome written = writeStorable(storable, ctx);
+        if (refused.isEmpty()) return written;
+        List<WriteOutcome.SkippedRecord> skipped = new ArrayList<>(refused);
+        int count = switch (written) {
+            case WriteOutcome.AllWritten a -> a.count();
+            case WriteOutcome.PartialWrite p -> {
+                skipped.addAll(p.skipped());
+                yield p.written();
+            }
+            case WriteOutcome.AllFailed f -> throw new IllegalStateException("the hybrid write cannot fail whole");
+        };
+        return new WriteOutcome.PartialWrite(count, skipped);
+    }
+
+    private WriteOutcome writeStorable(List<Map<String, Object>> items, ConnectorContext ctx) {
         if (items.isEmpty()) return new WriteOutcome.AllWritten(0);
 
         @SuppressWarnings("unchecked")

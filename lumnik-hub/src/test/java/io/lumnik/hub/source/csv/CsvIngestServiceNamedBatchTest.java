@@ -110,6 +110,58 @@ class CsvIngestServiceNamedBatchTest {
             "each file lands in a table named after the REMOTE file: " + result.tableName());
     }
 
+    /**
+     * #1920: the aggregate named the LAST file's table, summed the rows and listed the FIRST file's
+     * columns, as if one load. A batch now says what each file became.
+     */
+    @Test
+    void a_multi_file_ingest_reports_each_file_with_its_own_table_rows_and_columns() throws Exception {
+        Path dir   = Files.createTempDirectory("r1920_");
+        Path alpha = dir.resolve("alpha" + System.nanoTime() + ".csv");
+        Path beta  = dir.resolve("beta" + System.nanoTime() + ".csv");
+        Files.writeString(alpha, "id,email\n1,alice@x\n2,carol@x\n");
+        Files.writeString(beta,  "id,city,zip\n9,paris,75001\n");
+        Files.setLastModifiedTime(alpha, FileTime.from(Instant.parse("2026-07-26T10:00:00Z")));
+        Files.setLastModifiedTime(beta,  FileTime.from(Instant.parse("2026-07-26T10:05:00Z")));
+
+        CsvIngestResult result = TenantContext.callAsSystem(() -> service.execute(remoteForm(dir), 1L));
+
+        assertEquals(2, result.files().size(), "one entry per file");
+        var first = result.files().get(0);
+        var second = result.files().get(1);
+        assertTrue(first.sourceFile().contains("alpha"), first.sourceFile());
+        assertTrue(first.tableName().contains("alpha"), first.tableName());
+        assertEquals(2, first.rowsWritten());
+        assertTrue(first.promoteColumns().stream().anyMatch(c -> c.name().equals("email")));
+        assertTrue(second.tableName().contains("beta"), second.tableName());
+        assertEquals(1, second.rowsWritten());
+        assertTrue(second.promoteColumns().stream().anyMatch(c -> c.name().equals("city")),
+            "the second file's own columns, not the first file's");
+        assertNotEquals(first.tableName(), second.tableName());
+    }
+
+    /** #1918: a remote file is named after its stem, as an upload is — never {@code clients_csv}. */
+    @Test
+    void a_remote_file_lands_in_a_table_named_after_its_stem_without_the_extension() throws Exception {
+        Path dir = Files.createTempDirectory("r1918_");
+        String stem = "stem" + System.nanoTime();
+        Files.writeString(dir.resolve(stem + ".csv"), "id,email\n1,alice@x\n");
+
+        CsvIngestResult result = TenantContext.callAsSystem(() -> service.execute(remoteForm(dir), 1L));
+
+        assertEquals("ext." + stem, result.tableName(), "the stem, not the stem plus _csv");
+    }
+
+    @Test
+    void a_single_file_ingest_reports_no_file_list() throws Exception {
+        Path dir = Files.createTempDirectory("r1920s_");
+        Files.writeString(dir.resolve("solo" + System.nanoTime() + ".csv"), "id,email\n1,alice@x\n");
+
+        CsvIngestResult result = TenantContext.callAsSystem(() -> service.execute(remoteForm(dir), 1L));
+
+        assertTrue(result.files().isEmpty(), "the summary of one file is the top-level one");
+    }
+
     /** A local-transport form with an explicit glob path — the one-shot remote (FileSource) pipeline. */
     private CsvIngestForm remoteForm(Path dir) {
         CsvIngestForm form = new CsvIngestForm();

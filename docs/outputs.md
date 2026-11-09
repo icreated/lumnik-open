@@ -24,14 +24,17 @@ live event stream with `Error: access refused (403): scope not granted`.
 | Road | Carries | Command family |
 |---|---|---|
 | **Webhook** | every subscribed event, signed, retried, journaled, replayable | `lm integration` |
-| **Email** | events matching a rule, one mail per event, best-effort | `lm notify` |
+| **Email** | events matching a rule, one mail per rule and event, retried, journaled, replayable | `lm notify` |
 | **Pull** | the decision pile and the delivery journal, when you come asking | `lm inbox` · `lm outputs` |
 
-**No event is missed because transactions end out of order.** A road takes an event once the
-database transactions older than it have ended. A transaction left open after a write holds back the events of every tenant on the hub,
-without losing them. That includes another application's database on the same PostgreSQL
-server. After two minutes the hub log says so: `… event(s) have waited more than 2 minutes for an older database
-transaction to end`.
+**A transaction left open holds events back.** A road takes an event only once every older
+database transaction has ended.
+
+- One write left open holds back the events of every tenant on the hub. Nothing is lost: they
+  leave when it ends.
+- This includes another application's database on the same PostgreSQL server.
+- After two minutes the hub log says so: `… event(s) have waited more than 2 minutes for an older
+  database transaction to end`. Look for a database session left idle in transaction.
 
 ## Wire a webhook
 
@@ -44,7 +47,8 @@ lm integration test <ID>          # fires a real POST at the target, result inli
 ```
 
 - `--events` takes exact types or a prefix ending in `.*` (default `decision.*`). The
-  [registry below](#the-event-registry) is the vocabulary.
+  [registry below](#the-event-registry) is the vocabulary. `decision.*` reaches `decision.` plus
+  something. A `*` anywhere else, like `decision.cold-room-*`, is refused: it would never match.
 - The signing secret rides **stdin, never argv** — it is stored encrypted and never
   returned by `list`/`describe`.
 - `test` fires a sample event (`org.created`) at the target and prints the result:
@@ -133,8 +137,8 @@ ID    EVENTS      RECIPIENT        TEMPLATE        ENABLED
 ```
 
 One mail per matching event, rendered through a template that can reach into the payload —
-see [Email notifications](email.md). Mocked until the SMTP knobs are set; a failed send is not
-retried — when delivery must be provable, use the webhook.
+see [Email notifications](email.md). Mocked until the SMTP knobs are set. A failed send is tried
+three times, then given up: `lm notify deliveries` shows it and `lm notify replay ID` sends it again.
 
 ## How to…
 
@@ -165,8 +169,8 @@ in the journal like any delivery.
 
 1. **Registered after the event?** Forwarding starts at registration — nothing is
    retroactive. Trigger the event again.
-2. **Watching `data.row.changed` on a REST/GraphQL/SOAP-ingested table?** Those tables emit
-   no events ([named limits](respiration.md#named-limits-in-one-place)).
+2. **Expecting a process to fire on rows that existed before it was applied?** Only later inserts
+   and source changes fire it ([named limits](respiration.md#named-limits-in-one-place)).
 3. **Was anything subscribed at ingest time?** `data.row.changed` is only emitted when a
    subscription exists when the row lands — wire first, then re-run the ingestion.
 4. **Is it the pipe or the event?** `lm integration test <ID>` proves the pipe;
@@ -186,10 +190,12 @@ message cites columns or it declares some ([what a decision carries](apps/workfl
     --8<-- "lumnik-hub/src/main/resources/META-INF/events.yaml"
     ~~~~
 
-Two emission rules worth planning around:
+Three emission rules worth planning around:
 
 - **`data.row.changed`** is emitted only when an integration, rule or process subscribes to it,
-  and only for jdbc, CSV and kafka ingestion ([named limits](respiration.md#named-limits-in-one-place)).
+  and only for jdbc, CSV, kafka and REST ingestion ([named limits](respiration.md#named-limits-in-one-place)).
+- **`notification.mail.given-up`** is emitted once for each [mail given up](email.md#delivery-what-to-expect).
+  A webhook can carry it. A mail rule never receives it: a mail does not tell about mails.
 - **`decision.*` is the business-event layer**: minted by [Processes](apps/processes.md) and
   [Workflows](apps/workflows.md) (dormancy, due dates), treated in the [Inbox](apps/inbox.md) —
   `annotation.decision.acked` closes the loop with who and when.

@@ -315,4 +315,14 @@ class ViewFilterTest {
         }
         assertThat(ViewFilter.isNumeric(null)).isFalse();
     }
+
+    @Test
+    void aDayOnlyIsADateWithNoTime() {
+        assertThat(ViewFilter.isDayOnly("2026-07-01")).isTrue();
+        assertThat(ViewFilter.isDayOnly("  2026-07-01 ")).isTrue();
+        assertThat(ViewFilter.isDayOnly("2026-07-01T10:00:00Z")).isFalse();
+        assertThat(ViewFilter.isDayOnly("2026-07-01 10:00")).isFalse();
+        assertThat(ViewFilter.isDayOnly("2026-02-31")).isFalse();
+        assertThat(ViewFilter.isDayOnly("07/01/2026")).isFalse();
+    }
 }

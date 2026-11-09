@@ -40,6 +40,21 @@ class RowEventGateIT {
         // moot, and a second @Transactional method called on `this` would silently skip the
         // interceptor anyway.
         execSql(adminDs, "DELETE FROM core.notification_rule WHERE recipient LIKE '%@gatetest.local'");
+        execSql(adminDs, "DELETE FROM core.process_manifest WHERE name LIKE 'gate-%'");
+    }
+
+    /** A Process on the view of an Entity (#1833), and the Entity under that name. */
+    private void seedEntityProcess(String entity, String entityYaml, boolean enabled) {
+        execSql(adminDs, "DELETE FROM connector.entity_manifest WHERE name = '" + entity + "'");
+        execSql(adminDs, "INSERT INTO connector.entity_manifest (name, yaml_text) VALUES ('" + entity + "', '"
+            + entityYaml.replace("'", "''") + "')");
+        execSql(adminDs, "INSERT INTO core.process_manifest (tenant_id, name, yaml_text, scope, on_table, emit_type, enabled) "
+            + "VALUES (1, 'gate-" + entity + "', 'x', 'gate', 'connector.v_" + entity + "', 'decision.gate', " + enabled + ")");
+    }
+
+    private static String entityYaml(String name, String extra) {
+        return "kind: Entity\nname: " + name + "\nmatch: [code]\nscopes: [gate]\nsources:\n"
+            + "  - table: t_gate_a\n    map: { code: code }\n  - table: t_gate_b\n    map: { customer: code }\n" + extra;
     }
 
     @Transactional
@@ -121,6 +136,39 @@ class RowEventGateIT {
         seedRule("data.row.changed", true, "erp.fact");
         assertTrue(gate.enabled(1L, "erp.fact"), "rule filter matches the table");
         assertFalse(gate.enabled(1L, "erp.other"), "rule filter excludes other tables (no other subscriber)");
+    }
+
+    @Test
+    void aProcessOnAnEntityEnablesTheTablesTheEntityFusesForItsTenantOnly() {
+        seedEntityProcess("gateent", entityYaml("GateEnt", ""), true);
+        assertTrue(gate.enabled(1L, "connector.t_gate_a"), "a source of the Entity");
+        assertTrue(gate.enabled(1L, "connector.t_gate_b"), "the other source");
+        assertFalse(gate.enabled(1L, "connector.t_gate_other"), "a table the Entity does not fuse");
+        assertFalse(gate.enabled(2L, "connector.t_gate_a"), "another tenant's process is not this one's");
+    }
+
+    @Test
+    void aDisabledProcessOnAnEntityDoesNotEnable() {
+        seedEntityProcess("gateentoff", entityYaml("GateEntOff", ""), false);
+        assertFalse(gate.enabled(1L, "connector.t_gate_a"));
+    }
+
+    /** #1834: a change in a lookup of the Entity re-evaluates the rows it reaches, so the lookup's events are wanted too. */
+    @Test
+    void aProcessOnAnEntityWithJoinsEnablesItsLookupToo() {
+        seedEntityProcess("gateentjoined", entityYaml("GateEntJoined",
+            "joins:\n  - table: t_gate_c\n    from: code\n    to: code\n    map: { label: label }\n"), true);
+        assertTrue(gate.enabled(1L, "connector.t_gate_c"), "the lookup of the Entity");
+        assertTrue(gate.enabled(1L, "connector.t_gate_a"), "a source of the Entity");
+        assertFalse(gate.enabled(2L, "connector.t_gate_c"), "another tenant's process is not this one's");
+    }
+
+    @Test
+    void aProcessOnAnEntityTheConsumerCannotServeDoesNotEnable() {
+        seedEntityProcess("gateentresolved", "kind: Entity\nname: GateEntResolved\nscopes: [gate]\nsources:\n"
+            + "  - table: t_gate_a\n    map: { code: code }\n  - table: t_gate_b\n    map: { customer: code }\n"
+            + "resolution:\n  identity:\n    t_gate_a: code\n    t_gate_b: code\n  cascade:\n    - id: by-code\n      exact: { fields: [code] }\n", true);
+        assertFalse(gate.enabled(1L, "connector.t_gate_a"), "an Entity with resolution: is not evaluated, so no event is staged for it");
     }
 
     @Test

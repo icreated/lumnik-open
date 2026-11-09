@@ -56,7 +56,7 @@ The ERP stays. lumnik reads it, and puts its data to work beside it.
 
 [Quickstart](quickstart/installer.md): install `lm`, log in, load a CSV, see the rows.
 
-<p class="lm-check" markdown="span">**You know it worked when:** `lm connector list` answers. On a fresh hub, with headers only.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** `lm connector list` shows the connector your export registered.</p>
 </div>
 </article>
 <article class="lm-step" markdown>
@@ -119,7 +119,7 @@ flowchart LR
 
 - **Sources:** JDBC, CSV and files, REST, GraphQL, SOAP — plus Kafka in [lumnik Pro](editions.md) — through [declarative](how-it-works.md) connectors.
 - **Tenants:** each tenant sees only its own rows ([RLS](security/rls.md)).
-- **Repair at the door:** [transformers](connectors/transformers.md) fix mojibake and legacy dates.
+- **Repair at the door:** [transformers](connectors/transformers.md) fix broken accents and legacy dates.
 
 [Connector overview](connectors/index.md){ .lm-link }
 </article>
@@ -135,7 +135,7 @@ N legacy sources become one canonical, queryable thing. Disagreements stay visib
 <div class="lm-kicker">Ask</div>
 <h3>Answers that cite — or refuse</h3>
 
-Scoped chat and read-only text-to-SQL over the live hub, protected by query guards (lumnik Pro).
+Ask a scope's data in plain language. The SQL behind the answer runs read-only, and guards refuse to guess (lumnik Pro).
 
 [When Ask refuses](transparency/ask-honesty.md){ .lm-link }
 </article>
@@ -143,7 +143,7 @@ Scoped chat and read-only text-to-SQL over the live hub, protected by query guar
 <div class="lm-kicker">Act</div>
 <h3>Apps, workflows, and the roads out</h3>
 
-Views, processes, workflows, inbox, and the PWA turn the hub into operational surfaces — on a phone, where the work actually happens. And what changed [leaves again](respiration.md): a decision reaches your own tools by [signed webhook](outputs.md) or [email](email.md).
+Views, processes, workflows and the inbox become business apps, on a phone too. What changed [leaves again](respiration.md): a decision reaches your own tools by [signed webhook](outputs.md) or [email](email.md).
 
 [Browse apps](apps/views.md){ .lm-link }
 </article>

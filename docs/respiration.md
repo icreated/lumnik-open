@@ -14,43 +14,48 @@ The chain in one picture:
 
 ```mermaid
 flowchart LR
-  erp[("legacy source")] -->|"your ingestion cron"| row["a new row lands<br/>(mirror table)"]
-  row -->|"same transaction"| ev["an event —<br/>new rows only"]
+  erp[("legacy source")] -->|"your ingestion cron"| row["a row lands<br/>in the hub"]
+  row --> ev["an event"]
   ev -->|"≤ 5 s"| proc["your declared rule<br/>when: statut=EN LITIGE"]
   proc --> dec["decision.litige"]
-  dec --> inbox["Inbox tab<br/>lm inbox"]
+  dec --> inbox["Décisions tab<br/>lm inbox"]
   dec -->|"≤ 5 s, retried"| hook["your webhook →<br/>the tool that pings phones"]
   sweep["dormancy sweep<br/>every 15 min"] -->|"a document that STOPPED moving"| dec2["decision.dormant.*"]
   dec2 --> inbox
   dec2 --> hook
-  inbox -->|"✓ Acknowledge"| ack["acked — an event,<br/>timestamped, with who"]
+  inbox -->|"✓ Traiter · lm inbox ack"| ack["acked — an event,<br/>timestamped, with who"]
 ```
 
-- **Only new rows emit.** A re-ingested, unchanged row emits nothing. A table emits only once
-  a rule, a webhook or a notification subscribes to it.
-- **jdbc, CSV and kafka connectors emit.** Tables ingested over REST, GraphQL or SOAP emit no
-  event: a rule on them never fires.
-- **Every rule emits `decision.<your-name>`** — the prefix is enforced at apply.
+- **A new row emits.** So does a row changed at the source, when its table has a key. A REST
+  table always has one (`unique_key`).
+- **A row read again unchanged emits nothing.**
+- **A table emits only once something listens to it:** a rule, a webhook or an email rule. The rows
+  that landed before stay silent.
+- **jdbc, CSV, kafka and REST connectors emit.** A REST, GraphQL or SOAP endpoint lands in the
+  table its manifest names (usually `ext.*`). A rule names that table.
+- **Every rule emits `decision.<your-name>`.** The apply refuses any other prefix.
 
 | Clock | Value |
 |---|---|
 | rule, webhook and email consumers | every **5 s** |
-| webhook retry sweep | every **30 s**, **3 attempts** in total; journal in `lm outputs list` |
-| dormancy sweep | every **15 min** |
+| webhook and email retry sweeps | every **30 s**, **3 attempts** in total. Journals: `lm outputs list`, `lm notify deliveries` |
+| dormancy and due-date sweeps | every **15 min** |
 | your ingestion | the connector's own `spec.schedule` — the slow clock |
 
 ## Where a human meets it — the channels
 
 | Channel | What it does | Mode |
 |---|---|---|
-| **Inbox tab** (PWA, phone & desktop) | the pile, newest first, badge on open; a treated decision stays visible, dimmed **✓ acknowledged** | **pull** — it waits for you to open it |
-| **`lm inbox`** / TUI inbox page | the same pile for keyboard people (untreated only, by default) | same pull |
-| **Your webhook** (n8n, Make, your own endpoint) | every subscribed event, in seconds, retried, journaled, replayable — the road to a Teams message or an SMS | **push**. `lm integration add`; forwards from registration onward, never retroactively |
-| **Email** (`lm notify add`) | one mail per matching event, payload included | live once the deploy sets the SMTP knobs ([Email notifications](email.md)); a failed send is not retried |
+| **Décisions tab** (PWA, phone & desktop) | the pile, newest first, with a badge counting what waits. **✓ Traiter** treats one; it stays visible, dimmed, marked **✓ traité** | **pull** — it waits for you to open it |
+| **`lm inbox`** / TUI `:inbox` | the same pile for keyboard people. Untreated only, unless `--all` | same pull |
+| **Your webhook** (n8n, Make, your own endpoint) | every subscribed event, in seconds. Retried, journaled, replayable — the road to a Teams message or an SMS | **push**. `lm integration add`. Forwards from registration onward, never retroactively |
+| **Email** (`lm notify add`) | one mail per matching event, through a template. Retried, journaled in `lm notify deliveries` | live once the deploy sets the SMTP knobs ([Email notifications](email.md)) |
 
-**The inbox is per scope, not per person.** Everyone holding a scope sees all of its
-decisions; a user with no `scope:*` role sees every decision. There is no assignment, escalation
-or out-of-office.
+**The inbox is per scope, not per person.**
+
+- Everyone holding a scope sees all of its decisions.
+- A user with no `scope:*` role sees every decision.
+- There is no assignment, escalation or out-of-office.
 
 ```
 $ lm inbox
@@ -62,22 +67,27 @@ $ lm inbox
 ID  WHEN  PROCESS  MESSAGE  ENTITY_KEY
 ```
 
-## The gesture: what ✓ Acknowledge is, and is not
+## The gesture: what ✓ Traiter is, and is not
 
-- **It clears the decision from everyone's untreated pile** and shows who took it.
-- **It is an event** — `annotation.decision.acked`, timestamped, with who — that a webhook can forward.
-- **It never writes to your source system** ([Reversibility](reversibility.md)): the correction
+**✓ Traiter** in the PWA and `lm inbox ack ID` are the same gesture.
+
+- **It clears the decision from everyone's untreated pile.**
+- **It is an event**, `annotation.decision.acked`, timestamped, carrying who acked. A webhook can
+  forward it.
+- **It never writes to your source system** ([Reversibility](reversibility.md)). The correction
   itself is made in the legacy screen.
 
 ## Silence also emits
 
 Rules catch what *happens*. The [dormancy sweep](apps/workflows.md#dormancy-the-memory-of-the-breathing)
-catches what *stopped happening*: a declared workflow watches every document, and one that
-sits non-terminal past its threshold becomes `decision.dormant.<workflow>`.
+catches what *stopped happening*. A watched workflow follows every document. One that stays in a
+non-terminal state past its threshold becomes `decision.dormant.<workflow>`.
 
 - The threshold counts **from lumnik's first observation** of the document, not from the source's history.
 - `lm workflow apply` names every status value your manifest missed, with its row count. An
   undeclared status is watched too.
+- A workflow can also declare a deadline column. A document still in one of the states you list
+  when its date passes becomes `decision.overdue.<workflow>`: [Due date](apps/workflows.md#due-date-a-deadline-the-data-carries).
 
 ```
 $ lm observations stats
@@ -104,19 +114,19 @@ Three things outlive that window:
 
 ## Named limits, in one place
 
-- **No push to user surfaces** — the tab and the CLI are pull; the webhook is the road
-  to tools that push. (An event stream does exist for integrators, on the platform API.)
+- **No push to user surfaces.** The tab and the CLI are pull. The webhook is the road to tools
+  that push. Integrators also have a live event stream on the platform API.
 - **The inbox is per scope**, time-ordered, without assignment or severity.
-- **✓ Acknowledge never writes to the source.**
+- **✓ Traiter never writes to the source.**
 - **Webhooks forward from registration onward**, never retroactively.
-- **REST/GraphQL/SOAP-ingested tables emit no events** — only jdbc, CSV and kafka ingestion does.
+- **A Process does not evaluate rows that existed before it was applied.** Only later inserts and
+  source changes can trigger it.
 - **Declared status aliases** (encours/EC…) serve the dormancy watch and the chat's
-  background knowledge, not the chat's SQL or view filters: those match the literal values
-  in the column.
-- **Email is best-effort** — a failed send is logged and skipped: no retry, no journal.
-  Delivery stays mocked until the deploy sets the SMTP knobs. Webhooks retry and journal.
-- **No usage/adoption dashboard** — operational metrics (`/q/metrics`) are the only
-  proxy, per endpoint, if your ops scrape them.
+  background knowledge. The chat's SQL and the view filters match the literal values in the
+  column.
+- **Email stays mocked** until the deploy sets the SMTP knobs.
+- **No usage dashboard.** The only proxy is the operational metrics at `/q/metrics`, per
+  endpoint, if your ops scrape them.
 
 ## See also
 

@@ -1,16 +1,19 @@
 package io.lumnik.hub.workflow;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.extraction.spi.ExtractionSink;
 import io.lumnik.extraction.spi.ask.SchemaCard;
+import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.ApplyDoorSupport;
 import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.audit.AuditRecorder;
+import io.lumnik.hub.manifest.ModuleManifestRegistry;
 import io.lumnik.hub.rag.chunk.WorkflowChunkBuilder;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.quarkus.narayana.jta.QuarkusTransaction;
@@ -51,14 +54,21 @@ public class WorkflowApplyResource {
     @Inject WorkflowManifestStore store;
     @Inject AuditRecorder audit;
     @Inject WorkflowDataTruth truth;
+    @Inject DynamicTableRegistry tables;
     @Inject WorkflowChunkBuilder chunkBuilder;
     @Inject SchemaCardStore cards;
+    @Inject ModuleManifestRegistry modules;
     @Inject Instance<ExtractionSink> sinks;
+
+    static final String NOT_INDEXED_AI_OFF = "not indexed for chat: the AI is switched off "
+        + "(LUMNIK_AI_ENABLED=false); apply it again once it is on";
 
     private final WorkflowManifestParser parser = new WorkflowManifestParser();
 
+    /** {@code warnings}: what the apply did not do though it answers 200; absent when empty. */
     public record ApplyResult(String name, String scope, String table, String column,
-                              WorkflowDataTruth.Report dataTruth) {}
+                              WorkflowDataTruth.Report dataTruth,
+                              @JsonInclude(JsonInclude.Include.NON_EMPTY) List<String> warnings) {}
     public record WorkflowInfo(String name, String table, String column, String scope, boolean enabled) {}
 
     // Deliberately NOT @Transactional: index() must run with no ambient transaction (its javadoc
@@ -142,6 +152,12 @@ public class WorkflowApplyResource {
             return ApiErrors.badRequest(columnTaken(m, owner.get()));
         }
 
+        // The parser refuses an ingestion check on an ext table by its name; a hybrid table registered under connector
+        // looks like any t_ table, and only the registry knows (#1820).
+        if (m.checkOnIngestion() && tables.isHybrid(tenant, m.table())) {
+            return ApiErrors.badRequest(WorkflowManifestParser.ingestionCheckRefusal(m.table()));
+        }
+
         // store.upsert / truth.check throw a bare RuntimeException on anything beyond the
         // modeled "table missing" case (e.g. a DB outage) — caught here so the caller gets a
         // stable JSON error that quotes nothing of the failure (a driver message can name a
@@ -182,13 +198,17 @@ public class WorkflowApplyResource {
                     report.undeclared().stream().map(WorkflowDataTruth.ValueCount::value).toList());
             }
             index(tenant, g);
+            // Switched off, the lifecycle is stored but nothing reaches the chat's corpus: say it, or the
+            // integrator never learns the apply must be repeated once the AI is back (#1896). Not when
+            // the RAG module is absent (Open): turning a setting on would never index it.
+            List<String> warnings = modules.ragSwitchedOff() ? List.of(NOT_INDEXED_AI_OFF) : List.of();
             // Audit P4: same rationale as ViewApplyResource — the store writes raw JDBC,
             // nothing else records the apply.
             audit.record("WorkflowManifest", m.name(), "APPLY", Map.of(
                 "scope", m.scope(), "table", m.table(), "column", m.column(),
                 "manifest_sha256", AuditRecorder.sha256(body)));
             return Response.ok(
-                new ApplyResult(m.name(), m.scope(), m.table(), m.column(), report)).build();
+                new ApplyResult(m.name(), m.scope(), m.table(), m.column(), report, warnings)).build();
         } catch (WebApplicationException e) {
             // A refusal this door already dressed is not a store failure. WebApplicationException
             // IS a RuntimeException, so without this arm the broad catch below would swallow every

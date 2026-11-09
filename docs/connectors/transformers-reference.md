@@ -22,7 +22,7 @@
 | `clean` | `columns`; `strip` (false); `remove-control-chars` (false); `normalize-unicode` (off; `NFC`/`NFD`/`NFKC`/`NFKD`) | always strips a leading BOM; then optional trim, control-character removal, Unicode normalization |
 | `fix-mojibake` | `columns` | `BÃ©nÃ©dict` → `Bénédict`; leaves a value it cannot repair safely as it is, +1 `cell_errors` |
 | `decode-html-entities` | `columns` | `&amp;` → `&` |
-| `replace-smart-quotes` | `columns` | curly quotes and guillemets → `"`, dashes → `-`, ellipsis → `...`, non-breaking space → space |
+| `replace-smart-quotes` | `columns` | curly double quotes and guillemets → `"`, curly single quotes → `'`, dashes → `-`, ellipsis → `...`, non-breaking space → space |
 | `strip-invisible` | `columns` | removes invisible characters: zero-width space, soft hyphen, BOM |
 | `remove-diacritics` | `columns` | `Café` → `Cafe` |
 | `upper` / `lower` | `columns` | case; text cells only |
@@ -33,7 +33,7 @@
 | `regex-extract` | `column`; `pattern`; `groups` (group number → new column); `required` (false) | writes capture groups into new columns; a miss writes `null`, counted only with `required: true` |
 | `default` | `column`; `value` | fills an empty cell; never overwrites |
 | `lookup` | `column`; `table` (map); `on-missing` (`keep`; or `null` / `error` / any value) | translates a code with the map |
-| `parse-date` | `column`; `formats` (list of date patterns); `zone` (UTC) | first matching format wins; a pattern with a time gives a timestamp, otherwise a date |
+| `parse-date` | `column`; `formats` (list of date patterns); `zone` (UTC); `century-from` (a year, required with `yy`) | first matching format wins; a pattern with a time gives a timestamp, otherwise a date; `yy` is read in the 100 years from `century-from` |
 | `parse-number` | `column`; `decimal-separator` (`auto`; or `","` / `"."`); `negatives-in-parens` (false); `integer` (false) | `1 234,56 €` → `1234.56`; with `integer`, a whole number |
 | `parse-boolean` | `column`; `true` (`1, true, yes, y, oui, o, vrai, t`); `false` (`0, false, no, n, non, faux, f`) | `O`/`N`, `0`/`1` → a boolean, case and spaces ignored; declared lists replace the defaults |
 | `parse-email` | `column`; `lower` (false) | trims, optionally lowercases, checks the shape |
@@ -78,12 +78,11 @@
 | **overwritten** | `map-columns` renamed onto a column the row already had |
 | **declared unreadable** | `kotlin`, by the script |
 
-A `promote` entry is the other origin, and no hook is involved: a value that does not read as its declared type
-(`"sensor-fault"` where a `decimal` was declared) is written as an empty cell and counted, on a `rest-generic` or a
-`kafka` connector.
+A `promote` entry on a `rest-generic` or `kafka` connector counts too, with no hook involved. A value
+that does not read as its declared type (`"sensor-fault"` where a `decimal` was declared) is written as
+an empty cell, and counted.
 
-A blank cell — empty, or only whitespace: spaces, tabs — is not a value a `parse-*` hook could not read: it stays empty and
-is not counted.
+A blank cell — empty, or only spaces and tabs — stays empty. A `parse-*` hook does not count it.
 
 `lm run get` prints the alert when the count is above zero:
 

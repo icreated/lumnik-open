@@ -47,8 +47,8 @@ Global keys, from any page:
 | `?` | help screen (the same table, always at hand) |
 | `Esc` | close a modal, cancel an input, or back out one level |
 
-- The header names the hub, the page, the session scope and the event stream: `[LIVE✓]`, or
-  `[RECONNECTING]` with the reason in the footer.
+- The header names the hub, the page, the session scope and the event stream: `[CONNECTING]` at
+  startup, then `[LIVE✓]`, or `[RECONNECTING]` with the reason in the footer.
 - `:sources`, `:endpoints`, `:runs`, `:dlq` and `:inbox` update live; the cursor stays on your row.
 - **Another hub:** `:context` (or `:ctx`) lists your contexts. `Enter` switches for this session
   only; `lm config use-context` sets the default.
@@ -101,7 +101,7 @@ next one. A `Queued` run ends at once.
 |---|---|
 | `run … already ended (STATUS)` | nothing left to stop |
 | `run … is being started; try again in a moment` | a `Queued` run is starting — retry |
-| `run … is not in flight on this hub` | the run started a moment ago — retry; refused again, no process runs it, and the hub marks it `Failed` on its own |
+| `run … is not in flight on this hub` | the run started a moment ago: retry. Refused again: nothing runs it, and the hub marks it `Failed` on its own |
 
 ### What a status means
 
@@ -110,7 +110,7 @@ next one. A `Queued` run ends at once.
 | `Queued` | waiting for a free slot (only with the [run queue](../operations/upgrade.md#turning-on-the-run-queue) on) | nothing: it starts on its own |
 | `Running` | still going | `d` |
 | `Completed` | done. Rows in `:dlq` were set aside; other `skip` rows were filtered on purpose | `:dlq`, `RECORDS` |
-| `Partial` | read less than the source held; the next run resumes | `d`: the `error:` section |
+| `Partial` | read less than the source held, or read it all and could not be sure of the encoding; `error:` says which | `d`: the `error:` section |
 | `Failed` | the run failed: source unreachable, bad credentials, refused config | `d`: the `error:` section |
 | `Cancelled` | stopped by a user, or skipped: another run of the endpoint was active | `d` |
 | no row at all | the schedule has not fired yet | `:sources`, `:endpoints` |
@@ -149,10 +149,12 @@ Four pages answer "what needs me":
 ## Explore & ask
 
 `:ask` is analytic chat: a plain-language question comes back as generated SQL, rows and an answer.
-It asks the session scope shown in the header — your default (`lm scope`) at startup, changed with
-`:scopes` → `Enter` or `:scope <tag>`. A question continues the last one answered, as
-[`lm ask --previous`](lm-reference.md) does: "Et SUP-004 ?" is answered as the full question, shown
-in the headline after `understood as:`. An answer that ran no SQL keeps the question it continues; changing the scope starts over.
+
+- It asks the session scope shown in the header: your default (`lm scope`) at startup. Change it
+  with `:scopes` → `Enter`, or `:scope <tag>`.
+- A question continues the last one answered, as [`lm ask --previous`](lm-reference.md) does.
+  "Et SUP-004 ?" is answered as the full question, shown in the headline after `understood as:`.
+- An answer that ran no SQL keeps the question it continues. Changing the scope starts over.
 
 | Key | Effect |
 |---|---|
@@ -162,8 +164,8 @@ in the headline after `understood as:`. An answer that ran no SQL keeps the ques
 | `n` | new question — the next one stands alone |
 | `r` | clear the page — the next question stands alone |
 
-`:view` renders a [`kind: View`](../apps/views.md) manifest file. The path field starts on the
-WOW's `docs/demo/wow-customer/clients-view.yaml`, relative to where you started `lm`: from the repo
+`:view` renders a [`kind: View`](../apps/views.md) manifest file. The empty path field suggests the
+WOW's `docs/demo/wow-customer/clients-view.yaml`, relative to where you started `lm`. From the repo
 root, `Enter` renders it:
 
 ```

@@ -7,6 +7,154 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.11.0 — 2026-11-09
+
+A Process can now run on REST rows and on a fused Entity; mails are stored, retried and replayable;
+event patterns are strict; the csv reader tells you when it guessed the encoding. Four migrations
+(V87 to V90), all new tables or indexes in `core`, run by themselves at start. `lm` 1.8.0.
+
+### Before you upgrade
+- **Migrations V87 to V90 add tables and one index. Nothing existing is altered.** They hold the paged
+  work of a lookup fan-out (V87), the dead letters of outbox consumers (V88), the stored mail
+  deliveries (V89) and one index on that last table (V90, a plain `CREATE INDEX` on a new table:
+  the build is short). No action. The next free number is V91.
+- **A rest-generic run that ended `Completed` with zero rows can now end `Failed`.** A
+  `pagination.response_path` that reads nothing on the first page fails with `pagination.response_path
+  reads nothing on the first page — check it against the source's answer`; one that reads an object
+  fails with `pagination.response_path must read a list, not an object`. An empty list still
+  succeeds. `lm source rest test` (also GraphQL and SOAP endpoints) now says the same instead of
+  `200 0 ok`: a test that was green may turn red, and the run would have failed too.
+- **Decimal columns are plain `NUMERIC`, no longer `NUMERIC(18,4)`.** A fifth decimal used to be
+  rounded in silence; now it is kept. An existing table is widened by the next write that needs it.
+  Whole values read `1024944`, not `1024944.0000`. Check any view or query that counted on four
+  decimals.
+- **`parse-date` with a `yy` format needs `century-from`.** `98` was read as 2098 without a word.
+  Set `century-from` to the first year of your 100-year window (1950 covers 1950 to 2049).
+  `lm validate` refuses the hook without it, and refuses `century-from` when no format reads `yy`.
+- **Event patterns are strict** (mail rules, webhooks). A `*` is accepted only as a final `.*`, and
+  `prefix.*` needs the dot: `decision.cold.*` no longer matches `decision.coldroom-x`. Create and
+  update answer `400` with `event pattern '<p>' is not accepted: '*' is only allowed as a final
+  '.*'.` Rules already stored with a stray `*` stay as they are and never match. List your rules and
+  webhooks and fix them.
+- **A mail rule with an unknown template is refused at creation** (`lm notify add`,
+  `POST /api/notifications`), naming the shipped templates (`event-notification`,
+  `decision-alert`). Before, every mail of such a rule was given up at render.
+- **Mails are stored, one delivery per rule and event, and retried up to 3 times** by a 30-second
+  sweep. They are at-least-once: a delivery whose outcome could not be written is sent again once its
+  lease runs out. A rule on `notification.*` never receives the new `notification.mail.given-up`
+  event (loop guard): carry it with a webhook.
+- **A decision mail is subjected by the decision's sentence** (the `message` `lm inbox` shows, cut at
+  100 characters). Other mails keep `lumnik event: <type>`.
+- **A Process `when:` that compares to a `{x}` literal now means the column `x`.** Apply refuses it if
+  `x` is not a column, and a condition already stored that way no longer matches. Re-read your
+  `=` conditions for braces.
+- **A Process on an Entity refuses a decimal join key, and a date joined to a timestamp.** These keys
+  cannot be indexed under row-level security. Key the Entity on text, whole-number or timestamp
+  columns.
+- **A Workflow cannot use `spec.check.trigger: ingestion` on a REST table.** Apply refuses it with a
+  sentence saying why. A Workflow can still watch a REST table.
+- **A catch-all `data.row.changed` subscription (webhook or mail rule without an entity filter) now
+  sees rows changed by REST connectors.**
+- **A REST table gets a `(tenant_id, row_hash)` index on its next write.** The build is not
+  concurrent: writes to that table wait while it runs. Upgrade off-hours if you hold big REST tables.
+- **A changed `mapping:` on a csv-file connector drops its cursor.** The next run reads the files
+  again. An identical re-apply keeps the cursor. `lm apply` also warns when a `parse-date`,
+  `parse-number` or `parse-boolean` types a column the table holds as another type: the table is not
+  retyped; delete the connector, apply, run.
+- **A csv-file with no `parser.encoding` and bytes above 0x7F now ends the run `Partial`.** The run's
+  `error:` says the encoding was guessed, and asks you to declare `parser.encoding`. Declare it, then
+  `lm endpoint reset-cursor`. Only the first 8 KB are examined.
+- **A byte the declared encoding has no character for stops the read with a dead letter** naming the
+  encoding, the byte and the line. Rows before it are read; rows after it are not. Set the right
+  `parser.encoding`, then `lm endpoint reset-cursor`.
+- **A csv-file header is trimmed.** A header padded with spaces (a Firebird `isql` export) gives the
+  bare name; values keep their padding.
+- **A NUL byte in a text value dead-letters that one row.** Before, PostgreSQL refused it, the whole
+  chunk failed and the run ended `Failed`. Add `clean: { remove-control-chars: true }` to keep the row.
+- **A remote csv file (sftp or s3) is named after its stem**, as an upload is: `clients.csv` lands in
+  `ext.clients`, not `ext.clients_csv`. A table already created as `ext.<name>_csv` keeps its name,
+  and a new ingest of the same file creates `ext.<name>`. Check queries and Entities that read the old
+  name.
+- **A cron slot outside the schedule `window` is skipped**, not run late at the first in-window tick:
+  `0 6 * * *` with window `22:00-06:00` used to run at 22:00. A slot inside the window missed while
+  the hub was down still catches up.
+- **An Entity read filter with a date-only operand is that day's midnight in the Entity's `zone:`**
+  (UTC without one). `lm entity get --filter due=2026-07-01` can return other rows on an Entity with a
+  zone. A date-time operand is still an instant.
+- **Entity HMAC secret (`LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET`): keep it stable for the life of the
+  data.** Changing it in place is not supported. After a change, `lm entity resolve` leaves the rows an
+  `exact` rule resolved ambiguous, with no entity id; a pair declared with `lm entity assert-same`
+  keeps its link. If it changed by accident, put the old secret back before the next `lm entity
+  resolve`: after a resolve ran, nothing brings the links back. No rekey command exists yet. Open view
+  page links also stop working.
+- **`metadata.name is required`** no longer says `(kebab-case)`: nothing enforced that case. To take
+  over a one-shot csv ingest, use the name `lm connector list` shows.
+
+### Added
+- **A REST connector's rows can feed a Process and a Workflow.** Write a `kind: Process` or
+  `kind: Workflow` on an `ext.*` table, once it exists (first ingest). It fires on new rows and on rows
+  whose source content changed; rows that existed before the apply are not evaluated.
+- **A Process can key its decision by a column:** `spec.emit.key: <column>`. `lm inbox` then shows the
+  document (`analysisrequest-24`) instead of a row hash; a null or blank value falls back to the
+  hash. An unknown column is refused at apply.
+- **A Process `when:` can compare two columns of one row:** `"measured_at>{calib_valid_until}"`, quoted
+  in a YAML list. Operators `=`, `>`, `>=`, `<`, `<=`; both columns of one kind; a null never
+  matches.
+- **A Process can listen on a `match:` Entity:** set `spec.on.table` to the Entity's view. The rule is
+  evaluated on the fused row; one decision per source event and canonical key. Entities with
+  `resolution:` are refused; rows already there at apply are not evaluated. A change in a lookup table
+  (`joins:`) re-evaluates every fused row it reaches: durable, paged, resumes after a crash. The hub
+  builds the indexes these reads need, and warns while one is still building.
+- **`lm process apply` and `lm entity apply` print each hub warning on stderr** as `warning: …`. The exit
+  code stays 0.
+- **Dead letters for outbox consumers.** A consumer that fails on an event no longer loses it.
+  `GET /api/platform/events/dead-letters` (optional `consumer=`, `open=true`; the 200 most recent)
+  lists them; `POST /api/platform/events/dead-letters/{id}/replay` redoes one (Process, webhook and mail
+  letters). A failed replay answers `500` and leaves the letter open. No `lm` command yet.
+- **Mail deliveries are visible and replayable.** `lm notify deliveries [--limit N]` lists them, given-up
+  first: status, attempts, when, kind of failure; never subject or body. `lm notify replay ID` sends a
+  given-up mail again. A sent mail answers 409, another tenant's 404. HTTP:
+  `GET /api/platform/notification-deliveries` and `POST …/{id}/replay`, same roles as the webhook door.
+- **A given-up mail is told by an event:** `notification.mail.given-up` (`delivery_id`, `rule_id`,
+  `event_type`, `failure`; never the mail or the address), emitted once. Carry it with a webhook. A
+  failure names its kind: `authentication refused (SMTP 535)`, `recipient refused (SMTP 550)`,
+  `refused by the relay (SMTP n)`, `relay unreachable`, `TLS refused`.
+- **Several hub nodes follow each other's Entity changes.** A node checks every 3 s
+  (`lumnik.entity.registry.refresh-every`) and reloads only when the stored Entities changed.
+- **An Entity can declare `zone: Europe/Paris`.** A date is its midnight in that zone, for alignment,
+  the ledger's day comparison, join keys and search marks. Absent means UTC: existing Entities do not
+  move. A region name; an offset is refused.
+- **REST:** `transform: from_odata_date` reads `/Date(<ms>)/` and `/Date(<ms>±<minutes>)/` (OData v2) as a
+  UTC timestamp. Pagination presets `odata-v2` and `odata-v4`: the count arrives only if the endpoint
+  `path:` asks for it (`$format=json&$inlinecount=allpages`, `$count=true`). `pagination.total_header`
+  reads a range total such as `items 0-19/57` (a `*` total is refused).
+  `http_version: "1.1"` or `"2"` on the connector, for a service that resets its HTTP/2 stream after
+  an error reply; write it as a string.
+- **csv-file:** `parser.short_rows: skip-leading` skips short lines only before the first full line (a
+  `key;value` block above the table). `parser.escape` is one character for a backslash-escaped quote.
+- **`lm source jdbc discover --include-views`** lists views (PostgreSQL and Oracle); `add` still
+  refuses a view. Provider authors: the dialect contract gains `listViews`, with no default.
+- **A multi-file csv ingest reports each file** (`lm csv ingest s3://bucket/prefix/`): its table, rows
+  and columns, then the total. One file: output unchanged.
+- **`lm rag status` with the AI off** prints `ai: switched off (LUMNIK_AI_ENABLED=false)`. A workflow
+  applied with the AI off warns that it is not indexed for chat.
+
+### Fixed
+- A jdbc `mode: watermark` read whose first chunk ended on a row with no watermark stored a bad
+  cursor, and every later run read nothing. The cursor now rests on the last row that has a watermark.
+  A run already stuck at `IN 0`: reset the endpoint cursor.
+- `lm source rest test` names a SOAP Fault on a non-2xx, as the run does.
+- A cited REST row no longer answers 500 in the citation drill-down.
+- A list promoted as `text` on a REST table no longer escapes slashes.
+- `parse-number` strips the no-break and narrow no-break spaces used as French grouping.
+- REST writes are faster when something subscribes to the table.
+- A Process failing on one event no longer loses it for other Processes on the table. A stored Entity
+  the hub cannot read gives a `400` at Process apply, not a `500`.
+- Oracle: a table never analyzed shows `ROWS -1` in discover, not `0`.
+- `lm` says `this hub has the AI switched off (LUMNIK_AI_ENABLED=false)` for ask, rag search, scopes
+  and chat, instead of a bare 404. `lm` tables show a tab or line break inside a cell as `\t`, `\n`;
+  `-o json` and `-o yaml` keep the exact value. `lm chat` refuses `:topK` outside 1 to 50.
+
 ## v1.10.3 — 2026-11-04
 
 REST connectors refuse to report a partial read as complete. `lm describe connector-type` now tells you

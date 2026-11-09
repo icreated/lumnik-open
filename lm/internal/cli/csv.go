@@ -112,15 +112,31 @@ func newCsvIngestCmd() *cobra.Command {
 }
 
 func printCsvIngestSummary(w io.Writer, r *client.CsvIngestResult) {
-	if r.Refreshed {
-		fmt.Fprintf(w, "Re-ingested %s into %s — refreshed, rows deduplicated by key\n", r.SourceFile, r.TableName)
+	if len(r.Files) > 1 {
+		// Several files: each landed in its own table, with its own rows and columns (#1920).
+		fmt.Fprintf(w, "Ingested %d files from %s\n", len(r.Files), r.SourceFile)
+		for _, f := range r.Files {
+			refreshed := ""
+			if f.Refreshed {
+				refreshed = " — refreshed, rows deduplicated by key"
+			}
+			fmt.Fprintf(w, "  • %s — %s: %d rows, %d promoted cols%s\n", f.TableName, f.SourceFile, f.RowsWritten, len(f.PromoteColumns), refreshed)
+			for _, pc := range f.PromoteColumns {
+				fmt.Fprintf(w, "      - %s (%s)\n", pc.Name, pc.Type)
+			}
+		}
+		fmt.Fprintf(w, "  • rows written:    %d (all files)\n", r.RowsWritten)
 	} else {
-		fmt.Fprintf(w, "Ingested %s into %s\n", r.SourceFile, r.TableName)
-	}
-	fmt.Fprintf(w, "  • rows written:    %d\n", r.RowsWritten)
-	fmt.Fprintf(w, "  • promoted cols:   %d\n", len(r.PromoteColumns))
-	for _, pc := range r.PromoteColumns {
-		fmt.Fprintf(w, "      - %s (%s)\n", pc.Name, pc.Type)
+		if r.Refreshed {
+			fmt.Fprintf(w, "Re-ingested %s into %s — refreshed, rows deduplicated by key\n", r.SourceFile, r.TableName)
+		} else {
+			fmt.Fprintf(w, "Ingested %s into %s\n", r.SourceFile, r.TableName)
+		}
+		fmt.Fprintf(w, "  • rows written:    %d\n", r.RowsWritten)
+		fmt.Fprintf(w, "  • promoted cols:   %d\n", len(r.PromoteColumns))
+		for _, pc := range r.PromoteColumns {
+			fmt.Fprintf(w, "      - %s (%s)\n", pc.Name, pc.Type)
+		}
 	}
 	if len(r.Warnings) > 0 {
 		fmt.Fprintln(w, "  • warnings:")
@@ -133,12 +149,24 @@ func printCsvIngestSummary(w io.Writer, r *client.CsvIngestResult) {
 	// Both must be true before promising: an older hub reports no scopes, and a doorless
 	// build keeps the plain summary — the schema card it builds silently is our accounting,
 	// not the reader's, and a paid feature's absence is not announced (the GraphQL rule).
+	table := r.TableName
+	if len(r.Files) > 1 {
+		table = r.Files[0].TableName // an example to ask about: the batch has one table per file
+	}
 	if len(r.AskableScopes) > 0 && r.ChatAvailable {
 		scope := r.AskableScopes[0]
-		fmt.Fprintf(w, "\n  • askable:         scope '%s' — try: lm ask --scope %s \"how many rows are in %s?\"\n", scope, scope, r.TableName)
+		fmt.Fprintf(w, "\n  • askable:         scope '%s' — try: lm ask --scope %s \"how many rows are in %s?\"\n", scope, scope, table)
+		if len(r.Files) > 1 {
+			fmt.Fprintf(w, "A dormant connector is registered per file — see `lm connector list`.\n")
+			return
+		}
 		fmt.Fprintf(w, "A dormant connector is registered — see `lm connector list`.\n")
 		return
 	}
 	fmt.Fprintf(w, "\nA one-shot: no run recorded, nothing indexed for chat.\n")
+	if len(r.Files) > 1 {
+		fmt.Fprintf(w, "The rows are in the tables above, and a dormant connector is registered per file — see `lm connector list`.\n")
+		return
+	}
 	fmt.Fprintf(w, "The rows are in %s, and a dormant connector is registered — see `lm connector list`.\n", r.TableName)
 }

@@ -2,7 +2,7 @@
 
 !!! info "lumnik Pro"
     `lm ask`, the TUI's `:ask` and the PWA's Chat need the AI. On lumnik Open, or with the AI off,
-    `lm ask` answers `Error: API error 404 (no details from the server)`.
+    `lm ask` says so: `this hub's build has no Ask` on Open, `this hub has the AI switched off` with the AI off.
 
 `lm ask` turns a question into SQL and runs it, read-only, in one scope. One rule decides every
 case below: **a refusal is better than a confident wrong answer.** A refusal costs you a retry. A
@@ -54,7 +54,7 @@ LIMIT 500
 | *La requête n'a renvoyé aucune ligne. Il peut n'y en avoir réellement aucune…* | zero rows. Maybe none exist; maybe the query missed the question | Read the SQL before saying "there are none" |
 | *That filter matches N rows, so the question has no single answer…* | a name shared by several records | Ask again with the code the message lists |
 | *The answer summarises the first 48 of the 312 rows returned.* | the sentence is written from a sample; every row is still printed | For an exact figure, ask for the count |
-| *The SQL query stops at 500 rows: there may be more.* | the result was cut at 500 | Narrow the question |
+| *The SQL query stops at 500 rows: there may be more.* | the result was cut at the query's limit, 500 at most | Narrow the question |
 | *The phrased answer stated a figure these rows do not back, so it is withheld.* | the model wrote a number the rows do not support | The rows and the SQL are the answer |
 | *I couldn't tie this question to the previous one…* | a follow-up lumnik could not resolve | Ask the question in full |
 | *I couldn't run that query — the database refused it* | the query failed | Read the SQL; if it names a missing table, `lm source rediscover --scope <tag>` |
@@ -88,7 +88,8 @@ says so. The disagreement is yours to settle: `lm conflicts list` lists every on
 - **A name or a text.** *« de la catégorie Pompes »* matches the name exactly. *« dont la
   description contient Badu »* searches the text. Check which one the SQL used: `=` or `ILIKE`.
 - **Dates:** write `2026-07-02`, or a month with its year: *juillet 2026*. `01/07/2026` is
-  ambiguous and left to the model. The day is read in UTC.
+  ambiguous and left to the model. The day is read in UTC, even on an entity that declares a
+  `zone:`.
 - **An identifier:** a terse lookup such as `status SO-000004` works when the identifier column
   declares an `example` in the entity.
 

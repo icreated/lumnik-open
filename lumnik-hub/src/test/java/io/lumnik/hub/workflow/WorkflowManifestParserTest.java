@@ -269,10 +269,29 @@ class WorkflowManifestParserTest {
     @ParameterizedTest(name = "a table the hub owns, {0}, can be watched")
     @ValueSource(strings = {"connector.t_Orders", "connector.v_customer",
                             "connector.t_x",           // the shortest name a composition produces
-                            "connector.v_1customer"})  // an ENTITY may start with a digit
+                            "connector.v_1customer",   // an ENTITY may start with a digit
+                            "ext.senaite_a"})          // a REST connector's hybrid table (#1816)
     void a_table_the_hub_created_can_be_declared(String table) {
         assertThat(parser.parse(VALID.replace("connector.t_commandes_csv", table)).table())
             .isEqualTo(table);
+    }
+
+    /**
+     * #1816: a Workflow watches hybrid tables in {@code ext} only (#1820). The bound stays one schema:
+     * {@code public}, the hub's own schemas and a malformed {@code ext} name are refused, and the sentence names the
+     * three forms.
+     */
+    @ParameterizedTest(name = "spec.on.table {0} is refused with the three forms")
+    @ValueSource(strings = {"ext.", "ext.bad name", "ext.1foo", "ext.a.b", "Ext.x",
+                            "core.x", "identity.app_user", "public.x"})
+    void a_refused_table_is_told_the_three_forms(String table) {
+        assertThatThrownBy(() -> parser.parse(
+                VALID.replace("connector.t_commandes_csv", "\"" + table + "\"")))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("spec.on.table")
+            .hasMessageContaining("connector.t_<table>")
+            .hasMessageContaining("connector.v_<entity>")
+            .hasMessageContaining("ext.<table>");
     }
 
     /**
@@ -653,6 +672,21 @@ class WorkflowManifestParserTest {
         assertThat(parser.parse(CHECKED).checkOnIngestion()).isTrue();
         assertThat(parser.unknownKeys(CHECKED)).isEmpty();
         assertThat(parser.unknownKeys(CHECKED.replace("trigger:", "triggr:"))).containsExactly("spec.check.triggr");
+    }
+
+    /**
+     * #1816: the check after a run follows the tables the run reports as written, and a hybrid write reports none.
+     * Accepted, it would never run: refused, with the table and the reason.
+     */
+    @Test
+    void the_check_after_each_import_is_refused_on_an_ext_table() {
+        assertThatThrownBy(() -> parser.parse(CHECKED.replace("connector.t_commandes_csv", "ext.x")))
+            .isInstanceOf(IllegalArgumentException.class)
+            .hasMessageContaining("spec.check.trigger")
+            .hasMessageContaining("ext.x")
+            .hasMessageContaining("a run does not report");
+        assertThat(parser.parse(CHECKED.replace("connector.t_commandes_csv", "connector.t_x")).checkOnIngestion())
+            .isTrue();
     }
 
     static Stream<Arguments> checkRefusals() {

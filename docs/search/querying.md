@@ -362,7 +362,8 @@ Three more answers:
 | `search is degraded: <reason> — retry in 60s` | the provider is installed but failing; the reason says how | fix the backend; ingestion goes on meanwhile |
 | `SearchIndex "NAME" over ENTITY is invalid: <reason>` | an entity was re-applied without a column the index declares | fix the manifest and apply it again |
 
-Only an integrator is told *not built* or *being built*; any user is told the other cases.
+Only an integrator is told *not built*, *being built* or *its last build failed*. Any user is told
+the other cases.
 
 ## Over HTTP
 

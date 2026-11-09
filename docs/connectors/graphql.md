@@ -61,19 +61,19 @@ f26868f0  acme-graphql  partners  Completed  2400  2400  0        0             
 | `target` | endpoint | yes | The same hybrid target as REST: `table`, `unique_key`, `promote` |
 | `incremental` | endpoint | no | `mode: watermark` sends the mark as the variable named by `param` — see [Incremental](#incremental-the-mark-rides-in-a-variable) |
 
-`path` and `method` are implicit — the request is always a POST to `graphql_path`.
+`path` and `method` are implicit: the request is always a POST to `graphql_path`.
 
-- In the query the variable carries its sigil (`$after`); `cursor_var: after` names it without.
+- In the query the variable carries its sigil (`$after`). `cursor_var: after` names it without.
 - There is no page-size field: page size is in the query itself (`first: 500` above).
-
-- The rows that land are the nodes, without the `edges` wrapper.
-- A graphql endpoint must declare `kind: relay` with `cursor_binding: variable`. `lm apply`
-  refuses anything else, and shows the block to write.
+- `response_path` points at the nodes (`edges[*].node`): each node is one row, without the
+  `edges` wrapper.
+- Any `pagination` other than `kind: relay` with `cursor_binding: variable` is refused by
+  `lm apply`, which shows the block to write.
 
 ## The two ways a GraphQL server says no on HTTP 200
 
 A GraphQL server may answer `200` with an `errors` array, or with `"data": null`. Both are
-refused — by `lm source rest test` before any run:
+refused. `lm source rest test` says so before any run:
 
 ```
 $ lm source rest test acme-graphql-errors
@@ -83,7 +83,7 @@ null-data     POST    200     0      GraphQL response has no errors and null/abs
 Error: 2 of 2 enabled endpoint(s) did not answer with readable data
 ```
 
-and by a run, with the same message:
+A run fails with the same message:
 
 ```yaml
 --8<-- "docs/connectors/rest/demo/80-graphql-errors.yaml"
@@ -148,7 +148,7 @@ beb5aab8  acme-graphql-inc  partners  Completed  2   2    0        0            
 ```
 
 The second run asks only from the mark. It reads a little before it, by the length of the
-previous run: [a change during a run](rest.md#a-change-during-a-run).
+previous run plus one minute: [a change during a run](rest.md#a-change-during-a-run).
 
 ## Not yet supported
 
@@ -173,16 +173,16 @@ cursor.
 
 Add a second endpoint with its own query, its own `pagination` paths (they name the collection:
 `$.data.<collection>.pageInfo.endCursor`) and its own table. One connector, one API, one
-credential; the ledger records one run per endpoint.
+credential. `lm run list` shows one run per endpoint.
 
 ## Troubleshooting
 
 | Symptom | Cause | Gesture |
 |---|---|---|
 | Run fails though the HTTP status was 200 | an `errors[]` array, or `data: null` with no errors | read the message in `lm run get` — it carries the server's first error verbatim |
-| Run completed with `IN` 0 | `response_path` does not match the envelope | `lm source rest test <connector>` prints the item count it read from one page |
+| Run failed on `pagination.response_path reads nothing on the first page` | `response_path` does not match the envelope | `lm source rest test <connector>` shows the same message as its verdict; check `response_path` against the answer |
 | `cursor_binding: variable` refused at apply | that binding is only valid on `relay` on a graphql endpoint | use `query` or `header` binding on a plain REST endpoint |
-| Pagination never ends | `cursor_path` resolves to a value that does not change | it must point at `pageInfo.endCursor`, the opaque cursor the server hands back |
+| Run failed on `the source sent back the cursor it was given while saying more pages` | `cursor_path` reads a value that does not change, or `cursor_var` is not the query's variable | point `cursor_path` at `pageInfo.endCursor`, the opaque cursor the server hands back; check `cursor_var` against the query |
 
 ## See also
 

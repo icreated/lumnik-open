@@ -30,6 +30,16 @@ type CsvIngestPromote struct {
 	Type string `json:"type"`
 }
 
+// CsvIngestFile is one file of a multi-file batch: the table it landed in, its
+// rows and its own promoted columns (#1920).
+type CsvIngestFile struct {
+	SourceFile     string             `json:"sourceFile"`
+	TableName      string             `json:"tableName"`
+	RowsWritten    int                `json:"rowsWritten"`
+	PromoteColumns []CsvIngestPromote `json:"promoteColumns"`
+	Refreshed      bool               `json:"refreshed"`
+}
+
 // CsvIngestResult reports the outcome of a CSV ingest: the connector/endpoint
 // created, the landed table, the row/chunk counts, any promoted columns, and
 // warnings.
@@ -45,6 +55,7 @@ type CsvIngestResult struct {
 	AskableScopes  []string           `json:"askableScopes"`
 	ChatAvailable  bool               `json:"chatAvailable"`
 	Refreshed      bool               `json:"refreshed"`
+	Files          []CsvIngestFile    `json:"files"` // one entry per file when the source held several
 	Scope          string             `json:"-"` // echoed back for output
 	SourceFile     string             `json:"-"`
 }

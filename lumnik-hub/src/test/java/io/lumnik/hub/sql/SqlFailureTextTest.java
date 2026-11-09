@@ -1,6 +1,8 @@
 package io.lumnik.hub.sql;
 
 import io.lumnik.hub.connector.exceptions.ConnectorException;
+import java.net.SocketException;
+import java.sql.SQLFeatureNotSupportedException;
 import org.junit.jupiter.api.Test;
 
 import java.sql.BatchUpdateException;
@@ -50,7 +52,7 @@ class SqlFailureTextTest {
      *  type — class 0A, feature not supported, is structural: its words reach the run (Oracle's BLOB refusal). */
     @Test
     void a_providers_refusal_of_a_type_keeps_its_words() {
-        var refused = new java.sql.SQLFeatureNotSupportedException("column BODY has unsupported type BLOB");
+        var refused = new SQLFeatureNotSupportedException("column BODY has unsupported type BLOB");
         var failure = new RuntimeException("JDBC read failed on LUMNIK.T: " + refused.getMessage(), refused);
 
         assertThat(SqlFailureText.withCause(failure))
@@ -74,7 +76,7 @@ class SqlFailureTextTest {
     @Test
     void a_foreign_cause_beneath_a_sqlexception_is_never_served() {
         SQLException io = new SQLException("An I/O error occurred", "08006",
-            new java.net.SocketException("Connection reset by db-7.internal:5432"));
+            new SocketException("Connection reset by db-7.internal:5432"));
         var failure = new IllegalStateException("Store.op: " + io.getMessage(), io);
 
         assertThat(SqlFailureText.withCause(failure)).doesNotContain("db-7.internal")
@@ -113,7 +115,7 @@ class SqlFailureTextTest {
     @Test
     void the_cut_says_the_sqlexception_it_cut_not_a_foreign_root() {
         SQLException io = new SQLException("An I/O error occurred while sending to the backend.", "08006",
-            new java.net.SocketException("Connection reset by db-7.internal:5432"));
+            new SocketException("Connection reset by db-7.internal:5432"));
         var failure = new IllegalStateException("Store.op: " + io.getMessage(), io);
 
         assertThat(SqlFailureText.ownMessage(failure)).startsWith("Store.op — SQLSTATE 08006")

@@ -94,7 +94,7 @@ The same partners as the [REST quickstart](rest.md#quickstart), in the same
 | `target` | endpoint | yes | The same hybrid target as REST: `table`, `unique_key`, `promote` |
 
 - The request is always a `POST` with `Content-Type: text/xml; charset=utf-8`.
-- SOAP **1.1** envelopes only; a service that requires SOAP 1.2 (`application/soap+xml`) is not
+- SOAP **1.1** envelopes only. A service that requires SOAP 1.2 (`application/soap+xml`) is not
   supported.
 - Set `page_size` to the number of rows the service actually returns per page.
 
@@ -121,9 +121,10 @@ Five placeholders are resolved on every request — in `body:` **and** `header:`
 | `{{secret:NAME}}` | the `lm secret` registry, then the hub's process environment — see below |
 | `{{env:NAME}}` | the hub's process environment only |
 
-An **unresolved placeholder fails the run before any request is sent**; the error names the
-placeholder, never a value. Any other placeholder (`{{watermark}}`, a typo) is refused at
-`lm validate` and `lm apply`, naming the placeholder and the key (`body` or `header`).
+- An **unresolved placeholder fails the run before any request is sent**. The error names the
+  placeholder, never a value.
+- Any other placeholder (`{{watermark}}`, a typo) is refused at `lm validate` and `lm apply`.
+  The refusal names the placeholder and the key (`body` or `header`).
 
 ### A credential inside the envelope
 
@@ -155,8 +156,8 @@ lm secret set ACME_SESSION_TOKEN        # demo-session-42
 
 ## Where the QueryPage loop stops
 
-QueryPage has no total and no next link. It stops on exactly **one** signal, chosen by
-configuration and never tried in sequence:
+QueryPage has no total and no next link. The loop follows **one** signal: the first of these
+you set.
 
 | Set | The loop continues |
 |---|---|
@@ -208,8 +209,10 @@ ID        CONNECTOR        ENDPOINT      STATUS  IN  OUT  SKIPPED  DEAD-LETTERS 
 ```
 
 - The message carries the service's `faultstring` verbatim.
-- Nothing is ingested or dead-lettered; neither endpoint's `ext.*` table is created.
+- Nothing is ingested or dead-lettered. Neither endpoint's `ext.*` table is created.
 - A Fault is **never retried**: the demo API logs one request per endpoint.
+- `lm source rest test` shows the same: its `VERDICT` reads `SOAP Fault: …`. A 500 without a
+  Fault (an HTML page) reads `HTTP 500`.
 
 ### The same 500, without a Fault, is retried
 
@@ -226,7 +229,7 @@ ID        CONNECTOR        ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTER
 520b32f6  acme-soap-retry  flaky     Completed  2400  2400  0        0             2026-10-19 01:46  2026-10-19 01:46
 ```
 
-The demo API's log shows three requests per page, with the backoff between them:
+The demo API's log shows three requests per page, with a growing pause between them:
 
 ```
 19/Oct/2026 01:46:32  "POST /flaky/start.swe HTTP/1.1" 500 -
@@ -244,40 +247,57 @@ without one is retried.
     `curl http://127.0.0.1:8099/admin/reset`. Otherwise a second run finds the counters spent
     and retries nothing.
 
+### A refusal that reads `I/O error`, tried five times
+
+A CoreWCF service on Kestrel can lose its Fault over HTTP/2. The run then fails without the
+Fault. It is retried like a network failure, 5 attempts in all:
+
+```
+$ lm source rest test scenario-wcf-probe
+ENDPOINT     METHOD  STATUS  ITEMS  VERDICT
+open-orders  POST    -       0      I/O error (IOException)
+```
+
+Ask for HTTP/1.1 in the connector. The same answer then arrives whole:
+
+```yaml
+spec:
+  base_url: https://wcf-orders:18443
+  http_version: "1.1"        # "1.1" or "2"; absent, the hub negotiates
+```
+
+- The Fault is read, the run fails with its `faultstring`, and it is **not** retried.
+- **Quote the value.** `http_version: 1.1` is a number to YAML, and `lm validate` refuses it.
+- It is one setting for the connector, not for one endpoint.
+- Successful calls do not show the problem: it appears on the first refusal, a rotated password for example.
+
 ### What `lm apply` refuses
 
 - `kind: soap` without `pagination.kind: soap`, or the reverse.
 - A `response_path` with `[*]` or `..`: write a plain dotted path.
 - A missing `page_size`.
 
-Each refusal names the endpoint and shows the line to write.
+Each refusal names the key at fault, e.g. `spec.endpoints[0].pagination.page_size`.
 
 ## Incremental — the mark rides the URL, not the body
 
-`incremental: { mode: watermark }` works on a SOAP endpoint: the stored mark goes out with the
-run's first request; the new mark is the MAX of `watermark_path` over the rows read.
+`incremental: { mode: watermark }` works on a SOAP endpoint:
+
+- The stored mark goes out on every request of the run, under the query parameter `param` names.
+- The new mark is the highest `watermark_path` over the rows read.
+- As on REST, the run asks from a little before the mark:
+  [a change during a run](rest.md#a-change-during-a-run).
 
 ```yaml
 --8<-- "docs/connectors/rest/demo/95-soap-watermark.yaml"
 ```
 
-```
-$ lm run list --connector acme-soap-incremental
-ID        CONNECTOR              ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
-7f2e0dbf  acme-soap-incremental  partners  Completed  1     1     0        0             2026-10-19 01:46  2026-10-19 01:46
-e5a98a0f  acme-soap-incremental  partners  Completed  2400  2400  0        0             2026-10-19 01:46  2026-10-19 01:46
-```
-
-Run 1 reads 2 400 rows; run 2 sends the mark and reads the one row sharing that instant
-(inclusive filter), re-upserted on its key.
+Run 1 reads the 2 400 rows. Run 2 reads only the rows changed since the mark, and upserts them on
+their key: the table stays at 2 400 rows.
 
 !!! warning "Know this before you promise a customer an incremental SOAP feed"
-    The mark goes in the URL query string, not in the body — there is no `{{watermark}}`
-    placeholder:
-
-    ```
-    19/Oct/2026 01:46:44  "POST /siebel/start.swe?updated_since=2026-01-02T15%3A59%3A00Z HTTP/1.1" 200 -
-    ```
+    The mark goes in the URL query string, not in the body: there is no `{{watermark}}`
+    placeholder. The request reads `POST /siebel/start.swe?updated_since=…`.
 
     A service that expects the filter inside the body ignores it. Then filter in the body with a
     literal and leave `incremental` at `full`.
@@ -348,8 +368,9 @@ run per endpoint, as the [stop-signals connector](#where-the-querypage-loop-stop
 |---|---|---|
 | Run fails instantly with `unresolved secret/env placeholder` | `secret:` — the name is neither in `lm secret` nor in the hub's environment; `env:` — it is not in the hub's environment | `lm secret set NAME` for `secret:`; the hub's environment for `env:` |
 | Run fails on HTTP 500 with no retry | a `<soap:Fault>` is never retried | read the `faultstring` in `lm run get`; fix the request or the permission it needs |
-| Run completed with `IN` 0 | `response_path` does not match the answer | write the path **without** namespace prefixes; `lm source rest test` prints the item count of one page |
-| A run reads one row fewer than the source holds | `response_path` carries `[*]` or `..`, or an intermediate segment repeats | use a plain dotted path; the last page holding a single element is where the loss shows |
+| `I/O error (IOException)` on a service that should answer a Fault, five POSTs per run in its log | the service resets its HTTP/2 stream after the answer | set `http_version: "1.1"` in the connector |
+| Run failed on `pagination.response_path reads nothing on the first page` | `response_path` does not match the answer | write the path **without** namespace prefixes; `lm source rest test` shows the same message as its verdict |
+| A run reads one row fewer than the source holds | an intermediate segment of `response_path` repeats in the answer | the last page holding a single element is where the loss shows; compare the row count with the source's |
 | Pagination stops after one page | the flag is missing, null or unreadable, which stops the loop | check `last_page_path` / `has_more_path` against the real answer, or set neither and rely on the short page |
 
 ## See also

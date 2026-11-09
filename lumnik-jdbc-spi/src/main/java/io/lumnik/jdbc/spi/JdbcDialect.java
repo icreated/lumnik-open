@@ -16,7 +16,7 @@ import java.util.Set;
  * <p>{@link #keyComparison} and {@link #limitClause} have no default on purpose: a default
  * (row-value tuple, {@code LIMIT n}) would let a provider compile while emitting SQL its database
  * rejects or reads differently — the silent row loss the key paging must never have. Every provider
- * states both.
+ * states both; {@link #listViews} has none either, so a provider does not inherit another catalog's views.
  */
 public interface JdbcDialect {
 
@@ -90,6 +90,14 @@ public interface JdbcDialect {
 
   /** List user-visible tables in a schema, excluding system tables. */
   List<String> listTables(Connection conn, String schema) throws SQLException;
+
+  /**
+   * List user-visible views in a schema, excluding system views — what {@code --include-views} adds to
+   * the listing. No default on purpose, like {@link #keyComparison}: a provider must state its own
+   * catalog's answer, and one that cannot list views throws {@link SQLException} saying so rather
+   * than returning an empty list, which an integrator would read as "this schema has no view".
+   */
+  List<String> listViews(Connection conn, String schema) throws SQLException;
 
   /** Whether {@code schema.table} is a base table — one catalog lookup by name, no listing. */
   boolean tableExists(Connection conn, String schema, String table) throws SQLException;

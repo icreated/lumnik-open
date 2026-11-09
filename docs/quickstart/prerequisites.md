@@ -6,8 +6,8 @@ This list serves the [guided path](../parcours.md) and any first self-host insta
 Items marked *(real ingestion only)* are not needed for the demo path itself.
 
 !!! note "On Windows, start elsewhere"
-    Follow [Deploy on Windows](../deploy-windows.md) **first** — it installs WSL2 (admin
-    rights + a restart, exactly what to get done before the integrator arrives) and says
+    Follow [Deploy on Windows](../deploy-windows.md) **first**. It installs WSL2, which needs
+    admin rights and a restart: get that done before the integrator arrives. It also says
     which window each command below goes in. Then come back to this checklist.
 
 ## The machine
@@ -15,8 +15,8 @@ Items marked *(real ingestion only)* are not needed for the demo path itself.
 | Item | Requirement | Notes |
 |---|---|---|
 | Docker + Docker Compose v2 | required | a laptop or any cloud VM works |
-| Tools | `curl`, `python3`, `openssl`, `awk`, `jq` | `up.sh` refuses to start without the first four; the self-check below uses `jq`. Debian/Ubuntu: `sudo apt install -y curl python3 openssl gawk jq` |
-| Sizing | **4 vCPU / 16 GB / SSD**, measured for 50 concurrent users ([sizing](../operations/sizing.md)) | the model needs its own budget — see below |
+| Tools | `curl`, `python3`, `openssl`, `awk`, `jq` | `up.sh` stops without the first four. The self-check below uses `jq`. Debian/Ubuntu: `sudo apt install -y curl python3 openssl gawk jq` |
+| Sizing | **4 vCPU / 16 GB / SSD**, measured with 50 concurrent users ([sizing](../operations/sizing.md)) | the model needs its own budget — see below |
 | Free disk | **~20 GB** for a comfortable first install (images + models + data) | the models alone are most of it |
 | Outbound network | required **during install**: github.com (clone), the container registries, ollama.com (models) | at runtime the AI layer is local by default ([Models](../rag/models.md)) |
 | Air-gapped install | **not supported** | no image pre-load or mirror tooling ships |
@@ -24,7 +24,8 @@ Items marked *(real ingestion only)* are not needed for the demo path itself.
 
 ## The AI layer (Ollama)
 
-**lumnik Pro only** — the open edition does not use Ollama; skip this section.
+**lumnik Pro only.** The open edition does not use Ollama: skip this section.
+
 Chat, semantic search and ask need an Ollama the hub can reach. **Install
 [Ollama](https://ollama.com) on the host** (not in a container), then pull the three models:
 
@@ -59,9 +60,9 @@ sudo systemctl daemon-reload && sudo systemctl restart ollama
 
 | Item | Requirement |
 |---|---|
-| Ports | `8080` (hub) and `8180` (Keycloak) must be **free on this machine**; `11434` is Ollama's own (Pro). The stack binds them loopback-only — remote access goes through an SSH tunnel or the [TLS proxy](../deploy.md#one-https-origin-the-tls-proxy) |
-| Source flow *(real ingestion only)* | a network path hub → source database, and a **`SELECT`-only account** on the declared tables ([JDBC → Connection](../connectors/jdbc.md#connection)) — nothing for the guided path: the demo embeds its own sources |
-| First-login accounts | nothing to prepare: the realm ships `hubadmin` and `integrator`, whose passwords land in the generated `.env` at install time ([Quickstart](installer.md)) |
+| Ports | `8080` (hub) and `8180` (Keycloak) must be **free on this machine**. `11434` is Ollama's own (Pro). The stack listens on `127.0.0.1` only: another machine reaches it through an SSH tunnel or the [TLS proxy](../deploy.md#one-https-origin-the-tls-proxy) |
+| Source flow *(real ingestion only)* | a network path from the hub to the source database, and a **`SELECT`-only account** on the declared tables ([JDBC → Connection](../connectors/jdbc.md#connection)). Nothing for the guided path: the demo brings its own sources |
+| First-login accounts | nothing to prepare. The stack ships `hubadmin` and `integrator`; their passwords land in the generated `.env` at install time ([Quickstart](installer.md)) |
 
 ## The 60-second self-check
 

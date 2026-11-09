@@ -170,8 +170,8 @@ lm login        # prints a URL + device code — open it, sign in as integrator
 | `integrator` | 1 | `INTEGRATOR_PASSWORD` — change it before anything real |
 | `hubadmin` (superadmin) | 11 | `HUBADMIN_PASSWORD` |
 
-`--oidc-client-id` defaults to `lm-cli`, the bundled realm's client; set it only for your own IdP.
-Check the login — on a fresh hub, headers only:
+`--oidc-client-id` defaults to `lm-cli`, the bundled realm's client. Set it only for your own IdP.
+Check the login. On a fresh hub, the table is empty:
 
 ```
 $ lm connector list
@@ -182,19 +182,25 @@ NAME  TYPE  TENANT  SCHED  WINDOW  STATUS  LAST RUN
 
 ### Point the hub at an Ollama on another machine
 
-Pro only. Uncomment `OLLAMA_BASE_URL=…` in `.env`, then re-run `up.sh` with your flags. Left
-unset, the hub looks for Ollama on the machine running Docker.
+Pro only. In `.env`, uncomment the `OLLAMA_BASE_URL=` line and set it to that machine, for
+example `http://10.0.0.5:11434`. Then re-run `up.sh` with your flags. Left unset, the hub looks
+for Ollama on the machine running Docker.
 
 ### Switch the AI off
 
-The chat, the ask and the embeddings stop; the data is kept, and the PWA drops its Chat tab.
-The value is exactly `true` or `false`.
+The chat, the ask, view generation and the embeddings stop. The data is kept. The PWA drops its
+Chat tab. The value is exactly `true` or `false`: anything else stops the hub at startup.
 
 | Install | Gesture |
 |---|---|
-| Self-host | `LUMNIK_AI_ENABLED=false` in `.env`, then re-run `up.sh` with the flags you installed with (`--build`, `--search`…). It pulls the hub image: pin `LUMNIK_VERSION` first, or it is also an upgrade. A plain `docker compose restart` keeps the old setting. |
+| Self-host | `LUMNIK_AI_ENABLED=false` in `.env`, then re-run `up.sh` with the flags you installed with (`--build`, `--search`…) |
 | Helm (cloud edition), first install | `LUMNIK_AI_ENABLED=false ./deploy/helm/up.sh` (chart value `ai.enabled`) |
-| Helm (cloud edition), running cluster | `helm upgrade <release> deploy/helm/lumnik --reuse-values --set-string ai.enabled=false`, then `kubectl rollout restart deployment/<release>-hub`. `up.sh` refuses to run on a running cluster — see [Kubernetes / Helm](#kubernetes-helm) |
+| Helm (cloud edition), running cluster | `helm upgrade <release> deploy/helm/lumnik --reuse-values --set-string ai.enabled=false`, then `kubectl rollout restart deployment/<release>-hub` |
+
+- Without `--build`, `up.sh` pulls the hub image. Pin `LUMNIK_VERSION` in `.env` first, or the
+  switch is also an upgrade.
+- A plain `docker compose restart` keeps the old setting.
+- On a running cluster, the Helm `up.sh` refuses to run: see [Kubernetes / Helm](#kubernetes-helm).
 
 Check it with `lm module list`: `rag` and `llm` read `INACTIVE  disabled:lumnik.ai.enabled`.
 What a switch back on restores: [Switching the AI off](rag/models.md#switching-the-ai-off).
@@ -213,32 +219,35 @@ LUMNIK_SMTP_MOCK=false
 Re-run `up.sh` with your flags. Then check the hub's log:
 
 ```bash
-docker compose -f docker-compose.selfhost.yml logs hub | grep 'email delivery'
+docker compose -f docker-compose.selfhost.yml logs hub | grep -E 'email delivery|LUMNIK_SMTP'
 ```
 
-You want a line holding `"message":"email delivery live via smtp.example.com"`. If you set the host
-but not `LUMNIK_SMTP_MOCK=false`, every start logs `LUMNIK_SMTP_HOST is set but delivery is still mocked`.
-With neither set, the hub stays mocked and logs nothing about email. To switch email back off,
-comment the host line out: an empty `LUMNIK_SMTP_HOST=` stops the hub at startup.
+You want a line holding `"message":"email delivery live via smtp.example.com"`. Otherwise:
 
-**Rehearse without a mail provider.** Start the bundled test mailbox, point `.env` at it, restart
-the hub:
+| You set | Every start logs |
+|---|---|
+| the host, not `LUMNIK_SMTP_MOCK=false` | `LUMNIK_SMTP_HOST is set but delivery is still mocked` |
+| `LUMNIK_SMTP_MOCK=false`, no host | `LUMNIK_SMTP_MOCK=false but LUMNIK_SMTP_HOST is not set` |
+| neither | nothing: the hub stays mocked |
+
+To switch email back off, comment the host line out. An empty `LUMNIK_SMTP_HOST=` stops the hub
+at startup.
+
+**Rehearse without a mail provider.** Start the bundled test mailbox, then point `.env` at it:
 
 ```bash
-docker compose --profile mailpit -f docker-compose.selfhost.yml up -d
+docker compose --profile mailpit -f docker-compose.selfhost.yml up -d mailpit
 # .env: LUMNIK_SMTP_HOST=mailpit  LUMNIK_SMTP_PORT=1025  LUMNIK_SMTP_MOCK=false
-docker compose -f docker-compose.selfhost.yml up -d hub
 ```
 
-On a TLS install, run the proxy command instead of the last line.
-Mail then shows at `http://127.0.0.1:8025`. A failed send is not retried:
-[Email notifications](email.md).
+Re-run `up.sh` with your flags. Mail then shows at `http://127.0.0.1:8025`. What a failed send
+does, and where to see it: [Email notifications](email.md#delivery-what-to-expect).
 
 ### Offer Kotlin scripts to the integrators
 
-A `csv-file` connector or a REST endpoint can run a Kotlin script by naming it, `script: hooks:<name>.kts`
-([Kotlin hooks](connectors/kotlin-hooks.md)). The scripts come from
-you: copy the `.kts` files into `deploy/selfhost/hooks/`.
+A `csv-file` connector, or a REST, GraphQL or SOAP endpoint, can run a Kotlin script by naming
+it: `script: hooks:<name>.kts` ([Kotlin hooks](connectors/kotlin-hooks.md)). The scripts come
+from you: copy the `.kts` files into `deploy/selfhost/hooks/`.
 
 ```bash
 cp ean-check.kts deploy/selfhost/hooks/
@@ -247,8 +256,8 @@ cp ean-check.kts deploy/selfhost/hooks/
 | What | How |
 |---|---|
 | The hub sees the directory | read-only. Git ignores the files there. |
-| A new or replaced script | used from the next run, without a restart |
-| The integrator checks | `lm hook scripts` lists name, size and SHA-256; `lm apply` refuses a script that is missing or does not compile |
+| A new or replaced script | taken up from the next batch of rows, without a restart |
+| The integrator checks | `lm hook scripts` lists name, size and SHA-256. `lm apply` refuses a script that is missing or does not compile. |
 | File names | lower-case letters, digits and hyphens, ending in `.kts`. Another name is not offered. |
 
 A script runs with all of the hub's rights. Install only scripts you have read. On Helm, the

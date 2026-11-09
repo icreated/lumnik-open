@@ -1,8 +1,8 @@
 # Deploy on Windows
 
-Your Windows PC can run all of lumnik — the hub, the database, the login server,
-even the AI. This page walks you there step by step: each one says **where to
-type, what to type, and what you should see** before moving on.
+Your Windows PC can run all of lumnik: the hub, the database, the login server,
+and on lumnik Pro the AI. This page walks you there step by step. Each step says
+**where to type, what to type, and what you should see** before moving on.
 
 Total time: about an hour, most of it downloads. You need Windows 10 (version
 21H2 or later) or Windows 11, and around 20 GB of free disk.
@@ -114,19 +114,22 @@ long one, a coffee's worth. Later runs take seconds.
   integrator: per-install password set (INTEGRATOR_PASSWORD in .env)
 
   Hub:       http://localhost:8080   (health: /q/health)
+  Keycloak:  http://localhost:8180/realms/lumnik
+  Next:      point lm at the hub — server http://localhost:8080, OIDC http://localhost:8180/realms/lumnik
 ```
 
-Those two `password set` lines matter: they create your login accounts, with
-passwords unique to your install (stored in a file named `.env`).
+Those two `password set` lines matter. They give your two login accounts a
+password unique to your install, stored in a file named `.env`.
 
 !!! warning "The script stopped straight away, naming missing tools?"
-    That's its preflight doing its job — run the `sudo apt install` line from
+    That's its preflight doing its job. Run the `sudo apt install` line from
     step 3, then run `./deploy/selfhost/up.sh --build` again. It's safe to
     re-run as often as you like.
 
-    If instead the very end says `!! could not obtain a Keycloak admin token`,
-    the login server was slow to finish its first start — simply re-run
-    `./deploy/selfhost/up.sh --build`; the passwords get set on the next pass.
+    A line reads `!! could not obtain a Keycloak admin token` instead of
+    `password set`? The login server was slow to finish its first start.
+    Re-run `./deploy/selfhost/up.sh --build`: the passwords get set on the
+    next pass.
 
 **See it live**: in your normal Windows browser, open
 `http://localhost:8080/q/health`. It starts like this (Windows sees Ubuntu's
@@ -148,9 +151,9 @@ natural-language "ask"** need a local AI runtime:
 [Ollama](https://ollama.com), installed on Windows itself.
 
 !!! warning "On the open edition, skip this step entirely"
-    The modules that call Ollama are not in the tree you cloned at step 3, so nothing in
-    your install will ever reach it — the ~8 GB of downloads below buy you nothing. Come
-    back to this step only on a build that carries the chat extensions.
+    The code you cloned at step 3 has no chat, so nothing in your install ever calls
+    Ollama. The ~8 GB of downloads below would buy you nothing. Come back to this step
+    only on lumnik Pro.
 
 !!! warning "Graphics drivers first — the trap that looks like nothing"
     If your PC has an NVIDIA card, **update its drivers before the first model
@@ -223,16 +226,17 @@ Then just:
 
 ## Where to next
 
-Walk **[The WOW](wow.md)** — ingest two fake
-legacy systems, watch lumnik fuse them, and ask the result a question in plain
-language. One habit to take along: after every `lm connector run …`, check
-`lm run list` — *"run scheduled" is not "run succeeded"*, and the list is where
-the truth lives.
+Walk **[The WOW](wow.md)**: ingest two fake legacy systems, watch lumnik fuse
+them, and ask the result a question in plain language.
 
-- **A phone on this stack:** `http://localhost:8080` is reachable from your PC only. Put the
-  [TLS proxy](deploy.md#one-https-origin-the-tls-proxy) in front.
-- **Another port, an external PostgreSQL:** see [How to…](deploy.md#how-to) — the port stays,
-  use the proxy; an external database is not an option on this path.
+One habit to take along: after every `lm connector run …`, check `lm run list`.
+*"run scheduled" is not "run succeeded"*: the list is where the truth lives.
+
+- **A phone, or another machine:** the hub (`8080`) and Keycloak (`8180`) answer
+  this PC only. Put the [TLS proxy](deploy.md#one-https-origin-the-tls-proxy) in front.
+- **Another port:** there is no setting for it. Use the TLS proxy.
+- **An external PostgreSQL:** not on this path. The self-host stack always runs its own
+  database.
 
 ## Troubleshooting, Windows edition
 

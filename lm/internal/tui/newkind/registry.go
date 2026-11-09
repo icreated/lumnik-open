@@ -87,7 +87,7 @@ func All() []KindTemplate {
 	return []KindTemplate{
 		{"csv-file", "CSV files: local, SFTP, S3", csvFile, "docs/connectors/csv/10-local-simple.yaml", "sources"},
 		{"jdbc-generic", "SQL databases (watermark/full)", jdbcGeneric, "lumnik-hub/src/test/resources/validator/jdbc-multi-table-valid.yaml", "sources"},
-		{"rest-generic", "HTTP/JSON APIs (11 pagination presets)", restGeneric, "docs/connectors/rest/20-page-basic.yaml", "sources"},
+		{"rest-generic", "HTTP/JSON APIs (pagination presets)", restGeneric, "docs/connectors/rest/20-page-basic.yaml", "sources"},
 		{"graphql", "GraphQL APIs (relay pagination)", graphql, "docs/connectors/graphql/10-relay-basic.yaml", "sources"},
 		{"soap", "SOAP/legacy middlewares (Siebel QueryPage)", soap, "docs/connectors/soap/10-siebel-querypage.yaml", "sources"},
 		{"kafka", "Inbound events (Kafka/Redpanda/Event Hubs)", kafka, "docs/connectors/kafka/10-kafka-json.yaml", "sources"},

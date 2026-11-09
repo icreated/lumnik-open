@@ -33,13 +33,16 @@ class NotificationRulesIT {
     @DataSource("admin")
     AgroalDataSource adminDs;
 
-    /** One row-event-emitting table for this tenant — a DynamicTableWriter target, not a hybrid one. */
+    /** Two row-event-emitting tables for this tenant: a DynamicTableWriter target and a hybrid one. */
     @BeforeEach
     void seedATableThatEmits() {
         exec("DELETE FROM core.notification_rule WHERE tenant_id = 7001 AND recipient = 'a@b.c'");
-        exec("DELETE FROM connector.dynamic_table WHERE tenant_id = 7001 AND mapping_id = 'notif-demo'");
+        exec("DELETE FROM connector.dynamic_table WHERE tenant_id = 7001 "
+            + "AND mapping_id IN ('notif-demo', 'hybrid:ext.notif_hybrid')");
         exec("INSERT INTO connector.dynamic_table (tenant_id, mapping_id, table_schema, table_name, schema_inferred) "
             + "VALUES (7001, 'notif-demo', 'connector', 't_notif_demo', '{}'::jsonb)");
+        exec("INSERT INTO connector.dynamic_table (tenant_id, mapping_id, table_schema, table_name, schema_inferred) "
+            + "VALUES (7001, 'hybrid:ext.notif_hybrid', 'ext', 'notif_hybrid', '{}'::jsonb)");
     }
 
     private void exec(String sql) {
@@ -76,6 +79,39 @@ class NotificationRulesIT {
             .body("error", containsString("template"));
     }
 
+    @Test @Order(2)
+    void a_template_the_hub_does_not_carry_is_refused_naming_the_ones_it_does() {
+        // #1916: a typo was accepted, then every matching mail was given up at render.
+        asAdmin(TENANT)
+            .body("{\"eventPattern\":\"decision.*\",\"recipient\":\"a@b.c\",\"template\":\"decision-alrt\"}")
+            .post("/api/notifications")
+        .then().statusCode(400)
+            .body("error", allOf(containsString("'decision-alrt'"),
+                containsString("decision-alert"), containsString("event-notification")));
+    }
+
+    @Test @Order(2)
+    void every_template_the_refusal_names_is_accepted() {
+        // The refusal's list is a constant: this holds it to the templates the hub really carries.
+        for (String name : EmailConsumer.SHIPPED_TEMPLATES) {
+            asAdmin(TENANT)
+                .body("{\"eventPattern\":\"decision.*\",\"recipient\":\"a@b.c\",\"template\":\"" + name + "\"}")
+                .post("/api/notifications")
+            .then().statusCode(201)
+                .body("template", equalTo(name));
+        }
+    }
+
+    @Test @Order(2)
+    void a_star_anywhere_but_a_final_dot_star_is_refused_naming_the_accepted_forms() {
+        asAdmin(TENANT)
+            .body("{\"eventPattern\":\"decision.cold-room-*\",\"recipient\":\"a@b.c\"}")
+            .post("/api/notifications")
+        .then().statusCode(400)
+            .body("error", allOf(containsString("'decision.cold-room-*'"),
+                containsString("exact event type"), containsString("prefix.*")));
+    }
+
     @Test @Order(3)
     void list_is_tenant_bound() {
         asAdmin(TENANT).get("/api/notifications")
@@ -99,17 +135,31 @@ class NotificationRulesIT {
     }
 
     @Test @Order(3)
+    void entity_filter_naming_a_registered_hybrid_table_is_201() {
+        asAdmin(TENANT)
+            .body("{\"eventPattern\":\"data.row.changed\",\"recipient\":\"a@b.c\","
+                + "\"entityFilter\":\"ext.notif_hybrid\"}")
+            .post("/api/notifications")
+        .then().statusCode(201)
+            .body("entityFilter", equalTo("ext.notif_hybrid"));
+    }
+
+    @Test @Order(3)
     void entity_filter_no_event_can_carry_is_refused() {
-        // The entity of a data.row.changed is the table FQN DynamicTableWriter stages, so
+        // The entity of a data.row.changed is the table FQN the row writers stage, so
         // `t_notif_demo` and `customers` match nothing — for ever, silently, and RowEventGate
         // consults the same column, so the event is never even staged.
-        for (String filter : new String[] {"t_notif_demo", "connector.t_absent", "customers"}) {
+        for (String filter : new String[] {"t_notif_demo", "connector.t_absent", "customers", "ext.absent"}) {
             asAdmin(TENANT)
                 .body("{\"eventPattern\":\"data.row.changed\",\"recipient\":\"a@b.c\","
                     + "\"entityFilter\":\"" + filter + "\"}")
                 .post("/api/notifications")
             .then().statusCode(400)
-                .body("error", containsString(filter));
+                .body("error", containsString(filter))
+                // A hybrid table lives in the schema its target names, not only in ext (#1816).
+                .body("error", containsString(
+                    "a hybrid table, <schema>.<name>, usually ext.<name>"
+                        + " (a REST endpoint's target or a one-shot ingest)"));
         }
     }
 

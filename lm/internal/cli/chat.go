@@ -4,11 +4,18 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/icreated/lumnik-open/lm/internal/textsafe"
 
 	"github.com/spf13/cobra"
+)
+
+// The hub refuses a retrieval topK outside this range (RagSearchResource), for every question.
+const (
+	minTopK = 1
+	maxTopK = 50
 )
 
 type chatSession struct {
@@ -77,7 +84,7 @@ func handleSlash(cmd *cobra.Command, s *chatSession, line string) (exit bool) {
 		fmt.Fprintln(cmd.OutOrStdout(), `Commands:
   :corpus NAME     Scope chat to a corpus (or 'all' / '*' for all)
   :scope TAG       Bind chat to one scope (or 'default' for your own)
-  :topK N          Set retrieval top-K
+  :topK N          Set retrieval top-K (1 to 50)
   :clear           Clear screen
   :help / :h       Show this help
   :exit / :q       Quit`)
@@ -112,10 +119,9 @@ func handleSlash(cmd *cobra.Command, s *chatSession, line string) (exit bool) {
 			fmt.Fprintln(cmd.OutOrStdout(), "current topK:", s.topK)
 			return false
 		}
-		var n int
-		_, err := fmt.Sscanf(parts[1], "%d", &n)
-		if err != nil || n < 1 {
-			fmt.Fprintln(cmd.ErrOrStderr(), "invalid topK, must be positive int")
+		n, err := strconv.Atoi(parts[1])
+		if err != nil || n < minTopK || n > maxTopK {
+			fmt.Fprintf(cmd.ErrOrStderr(), "invalid topK, must be an integer from %d to %d\n", minTopK, maxTopK)
 			return false
 		}
 		s.topK = n

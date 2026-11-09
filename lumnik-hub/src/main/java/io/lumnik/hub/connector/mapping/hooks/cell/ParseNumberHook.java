@@ -18,7 +18,8 @@ import java.util.regex.Pattern;
 @HookId("parse-number")
 public class ParseNumberHook implements CellHook {
 
-  private static final Pattern NOISE = Pattern.compile("[\\s$€£¥]");
+  /** {@code \s} is ASCII only: the no-break spaces Java writes as French grouping (#1878) are named. */
+  private static final Pattern NOISE = Pattern.compile("[\\s\u00A0\u2007\u202F$€£¥]");
 
   private static final List<String> SEPARATORS = List.of("auto", ".", ",");
 

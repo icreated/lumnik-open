@@ -18,7 +18,8 @@ Ingested ./clients.csv into ext.quick_look
 A dormant connector is registered — see `lm connector list`.
 ```
 
-- The rows land in `ext.<name>`. `--name quick-look` gives `ext.quick_look`: every `-` becomes `_`.
+- The rows land in `ext.<name>`. `--name quick-look` gives `ext.quick_look`: the name is
+  lower-cased, and any character other than a letter or a digit becomes `_`.
 - Numbers and true/false become typed columns. Dates stay text, like `signup_date` above.
 - The file is askable at once in the scope you pass (Pro, AI on). Without `--scope`, it goes to
   `system`.
@@ -39,8 +40,11 @@ lm csv ingest s3://acme-exports/billing/ --region eu-west-3 --suffix .csv
 
 - An uploaded file is limited to 10 MB. A larger one: put it on SFTP or S3.
 - A remote file is limited to 500 MB, and stays where it is.
-- A folder holds several files: each lands in its own `ext.<filename>`. `--name` takes one file
-  only, and is refused on a folder.
+- Without `--name`, the table is named after the file, without its extension. `clients.csv`
+  lands in `ext.clients`, uploaded or remote.
+- A folder holds several files: each lands in its own table, named after the file. `--name`
+  takes one file only, and is refused on a folder. The summary lists each table with its rows
+  and columns.
 
 ## Load it again
 

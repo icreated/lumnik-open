@@ -1,8 +1,10 @@
 # JDBC — Oracle
 
 > **lumnik Pro.** The Oracle provider ships in lumnik Pro with its JDBC driver — you drop no jar. The open
-> edition has no Oracle provider: a manifest declaring `dialect: oracle` there is refused with
-> `JDBC dialect 'oracle' is not installed. Available: postgres`.
+> edition has no Oracle provider, and refuses an Oracle manifest:
+>
+> - with `dialect: oracle`: `JDBC dialect 'oracle' is not installed. Available: postgres`;
+> - without it: `no installed JDBC dialect accepts url scheme 'jdbc:oracle' — install its provider, or set 'dialect'. Available: postgres`.
 
 ```yaml
 spec:
@@ -37,7 +39,7 @@ spec:
 - **Index `(watermark, key)` on every Oracle table you page.** Without it every page scans the whole
   table. A very large group of rows sharing one watermark value still pages more slowly.
 - **Watermark ties and `NULL`s** behave as on PostgreSQL — see
-  [A run reads what the table held when it started](../jdbc.md#resume-restart-reset).
+  [Resume, restart, reset](../jdbc.md#resume-restart-reset).
 
 | Oracle type | Lands as |
 |---|---|

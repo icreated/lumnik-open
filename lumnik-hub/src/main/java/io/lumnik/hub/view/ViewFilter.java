@@ -7,6 +7,7 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -20,9 +21,16 @@ import java.util.regex.Pattern;
  * ordering operators are exempt from the domain check: a search / a threshold is not a
  * membership assertion. The comparable shapes below are shared verbatim by the SQL world
  * (PG {@code ~} guard) and the in-memory evaluator, so the two can never disagree on a row.
+ * {@code operandColumn} is the column the value names ({@code \{column\}}), set by
+ * {@link #parseProcessCondition} only; null for a literal and for every view filter.
  * Pure: no DB, no HTTP.
  */
-public record ViewFilter(String column, String op, String value) {
+public record ViewFilter(String column, String op, String value, String operandColumn) {
+
+    /** A literal filter: the value is the operand. */
+    public ViewFilter(String column, String op, String value) {
+        this(column, op, value, null);
+    }
 
     /** Two-char operators FIRST — a naive scan would split "montant>=10" on the '='. */
     private static final String[] OPS = {">=", "<=", ">", "<", "=", "~"};
@@ -52,7 +60,28 @@ public record ViewFilter(String column, String op, String value) {
         return null;
     }
 
+    /**
+     * A column operand, {@code \{column\}}: any name without a brace, spaces around it shed. The parser does not judge
+     * the name — a hyphenated column is a column — {@code ProcessConditionResolver} checks it exists (#1830).
+     */
+    private static final Pattern COLUMN_OPERAND = Pattern.compile("^\\{([^{}]+)}$");
+
     public static ViewFilter parse(String raw) {
+        return parse(raw, false);
+    }
+
+    /**
+     * A kind:Process {@code when:} condition: the {@link #parse} grammar, plus a right-hand side that
+     * names another column of the same row — {@code measured_at<\{calib_valid_from\}}. The braces are the
+     * marker, so a bare {@code operator=reviewer} keeps comparing with the literal text, whatever the
+     * table's columns are called. {@code =} and the ordering operators take one; {@code ~} does not.
+     * Views keep the literal-only {@link #parse}: their filters become SQL with a bound operand.
+     */
+    public static ViewFilter parseProcessCondition(String raw) {
+        return parse(raw, true);
+    }
+
+    private static ViewFilter parse(String raw, boolean columnOperand) {
         // Scan left-to-right and build from the first match in the same scope — so the operator
         // is never a nullable sentinel.
         for (int i = 0; i < raw.length(); i++) {
@@ -63,6 +92,14 @@ public record ViewFilter(String column, String op, String value) {
                 if (column.isBlank() || value.isBlank())
                     throw new IllegalArgumentException(
                         "filter '" + raw + "' needs a column and a value — col=value, col~text, or col>value");
+                Matcher braced = COLUMN_OPERAND.matcher(value);
+                String operand = columnOperand && braced.matches() ? braced.group(1).strip() : "";
+                if (!operand.isEmpty()) {
+                    if ("~".equals(op))
+                        throw new IllegalArgumentException("'" + value + "' names a column — a column operand "
+                            + "needs = or an ordering operator (> < >= <=), ~ takes a text");
+                    return new ViewFilter(column, op, value, operand);
+                }
                 refuseQuotedValue(column, op, value);
                 ViewFilter f = new ViewFilter(column, op, value);
                 if (f.ordering() && f.operandType() == null)
@@ -198,6 +235,11 @@ public record ViewFilter(String column, String op, String value) {
     /** The shape first, so nothing absurd reaches the parser, then the parser: a date or a date-time. */
     public static boolean isTemporal(String value) {
         return value.matches(TEMPORAL_SHAPE) && TemporalText.parse(value) != null;
+    }
+
+    /** A date with no time: a day, which an entity's zone bounds (#1912). */
+    public static boolean isDayOnly(String value) {
+        return isTemporal(value) && value.strip().length() == "2026-07-01".length();
     }
 
     /** A float column is compared natively ({@code ?::float8}); Postgres raises on a value it cannot hold

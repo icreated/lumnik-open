@@ -190,11 +190,21 @@ public class EntityReadResource {
       sql.append(i == 0 ? " WHERE " : " AND ");
       ColumnFilter f = filters.get(i);
       // A date against a date or a timestamp column is equal as an instant, a date-only one being its
-      // midnight UTC — the view's `=` (#1310, #1325); a number against a number column by value, 1500.00 being
-      // 1500 (#1338); anything else is the exact text.
+      // midnight in the entity's zone, as the view stores a date source; a day against a plain date column
+      // is that date (#1310, #1325, #1912). A number against a number column by value, 1500.00 being 1500
+      // (#1338); anything else is the exact text.
       ColumnKind kind = typed.getOrDefault(f.column(), ColumnKind.TEXT);
       if (kind.temporal() && ViewFilter.isTemporal(f.value())) {
-        sql.append(quoteIdent(f.column())).append("::timestamptz = CAST(?").append(i + 1).append(" AS timestamptz)");
+        boolean day = ViewFilter.isDayOnly(f.value());
+        if (day && kind == ColumnKind.DATE) {
+          // a column every source gave as a date stays a date: no instant, so no zone
+          sql.append(quoteIdent(f.column())).append(" = CAST(?").append(i + 1).append(" AS date)");
+        } else if (day) {
+          sql.append(quoteIdent(f.column())).append("::timestamptz = (CAST(?").append(i + 1)
+              .append(" AS date)::timestamp AT TIME ZONE ").append(EntityViewCompiler.quoteLiteral(m.sqlZone())).append(")");
+        } else {
+          sql.append(quoteIdent(f.column())).append("::timestamptz = CAST(?").append(i + 1).append(" AS timestamptz)");
+        }
       } else if (kind.number() && ViewFilter.isNumeric(f.value())) {
         sql.append(quoteIdent(f.column())).append("::numeric = CAST(?").append(i + 1).append(" AS numeric)");
       } else {

@@ -69,6 +69,14 @@ class AdminDatasourceTenantGuardTest {
   private static final Map<String, String> DELIBERATE = Map.ofEntries(
       // Four background @Scheduled sweeps: no HTTP caller, no tenant on the thread, cross-tenant
       // by design — the admin datasource is what lets them span tenants.
+      e("ProcessManifestStore:select:core.process_manifest",
+          "the managed-index pass (#1838): which Entity views any tenant's process watches — an index is per table, not per tenant; "
+          + "no row is read back, only the view names"),
+      e("LookupFanOut:select:core.process_fanout,core.process_manifest",
+          "the lookup fan-out worker (#1834) claims the oldest open work row of ANY tenant (FOR UPDATE SKIP LOCKED); every "
+          + "statement after the claim names the row's tenant"),
+      e("LookupFanOut:delete:core.process_fanout",
+          "the purge of finished fan-out rows is by age, across tenants; a finished row is read by no one"),
       e("AuditDispatcher:select:core.audit_outbox",  "drains every tenant's audit outbox"),
       e("AuditDispatcher:update:core.audit_outbox",  "marks the row that same sweep just drained, by id"),
       e("AuditRetentionPurger:delete:core.audit_event", "operator-wide retention purge, all tenants"),

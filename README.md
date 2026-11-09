@@ -24,7 +24,7 @@ before that word goes away.
 
 ## What's in the box
 
-- **Connectors, declarative-first** — JDBC, CSV (local + remote), REST (11 pagination
+- **Connectors, declarative-first** — JDBC, CSV (local + remote), REST (pagination
   presets + body-link), GraphQL sources, SOAP (Siebel QueryPage battle-tested), file drops.
   YAML manifests with a Kotlin escape hatch; per-row DLQ isolation; validate-then-apply.
 - **The hub** — multi-tenant PostgreSQL 16 with Row-Level Security on every row, dynamic

@@ -16,12 +16,15 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
+import java.time.temporal.ChronoField;
 import java.time.temporal.TemporalAccessor;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.StreamSupport;
 
 /**
  * Parses a text cell with the first declared format that fits: a date, or a date and time. A time
@@ -30,6 +33,10 @@ import java.util.Set;
  * the value stays a wall-clock time and the writer stores it as UTC (#1092) — never the zone of the
  * machine the hub runs on. In a daylight-saving gap or overlap, java.time's rule applies (a time in
  * the gap moves forward by the gap, an overlap takes the earlier offset).
+ *
+ * <p>A two-digit year ({@code yy}) has no century in the text, and java.time's own answer — always 20xx — turned
+ * {@code 98} into 2098 in silence (#1857). So a {@code yy} format needs {@code century-from}, the first year of its
+ * 100-year window ({@code 1950}: 50–99 are 19xx, 00–49 are 20xx), and the hook refuses one without it.
  */
 @ApplicationScoped
 @HookId("parse-date")
@@ -48,6 +55,22 @@ public class ParseDateHook implements CellHook {
               "parse-date hook: 'formats[" + i + "]' is not a valid date pattern (" + fault + ")");
         }
       }
+    }
+    // #1857: a two-digit year is read inside a window the integrator declares — no default is right for every source.
+    boolean twoDigitYear = params.has("formats")
+        && StreamSupport.stream(params.get("formats").spliterator(), false)
+            .anyMatch(f -> !twoDigitYears(f.asText()).isEmpty());
+    JsonNode window = params.get("century-from");
+    boolean windowDeclared = window != null && !window.isNull();
+    if (windowDeclared && !(window.isIntegralNumber() && window.canConvertToInt()
+        && window.asInt() >= 1 && window.asInt() <= 9900)) {
+      throw new MappingValidationException(
+          "parse-date hook: 'century-from' must be a whole year between 1 and 9900 (got " + MappingValidationException.typeName(window) + ")");
+    }
+    if (twoDigitYear != windowDeclared) {
+      throw new MappingValidationException(twoDigitYear
+          ? "parse-date hook: 'century-from' is required when a format reads a two-digit year (yy)"
+          : "parse-date hook: 'century-from' has no effect: no format reads a two-digit year (yy)");
     }
     // #1482: read typed — a list or a map `zone` read as "", no zone, UTC, in silence.
     Zones.whyNot(ScalarParams.optionalText("parse-date hook", "zone", params.path("zone"), null)).ifPresent(why -> {
@@ -74,6 +97,41 @@ public class ParseDateHook implements CellHook {
     }
   }
 
+  /** Where each {@code yy} (exactly two {@code y}, outside quotes) starts in a pattern; {@code yyyy} and {@code y} are not. */
+  private static List<Integer> twoDigitYears(String pattern) {
+    List<Integer> at = new ArrayList<>();
+    boolean quoted = false;
+    for (int i = 0; i < pattern.length(); ) {
+      char c = pattern.charAt(i);
+      if (c == '\'') quoted = !quoted;
+      if (quoted || c != 'y') {
+        i++;
+        continue;
+      }
+      int end = i;
+      while (end < pattern.length() && pattern.charAt(end) == 'y') end++;
+      if (end - i == 2) at.add(i);
+      i = end;
+    }
+    return at;
+  }
+
+  /** The pattern's formatter, its {@code yy} read in the 100 years starting at {@code centuryFrom}. */
+  private static DateTimeFormatter formatter(String pattern, int centuryFrom) {
+    // The common pattern has no yy: skip the scan on the per-cell path.
+    List<Integer> years = pattern.contains("yy") ? twoDigitYears(pattern) : List.of();
+    if (years.isEmpty()) return DateTimeFormatter.ofPattern(pattern);
+    DateTimeFormatterBuilder b = new DateTimeFormatterBuilder();
+    int from = 0;
+    for (int at : years) {
+      if (at > from) b.appendPattern(pattern.substring(from, at));
+      b.appendValueReduced(ChronoField.YEAR_OF_ERA, 2, 2, centuryFrom);
+      from = at + 2;
+    }
+    if (from < pattern.length()) b.appendPattern(pattern.substring(from));
+    return b.toFormatter();
+  }
+
   /** The declared zone, or null when there is none: missing, null and blank all count as none, as
    *  they count as missing for KotlinCellHook's `script`. */
   private static String zone(JsonNode params) {
@@ -96,6 +154,7 @@ public class ParseDateHook implements CellHook {
       for (JsonNode f : params.get("formats")) formats.add(f.asText());
     }
 
+    int centuryFrom = params.path("century-from").asInt();
     for (String fmt : formats) {
       boolean hasTime = fmt.contains("H") || fmt.contains("h") || fmt.contains("m") || fmt.contains("s");
       // Not LocalDate.parse: it answers "this format does not fit" — the normal case once several
@@ -107,7 +166,7 @@ public class ParseDateHook implements CellHook {
       // (Compiling each format once was measured too: ~150 ns per three-format cell, about 2% of
       // a mapped row — not worth a cache.)
       ParsePosition pos = new ParsePosition(0);
-      Object parsed = DateTimeFormatter.ofPattern(fmt)
+      Object parsed = formatter(fmt, centuryFrom)
           .toFormat(hasTime ? LocalDateTime::from : LocalDate::from)
           .parseObject(str, pos);
       if (parsed != null && pos.getIndex() == str.length()) {
@@ -126,7 +185,7 @@ public class ParseDateHook implements CellHook {
 
   @Override
   public Set<String> params() {
-    return Set.of("column", "formats", "zone");
+    return Set.of("column", "formats", "zone", "century-from");
   }
 
   @Override

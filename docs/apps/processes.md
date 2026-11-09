@@ -1,14 +1,13 @@
 # kind: Process — react
 
-> The second rung: a **declarative watcher** on ingested rows. When a row lands that matches
-> your conditions, the process emits a `decision.*` event. It always lands in the
-> [inbox](inbox.md); a webhook subscription carries it on to n8n, Make, Zapier or your own
-> endpoint.
+> A **declarative watcher** on ingested rows. When a row lands that matches your conditions, the
+> process emits a `decision.*` event. It always lands in the [inbox](inbox.md). A webhook
+> subscription carries it on to n8n, Make, Zapier or your own endpoint.
 
 | | |
 |---|---|
 | **Kind** | `Process` — `apps.lumnik.io/v1` |
-| **Trigger** | `data.row.changed` on a raw `connector.t_*` table — the only trigger |
+| **Trigger** | `data.row.changed` on a raw `connector.t_*` table, or on a REST connector's `ext.*` table — the only trigger |
 | **Conditions** | the [view filter grammar](views.md#filter-grammar), ANDed, over the table's own columns |
 | **Emits** | one `decision.<name>` event per matching row, `{col}`-templated, fields included |
 | **Commands** | `lm process apply` · `list` · `disable` · `enable` · `rm` — all need `lm_admin` |
@@ -127,14 +126,15 @@ automation needs and the reader does not:
 
 | Field | Required | Meaning |
 |---|---|---|
-| `metadata.name` | yes | kebab-case (`[a-z0-9-]+`); becomes the event's `process` |
+| `metadata.name` | yes | kebab-case (`[a-z0-9-]+`), at most 112 characters; becomes the event's `process` |
 | `spec.scope` | yes | the scope whose [schema card](../rag/http-api.md#schema-admin) declares `on.table` |
 | `spec.on.event` | yes | **must be `data.row.changed`** |
 | `spec.on.table` | yes | the table the connector fills (`connector.t_<name>`) — see [Watch the table the connector fills](#watch-the-table-the-connector-fills) |
-| `spec.when[]` | yes (≥ 1) | conditions in the [view filter grammar](views.md#filter-grammar), ANDed |
+| `spec.when[]` | yes (≥ 1) | conditions in the [view filter grammar](views.md#filter-grammar), ANDed. The right-hand side may name another column of the row: [`{column}`](#compare-two-columns-of-the-same-row) |
 | `spec.emit.type` | yes | **must start with `decision.`** |
 | `spec.emit.message` | yes | the human sentence, `{col}`-templated |
 | `spec.emit.fields` | no | columns the payload's `fields` carries besides those the message names — what an automation needs but a reader should not see; each must be a column of `on.table` |
+| `spec.emit.key` | no | the column whose value is the decision's `ENTITY_KEY` (`key: sample`): the document a reader recognises; a column of `on.table`. Absent, or empty on the row: the row hash — [below](#key-the-decision-by-the-document) |
 
 `apply` refuses a key it does not know and names it — a misspelled `mesage:` is a `400`, not a
 decision with no text.
@@ -144,15 +144,128 @@ enabled processes fire. See [Turn a process off](#turn-a-process-off).
 
 ### Watch the table the connector fills
 
-`on.table` is the table a connector fills, and `when` columns are that table's own. A fused
-entity (`connector.v_*`) and a REST `ext.*` table are refused: a process could never fire on them.
+`on.table` is the table a connector fills, and `when` columns are that table's own. A table the
+scope's card does not carry yet is refused. So is a table no connector writes rows into: the process
+could never fire.
+
+### Watch an Entity
+
+`on.table` can be the view of a `match:` Entity: `connector.v_<entity>`. A change in any of the
+Entity's source tables re-evaluates the **fused row** it belongs to. So `when` may read columns that no
+single source holds: a credit limit from the ERP and a segment from the CRM.
+
+```yaml
+spec:
+  scope: desk
+  on: { event: data.row.changed, table: connector.v_acmecustomer }
+  when: [ city=Lyon ]
+  emit: { type: decision.lyon, message: "Client {name} à Lyon" }
+```
+
+The full file is `docs/apps/demo/processes/30-lyon-customer.yaml`.
+
+- **One decision per event and per fused row.** A change that still satisfies the rule decides
+  again, as it does on a table. A replay of the same event does not.
+- **Columns:** `when`, `{col}` in the message, `emit.fields` and `emit.key` are columns of the
+  Entity. Without `emit.key`, the decision's key is the Entity's canonical key.
+- **Isolation:** another tenant's rows with the same key are never fused in.
+- **Refused at apply:** an Entity with `resolution:` (not supported yet), an Entity one of whose
+  sources or lookups no connector fills, and a match or join key the hub cannot serve (below).
+- **Speed:** the hub prepares an index on each source table by itself, in the background. You
+  declare nothing. Until it is ready the process works, more slowly, and the apply warns:
+  `managed index on connector.t_results is pending; Entity Process reads may be slower until it is ready`.
+  The warning disappears once the index exists.
+- **Match keys it can serve:** text, whole numbers, and timestamps with a time zone. A decimal key,
+  or a date matched with a timestamp, is refused: at the process apply, and at an Entity re-apply
+  while a process listens on it. Make the key a text or a whole number in the Entity.
+  A process applied on such a key by an older hub keeps running, slowly: change the key, then apply the process again.
+- **A change in a lookup:** see [below](#a-change-in-a-lookup).
+- **Not covered:** a deleted row, the old key of a row whose match key changed, and the rows already
+  there when the process is applied.
+
+The first apply warns on stderr, one line per source table:
 
 ```
-$ lm process apply -f docs/apps/demo/processes/63-refused-fused-view.yaml
-Error: API error 400: spec.on.table 'connector.v_acmecustomer' is a fused entity view — data.row.changed is born on the raw table a connector writes, never on a view, so this process could never fire — declare it on connector.t_acme_desk_erp or connector.t_acme_desk_crm
+$ lm process apply -f docs/apps/demo/processes/30-lyon-customer.yaml
+Applied process "lyon-customer" → table connector.v_acmecustomer, emits decision.lyon
+warning: managed index on connector.t_acme_desk_erp is pending; Entity Process reads may be slower until it is ready
+warning: managed index on connector.t_acme_desk_crm is pending; Entity Process reads may be slower until it is ready
 ```
 
-Declare one process per raw source, or move the condition to the source that carries it.
+A few seconds later, the same command says only the first line:
+
+```
+$ lm process apply -f docs/apps/demo/processes/30-lyon-customer.yaml
+Applied process "lyon-customer" → table connector.v_acmecustomer, emits decision.lyon
+```
+
+An Entity that matches on a decimal applies. A process on it does not
+(`docs/apps/demo/entities/66-partner-by-amount.yaml`, `docs/apps/demo/processes/63-refused-decimal-key.yaml`):
+
+```
+$ lm entity apply -f docs/apps/demo/entities/66-partner-by-amount.yaml
+Applied entity "PartnerByAmount" → connector."v_partnerbyamount"
+$ lm process apply -f docs/apps/demo/processes/63-refused-decimal-key.yaml
+Error: API error 400: an index on connector.t_due_partner cannot serve this key: it is read through trim_scale, and under row-level security PostgreSQL does not let an index serve a call to it — use a text, a whole-number or a timestamptz match key
+```
+
+#### A change in a lookup
+
+An Entity can enrich its rows from a lookup table (`joins:`): a register of instruments beside the
+results, for instance. A change in the lookup re-evaluates **every fused row it reaches**. A
+recalibration in the register re-evaluates every result of that instrument.
+
+```yaml
+spec:
+  scope: lab
+  on: { event: data.row.changed, table: connector.v_labresult }
+  when: [ "measured_at>{calib_valid_until}" ]   # the date is the register's, the result is the other table's
+  emit: { type: decision.out-of-calibration, message: "{result_id} was measured out of calibration", key: result_id }
+```
+
+- **How many rows:** as many as the lookup row reaches. Nothing caps it.
+- **When the decisions come:** not at once. They appear in `lm inbox` as the background work
+  progresses. The hub log says when it is over:
+  `process fan-out done: process 'out-of-calibration', … 42317 keys reached`.
+- **If the database is down** when the lookup row changes, the hub log says the change was not
+  queued (`could not be queued — its fused rows are NOT re-evaluated`). Save the lookup row again.
+- **A restart is safe.** The work resumes. A row is never decided twice for the same change.
+- **The lookup key:** a lookup row without a key, or deleted, reaches nothing. A lookup row whose key
+  changed reaches the rows of its new key only.
+- **Speed:** the hub builds an index by itself first. Until it is ready the work waits. Nothing is lost.
+- **Join keys it can serve:** text, numbers, and two dates or two timestamps. A date or a timestamp
+  joined to a **text** column is refused at apply:
+  `an index on connector.t_results cannot serve this key: … — join the two columns as text, as numbers, or as two dates or two timestamps`.
+  Give both columns the same kind.
+- **A process switched off** does not decide. Its work waits until you turn it on again.
+- **Not covered:** the rows already there when the process is applied.
+
+### Compare two columns of the same row
+
+A condition can compare a column with another column of the same row. Write the other column in
+braces: `{column}`. The braces tell it from a literal, so `operator=reviewer` still compares
+`operator` with the text `reviewer`.
+
+```yaml
+spec:
+  scope: lab
+  on: { event: data.row.changed, table: ext.lab_results }
+  when:
+    - "measured_at>{calib_valid_until}"   # measured after the instrument's calibration ran out
+  emit: { type: decision.out-of-calibration, message: "{sample} was measured out of calibration" }
+```
+
+Quote the entry: in a YAML list, a bare `{` opens a map.
+
+- **Operators:** `=`, `>`, `>=`, `<`, `<=`. `~` takes a text, not a column.
+- **Kinds:** both columns are numbers, both are dates, or both are texts. A number against a date is
+  refused at apply. A type the hub cannot order (an interval, a boolean) takes `=` against its own type.
+- **Texts:** `=` on two texts is exact: `01` is not `1`. `<` and `>` read a text holding a number or a date as one.
+- **Names:** the name in braces must be a column of the table. `{limit-value}` works for a column called `limit-value`.
+- **Nulls:** a null on either side never matches, as for a literal.
+- **Dates:** a date and a timestamp compare as instants. A date is read as midnight UTC.
+- **Two bounds:** conditions are ANDed. For "before the start **or** after the end", declare two processes.
+- **Views:** a view filter stays literal-only. This is for processes.
 
 ## Message templating
 
@@ -187,6 +300,67 @@ ID  WHEN      PROCESS        MESSAGE                                            
 **A row that matches two processes fires two decisions**, one per process —
 [shown below](#watch-a-second-condition-on-the-same-table).
 
+A Process does not evaluate rows that existed before it was applied. Only subsequent inserts and source changes can trigger it.
+
+### Processes on REST tables
+
+A REST connector's `ext.*` table can carry a process, like a `connector.t_*` table.
+Apply the process after the first run completes: the table exists only then.
+A new row fires the process. So does a row whose content changed at the source.
+A re-read that changes nothing fires nothing.
+`when` and `{col}` name the table's promoted columns.
+
+A REST connector fills `ext.lab_results` (`unique_key: $.sample`). After its first run:
+
+```yaml
+--8<-- "docs/apps/demo/processes/40-rest-over-limit.yaml"
+```
+
+```
+$ lm process apply -f docs/apps/demo/processes/40-rest-over-limit.yaml
+Applied process "lab-over-limit-c" → table ext.lab_results, emits decision.lab-over-limit-c
+```
+
+Nothing changed at the source:
+
+```
+$ lm connector run lab-results
+run scheduled: 2d3f054d-0e61-4053-b227-54066ab3cf35
+$ lm inbox --process lab-over-limit-c
+ID  WHEN  PROCESS  MESSAGE  ENTITY_KEY
+```
+
+Then plate `AR-22` is counted at 2400 colonies at the source, and the connector runs again:
+
+```
+$ lm connector run lab-results
+run scheduled: fc7ff0f9-64f1-4735-8cfb-4ebf0ba9d2d7
+$ lm inbox --process lab-over-limit-c
+ID  WHEN      PROCESS           MESSAGE                                                                                  ENTITY_KEY
+8   just now  lab-over-limit-c  AR-22 (Fleming): 2400 CFU/plate, a clean plate holds at most 100 — state to_be_verified  AR-22
+```
+
+### Key the decision by the document
+
+By default a decision's `ENTITY_KEY` is the row hash. A reader does not recognise a hash.
+`spec.emit.key` names the column that identifies the document. A value longer than 200
+characters shows as a `sha256:` digest; the payload's `entity_key` keeps it whole.
+
+```yaml
+emit:
+  type: decision.plate-over-limit-c
+  key: sample
+  message: "{sample} ({research_group}): {result} {unit}, a clean plate holds at most 100 — state {review_state}"
+```
+
+A SENAITE LIMS read over REST, after one plate is counted at 2400 colonies:
+
+```
+$ lm inbox --process scenario-senaite-over-limit-c
+ID     WHEN      PROCESS                        MESSAGE                                                                                                     ENTITY_KEY
+23570  just now  scenario-senaite-over-limit-c  analysisrequest-24 (Fleming group): 2400 CFU/plate, a clean plate holds at most 100 — state to_be_verified  analysisrequest-24
+```
+
 ## Delivery is opt-in
 
 A decision always lands in [the inbox](inbox.md). Reaching an external system also needs a
@@ -212,8 +386,6 @@ $ lm process apply -f docs/apps/demo/processes/61-refused-placeholder.yaml
 Error: API error 400: message references {customer_name} — not a column of connector.t_acme_desk_orders
 $ lm process apply -f docs/apps/demo/processes/62-refused-emit-type.yaml
 Error: API error 400: spec.emit.type is required and must start with 'decision.' — the governed taxonomy
-$ lm process apply -f docs/apps/demo/processes/63-refused-fused-view.yaml
-Error: API error 400: spec.on.table 'connector.v_acmecustomer' is a fused entity view — data.row.changed is born on the raw table a connector writes, never on a view, so this process could never fire — declare it on connector.t_acme_desk_erp or connector.t_acme_desk_crm
 $ lm process apply -f docs/apps/demo/processes/64-refused-quoted-value.yaml
 Error: API error 400: filter value 'EN LITIGE' is quoted; a value here is a bare literal, so the quotes would be compared to status too — write status=EN LITIGE
 ```
@@ -297,10 +469,18 @@ Each gesture is recorded in the [audit trail](../security/index.md#the-audit-tra
 |---|---|---|
 | apply refused: `unknown key(s) in the manifest: …` | a misspelled field (`mesage:`) | the message lists what `kind:Process` honors — fix the spelling |
 | apply refused `404`: `no schema for scope '…' — run discovery first` | `spec.scope` is not a discovered scope | `lm source rediscover --scope <tag>` (`lm_integrator` + `lm_admin`, a scope you hold); `lm source schema --scope <tag>` shows what it holds |
-| apply refused: `spec.on.table '…' is not in the '…' scope` | the scope's card does not carry that table | `lm source schema --scope <tag>`, then fix the name |
-| apply refused: `spec.on.table '…' is a fused entity view …` | the trigger is a `connector.v_*` view | declare the process on one of the raw tables the message names |
-| apply refused: `spec.on.table '…' cannot fire …` | the table is in the card but no connector writes rows into it (an `ext.*` hybrid target) | declare the process on a `connector.t_*` table |
+| apply refused: `spec.on.table '…' is not in the '…' scope` | the scope's card does not carry that table: a misspelled name, or an `ext.*` table no run has created yet | `lm source schema --scope <tag>`, then fix the name. For an `ext.*` table, wait for the first run to complete (the hub refreshes the card itself); if the table is still missing, `lm source rediscover --scope <tag>` |
+| apply refused: `spec.on.table '…' is a resolution: Entity …` | a process on an Entity that has a `resolution:` is not supported yet | declare it on a `match:` Entity, or on one of the raw tables the message names |
+| apply refused: `spec.on.table '…' joins connector.t_…, which cannot fire` | no connector fills one of the Entity's lookup tables | run the connector that fills it, then apply again |
+| apply refused: `an index on … cannot serve this key … join the two columns as text …` | a join compares a date or a timestamp with a text column | give both columns the same kind in the connector or the Entity |
+| a lookup change decided nothing yet | the work runs in the background, and waits for its index | wait; the decisions arrive in `lm inbox`. A process turned off waits too |
+| apply refused: `spec.on.table '…' is the view of an Entity whose stored definition cannot be read` | the Entity was applied by another hub version | apply the Entity again, then the process |
+| apply refused: `spec.on.table '…' fuses connector.t_…, which cannot fire` | no connector fills one of the Entity's source tables | run the connector that fills it, then apply again |
+| apply refused: `spec.on.table '…' cannot fire …` | the table is in the card but no connector writes rows into it | declare the process on a `connector.t_*` or an `ext.*` table |
+| a process on an `ext.*` table never fired on the rows already there | it was applied after those rows landed | expected: see the limit above. Only new rows and source changes fire |
 | apply refused: `when: column '…' is not in …`, or `'…' is not an allowed value for …` | an unknown column, or an `=` value outside its declared domain | fix the condition against the card |
+| apply refused: `when: cannot compare '…' (…) with '…' (…)` | the two columns are not of one kind (a date against a number) | compare columns of the same kind |
+| apply refused: `when: column '…' is not in …` on a `{column}` | the column in braces is not a column of the trigger table | fix the name |
 | apply refused: `message references {…} — not a column of …` | a placeholder that is not a column of the trigger table | fix the placeholder, or drop it |
 | apply refused: `spec.emit.type … must start with 'decision.'` | an emit type outside the taxonomy | `decision.<something>` |
 | a process never fires on a re-run | the rows were already in the table | expected: only new rows fire |

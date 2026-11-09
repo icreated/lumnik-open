@@ -9,12 +9,13 @@ package client
 // Mirrored from the resources named beside them; a hub that raises one of these makes the client
 // stop short, not overreach.
 const (
-	RunsPageCap         = 200  // RunAdminResource
-	DlqPageCap          = 200  // DlqAdminResource
-	InboxPageCap        = 200  // InboxResource
-	OutputsPageCap      = 500  // PlatformDeliveryResource
-	ConflictsPageCap    = 1000 // EntityConflictsResource
-	ObservationsPageCap = 1000 // WorkflowResource
-	AmbiguousPageCap    = 1000 // EntityResolutionReadResource.ambiguous
-	EntityRowsPageCap   = 1000 // EntityReadResource.read
+	RunsPageCap           = 200  // RunAdminResource
+	DlqPageCap            = 200  // DlqAdminResource
+	InboxPageCap          = 200  // InboxResource
+	OutputsPageCap        = 500  // PlatformDeliveryResource
+	MailDeliveriesPageCap = 500  // NotificationDeliveryResource
+	ConflictsPageCap      = 1000 // EntityConflictsResource
+	ObservationsPageCap   = 1000 // WorkflowResource
+	AmbiguousPageCap      = 1000 // EntityResolutionReadResource.ambiguous
+	EntityRowsPageCap     = 1000 // EntityReadResource.read
 )

@@ -24,13 +24,33 @@ public final class ConfigDefValidators {
             : Optional.of("must match " + desc);
     }
 
-    public static Function<JsonNode, Optional<String>> inRange(int min, int max) {
+    /**
+     * A whole number in {@code [min, max]}: an integral JSON number that fits a long, or the
+     * digits of one as text (ASCII, an optional minus).
+     * Never {@code asInt()}: {@code 4294967297} wraps to {@code 1} there, a fraction truncates and text reads as 0
+     * (#1809). Safe for a LONG field.
+     */
+    public static Function<JsonNode, Optional<String>> inRange(long min, long max) {
+        String refusal = "must be a whole number between " + min + " and " + max;
         return v -> {
-            int n = v.asInt();
-            return (n >= min && n <= max)
-                ? Optional.empty()
-                : Optional.of("must be between " + min + " and " + max);
+            Long n = wholeNumber(v);
+            return n != null && n >= min && n <= max ? Optional.empty() : Optional.of(refusal);
         };
+    }
+
+    /** The digits of a whole number, as JSON writes one: ASCII only, no leading plus ({@code Long.valueOf} takes both). */
+    private static final Pattern WHOLE_NUMBER = Pattern.compile("-?[0-9]+");
+
+    private static Long wholeNumber(JsonNode v) {
+        if (v.isIntegralNumber()) return v.canConvertToLong() ? v.longValue() : null;
+        if (!v.isTextual()) return null;
+        String digits = v.asText().strip();
+        if (!WHOLE_NUMBER.matcher(digits).matches()) return null;
+        try {
+            return Long.valueOf(digits);
+        } catch (NumberFormatException e) {
+            return null;   // more digits than a long holds
+        }
     }
 
     public static Function<JsonNode, Optional<String>> nonEmpty() {

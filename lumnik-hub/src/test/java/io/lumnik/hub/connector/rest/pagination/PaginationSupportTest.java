@@ -123,7 +123,29 @@ class PaginationSupportTest {
         RestResponse page = RestResponse.of(200, Map.of("X-Total-Count", List.of(value)), "[{}]");
         ConnectorException e = assertThrows(ConnectorException.class,
             () -> PaginationSupport.declaredItems(page, null, "X-Total-Count"));
-        assertEquals("pagination.total_header must read a row count: a whole number from 0", e.getMessage());
+        assertEquals(ROW_COUNT_REFUSAL, e.getMessage());
+    }
+
+    private static final String ROW_COUNT_REFUSAL =
+        "pagination.total_header must read a row count: a whole number from 0, or the total of a range (items 0-19/57)";
+
+    /** #1866: the Domino Data Service sends the view's count as {@code Content-Range: items 0-19/57}. */
+    @ParameterizedTest
+    @ValueSource(strings = {"items 0-19/57", " items 0-19/57 ", "items */57", "rows 20-39/57"})
+    void declaredItems_from_a_header_reads_the_total_of_a_range(String value) {
+        RestResponse page = RestResponse.of(200, Map.of("Content-Range", List.of(value)), "[{}]");
+        assertEquals(OptionalLong.of(57), PaginationSupport.declaredItems(page, null, "Content-Range"));
+    }
+
+    /** A range whose total is unknown is no count; neither is a malformed one, nor a {@code bytes} range, whose total counts bytes. */
+    @ParameterizedTest
+    @ValueSource(strings = {"items 0-19/*", "items 0-19", "items 0-19/-1", "items 0-19/5.5", "items a-b/57", "0-19/57",
+        "bytes 0-19/57", "Bytes */57", "BYTES 0-19/57"})
+    void declaredItems_from_a_header_refuses_a_range_without_a_known_row_total(String value) {
+        RestResponse page = RestResponse.of(200, Map.of("Content-Range", List.of(value)), "[{}]");
+        ConnectorException e = assertThrows(ConnectorException.class,
+            () -> PaginationSupport.declaredItems(page, null, "Content-Range"));
+        assertEquals(ROW_COUNT_REFUSAL, e.getMessage());
     }
 
     @Test

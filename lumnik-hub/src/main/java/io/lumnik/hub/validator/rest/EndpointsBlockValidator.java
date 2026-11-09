@@ -150,7 +150,7 @@ public final class EndpointsBlockValidator {
      * connector's, so the run looks each one up here first. Declared below so the closed sweep does not call them
      * ignored; {@link RestConnectorValidator} sends them back up to spec, where they are checked.
      */
-    public static final List<String> CONNECTOR_LEVEL_KEYS = List.of("base_url", "auth", "tls", "default_rate_limit", "graphql_path");
+    public static final List<String> CONNECTOR_LEVEL_KEYS = List.of("base_url", "auth", "tls", "http_version", "default_rate_limit", "graphql_path");
 
     /** The connector-level keys that are blocks, not strings. */
     private static final Set<String> CONNECTOR_LEVEL_BLOCKS = Set.of("auth", "tls");

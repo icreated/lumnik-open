@@ -7,6 +7,7 @@ import org.apache.commons.csv.CSVRecord;
 
 import io.lumnik.hub.connector.api.types.MalformedRecord;
 
+import java.io.IOException;
 import java.io.Reader;
 import java.io.UncheckedIOException;
 import java.nio.charset.Charset;
@@ -44,8 +45,25 @@ public class CsvFileReader {
       boolean hasHeader,
       boolean bomStrip,
       List<String> nullValues,
-      List<String> columns          // required when hasHeader == false; ignored otherwise
+      List<String> columns,         // required when hasHeader == false; ignored otherwise
+      boolean skipLeadingShortRows, // #1863: skip the too-short lines BEFORE the first full-width one
+      Character escape              // #1877: the character that escapes a quote inside a quoted value; null = RFC 4180 doubling
   ) {
+    /**
+     * Every config but the one of a first read of a headerless file has no preamble to skip, so
+     * {@code skipLeadingShortRows} is off unless said: a window resumed from a checkpoint is mid-table by construction.
+     */
+    public Config(Charset encoding, char delimiter, boolean hasHeader, boolean bomStrip,
+                  List<String> nullValues, List<String> columns) {
+      this(encoding, delimiter, hasHeader, bomStrip, nullValues, columns, false);
+    }
+
+    /** No escape character unless said: the file doubles its quotes (RFC 4180). */
+    public Config(Charset encoding, char delimiter, boolean hasHeader, boolean bomStrip,
+                  List<String> nullValues, List<String> columns, boolean skipLeadingShortRows) {
+      this(encoding, delimiter, hasHeader, bomStrip, nullValues, columns, skipLeadingShortRows, null);
+    }
+
     /**
      * The delimiter of {@code parser.lines: true} (#1415): ASCII's own unit separator — a marker, never a split: a
      * line that holds it is joined back whole ({@code lineRow}). Line mode rides on the delimiter
@@ -66,7 +84,11 @@ public class CsvFileReader {
   }
 
   public static Config autoDetect(Path file) {
-    Charset enc = EncodingDetector.detect(file);
+    return autoDetect(file, EncodingDetector.detect(file));
+  }
+
+  /** The detection of a file whose encoding is already chosen: ICU runs once for the file, not once per ask. */
+  public static Config autoDetect(Path file, Charset enc) {
     char delim = DelimiterDetector.detect(file, enc);
     return new Config(enc, delim, true, true,
         List.of("", "NULL", "null", "#N/A"), null);
@@ -104,7 +126,7 @@ public class CsvFileReader {
                            Consumer<Map<String, Object>> rows,
                            Consumer<MalformedRecord> malformed) throws Exception {
     Config effective = cfg == null ? autoDetect(file) : cfg;
-    return readWindow(Files.newBufferedReader(file, effective.encoding()), file.toString(),
+    return readWindow(decoding(file, effective.encoding()), file.toString(),
         effective, skip, maxGood, rows, malformed);
   }
 
@@ -183,7 +205,21 @@ public class CsvFileReader {
     long seen = 0;       // events read from the stream start (good + malformed)
     long consumed = 0;   // events delivered or isolated past `skip` (this window)
     int good = 0;        // good rows delivered this window
-    try (CSVParser parser = buildFormat(effective).parse(rdr)) {
+    // #1863: false while the table has not begun, and only a read from the top can be in that state — a resumed
+    // window's config does not ask (skipLeadingShortRows is off), so it starts mid-table.
+    boolean preamble = effective.skipLeadingShortRows();
+    CSVParser opened;
+    try {
+      opened = buildFormat(effective).parse(rdr);
+    } catch (CheckpointingReader.UndecodableByteException headerBytes) {
+      // The first record, header included, holds a byte the encoding does not map: nothing was read.
+      if (seen >= skip) {
+        malformed.accept(new MalformedRecord(fileLabel, lineBase + 1, null, undecodableSentence(headerBytes, lineBase + 1)));
+        consumed++;
+      }
+      return new Scan(consumed, true, null, 0L, List.of());
+    }
+    try (CSVParser parser = opened) {
       Set<String> nullSet = new HashSet<>(effective.nullValues());
       Map<String, String> originalToStripped = strippedHeaders(parser, effective.bomStrip());
       int declaredColumns = parser.getHeaderNames().size();
@@ -201,14 +237,27 @@ public class CsvFileReader {
           // I/O wrapper on purpose: any OTHER RuntimeException (e.g. an NPE) is a real defect and
           // must propagate to fail the run loudly, not masquerade as a "malformed source" entry.
           if (seen >= skip) {
-            malformed.accept(new MalformedRecord(
-                fileLabel, lineBase + parser.getCurrentLineNumber(), null, desyncSentence(tokenizerDesync)));
+            long line = lineBase + parser.getCurrentLineNumber();
+            // A byte the encoding cannot decode sits in the record after the last one read (#1887): the parser's
+            // line number is already that record's.
+            malformed.accept(tokenizerDesync.getCause() instanceof CheckpointingReader.UndecodableByteException bytes
+                ? new MalformedRecord(fileLabel, line, null, undecodableSentence(bytes, line))
+                : new MalformedRecord(fileLabel, line, null, desyncSentence(tokenizerDesync)));
             consumed++;
           }
           return new Scan(consumed, true, null, 0L, headers);
         }
+        boolean leadingShort = preamble && rec.size() < declaredColumns;
+        if (!leadingShort) preamble = false;   // the first full-width record: the table has begun
         if (seen++ < skip) {
           continue;   // already-consumed event on resume: counted, delivered to no one
+        }
+        if (leadingShort) {
+          // The block before the table (#1863): read, counted, not an anomaly. The line it stood on is kept for the log.
+          malformed.accept(new MalformedRecord(fileLabel, lineBase + parser.getCurrentLineNumber(),
+              rec.toList(), "Leading short row skipped: " + rec.size() + " of " + declaredColumns + " values", true));
+          consumed++;
+          continue;
         }
         Map<String, Object> row;
         try {
@@ -301,6 +350,7 @@ public class CsvFileReader {
     if (effective.hasHeader() && !effective.lines()) {
       return CSVFormat.Builder.create(CSVFormat.DEFAULT)
           .setDelimiter(effective.delimiter())
+          .setEscape(effective.escape())
           .setHeader()
           .setSkipHeaderRecord(true)
           .setIgnoreEmptyLines(true)
@@ -314,17 +364,22 @@ public class CsvFileReader {
     return CSVFormat.Builder.create(CSVFormat.DEFAULT)
         .setDelimiter(effective.delimiter())
         .setQuote(effective.lines() ? null : CSVFormat.DEFAULT.getQuoteCharacter())
+        .setEscape(effective.escape())
         .setHeader(effective.columns().toArray(new String[0]))
         .setSkipHeaderRecord(false)
         .setIgnoreEmptyLines(true)
         .build();
   }
 
-  /** Map each header key to its BOM-stripped form, parsed once and reused per row. */
+  /**
+   * Map each header key to its BOM-stripped, trimmed form, parsed once and reused per row. The
+   * trim is unconditional: a legacy export may pad its header line to a display width (#1853).
+   * Two names equal after trimming collapse like any repeated name (see {@link #toRow}).
+   */
   private Map<String, String> strippedHeaders(CSVParser parser, boolean bomStrip) {
     Map<String, String> originalToStripped = new LinkedHashMap<>();
     for (String originalKey : parser.getHeaderMap().keySet()) {
-      originalToStripped.put(originalKey, stripBom(originalKey, bomStrip));
+      originalToStripped.put(originalKey, stripBom(originalKey, bomStrip).strip());
     }
     return originalToStripped;
   }
@@ -378,6 +433,24 @@ public class CsvFileReader {
       row.put(entry.getValue(), nullSet.contains(v) ? null : v);
     }
     return row;
+  }
+
+  /**
+   * A reader that decodes the file with the encoding the read uses, saying where it cannot ({@link
+   * CheckpointingReader.UndecodableByteException}) — and delivering the lines before that byte first.
+   */
+  static Reader decoding(Path file, Charset encoding) throws IOException {
+    return new CheckpointingReader(Files.newInputStream(file), encoding);
+  }
+
+  /**
+   * The sentence for a byte the encoding has no character for: the encoding, the byte, the line (the one the record
+   * holding it starts on) and the gesture. The lines before it were read; nothing past it can be.
+   */
+  private static String undecodableSentence(CheckpointingReader.UndecodableByteException e, long line) {
+    return e.charset().name() + " has no character for the byte " + e.hex() + " at line " + line
+        + ": the file cannot be read past it. If " + e.charset().name()
+        + " is not the file's encoding, declare the right one in parser.encoding";
   }
 
   private static String columns(int declared) {

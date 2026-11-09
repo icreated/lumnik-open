@@ -338,6 +338,92 @@ class CsvFileConnectorValidatorTest {
             () -> "expected exactly a refusal of spec.parser." + key + ", got: " + r.errors());
     }
 
+    private ObjectNode withShortRows(String shortRows, Boolean hasHeader) throws Exception {
+        ObjectNode doc = (ObjectNode) load("csv-local-valid.yaml");
+        ObjectNode parser = ((ObjectNode) doc.path("spec")).putObject("parser");
+        parser.set("short_rows", mapper.readTree(shortRows));
+        if (hasHeader != null) {
+            parser.put("has_header", hasHeader);
+            if (!hasHeader) parser.putArray("columns").add("id").add("x").add("y");
+        }
+        return doc;
+    }
+
+    /** #1863: skip-leading and error are the two ends; a headerless table (declared columns) is what it needs. */
+    @ParameterizedTest
+    @ValueSource(strings = {"\"skip-leading\"", "\"error\""})
+    void shortRows_onAHeaderlessTable_isAccepted(String value) throws Exception {
+        ValidationResult r = service.validate(withShortRows(value, false));
+        assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
+        assertTrue(r.warnings().stream().noneMatch(w -> w.path().contains("short_rows")),
+            () -> "short_rows must be a known parser key, got: " + r.warnings());
+    }
+
+    /** A value that is not one of the two is refused where it is written, whatever its type. */
+    @ParameterizedTest
+    @ValueSource(strings = {"\"skip\"", "\"skip_leading\"", "\"\"", "true", "1", "[\"skip-leading\"]"})
+    void shortRows_withAnyOtherValue_isRefused(String value) throws Exception {
+        ValidationResult r = service.validate(withShortRows(value, false));
+        assertEquals(List.of("spec.parser.short_rows"), r.errors().stream().map(e -> e.path()).toList(),
+            () -> "expected a refusal of spec.parser.short_rows, got: " + r.errors());
+    }
+
+    /** With a header line the first line IS the header: a block before it cannot be told from it. Accepted then ignored is refused. */
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {"true", "null"}, nullValues = "null")
+    void shortRowsSkipLeading_withAHeaderLine_isRefused(Boolean hasHeader) throws Exception {
+        ValidationResult r = service.validate(withShortRows("\"skip-leading\"", hasHeader));
+        assertEquals(List.of("spec.parser.short_rows"), r.errors().stream().map(e -> e.path()).toList(),
+            () -> "expected a refusal of spec.parser.short_rows, got: " + r.errors());
+        assertTrue(r.errors().get(0).message().contains("has_header: false"), () -> r.errors().toString());
+    }
+
+    /** lines: true gives one value per line, never short: the refusal is lines', and the only one. */
+    @Test void shortRowsSkipLeading_withLines_isRefusedOnce() throws Exception {
+        ObjectNode doc = withLines();
+        ((ObjectNode) doc.path("spec").path("parser")).put("short_rows", "skip-leading");
+        ValidationResult r = service.validate(doc);
+        assertEquals(List.of("spec.parser.short_rows"), r.errors().stream().map(e -> e.path()).toList(),
+            () -> "expected exactly one refusal of spec.parser.short_rows, got: " + r.errors());
+        assertTrue(r.errors().get(0).message().contains("lines: true"), () -> r.errors().toString());
+    }
+
+    private ObjectNode withEscape(String delimiter, String escape) throws Exception {
+        ObjectNode doc = (ObjectNode) load("csv-local-valid.yaml");
+        ObjectNode parser = ((ObjectNode) doc.path("spec")).putObject("parser");
+        if (delimiter != null) parser.put("delimiter", delimiter);
+        parser.set("escape", mapper.readTree(escape));
+        return doc;
+    }
+
+    /** #1877: one character that is neither the delimiter nor the quote — a known parser key, no warning. */
+    @ParameterizedTest
+    @ValueSource(strings = {"\"\\\\\"", "\"^\""})
+    void escape_isAcceptedAsOneOtherCharacter(String value) throws Exception {
+        ValidationResult r = service.validate(withEscape(";", value));
+        assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
+        assertTrue(r.warnings().stream().noneMatch(w -> w.path().contains("escape")),
+            () -> "escape must be a known parser key, got: " + r.warnings());
+    }
+
+    /** Longer than a character, empty, the quote, the delimiter, or not a string: refused where it is written. */
+    @ParameterizedTest
+    @ValueSource(strings = {"\"\\\\\\\\\"", "\"ab\"", "\"\"", "\"\\\"\"", "\";\"", "true", "[\"\\\\\"]"})
+    void escape_withAnythingElse_isRefused(String value) throws Exception {
+        ValidationResult r = service.validate(withEscape(";", value));
+        assertEquals(List.of("spec.parser.escape"), r.errors().stream().map(e -> e.path()).toList(),
+            () -> "expected a refusal of spec.parser.escape, got: " + r.errors());
+    }
+
+    /** lines: true has no quoting, so nothing to escape: accepted then ignored is the defect this refuses. */
+    @Test void escape_withLines_isRefused() throws Exception {
+        ObjectNode doc = withLines();
+        ((ObjectNode) doc.path("spec").path("parser")).put("escape", "\\");
+        ValidationResult r = service.validate(doc);
+        assertEquals(List.of("spec.parser.escape"), r.errors().stream().map(e -> e.path()).toList(),
+            () -> "expected exactly a refusal of spec.parser.escape, got: " + r.errors());
+    }
+
     /** A `delimiter:` left empty is no delimiter, for the runtime as for this rule. */
     @Test void lines_withAnEmptyDelimiter_isAccepted() throws Exception {
         ObjectNode doc = withLines();

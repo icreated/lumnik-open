@@ -5,10 +5,11 @@ lumnik ships as two builds:
 | Build | Licence | What it does |
 |---|---|---|
 | **`lumnik-open`** | Apache-2.0, public repository | ingest, fuse, react, serve the business apps |
-| **lumnik Pro** | commercial | adds *Ask* (natural-language chat over your data), model providers and the external-identity loop |
+| **lumnik Pro** | commercial | adds *Ask* (natural-language chat over your data), the model providers, Kafka, the Oracle dialect, and JIT and SCIM for an external identity directory |
 
-The open hub has no chat and no Ask: no stub, no licence key. `lm` is one binary for both editions; on an
-open hub its Ask commands (`lm ask`, `lm chat`, `lm rag search`, `lm scopes`) say so:
+The open hub has no chat and no Ask, and no licence key unlocks them: they are not in the build.
+`lm` is one binary for both editions. On an open hub, its Ask commands (`lm ask`, `lm chat`,
+`lm rag search`, `lm scopes`) say so:
 
 ```text
 $ lm ask "how many customers?"
@@ -31,15 +32,19 @@ paid tiers — see [Three tiers, two builds](#three-tiers-two-builds).
 | `lm` CLI / TUI, manifests, the whole integrator surface | ✓ | ✓ |
 | Multi-tenancy & RLS, audit trail, [backup](operations/backup-restore.md) | ✓ | ✓ |
 | [Search](search/search-indexes.md): declare an index (`kind: SearchIndex`). Querying needs a provider: without one, `lm search query` answers *not installed* | ✓ | ✓ |
-| Search [provider](search/search-indexes.md#choosing-a-provider): PostgreSQL (`up.sh --search`) or OpenSearch / Elasticsearch (`up.sh --search-cluster`). Never in the published image. It also brings the PWA's Search tab | — | ✓ opt-in build |
+| Search [provider](search/search-indexes.md#choosing-a-provider): PostgreSQL (`up.sh --search`) or OpenSearch / Elasticsearch (`up.sh --search-cluster`), with the PWA's Search tab. Never in the published image | — | ✓ opt-in build |
 | **Ask**: [chat and `lm ask`](rag/http-api.md), semantic search, `lm view generate` (the AI writes a view) | — | ✓ |
 | Model providers ([Ollama & friends](rag/models.md)) | — | ✓ |
 | [JIT provisioning](security/byo-idp.md) for external IdPs | — | ✓ |
 | [SCIM deprovisioning](security/scim.md) | — | ✓ |
 
 **Switched off is not absent.** A Pro hub can run with the AI switched off
-(`LUMNIK_AI_ENABLED=false`): the data is kept, and `lm module list` shows `rag` and `llm` as
-`INACTIVE`. An Open hub does not list them at all. Neither shows a Chat tab. How to switch it:
+(`LUMNIK_AI_ENABLED=false`):
+
+- the data is kept;
+- `lm module list` shows `rag` and `llm` as `INACTIVE`.
+
+An Open hub does not list them at all. Neither shows a Chat tab. How to switch it:
 [Choosing what your hub offers](choosing-what-your-hub-offers.md).
 
 ## Which edition am I running?
@@ -73,8 +78,10 @@ The commercial ladder has three tiers; the builds are two:
 
 **Enterprise is the Pro build**, sold with your identity directory
 ([external IdP](security/byo-idp.md), [SCIM](security/scim.md)), a Kubernetes delivery and
-service commitments. These pages mark a capability **"not in the open edition"** — the build
-you can check with [`lm module list`](#which-edition-am-i-running), not the tier.
+service commitments.
+
+When a page marks a capability **"not in the open edition"**, it speaks of the build — the one
+[`lm module list`](#which-edition-am-i-running) shows — not of the tier.
 
 Prices: **contact@lumnik.fr**. The open edition is the same hub, so an evaluation can start there.
 

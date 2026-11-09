@@ -25,4 +25,13 @@ class JoinKeysTest {
     void aTextSideKeepsTheTextRule(String type, String other) {
         assertThat(JoinKeys.compared("\"k\"", type, other)).isEqualTo(JoinKeys.normalised("\"k\""));
     }
+
+    @ParameterizedTest(name = "{1} against {2} at the zone's day -> {3}")
+    @CsvSource(nullValues = "null", delimiter = '|', value = {
+        "\"k\" | timestamptz | date        | (\"k\" AT TIME ZONE 'Europe/Paris')::date",
+        "\"k\" | timestamp   | date        | \"k\"::date",
+        "\"k\" | timestamptz | timestamptz | \"k\""})
+    void aDeclaredZoneIsTheDayATimeFallsOn(String column, String type, String other, String expected) {
+        assertThat(JoinKeys.compared(column, type, other, "Europe/Paris")).isEqualTo(expected);
+    }
 }

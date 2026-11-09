@@ -285,7 +285,7 @@ public class CsvIngestService {
             connectorId, endpointId, tableName,
             rowsRead, rowsWritten, 0,
             resultCols, List.of(),
-            connectorTags, chatAvailable(), breath
+            connectorTags, chatAvailable(), breath, List.of()
         );
     }
 
@@ -587,6 +587,7 @@ public class CsvIngestService {
         List<PromoteColumn> promoteCols = new ArrayList<>();
         List<String> allScopes = new ArrayList<>();
         boolean anyRefreshed = false;
+        List<CsvIngestResult.FileResult> perFileSummaries = new ArrayList<>();
 
         for (FileDescriptor descriptor : files) {
             CsvIngestResult perFile;
@@ -597,6 +598,9 @@ public class CsvIngestService {
                     "CSV ingest failed for " + descriptor.path() + ": " + e.getMessage(), e);
             }
             ingested.add(new Ingested(descriptor, perFile));
+            perFileSummaries.add(new CsvIngestResult.FileResult(descriptor.path(), perFile.tableName(),
+                perFile.rowsWritten(), perFile.promoteColumns() == null ? List.of() : perFile.promoteColumns(),
+                perFile.refreshed()));
             totalRowsRead    += perFile.rowsRead();
             totalRowsWritten += perFile.rowsWritten();
             if (promoteCols.isEmpty() && perFile.promoteColumns() != null) {
@@ -611,7 +615,7 @@ public class CsvIngestService {
 
         return new CsvIngestResult(lastConnectorId, lastEndpointId, tableName,
             totalRowsRead, totalRowsWritten, 0, promoteCols, List.of(),
-            allScopes, chatAvailable(), anyRefreshed);
+            allScopes, chatAvailable(), anyRefreshed, files.size() > 1 ? perFileSummaries : List.of());
     }
 
     /**
@@ -692,7 +696,7 @@ public class CsvIngestService {
     private CsvIngestForm buildSubForm(CsvIngestForm form, FileDescriptor descriptor, Path temp) {
         CsvIngestForm sub = new CsvIngestForm();
         sub.file       = temp.toFile();
-        sub.name       = (form.name != null) ? form.name : slugify(descriptor.name());
+        sub.name       = (form.name != null) ? form.name : slugify(stripExt(descriptor.name()));
         sub.scope      = form.scope;
         sub.tags       = form.tags;
         sub.sampleRows = form.sampleRows;

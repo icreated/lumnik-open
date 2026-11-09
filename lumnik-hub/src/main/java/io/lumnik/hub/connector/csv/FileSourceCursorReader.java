@@ -21,13 +21,10 @@ import io.lumnik.hub.connector.transport.SeekableSource;
 import io.lumnik.hub.connector.transport.cursor.FileProcessingCursor;
 import org.jboss.logging.Logger;
 
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.Reader;
 import java.nio.charset.Charset;
-import java.nio.charset.CodingErrorAction;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -159,7 +156,7 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
             if (next == null) return new ReadResult.EndOfStream<>(List.of());
 
             startsAFile = true;
-            return startFile(source, fpc, next, chunkSize);
+            return startFile(source, fpc, next, chunkSize, ctx.scope());
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -264,7 +261,8 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
     // S5443: temp file in system dir is safe — short-lived, immediately processed, backend-only.
     @SuppressWarnings("java:S5443")
     private ReadResult<Map<String, Object>> startFile(FileSource source, FileProcessingCursor fpc,
-                                                      FileDescriptor next, int chunkSize) {
+                                                      FileDescriptor next, int chunkSize,
+                                                      RunScope scope) {
         List<Map<String, Object>> rows = new ArrayList<>(Math.min(chunkSize, 1024));
         Path temp;
         try {
@@ -276,7 +274,7 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
             try (InputStream in = source.open(next)) {
                 Files.copy(in, temp, StandardCopyOption.REPLACE_EXISTING);
             }
-            CsvFileReader.Config cfg = CsvFileConnectorType.effectiveConfig(temp, overrides);
+            CsvFileReader.Config cfg = CsvFileConnectorType.effectiveConfig(temp, overrides, scope, next.path());
             Windowed w = firstWindow(source, next, temp, cfg, chunkSize, rows);
             return advance(fpc, next, cfg, w, rows, 0L);
         } catch (RuntimeException e) {
@@ -318,7 +316,7 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
         }
         // FALLBACK — bounded skip-parse over the temp copy: heap holds at most one chunk.
         CsvFileReader.Window w = reader.readWindow(
-            Files.newBufferedReader(temp, cfg.encoding()), next.path(), cfg,
+            CsvFileReader.decoding(temp, cfg.encoding()), next.path(), cfg,
             0L, chunkSize, rows::add, malformedBuffer::add);
         return new Windowed(w.consumed(), w.fileExhausted(), null, null, null, null);
     }
@@ -365,7 +363,7 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
                 // The header line is behind the anchor: parse with the cursor's captured column
                 // names, the same headerless-mode machinery has-header=false files always used.
                 CsvFileReader.Config headerless = new CsvFileReader.Config(
-                    enc, delim, false, overrides.bomStrip(), overrides.nullValues(), ip.headers());
+                    enc, delim, false, overrides.bomStrip(), overrides.nullValues(), ip.headers(), false, overrides.escape());
                 CsvFileReader.CheckpointedWindow w;
                 try {
                     w = reader.readWindowCheckpointed(rdr, ip.path(), headerless,
@@ -382,12 +380,11 @@ final class FileSourceCursorReader implements ItemReader<Map<String, Object>> {
         // holds more than a chunk of rows. This is the permanent home of non-seekable transports
         // (and of any resume whose seek failed pre-parse); today's whole-file materialisation is gone.
         CsvFileReader.Config cfg = new CsvFileReader.Config(
-            enc, delim, overrides.hasHeader(), overrides.bomStrip(), overrides.nullValues(), overrides.columns());
+            enc, delim, overrides.hasHeader(), overrides.bomStrip(), overrides.nullValues(), overrides.columns(),
+            overrides.skipLeadingShortRows(), overrides.escape());
         try (InputStream in = source.open(now)) {
-            // REPORT decoder semantics, matching Files.newBufferedReader on every other path.
-            Reader r = new BufferedReader(new InputStreamReader(in,
-                enc.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
-                   .onUnmappableCharacter(CodingErrorAction.REPORT)));
+            // REPORT decoder semantics on every path: a byte the encoding does not map is said (#1887).
+            Reader r = new CheckpointingReader(in, enc);
             CsvFileReader.Window w = reader.readWindow(
                 r, ip.path(), cfg, ip.rowsProcessed(), chunkSize, rows::add, malformedBuffer::add);
             return advance(fpc, now, cfg,

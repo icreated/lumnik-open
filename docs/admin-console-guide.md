@@ -163,7 +163,7 @@ They follow the live event stream, which your own tooling can read too:
 | Door | `GET /api/platform/events/stream?topic=connector.run.*` (`Accept: text/event-stream`) |
 | `topic` | repeatable; `*` is a wildcard over the event type; none = every event |
 | Each element | `{"topic": "<type>", "payload": "<JSON as a string>", "capturedAt": "<ISO-8601>"}` |
-| Order | an event shows once the transactions older than it have ended, so a late commit is never missed |
+| Order | an event shows once every older database transaction has ended: none is missed, and one left open delays them all ([Outputs](outputs.md#the-three-roads-out)) |
 | Scope-bound caller | refused (`scope not granted`); in `lm ui` the views then refresh only when opened |
 
 ## Keep a connector credential: the secret store
@@ -202,6 +202,9 @@ Takes the `row_hash` of a chat citation and prints the raw source row (all value
 It answers `404` when the hash resolves to nothing in your tenant. A scope-bound caller reads the
 row only if every connector writing its table carries one of its scopes.
 
+A citation names a content, not a row. Two rows of a REST table with the same content (different
+`external_id`) share one chunk and one hash: the command prints the oldest of them.
+
 ## Check migration drift
 
 ```
@@ -235,7 +238,7 @@ An Open build lists no `llm` or `rag` line.
 |---|---|
 | `lm hook list` · `lm hook get NAME` | the hooks this hub loaded |
 | `lm workflow list` · `lm workflow get NAME` | the tenant's declared `kind:Workflow` manifests ([Workflows](apps/workflows.md)) |
-| `POST /api/platform/hooks/{hookId}/toggle?tenantId=…` | turns one hook on or off for one tenant; other hub threads see it within 60 s |
+| `POST /api/platform/hooks/{hookId}/toggle` with `{"enabled": false}` | turns one hook on or off for your own tenant (a `tenantId=` naming another one is `403`). The hub you called applies it at once, another replica within 60 s |
 
 ## Manage tenants, orgs and users
 

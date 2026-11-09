@@ -1,8 +1,9 @@
 # The demo broker
 
-> One Redpanda in a container and one Python file that fills it with eleven topics, plus one name kept absent on purpose, over the
-> same 2 400 fictional ACME partners the [REST demo API](../rest/demo-api.md) serves — the
-> source every screen of the [Kafka](../kafka.md) page reads.
+> One Redpanda in a container, and one Python file that fills it with eleven topics. A twelfth
+> name is kept absent on purpose. The data is the same 2 400 fictional ACME partners the
+> [REST demo API](../rest/demo-api.md) serves. Every screen of the [Kafka](../kafka.md) page
+> reads it.
 
 It ships with the repo. Two commands start and fill it:
 
@@ -49,8 +50,8 @@ the Kafka page:
 | `acme.live` | empty until `feed` writes to it while a run reads | [The head is the target](../kafka.md#the-head-is-the-target) |
 | `acme.absent` | **never created** | [A topic that does not exist](when-the-topic-misbehaves.md#a-topic-that-does-not-exist) |
 
-The poison is placed deterministically (every index where `i % 7 == 3`: a truncated object, a
-JSON array, a JSON scalar), so every fill gives the same counts.
+The poison messages (a truncated object, a JSON array, a JSON scalar) sit at fixed places, so
+every fill gives the same counts.
 
 ## The three gestures that change the broker
 
@@ -63,7 +64,7 @@ python3 docs/connectors/kafka/demo/acme-topics.py trim 5500                     
 ```
 
 `trim` moves the partition's log start at once, as retention would over days. It runs `rpk` in
-the container `lumnik-demo-redpanda`; set `KAFKA_DEMO_CONTAINER` to use another one.
+the container `lumnik-demo-redpanda`. Set `KAFKA_DEMO_CONTAINER` to use another one.
 
 ## Checking it before you blame the manifest
 
@@ -72,8 +73,9 @@ python3 docs/connectors/kafka/demo/acme-topics.py verify
 ```
 
 It checks every topic's count and partitions, and that `acme.absent` does not exist. After `trim`,
-or `feed --topic acme.partners-trimmed`, `verify` reports `acme.partners-trimmed`: expected. `reset` drops the topics and fills
-them again:
+or `feed --topic acme.partners-trimmed`, `verify` reports `acme.partners-trimmed`: expected.
+
+`reset` drops the topics and fills them again:
 
 ```bash
 python3 docs/connectors/kafka/demo/acme-topics.py reset

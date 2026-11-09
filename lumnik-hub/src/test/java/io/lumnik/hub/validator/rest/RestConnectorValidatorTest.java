@@ -1218,6 +1218,31 @@ class RestConnectorValidatorTest {
             () -> "one defect, one refusal: " + r.errors());
     }
 
+    // ── #1859: spec.http_version — the protocol a connector speaks ──
+
+    private ValidationResult withHttpVersion(String json) throws Exception {
+        JsonNode doc = mapper.readTree(REST_HEAD.formatted(
+            "{\"id\":\"pods\",\"method\":\"GET\",\"path\":\"/api/v1/pods\"," + EP_TAIL + "}"));
+        ((ObjectNode) doc.path("spec")).set("http_version", mapper.readTree(json));
+        return service.validate(doc);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"\"1.1\"", "\"2\""})
+    void httpVersion_isValid_andNotCalledUnknown(String value) throws Exception {
+        ValidationResult r = withHttpVersion(value);
+        assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
+        assertEquals(List.of(), ValidationWarnings.unknownKeyPaths(r), () -> "http_version is honored: " + r.warnings());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"\"3\"", "\"1.0\"", "\"HTTP/1.1\"", "\"\"", "1.1", "2", "[\"1.1\"]"})
+    void httpVersion_otherThanOneDotOneOrTwo_isRefusedByPath(String value) throws Exception {
+        ValidationResult r = withHttpVersion(value);
+        assertFalse(r.isValid(), () -> value + " must be refused");
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.http_version")), () -> "got: " + r.errors());
+    }
+
     // ── #1609: spec.tls — a connector's trust in an internal CA ──
 
     private ValidationResult withTls(String tls) throws Exception {

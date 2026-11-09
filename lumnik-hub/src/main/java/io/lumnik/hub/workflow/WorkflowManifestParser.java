@@ -51,12 +51,15 @@ public class WorkflowManifestParser {
         .build();
 
     /** What a workflow may watch — see {@link #requireWatchedTable}. {@code t_} is
-     *  DynamicTableRegistry's ingest convention, {@code v_} an EntityViewCompiler fused view. */
+     *  DynamicTableRegistry's ingest convention, and {@code v_} an EntityViewCompiler fused view. */
     private static final String SCHEMA = "connector";
     private static final String SCHEMA_PREFIX = SCHEMA + ".";
     private static final String INGEST_PREFIX = SCHEMA_PREFIX + "t_";
     private static final String FUSED_VIEW_PREFIX = SCHEMA_PREFIX + "v_";
-    private static final List<String> WATCHABLE = List.of(INGEST_PREFIX, FUSED_VIEW_PREFIX);
+    /** {@code ext}: the Workflow's allowlist choice (#1816). The sweep reads on the admin datasource, so the schemas
+     *  it accepts are an explicit list. A hybrid target registered under {@code connector} is a {@code t_} table here; the registry tells it apart (#1820). */
+    static final String HYBRID_PREFIX = "ext.";
+    private static final List<String> WATCHABLE = List.of(INGEST_PREFIX, FUSED_VIEW_PREFIX, HYBRID_PREFIX);
     /** {@code EntityManifestParser} admits {@code [A-Za-z0-9_]+} and {@code EntityViewCompiler}
      *  folds it — so the composed suffix is exactly that alphabet, lower-cased. A leading DIGIT is
      *  legal here and illegal under {@code t_}: the two prefixes do not share an alphabet. */
@@ -97,8 +100,8 @@ public class WorkflowManifestParser {
         WorkflowManifest.DueDef due = optionalDue(spec, watched, declared);
 
         return new WorkflowManifest(name, scope, provenance, watched.table(), watched.column(),
-            watched.key(), checkOnIngestion(spec), watched.order(), dormancy, due, List.copyOf(declared.states()),
-            List.copyOf(transitions));
+            watched.key(), checkOnIngestion(spec, watched.table()), watched.order(), dormancy, due,
+            List.copyOf(declared.states()), List.copyOf(transitions));
     }
 
     /** The column this workflow watches, the optional business key linking a document's versions, and the
@@ -187,8 +190,10 @@ public class WorkflowManifestParser {
      * When the declaration is confronted with the data besides the apply, which always does it (#1589).
      * {@code spec.check} says WHEN; {@code spec.on} says WHAT is watched. A trigger is a word, so a new
      * one is a new value rather than a new switch, and an unknown one is refused, never ignored.
+     *
+     * <p>It is refused on an {@code ext} table (#1816); the refusal says why.
      */
-    private static boolean checkOnIngestion(JsonNode spec) {
+    private static boolean checkOnIngestion(JsonNode spec, String table) {
         JsonNode check = spec.path("check");
         if (check.isMissingNode() || check.isNull()) return false;
         if (!check.isObject())
@@ -198,7 +203,14 @@ public class WorkflowManifestParser {
         if (!INGESTION_TRIGGER.equals(trigger))
             throw new IllegalArgumentException("spec.check.trigger must be '" + INGESTION_TRIGGER + "' (got '"
                 + trigger + "'): the apply always checks, and 'ingestion' re-checks after each completed run");
+        if (table.startsWith(HYBRID_PREFIX)) throw new IllegalArgumentException(ingestionCheckRefusal(table));
         return true;
+    }
+
+    /** Why {@code spec.check.trigger: ingestion} cannot watch a hybrid table; said by the parser for an {@code ext} one, by the apply door for any other (#1820). */
+    static String ingestionCheckRefusal(String table) {
+        return "spec.check.trigger 'ingestion' cannot watch " + table + ": the check follows the tables a run reports as "
+            + "written, and a run does not report a hybrid (REST) table. Drop spec.check: the apply still checks.";
     }
 
     /**
@@ -229,9 +241,9 @@ public class WorkflowManifestParser {
      */
     private static String requireWatchedTable(String table) {
         if (table == null || WATCHABLE.stream().noneMatch(p -> composedAs(table, p)))
-            throw new IllegalArgumentException("spec.on.table is required and must name a table in "
-                + "the '" + SCHEMA + "' schema that ingestion owns (" + SCHEMA + ".t_<table>) or a "
-                + "fused entity view (" + SCHEMA + ".v_<entity>, always lower-case), spelled the way "
+            throw new IllegalArgumentException("spec.on.table is required and must name a table "
+                + "ingestion owns (" + INGEST_PREFIX + "<table> or " + HYBRID_PREFIX + "<table>) or a "
+                + "fused entity view (" + FUSED_VIEW_PREFIX + "<entity>, always lower-case), spelled the way "
                 + "the hub created it (letters, digits and underscores — a space is a typo): " + table);
         return table;
     }
@@ -242,7 +254,7 @@ public class WorkflowManifestParser {
      * {@code isPlainIdentifier} is the predicate ingestion gates its target table with BEFORE
      * composing {@code "t_" + name} (SourceBlockValidator, KafkaConnectorValidator; the CSV door
      * slugs), and {@link #FUSED_VIEW_NAME_RX} is the entity parser's alphabet after
-     * {@code EntityViewCompiler}'s fold.
+     * {@code EntityViewCompiler}'s fold. An {@code ext} name gets the {@code t_} clause.
      *
      * <p>It tests the COMPONENT, never the composed token: {@code isPlainIdentifier("t_1foo")} is
      * true while {@code isPlainIdentifier("1foo")} is false, so validating the whole thing would

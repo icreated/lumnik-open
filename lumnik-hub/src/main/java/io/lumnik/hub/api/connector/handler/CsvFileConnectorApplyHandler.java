@@ -2,18 +2,25 @@ package io.lumnik.hub.api.connector.handler;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
+import io.lumnik.hub.connector.csv.MappingTypeDrift;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.json.JsonNodes;
 import io.lumnik.hub.connector.naming.Identifiers;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
+import io.lumnik.hub.connector.repository.ConnectorCursorEntityRepository;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
+import io.lumnik.hub.validator.ValidationError;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 @ApplicationScoped
 @ConnectorTypeId("csv-file")
@@ -32,6 +39,8 @@ public class CsvFileConnectorApplyHandler implements ConnectorApplyHandler {
 
     @Inject ConnectorRepository connRepo;
     @Inject ConnectorEndpointRepository epRepo;
+    @Inject ConnectorCursorEntityRepository cursorRepo;
+    @Inject @DataSource("admin") AgroalDataSource adminDs;
 
     @Override public String kind() { return KIND_CSV_FILE; }
 
@@ -41,11 +50,41 @@ public class CsvFileConnectorApplyHandler implements ConnectorApplyHandler {
         String name = meta.path("name").asText();
         JsonNode spec = doc.path("spec");
 
+        Object mappingBefore = connRepo.byAddressForUpdate(tenant, name).map(c -> mappingOf(c)).orElse(null);
         Connector conn = ApplyUpsert.connector(connRepo, tenant, name, KIND_CSV_FILE, meta, spec,
             c -> buildConnectorConfig(c, spec));
         defaultEndpoint(epRepo, conn);
 
-        return new ApplyResult(name, conn.getId(), 1);
+        // #1882: the files an earlier run read were read through another mapping. The unchanged-skip answers for the
+        // bytes, not for what the mapping makes of them: drop the cursor, the next run reads them again.
+        if (!Objects.equals(mappingBefore, mappingOf(conn))) {
+            epRepo.findByName(conn.getId(), "default").ifPresent(ep -> {
+                var cursor = cursorRepo.findById(ep.getId());
+                if (cursor != null) cursorRepo.delete(cursor);
+            });
+        }
+        return new ApplyResult(name, conn.getId(), 1, typeDrift(conn));
+    }
+
+    private static Object mappingOf(Connector c) {
+        return c.getConfig() == null ? null : c.getConfig().get(MAPPING);
+    }
+
+    /** What the mapping types that the table, already born, holds as another type (#1882). */
+    @SuppressWarnings("unchecked")
+    private List<ValidationError> typeDrift(Connector conn) {
+        if (!(mappingOf(conn) instanceof Map<?, ?> mapping)) return List.of();
+        String table = "t_" + Identifiers.slug(conn.getName(), "table");
+        Map<String, String> held = new HashMap<>();
+        Jdbc.query(adminDs, "CsvFileConnectorApplyHandler.typeDrift",
+            "SELECT column_name, udt_name FROM information_schema.columns WHERE table_schema = 'connector'"
+                + " AND table_name = ?",
+            ps -> ps.setString(1, table), rs -> held.put(rs.getString(1), rs.getString(2)));
+        // t_* is shared between tenants: its types are this caller's to read only once the table holds their rows.
+        if (held.isEmpty() || !Jdbc.queryOne(adminDs, "CsvFileConnectorApplyHandler.typeDrift.rows",
+                "SELECT 1 FROM connector.\"" + table + "\" WHERE tenant_id = ? LIMIT 1",
+                ps -> ps.setLong(1, conn.getTenantId()), rs -> 1).isPresent()) return List.of();
+        return MappingTypeDrift.warnings("connector." + table, (Map<String, Object>) mapping, held);
     }
 
     /**

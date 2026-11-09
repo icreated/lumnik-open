@@ -2,7 +2,7 @@
 
 > **lumnik Pro.** Consume a Kafka-compatible topic — Apache Kafka, Redpanda, Azure Event Hubs —
 > into a hub table. Each run reads from the stored position to the head the topic had when the
-> run started, then completes; the hub owns the offsets, and nothing is ever written back to
+> run started, then completes. The hub keeps the offsets, and nothing is ever written back to
 > the broker.
 
 | | |
@@ -40,7 +40,7 @@ $ lm connector run acme-kafka-partners
 run scheduled: c5fc42d2-87f9-4328-acd2-b29213562a54
 ```
 
-"Scheduled" is not "done": the result lands in the run ledger a second or two later. Run it a
+"Scheduled" is not "done": the run shows in `lm run list` a second or two later. Run it a
 second time, then look:
 
 ```
@@ -52,8 +52,8 @@ ID        CONNECTOR            ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LE
 c5fc42d2  acme-kafka-partners  default   Completed  2400  2400  0        0             2026-09-13 02:21  2026-09-13 02:21
 ```
 
-The first run read the whole topic; the second found nothing new. `STARTED` / `ENDED` print in
-your terminal's time zone (these screens: Paris, UTC+2); `schedule` is evaluated in UTC.
+The first run read the whole topic. The second found nothing new. `STARTED` / `ENDED` print in
+your terminal's time zone (these screens: Paris, UTC+2). `schedule` is evaluated in UTC.
 
 What landed in `connector.t_acme_partners` — each top-level JSON field became a column:
 
@@ -72,7 +72,7 @@ What landed in `connector.t_acme_partners` — each top-level JSON field became 
     | JSON value | Column type |
     |---|---|
     | whole number | `bigint` |
-    | number with a decimal point | `numeric(18,4)` |
+    | number with a decimal point | `numeric` |
     | string (timestamps included) | `text` |
     | boolean | `boolean` |
     | object, array | `jsonb` |
@@ -104,10 +104,11 @@ spec:
     - { name: temperature_c, path: $.object.temperature, type: decimal }
 ```
 
-There is no `target` and no `mapping` block: the table is `connector.t_<name>` and messages land
+There is no `target` and no `mapping` block: the table is `connector.t_<name>`, and messages land
 as they are. `promote` only adds columns: see
-[A value nested in the message](#a-value-nested-in-the-message-promote). Three more keys belong to
-the [Event Hubs preset](#azure-event-hubs-the-event-hubs-preset):
+[A value nested in the message](#a-value-nested-in-the-message-promote).
+
+Three more keys belong to the [Event Hubs preset](#azure-event-hubs-the-event-hubs-preset):
 `preset`, `namespace`, `connection_string_env`.
 
 ### Configuration reference
@@ -123,13 +124,14 @@ the [Event Hubs preset](#azure-event-hubs-the-event-hubs-preset):
 | `poll_timeout_ms` | `2000` | integer in `[100, 60000]` |
 | `max_poll_records` | `500` | integer ≥ 1; leave it at its default |
 | `auth.kind` | `none` | `none` or `sasl-plain`; `sasl-plain` requires `username_env` and `password_env`, and refuses a blank one |
-| `auth.security_protocol` | `SASL_SSL` | `SASL_SSL` or `SASL_PLAINTEXT`. A wrong value is not caught by `lm validate`: the run fails when it connects |
+| `auth.security_protocol` | `SASL_SSL` | `SASL_SSL` or `SASL_PLAINTEXT`, in any case. `lm validate` names any other value; it is read only with `sasl-plain` |
 | `schedule` | — | five-field cron, validated at apply, evaluated in UTC |
 | `window` | — | `HH:MM-HH:MM`, UTC, end exclusive, may cross midnight; a manual run ignores it |
 | `promote` | — | a list of `{ name, path, type, transform? }`, rest's grammar: `path` a JSONPath, `type` one of `text`, `bigint`, `integer`, `decimal`, `boolean`, `date`, `timestamptz` (not `jsonb`); a name used once, never a [reserved one](#seven-column-names-are-reserved) |
 | `metadata.scopes` | — | the business scope(s) the table is askable in; the validator warns when none is declared |
 
-`lm validate` and `lm apply` enforce every rule above. Five mistakes in one file, all named at once:
+`lm validate` and `lm apply` enforce these rules. Five
+mistakes in one file, all named at once:
 
 ```yaml
 --8<-- "docs/connectors/kafka/demo/90-refused.yaml"
@@ -166,16 +168,16 @@ Error: validation failed: 5 error(s)
 Read the warning: **the key list is closed**, inside `auth` too.
 
 - A misspelled key (`poll_timeout`), or a `target` copied from another manifest, is named and
-  ignored; the manifest still applies.
+  ignored. The manifest still applies.
 - A `mapping` block is **refused**: a check declared there would never run.
-- A misspelled `security_protocol` leaves the default `SASL_SSL` in place: a plaintext SASL
-  broker then fails in the TLS handshake.
+- A misspelled `security_protocol` key is named and ignored too. The default `SASL_SSL` then
+  stays, and a plaintext SASL broker fails in the TLS handshake.
 
 ## How a run reads a topic
 
 ### Partitions and the cursor
 
-A topic has one or more partitions, each with its own **offsets**; the hub stores one position
+A topic has one or more partitions, each with its own **offsets**. The hub stores one position
 per partition. `acme.orders` is keyed by partner over six partitions:
 
 ```yaml
@@ -217,16 +219,18 @@ f5046f38  acme-kafka-live  default   Completed  2673  2673  0        0          
 644240c1  acme-kafka-live  default   Completed  1313  1313  0        0             2026-09-13 02:23  2026-09-13 02:23
 ```
 
-The first run read the 1 313 messages present at its start and completed while the feeder was
-still writing; the second read the 2 673 that arrived since. Together 3 986, the feeder's count.
+The first run read the 1 313 messages present at its start, and completed while the feeder was
+still writing. The second read the 2 673 that arrived since. Together 3 986, the feeder's count.
 
-A run is reported **`Partial`** in two cases only (a run that simply ends below the head stays
-`Completed` — see [An empty poll](kafka/when-the-topic-misbehaves.md#an-empty-poll-and-what-it-does-not-prove)):
+A run is reported **`Partial`** in two cases only:
 
 - the broker had already deleted offsets the stored position pointed to
   ([A log that moved under the cursor](kafka/when-the-topic-misbehaves.md#a-log-that-moved-under-the-cursor));
-- a long run of unreadable messages stopped the run early; the next run continues after them
+- a long run of unreadable messages stopped the run early. The next run continues after them
   ([Poison messages](kafka/when-the-topic-misbehaves.md#poison-messages-the-per-message-dlq)).
+
+A run that simply ends below the head stays `Completed`:
+[An empty poll](kafka/when-the-topic-misbehaves.md#an-empty-poll-and-what-it-does-not-prove).
 
 `Partial` is the status to alert on — see [Observability](../operations/observability.md).
 
@@ -253,9 +257,9 @@ acme-kafka-cadence  kafka  1       */5 * * * *  06:00-22:00
   connector.
 - **No overlap.** A slot that fires while a run is active is skipped and recorded as `Cancelled`
   with the reason.
-- **`window` fences the slots.** A slot due outside `"06:00-22:00"` is skipped, never queued; the
-  end is exclusive and the range may cross midnight (`"22:00-06:00"`). It gates the *start* only.
-  A manual `lm connector run` ignores it.
+- **`window` fences the slots.** A slot due outside `"06:00-22:00"` is skipped; the next slot inside it runs.
+  The end is exclusive, and the range may cross midnight (`"22:00-06:00"`). It gates the *start*
+  only. A manual `lm connector run` ignores it.
 - An external trigger works too: your own cron plus `lm connector run <name>`.
 
 **One connector reads one topic**, with no key or header filtering. To land the same messages
@@ -290,7 +294,7 @@ kafka:acme_partners                   connector  t_acme_partners            2400
 !!! warning "Deleting a kafka connector deletes its data"
     - `lm connector delete` removes the connector's rows from `connector.t_<name>`, its cursor
       and its run history. The table goes with the last connector writing into it.
-    - The topic is untouched; re-applying the manifest reads it again from the beginning.
+    - The topic is untouched. Re-applying the manifest reads it again from the beginning.
     - It is the only way to drop the rows — `lm endpoint purge` refuses a kafka endpoint:
 
     ```
@@ -329,8 +333,8 @@ ID        CONNECTOR         ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTE
  2400 |            1200 |         1200
 ```
 
-- **A new field becomes a new column** during the run. Rows written before it hold `NULL`; a field
-  that disappears leaves its column `NULL` for later rows.
+- **A new field becomes a new column** during the run. Rows written before it hold `NULL`.
+- A field that disappears leaves its column `NULL` for later rows.
 - **The new column takes its type from the first messages that carry it.** If they all hold
   `null`, it lands as text.
 - **A column keeps its type**, with one exception: [a whole number that receives a
@@ -344,7 +348,7 @@ A column whose first messages held whole numbers is `bigint`. The first message 
 value widens it to `numeric`:
 
 - Earlier values do not change: `1000` stays `1000`.
-- The column then reads `NUMERIC` in the schema cards, not `NUMERIC(18,4)`.
+- The column then reads `NUMERIC` in the schema cards, as a decimal column from the start does.
 - **Under an entity, nothing to do.** The entity's view is rebuilt with the widened column, in the
   same step.
 - **Under a view you made** (a report, a BI view), the run fails and names it:
@@ -353,8 +357,8 @@ value widens it to `numeric`:
     connector.t_orders_x: amount cannot widen — view connector.v_sales_report reads it and the hub did not make it. Drop it, then run the connector again.
     ```
 
-    Drop the view, run the connector again, then create the view again. The failed chunk is read
-    again: no row is lost.
+    Drop the view, run the connector again, then create the view again. The next run reads again
+    the messages that did not land: no row is lost.
 
 ### Names the producer chose stay — and stay askable
 
@@ -381,7 +385,7 @@ A kafka manifest has **no `mapping` block**: the field names on the topic are th
        1001 | Roulements Bruxelles 1001 |          637 |    1.5000 | {"city": "Bruxelles", "street": "1 rue de l'Usine"} | ["erp", "partner", "batch-1"]
 ```
 
-A space, a dot, a currency sign or a capital is kept; the hub and the chat quote the name in SQL:
+A space, a dot, a currency sign or a capital is kept. The hub and the chat quote the name in SQL:
 
 ```
 $ lm ask --scope billing "How many rows are in connector.t_acme_partners_raw and what is the largest MONTANT_€?"
@@ -520,7 +524,7 @@ each case, as `lm` shows it, in [When the topic misbehaves](kafka/when-the-topic
 
 `brokers_env`, `username_env` and `password_env` are **names**, resolved when the run starts: the
 [`lm secret`](../cli/lm-reference.md#data-runs-answers) registry of your tenant first, then the
-hub's environment (OS variable, then JVM system property).
+hub's environment.
 
 ```yaml
 --8<-- "docs/connectors/kafka/demo/62-brokers-env.yaml"
@@ -542,7 +546,7 @@ d071091c  acme-kafka-brokers-env  default   Completed  2400  2400  0        0   
 3e808fcf  acme-kafka-brokers-env  default   Failed     0     0     0        0             2026-09-13 02:21  2026-09-13 02:21
 ```
 
-`sasl-plain` refuses a credential name that resolves to nothing or blanks, before connecting:
+`sasl-plain` refuses, before connecting, a credential name that resolves to nothing or to a blank:
 
 ```yaml
 --8<-- "docs/connectors/kafka/demo/65-sasl.yaml"
@@ -562,14 +566,14 @@ $ lm run get 9e962b07 > /dev/null
 ✖ run failed: Unexpected handshake request with client mechanism PLAIN, enabled mechanisms are []
 ```
 
-- `security_protocol` is not validated at apply. `SASL_SSL` is the default; a SASL listener
-  without TLS needs `SASL_PLAINTEXT`.
+- `SASL_SSL` is the default `security_protocol`. A SASL listener without TLS needs
+  `SASL_PLAINTEXT`.
 - SASL/SCRAM, mTLS and OAuth are [not yet supported](#limitations).
 
 ## Azure Event Hubs — the `event-hubs` preset
 
 Event Hubs speaks Kafka with SASL/PLAIN: the username is the literal `$ConnectionString`, the
-password the namespace connection string. `preset: event-hubs` writes that config at apply;
+password the namespace connection string. `preset: event-hubs` writes that config at apply.
 `connector_type` stays `kafka`.
 
 ```yaml
@@ -601,8 +605,11 @@ tags:
     - azure
 ```
 
-The stored config is plain kafka: `preset`, `namespace` and `connection_string_env` are gone. Set
-the two names it reads:
+The stored config is plain kafka: `preset`, `namespace` and `connection_string_env` are gone.
+Besides what the preset writes, it keeps `name`, `topic`, `format`, `promote`,
+`poll_timeout_ms` and `max_poll_records`. The two poll keys are checked as for plain kafka.
+
+Set the two names the config reads:
 
 ```bash
 lm secret set EVENTHUBS_CONN_STR          # the namespace Primary Connection String, Endpoint=sb://…
@@ -623,7 +630,7 @@ missing input (`preset 'event-hubs' requires 'namespace'`).
   reach the hub under the name and shape it should land with.
 - **No pre-flight.** There is no `lm source kafka test`; the first run is the test. A missing
   topic or an unresolved secret fails it at once.
-- **Append-only.** A tombstone is set aside, never applied as a delete; a deletion that must reach
+- **Append-only.** A tombstone is set aside, never applied as a delete. A deletion that must reach
   the table has to travel as data.
 - **`sasl-plain` only.** No SASL/SCRAM, no mTLS, no OAuth.
 - **Object key order** inside a nested value does not survive `jsonb`.
@@ -643,7 +650,7 @@ lm dlq list --run <run-id> · lm dlq get <id>
 
 ## TUI
 
-- `:sources` — the `KIND` column reads `kafka`; Enter drills into the single `default` endpoint
+- `:sources` — the `KIND` column reads `kafka`; Enter opens the connector's `:runs`
 - `:runs` — one row per run, `Partial` in its own colour beside `Completed` and `Failed`
 - `:dlq` — the quarantined messages, with coordinates
 
@@ -659,8 +666,7 @@ spec:
   window: "06:00-22:00"      # optional
 ```
 
-**Result:** every five minutes, a catch-up to the head; night slots and slots that meet a running
-run are skipped. See [Continuous consumption](#continuous-consumption).
+**Result:** every five minutes, a catch-up to the head. A night slot is skipped. A slot that meets a running run is skipped. See [Continuous consumption](#continuous-consumption).
 
 ### Read a topic again from the beginning
 

@@ -54,3 +54,79 @@ func TestNotifyAddAndList(t *testing.T) {
 		}
 	}
 }
+
+func TestNotifyDeliveries_listsWhatTheHubDidWithTheMails(t *testing.T) {
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.RequestURI()
+		_, _ = w.Write([]byte(`[
+			{"id":12,"ruleId":3,"recipient":"adv@example.com","eventType":"decision.litige-ouvert",
+			 "status":"given up: send","attempts":3,"error":"MailSendException","at":"2026-11-08T09:12:04Z"},
+			{"id":13,"ruleId":3,"recipient":"adv@example.com","eventType":"decision.litige-ouvert",
+			 "status":"sent","attempts":1,"error":null,"at":"2026-11-08T09:13:00Z"}]`))
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"notify", "deliveries"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/api/platform/notification-deliveries?limit=200" {
+		t.Errorf("GET went to %q", path)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("want a header and two rows:\n%s", out.String())
+	}
+	for _, want := range []string{"ID", "RECIPIENT", "EVENT", "STATUS", "ATTEMPTS", "WHEN", "ERROR"} {
+		if !strings.Contains(lines[0], want) {
+			t.Errorf("header lacks %s: %q", want, lines[0])
+		}
+	}
+	for _, want := range []string{"12", "adv@example.com", "decision.litige-ouvert", "given up: send", "MailSendException"} {
+		if !strings.Contains(lines[1], want) {
+			t.Errorf("the first row lacks %q: %q", want, lines[1])
+		}
+	}
+}
+
+func TestNotifyReplay_saysWhereTheDeliveryStands(t *testing.T) {
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		_, _ = w.Write([]byte(`{"id":12,"status":"given up: send"}`))
+	}))
+	defer srv.Close()
+	setupCfg(t, srv.URL)
+
+	cmd := NewRootCmd()
+	out := new(bytes.Buffer)
+	cmd.SetOut(out)
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"notify", "replay", "12"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/api/platform/notification-deliveries/12/replay" {
+		t.Errorf("POST went to %q", path)
+	}
+	if got := strings.TrimSpace(out.String()); got != "delivery 12: given up: send" {
+		t.Errorf("replay printed %q", got)
+	}
+}
+
+func TestNotifyReplay_refusesAnIdThatIsNotANumber(t *testing.T) {
+	cmd := NewRootCmd()
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetErr(new(bytes.Buffer))
+	cmd.SetArgs([]string{"notify", "replay", "abc"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "lm notify deliveries") {
+		t.Errorf("want a refusal pointing at lm notify deliveries, got %v", err)
+	}
+}

@@ -25,6 +25,15 @@ class ProcessConditionTest {
                     List.of("GOLD", "SILVER", "BRONZE"))));
 
     @Test
+    void emitKeyMustBeAColumnOfTheTable() {
+        ProcessConditionResolver.validateKey(null, table);
+        ProcessConditionResolver.validateKey("code", table);
+        assertThatThrownBy(() -> ProcessConditionResolver.validateKey("sample", table))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("spec.emit.key names sample — not a column of connector.t_cust_csv");
+    }
+
+    @Test
     void resolvesValidConditions() {
         List<ViewFilter> conds = ProcessConditionResolver.resolve(
                 List.of("segment=GOLD", "name~mar"), table);

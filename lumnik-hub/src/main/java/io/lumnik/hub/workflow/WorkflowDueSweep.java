@@ -3,6 +3,8 @@ package io.lumnik.hub.workflow;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
+import io.lumnik.hub.event.OutboxKey;
 import io.lumnik.hub.sql.TenantRlsScope;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.narayana.jta.QuarkusTransaction;
@@ -93,6 +95,7 @@ public class WorkflowDueSweep {
     private volatile Runnable beforeRead = () -> {};
 
     @Inject WorkflowRegistry registry;
+    @Inject DynamicTableRegistry tables;
     @Inject ObjectMapper json;
 
     @Inject
@@ -164,6 +167,8 @@ public class WorkflowDueSweep {
             return;
         }
         String[] values = dueValues(g);
+        // A fused view without order follows the row-by-row path below and never uses this column.
+        String writtenAt = g.onFusedView() ? null : tables.writtenAtColumn(tenant, g.table());
         OrderColumn ordered = order;
         KeySample unreadable = new KeySample();
         String after = "";
@@ -171,7 +176,7 @@ public class WorkflowDueSweep {
         do {
             String from = after;
             page = QuarkusTransaction.requiringNew().call(
-                () -> readPage(tenant, g, kind, ordered, context, values, zone, now, from));
+                () -> readPage(tenant, g, kind, ordered, context, values, writtenAt, zone, now, from));
             alert(tenant, g, page.overdue());
             page.unreadable().forEach(unreadable::add);
             after = page.lastKey();
@@ -239,7 +244,7 @@ public class WorkflowDueSweep {
      * state and the date are filtered on that current version, never before.
      */
     private Page readPage(long tenant, WorkflowGraph g, DueColumn kind, OrderColumn order, CitedColumns context,
-                          String[] values, ZoneId zone, Instant now, String after) throws SQLException {
+                          String[] values, String writtenAt, ZoneId zone, Instant now, String after) throws SQLException {
         String key = quoteIdent(g.key());
         // Built from its parts, never by rewriting its own text: a column name is the source's, free, and may hold
         // " FROM " inside its quotes — a String.replace on the statement would rewrite the name, or break out of it.
@@ -250,7 +255,7 @@ public class WorkflowDueSweep {
         String documents = g.onFusedView()
             ? "SELECT " + columns + ", false AS unreadable FROM " + quoteTable(g.table()) + where
             : OrderColumn.currentOnTable(order, order == null ? null : quoteIdent(g.order()), key, columns, g.table(),
-                where);
+                writtenAt, where);
         String sql = "SELECT s.k, s.v, s.d, s.unreadable" + context.carried() + " FROM (" + documents + ") s "
             + "WHERE s.unreadable OR (lower(btrim(s.v)) = ANY (?) AND s.d " + (kind == DueColumn.DATE ? "<" : "<=")
             + " ?) ORDER BY s.k LIMIT " + PAGE;
@@ -365,7 +370,7 @@ public class WorkflowDueSweep {
             ps.setString(2, "decision.overdue." + g.name());
             ps.setString(3, "workflow:" + g.name());
             ps.setString(4, g.table());
-            ps.setString(5, WorkflowDormancySweep.bounded(o.key()));
+            ps.setString(5, OutboxKey.bounded(o.key()));
             ps.setString(6, payload);
         });
     }

@@ -2,19 +2,15 @@ package io.lumnik.hub.search.mark;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.hub.sql.IndexBuilds;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.util.HexFormat;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
 
@@ -54,7 +50,7 @@ public class IngestedAtIndex {
         String qualifiedTable = SCHEMA + "." + quoteIdent(table);
         try (Connection c = ds.getConnection()) {
             c.setAutoCommit(true);
-            if (!tryLock(c, index)) return; // another node is on it
+            if (!IndexBuilds.tryLock(c, SCHEMA + "." + index)) return; // another node is on it
             try {
                 if (!tableExists(c, qualifiedTable)) return;
                 Existing existing = existing(c, index, qualifiedTable);
@@ -74,7 +70,7 @@ public class IngestedAtIndex {
                         "DROP INDEX CONCURRENTLY IF EXISTS " + SCHEMA + "." + quoteIdent(index), ps -> {});
                 }
             } finally {
-                unlock(c, index);
+                IndexBuilds.unlock(c, SCHEMA + "." + index);
             }
         }
     }
@@ -83,36 +79,9 @@ public class IngestedAtIndex {
     static String indexName(String table) {
         String name = table + SUFFIX;
         if (name.getBytes(StandardCharsets.UTF_8).length <= MAX_IDENT_BYTES) return name;
-        String digest = digest(table);
+        String digest = IndexBuilds.digest(table);
         String prefix = table.substring(0, MAX_IDENT_BYTES - digest.length() - SUFFIX.length() - 1);
         return prefix + "_" + digest + SUFFIX;
-    }
-
-    /** The first 8 bytes of SHA-256, hex-encoded (as {@code Identifiers.digest} does with 5). */
-    private static String digest(String raw) {
-        try {
-            byte[] h = MessageDigest.getInstance("SHA-256").digest(raw.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(h, 0, 8);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 is required but unavailable", e);
-        }
-    }
-
-    private static boolean tryLock(Connection c, String index) throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement("SELECT pg_try_advisory_lock(hashtextextended(?, 0))")) {
-            ps.setString(1, SCHEMA + "." + index);
-            try (ResultSet rs = ps.executeQuery()) {
-                rs.next();
-                return rs.getBoolean(1);
-            }
-        }
-    }
-
-    private static void unlock(Connection c, String index) throws SQLException {
-        try (PreparedStatement ps = c.prepareStatement("SELECT pg_advisory_unlock(hashtextextended(?, 0))")) {
-            ps.setString(1, SCHEMA + "." + index);
-            ps.execute();
-        }
     }
 
     private static boolean tableExists(Connection c, String qualifiedTable) {

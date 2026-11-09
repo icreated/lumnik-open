@@ -22,4 +22,12 @@ class DynamicTableRegistryTest {
         assertThat(DynamicTableRegistry.isHubDynamicTable("core", "event_outbox")).isFalse();
         assertThat(DynamicTableRegistry.isHubDynamicTable("connector", null)).isFalse();
     }
+
+    /** #1821: the hash column is told by the registry row's mapping marker, with no query. */
+    @Test
+    void the_row_hash_column_follows_the_mapping_marker() {
+        assertThat(DynamicTableRegistry.rowHashColumnOf("hybrid:ext.orders")).isEqualTo("row_hash");
+        assertThat(DynamicTableRegistry.rowHashColumnOf("m-orders-csv")).isEqualTo("_row_hash");
+        assertThat(DynamicTableRegistry.rowHashColumnOf(null)).isEqualTo("_row_hash");
+    }
 }

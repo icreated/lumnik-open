@@ -9,6 +9,10 @@ type RagStatus struct {
 	IndexedAt      *string `json:"indexedAt"`
 	Provider       string  `json:"provider"`
 	EmbeddingModel string  `json:"embeddingModel"`
+	// SwitchedOff: the RAG module is installed and the AI is off (LUMNIK_AI_ENABLED=false), so zero
+	// Chunks is not an empty corpus. StoredChunks is what the store holds (nil: no RAG module).
+	SwitchedOff  bool `json:"switchedOff"`
+	StoredChunks *int `json:"storedChunks"`
 }
 
 // RagStatus fetches the RAG index status via GET /api/platform/rag/status.

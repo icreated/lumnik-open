@@ -74,7 +74,9 @@ Waiting...
 Logged in to lumnik Open Edition.
 ```
 
-A Pro hub prints `Logged in.` Check the round trip. On a fresh hub, the table is empty:
+On a Pro hub, the last line reads `Logged in.`
+
+Check the round trip. On a fresh hub, the table is empty:
 
 ```
 $ lm connector list
@@ -143,7 +145,8 @@ LIMIT 500
 - **Use the words of the data.** *« Quels articles sont en rupture de stock ? »* is declined:
   no column says "rupture". *« Quantité à zéro »* names the column, and works.
 - Without `--scope`, the question goes to your default scope, where this file is not.
-- `lm ask` answers `404` on lumnik Open, and on Pro with the AI switched off.
+- On lumnik Open, `lm ask` answers `Error: this hub's build has no Ask: …`. On Pro with the AI
+  switched off, it answers `Error: this hub has the AI switched off …`.
 
 Why Ask declines, and what to do: [When Ask refuses](../transparency/ask-honesty.md).
 
@@ -160,8 +163,8 @@ passes `--force`.
 ## Next
 
 - **Make it recurring:** a `csv-file` connector reads the export on a schedule:
-  [CSV & files](../connectors/csv.md). Give it the registered name, here `stock_count`: `lm` turns
-  every `-` of `--name` into `_`. Then `lm connector resume stock_count`.
+  [CSV & files](../connectors/csv.md). Give its manifest the name `lm connector list` shows:
+  `--name stock-count` was registered as `stock_count`. Then `lm connector resume stock_count`.
 - **Another source:** [Other first sources](other-sources.md) — an API, SFTP, S3.
 - **The full demo**, with two sources fused into one customer: [The WOW](../wow.md).
 
@@ -180,8 +183,8 @@ Empty, or not found? Rebuild it with `lm source rediscover --scope retail`, then
 
 | You see | Do this |
 |---|---|
-| `401` on every command | Your session ended. Run `lm login` again. |
+| `Error: API error 401 …` on every command | Your session ended. Run `lm login` again. |
 | `Error: access refused (403): scope not granted` | Your account holds `scope:` roles, and not this one. Use a scope you hold. |
-| `Error: API error 404 (no details from the server)` on `lm ask` | lumnik Open, or the AI is off. See [The two editions](../editions.md#which-edition-am-i-running). |
+| `Error: this hub's build has no Ask …` or `Error: this hub has the AI switched off …` on `lm ask` | lumnik Open, or the AI is off. See [The two editions](../editions.md#which-edition-am-i-running). |
 | Ask declines a question | Rephrase it with the words of your columns. Check `lm source schema --scope <tag>`. |
 | A second connector appears after `lm apply -f` | `metadata.name` differs from the registered name. Delete the duplicate, re-apply under the name `lm connector list` shows. |

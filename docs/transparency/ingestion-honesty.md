@@ -17,13 +17,13 @@ ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTE
 | Counter | Counts |
 |---|---|
 | `IN` | the rows read from the source |
-| `OUT` | the source rows written. A row `split-row` cut in three still counts one |
-| `SKIPPED` | the rows not written: filtered out on purpose, already present, or set aside |
+| `OUT` | the source rows delivered to the table. A row already there, unchanged, counts too. A row `split-row` cut in three still counts one |
+| `SKIPPED` | the rows not written: filtered out on purpose, or set aside |
 | `DEAD-LETTERS` | the part of `SKIPPED` set aside with its reason, for you to look at |
 
 | Not written | Reasons | A dead letter? |
 |---|---|---|
-| on purpose | a `filter-where` or `skip-empty-rows` dropped it; the row was already there | no |
+| on purpose | a `filter-where` or `skip-empty-rows` dropped it; `parser.short_rows: skip-leading` skipped a line before the table | no |
 | set aside | `MalformedSource` (the file is broken), `MappingFailed` (a hook could not read a value), `ValidationFailed` (`validate-row`), `WriteFailed` | yes |
 
 ## The lines under the table

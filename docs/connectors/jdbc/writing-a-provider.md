@@ -38,7 +38,7 @@ Providers add up: several live in one image, and each connector picks its own.
 | `readColumn(rs, index)` | The value of a cell. Default `getObject`; override for a LOB locator or a driver-specific timestamp class, and throw to refuse a type you cannot read. |
 | `isWallClock(metadata, index)` | Whether the column holds a date and time written with no time zone, which the hub then reads in the connection's `zone`, UTC without one. Default: the column's JDBC type is `TIMESTAMP`. Override it when your driver reports a zoned type under that same code. |
 | `sessionInitSql()` | A statement run on every new connection of this dialect's pool — for a database whose session settings (sort order, number format) change what a query means. Default: none. |
-| introspection | `listTables`, `tableExists`, `listColumns`, `listPrimaryKey`, `listForeignKeys`, `estimateRowCount`, `inferWatermarkColumn`. |
+| introspection | `listTables`, `listViews` (no default: a provider that cannot list views throws `SQLException` saying so, never an empty list), `tableExists`, `listColumns`, `listPrimaryKey`, `listForeignKeys`, `estimateRowCount`, `inferWatermarkColumn`. |
 
 `keyComparison` and `limitClause` have no default so that a provider cannot compile while emitting
 SQL its database rejects, or reads differently.

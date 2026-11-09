@@ -1,0 +1,16 @@
+# #1926: a preset manifest whose poll_timeout_ms is out of [100, 60000]. The preset carries the key
+# through, so the validator sees it on the expansion and refuses it, as for plain kafka.
+apiVersion: connectors.lumnik.io/v1
+kind: Connector
+metadata:
+  name: acme-eventhubs-bad-poll
+  connector_type: kafka
+  scopes: [erp]
+spec:
+  preset: event-hubs
+  namespace: acme
+  connection_string_env: EVENTHUBS_CONN_STR
+  name: telemetry_events
+  topic: telemetry
+  format: json
+  poll_timeout_ms: 5

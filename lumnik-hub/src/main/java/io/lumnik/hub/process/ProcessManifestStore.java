@@ -2,10 +2,12 @@ package io.lumnik.hub.process;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.hub.entity.EntityViewCompiler;
 import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.jboss.logging.Logger;
 
 import java.util.List;
 import java.util.Optional;
@@ -15,6 +17,8 @@ import java.util.Set;
 @ApplicationScoped
 public class ProcessManifestStore {
 
+    private static final Logger LOG = Logger.getLogger(ProcessManifestStore.class);
+
     @Inject
     @DataSource("admin")
     AgroalDataSource adminDs;
@@ -22,7 +26,8 @@ public class ProcessManifestStore {
     private final ProcessManifestParser parser = new ProcessManifestParser();
 
     public record StoredProcess(String name, String scope, String onTable, List<String> when,
-                                String emitType, String emitMessage, List<String> emitFields, boolean enabled) {}
+                                String emitType, String emitMessage, List<String> emitFields, String emitKey,
+                                boolean enabled) {}
 
     /**
      * Upsert this process, refusing to overwrite a name the caller's grants do not reach.
@@ -135,11 +140,58 @@ public class ProcessManifestStore {
                 ps -> { ps.setLong(1, tenantId); ps.setString(2, table); });
     }
 
+    /** {@code LIKE} for an entity view's name: the prefix's underscore is a wildcard, so it is escaped. */
+    private static final String ENTITY_VIEW_LIKE = EntityViewCompiler.VIEW_PREFIX.replace("_", "\\_") + "%";
+
+    /**
+     * The tenant's enabled processes whose trigger is a fused entity view ({@code connector.v_*}, #1833): the
+     * rows a change in one of the Entity's sources can reach.
+     */
+    public List<StoredProcess> findEnabledOnEntityViews(long tenantId) {
+        return query("SELECT yaml_text, enabled FROM core.process_manifest "
+                   + "WHERE tenant_id = ? AND enabled AND on_table LIKE ?",
+                ps -> { ps.setLong(1, tenantId); ps.setString(2, ENTITY_VIEW_LIKE); });
+    }
+
+    /** The entity views the tenant's enabled processes listen on — no manifest read: the emission gate asks it per batch. */
+    public List<String> enabledEntityViews(long tenantId) {
+        return Jdbc.query(adminDs, "ProcessManifestStore.enabledEntityViews",
+                "SELECT DISTINCT on_table FROM core.process_manifest WHERE tenant_id = ? AND enabled AND on_table LIKE ?",
+                ps -> { ps.setLong(1, tenantId); ps.setString(2, ENTITY_VIEW_LIKE); }, rs -> rs.getString(1));
+    }
+
+    /** Every tenant's enabled entity views: the background index pass is not a request, it has no tenant. */
+    public List<String> allEnabledEntityViews() {
+        return Jdbc.query(adminDs, "ProcessManifestStore.allEnabledEntityViews",
+                "SELECT DISTINCT on_table FROM core.process_manifest WHERE enabled AND on_table LIKE ?",
+                ps -> ps.setString(1, ENTITY_VIEW_LIKE), rs -> rs.getString(1));
+    }
+
+    /** Does any tenant's enabled process listen on this entity view? */
+    public boolean anyEnabledOn(String view) {
+        return Jdbc.exists(adminDs, "ProcessManifestStore.anyEnabledOn",
+                "SELECT 1 FROM core.process_manifest WHERE enabled AND on_table = ?", ps -> ps.setString(1, view));
+    }
+
     private List<StoredProcess> query(String sql, Jdbc.Binder binder) {
+        // A stored manifest that cannot be read (written by another version) is left out and said: one broken process must not
+        // take the others of its table with it, and the sweeper moves on whatever a consumer throws.
         return Jdbc.query(adminDs, "ProcessManifestStore.query", sql, binder, rs -> {
-            ProcessManifest m = parser.parse(rs.getString(1));
-            return new StoredProcess(m.name(), m.scope(), m.onTable(), m.when(),
-                    m.emitType(), m.emitMessage(), m.emitFields(), rs.getBoolean(2));
-        });
+            try {
+                return Optional.of(stored(rs.getString(1), rs.getBoolean(2)));
+            } catch (RuntimeException e) {
+                // the parser's words quote the text it choked on, and a manifest can hold customer data: the kind only
+                LOG.errorf("a stored process cannot be read (%s) — it is left out", e.getClass().getSimpleName());
+                LOG.debug("stored process read failure", e);
+                return Optional.<StoredProcess>empty();
+            }
+        }).stream().flatMap(Optional::stream).toList();
+    }
+
+    /** A stored manifest's yaml, read as the process it declares. */
+    StoredProcess stored(String yaml, boolean enabled) {
+        ProcessManifest m = parser.parse(yaml);
+        return new StoredProcess(m.name(), m.scope(), m.onTable(), m.when(),
+                m.emitType(), m.emitMessage(), m.emitFields(), m.emitKey(), enabled);
     }
 }

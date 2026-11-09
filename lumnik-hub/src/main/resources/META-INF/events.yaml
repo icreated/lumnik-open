@@ -86,14 +86,22 @@ events:
       by:   string
       at:   string
   - type: data.row.changed
-    description: "A genuinely new or changed row landed in a watched ingest table; emitted in the ingestion transaction."
+    description: "A genuinely new or changed row landed in a watched ingest table; emitted in the ingestion transaction. op is technical provenance; row_id (the row's own id, a string) only for rows of hybrid (REST) tables."
     payload:
       entity:     string
       entity_key: string
       op:         string
       run_id:     string
+      row_id:     string
   - type: annotation.decision.acked
     description: "A human treated a decision in the inbox."
     payload:
       decision_id: long
       by:          string
+  - type: notification.mail.given-up
+    description: "A mail was given up after its attempts (or at once, when its template failed). Carries the kind of failure, never the mail; lm notify replay ID sends it again."
+    payload:
+      delivery_id: long
+      rule_id:     long
+      event_type:  string
+      failure:     string

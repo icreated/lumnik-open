@@ -85,10 +85,11 @@ public class ConnectorScheduler {
     for (DueConnector c : listDueConnectors()) {
       Instant reference = c.lastStarted() != null ? c.lastStarted() : c.createdAt();
       if (!isCronDue(c.schedule(), reference, now)) continue;
-      // P10: the execution window — a due slot outside it is SKIPPED, never queued
-      // (the next in-window cron slot runs). Manual runs bypass this gate entirely.
-      if (!RunWindow.contains(c.window(), now.toLocalTime())) {
-        LOG.debugf("ConnectorScheduler: connector %s due but outside window %s — skipped", c.id(), c.window());
+      // P10: the execution window — a slot that fell outside it is SKIPPED, never queued
+      // (the next in-window cron slot runs), and nothing starts while the tick is outside it.
+      // Manual runs bypass this gate entirely.
+      if (!slotInWindow(c.schedule(), c.window(), now) || !RunWindow.contains(c.window(), now.toLocalTime())) {
+        LOG.debugf("ConnectorScheduler: connector %s due but its slot or this tick is outside window %s — skipped", c.id(), c.window());
         continue;
       }
       // #897: a fan-out still waiting for run permits has written no row for this slot yet, so the
@@ -114,14 +115,26 @@ public class ConnectorScheduler {
    * An unparseable cron is logged and treated as not-due (never silently spun).
    */
   static boolean isCronDue(String cron, Instant reference, ZonedDateTime now) {
+    return lastSlot(cron, now).filter(slot -> slot.toInstant().isAfter(reference)).isPresent();
+  }
+
+  /** The cron's last firing at or before {@code now}; empty when there is none or the cron is unparseable. */
+  private static Optional<ZonedDateTime> lastSlot(String cron, ZonedDateTime now) {
     try {
-      ExecutionTime et = ExecutionTime.forCron(UNIX_PARSER.parse(cron));
-      Optional<ZonedDateTime> lastFire = et.lastExecution(now);
-      return lastFire.isPresent() && lastFire.get().toInstant().isAfter(reference);
+      return ExecutionTime.forCron(UNIX_PARSER.parse(cron)).lastExecution(now);
     } catch (Exception e) {
       LOG.warnf("Invalid cron '%s', treating as not-due: %s", cron, e.getMessage());
-      return false;
+      return Optional.empty();
     }
+  }
+
+  /**
+   * #1922: whether the slot the cron last fired at, at or before {@code now}, fell inside the
+   * window. A slot outside it is skipped for good: the tick that finds the window open must
+   * not run it late. An unparseable cron is not due anyway ({@link #isCronDue}).
+   */
+  static boolean slotInWindow(String cron, String window, ZonedDateTime now) {
+    return lastSlot(cron, now).map(slot -> RunWindow.contains(window, slot.toLocalTime())).orElse(true);
   }
 
   List<DueConnector> listDueConnectors() {

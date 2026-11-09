@@ -9,6 +9,7 @@ import jakarta.transaction.UserTransaction;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.sql.Timestamp;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -145,19 +146,50 @@ class EvolutionIT {
   }
 
   /**
-   * The detection itself, without a datasource: only a registered {@code BIGINT} fed a fractional
-   * number widens. A text column holding "1.5" does not (it is not a {@code Number}), and a column
-   * already {@code NUMERIC(18,4)} has nowhere to go.
+   * The detection itself, without a datasource: a registered {@code BIGINT} fed a fractional number
+   * widens. A text column holding "1.5" does not (it is not a {@code Number}), and a column already
+   * plain {@code NUMERIC} has nowhere to go. A legacy {@code NUMERIC(18,4)} (#1862) widens only for a
+   * value that type would round or refuse: a fifth decimal, or more than 14 digits before the point, whatever the Java type carrying it.
    */
   @Test
-  void widenings_namesOnlyTheBigintColumnsAFractionMakesTooNarrow() {
-    Map<String, String> registered = Map.of(
-        "credit_limit", "BIGINT", "qty", "BIGINT", "price", "NUMERIC(18,4)", "code", "TEXT");
+  void widenings_namesTheBigintColumnsAFractionMakesTooNarrowAndTheLegacyDecimalsAFifthDecimalRounds() {
+    Map<String, String> registered = new HashMap<>(Map.of(
+        "credit_limit", "BIGINT", "qty", "BIGINT", "price", "NUMERIC", "code", "TEXT"));
+    for (String legacy : List.of("mz_big", "mz_dbl", "mz_ok", "mz_nan", "id_wide", "mz_flt",
+        "long_wide", "long_ok", "big_wide", "int_ok")) {
+      registered.put(legacy, "NUMERIC(18,4)");
+    }
     List<Map<String, Object>> rows = List.of(
-        Map.of("credit_limit", 1000, "qty", 3, "price", 2.5d, "code", "1.5"),
+        Map.ofEntries(
+            Map.entry("credit_limit", 1000), Map.entry("qty", 3), Map.entry("price", 2.12345d), Map.entry("code", "1.5"),
+            Map.entry("mz_big", new BigDecimal("195.0876500")), Map.entry("mz_dbl", 195.08771d),
+            Map.entry("mz_ok", new BigDecimal("1.50000")), Map.entry("mz_nan", Double.NaN),
+            Map.entry("id_wide", new BigDecimal("1234567890123456789")),
+            Map.entry("mz_flt", 1.1f),                                    // 1.1, not its binary expansion
+            Map.entry("long_wide", 123456789012345L), Map.entry("long_ok", 12345678901234L),
+            Map.entry("big_wide", new BigInteger("100000000000000000000")), Map.entry("int_ok", 7)),
         Map.of("credit_limit", 748.5d, "qty", 4, "price", 9.0d, "code", "2.5"));
 
-    assertThat(DynamicTableWriter.widenings(rows, registered)).containsExactly("credit_limit");
+    assertThat(DynamicTableWriter.widenings(rows, registered))
+        .containsExactlyInAnyOrder("credit_limit", "mz_big", "mz_dbl", "id_wide", "long_wide", "big_wide");
+  }
+
+  /** #1862: the fifth decimal of a theoretical m/z is stored as read, not rounded to four (195.08765 -> 195.0877). */
+  @Test
+  void a_decimal_column_keeps_a_fifth_decimal() {
+    String mappingId = "test_scale_" + System.nanoTime();
+    MappingTarget.Table spec = spec(mappingId);
+
+    writeChunk(spec, "s1_" + mappingId, Map.of("mz", new BigDecimal("195.08765")));
+    writeChunk(spec, "s2_" + mappingId, Map.of("mz", 524.26496d));
+
+    assertThat(columnTypes(mappingId)).containsEntry("mz", "numeric");
+    for (String[] expected : new String[][] {{"s1_", "195.08765"}, {"s2_", "524.26496"}}) {
+      Object mz = em.createNativeQuery("SELECT mz FROM tenant_1_data." + mappingId + " WHERE _row_hash = ?1")
+          .setParameter(1, expected[0] + mappingId).getSingleResult();
+      assertThat((BigDecimal) mz).isEqualByComparingTo(expected[1]);
+      assertThat(mz.toString()).isEqualTo(expected[1]);
+    }
   }
 
   /**

@@ -51,6 +51,18 @@ class ProcessManifestParserTest {
     }
 
     @Test
+    void emitKeyIsKept_absentIsNull_blankOrNotTextIsRefused() {
+        String withKey = YAML.replace("message: \"Nouveau client GOLD\"",
+            "message: \"Nouveau client GOLD\"\n    key: code");
+        assertThat(new ProcessManifestParser().parse(withKey).emitKey()).isEqualTo("code");
+        assertThat(new ProcessManifestParser().parse(YAML).emitKey()).isNull();
+        assertThatThrownBy(() -> new ProcessManifestParser().parse(withKey.replace("key: code", "key: \"  \"")))
+            .hasMessageContaining("spec.emit.key");
+        assertThatThrownBy(() -> new ProcessManifestParser().parse(withKey.replace("key: code", "key: [code]")))
+            .hasMessageContaining("spec.emit.key");
+    }
+
+    @Test
     void refusesWrongKind() {
         assertThatThrownBy(() -> new ProcessManifestParser().parse(YAML.replace("kind: Process", "kind: View")))
             .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("Process");

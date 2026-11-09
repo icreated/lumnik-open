@@ -8,9 +8,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -25,6 +22,8 @@ import java.util.Map;
 import java.util.Set;
 
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
+import io.lumnik.hub.event.OutboxKey;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
 import static io.lumnik.hub.workflow.WorkflowManifestParser.norm;
@@ -49,8 +48,6 @@ import static io.quarkus.scheduler.Scheduled.ConcurrentExecution.SKIP;
 public class WorkflowDormancySweep {
 
     private static final Logger LOG = Logger.getLogger(WorkflowDormancySweep.class);
-    /** core.event_outbox.entity_key / dedup_key are VARCHAR(200) (V24). */
-    private static final int OUTBOX_KEY_MAX = 200;
 
     private static final String EMIT_SQL =
         "INSERT INTO core.event_outbox "
@@ -86,6 +83,7 @@ public class WorkflowDormancySweep {
     private final WorkflowConditions conditions = new WorkflowConditions(LOG, "dormancy");
 
     @Inject WorkflowRegistry registry;
+    @Inject DynamicTableRegistry tables;
     @Inject WorkflowObservationStore observations;
     @Inject ObjectMapper json;
 
@@ -392,6 +390,7 @@ public class WorkflowDormancySweep {
         String column = quoteIdent(g.column());
         String current = OrderColumn.currentOnTable(order, order == null ? null : quoteIdent(g.order()), key,
             key + "::text AS k, " + column + "::text AS v" + context.projected(), g.table(),
+            tables.writtenAtColumn(tenant, g.table()),
             " WHERE tenant_id = ? AND " + key + " IS NOT NULL AND btrim(" + key + "::text) <> '' AND " + column
                 + " IS NOT NULL AND btrim(" + column + "::text) <> ''");
         String sql = "DECLARE " + cursor + " CURSOR WITH HOLD FOR "
@@ -445,30 +444,11 @@ public class WorkflowDormancySweep {
             ps.setString(2, "decision.dormant." + g.name());
             ps.setString(3, "workflow:" + g.name());
             ps.setString(4, g.table());
-            ps.setString(5, bounded(obs.docKey()));
+            ps.setString(5, OutboxKey.bounded(obs.docKey()));
             ps.setString(6, payload);
-            ps.setString(7, bounded(
+            ps.setString(7, OutboxKey.bounded(
                 "dormant:" + g.name() + ":" + obs.docKey() + ":" + obs.since().toEpochMilli()));
         });
-    }
-
-    /** {@code core.event_outbox.entity_key} and {@code dedup_key} are VARCHAR(200) (V24), but a
-     *  doc key is raw text from an arbitrary customer column and has no bound at all. Readable
-     *  while it fits; beyond that a stable digest of the whole value — still deterministic, so
-     *  ON CONFLICT still dedupes, and the row is emitted instead of a 22001 killing the alert.
-     *  The payload keeps the real key verbatim (jsonb is unbounded): the operator must be able to
-     *  see which document this is. Measured in UTF-16 units, i.e. conservatively. */
-    static String bounded(String s) {
-        if (s == null || s.length() <= OUTBOX_KEY_MAX) return s;
-        try {
-            byte[] d = MessageDigest.getInstance("SHA-256")
-                .digest(s.getBytes(StandardCharsets.UTF_8));
-            StringBuilder sb = new StringBuilder("sha256:");
-            for (byte b : d) sb.append(String.format("%02x", b));
-            return sb.toString();
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 unavailable", e); // never on a JRE
-        }
     }
 
     private List<Long> tenants() {

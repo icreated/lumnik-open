@@ -56,6 +56,17 @@ class TransformEachTest {
         .hasMessageContaining("2 rows of one");
   }
 
+  /** The NUL guard drops after this check: a split it would shrink to one row is still a split (#1855). */
+  @Test
+  void aRowSplitInSeveralIsRefused_evenWhenOneFragmentHoldsANulByte() {
+    List<Map<String, Object>> rows = List.of(new HashMap<>(Map.of("pod", "a", "ports", "80,4\u000043")));
+
+    assertThatThrownBy(() -> engine.transformEach(spec("row:\n  - { split-row: { by: ports } }\n"), rows,
+        new MappingState()))
+        .isInstanceOf(MappingValidationException.class)
+        .hasMessageContaining("2 rows of one");
+  }
+
   @Test
   void anAggregatorIsRefusedBeforeAnyRow() {
     assertThatThrownBy(() -> engine.transformEach(

@@ -29,9 +29,11 @@ public class SchemaIntrospector {
 
     List<TableDescriptor> out = new ArrayList<>();
     try (Connection conn = ds.getConnection()) {
-      for (String tableName : dialect.listTables(conn, schema)) {
-        if (matchesAny(tableName, skip)) continue;
-        out.add(describeOne(conn, dialect, schema, tableName));
+      List<String> names = new ArrayList<>(dialect.listTables(conn, schema));
+      if (includeViews) names.addAll(dialect.listViews(conn, schema));
+      for (String name : names) {
+        if (matchesAny(name, skip)) continue;
+        out.add(describeOne(conn, dialect, schema, name));
       }
     } catch (Exception e) {
       throw new RuntimeException("Discovery failed for " + cc.url() + " / " + schema, e);

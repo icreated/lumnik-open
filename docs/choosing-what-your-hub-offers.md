@@ -13,9 +13,10 @@
 
 ## The four questions
 
-Questions 1 to 3 decide whether a tab is on an app. Question 4 decides whether it is worth showing:
-Search checks it before it appears, while Records opens anyway and says what is missing. Read them top to
-bottom; the first *no* is your answer when something is missing.
+- Questions 1 to 3 decide whether a tab is on an app.
+- Question 4 decides whether it is worth showing. Search checks it before it appears. Fiches opens
+  anyway, and says what is missing.
+- Read them top to bottom. When something is missing, the first *no* is your answer.
 
 ```mermaid
 flowchart LR
@@ -34,14 +35,14 @@ The tabs and who brings them:
 
 | Tab | Shown as | Brought by | Needs |
 |---|---|---|---|
-| `fiches` | Records | every hub | a saved view for the app's scope (without one the tab opens and says so) |
-| `inbox` | Inbox | every hub | — |
+| `fiches` | Fiches (the records) | every hub | a saved view for the app's scope (without one the tab opens and says so) |
+| `inbox` | Décisions (the inbox) | every hub | — |
 | `chat` | Chat | Pro (`rag` + `llm`) | the AI switched on |
-| `search` | Search | a Search provider (`search_pg` or `search_opensearch`) | a search index the user may read |
+| `search` | Recherche (Search) | a Search provider (`search_pg` or `search_opensearch`) | a search index the user may read |
 
 ## 1. Is it in the build?
 
-What the image carries is fixed when the hub is built; no setting adds a module that is not there.
+What the image carries is fixed when the hub is built. No setting adds a module that is not there.
 Ask the hub what it carries:
 
 ```
@@ -77,11 +78,12 @@ rag        0.1.0    Platform RAG        ACTIVE
 search_pg  0.1.0    PostgreSQL search   ACTIVE
 ```
 
-No `lm` command prints which tabs each module brings; the platform API does (integrator token).
-The hub offers the tabs of the active modules — here a Pro hub with the AI switched off:
+No `lm` command prints which tabs each module brings. The platform API does, with an integrator
+token ([mint `$TOKEN`](recipes/test-the-api.md#mint-a-token)). The hub offers the tabs of the active
+modules — here a Pro hub with the AI switched off:
 
 ```
-$ curl -s "$LUMNIK_URL/api/platform/modules" -H "Authorization: Bearer $TOKEN" \
+$ curl -s http://localhost:8080/api/platform/modules -H "Authorization: Bearer $TOKEN" \
     | jq -c '.modules[] | select((.tabs|length)>0) | {id, active, tabs}'
 {"id":"core","active":true,"tabs":["fiches","inbox"]}
 {"id":"rag","active":false,"tabs":["chat"]}
@@ -91,11 +93,12 @@ A Search provider adds `{"id":"search_pg","active":true,"tabs":["search"]}`.
 
 ## 2. Is it switched on?
 
-One setting switches off the whole AI family — chat, ask, view generation, embeddings — without
-rebuilding: `LUMNIK_AI_ENABLED=false`. The gesture per install is in
-[Deploy — switch the AI off](deploy.md#switch-the-ai-off). It must be exactly `true` or `false`;
-anything else stops the hub at startup. What you see, and what keeps running:
-[Switching the AI off](rag/models.md#switching-the-ai-off).
+One setting switches off the whole AI family, without rebuilding: `LUMNIK_AI_ENABLED=false`.
+Chat, ask, view generation and embeddings stop.
+
+- The gesture per install: [Deploy — switch the AI off](deploy.md#switch-the-ai-off).
+- The value must be exactly `true` or `false`. Anything else stops the hub at startup.
+- What you see, and what keeps running: [Switching the AI off](rag/models.md#switching-the-ai-off).
 
 The module list tells the difference between *switched off* and *not there*:
 
@@ -108,13 +111,14 @@ llm       0.1.0    Model provider      INACTIVE  disabled:lumnik.ai.enabled
 rag       0.1.0    Platform RAG        INACTIVE  disabled:lumnik.ai.enabled
 ```
 
-- **Inactive** (Pro, switched off): the data is kept, the images are the same, and putting the setting back
-  restores what you had. Content that needed indexing *while the AI was off* is not there when it returns —
-  re-apply the workflow or re-ingest the file ([what comes back](rag/models.md#switching-the-ai-off)).
+- **Inactive** (Pro, switched off): the data is kept, and the image is the same. Putting the setting
+  back restores what you had.
+- One exception: content that needed indexing *while the AI was off* is not there when it returns.
+  Re-apply the workflow or re-ingest the file ([what comes back](rag/models.md#switching-the-ai-off)).
 - **Absent** (Open): the module is not in the build, so it is not in the list at all.
 
-Either way the Chat tab is gone from every app. Search is not part of this switch: turning the AI off leaves
-Search exactly as it was.
+Either way, the Chat tab is gone from every app. Search is not part of this switch: it stays exactly
+as it was.
 
 ## 3. Does the app ask for it?
 
@@ -162,13 +166,13 @@ Hiding a tab hides it, nothing more: who may read what is still decided by roles
 
 | Tab | Ready when | Check |
 |---|---|---|
-| Records | a saved view exists for the app's scope (otherwise the tab opens and says so) | `lm view list --scope <app scope>` |
+| Fiches | a saved view exists for the app's scope (otherwise the tab opens and says so) | `lm view list --scope <app scope>` |
 | Search | the user may read a search index (otherwise the tab is not shown) | `lm search status` |
 
 Search's full checklist: [Enabling Search for an app](apps/pwa.md#enabling-search-for-an-app).
 
-Whether Search is installed: the TUI's `:search` page says so in its banner, and a query on a hub
-without a provider is refused, never answered with an empty list:
+Is Search installed at all? The TUI's `:search` page says so in its banner. On a hub without a
+provider, a query is refused, never answered with an empty list:
 
 ```
 $ lm search query "Lyon"
@@ -180,9 +184,9 @@ Error: search is not installed on this hub — no Search provider is built into 
 **A warehouse app with no Chat, on a Pro hub.** Question 3 only: `tabs: [fiches, inbox]` in the app's
 manifest, then `lm app apply -f`. The other apps keep their Chat.
 
-**A client who forbids a model on their hub.** Question 2: [switch the AI off](deploy.md#switch-the-ai-off). Every
-app loses its Chat tab at once, no manifest changes, and the rest of the hub (including Oracle, SCIM and
-Search) is untouched.
+**A client who forbids a model on their hub.** Question 2: [switch the AI off](deploy.md#switch-the-ai-off).
+Every app loses its Chat tab at once, with no manifest change. The rest of the hub is untouched,
+Oracle, SCIM and Search included.
 
 **Search in one app, but not the others** (questions 3 and 4, here for the `stock` app):
 

@@ -5,9 +5,11 @@ import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.TenantWide;
 import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
+import io.lumnik.hub.event.EventPatterns;
 import io.lumnik.hub.event.RowEventGate;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.identity.KnownKeysOnly;
+import io.quarkus.qute.Engine;
 import io.quarkus.resteasy.reactive.jackson.CustomDeserialization;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -49,6 +51,7 @@ import java.util.List;
 public class NotificationRuleResource {
 
     @Inject NotificationRuleRepository repo;
+    @Inject Engine qute;
     @Inject DynamicTableRegistry tables;
 
     public record RuleDto(Long id, String eventPattern, String entityFilter,
@@ -80,6 +83,9 @@ public class NotificationRuleResource {
         long tenant = RequireTenant.current();
         if (in == null || Text.blank(in.eventPattern()))
             return ApiErrors.badRequest("eventPattern is required (an exact type, or a prefix ending in .*)");
+        String badPattern = EventPatterns.refusal(in.eventPattern().strip());
+        if (badPattern != null)
+            return ApiErrors.badRequest(badPattern);
         if (Text.blank(in.recipient()))
             return ApiErrors.badRequest("recipient is required");
         String template = Text.blank(in.template())
@@ -88,6 +94,10 @@ public class NotificationRuleResource {
         // never a path — refused at the door instead of skipped at delivery time.
         if (!EmailConsumer.SAFE_TEMPLATE.matcher(template).matches())
             return ApiErrors.badRequest("template must match [a-z0-9-]+ (a template name, not a path)");
+        // The consumer gives every mail up at render when the hub has no such template: refused here instead.
+        if (qute.getTemplate(EmailConsumer.templateId(template)) == null)
+            return ApiErrors.badRequest("template '" + template + "' is not one this hub carries — the ones it ships: "
+                + String.join(", ", EmailConsumer.SHIPPED_TEMPLATES));
         String entityFilter = blankToNull(in.entityFilter());
         // Only for data.row.changed is the entity a table a connector's row writer fills. Other
         // families stamp their own: a decision.dormant.* carries the workflow's watched table,
@@ -98,7 +108,9 @@ public class NotificationRuleResource {
                 && !tables.emitsRowEvents(tenant, entityFilter))
             return ApiErrors.badRequest("entityFilter '" + entityFilter + "' names no table that emits"
                 + " data.row.changed — that event's entity is the full name of the table a"
-                + " connector's row writer fills (connector.t_<name>). Run the connector once, or"
+                + " connector's row writer fills (a connector.t_<name> table, or a hybrid table, <schema>.<name>,"
+                + " usually ext.<name> (a REST endpoint's target or a one-shot ingest))."
+                + " Run the connector once, or"
                 + " leave entityFilter out to match every entity");
 
         NotificationRule r = new NotificationRule();

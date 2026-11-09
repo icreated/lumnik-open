@@ -74,8 +74,8 @@ In the TUI the header shows the session scope — seeded from your default ([TUI
   [leak guard](../transparency/ask-rules.md#4-leak-guard-the-business-scope-boundary) refuses any
   generated query that reads a table not declared in the scope (see the guard page for the
   refusal message).
-- **By default a scope is a working boundary, not a security boundary between users**: a user
-  with no scope grants may ask any scope — scopes keep answers inside the selected data set.
+- **By default a scope is a working boundary, not a security boundary between users.** A user
+  with no scope grants may ask any scope; the scope keeps the answer inside the selected data set.
   To make it a need-to-know boundary too, bind the user (next section).
 
 ## Binding users to scopes (opt-in)
@@ -83,7 +83,7 @@ In the TUI the header shows the session scope — seeded from your default ([TUI
 A grant is a Keycloak realm role named `scope:<name>` — nothing else to create or administer.
 
 - A user with **no** `scope:*` roles is *unscoped*: tenant-wide access, exactly the default
-  behavior above. (This is why admins need no special case — they simply carry no grants.)
+  behavior above. An admin who carries no grant sees the whole tenant.
 - A user with **one or more** `scope:*` roles is *scope-bound*:
   - asking or searching a scope they do not hold: `Error: access refused (403): scope not granted`;
   - `lm ask` needs a scope they hold: named with `--scope`, or set as their default. `all` is
@@ -139,10 +139,14 @@ flowchart LR
 
 ## Scoping and the ladder
 
-The same scope name runs the whole ladder: a `kind: View` renders a scope's table, a `kind: Process`
-watches a scope's raw ingest table, and a [`kind: Workflow`](../apps/workflows.md) declares a
-lifecycle whose corpus chunk carries that same scope — so a bound user retrieves the
-declared graph only for the scopes they hold. One scope name, end to end.
+The same scope name runs the whole ladder:
+
+- a `kind: View` renders a scope's table;
+- a `kind: Process` watches a scope's raw ingest table;
+- a [`kind: Workflow`](../apps/workflows.md) declares a lifecycle in a scope, and the chat tells it
+  only to users who may read that scope.
+
+One scope name, end to end.
 
 ## See also
 

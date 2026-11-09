@@ -27,7 +27,13 @@ manifest can only name it.
 ## Check what the hub holds
 
 `lm hook scripts` lists the scripts of the hooks directory. The SHA-256 tells you which version
-the hub holds.
+the hub holds:
+
+```console
+$ lm hook scripts
+NAME                SIZE  SHA256
+shipping-fee-b.kts  316   23ba31c1b1827ff86228f4f7f36ffd2b73b7ab77ef155598bf05ef12c4b1273e
+```
 
 `lm validate` and `lm apply` check every `script:`: it must exist and compile. A refusal names
 the hook (`spec.mapping.cell[1].kotlin`) and says why:
@@ -69,11 +75,11 @@ built-in hook:
 
 ## Which version a run used
 
-A script the operator replaces applies at once, without a restart. `lm run get` names each
-script the run used, with the SHA-256 `lm hook scripts` shows:
+A script the operator replaces applies from the next block of rows, without a restart.
+`lm run get` names each script the run used, with the SHA-256 `lm hook scripts` shows:
 
 ```text
-• script hooks:shipping-fee.kts  sha256 23ba31c1b1827ff86228f4f7f36ffd2b73b7ab77ef155598bf05ef12c4b1273e
+• script hooks:shipping-fee-b.kts  sha256 23ba31c1b1827ff86228f4f7f36ffd2b73b7ab77ef155598bf05ef12c4b1273e
 ```
 
 A script replaced while a run was going gives two lines: that run used both versions.

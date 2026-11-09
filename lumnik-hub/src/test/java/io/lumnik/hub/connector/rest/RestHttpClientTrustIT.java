@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.rest;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
+import java.util.ArrayList;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -80,7 +81,7 @@ class RestHttpClientTrustIT {
     }
 
     private static void keytool(String... args) throws Exception {
-        List<String> cmd = new java.util.ArrayList<>(List.of(Path.of(System.getProperty("java.home"), "bin", "keytool").toString()));
+        List<String> cmd = new ArrayList<>(List.of(Path.of(System.getProperty("java.home"), "bin", "keytool").toString()));
         cmd.addAll(List.of(args));
         Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
         String out = new String(p.getInputStream().readAllBytes());

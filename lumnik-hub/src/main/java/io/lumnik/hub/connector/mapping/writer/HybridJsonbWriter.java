@@ -7,12 +7,14 @@ import com.jayway.jsonpath.JsonPathException;
 import com.jayway.jsonpath.Option;
 import com.jayway.jsonpath.ReadContext;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.mapping.MappingValidationException;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.PromotedColumn;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.SqlType;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.Transform;
+import io.lumnik.hub.event.RowEventGate;
 import io.lumnik.hub.sql.TemporalText;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -30,6 +32,7 @@ import java.time.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.IntConsumer;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
@@ -69,8 +72,13 @@ public class HybridJsonbWriter {
     @Inject
     DynamicTableRegistry registry;
 
+    @Inject
+    RowEventGate gate;
+
     /** In-memory cache of known columns per table — cleared on drift or by tests. */
     private final Map<String, Set<String>> schemaCache = new ConcurrentHashMap<>();
+    /** The tables whose row-hash index this process has ensured (#1873). */
+    private final Set<String> rowHashIndexed = ConcurrentHashMap.newKeySet();
 
     /** Once-per-boot registration marker per (table, tenant) — the registry upsert is idempotent,
      *  this only spares one round-trip per batch. Cleared with the schema cache. */
@@ -118,14 +126,26 @@ public class HybridJsonbWriter {
         JsonPath uniqueKey = JsonPath.compile(spec.uniqueKeyPath());
         List<JsonPath> colPaths = paths(spec);
         String[] target = schemaAndTable(spec);
+        String entity = target[0] + "." + target[1];
+        // Asked once per write, as the dynamic writer does: no subscription, no events, today's write (#1816).
+        boolean emitting = gate.enabled(tenantId, entity);
         try (Connection c = adminDs.getConnection()) {
             DynamicTableWriter.writeLock(c, target[0], target[1]);
+            long unreadable;
             try {
-                return writeLocked(c, spec, items, cells, systemContexts, tenantId, connectorId, endpointId, uniqueKey,
-                    colPaths);
-            } finally {
-                DynamicTableWriter.releaseWriteLock(c, target[0], target[1]);
+                unreadable = writeLocked(c, spec, items, cells, systemContexts, tenantId, connectorId, endpointId,
+                    uniqueKey, colPaths, emitting ? entity : null);
+            } catch (SQLException | RuntimeException | Error failure) {
+                // A failed Jdbc.transaction may end the session: the release then throws, and must not mask it.
+                try {
+                    DynamicTableWriter.releaseWriteLock(c, target[0], target[1]);
+                } catch (SQLException releaseFailure) {
+                    failure.addSuppressed(releaseFailure);
+                }
+                throw failure;
             }
+            DynamicTableWriter.releaseWriteLock(c, target[0], target[1]);
+            return unreadable;
         } catch (SQLException e) {
             throw new RuntimeException("HybridJsonbWriter failed for " + spec.table(), e);
         }
@@ -219,25 +239,119 @@ public class HybridJsonbWriter {
         }
     }
 
+    /** @param eventEntity the entity of the staged events, {@code null} when no subscription asked for them */
     private long writeLocked(Connection c, HybridJsonbSpec spec, List<Map<String, Object>> items,
                              List<Map<String, Object>> cells,
                              List<Map<String, Object>> systemContexts, long tenantId, UUID connectorId,
-                             UUID endpointId, JsonPath uniqueKey, List<JsonPath> colPaths) throws SQLException {
+                             UUID endpointId, JsonPath uniqueKey, List<JsonPath> colPaths, String eventEntity)
+        throws SQLException {
         boolean schemaChanged = ensureTable(c, spec);
         if (schemaChanged) registered.removeIf(k -> k.startsWith(spec.table() + "|" + tenantId + "|"));
         registerIfNeeded(spec, tenantId, connectorId, c);
-        String sql = buildInsertSql(spec);
+        if (eventEntity != null) {
+            return writeEmitting(c, eventEntity, spec, items, cells, systemContexts,
+                tenantId, connectorId, endpointId, uniqueKey, colPaths);
+        }
+        // One row per statement on purpose: this chunk is not reduced to one item per key, and a multi-row upsert
+        // that meets a key twice fails ("cannot affect row a second time"). The gated path reduces it first.
         long unreadable = 0;
-        try (PreparedStatement ps = c.prepareStatement(sql)) {
+        try (PreparedStatement ps = c.prepareStatement(buildInsertSql(spec, 1))) {
             for (int r = 0; r < items.size(); r++) {
-                String rowHash = systemContexts == null ? null
-                    : (String) systemContexts.get(r).get("_row_hash");
-                unreadable += bind(ps, spec, uniqueKey, colPaths, items.get(r), cells == null ? null : cells.get(r),
-                     rowHash, tenantId, connectorId, endpointId);
+                unreadable += bind(ps, spec, colPaths, readItem(items.get(r), uniqueKey, spec),
+                     cells == null ? null : cells.get(r), rowHashOf(systemContexts, r), tenantId, connectorId,
+                     endpointId);
+                ps.addBatch();
             }
             ps.executeBatch();
         }
         return unreadable;
+    }
+
+    /**
+     * The write a subscription asked for (#1816): the upserts and their events in one transaction, on the connection
+     * that holds the table's write lock. Every item is read, so {@code unreadable} counts the whole chunk; only the
+     * last item of each key runs, so a shadowed version raises no event. An event is a new row or a moved, non-NULL
+     * hash: a promoted column rewritten under the same hash is not a change at the source.
+     *
+     * <p>The rows run in multi-row statements (#1819), {@link DynamicTableWriter#subBatchSize} rows each, as the
+     * dynamic writer's do: one round trip per statement, not per row. A statement returns the rows it wrote, each with
+     * its hash, whether it is new, its previous hash and its id; a row left alone returns nothing. The chunk holds
+     * each key once, so no statement touches a row twice.
+     *
+     * <p>Writes that emit events for one table and tenant are serialised: the transaction first takes a lock on
+     * {@link #rowEventsLockKey}, held until it ends. Its statements start after the previous writer committed, so they
+     * see its rows. This relies on READ COMMITTED: each statement takes a fresh snapshot, after the lock is granted;
+     * under REPEATABLE READ the snapshot would be taken before the wait. The shared write lock is taken before this
+     * lock, always in that order.
+     */
+    private long writeEmitting(Connection c, String entity, HybridJsonbSpec spec,
+                               List<Map<String, Object>> items, List<Map<String, Object>> cells,
+                               List<Map<String, Object>> systemContexts, long tenantId, UUID connectorId,
+                               UUID endpointId, JsonPath uniqueKey, List<JsonPath> colPaths) {
+        List<ParsedItem> parsed = new ArrayList<>(items.size());
+        boolean[] shadowed = new boolean[items.size()];
+        Map<String, Integer> lastOf = new HashMap<>();
+        for (int r = 0; r < items.size(); r++) {
+            parsed.add(readItem(items.get(r), uniqueKey, spec));
+            Integer earlier = lastOf.put(parsed.get(r).externalId(), r);
+            if (earlier != null) shadowed[earlier] = true;
+        }
+        // Read before the transaction: a shadowed item is counted unreadable though it never runs.
+        long unreadable = 0;
+        List<Integer> live = new ArrayList<>(items.size());
+        Object[][] values = new Object[items.size()][];
+        for (int r = 0; r < items.size(); r++) {
+            Cells row = cellsOf(spec, colPaths, parsed.get(r), cells == null ? null : cells.get(r));
+            unreadable += row.unreadable();
+            values[r] = row.values();
+            if (!shadowed[r]) live.add(r);
+        }
+        String source = connectorId != null ? connectorId.toString() : "ingest";
+        UUID runId = systemContexts == null ? null : (UUID) systemContexts.getFirst().get("_run_id");
+        int sub = DynamicTableWriter.subBatchSize(spec.promote().size() + FIXED_PARAMS);
+        // The label names the table, as the un-gated path's wrapper does: the SQLSTATE's message names none.
+        Jdbc.transaction(c, "HybridJsonbWriter.write " + spec.table(), tx -> {
+            // The lock is the statement's effect; its one (void) row is read and dropped.
+            Jdbc.queryOne(tx, "HybridJsonbWriter.rowEventsLock", "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+                ps -> ps.setString(1, rowEventsLockKey(entity, tenantId)), rs -> true);
+            try (PreparedStatement outbox = tx.prepareStatement(DynamicTableWriter.OUTBOX_SQL)) {
+                for (int start = 0; start < live.size(); start += sub) {
+                    int end = Math.min(start + sub, live.size());
+                    try (PreparedStatement ps = tx.prepareStatement(buildInsertSql(spec, end - start) + returningChange(spec))) {
+                        int base = 0;
+                        for (int k = start; k < end; k++) {
+                            int r = live.get(k);
+                            bindRow(ps, base, spec, parsed.get(r), values[r], rowHashOf(systemContexts, r),
+                                tenantId, connectorId, endpointId);
+                            base += spec.promote().size() + FIXED_PARAMS;
+                        }
+                        try (ResultSet rs = ps.executeQuery()) {
+                            while (rs.next()) {   // a row left unchanged by the upsert's WHERE returns nothing
+                                String hash = rs.getString(1);
+                                boolean inserted = rs.getBoolean(2);
+                                if (hash != null && (inserted || !hash.equals(rs.getString(3)))) {
+                                    DynamicTableWriter.stageEvent(outbox, JSON, tenantId, source, entity, hash, runId,
+                                        inserted ? "insert" : "update", rs.getLong(4));
+                                }
+                            }
+                        }
+                    }
+                    // Per statement, so the outbox batch never outgrows one sub-batch.
+                    outbox.executeBatch();
+                }
+            }
+            return null;
+        });
+        return unreadable;
+    }
+
+    /** The key of the lock event writes of one table and tenant take; never the table's own write-lock key. */
+    static String rowEventsLockKey(String entity, long tenantId) {
+        return "row-events:" + entity + ":" + tenantId;
+    }
+
+    private static String rowHashOf(List<Map<String, Object>> systemContexts, int r) {
+        return systemContexts == null ? null : (String) systemContexts.get(r).get("_row_hash");
     }
 
     /** {@code [schema, table]} of the target, as it is registered — {@code public} when the spec names none. */
@@ -308,20 +422,13 @@ public class HybridJsonbWriter {
 
     /** The {@code CREATE TABLE}: the reserved columns ({@link HybridJsonbSpec#RESERVED_COLUMNS}) with the promoted ones between. */
     static String createTableSql(String qfqTable, List<PromotedColumn> promote) {
-        StringBuilder sb = new StringBuilder("CREATE TABLE IF NOT EXISTS ")
-            .append(qfqTable).append(" (")
-            .append("id BIGSERIAL PRIMARY KEY, ")
-            .append("tenant_id BIGINT NOT NULL, ")
-            .append("external_id TEXT NOT NULL, ");
+        StringBuilder sb = new StringBuilder("CREATE TABLE IF NOT EXISTS ").append(qfqTable).append(" (");
+        for (TableColumn col : HybridJsonbSpec.LEADING_COLUMNS) sb.append(col.sql()).append(", ");
         for (PromotedColumn col : promote) {
             sb.append(qi(col.name())).append(' ').append(col.type().ddl).append(", ");
         }
-        return sb.append("row_hash TEXT, ")
-            .append("data JSONB NOT NULL, ")
-            .append("indexed_at TIMESTAMPTZ DEFAULT now(), ")
-            .append("connector_id UUID NOT NULL, ")
-            .append("endpoint_id UUID NOT NULL, ")
-            .append("UNIQUE (tenant_id, external_id))").toString();
+        for (TableColumn col : HybridJsonbSpec.TRAILING_COLUMNS) sb.append(col.sql()).append(", ");
+        return sb.append("UNIQUE (tenant_id, external_id))").toString();
     }
 
     /** @return true when the table was created or any column was added — the caller then
@@ -334,6 +441,7 @@ public class HybridJsonbWriter {
         if (known.isEmpty()) {
             createTable(c, spec);
             schemaCache.put(spec.table(), loadColumns(c, spec.table()));
+            rowHashIndexed.add(spec.table());   // createTable made the index
             return true;
         }
         boolean changed = false;
@@ -353,7 +461,25 @@ public class HybridJsonbWriter {
             known.add(ROW_HASH);
             changed = true;
         }
+        // Retrofit (#1873): a table created before the index existed. Once per table and process; IF NOT EXISTS
+        // makes a restart's second attempt a no-op.
+        if (!rowHashIndexed.contains(spec.table())) {
+            try (Statement st = c.createStatement()) {
+                st.execute(rowHashIndexSql(fqn(spec.table()), bareName(spec.table())));
+            }
+            rowHashIndexed.add(spec.table());   // after the DDL: a failed one is tried again by the next write
+        }
         return changed;
+    }
+
+    /** The citation's drill-down reads a row by {@code (tenant_id, row_hash)} (#1873): one user read, but a seq scan without it. */
+    private String rowHashIndexSql(String qfqTable, String tableName) {
+        return "CREATE INDEX IF NOT EXISTS " + qi(indexName(tableName, "row_hash"))
+            + " ON " + qfqTable + " (tenant_id, " + ROW_HASH + ")";
+    }
+
+    private static String bareName(String table) {
+        return table.substring(table.indexOf('.') + 1);
     }
 
     private Set<String> loadColumns(Connection c, String fqTable) {
@@ -404,6 +530,7 @@ public class HybridJsonbWriter {
             String idxName = indexName(tableName, "data_gin");
             s.execute("CREATE INDEX IF NOT EXISTS " + qi(idxName) +
                       " ON " + qfqTable + " USING GIN (data jsonb_path_ops)");
+            s.execute(rowHashIndexSql(qfqTable, tableName));
             // Tenant isolation: the same policy the connector.t_* tables get, from RlsDdl.
             s.execute(RlsDdl.enableRowLevelSecurity(schemaName, tableName));
             s.execute(RlsDdl.tenantIsolationPolicy(schemaName, tableName));
@@ -425,7 +552,11 @@ public class HybridJsonbWriter {
 
     // ── SQL building ─────────────────────────────────────────────────────────
 
-    private String buildInsertSql(HybridJsonbSpec spec) {
+    /** Bind parameters of a row besides its promoted columns: tenant, key, hash, data, connector, endpoint. */
+    static final int FIXED_PARAMS = 6;
+
+    /** The upsert of {@code rows} rows in one statement; {@code rows} of them tuples of the same shape. */
+    private String buildInsertSql(HybridJsonbSpec spec, int rows) {
         List<String> cols = new ArrayList<>();
         List<String> qs   = new ArrayList<>();
 
@@ -457,53 +588,89 @@ public class HybridJsonbWriter {
         // not the last read. A skipped row is still locked, so it still logs a small lock record.
         return "INSERT INTO " + fqn(spec.table()) + " AS cur" +
                " (" + String.join(", ", cols) + ")" +
-               " VALUES (" + String.join(", ", qs) + ")" +
+               " VALUES " + String.join(", ", Collections.nCopies(rows, "(" + String.join(", ", qs) + ")")) +
                " ON CONFLICT (tenant_id, external_id) DO UPDATE SET " + set +
                ", data = EXCLUDED.data, indexed_at = now()" +
                " WHERE EXCLUDED." + ROW_HASH + " IS NULL" +
                " OR (" + stored + ") IS DISTINCT FROM (" + incoming + ")";
     }
 
+    /**
+     * What the gated upsert returns for a row it wrote: its hash, whether it is new, its previous hash as the
+     * statement's snapshot saw it, and its id, which the event carries so the row is read back by primary key. An
+     * event needs nothing else of the row, so the rows of a multi-row statement need no matching to their items. The
+     * previous hash is exact: writes that emit events for one table and tenant are serialised
+     * ({@link #writeEmitting}), so no other one commits the same key after that snapshot.
+     */
+    private static String returningChange(HybridJsonbSpec spec) {
+        return " RETURNING cur." + ROW_HASH + ", (cur.xmax = 0), (SELECT stored." + ROW_HASH
+            + " FROM " + fqn(spec.table())
+            + " stored WHERE stored.tenant_id = cur.tenant_id AND stored.external_id = cur.external_id), cur.id";
+    }
+
     // ── Row binding ──────────────────────────────────────────────────────────
 
-    private int bind(PreparedStatement ps, HybridJsonbSpec spec,
-                      JsonPath uniqueKey, List<JsonPath> colPaths,
-                      Map<String, Object> item, Map<String, Object> cells, String rowHash,
-                      long tenantId, UUID connectorId, UUID endpointId) throws SQLException {
+    /** An item read once: its JSON, the context its paths read, and its key. */
+    private record ParsedItem(String json, ReadContext ctx, String externalId) {}
+
+    private static ParsedItem readItem(Map<String, Object> item, JsonPath uniqueKey, HybridJsonbSpec spec) {
         // Serialize to JSON string first so JsonPath operates on a well-known input type
         String jsonStr = json(item);
         ReadContext ctx = JsonPath.using(JP).parse(jsonStr);
+        return new ParsedItem(jsonStr, ctx, externalIdOf(ctx, uniqueKey, spec));
+    }
+
+    /** An item's promoted cells, read and converted to their column types; {@code unreadable} of them did not read. */
+    private record Cells(Object[] values, int unreadable) {}
+
+    private Cells cellsOf(HybridJsonbSpec spec, List<JsonPath> colPaths, ParsedItem item, Map<String, Object> cells) {
+        List<PromotedColumn> promote = spec.promote();
+        Object[] values = new Object[promote.size()];
+        int unreadable = 0;
+        for (int ci = 0; ci < promote.size(); ci++) {
+            PromotedColumn col = promote.get(ci);
+            // A mapping's row is already read and transformed.
+            Object raw = cells != null ? cells.get(col.name()) : pathValue(item.ctx(), colPaths.get(ci), col);
+            Object val = converted(raw, col.type());
+            if (val == UNREADABLE) {
+                unreadable++;
+                val = null;   // the row is written; its payload keeps the value whole in `data`
+            }
+            values[ci] = val;
+        }
+        return new Cells(values, unreadable);
+    }
+
+    /** One row's parameters, from the 1-based position {@code base + 1}. */
+    private void bindRow(PreparedStatement ps, int base, HybridJsonbSpec spec, ParsedItem item, Object[] values,
+                         String rowHash, long tenantId, UUID connectorId, UUID endpointId) throws SQLException {
+        int i = base + 1;
+        ps.setLong(i++, tenantId);
+        ps.setString(i++, item.externalId());
+        List<PromotedColumn> promote = spec.promote();
+        for (int ci = 0; ci < promote.size(); ci++) bindTyped(ps, i++, values[ci], promote.get(ci).type());
+        ps.setString(i++, rowHash);
+        ps.setString(i++, item.json());  // reuse already-serialized JSON
+        ps.setObject(i++, connectorId);
+        ps.setObject(i,   endpointId);
+    }
+
+    private int bind(PreparedStatement ps, HybridJsonbSpec spec, List<JsonPath> colPaths,
+                      ParsedItem item, Map<String, Object> cells, String rowHash,
+                      long tenantId, UUID connectorId, UUID endpointId) throws SQLException {
+        Cells row = cellsOf(spec, colPaths, item, cells);
+        bindRow(ps, 0, spec, item, row.values(), rowHash, tenantId, connectorId, endpointId);
+        return row.unreadable();
+    }
+
+    private static String externalIdOf(ReadContext ctx, JsonPath uniqueKey, HybridJsonbSpec spec) {
         String externalId = keyOf(ctx.read(uniqueKey, Object.class), spec);
         // Named here, before the NOT NULL column refuses it with a SQLSTATE whose message is withheld (#1630).
         if (externalId == null) {
             throw new ConnectorException("unique_key '" + spec.uniqueKeyPath() + "' reads no value on an item of "
                 + spec.table() + ": every item needs a key");
         }
-
-        int i = 1;
-        ps.setLong(i++, tenantId);
-        ps.setString(i++, externalId);
-
-        List<PromotedColumn> promote = spec.promote();
-        int unreadable = 0;
-        for (int ci = 0; ci < promote.size(); ci++) {
-            PromotedColumn col = promote.get(ci);
-            // A mapping's row is already read and transformed.
-            Object raw = cells != null ? cells.get(col.name()) : pathValue(ctx, colPaths.get(ci), col);
-            Object val = converted(raw, col.type());
-            if (val == UNREADABLE) {
-                unreadable++;
-                val = null;   // the row is written; its payload keeps the value whole in `data`
-            }
-            bindTyped(ps, i++, val, col.type());
-        }
-
-        ps.setString(i++, rowHash);
-        ps.setString(i++, jsonStr);  // reuse already-serialized JSON
-        ps.setObject(i++, connectorId);
-        ps.setObject(i,   endpointId);
-        ps.addBatch();
-        return unreadable;
+        return externalId;
     }
 
     /** The row's {@code external_id}: the value at the key's path through its transform; {@code null} when none. */
@@ -518,6 +685,20 @@ public class HybridJsonbWriter {
             return applyTransform(raw, col.transform(), col.name());
         } catch (IllegalArgumentException | ClassCastException | DateTimeException notReadable) {
             return UNREADABLE;
+        }
+    }
+
+    /**
+     * A value as text. A list or an object is JSON written the way the hub writes it everywhere else: the JSON-path
+     * library's own {@code toString} escapes every {@code /} as {@code \/} (#1867), so a multi-value field read
+     * differently from a single-value one.
+     */
+    private static String textOf(Object val) {
+        if (!(val instanceof List<?>) && !(val instanceof Map<?, ?>)) return String.valueOf(val);
+        try {
+            return JSON.writeValueAsString(val);
+        } catch (Exception unwritable) {
+            throw new IllegalStateException("HybridJsonbWriter: JSON serialization failed", unwritable);
         }
     }
 
@@ -538,7 +719,7 @@ public class HybridJsonbWriter {
         if (val == null || val == UNREADABLE) return val;
         try {
             return switch (type) {
-                case TEXT -> String.valueOf(val);
+                case TEXT -> textOf(val);
                 // A string is parsed as a plain numeral only: "1e999999999" would otherwise be expanded (#1090).
                 case BIGINT -> val instanceof Number n ? (Object) new BigDecimal(n.toString()).longValueExact()
                     : (Object) Long.parseLong(String.valueOf(val).strip());
@@ -616,11 +797,39 @@ public class HybridJsonbWriter {
             case TRIM          -> String.valueOf(raw).trim();
             case PARSE_QUANTITY -> Quantity.parse(String.valueOf(raw));
             case LAST_PATH_SEGMENT -> lastPathSegment(raw);
+            case FROM_ODATA_DATE -> fromODataDate(raw, column);
             case TO_JSON_STRING -> {
                 try { yield JSON.writeValueAsString(raw); }
                 catch (Exception e) { throw new RuntimeException("TO_JSON_STRING failed", e); }
             }
         };
+    }
+
+    /**
+     * {@code /Date(<ms>)/}, with an optional {@code ±<minutes>} (a DateTimeOffset): the milliseconds are the UTC
+     * instant, the offset the zone the source showed it in, so it is checked and not applied (#1826).
+     */
+    private static final Pattern ODATA_DATE = Pattern.compile("/Date\\((-?\\d{1,15})(?:[+-](\\d{1,4}))?\\)/");
+
+    /** The first and last millisecond a timestamptz written from a four-digit year can hold: 0001-01-01 … 9999-12-31. */
+    private static final long ODATA_MIN_MS = -62_135_596_800_000L;
+    private static final long ODATA_MAX_MS = 253_402_300_799_999L;
+    private static final int ODATA_MAX_OFFSET_MINUTES = 1_440;
+
+    private static OffsetDateTime fromODataDate(Object raw, String column) {
+        Matcher m = raw instanceof CharSequence text ? ODATA_DATE.matcher(text.toString().strip()) : null;
+        if (m == null || !m.matches()) throw unreadableODataDate(raw, column);
+        long ms = Long.parseLong(m.group(1));
+        boolean offsetInRange = m.group(2) == null || Integer.parseInt(m.group(2)) <= ODATA_MAX_OFFSET_MINUTES;
+        if (ms < ODATA_MIN_MS || ms > ODATA_MAX_MS || !offsetInRange) throw unreadableODataDate(raw, column);
+        return OffsetDateTime.ofInstant(Instant.ofEpochMilli(ms), ZoneOffset.UTC);
+    }
+
+    private static IllegalArgumentException unreadableODataDate(Object raw, String column) {
+        // The value is the source's data and may be a key the run fails on: say its type, not its content.
+        return new IllegalArgumentException("column '" + column + "': from_odata_date cannot read a "
+            + raw.getClass().getSimpleName() + " value — expected /Date(<ms>)/ or /Date(<ms>±<minutes>)/, minutes at most "
+            + ODATA_MAX_OFFSET_MINUTES + ", in years 0001 to 9999");
     }
 
     /**
@@ -644,7 +853,7 @@ public class HybridJsonbWriter {
     private void bindTyped(PreparedStatement ps, int idx, Object val, SqlType type) throws SQLException {
         if (val == null) { ps.setNull(idx, Types.NULL); return; }
         switch (type) {
-            case TEXT        -> ps.setString(idx, String.valueOf(val));
+            case TEXT        -> ps.setString(idx, textOf(val));
             case BIGINT      -> ps.setLong(idx, ((Number) val).longValue());
             case INTEGER     -> ps.setInt(idx, ((Number) val).intValue());
             case BOOLEAN     -> ps.setBoolean(idx, (Boolean) val);

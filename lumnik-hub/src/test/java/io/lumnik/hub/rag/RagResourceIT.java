@@ -24,7 +24,7 @@ class RagResourceIT {
     @Test
     void getStatus_returns200WithIndexInfo() {
         when(platformIndexer.status())
-            .thenReturn(new RagStatusDto(true, 178, Instant.now(), "ollama", "nomic-embed-text"));
+            .thenReturn(new RagStatusDto(true, 178, Instant.now(), "ollama", "nomic-embed-text", false, 178L));
 
         given()
             .header("X-Lumnik-Roles", "lm_admin")

@@ -1,5 +1,6 @@
 package io.lumnik.hub.entity;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.common.tenant.CurrentTenantHolder;
@@ -7,6 +8,7 @@ import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.ApplyScopeBoundary;
 import io.lumnik.hub.ask.SchemaCardRefresher;
 import io.lumnik.hub.audit.AuditRecorder;
+import io.lumnik.hub.process.MatchIndexes;
 import io.lumnik.hub.search.SearchIndexRevalidator;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -28,9 +30,15 @@ public class EntityApplyResource {
   @Inject EntityRegistry registry;
   @Inject SchemaCardRefresher cardRefresher;
   @Inject SearchIndexRevalidator searchIndexes;
+  @Inject MatchIndexes matchIndexes;
   @Inject AuditRecorder audit;
 
-  public record ApplyResult(String name, String view) {}
+  public record ApplyResult(String name, String view,
+                            @JsonInclude(JsonInclude.Include.NON_EMPTY) List<String> warnings) {
+    public ApplyResult(String name, String view) {
+      this(name, view, List.of());
+    }
+  }
 
   /** 63 bytes, PostgreSQL's identifier limit, less the view's {@code v_} prefix (names are ASCII). */
   static final int MAX_NAME_LENGTH = 61;
@@ -84,6 +92,12 @@ public class EntityApplyResource {
     // rollback reaches (#582).
     ApplyScopeBoundary.refuseUnlessCallerHolds(registry.storedScopes(m.name()));
 
+    // #1838: before anything is stored or compiled — a process already watching this Entity must not be left on a read
+    // that can only scan.
+    matchIndexes.refusalBeforeApply(m).ifPresent(why -> {
+      throw new WebApplicationException(ApiErrors.badRequest(why));
+    });
+
     try {
       // granted().orElse(null) — empty Optional means unscoped, i.e. every scope. The compiler
       // rolled its whole transaction back on a refusal, DDL included, so the view is as it was.
@@ -108,6 +122,7 @@ public class EntityApplyResource {
     // committed, so a discovery failure must NOT fail the apply. No tenant context → no card is
     // created for a bogus tenant 0; the stored cards are still refreshed.
     cardRefresher.afterEntityChanged(m.name(), CurrentTenantHolder.get(), m.scopes());
-    return new ApplyResult(m.name(), EntityViewCompiler.viewName(m.name()));
+    // #1838: a changed key expression may need an index no Process apply will ever ask for.
+    return new ApplyResult(m.name(), EntityViewCompiler.viewName(m.name()), matchIndexes.afterEntityApplied(m));
   }
 }

@@ -66,6 +66,8 @@ class EventRetentionPurgerIT {
     void dropTestEvents() {
         em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
         em.createNativeQuery("DELETE FROM core.event_outbox WHERE event_type LIKE 'purge.test.%'").executeUpdate();
+        em.createNativeQuery("DELETE FROM core.event_dead_letter WHERE consumer_name LIKE 'purge-%'").executeUpdate();
+        em.createNativeQuery("DELETE FROM core.notification_delivery WHERE recipient LIKE '%@purge.local'").executeUpdate();
     }
 
     @Transactional
@@ -82,6 +84,75 @@ class EventRetentionPurgerIT {
         return ((Number) em.createNativeQuery(
             "SELECT count(*) FROM core.event_outbox WHERE event_type LIKE 'purge.test.%'")
             .getSingleResult()).longValue();
+    }
+
+    @Transactional
+    void seedLetter(String consumer, long eventId, String replayedAgo) {
+        em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
+        em.createNativeQuery("INSERT INTO core.event_dead_letter (consumer_name, event_id, tenant_id, error, envelope, replayed_at) "
+            + "VALUES (:c, :e, 1, 'X', '{}'::jsonb, " + (replayedAgo == null ? "NULL" : "NOW() - INTERVAL '" + replayedAgo + "'") + ")")
+          .setParameter("c", consumer).setParameter("e", eventId).executeUpdate();
+    }
+
+    @Transactional
+    void seedOldOpenLetter(String consumer, long eventId) {
+        em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
+        em.createNativeQuery("INSERT INTO core.event_dead_letter (consumer_name, event_id, tenant_id, error, envelope, failed_at) "
+            + "VALUES (:c, :e, 1, 'X', '{}'::jsonb, NOW() - INTERVAL '60 days')")
+          .setParameter("c", consumer).setParameter("e", eventId).executeUpdate();
+    }
+
+    @Transactional
+    long countLetters() {
+        em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
+        return ((Number) em.createNativeQuery("SELECT count(*) FROM core.event_dead_letter WHERE consumer_name LIKE 'purge-%'")
+            .getSingleResult()).longValue();
+    }
+
+    @Transactional
+    void seedDelivery(String recipient, boolean succeeded, int attempts, String age, String lease) {
+        em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
+        em.createNativeQuery("INSERT INTO core.notification_delivery (tenant_id, rule_id, event_id, event_type, recipient, subject, body, "
+            + "succeeded, attempts, created_at, claimed_until) VALUES (1, :r, 1, 'purge.test.mail', :to, 's', 'b', :ok, :n, "
+            + "NOW() - INTERVAL '" + age + "', " + (lease == null ? "NULL" : "NOW() + INTERVAL '" + lease + "'") + ")")
+          .setParameter("r", recipient.hashCode()).setParameter("to", recipient).setParameter("ok", succeeded).setParameter("n", attempts)
+          .executeUpdate();
+    }
+
+    @Transactional
+    long countDeliveries() {
+        em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
+        return ((Number) em.createNativeQuery("SELECT count(*) FROM core.notification_delivery WHERE recipient LIKE '%@purge.local'")
+            .getSingleResult()).longValue();
+    }
+
+    /** #1848: a resolved mail goes with the retention; one still to send, or leased, stays however old. */
+    @Test
+    void purgesTheResolvedMailDeliveriesBeyondTheRetentionOnly() {
+        seedConsumer("purge-any", seedOldEvent("purge.test.mail"));
+        seedDelivery("sent-old@purge.local", true, 1, "60 days", null);
+        seedDelivery("given-up-old@purge.local", false, 3, "60 days", null);
+        seedDelivery("sent-lately@purge.local", true, 1, "1 day", null);
+        seedDelivery("pending-old@purge.local", false, 1, "60 days", null);
+        seedDelivery("leased-old@purge.local", false, 0, "60 days", "1 minute");
+
+        TenantContext.runAsSystem(purger::purge);
+
+        assertEquals(3, countDeliveries(), "the recent one, and the two still to send");
+    }
+
+    /** #1837: a letter past the retention goes, replayed or not; a recent one stays. */
+    @Test
+    void purgesTheLettersBeyondTheRetentionOnly() {
+        seedConsumer("purge-any", seedOldEvent("purge.test.letter"));
+        seedLetter("purge-old", 1, "60 days");
+        seedLetter("purge-lately", 2, "1 day");
+        seedLetter("purge-open", 3, null);
+        seedOldOpenLetter("purge-open-old", 4);
+
+        TenantContext.runAsSystem(purger::purge);
+
+        assertEquals(2, countLetters(), "only the recent ones remain: open, or replayed lately");
     }
 
     @Test

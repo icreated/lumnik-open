@@ -464,7 +464,18 @@ public class EntityViewCompiler {
     Map<String, String> canonToSrc = validatedCanonToSrc(m, s);
     return m.match().stream().map(mc -> {
       String phys = canonToSrc.get(mc);
-      return aligned(quoteIdent(phys), sources.typeOf(table, phys), fusedType(m, sources, mc));
+      return aligned(quoteIdent(phys), sources.typeOf(table, phys), fusedType(m, sources, mc), m.sqlZone());
+    }).toList();
+  }
+
+  /**
+   * The type the view gives each {@code match:} column, in match order: {@code date}, {@code timestamptz}, {@code bigint},
+   * {@code numeric}, or {@code text} — what a reader binding a key's text back to the column casts it to (#1833).
+   */
+  public static List<String> matchColumnTypes(EntityManifest m, Sources sources) {
+    return m.match().stream().map(mc -> {
+      String fused = fusedType(m, sources, mc);
+      return fused == null ? "text" : fused;
     }).toList();
   }
 
@@ -478,8 +489,8 @@ public class EntityViewCompiler {
    * type, and otherwise a date (its midnight) or a naive timestamp read as UTC — never in the session's
    * zone, which is the hub JVM's.
    */
-  private static String typed(String column, String sourceType, String fused) {
-    return fused == null ? column + "::text" : aligned(column, sourceType, fused);
+  private static String typed(String column, String sourceType, String fused, String zone) {
+    return fused == null ? column + "::text" : aligned(column, sourceType, fused, zone);
   }
 
   /**
@@ -487,10 +498,10 @@ public class EntityViewCompiler {
    * timestamp column as an instant (the database's own cast, in UTC), a number by value (#1338), any other as
    * its exact text (#1326 review).
    */
-  private static String anyOf(String column, String sourceType, String fused) {
+  private static String anyOf(String column, String sourceType, String fused, String zone) {
     if (fused == null) return column + "::text = ANY(?)";
     String cast = ColumnKind.ofType(fused).temporal() ? "timestamptz" : "numeric";
-    return "(" + aligned(column, sourceType, fused) + ")::" + cast + " = ANY(?::" + cast + "[])";
+    return "(" + aligned(column, sourceType, fused, zone) + ")::" + cast + " = ANY(?::" + cast + "[])";
   }
 
   /**
@@ -498,12 +509,13 @@ public class EntityViewCompiler {
    * or a naive timestamp read as UTC; a whole number as a bigint; a decimal without its trailing zeros (#1338), so
    * every source says {@code 7} for {@code 7.0000} — the view, its key, its ledger and the search marks alike.
    */
-  private static String aligned(String column, String sourceType, String fused) {
+  private static String aligned(String column, String sourceType, String fused, String zone) {
     if (fused == null) return column;
     return switch (fused) {
       case "numeric" -> "trim_scale(" + column + "::numeric)";
       case "bigint" -> "int8".equals(sourceType) ? column : column + "::bigint";   // the catalog says int8
-      default -> fused.equals(sourceType) ? column : "(" + column + "::timestamp AT TIME ZONE 'UTC')";
+      default -> fused.equals(sourceType) ? column
+          : "(" + column + "::timestamp AT TIME ZONE " + quoteLiteral("date".equals(sourceType) ? zone : "UTC") + ")";
     };
   }
 
@@ -541,7 +553,9 @@ public class EntityViewCompiler {
     return m.sources().stream().anyMatch(s -> s.table().equalsIgnoreCase(bare));
   }
 
-  static final String SCHEMA = "connector";
+  public static final String SCHEMA = "connector";
+  /** What every entity view's qualified name starts with: {@link #viewName} and {@link #entityNameFromView} agree on it. */
+  public static final String VIEW_PREFIX = SCHEMA + ".v_";
   /** The output aliases of a lookup CTE (#846); EntityManifestParser refuses a joined column named like one. */
   static final String LOOKUP_KEY = "_k";
   static final String LOOKUP_COUNT = "_n";
@@ -605,8 +619,7 @@ public class EntityViewCompiler {
    * (a foreign view, in any schema), so the caller can tell an entity view from a stranger's.
    */
   public static String entityNameFromView(String qualifiedView) {
-    String prefix = SCHEMA + ".v_";
-    return qualifiedView != null && qualifiedView.startsWith(prefix) ? qualifiedView.substring(prefix.length()) : null;
+    return qualifiedView != null && qualifiedView.startsWith(VIEW_PREFIX) ? qualifiedView.substring(VIEW_PREFIX.length()) : null;
   }
 
   /**
@@ -680,7 +693,7 @@ public class EntityViewCompiler {
     for (int k = 0; k < joins.size(); k++) {
       sb.append("\nLEFT JOIN lk").append(k).append(" ON ")
         .append(JoinKeys.compared("f." + quoteIdent(joins.get(k).from()), fusedType(m, sources, joins.get(k).from()),
-            sources.typeOf(joins.get(k).table(), joins.get(k).to())))
+            sources.typeOf(joins.get(k).table(), joins.get(k).to()), m.sqlZone()))
         .append(" = lk").append(k).append('.').append(quoteIdent(LOOKUP_KEY));
     }
     return sb.toString();
@@ -715,7 +728,7 @@ public class EntityViewCompiler {
         .append(key).append(" AS ").append(quoteIdent(LOOKUP_KEY))
         .append(", count(*) AS ").append(quoteIdent(LOOKUP_COUNT));
     j.map().forEach((phys, canon) -> sb.append(", (array_agg(")
-        .append(typed(quoteIdent(phys), sources.typeOf(j.table(), phys), lookupType(sources, j, phys)))
+        .append(typed(quoteIdent(phys), sources.typeOf(j.table(), phys), lookupType(sources, j, phys), m.sqlZone()))
         .append(" ORDER BY ").append(ord).append("))[1] AS ").append(quoteIdent(canon)));
     String ambiguity = j.map().entrySet().stream()
         .map(e -> quoteLiteral(e.getValue()) + ", jsonb_agg(jsonb_build_object('src', "
@@ -730,7 +743,13 @@ public class EntityViewCompiler {
 
   /** A lookup's key, compared as the fused {@code from} it meets ({@link JoinKeys#compared}, #1329). */
   public static String lookupToKey(EntityManifest m, Sources sources, EntityManifest.Join j) {
-    return JoinKeys.compared(quoteIdent(j.to()), sources.typeOf(j.table(), j.to()), fusedType(m, sources, j.from()));
+    return JoinKeys.compared(quoteIdent(j.to()), sources.typeOf(j.table(), j.to()), fusedType(m, sources, j.from()),
+        m.sqlZone());
+  }
+
+  /** The SQL type of a join's compared key ({@link JoinKeys#comparedType}): what a value read off it is bound as. */
+  public static String lookupKeyType(EntityManifest m, Sources sources, EntityManifest.Join j) {
+    return JoinKeys.comparedType(fusedType(m, sources, j.from()), sources.typeOf(j.table(), j.to()));
   }
 
   /**
@@ -743,7 +762,7 @@ public class EntityViewCompiler {
                                      String physicalColumn, String qualifier) {
     String fused = fusedType(m, sources, j.from());
     return JoinKeys.compared(aligned(qualifier + quoteIdent(physicalColumn), sources.typeOf(sourceTable, physicalColumn),
-        fused), fused, sources.typeOf(j.table(), j.to()));
+        fused, m.sqlZone()), fused, sources.typeOf(j.table(), j.to()), m.sqlZone());
   }
 
   /** A relation shaped like the entity view for one probe, and the columns whose values bind its {@code ?}, in order. */
@@ -809,15 +828,15 @@ public class EntityViewCompiler {
       String table = SCHEMA + "." + quoteIdent(s.table());
       // The probed value as the view fuses it (#1325): a date read as its timestamp when the column mixes them.
       String probedText = probedFused == null ? quoteIdent(physProbed) + "::text"
-          : "(" + typed(quoteIdent(physProbed), sources.typeOf(s.table(), physProbed), probedFused) + ")::text";
+          : "(" + typed(quoteIdent(physProbed), sources.typeOf(s.table(), physProbed), probedFused, m.sqlZone()) + ")::text";
       String keySelect = IntStream.range(0, keyCols.size())
           .mapToObj(j -> keyCols.get(j) + " AS " + quoteIdent("_k" + j)).collect(Collectors.joining(", "));
       StringBuilder holder = new StringBuilder("SELECT ").append(keySelect).append(" FROM ").append(table)
-          .append(" WHERE ").append(anyOf(quoteIdent(physProbed), sources.typeOf(s.table(), physProbed), probedFused));
+          .append(" WHERE ").append(anyOf(quoteIdent(physProbed), sources.typeOf(s.table(), physProbed), probedFused, m.sqlZone()));
       params.add(probed);
       for (String kf : keyFilters) {
         String physKey = canonToSrc.get(kf);
-        holder.append(" AND ").append(anyOf(quoteIdent(physKey), sources.typeOf(s.table(), physKey), fusedType(m, sources, kf)));
+        holder.append(" AND ").append(anyOf(quoteIdent(physKey), sources.typeOf(s.table(), physKey), fusedType(m, sources, kf), m.sqlZone()));
         params.add(kf);
       }
       holders.add(holder.toString());
@@ -877,6 +896,11 @@ public class EntityViewCompiler {
        .append(key.stream().map(k -> k + " IS NOT NULL").collect(Collectors.joining(" AND ", " WHERE ", "")));
   }
 
+  /** The physical column of {@code s} mapped to the canonical column {@code canonical}; null when the source maps none. */
+  public static String sourceColumn(EntityManifest m, EntityManifest.Source s, String canonical) {
+    return validatedCanonToSrc(m, s).get(canonical);
+  }
+
   /** Shared null/blank guards, same defensive posture for both the match and the resolved branch. */
   private static Map<String, String> validatedCanonToSrc(EntityManifest m, EntityManifest.Source s) {
     if (s == null)
@@ -903,7 +927,7 @@ public class EntityViewCompiler {
       cte.append(", ");
       String fused = fusedType(m, sources, c);
       String srcCol = canonToSrc.get(c);
-      if (srcCol != null) cte.append(typed(qualifier + quoteIdent(srcCol), sources.typeOf(s.table(), srcCol), fused));
+      if (srcCol != null) cte.append(typed(qualifier + quoteIdent(srcCol), sources.typeOf(s.table(), srcCol), fused, m.sqlZone()));
       else cte.append("NULL::").append(fused == null ? "text" : fused);
       cte.append(" AS ").append(quoteIdent(c));
     }
@@ -1083,7 +1107,7 @@ public class EntityViewCompiler {
    * {@code prefer} names (#1379), null when it names none. {@code compared} is false for a {@code conflicts: false}
    * column (#1449): same value rule, no ledger.
    */
-  record Fusion(String type, List<Integer> timeSources, Integer preferred, boolean compared) {
+  record Fusion(String type, List<Integer> timeSources, Integer preferred, boolean compared, String zone) {
 
     /**
      * The one fusion rule for a non-match column's value: the first non-null across the sources, in source order —
@@ -1108,7 +1132,7 @@ public class EntityViewCompiler {
       String value = type != null ? col + "::text" : col;
       String disagree = timeSources == null ? "count(DISTINCT " + col + ") > 1"
           : "count(DISTINCT " + col + ") FILTER (WHERE _ord IN (" + ordinals() + ")) > 1"
-              + " OR count(DISTINCT (" + col + " AT TIME ZONE 'UTC')::date) > 1";
+              + " OR count(DISTINCT (" + col + " AT TIME ZONE " + quoteLiteral(zone) + ")::date) > 1";
       return "CASE WHEN " + disagree + " THEN jsonb_agg(jsonb_build_object('src', _src, 'value', "
           + value + ") ORDER BY " + order() + col + ") FILTER (WHERE " + col + " IS NOT NULL) END";
     }
@@ -1135,7 +1159,7 @@ public class EntityViewCompiler {
     Integer preferred = meta == null || meta.prefer() == null ? null
         : m.sources().stream().map(EntityManifest.Source::table).toList().indexOf(meta.prefer());
     boolean compared = meta == null || meta.conflicts() == null || meta.conflicts();
-    if (!"timestamptz".equals(type)) return new Fusion(type, null, preferred, compared);
+    if (!"timestamptz".equals(type)) return new Fusion(type, null, preferred, compared, m.sqlZone());
     List<Integer> times = new ArrayList<>();
     boolean anyDay = false;
     for (int i = 0; i < m.sources().size(); i++) {
@@ -1145,6 +1169,6 @@ public class EntityViewCompiler {
       if ("date".equals(sources.typeOf(s.table(), phys))) anyDay = true;
       else times.add(i);
     }
-    return new Fusion(type, anyDay ? List.copyOf(times) : null, preferred, compared);
+    return new Fusion(type, anyDay ? List.copyOf(times) : null, preferred, compared, m.sqlZone());
   }
 }

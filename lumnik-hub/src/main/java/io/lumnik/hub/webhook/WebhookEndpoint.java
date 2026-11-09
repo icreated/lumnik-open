@@ -1,6 +1,7 @@
 package io.lumnik.hub.webhook;
 
 import io.lumnik.common.domain.TenantedEntity;
+import io.lumnik.hub.event.EventPatterns;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -62,7 +63,6 @@ public class WebhookEndpoint extends TenantedEntity {
 
     public boolean matches(String eventType) {
         return enabled && eventTypes != null && eventTypes.stream()
-            .anyMatch(p -> p.equals(eventType) || (p.endsWith(".*")
-                && eventType.startsWith(p.substring(0, p.length() - 2))));
+            .anyMatch(p -> EventPatterns.matches(p, eventType));
     }
 }

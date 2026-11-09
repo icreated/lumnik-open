@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.HashMap;
@@ -28,6 +29,22 @@ class ProcessPayloadTest {
         assertThat(n.get("entity").asText()).isEqualTo("connector.t_x");
         assertThat(n.get("entity_key").asText()).isEqualTo("hash-1");
         assertThat(n.has("fields")).isFalse();   // placeholder-free → payload shape unchanged
+    }
+
+    @Test
+    void theDecisionKeyIsTheDeclaredColumn_elseTheRowHash() {
+        Map<String, Object> row = new HashMap<>();
+        row.put("sample", "analysisrequest-24");
+        row.put("lot", BigDecimal.valueOf(240000, 4));
+        row.put("blank", "  ");
+        row.put("empty", null);
+        assertThat(ProcessConsumer.decisionKey("sample", row, "hash-1")).isEqualTo("analysisrequest-24");
+        assertThat(ProcessConsumer.decisionKey("lot", row, "hash-1")).isEqualTo("24");   // rendered like a {col}
+        assertThat(ProcessConsumer.decisionKey(null, row, "hash-1")).isEqualTo("hash-1");
+        assertThat(ProcessConsumer.decisionKey("blank", row, "hash-1")).isEqualTo("hash-1");
+        assertThat(ProcessConsumer.decisionKey("empty", row, "hash-1")).isEqualTo("hash-1");
+        row.put("sample-id", "S-7");   // a name no {placeholder} can spell: the value still keys it
+        assertThat(ProcessConsumer.decisionKey("sample-id", row, "hash-1")).isEqualTo("S-7");
     }
 
     @Test

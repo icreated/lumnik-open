@@ -43,8 +43,9 @@ January, so it compares it as written: a conflict on every row.
 
 ## Type it at the door: four steps
 
-A table keeps the column types it was created with. Adding `parse-date` to a connector that
-already ran changes nothing: create its table again.
+A table keeps the column types it was created with. Adding `parse-date` to a CSV connector whose
+table already holds rows does not retype the table: `lm apply` warns, and you create the table
+again.
 
 ```bash
 lm entity delete orderdue --force                                     # 1. the entity holds the table
@@ -110,7 +111,7 @@ OrderDue  SO-2  due      t_due_erp,t_due_partner
 | The sources hold | The entity's column | Compared |
 |---|---|---|
 | dates only | a date | as dates |
-| dates and times | a time; a date is its midnight UTC | **at the day**: a time agrees with its day |
+| dates and times | a time; a date is its midnight, in the entity's [zone](#the-businesss-day) (UTC without one) | **at the day**: a time agrees with its day |
 | times only | a time | to the instant |
 | one source as text | text | as written |
 
@@ -133,7 +134,42 @@ with `zone: Europe/Paris`: a conflict on every row. Declare where each source wr
 - the ERP's JDBC connection: `zone: Europe/Paris` ([A time without a time zone](connectors/jdbc.md#a-time-without-a-time-zone));
 - the CSV's `parse-date`: the same `zone` ([parse-date](connectors/transformers.md#which-time-zone-a-time-is-in)).
 
-A date alone has no such trap: both sides are its midnight UTC.
+A date alone has no such trap: both sides are its midnight.
+
+## The business's day
+
+A date and a time meet at the day. Which day a time falls on depends on where you stand: a sample
+registered at `00:30` in Paris on the 6th is still the 5th in UTC. The ERP's goods receipt for that
+batch says the 6th. Without a zone the entity reads the UTC day, and the pair disagrees:
+
+```
+BATCH_NO  RECEIVED              _CONFLICTS
+L-104     2026-11-05T23:30:00Z  {"received": [{"src": "t_lims", …}, {"src": "t_erp", …}]}
+```
+
+Say where the business is, once, on the entity:
+
+```yaml
+kind: Entity
+name: Batch
+zone: Europe/Paris
+```
+
+With `zone: Europe/Paris`:
+
+- a date is its midnight in Paris, and a time falls on its Paris day;
+- `L-104` agrees;
+- a real disagreement, the 7th against the 6th, is still one.
+
+The zone holds where the entity compares a date with a time: the fused rows, `lm conflicts list`, a
+join keyed by day, the search, and a `--filter` on a date ([Read API](entities.md#read-api)). It does
+not reach the day in an `lm ask` question, which still starts at midnight UTC.
+
+- **Without `zone:`, nothing moves.** An entity applied before keeps the UTC day.
+- **A region, not an offset.** `Europe/Paris`, not `+01:00`: the region knows the summer time.
+- **Apply the entity again** after you add it: the view is rebuilt with the zone.
+- It does not change how a *source* writes its times without a zone: that stays on the
+  connector's `zone` and on `parse-date`.
 
 ## The files
 

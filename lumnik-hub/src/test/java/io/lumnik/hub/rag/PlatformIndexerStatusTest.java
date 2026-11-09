@@ -3,7 +3,9 @@ package io.lumnik.hub.rag;
 import io.lumnik.extraction.spi.ExtractedChunk;
 import io.lumnik.extraction.spi.ExtractionSink;
 import io.lumnik.hub.hook.HookRegistry;
+import io.lumnik.hub.manifest.ModuleManifest;
 import io.lumnik.hub.manifest.ModuleManifestRegistry;
+import io.lumnik.hub.manifest.ModuleStatus;
 import io.lumnik.hub.rag.chunk.HookChunkBuilder;
 import io.lumnik.hub.rag.chunk.ManifestChunkBuilder;
 import io.lumnik.hub.rag.chunk.OpenApiChunkBuilder;
@@ -32,7 +34,15 @@ class PlatformIndexerStatusTest {
         when(inst.isUnsatisfied()).thenReturn(port == null);
         if (port != null) when(inst.get()).thenReturn(port);
         ix.embeddingPorts = inst;
+        ix.manifestRegistry = mock(ModuleManifestRegistry.class);
+        ix.storedChunks = mock(StoredChunks.class);
         return ix;
+    }
+
+    private static ModuleStatus ragModule(String inactiveReason) {
+        ModuleManifest m = mock(ModuleManifest.class);
+        when(m.id()).thenReturn("rag");
+        return new ModuleStatus(m, inactiveReason);
     }
 
     @Test
@@ -69,7 +79,6 @@ class PlatformIndexerStatusTest {
     /** A real PlatformIndexer over mocked collaborators; {@code port} null = no embedding model. */
     private PlatformIndexer indexer(EmbeddingPort port, ExtractionSink... sinks) {
         PlatformIndexer ix = withPort(port);
-        ix.manifestRegistry = mock(ModuleManifestRegistry.class);
         ix.hookRegistry = mock(HookRegistry.class);
         ix.manifestChunkBuilder = mock(ManifestChunkBuilder.class);
         ix.openApiChunkBuilder = mock(OpenApiChunkBuilder.class);
@@ -129,5 +138,45 @@ class PlatformIndexerStatusTest {
         assertThat(dto.indexed()).isTrue();
         assertThat(dto.chunks()).isEqualTo(2);
         assertThat(dto.indexedAt()).isNotNull();
+    }
+
+    // ── the AI switched off keeps its corpus: the status must not read as an empty one (#1895) ──
+
+    @Test
+    void with_the_ai_switched_off_the_status_says_so_and_counts_what_the_store_keeps() {
+        PlatformIndexer ix = withPort(null);
+        ModuleStatus rag = ragModule("disabled:lumnik.ai.enabled");
+        when(ix.manifestRegistry.statuses()).thenReturn(List.of(rag));
+        when(ix.storedChunks.countVisible()).thenReturn(36L);
+
+        RagStatusDto dto = ix.status();
+
+        assertThat(dto.switchedOff()).isTrue();
+        assertThat(dto.storedChunks()).isEqualTo(36L);
+    }
+
+    @Test
+    void with_the_ai_on_the_status_is_not_switched_off_and_still_counts_the_store() {
+        PlatformIndexer ix = withPort(mock(EmbeddingPort.class));
+        ModuleStatus rag = ragModule(null);
+        when(ix.manifestRegistry.statuses()).thenReturn(List.of(rag));
+        when(ix.storedChunks.countVisible()).thenReturn(5L);
+
+        RagStatusDto dto = ix.status();
+
+        assertThat(dto.switchedOff()).isFalse();
+        assertThat(dto.storedChunks()).isEqualTo(5L);
+    }
+
+    @Test
+    void without_the_rag_module_there_is_no_store_to_count() {
+        PlatformIndexer ix = withPort(null);
+        when(ix.manifestRegistry.statuses()).thenReturn(List.of());
+
+        RagStatusDto dto = ix.status();
+
+        assertThat(dto.switchedOff()).isFalse();
+        assertThat(dto.storedChunks()).isNull();
+        verifyNoInteractions(ix.storedChunks);
     }
 }

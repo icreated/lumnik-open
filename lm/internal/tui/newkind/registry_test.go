@@ -3,6 +3,7 @@ package newkind
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -45,4 +46,15 @@ func repoRoot(t *testing.T) string {
 		dir = parent
 	}
 	return filepath.Dir(dir)
+}
+
+var digitRun = regexp.MustCompile(`\b\d+\b`) // a bare number; "S3" is a name
+
+// A description must not count what the hub owns: the count drifts (#1928).
+func TestDescriptionsCarryNoDigit(t *testing.T) {
+	for _, k := range All() {
+		if digitRun.MatchString(k.Doc) {
+			t.Errorf("%s: description %q carries a count", k.Kind, k.Doc)
+		}
+	}
 }

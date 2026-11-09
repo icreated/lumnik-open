@@ -7,6 +7,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -40,6 +42,26 @@ class CsvFileReaderTest {
     reader.readAll(path, null, rows::add);
     // simple fixture has no nulls, so just verify no NULL strings became actual nulls
     assertThat(rows.get(0).get("email")).isNotNull();
+  }
+
+  /**
+   * A header name is trimmed like a BOM is stripped: Firebird's isql pads every line, the header
+   * included, to the expression's display width (#1853). The values keep their padding.
+   */
+  @Test
+  void a_header_name_loses_its_surrounding_whitespace_and_a_value_keeps_its_own(@TempDir Path tmp)
+      throws Exception {
+    Path file = tmp.resolve("padded.csv");
+    Files.writeString(file, "\uFEFF ART_ID;REF;DATE_MAJ" + " ".repeat(40) + "\n"
+        + "1;CLE-14;2026-10-30" + " ".repeat(10) + "\n");
+
+    var rows = new ArrayList<Map<String, Object>>();
+    new CsvFileReader().readAll(file,
+        new CsvFileReader.Config(StandardCharsets.UTF_8, ';', true, true, List.of(""), null), rows::add, bad -> {});
+
+    assertThat(rows).hasSize(1);
+    assertThat(rows.get(0).keySet()).containsExactly("ART_ID", "REF", "DATE_MAJ");
+    assertThat(rows.get(0).get("DATE_MAJ")).isEqualTo("2026-10-30" + " ".repeat(10));
   }
 
   /**
@@ -146,6 +168,84 @@ class CsvFileReaderTest {
     assertThat(bad.get(0).message())
         .as("the reader's own sentence, never the parser library's exception text")
         .isEqualTo("A quoted value does not close where expected: the file cannot be read past this line");
+  }
+
+  /**
+   * #1887: 0x90 is one of the five bytes windows-1252 leaves undefined (a DOS code page's É). The lines before it
+   * are read; the sentence names the encoding, the byte and the line, so {@code parser.encoding} is the next gesture.
+   */
+  @Test
+  void a_byte_the_encoding_does_not_map_says_the_encoding_the_byte_and_the_line(@TempDir Path tmp) throws Exception {
+    Path file = tmp.resolve("dos.csv");
+    Files.write(file, concat("id,name\n1,Perceuse\n2,".getBytes(StandardCharsets.US_ASCII),
+        new byte[] {(byte) 0x90}, "lectro\n3,Autre\n".getBytes(StandardCharsets.US_ASCII)));
+    var cfg = new CsvFileReader.Config(Charset.forName("windows-1252"), ',', true, true, List.of(""), null);
+
+    var good = new ArrayList<Map<String, Object>>();
+    var bad = new ArrayList<MalformedRecord>();
+    new CsvFileReader().readAll(file, cfg, good::add, bad::add);
+
+    assertThat(good).as("the lines before the bad byte are kept").hasSize(1);
+    assertThat(bad).hasSize(1);
+    assertThat(bad.get(0).line()).isEqualTo(3);
+    assertThat(bad.get(0).message())
+        .contains("windows-1252", "0x90", "line 3", "parser.encoding")
+        .doesNotContain("Exception");
+  }
+
+  /** The line is the file's, however far down the byte sits. */
+  @Test
+  void the_line_follows_the_byte_down_the_file(@TempDir Path tmp) throws Exception {
+    Path file = tmp.resolve("deep.csv");
+    Files.write(file, concat("id,name\n1,a\n2,b\n3,c\n4,".getBytes(StandardCharsets.US_ASCII),
+        new byte[] {(byte) 0x90}, "\n".getBytes(StandardCharsets.US_ASCII)));
+    var cfg = new CsvFileReader.Config(Charset.forName("windows-1252"), ',', true, true, List.of(""), null);
+
+    var good = new ArrayList<Map<String, Object>>();
+    var bad = new ArrayList<MalformedRecord>();
+    new CsvFileReader().readAll(file, cfg, good::add, bad::add);
+
+    assertThat(good).hasSize(3);
+    assertThat(bad).extracting(MalformedRecord::line).containsExactly(5L);
+    assertThat(bad.get(0).message()).contains("line 5");
+  }
+
+  /** The bad byte in the very first record: the line is 1, not the 0 of "nothing read yet". */
+  @Test
+  void a_bad_byte_on_the_first_line_is_line_one(@TempDir Path tmp) throws Exception {
+    Path file = tmp.resolve("first.csv");
+    Files.write(file, concat(new byte[] {(byte) 0x90}, "lectro,x\n".getBytes(StandardCharsets.US_ASCII)));
+    var cfg = new CsvFileReader.Config(Charset.forName("windows-1252"), ',', true, true, List.of(""), null);
+
+    var bad = new ArrayList<MalformedRecord>();
+    new CsvFileReader().readAll(file, cfg, r -> {}, bad::add);
+
+    assertThat(bad).hasSize(1);
+    assertThat(bad.get(0).line()).isEqualTo(1);
+    assertThat(bad.get(0).message()).contains("windows-1252", "0x90", "line 1");
+  }
+
+  /** The checkpoint path speaks the same sentence as the plain one. */
+  @Test
+  void the_checkpoint_path_says_the_same_about_a_bad_byte() throws Exception {
+    byte[] bytes = concat("id,name\n1,Perceuse\n2,".getBytes(StandardCharsets.US_ASCII),
+        new byte[] {(byte) 0x90}, "lectro\n".getBytes(StandardCharsets.US_ASCII));
+    Charset cs = Charset.forName("windows-1252");
+    var good = new ArrayList<Map<String, Object>>();
+    var bad = new ArrayList<MalformedRecord>();
+    new CsvFileReader().readWindowCheckpointed(
+        new CheckpointingReader(new java.io.ByteArrayInputStream(bytes), cs), "mem.csv",
+        new CsvFileReader.Config(cs, ',', true, true, List.of(""), null), 0, 100, 0L, good::add, bad::add);
+
+    assertThat(good).hasSize(1);
+    assertThat(bad).hasSize(1);
+    assertThat(bad.get(0).message()).contains("windows-1252", "0x90", "line 3");
+  }
+
+  private static byte[] concat(byte[]... parts) {
+    var out = new java.io.ByteArrayOutputStream();
+    for (byte[] p : parts) out.writeBytes(p);
+    return out.toByteArray();
   }
 
   @Test

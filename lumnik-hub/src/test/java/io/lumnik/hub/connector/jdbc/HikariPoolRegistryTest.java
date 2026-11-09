@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.jdbc;
 
 import com.zaxxer.hikari.HikariDataSource;
 import io.lumnik.jdbc.postgresql.PostgresDialect;
+import java.util.ArrayList;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -217,7 +218,7 @@ class HikariPoolRegistryTest {
   @Test
   void callers_of_one_key_during_its_build_get_the_one_pool() throws Exception {
     gate = new CountDownLatch(1);
-    List<CompletableFuture<HikariDataSource>> asks = new java.util.ArrayList<>();
+    List<CompletableFuture<HikariDataSource>> asks = new ArrayList<>();
     for (int i = 0; i < 4; i++) {
       asks.add(CompletableFuture.supplyAsync(() -> registry.acquire(SLOW_URL, "u", "pw", 1L, STUB, T0), threads));
     }

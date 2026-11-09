@@ -173,10 +173,10 @@ class SchemaTypingInventoryTest {
   static Stream<Arguments> valueShapes() {
     return Stream.of(
         Arguments.of("a string", "Bénédicte", "TEXT"),
-        Arguments.of("a BigDecimal, as JDBC returns for numerics", new BigDecimal("1.5"), "NUMERIC(18,4)"),
+        Arguments.of("a BigDecimal, as JDBC returns for numerics", new BigDecimal("1.5"), "NUMERIC"),
 
         // A whole number is a whole number all the way to the screen. These four used to be
-        // NUMERIC(18,4), so a JSON `partner_id: 1000` printed 1000.0000 in psql, in every view and
+        // NUMERIC, so a JSON `partner_id: 1000` printed 1000.0000 in psql, in every view and
         // in the answers the ask door writes (#497). A BigDecimal is NOT among them, on purpose:
         // it is what JDBC returns for a source column DECLARED numeric, scale and all, and the
         // source's own opinion is the one the hint road carries.
@@ -184,7 +184,7 @@ class SchemaTypingInventoryTest {
         Arguments.of("a long", 42L, "BIGINT"),
         Arguments.of("a short", (short) 42, "BIGINT"),
         Arguments.of("a BigInteger", BigInteger.valueOf(42), "BIGINT"),
-        Arguments.of("a double that happens to be whole", 42.0d, "NUMERIC(18,4)"),
+        Arguments.of("a double that happens to be whole", 42.0d, "NUMERIC"),
         Arguments.of("a java.sql.Timestamp", Timestamp.valueOf("2026-05-23 14:30:00"), "TIMESTAMPTZ"),
         Arguments.of("a java.sql.Date", Date.valueOf("2026-05-23"), "DATE"),
         Arguments.of("a boolean", Boolean.TRUE, "BOOLEAN"),
@@ -212,7 +212,7 @@ class SchemaTypingInventoryTest {
   }
 
   /**
-   * One fractional value anywhere in the sample types the WHOLE column {@code NUMERIC(18,4)} —
+   * One fractional value anywhere in the sample types the WHOLE column {@code NUMERIC} —
    * the ordinary all-or-nothing rule, stated here because it is what makes {@code BIGINT} safe to
    * choose at all. A column whose sampled values are whole is narrowed; the moment one is not, it
    * is not.
@@ -227,7 +227,7 @@ class SchemaTypingInventoryTest {
     Map<String, Object> fractional = new LinkedHashMap<>();
     fractional.put("credit_limit", 748.5d);
 
-    assertThat(inferrer.infer(List.of(whole, fractional)).get("credit_limit")).isEqualTo("NUMERIC(18,4)");
+    assertThat(inferrer.infer(List.of(whole, fractional)).get("credit_limit")).isEqualTo("NUMERIC");
     assertThat(inferrer.infer(List.of(whole)).get("credit_limit")).isEqualTo("BIGINT");
   }
 
@@ -239,8 +239,8 @@ class SchemaTypingInventoryTest {
     Map<String, Object> allNull = new LinkedHashMap<>();
     allNull.put("sparse", null);
 
-    assertThat(inferrer.infer(List.of(allNull), Map.of("sparse", "NUMERIC(18,4)")).get("sparse"))
-        .isEqualTo("NUMERIC(18,4)");
+    assertThat(inferrer.infer(List.of(allNull), Map.of("sparse", "NUMERIC")).get("sparse"))
+        .isEqualTo("NUMERIC");
     assertThat(inferrer.infer(List.of(allNull), Map.of()).get("sparse")).isEqualTo("TEXT");
   }
 

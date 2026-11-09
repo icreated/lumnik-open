@@ -158,6 +158,10 @@ class GatedUpdateModeIT {
         assertThat(p.has("run_id"))
             .as("run_id is omitted when no _run_id is present (never the string \"null\")").isFalse();
         assertThat(p.get("op").asText()).isEqualTo("insert");
+        List<String> keys = new ArrayList<>();
+        p.fieldNames().forEachRemaining(keys::add);
+        assertThat(keys).as("the dynamic writer's payload carries no row_id (#1816)")
+            .containsExactlyInAnyOrder("entity", "entity_key", "op");
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────

@@ -18,10 +18,11 @@ If you know `kubectl`, you know most of `lm`:
 For the other kinds, the fields are on each kind's page, and the TUI's `:new` opens a valid
 example of the kind you pick in `$EDITOR`.
 
-**`lm apply` never reconciles.** Apply once and it stays applied until you apply again;
-nothing pulls the hub or your sources back toward the manifest. The one watcher is a
-`Workflow`'s [dormancy sweep](apps/workflows.md#dormancy-the-memory-of-the-breathing): it
-raises an alert, and never changes the manifest or the data.
+**`lm apply` never reconciles.** An apply stays as it is until you apply again. Nothing pulls the
+hub or your sources back toward the manifest. The only watchers are a `Workflow`'s
+[dormancy](apps/workflows.md#dormancy-the-memory-of-the-breathing) and
+[due-date](apps/workflows.md#due-date-a-deadline-the-data-carries) sweeps. They raise alerts, and
+never change the manifest or the data.
 
 ## Eight kinds, three families
 
@@ -87,12 +88,12 @@ manual.
 |---|---|---|
 | JSONPath | `$` is the response root — `$.data[-1:].id` reads "the `id` of the last element of `data`" | REST/GraphQL/SOAP pagination + `promote` fields — [REST](connectors/rest.md) |
 | cron | 5 fields (UNIX crontab dialect), evaluated in **UTC** | any connector's `spec.schedule` — [Connectors Overview](connectors/index.md) |
-| glob | `*` and `?` only, in the **final filename segment** — no `**` recursion | CSV local/sftp/s3 `transport.path` — [CSV & files](connectors/csv.md) |
+| glob | `*` and `?` only, in the **final filename segment** — no `**` recursion | CSV `local` and `sftp` `transport.path` (S3 selects by `prefix` + `suffix`) — [CSV & files](connectors/csv.md) |
 | date patterns | `dd/MM/yyyy` — capital `MM` is month, lowercase `mm` is minutes; add `H`/`h`/`m`/`s` only when the value carries a time | `parse-date` — [Transformers](connectors/transformers.md) |
 | regex | Java syntax; each hook says whether the pattern must match the whole value | `regex-extract` / `regex-replace` / `filter-where` — [Transformers](connectors/transformers.md) |
-| `{{secret:NAME}}` / `{{env:NAME}}` | `secret:` reads the `lm secret` registry, then the hub's environment; `env:` reads the environment only; unresolved fails the run fast | SOAP body/header templates — [SOAP](connectors/soap.md) |
-| `${now}` | resolves once, to the ingestion instant | `enrich-context` — [Transformers](connectors/transformers.md) |
-| Kotlin `.kts` | the escape hatch: runs with all of the hub's rights. The operator puts scripts in the hub's hooks directory; a manifest only names them | `csv-file` connectors only — [Kotlin hooks](connectors/kotlin-hooks.md) |
+| `{{secret:NAME}}` / `{{env:NAME}}` | `secret:` reads the `lm secret` registry, then the hub's environment. `env:` reads the environment only. An unresolved name fails the run before anything is sent | SOAP body/header templates — [SOAP](connectors/soap.md) |
+| `${now}` | the moment of ingestion | `enrich-context` — [Transformers](connectors/transformers.md) |
+| Kotlin `.kts` | the escape hatch: runs with all of the hub's rights. The operator puts scripts in the hub's hooks directory; a manifest only names them | a `csv-file` connector's `spec.mapping`, a REST/GraphQL/SOAP endpoint's own `mapping` — [Kotlin hooks](connectors/kotlin-hooks.md) |
 
 ## Refusability as a feature
 

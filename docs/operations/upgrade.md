@@ -35,8 +35,8 @@
     Follow the boot with `./deploy/selfhost/logs.sh hub`.
 5. Run `lm migration status` again: a higher `VERSION` and `PENDING 0` on every schema means the
    migrations are done.
-6. Apply each [`resolution:` entity](../entities-resolution.md) again with the same manifest, then
-   run `lm entity resolve NAME`.
+6. If an entity declares [`resolution:`](../entities-resolution.md), apply it again with the same
+   manifest, then run `lm entity resolve NAME`.
 
 ## Turning on the run queue
 

@@ -113,6 +113,19 @@ class ModuleManifestRegistryTest {
             .containsExactly(null, "disabled:lumnik.ai.enabled", "disabled:lumnik.ai.enabled");
     }
 
+    // Installed and switched off is not absent (#1896): only the first can be turned back on.
+    @Test
+    void the_rag_module_is_switched_off_only_when_it_is_installed_and_the_ai_is_off() {
+        var off = ModuleManifestRegistry.allowedBy(config(Map.of("lumnik.ai.enabled", "false")));
+        var on = ModuleManifestRegistry.allowedBy(config(Map.of()));
+        var pro = List.of(m("core", null, null, null), ai("llm", null, null), ai("rag", List.of("llm"), null));
+        var open = List.of(m("core", null, null, null));
+
+        assertThat(registryWith(pro, off).ragSwitchedOff()).as("Pro, AI off").isTrue();
+        assertThat(registryWith(pro, on).ragSwitchedOff()).as("Pro, AI on").isFalse();
+        assertThat(registryWith(open, off).ragSwitchedOff()).as("Open, property false: nothing to turn on").isFalse();
+    }
+
     @Test
     void the_switch_is_validated_even_when_no_installed_module_names_it() {
         // An Open build carries no module with enabled_by; a typo must still stop the hub there.

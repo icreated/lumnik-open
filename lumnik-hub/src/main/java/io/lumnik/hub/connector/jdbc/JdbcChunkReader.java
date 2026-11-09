@@ -160,7 +160,7 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
           rows.add(row);
         }
 
-        // Every non-empty chunk is HasMore and the stream ends on the read that finds nothing:
+        // Every non-empty chunk is HasMore (one with no watermark row at all excepted, below) and the stream ends on the read that finds nothing:
         // the engine persists a position only from HasMore (see ReadResult.EndOfStream), so a
         // loaded EndOfStream would forfeit its tail. Costs one 0-row keyset query per run.
         if (rows.isEmpty()) {
@@ -168,7 +168,12 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
         }
         if (rows.size() > chunkSize) refuseKeyCutByTheChunk(rows.getLast(), rows.get(chunkSize - 1), qMode);
         if (rows.size() > chunkSize) rows.removeLast();
-        return new ReadResult.HasMore<>(rows, buildNextCursor(rows.getLast()).toConnectorCursor());
+        Map<String, Object> resumeRow = lastRowToResumeFrom(rows);
+        // Rows with no watermark only: none can be a resume point, and the same cursor back as HasMore
+        // would read them again for ever. The stream ends on them, bare: no position is stored, so the
+        // next run reads them again (an upsert by key, IN counts them) (#1921).
+        if (resumeRow == null) return new ReadResult.EndOfStream<>(rows);
+        return new ReadResult.HasMore<>(rows, buildNextCursor(resumeRow).toConnectorCursor());
       }
 
     } catch (SQLException | RuntimeException e) {
@@ -300,6 +305,21 @@ public class JdbcChunkReader implements ItemReader<Map<String, Object>> {
 
   private static final DateTimeFormatter TIMESTAMP_FORMATTER =
       DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss[.SSSSSSSSS][.SSSSSS][.SSS][.S]");
+
+  /**
+   * The row the next read resumes after. A row with no watermark cannot be one: it sorts last, its
+   * cursor would hold no value, and {@code (wm, pk) > (NULL, …)} is unknown for every row, so every
+   * later run would read nothing (#1921). The last row that HAS a watermark is the resume point;
+   * {@code null} when none does. A full scan has no watermark, its last row always serves.
+   */
+  private Map<String, Object> lastRowToResumeFrom(List<Map<String, Object>> rows) {
+    String col = cursorColumn();
+    if (col.isEmpty()) return rows.getLast();
+    for (int i = rows.size() - 1; i >= 0; i--) {
+      if (rows.get(i).get(col) != null) return rows.get(i);
+    }
+    return null;
+  }
 
   /**
    * Build the next cursor from the last row read.

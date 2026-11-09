@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/icreated/lumnik-open/lm/internal/client"
 )
 
 func TestCsvIngestCmd_uploads_multipart_and_prints_summary(t *testing.T) {
@@ -255,5 +257,35 @@ func TestCsvIngestSummary_saysBreathOnRefresh(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Re-ingested ") || !strings.Contains(out.String(), " — refreshed, rows deduplicated by key\n") {
 		t.Errorf("a refreshed ingest must say so:\n%s", out.String())
+	}
+}
+
+// #1920: a prefix of several files lands in one table each. The summary said "one load": the last
+// table, the summed rows, the first file's columns.
+func TestCsvIngestSummary_namesEachTableOfAMultiFileBatch(t *testing.T) {
+	r := &client.CsvIngestResult{
+		TableName:     "ext.beta",
+		RowsWritten:   3,
+		SourceFile:    "s3://bucket/prefix/",
+		AskableScopes: []string{"billing"},
+		ChatAvailable: true,
+		Files: []client.CsvIngestFile{
+			{SourceFile: "prefix/alpha.csv", TableName: "ext.alpha", RowsWritten: 2,
+				PromoteColumns: []client.CsvIngestPromote{{Name: "id", Type: "bigint"}, {Name: "email", Type: "text"}}},
+			{SourceFile: "prefix/beta.csv", TableName: "ext.beta", RowsWritten: 1, Refreshed: true,
+				PromoteColumns: []client.CsvIngestPromote{{Name: "city", Type: "text"}}},
+		},
+	}
+	var out strings.Builder
+	printCsvIngestSummary(&out, r)
+	got := out.String()
+	for _, want := range []string{"Ingested 2 files", "ext.alpha", "ext.beta", "alpha.csv", "beta.csv",
+		"- email (text)", "- city (text)", "3", "ext.beta — prefix/beta.csv: 1 rows, 1 promoted cols — refreshed"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("batch summary does not mention %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Ingested s3://bucket/prefix/ into ext.beta") {
+		t.Errorf("batch summary still reads as one load into the last table:\n%s", got)
 	}
 }

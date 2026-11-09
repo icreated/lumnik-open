@@ -17,8 +17,12 @@ The three `ollama pull` lines: [Prerequisites](../quickstart/prerequisites.md#th
 
 ## The knobs
 
-All are environment variables. Self-host: set them in the root `.env`, then re-run `up.sh` with
-your flags. Helm (cloud edition): the same names, prefixed `LUMNIK_` when you run `up.sh`.
+All are environment variables.
+
+- **Self-host:** set them in the root `.env`, then re-run `up.sh` with your flags.
+- **Helm (cloud edition):** export the same names prefixed `LUMNIK_` (`LUMNIK_RAG_CHAT_MODEL`)
+  before `deploy/helm/up.sh`. `LUMNIK_ASK_ANSWER_BUDGET_CHARS` keeps its name. Unset means the
+  hub's default.
 
 | Variable | Default | Drives |
 |---|---|---|
@@ -62,24 +66,29 @@ What you see once it is off:
 - **The PWA has no Chat tab.** The other tabs are untouched.
 - **`lm module list`** shows `rag` and `llm` as `INACTIVE`, reason `disabled:lumnik.ai.enabled`.
   In the [Open edition](../editions.md) they are not listed at all.
-- **`lm ask`, `lm rag search`, `lm scopes`** and a question in `lm chat` answer `Error: API error 404 (no details from the server)`.
+- **`lm ask`, `lm rag search`, `lm scopes`** and a question in `lm chat` answer `Error: this hub has the AI switched off (LUMNIK_AI_ENABLED=false): …`.
 - **`lm view generate`** answers that no chat model is available.
-- **`lm rag status`** says `provider: none` and `indexed: false`; `lm rag reindex` has nothing to
-  index with.
+- **`lm rag status`** says `ai: switched off`:
+    - `stored_chunks:` is what the store keeps for you. Your corpus is not empty.
+    - `chunks: 0` and `indexed: false` count only what was indexed since the hub started: nothing,
+      with the AI off.
+    - `lm rag reindex` has nothing to index with.
 - **`lm csv ingest`** loads the file and no longer says it is askable.
 - Nothing calls a model and no embedding is computed.
 
 ```console
 $ lm ask --scope desk "combien de clients ?"
-Error: API error 404 (no details from the server)
+Error: this hub has the AI switched off (LUMNIK_AI_ENABLED=false): lm module list shows rag INACTIVE; the operator turns it back on
 $ lm view generate desk "les clients"
 Error: API error 400: generation abstained: no chat model is available on this hub — view generation needs one
 $ lm rag status
+ai: switched off (LUMNIK_AI_ENABLED=false)
 indexed: false
 chunks: 0
 indexed_at: -
 provider: none
 embedding_model: none
+stored_chunks: 36
 
 $ lm module list
 NAME      VERSION  SCHEMA              STATUS    REASON
@@ -92,10 +101,13 @@ rag       0.1.0    Platform RAG        INACTIVE  disabled:lumnik.ai.enabled
 What does not change: the images and the data already indexed. Search does not depend on this
 setting.
 
-**Switching it back on** brings back the data you had. What needed indexing while the AI was off (a
-workflow applied, a table ingested, a connector re-described) is absent: re-apply the workflow or
-the connector, or re-ingest the file.
-`lm rag reindex` rebuilds only the platform corpus.
+**Switching it back on** brings back the data you had.
+
+- What needed indexing while the AI was off is absent: a workflow applied, a table ingested, a
+  connector re-described. Re-apply the workflow or the connector, or re-ingest the file.
+- `lm workflow apply` tells you when it happens: it prints
+  `warning: not indexed for chat: the AI is switched off …` on stderr, and still exits 0.
+- `lm rag reindex` rebuilds only the platform corpus.
 
 ## Embeddings — model and dimension travel together
 
@@ -126,8 +138,9 @@ Each model call times out at 120 seconds. Raise one for a slow model, in the hub
 QUARKUS_LANGCHAIN4J_OLLAMA_ANALYTIC_TIMEOUT=300s     # the ask model; …_OLLAMA_TIMEOUT for the chat
 ```
 
-The self-host compose passes only the variables it lists: add the line to the hub's
-`environment:` in `docker-compose.selfhost.yml`.
+- **Self-host:** the compose passes only the variables it lists. Add the line to the hub's
+  `environment:` in `docker-compose.selfhost.yml`; the root `.env` alone does not reach the hub.
+- **Helm:** pass it through `hub.extraEnv`, as for [rate limits](../operations/rate-limits.md#tuning).
 
 ### Pointing at OpenAI
 

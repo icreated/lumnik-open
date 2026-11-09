@@ -84,6 +84,11 @@ public class RestConnectorValidator implements ConnectorValidator {
                         "Name of the lm secret holding the CA's PEM certificate(s); only those CAs are trusted",
                         nonEmpty())
                     .closed())
+            // #1859: a service that resets its HTTP/2 stream after a complete answer (CoreWCF on Kestrel) loses
+            // that answer to the JDK client, which negotiates HTTP/2; "1.1" is the integrator's way out.
+            .optionalCustom("http_version", Type.STRING, Importance.LOW,
+                "HTTP version every request asks for: \"1.1\" or \"2\" (omit => negotiated, HTTP/2 when the server offers it)",
+                v -> List.of("1.1", "2").contains(v.asText()) ? Optional.empty() : Optional.of("must be one of: 1.1, 2"))
             .optionalHinted("headers", Type.LIST, Importance.MEDIUM,
                 "Static headers sent on every request, [{name, value | value_env}]", null,
                 "headers is a list of { name, value|value_env } objects")

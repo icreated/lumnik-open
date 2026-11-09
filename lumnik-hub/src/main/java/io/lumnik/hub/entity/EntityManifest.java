@@ -17,17 +17,32 @@ import java.util.Map;
  * @param sources    ordered list of sources; the order is the deterministic merge tiebreak (_ord).
  * @param resolution the #613 cascade policy (null when the manifest uses {@code match} instead).
  * @param joins      the #846 relational lookups: they enrich the fused rows and never fuse or add one.
+ * @param zone       the business's time zone (#1881), where a date meets a time: a date is its midnight there, a time
+ *                   falls on the day it has there. Null: UTC, as every entity applied before it.
  */
 public record EntityManifest(String kind, String name, String label,
     List<String> match, List<Source> sources, List<String> scopes,
     String description, Map<String, ColumnMeta> columns, Resolution resolution,
-    List<Join> joins) {
+    List<Join> joins, String zone) {
 
   /** Null-safe collections (a manifest with no scopes is simply not discoverable; no columns = no extra grounding). */
   public EntityManifest {
     scopes = scopes == null ? List.of() : scopes;
     columns = columns == null ? Map.of() : columns;
     joins = joins == null ? List.of() : joins;
+  }
+
+  /** The pre-#1881 shape: no zone, so UTC. */
+  public EntityManifest(String kind, String name, String label,
+      List<String> match, List<Source> sources, List<String> scopes,
+      String description, Map<String, ColumnMeta> columns, Resolution resolution,
+      List<Join> joins) {
+    this(kind, name, label, match, sources, scopes, description, columns, resolution, joins, null);
+  }
+
+  /** The zone the SQL names: the declared one, UTC when there is none. */
+  public String sqlZone() {
+    return Text.blank(zone) ? "UTC" : zone;
   }
 
   /** The pre-#846 shape: no joins. Keeps every existing call site valid. */
@@ -44,7 +59,12 @@ public record EntityManifest(String kind, String name, String label,
 
   /** One source: a connector dynamic table + its sourceColumn -&gt; canonicalColumn map (ordered). */
   public record Source(String table,
-      @JsonDeserialize(as = LinkedHashMap.class) Map<String, String> map) {}
+      @JsonDeserialize(as = LinkedHashMap.class) Map<String, String> map) {
+    /** The table as an event or a card names it: schema-qualified ({@code connector.t_orders}). */
+    public String fqn() {
+      return EntityViewCompiler.SCHEMA + "." + table;
+    }
+  }
 
   /**
    * One relational lookup (#846): enriches the fused rows from {@code table} without fusing

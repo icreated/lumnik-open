@@ -20,4 +20,10 @@ public final class Text {
     public static boolean present(String s) {
         return !blank(s);
     }
+
+    /** The string itself when it has at most {@code max} code points, else its first {@code max - 1} and a "…": never a split surrogate pair. */
+    public static String clip(String s, int max) {
+        if (s.codePointCount(0, s.length()) <= max) return s;
+        return s.substring(0, s.offsetByCodePoints(0, max - 1)) + "…";
+    }
 }

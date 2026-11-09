@@ -1,4 +1,4 @@
-# Guided path — the guided path
+# Guided path — three half-days
 
 <section class="lm-hero" markdown>
 <p class="lm-eyebrow">Guided onboarding</p>
@@ -36,8 +36,8 @@ Run every command **from the repository root** unless a page says otherwise.
 git clone https://github.com/icreated/lumnik-open.git && cd lumnik-open
 ```
 
-That repository is the **open edition**. A step marked **Pro** needs lumnik Pro with the AI on
-(the chat, `lm ask`, the models); on the open edition, read it and skip its checkpoint.
+That repository is the **open edition**. A step marked **Pro** needs lumnik Pro with the AI on:
+the chat, `lm ask`, the models. On the open edition, read the step and skip its checkpoint.
 See [The two editions](editions.md#feature-by-feature).
 </div>
 
@@ -154,7 +154,7 @@ Read [Connectors overview](connectors/index.md) and [CSV & files](connectors/csv
 
 Read [Seeing what was ingested, skipped, and quarantined](transparency/ingestion-honesty.md).
 
-<p class="lm-check" markdown="span">**You know it worked when:** on the WOW's `cust-csv` run, you read IN = OUT + SKIPPED. Every skipped row is counted; `lm dlq list` shows the ones set aside.</p>
+<p class="lm-check" markdown="span">**You know it worked when:** on the WOW's `cust-csv` run, you read IN = OUT + SKIPPED. Every skipped row is counted. `lm dlq list` shows the ones set aside.</p>
 
 ```
 $ lm run get 3e9f353a
@@ -204,7 +204,11 @@ Read [When Ask refuses](transparency/ask-honesty.md): what `lm ask` says, and wh
 <div class="lm-kicker">30 min</div>
 <div class="lm-title">Scopes</div>
 
-Read [Scopes](rag/scopes.md): a scope is declared on the connector or entity (`scopes:`) and granted as a Keycloak role `scope:<tag>`. No scope role = tenant-wide; one or more = bound.
+Read [Scopes](rag/scopes.md):
+
+- a connector or an entity declares its scopes: `scopes: [clients]`;
+- a user receives a scope as the Keycloak role `scope:<tag>`;
+- a user with no scope role sees the whole tenant. A user with one or more sees only those scopes.
 
 The bundled realm has no scope-bound user: create one in Keycloak with the realm role `scope:desk` ([Add a user](security/identity-admin.md#add-a-user), [Grant a business scope](security/identity-admin.md#grant-or-revoke-a-business-scope)).
 
@@ -305,9 +309,9 @@ C-900        Saint Exupery  Lyon
 <div class="lm-kicker">30 min</div>
 <div class="lm-title">Processes — react</div>
 
-Read [Processes](apps/processes.md): declarative reactions to `data.row.changed`, always refusable, never writing to the source.
+Read [Processes](apps/processes.md): a declared rule raises a decision when a new or changed row matches it. A process never writes to the source.
 
-<p class="lm-check" markdown="span">**You know it landed when:** you can say what emits the event and what may refuse the action.</p>
+<p class="lm-check" markdown="span">**You know it landed when:** you can say which rows make a process fire, and why re-running an unchanged export fires nothing.</p>
 </div>
 </article>
 <article class="lm-step" markdown>
@@ -327,7 +331,7 @@ Read [Workflows](apps/workflows.md): a declared lifecycle over a status column, 
 <div class="lm-kicker">20 min</div>
 <div class="lm-title">Inbox — decide</div>
 
-Read [Inbox](apps/inbox.md): where `decision.*` events (including `decision.dormant.<workflow>`) wait for a human, and `lm inbox ack` that closes them.
+Read [Inbox](apps/inbox.md): decisions and dormancy alerts wait there for a human. `lm inbox ack` closes one.
 
 <p class="lm-check" markdown="span">**You know it worked when:** an acked decision leaves `lm inbox` and shows `[acked]` in `lm inbox --all`.</p>
 </div>
@@ -372,8 +376,8 @@ Common stumbles:
   your PATH serves a stale copy.
 - **Credentials.** Every password is generated at install time into `.env`, at the root of the clone.
   If a login page surprises you, the answer is in that file.
-- **Ollama pulls one model at a time.** One `ollama pull <model>` per line, and make sure
-  `ollama serve` isn't already running before starting it again.
+- **Ollama pulls one model at a time.** Write one `ollama pull <model>` per line. Before you
+  start `ollama serve`, check that it is not already running.
 
 If a step does not match what you see, report it — it is a documentation bug.
 

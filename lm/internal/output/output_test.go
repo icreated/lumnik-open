@@ -141,3 +141,34 @@ func TestPrint_jsonWritesHTMLCharactersAsTheyAre(t *testing.T) {
 		}
 	}
 }
+
+// A line break inside a cell is shown, not obeyed: one row stays one line and the columns after it
+// stay under their headers (#1889). The machine formats keep the value exact.
+func TestPrint_tableShowsALineBreakInACellInsteadOfObeyingIt(t *testing.T) {
+	buf := new(bytes.Buffer)
+	rows := []row{{"M-1103", "Broche révisée.\nPrévoir 2027.\r\nPince\t3 kN"}, {"M-1104", "ok"}}
+	err := Print(buf, "table", []string{"NAME", "STATUS"}, rows, func(r row) []string {
+		return []string{r.Name, r.Status}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("one header and two rows must stay three lines, got %d: %q", len(lines), buf.String())
+	}
+	if !strings.Contains(lines[1], `Broche révisée.\nPrévoir 2027.\r\nPince\t3 kN`) {
+		t.Errorf("the break must be shown as an escape: %q", lines[1])
+	}
+}
+
+func TestPrint_jsonKeepsALineBreakInACellExact(t *testing.T) {
+	buf := new(bytes.Buffer)
+	rows := []row{{"a", "x\ny"}}
+	if err := Print(buf, "json", nil, rows, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), `x\ny`) || strings.Contains(buf.String(), `x\\ny`) {
+		t.Errorf("json must carry the real newline (as the JSON escape \\n): %q", buf.String())
+	}
+}

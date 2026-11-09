@@ -13,8 +13,9 @@
 #   lm connector run acme-soap-incremental      # run 2 — only what changed
 #   lm endpoint reset-cursor acme-soap-incremental/partners
 #
-# Expect: run 1 = 2 400 in / 2 400 out. Run 2 = 1 in / 1 out: the row holding the latest
-# instant comes back, and replaces itself.
+# Expect: run 1 = 2 400 in / 2 400 out. Run 2 = only the rows changed since run 1 (a little
+# before, so nothing changed during run 1 is missed). They replace their earlier version: the
+# table stays at 2 400.
 
 apiVersion: connectors.lumnik.io/v1
 kind: Connector

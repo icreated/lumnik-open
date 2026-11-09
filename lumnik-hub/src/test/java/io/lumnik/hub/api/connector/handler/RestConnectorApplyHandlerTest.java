@@ -170,6 +170,29 @@ class RestConnectorApplyHandlerTest {
         assertFalse(existing.getConfig().containsKey("tls"), "a manifest without tls trusts the public CAs again");
     }
 
+    /** #1859: spec.http_version reaches the run — validated, then dropped by this door, the connector kept negotiating HTTP/2. */
+    @Test
+    void apply_carries_http_version_into_connector_config() throws Exception {
+        Connector conn = applyAndCapture(
+            "{\"metadata\":{\"name\":\"c1\"},"
+            + "\"spec\":{\"base_url\":\"https://wcf-orders:18443\",\"http_version\":\"1.1\"}}");
+        assertEquals("1.1", conn.getConfig().get("http_version"));
+    }
+
+    @Test
+    void reapply_without_http_version_negotiates_again() throws Exception {
+        Connector existing = new Connector();
+        existing.setConfig(new HashMap<>(Map.of("kind", "rest-generic", "base_url", "https://api.example.com",
+            "http_version", "1.1")));
+        ConnectorRepository connRepo = mock(ConnectorRepository.class);
+        when(connRepo.byAddressForUpdate(1L, "c1")).thenReturn(Optional.of(existing));
+
+        apply("{\"metadata\":{\"name\":\"c1\"},\"spec\":{\"base_url\":\"https://api.example.com\"}}",
+            connRepo, mock(ConnectorEndpointRepository.class));
+
+        assertFalse(existing.getConfig().containsKey("http_version"), "a manifest without http_version negotiates again");
+    }
+
     /** The method stored for the one endpoint of {@code endpoint} (JSON), when the manifest leaves it to the default. */
     private static String storedMethod(String endpoint) throws Exception {
         ConnectorEndpointRepository epRepo = mock(ConnectorEndpointRepository.class);

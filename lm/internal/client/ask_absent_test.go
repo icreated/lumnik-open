@@ -60,7 +60,7 @@ func TestAskDoorOnAProHubWithTheAIOffSaysSwitchedOff(t *testing.T) {
 	me := 0
 	_, err := askHub(t, 404, "", "commercial", &me).RagAsk("q", "", "", "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "this hub has Ask switched off")
+	assert.Contains(t, err.Error(), "this hub has the AI switched off")
 	assert.Contains(t, err.Error(), "LUMNIK_AI_ENABLED")
 }
 

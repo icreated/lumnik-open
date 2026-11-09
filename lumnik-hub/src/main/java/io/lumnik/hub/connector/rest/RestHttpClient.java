@@ -19,6 +19,8 @@ import java.util.stream.Collectors;
 public class RestHttpClient {
 
     private final HttpClient client;
+    /** The protocol every request asks for (#1859); {@code null} leaves it to the JDK, which negotiates HTTP/2 by ALPN. */
+    private final HttpClient.Version version;
     /**
      * The clients trusting an internal CA (#1609), one per PEM: a run must not build a pool per chunk. Bounded and
      * expiring, so a rotated CA's client is dropped — and its selector thread with it — instead of kept for life.
@@ -28,7 +30,12 @@ public class RestHttpClient {
 
     public RestHttpClient() { this(builder().build()); }
 
-    private RestHttpClient(HttpClient client) { this.client = client; }
+    private RestHttpClient(HttpClient client) { this(client, null); }
+
+    private RestHttpClient(HttpClient client, HttpClient.Version version) {
+        this.client = client;
+        this.version = version;
+    }
 
     private static HttpClient.Builder builder() {
         return HttpClient.newBuilder()
@@ -48,7 +55,23 @@ public class RestHttpClient {
      * {@link IllegalArgumentException}.
      */
     public RestHttpClient trusting(String caPem) {
-        return trusted.get(caPem, pem -> new RestHttpClient(builder().sslContext(CaTrust.sslContext(pem)).build()));
+        RestHttpClient trusting = trusted.get(caPem, pem -> new RestHttpClient(builder().sslContext(CaTrust.sslContext(pem)).build()));
+        return version == null ? trusting : new RestHttpClient(trusting.client, version);
+    }
+
+    /**
+     * This client, asking for HTTP {@code httpVersion} ({@code "1.1"} or {@code "2"}) on every request (#1859). A
+     * service that resets its HTTP/2 stream after a complete answer loses that answer to the JDK client: over
+     * HTTP/1.1 the same answer — a SOAP Fault naming a refused credential — arrives. Shares this client's
+     * connections and trust. Anything else is an {@link IllegalArgumentException}.
+     */
+    public RestHttpClient speaking(String httpVersion) {
+        HttpClient.Version asked = switch (httpVersion) {
+            case "1.1" -> HttpClient.Version.HTTP_1_1;
+            case "2" -> HttpClient.Version.HTTP_2;
+            default -> throw new IllegalArgumentException("http_version must be 1.1 or 2");
+        };
+        return new RestHttpClient(client, asked);
     }
 
     /**
@@ -84,6 +107,7 @@ public class RestHttpClient {
         String url = buildUrl(req.url(), req.queryParams());
         HttpRequest.Builder b = HttpRequest.newBuilder().uri(uri(url))
             .timeout(Duration.ofSeconds(60));
+        if (version != null) b.version(version);
         req.headers().forEach(b::header);
         HttpRequest.BodyPublisher body = req.body() != null
             ? HttpRequest.BodyPublishers.ofString(req.body())

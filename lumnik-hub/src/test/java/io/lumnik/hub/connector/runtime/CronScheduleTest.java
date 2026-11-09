@@ -46,4 +46,32 @@ class CronScheduleTest {
   void invalid_cron_is_never_due() {
     assertThat(ConnectorScheduler.isCronDue("not-a-cron", Instant.EPOCH, NOW)).isFalse();
   }
+
+  /** #1922: the slot is fenced by the window it fell in, not by the window the tick finds. */
+  @Test
+  void a_slot_that_fell_outside_the_window_is_not_in_it_even_when_the_tick_is_inside() {
+    ZonedDateTime windowOpen = ZonedDateTime.of(2026, 6, 1, 22, 0, 30, 0, ZoneOffset.UTC);
+    assertThat(ConnectorScheduler.slotInWindow("0 6 * * *", "22:00-06:00", windowOpen))
+        .as("06:00 is the exclusive end: the slot is skipped, not run at 22:00")
+        .isFalse();
+  }
+
+  @Test
+  void a_slot_inside_the_window_is_in_it() {
+    ZonedDateTime tick = ZonedDateTime.of(2026, 6, 1, 6, 0, 30, 0, ZoneOffset.UTC);
+    assertThat(ConnectorScheduler.slotInWindow("0 6 * * *", "22:00-07:00", tick)).isTrue();
+  }
+
+  @Test
+  void without_a_window_every_slot_is_in_it() {
+    assertThat(ConnectorScheduler.slotInWindow("0 6 * * *", null, NOW)).isTrue();
+  }
+
+  @Test
+  void a_slot_at_the_window_start_is_in_it() {
+    ZonedDateTime tick = ZonedDateTime.of(2026, 6, 1, 22, 0, 30, 0, ZoneOffset.UTC);
+    assertThat(ConnectorScheduler.slotInWindow("0 22 * * *", "22:00-06:00", tick))
+        .as("the start is inclusive")
+        .isTrue();
+  }
 }

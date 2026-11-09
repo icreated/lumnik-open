@@ -16,6 +16,7 @@ import io.lumnik.hub.connector.rest.auth.AuthProviderRegistry;
 import io.lumnik.hub.connector.rest.auth.AuthSpec;
 import io.lumnik.hub.connector.rest.pagination.PaginationFactory;
 import io.lumnik.hub.connector.rest.pagination.PaginationStrategy;
+import io.lumnik.hub.connector.rest.pagination.PaginationSupport;
 import io.lumnik.hub.connector.rest.reliability.ResponseValidator;
 import io.lumnik.hub.connector.secret.SecretRefs;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -116,13 +117,23 @@ public class RestPreflight {
         boolean http2xx = resp.status() / 100 == 2;
         if (!http2xx) {
             return new Verdict(ep.getName(), req.method(), req.url(), resp.status(),
-                false, 0, "HTTP " + resp.status(), sample);
+                false, 0, refusalOf(cfg, resp), sample);
         }
 
         try {
             RestEndpointReader.validatorFor(cfg).validate(resp);
             RestResponse parsed = RestEndpointReader.bodyParserFor(cfg).reparse(resp);
-            int items = pagination.build(RestEndpointReader.mapConfig(cfg, "pagination")).items(parsed).size();
+            Map<String, Object> pagCfg = RestEndpointReader.mapConfig(cfg, "pagination");
+            // The first page a run would refuse (response_path reads nothing, or not a list) is not ok here
+            // either (#1925): the run names the same sentence, behind the endpoint's name.
+            String firstPage = PaginationSupport.firstPageRefusal(parsed.json(), RestEndpointReader.str(pagCfg.get("response_path")));
+            if (firstPage != null) {
+                return new Verdict(ep.getName(), req.method(), req.url(), resp.status(), false, 0, firstPage, sample);
+            }
+            int items = pagination.build(pagCfg).items(parsed).size();
+            // The count a run would read off this page, so a header it refuses is not answered ok (#1866).
+            PaginationSupport.declaredItems(parsed, RestEndpointReader.str(pagCfg.get("total_path")),
+                RestEndpointReader.str(pagCfg.get("total_header")));
             return new Verdict(ep.getName(), req.method(), req.url(), resp.status(),
                 true, items, "", sample);
         } catch (Exception unreadable) {
@@ -130,6 +141,20 @@ public class RestPreflight {
             // served with 200. The run would fail the chunk here; the pre-flight says so first.
             return new Verdict(ep.getName(), req.method(), req.url(), resp.status(),
                 false, 0, describe(unreadable), sample);
+        }
+    }
+
+    /**
+     * A non-2xx, in the run's own words (#1861): the validator reads the body first, so a SOAP Fault on HTTP 500 is
+     * named. A body it does not recognise, and GraphQL (whose validator leaves a non-2xx to its status), give
+     * {@code HTTP <status>}.
+     */
+    private static String refusalOf(Map<String, Object> cfg, RestResponse resp) {
+        try {
+            RestEndpointReader.validatorFor(cfg).validate(resp);
+            return "HTTP " + resp.status();
+        } catch (RuntimeException named) {
+            return describe(named);
         }
     }
 

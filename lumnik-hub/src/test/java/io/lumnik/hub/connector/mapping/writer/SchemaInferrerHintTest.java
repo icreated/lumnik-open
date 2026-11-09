@@ -24,15 +24,15 @@ class SchemaInferrerHintTest {
     // A sparse FK like c_payment.c_order_id: all NULL in this batch, but source declares numeric.
     var rows = new ArrayList<Map<String, Object>>();
     Map<String, Object> r1 = new HashMap<>(); r1.put("c_order_id", null); rows.add(r1);
-    var schema = inferrer.infer(rows, Map.of("c_order_id", "NUMERIC(18,4)"));
-    assertThat(schema.get("c_order_id")).isEqualTo("NUMERIC(18,4)");
+    var schema = inferrer.infer(rows, Map.of("c_order_id", "NUMERIC"));
+    assertThat(schema.get("c_order_id")).isEqualTo("NUMERIC");
   }
 
   @Test
   void all_null_column_without_hint_still_defaults_to_text() {
     var rows = new ArrayList<Map<String, Object>>();
     Map<String, Object> r1 = new HashMap<>(); r1.put("v", null); rows.add(r1);
-    var schema = inferrer.infer(rows, Map.of("other", "NUMERIC(18,4)"));
+    var schema = inferrer.infer(rows, Map.of("other", "NUMERIC"));
     assertThat(schema.get("v")).isEqualTo("TEXT");
   }
 
@@ -43,7 +43,7 @@ class SchemaInferrerHintTest {
     var rows = List.of(
         Map.<String, Object>of("v", "char-value"),
         Map.<String, Object>of("v", "another"));
-    var schema = inferrer.infer(rows, Map.of("v", "NUMERIC(18,4)"));
+    var schema = inferrer.infer(rows, Map.of("v", "NUMERIC"));
     assertThat(schema.get("v")).isEqualTo("TEXT");
   }
 
@@ -56,14 +56,14 @@ class SchemaInferrerHintTest {
 
   @Test
   void pgTypeForSqlType_maps_numerics_temporals_and_falls_back_to_text() {
-    assertThat(SchemaInferrer.pgTypeForSqlType(Types.NUMERIC)).isEqualTo("NUMERIC(18,4)");
-    assertThat(SchemaInferrer.pgTypeForSqlType(Types.DECIMAL)).isEqualTo("NUMERIC(18,4)");
+    assertThat(SchemaInferrer.pgTypeForSqlType(Types.NUMERIC)).isEqualTo("NUMERIC");
+    assertThat(SchemaInferrer.pgTypeForSqlType(Types.DECIMAL)).isEqualTo("NUMERIC");
     // A source's INTEGER answers BIGINT because an Integer VALUE does (#497); the two roads must
     // meet, or a sparse column created from the hint would refuse the values that fill it later.
     assertThat(SchemaInferrer.pgTypeForSqlType(Types.INTEGER)).isEqualTo("BIGINT");
     assertThat(SchemaInferrer.pgTypeForSqlType(Types.BIGINT)).isEqualTo("BIGINT");
     assertThat(SchemaInferrer.pgTypeForSqlType(Types.SMALLINT)).isEqualTo("BIGINT");
-    assertThat(SchemaInferrer.pgTypeForSqlType(Types.DOUBLE)).isEqualTo("NUMERIC(18,4)");
+    assertThat(SchemaInferrer.pgTypeForSqlType(Types.DOUBLE)).isEqualTo("NUMERIC");
     assertThat(SchemaInferrer.pgTypeForSqlType(Types.TIMESTAMP)).isEqualTo("TIMESTAMPTZ");
     assertThat(SchemaInferrer.pgTypeForSqlType(Types.TIMESTAMP_WITH_TIMEZONE)).isEqualTo("TIMESTAMPTZ");
     assertThat(SchemaInferrer.pgTypeForSqlType(Types.DATE)).isEqualTo("DATE");

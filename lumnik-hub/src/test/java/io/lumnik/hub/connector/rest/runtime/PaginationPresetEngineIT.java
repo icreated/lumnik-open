@@ -122,6 +122,57 @@ class PaginationPresetEngineIT {
         assertEquals(3L, count(table));
     }
 
+    /** #1827: SAP Gateway — the answer under {@code d}, the next page in {@code d.__next}, the total as text. */
+    @Test
+    void odata_v2_preset_paginates_and_reads_its_text_total() {
+        String table = "ext.preset_odata2_" + Long.toUnsignedString(System.nanoTime());
+        String base = "http://localhost:" + wm.port();
+
+        stubFor(get(urlPathEqualTo("/odata/items"))
+            .withQueryParam("$skiptoken", absent())
+            .willReturn(okJson("{\"d\":{\"__count\":\"3\",\"__next\":\"" + base + "/odata/items?$skiptoken=2\","
+                + "\"results\":[{\"id\":\"a\",\"name\":\"X\"},{\"id\":\"b\",\"name\":\"Y\"}]}}")));
+        stubFor(get(urlPathEqualTo("/odata/items"))
+            .withQueryParam("$skiptoken", equalTo("2"))
+            .willReturn(okJson("{\"d\":{\"__count\":\"3\",\"results\":[{\"id\":\"c\",\"name\":\"Z\"}]}}")));
+
+        UUID id = apply(odataManifest("odata-v2", "odata2", base, table));
+
+        RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(id, new RunTrigger.Manual(1L)));
+        assertInstanceOf(RunStatus.Completed.class, s);
+        assertEquals(3L, count(table));
+    }
+
+    /** #1827: OData v4 — members named {@code @odata.nextLink} / {@code @odata.count}, read through bracketed paths. */
+    @Test
+    void odata_v4_preset_paginates_and_reads_its_count() {
+        String table = "ext.preset_odata4_" + Long.toUnsignedString(System.nanoTime());
+        String base = "http://localhost:" + wm.port();
+
+        stubFor(get(urlPathEqualTo("/odata/items"))
+            .withQueryParam("$skiptoken", absent())
+            .willReturn(okJson("{\"@odata.count\":3,\"@odata.nextLink\":\"" + base + "/odata/items?$skiptoken=2\","
+                + "\"value\":[{\"id\":\"a\",\"name\":\"X\"},{\"id\":\"b\",\"name\":\"Y\"}]}")));
+        stubFor(get(urlPathEqualTo("/odata/items"))
+            .withQueryParam("$skiptoken", equalTo("2"))
+            .willReturn(okJson("{\"@odata.count\":3,\"value\":[{\"id\":\"c\",\"name\":\"Z\"}]}")));
+
+        UUID id = apply(odataManifest("odata-v4", "odata4", base, table));
+
+        RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(id, new RunTrigger.Manual(1L)));
+        assertInstanceOf(RunStatus.Completed.class, s);
+        assertEquals(3L, count(table));
+    }
+
+    private static String odataManifest(String preset, String name, String base, String table) {
+        return "{\"metadata\":{\"name\":\"" + name + "-" + Long.toUnsignedString(System.nanoTime()) + "\",\"connector_type\":\"rest-generic\"},"
+            + "\"spec\":{\"base_url\":\"" + base + "\",\"endpoints\":[{"
+            + "\"id\":\"items\",\"path\":\"/odata/items\",\"method\":\"GET\","
+            + "\"pagination\":{\"kind\":\"" + preset + "\"},"
+            + "\"target\":{\"kind\":\"hybrid\",\"table\":\"" + table + "\",\"unique_key\":\"$.id\","
+            + "\"promote\":[{\"name\":\"name\",\"path\":\"$.name\",\"type\":\"text\"}]}}]}}";
+    }
+
     @Test
     void spring_page_preset_paginates_via_page() {
         String table = "ext.preset_spring_" + Long.toUnsignedString(System.nanoTime());

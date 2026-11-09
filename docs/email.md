@@ -47,11 +47,14 @@ ID    EVENTS                RECIPIENT               TEMPLATE            ENABLED
 
 Templates are [Qute](https://quarkus.io/guides/qute) HTML files at
 `templates/email/<name>.html` inside the hub. The rule picks one by name (`--template`), in
-kebab-case only; an unknown name is logged and the mail skipped.
+kebab-case only. A name the hub does not have is refused when you add the rule, with the names
+it does carry:
 
 ```
 $ lm notify add --events 'decision.*' --to adv@example.com --template '../x'
 Error: API error 400: template must match [a-z0-9-]+ (a template name, not a path)
+$ lm notify add --events 'decision.*' --to adv@example.com --template decision-alrt
+Error: API error 400: template 'decision-alrt' is not one this hub carries — the ones it ships: event-notification, decision-alert
 ```
 
 Two ship with the hub:
@@ -60,6 +63,12 @@ Two ship with the hub:
 |---|---|---|
 | `event-notification` (default) | ops | subject + source/entity/time line + the payload as JSON in a `<pre>` |
 | `decision-alert` | business | the process **message as headline** ("Commande SO-000013 du client P-1007 en litige — 860.00 €"), entity & key, the referenced fields as a table |
+
+The subject line does not depend on the template.
+
+- A decision (`decision.*`) has its own sentence as the subject: the one `lm inbox` shows, on one
+  line, cut at 100 characters. Three decisions give three different subjects.
+- Any other mail, or a decision with no sentence, reads `lumnik event: ` and the event name.
 
 ### The variables a template sees
 
@@ -73,7 +82,7 @@ Two ship with the hub:
 | `{payloadJson}` | string | the same payload, serialized — for `<pre>` blocks |
 
 Payloads differ per event type ([registry](outputs.md#the-event-registry)), so guard
-what may be absent — a missing reference fails the render and the mail is skipped:
+what may be absent. A missing reference fails the render, and the mail is given up at once:
 
 ```html
 <h2>{payload.message ?: eventType}</h2>       {! fallback when the key is absent !}
@@ -106,9 +115,40 @@ Templates ship inside the hub image: the published image cannot take your own. P
 
 - A mail leaves within about 5 seconds.
 - **Mocked** until the deploy sets the SMTP knobs ([turn on email delivery](deploy.md#turn-on-email-delivery)).
-- **Best-effort:** a failed send is logged and skipped — no retry, no journal. One broken
-  recipient does not block the others.
-- **A hub crash can lose a batch of mails**; it never sends one twice.
+- **A failed send is tried again**, three attempts in all, then given up on that mail alone. One broken
+  recipient does not block the others. A mail whose template fails is given up at once.
+- **A hub crash does not lose a mail.** A mail can go twice if the hub stops after the mail server took it
+  and before the hub wrote it down.
+- **See what happened:** `lm notify deliveries` lists the mails, the given-up ones first, with the kind of
+  failure (never the text of the mail). `lm notify replay ID` sends a given-up mail again: the same
+  delivery, so a rule never gets a second mail for an event, and a mail already sent is refused.
+- **A given-up mail is told, not only listed.** Each one raises an event, `notification.mail.given-up`,
+  once, when it is given up. It carries the mail's ID (the one `lm notify deliveries` shows), the rule,
+  the event type and the kind of failure. Never the mail. A [webhook](outputs.md#wire-a-webhook) can
+  carry it to the people who must act:
+  `lm integration add relay-watch --url https://n8n.example.com/webhook/lumnik --events 'notification.mail.given-up' --secret-stdin`.
+  Fix the cause, then `lm notify replay ID`. A new password gives up every mail at once: expect one
+  event per mail.
+- **Read the ERROR column** to know what to fix:
+
+| ERROR says | What it means | The gesture |
+|---|---|---|
+| `authentication refused (SMTP 535)` | The relay refused the login. | Fix `LUMNIK_SMTP_PASSWORD`. |
+| `relay unreachable` | Nothing answers at the host and port. | Fix the host, the port or the network. |
+| `TLS refused` | The secure handshake failed. | Fix the TLS setting or the relay's certificate. |
+| `address or message refused (SMTP 550)` | The relay refused an address or the message. The code does not say which. | Check the sender and the recipient, then the relay's own log. |
+| `refused by the relay (SMTP 554)` | The relay refused the mail, with this code. | Read the relay's own log. |
+
+Any other failure shows its own name.
+
+```
+$ lm notify deliveries
+ID  RECIPIENT        EVENT                   STATUS          ATTEMPTS  WHEN              ERROR
+12  adv@example.com  decision.litige-ouvert  given up: send  3         2026-11-08 10:12  authentication refused (SMTP 535)
+13  adv@example.com  decision.litige-ouvert  sent            1         2026-11-08 10:13
+$ lm notify replay 12
+delivery 12: sent
+```
 
 When delivery must be provable, wire a [webhook](outputs.md#wire-a-webhook) as well.
 

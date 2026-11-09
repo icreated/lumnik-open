@@ -139,8 +139,11 @@ city  Lyon
 - **The labels are the entity's.** Change one by re-applying the entity; it shows at the next search once the hub
   has taken the new entity in.
 - **A column without a label keeps its name** (`city` above), so you can label what matters first.
-- **They show in three places**: on each result, in the record sheet it opens (every column of the record, not only
-  those the index returns, and the columns reported as divergent), and on the filter chips offered with the results.
+- **They show in three places:**
+    - on each result;
+    - in the record sheet it opens: every column of the record, not only those the index returns, and the columns
+      reported as divergent;
+    - on the filter chips offered with the results.
 - **A filter chip is labelled only when the entities in the page agree.** If two entities label the same column
   differently, the chip keeps the column name rather than pick one.
 - Labels are display names only: searching and filtering still use the column names.
@@ -166,9 +169,10 @@ the card behaves as before.
   necessarily the linked one. Literal text around it is kept. Nothing else is ever substituted.
 - **One link per field**, at most 16, each on a field the index declares. Nothing but `field` and `url` is allowed.
 - **The address follows the same rules as a [view's external link](../apps/views.md#linking-views)**: `https://`
-  only, the host written out in full, the page opened in a new tab. Special characters in the value are made safe
-  for the address. **The other system receives the value** — declare only systems you trust with it.
-- **A result with no value for any `{field}` of the address has no link**, and the field shows as plain text.
+  only, the host written out in full, the page opened in a new tab.
+- Special characters in the value are made safe for the address.
+- **The other system receives the value.** Declare only systems you trust with it.
+- **A result that lacks the value of one `{field}` of the address has no link**, and the field shows as plain text.
 - **A link on the title field** makes the heading itself the link.
 
 A mistake is refused when you apply, naming the key — here an address that mentions `{ghost}`, which is not a field of the index:
@@ -387,7 +391,7 @@ $ curl -H "Authorization: Bearer $TOKEN" "$LUMNIK_URL/api/search/capability"
 | `state` | Meaning |
 |---|---|
 | `available` | a provider answers |
-| `degraded` | a provider is installed but impaired; `reason` is `backend_unreachable`, `backend_auth_failed`, `backend_error`, `unsupported_distribution` or `cluster_red` |
+| `degraded` | a provider is installed but impaired; `reason` says why: `backend_unreachable`, `backend_auth_failed`, `backend_error`, `unsupported_distribution`, `cluster_red` (the last four from the cluster provider), or `ambiguous_provider`, `unknown_provider`, `status_failed`, `provider_error` |
 | `unavailable` | no provider in this hub (`reason`: `not_installed`) |
 
 A cluster outage never stops ingestion and never turns into an empty answer.

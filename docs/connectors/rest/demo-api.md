@@ -29,7 +29,7 @@ The first path segment picks the envelope; the data is the same under every dial
 | `/drf/partners` | Django REST — `$.results` + a whole next URL in `$.next` | [One connector, one API](../rest.md#one-connector-one-api) |
 | `/link/partners` | an RFC 5988 `Link: …; rel="next"` header | [Pagination](pagination.md) |
 | `/offset/partners` | offset + limit with a published `$.total` | [Incremental sync](../rest.md#incremental-sync) |
-| `/open/partners` | the same, with no auth wall at all | try it with `curl` |
+| `/open/partners` | the same, with no auth wall at all | [Run hooks over the promoted columns](../rest.md#run-hooks-over-the-promoted-columns); try it with `curl` |
 | `/hdr/partners` | 400 to any request without `X-Api-Version` | [Request headers](../rest.md#request-headers) |
 | `/liar/partners` | serves 2 300 rows while declaring 2 400 | [The declared total](../rest.md#the-declared-total-a-witness-on-the-count) |
 | `/down/partners` | 500, forever | [When the source misbehaves](../rest.md#when-the-source-misbehaves) |
@@ -37,8 +37,7 @@ The first path segment picks the envelope; the data is the same under every dial
 | `POST /graphql` | Relay `edges` / `pageInfo` | [GraphQL](../graphql.md) |
 | `GET /openapi.json` | an OpenAPI 3 document for `/open`, `/spring` and `/v1` | [Generate a manifest from an OpenAPI spec](../rest.md#generate-a-manifest-from-an-openapi-spec) |
 
-`/openapi.json` describes three paths; the server never reads it. Its `servers` entry is the
-address you called it on.
+`/openapi.json` describes three paths. Its `servers` entry is the address you called it on.
 
 ## The eight SOAP services
 
@@ -71,8 +70,8 @@ lm secret set ACME_SESSION_TOKEN   # demo-session-42 — /session, inside the SO
 
 !!! note "`host.docker.internal`, not `localhost`"
     The manifests point at `http://host.docker.internal:8099`. The hub runs in a container, and
-    `localhost` inside it is that container — the address above is how it reaches your machine.
-    The demo API listens on every interface for the same reason; pass it an address
+    `localhost` inside it is that container: the address above is how it reaches your machine.
+    The demo API listens on every interface for the same reason. Pass it an address
     (`acme-api.py 8099 127.0.0.1`) to keep it to your own shell.
 
 ## Checking it before you blame the manifest
@@ -81,9 +80,14 @@ lm secret set ACME_SESSION_TOKEN   # demo-session-42 — /session, inside the SO
 python3 docs/connectors/rest/demo/selftest.py
 ```
 
-It walks every dialect and SOAP service to its last page and checks that the 2 400 ids arrive
-exactly once, `/flaky` answers `429`, `503`, `200`, `/tail` yields 201 rows and both fault
-services carry a `<soap:Fault>`. It exits non-zero when something is off.
+It walks every dialect and SOAP service to its last page, and checks that:
+
+- the 2 400 ids arrive exactly once;
+- `/flaky` answers `429`, `503`, then `200`;
+- `/tail` yields 201 rows;
+- both fault services carry a `<soap:Fault>`.
+
+It prints `ALL OK`, or `SOMETHING FAILED` and exits non-zero.
 
 !!! warning "Reset the flaky counters between retry tests"
     `/flaky` fails twice **per query string**, then serves that page for good: a second run
@@ -98,7 +102,7 @@ services carry a `<soap:Fault>`. It exits non-zero when something is off.
 
 ## The manifests that read it
 
-Fourteen manifests live beside it, each transcluded into the page that explains it:
+Fifteen manifests live beside it, each shown on the page that explains it:
 
 | File | Reads | Page |
 |---|---|---|
@@ -116,6 +120,7 @@ Fourteen manifests live beside it, each transcluded into the page that explains 
 | `93-soap-retry.yaml` | `/flaky` | [The same 500, retried](../soap.md#the-same-500-without-a-fault-is-retried) |
 | `94-soap-session.yaml` | `/session` | [A credential inside the envelope](../soap.md#a-credential-inside-the-envelope) |
 | `95-soap-watermark.yaml` | `/siebel` | [Incremental](../soap.md#incremental-the-mark-rides-the-url-not-the-body) |
+| `96-mapping-hooks.yaml` | `/open` | [Run hooks over the promoted columns](../rest.md#run-hooks-over-the-promoted-columns) |
 
 ## See also
 

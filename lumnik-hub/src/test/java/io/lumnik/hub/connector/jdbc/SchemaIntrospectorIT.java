@@ -94,6 +94,36 @@ class SchemaIntrospectorIT {
   }
 
   @Test
+  void discover_lists_no_view_unless_asked() {
+    JdbcConnectionConfig cc = JdbcConnectionConfig.parse(
+        PG.getJdbcUrl(), PG.getUsername(), PG.getPassword(), dialectRegistry);
+    List<TableDescriptor> tables = introspector.discover(cc, "public", List.of("t_*", "ad_*"), false);
+    assertFalse(tables.stream().anyMatch(t -> t.name().equals("v_bpartner_active")));
+  }
+
+  @Test
+  void discover_lists_the_views_with_their_columns_and_no_key_when_asked() {
+    JdbcConnectionConfig cc = JdbcConnectionConfig.parse(
+        PG.getJdbcUrl(), PG.getUsername(), PG.getPassword(), dialectRegistry);
+    List<TableDescriptor> all = introspector.discover(cc, "public", List.of("t_*", "ad_*"), true);
+    TableDescriptor view = all.stream().filter(t -> t.name().equals("v_bpartner_active")).findFirst().orElseThrow();
+    assertEquals(List.of("c_bpartner_id", "name", "updated"),
+        view.columns().stream().map(ColumnDescriptor::name).toList());
+    assertTrue(view.primaryKey().isEmpty());
+    assertTrue(view.foreignKeys().isEmpty());
+    assertTrue(view.unsupportedColumns().isEmpty());
+    assertTrue(all.stream().anyMatch(t -> t.name().equals("c_bpartner")), "the tables are still listed");
+  }
+
+  @Test
+  void discover_applies_the_skip_patterns_to_views_too() {
+    JdbcConnectionConfig cc = JdbcConnectionConfig.parse(
+        PG.getJdbcUrl(), PG.getUsername(), PG.getPassword(), dialectRegistry);
+    List<TableDescriptor> all = introspector.discover(cc, "public", List.of("v_*"), true);
+    assertFalse(all.stream().anyMatch(t -> t.name().startsWith("v_")));
+  }
+
+  @Test
   void describe_single_table_returns_descriptor() {
     JdbcConnectionConfig cc = JdbcConnectionConfig.parse(
         PG.getJdbcUrl(), PG.getUsername(), PG.getPassword(), dialectRegistry);

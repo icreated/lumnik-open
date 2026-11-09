@@ -52,6 +52,10 @@ public class DynamicTableRegistry {
    *  with no schema registers under {@code public}, and a mapping may target any schema). */
   static final String HYBRID_MAPPING_PREFIX = "hybrid:";
 
+  /** The column a hybrid table stamps with the time a row last changed (#903), where the others have {@code _ingested_at}. */
+  public static final String HYBRID_WRITTEN_AT_COLUMN = "indexed_at";
+  public static final String DYNAMIC_WRITTEN_AT_COLUMN = "_ingested_at";
+
   /** The columns every table {@link HybridJsonbWriter#createTable} makes carries, with their types. */
   private static final Map<String, String> HYBRID_SIGNATURE = Map.of(
       "tenant_id", "bigint", "external_id", "text", "row_hash", "text", "data", "jsonb",
@@ -97,10 +101,9 @@ public class DynamicTableRegistry {
 
   /**
    * Does a row written into this table emit {@code data.row.changed}? The positive form of the
-   * question on purpose: the event is staged by {@link DynamicTableWriter} alone, so the answer is
-   * "there is a registry row for it, and it is not one the hybrid writer put there". Everything
-   * else — a fused {@code connector.v_} entity view, an {@code ext.*} hybrid target, a table the
-   * card grew from some future source — answers false, so drift refuses instead of going silent.
+   * question on purpose: both row writers stage the event, so the answer is "a registry row exists
+   * for this table". Everything else — a fused {@code connector.v_} entity view, a table the card
+   * grew from some future source — answers false, so drift refuses instead of going silent.
    *
    * <p>That silence is what this exists to end: a subscription declared on a table nothing writes
    * rows into is accepted, listed, and never heard from again.
@@ -108,18 +111,64 @@ public class DynamicTableRegistry {
    * @param fqn schema-qualified, exactly as the writer stamps it on the event's {@code entity}
    */
   public boolean emitsRowEvents(Long tenantId, String fqn) {
+    return registered("DynamicTableRegistry.emitsRowEvents", tenantId, fqn, false);
+  }
+
+  /** The content-hash column of a hybrid table. */
+  public static final String HYBRID_HASH_COLUMN = "row_hash";
+  /** The content-hash column of a {@code DynamicTableWriter} table. */
+  public static final String DYNAMIC_HASH_COLUMN = "_row_hash";
+
+  /**
+   * The column holding a row's content hash: {@code row_hash} in a hybrid table, {@code _row_hash}
+   * in a {@code DynamicTableWriter} one. Two values only, told apart by the registry row's
+   * {@code mapping_id} marker. A table with no registry row answers the dynamic one.
+   *
+   * @param fqn schema-qualified, as for {@link #emitsRowEvents}
+   */
+  public String rowHashColumn(Long tenantId, String fqn) {
+    return registered("DynamicTableRegistry.rowHashColumn", tenantId, fqn, true)
+        ? HYBRID_HASH_COLUMN : DYNAMIC_HASH_COLUMN;
+  }
+
+  /**
+   * The same answer from a registry row's {@code mapping_id} alone, for a caller that already holds it (a citation's
+   * metadata): no query. The marker is what {@link #rowHashColumn} tests with {@code LIKE}.
+   */
+  public static String rowHashColumnOf(String mappingId) {
+    return mappingId != null && mappingId.startsWith(HYBRID_MAPPING_PREFIX) ? HYBRID_HASH_COLUMN : DYNAMIC_HASH_COLUMN;
+  }
+
+  /**
+   * Is {@code fqn} registered for the tenant — by the hybrid writer only, when {@code hybridOnly}?
+   *
+   * @param label the asking door's: a failure names it
+   */
+  private boolean registered(String label, Long tenantId, String fqn, boolean hybridOnly) {
     if (tenantId == null || fqn == null) return false;
     int dot = fqn.indexOf('.');
     if (dot <= 0 || dot == fqn.length() - 1) return false;
-    String sql = "SELECT 1 FROM connector.dynamic_table "
-        + "WHERE tenant_id = ? AND table_schema = ? AND table_name = ? "
-        + "AND mapping_id NOT LIKE ? LIMIT 1";
-    return Jdbc.exists(adminDs, "DynamicTableRegistry.emitsRowEvents", sql, ps -> {
+    String sql = "SELECT 1 FROM connector.dynamic_table WHERE tenant_id = ? AND table_schema = ? AND table_name = ?"
+        + (hybridOnly ? " AND mapping_id LIKE ?" : "") + " LIMIT 1";
+    return Jdbc.exists(adminDs, label, sql, ps -> {
       ps.setLong(1, tenantId);
       ps.setString(2, fqn.substring(0, dot));
       ps.setString(3, fqn.substring(dot + 1));
-      ps.setString(4, HYBRID_MAPPING_PREFIX + "%");
+      if (hybridOnly) ps.setString(4, HYBRID_MAPPING_PREFIX + "%");
     });
+  }
+
+  /** Is the table written by the hybrid writer — a REST {@code ext.*} target, or one registered under {@code connector}? */
+  public boolean isHybrid(Long tenantId, String fqn) {
+    return registered("DynamicTableRegistry.isHybrid", tenantId, fqn, true);
+  }
+
+  /**
+   * The column holding the time a row was written, by the table's kind (#1820): {@code indexed_at} in a hybrid table,
+   * {@code _ingested_at} in the others. Told by the registry's marker, never by the schema a table lives in.
+   */
+  public String writtenAtColumn(Long tenantId, String fqn) {
+    return isHybrid(tenantId, fqn) ? HYBRID_WRITTEN_AT_COLUMN : DYNAMIC_WRITTEN_AT_COLUMN;
   }
 
   /**

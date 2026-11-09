@@ -5,6 +5,7 @@ import io.lumnik.hub.connector.api.ItemWriter;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.ScriptVersion;
 import io.lumnik.hub.connector.api.types.SkipReason;
+import io.lumnik.hub.sql.PgText;
 import io.lumnik.hub.connector.api.types.WriteOutcome;
 import io.lumnik.hub.connector.mapping.carry.CarryCodec;
 import io.lumnik.hub.connector.mapping.carry.MappingCarry;
@@ -82,7 +83,7 @@ public class MappingEngine {
     rows = applyDatasetHooks(spec, rows, state);
     rows = applyRowHooks(spec, rows, state);
     if (endOfStream) flushRowHooks(spec, rows, state);
-    rows = applyCellHooks(spec, rows, state);
+    rows = refuseNulBytes(applyCellHooks(spec, rows, state), state);
 
     state.counters().rowsOut().addAndGet(rows.size());
     return rows;
@@ -108,6 +109,7 @@ public class MappingEngine {
         throw new MappingValidationException("the mapping made " + rows.size() + " rows of one — each row here lands "
             + "beside its own payload, so a hook may change or drop a row, not split it");
       }
+      rows = refuseNulBytes(rows, state);   // after the split check: a fragment it drops must not hide the split
       out.add(rows.isEmpty() ? null : rows.getFirst());
     }
     return out;
@@ -238,6 +240,39 @@ public class MappingEngine {
       kept.add(row);
     }
     return kept;
+  }
+
+  /**
+   * The last word of the cell tier: a row that still holds a NUL byte in a value, nested ones included, is dropped alone (#1855).
+   * PostgreSQL refuses U+0000 in {@code text} (22021), and the refusal used to fail the whole chunk and then the run.
+   * The reason names the column and, for a text value, the hook that removes the byte; the value is never quoted
+   * in a message, and the dead letter stores the row safely itself.
+   */
+  private static List<Map<String, Object>> refuseNulBytes(List<Map<String, Object>> rows, MappingState state) {
+    List<Map<String, Object>> kept = null;   // built at the first offender: a chunk without one is returned as it came
+    for (int i = 0; i < rows.size(); i++) {
+      Map<String, Object> row = rows.get(i);
+      String column = nulColumn(row);
+      if (column == null) {
+        if (kept != null) kept.add(row);
+        continue;
+      }
+      if (kept == null) kept = new ArrayList<>(rows.subList(0, i));
+      String how = row.get(column) instanceof CharSequence
+          ? "remove it with cell: clean: { columns: [" + column + "], remove-control-chars: true }"
+          : "it is inside a nested value, which no hook reaches";
+      state.dropped().add(new MappingState.DroppedRow(row, new SkipReason.MappingFailed(column,
+          "the value holds a NUL byte (0x00), which cannot be stored — " + how)));
+    }
+    return kept == null ? rows : kept;
+  }
+
+  /** The first column of {@code row} whose text holds a NUL byte, or {@code null}. */
+  private static String nulColumn(Map<String, Object> row) {
+    for (Map.Entry<String, Object> e : row.entrySet()) {
+      if (PgText.holdsNul(e.getValue())) return e.getKey();
+    }
+    return null;
   }
 
   private void applyCellChain(MappingSpec spec, Map<String, Object> row, MappingState state) {

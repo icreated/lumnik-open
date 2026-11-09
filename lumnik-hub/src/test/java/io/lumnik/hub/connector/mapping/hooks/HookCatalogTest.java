@@ -42,7 +42,7 @@ class HookCatalogTest {
   @CsvSource(delimiter = '|', quoteCharacter = '`', value = {
       "CELL|upper|{\"colums\": [\"a\"]}|colums|columns",
       "CELL|upper|{\"column\": \"a\"}|column|columns",
-      "CELL|parse-date|{\"column\": \"d\", \"format\": [\"yyyy\"]}|format|column, formats, zone",
+      "CELL|parse-date|{\"column\": \"d\", \"format\": [\"yyyy\"]}|format|century-from, column, formats, zone",
       "CELL|lookup|{\"column\": \"c\", \"on_missing\": \"keep\"}|on_missing|column, on-missing, table",
       "CELL|kotlin|{\"script\": \"classpath:mapping/uppercase-phone.kts\", \"contxt\": {}}|contxt|context, script",
       "ROW|aggregator|{\"group-by\": [\"k\"], \"emit-on-change\": \"k\"}|group-by|emit-on-change, keep-first, merge",
@@ -137,7 +137,7 @@ class HookCatalogTest {
         Map.entry("cell/lookup", Set.of("column", "table", "on-missing")),
         Map.entry("cell/lower", columns),
         Map.entry("cell/mask", Set.of("column", "keep-first", "keep-last", "mask-char")),
-        Map.entry("cell/parse-date", Set.of("column", "formats", "zone")),
+        Map.entry("cell/parse-date", Set.of("column", "formats", "zone", "century-from")),
         Map.entry("cell/parse-email", Set.of("column", "lower")),
         Map.entry("cell/parse-boolean", Set.of("column", "true", "false")),
         Map.entry("cell/parse-number", Set.of("column", "integer", "decimal-separator", "negatives-in-parens")),

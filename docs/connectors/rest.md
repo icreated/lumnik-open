@@ -118,29 +118,13 @@ spec:
 ```
 
 - The path-shaped fields (`cursor_path`, `response_path`, `unique_key`, `link_path`, …) are
-  JSONPath read against the response body: `$.data[-1:].id` is "the `id` of the last element
+  JSONPath, read against the response body. `$.data[-1:].id` is "the `id` of the last element
   of `data`".
-- A `promote` entry's `type` is one of `text`, `bigint`, `integer`, `decimal`, `boolean`,
-  `date`, `timestamptz`, `jsonb`.
-- A `promote` entry's `name` is a new column: not one the table already has (`id`, `tenant_id`,
-  `external_id`, `row_hash`, `data`, `indexed_at`, `connector_id`, `endpoint_id`), and not the name of
-  another entry. Its `path` must be a JSONPath. `lm validate` refuses all three, naming the entry.
-- A `promote` entry copies one value into a typed column. Values sent as text are read as the
-  type says: `"2026-10-01T08:01:00Z"` as a `timestamptz`, `"12"` as a `bigint`, `"true"` as a
-  `boolean`. A value that cannot be read leaves that column empty for the row, and the run counts
-  it in `cell_errors`; the row is written and keeps the value in its payload.
-- A path with a filter or a wildcard reads one value: `$.status.conditions[?(@.type=='Ready')].status`
-  reads `False`, not `["False"]`. Nothing matched: the column is empty. Several values: the column is
-  empty and the run counts one cell error. A `jsonb` column keeps the list; a path without a filter
-  keeps what it points at, an array included.
-- A path the JSONPath library cannot evaluate leaves that row's column empty and counts one cell
-  error; the run goes on. `first()` after a filter is one: write the filter alone.
-- A `promote` entry may also carry a `transform:`, e.g. `from_epoch` for a number of seconds:
-  [the list](#transform-a-promoted-value).
-- Without `schedule`, the connector runs only on `lm connector run`. `window` fences scheduled
-  runs: a slot due outside it is skipped, never queued. A manual run ignores the window.
+- Without `schedule`, the connector runs only on `lm connector run`.
+- `window` fences the scheduled runs: a slot due outside it is skipped, and the next slot inside
+  it runs. A manual run ignores the window.
 
-An unknown key at the connector level of `spec` comes back as a warning; the manifest still
+An unknown key at the connector level of `spec` comes back as a warning. The manifest still
 applies:
 
 ```
@@ -152,6 +136,39 @@ $ lm validate -f my-api.yaml
           → Remove it, or check the spelling
 ```
 
+**A `promote` entry** copies one value of each item into a typed column:
+
+- `type` is one of `text`, `bigint`, `integer`, `decimal`, `boolean`, `date`, `timestamptz`,
+  `jsonb`.
+- `name` is a new column. It cannot be a column the table already has: `id`, `tenant_id`,
+  `external_id`, `row_hash`, `data`, `indexed_at`, `connector_id`, `endpoint_id`. Two entries
+  cannot share a name.
+- `path` must be a JSONPath.
+- `lm validate` refuses a reserved name, a name used twice and a path that is not a JSONPath. It
+  names the entry.
+- `transform:` is optional, e.g. `from_epoch` for a number of seconds:
+  [the list](#transform-a-promoted-value).
+
+A value sent as text is read as the `type` says: `"2026-10-01T08:01:00Z"` as a `timestamptz`,
+`"12"` as a `bigint`, `"true"` as a `boolean`.
+
+A value that cannot be read is a **cell error**. The column stays empty for that row. The row is
+still written, with the value in its payload, and the run goes on. `lm run get` counts these cells:
+
+```
+⚠ 1 cell(s) not delivered as declared (a hook, or a promoted value of the wrong type) — the rows were still written
+```
+
+A path with a filter or a wildcard, such as `$.status.conditions[?(@.type=='Ready')].status`:
+
+- One value matches: the column holds it, `False` and not `["False"]`.
+- Nothing matches: the column is empty.
+- Several values match: one cell error.
+- A `jsonb` column keeps the whole list.
+
+A path without a filter keeps what it points at, an array included. A path the JSONPath library
+cannot evaluate is one cell error. `first()` after a filter is one: write the filter alone.
+
 ### Transform a promoted value
 
 A `promote` entry takes one `transform:`. A rule over several columns goes in the endpoint's
@@ -161,6 +178,7 @@ A `promote` entry takes one `transform:`. A rule over several columns goes in th
 |---|---|
 | `from_epoch` | Unix epoch **seconds** → timestamp (UTC). Milliseconds are not supported. |
 | `parse_iso8601` | ISO-8601 text → timestamp |
+| `from_odata_date` | An OData v2 date, as SAP Gateway writes it → timestamp (UTC). [The shapes](#read-an-odata-v2-date) |
 | `to_lower` / `to_upper` | case |
 | `trim` | removes the spaces around the value |
 | `to_json_string` | writes the value as JSON text |
@@ -209,6 +227,25 @@ lumnik=> SELECT pod, cpu, cpu_cores, memory, memory_bytes FROM ext.k8s_usage ORD
 The suffix is case-sensitive: `m` is milli, `M` mega. `12 MB` or `1mi` is not a quantity: the
 column stays empty and the run counts one cell error, as for any transform.
 
+#### Read an OData v2 date
+
+SAP Gateway sends a date as `/Date(<milliseconds>)/`, and a date with a zone as
+`/Date(<milliseconds>±<minutes>)/`. `from_odata_date` reads the two:
+
+| Source text | Stored |
+|---|---|
+| `/Date(1793577600000)/` | `2026-11-02T00:00:00Z` |
+| `/Date(1793577600000+0060)/` | `2026-11-02T00:00:00Z`: the milliseconds are already UTC; the offset only says the zone the source showed |
+| `/Date(-86400000)/` | `1969-12-31T00:00:00Z`: a date before 1970 |
+
+Any other shape leaves the column empty for that row and counts one cell error; the row is
+written and keeps the value in its payload. So does a date outside the years 0001 to 9999, and an
+offset above 1440 minutes.
+
+```yaml
+promote:
+  - { name: requested_delivery, path: "$.RequestedDeliveryDate", type: timestamptz, transform: from_odata_date }
+```
 
 #### A key read from a link
 
@@ -275,6 +312,8 @@ lumnik=> SELECT data FROM ext.acme_partner_bands WHERE external_id = '1000';
 - **`data` stays what the API returned.** The mapping changes the columns, never the payload.
 - **An item a hook drops is counted** in `SKIPPED`: `IN = OUT + SKIPPED`. Under
   `on-error: dlq`, the dead letter is the item as the API sent it.
+- **An item holding a NUL byte (`0x00`) goes to the dead letters,** mapping or not. The database
+  cannot store it. The other items land.
 - **One item is one row, mapped on its own.** `split-row` and `aggregator` are refused: a row
   lands beside the item it was read from. `sort-by` and `fill-down` are refused too: an item
   mapped alone has nothing around it to order or to carry from.
@@ -309,7 +348,7 @@ ID        CONNECTOR  ENDPOINT         STATUS     IN    OUT   SKIPPED  DEAD-LETTE
 3531807d  acme-saas  cursor-partners  Completed  2400  2400  0        0             2026-10-19 01:40  2026-10-19 01:40
 ```
 
-The ledger records **one run per endpoint**. `stripe` and `drf-page` are two of the
+`lm run list` shows **one run per endpoint**. `stripe` and `drf-page` are two of the
 [presets](rest/pagination.md#presets).
 
 ### Settings shared by every endpoint
@@ -332,11 +371,12 @@ spec:
 | Key in `spec.defaults` | Taken by |
 |---|---|
 | `incremental` | every endpoint |
+| `response_format` | REST endpoints (not GraphQL, not SOAP) |
 | `variables` | GraphQL endpoints |
 | `header`, `soap_action` | SOAP endpoints |
 
-Only these four keys belong in `spec.defaults`. `lm validate` names any other, and reports a
-mistake in a default once.
+Only these five keys belong in `spec.defaults`. `lm validate` names any other. A mistake in a
+default is reported once, at `spec.defaults.<key>`.
 
 ## Auth
 
@@ -521,18 +561,34 @@ lm secret set CLUSTER_CA - < ca.crt
 ```
 
 - **Only the CAs in that secret are trusted** for this connector — the public ones no longer are.
-  One connector, one API: its runs, `lm source rest test` and `lm source rest probe` all share
-  that trust.
-- A certificate the trust refuses fails at once, as `certificate refused (SSLHandshakeException)`: it is
-  not retried like a network failure, which still reads `TLS failure`.
+  Its runs, `lm source rest test` and `lm source rest probe` all share that trust.
 - A secret may hold several PEM certificates (a root and an intermediate): each one is trusted.
+- A certificate the trust refuses fails at once, never retried: `certificate refused
+  (SSLHandshakeException)`. Another TLS problem reads `TLS failure`, and is retried like a
+  network failure.
 - **A secret nothing holds, or one that holds no certificate**, fails the run and `lm source rest
-  test` by the secret's name, never by its content: `CA certificate unavailable
+  test`. The message names the secret, never its content: `CA certificate unavailable
   (secret=CLUSTER_CA)`, `secret CLUSTER_CA holds no PEM certificate`.
-- A `tls` block that names no CA (`ca_secret` missing or blank) is refused at `lm apply`, and a run
-  given one fails: a declared trust never falls back to the public CAs.
+- A `tls` block without `ca_secret` (missing or blank) is refused at `lm apply`. A declared trust
+  never falls back to the public CAs.
 - There is no switch to skip the check.
 - An `oauth2` token request (`token_url`) still uses the public trust.
+
+## The HTTP version
+
+The hub uses HTTP/2 when the server offers it. Some services break their answer over HTTP/2.
+Name the version in the connector:
+
+```yaml
+spec:
+  base_url: https://wcf-orders:18443
+  http_version: "1.1"        # "1.1" or "2"
+```
+
+- Absent, the hub negotiates: HTTP/2 when the server offers it, else HTTP/1.1.
+- The value is a string. `1.1` unquoted is a number, and `lm validate` refuses it.
+- It covers every endpoint, `lm source rest test` and `lm source rest probe`.
+- When to set it: [a refusal that reads `I/O error`](soap.md#a-refusal-that-reads-io-error-tried-five-times).
 
 ## An answer in XML
 
@@ -605,13 +661,14 @@ convention, so the usual answer is one line:
 pagination: { kind: spring-page }        # Spring Data Page — seven fields under one word
 ```
 
-Thirteen presets name the framework behind the API (Spring Data, Micronaut, Django REST,
-FastAPI, NestJS, JSON:API, Sequelize, Stripe) or the product (PrestaShop). When none fits, write one of seven strategies
-by hand: `cursor`, `page`, `offset`, `link-header`, `body-link`, `relay`, and `none` for an
-answer that holds the whole list.
+Fifteen presets name the framework behind the API (Spring Data, Micronaut, Django REST,
+FastAPI, NestJS, JSON:API, Sequelize, Stripe), the product (PrestaShop) or the protocol (OData v2
+as SAP Gateway serves it, OData v4). When none fits, write one of seven strategies by hand:
+`cursor`, `page`, `offset`, `link-header`, `body-link`, `relay`, and `none` for an answer that
+holds the whole list.
 
-**→ [Pagination](rest/pagination.md)** — the catalogue, the fields of each strategy, where the
-cursor is injected, page size on the strategies that send none, and `kind: custom`.
+**→ [Pagination](rest/pagination.md)** — the presets, the fields of each strategy, where the
+cursor goes, and the page size on the strategies that send none.
 
 ## Request headers
 
@@ -717,9 +774,33 @@ table still holds 2 400 rows.
 An order that changes while a run is reading could be missed by the next run. So each run asks
 from a little before the last mark. The few orders read twice are simply updated again.
 
+- By default, the margin is the length of the run that set the mark, plus one minute.
 - `lookback: 10m` chooses that margin yourself; `lookback: 0s` turns it off.
 - It works when `updated_at` is a date and time with a time zone. With a change number or a date
   alone, the mark is sent as it is, and such a change can still be missed.
+
+## Watch the rows you read
+
+A `kind: Process` or a `kind: Workflow` can name the connector's `ext.*` table. A Process needs the
+table to exist first: apply it after the first run completes. A Workflow may be declared before.
+
+```yaml
+spec:
+  on:
+    event: data.row.changed
+    table: ext.acme_partners
+```
+
+A new row fires the process. So does a row whose content changed at the source. A re-read that
+changes nothing fires nothing.
+
+- `when` and `{col}` name the promoted columns.
+- Rows that existed before the Process was applied are not evaluated.
+- A Workflow orders a key's versions by `indexed_at`, the moment the row last changed.
+- `spec.check.trigger: ingestion` is refused on an `ext.*` table. The check at apply time still
+  runs.
+
+See [Processes](../apps/processes.md#processes-on-rest-tables) and [Workflows](../apps/workflows.md).
 
 ## Storage layout
 
@@ -743,14 +824,14 @@ A new `promote` entry adds its column on the next run — see
 
 ## When the source misbehaves
 
-The engine retries what is worth retrying, refuses to read an error body as data, and — where
-the source publishes a count — checks the run against it.
+The connector retries what is worth retrying. It never reads an error body as data. Where the
+source publishes a count, it checks the run against it.
 
 ### Retry, page cap, rate limit
 
 | Guard | Behaviour |
 |---|---|
-| Retry | `429`, `5xx`, timeouts and network errors are retried up to 5 times, with growing pauses. Then the run fails. Other statuses are not retried |
+| Retry | `408`, `429`, `500`, `502`, `503`, `504`, timeouts and network errors are tried again: 5 attempts in all, with growing pauses, or the wait the source's `Retry-After` header asks. Then the run fails. Other statuses are not retried |
 | Page cap | **10 000 pages** per endpoint per run. Reached before the source's last page, the run fails: `reached the page cap (10000 pages) before the source's last page`. The rows already read stay; the run is not called complete |
 | Rate limit | `default_rate_limit` (default `100/s`): `count/window`, window `s`, `m` or `h` with an optional integer (`100/s`, `100/5m`, `1000/h`). One bucket per connector, shared by all its endpoints — set it to the strictest endpoint's limit |
 
@@ -775,8 +856,8 @@ a05e8be8  acme-outage  down      Failed  0   0    0        0             2026-10
 ✖ run failed: upstream returned HTTP 500 (transient) — refusing to ingest its body as data: {"error": "this endpoint is down and stays down"}
 ```
 
-A final non-2xx fails the run; it is never reported as an empty sync. A status that succeeds
-on retry does not — the flaky endpoint completes with all 2 400 rows.
+A final non-2xx fails the run: it is never reported as an empty sync. A request that succeeds
+on retry does not fail it: the flaky endpoint completes with all 2 400 rows.
 
 The pre-flight sends **one** request without retry, so a flaky source shows red there:
 
@@ -814,16 +895,16 @@ a368b49d  acme-witness  incomplete  Failed  2000  2000  0        0             2
 
 - The run fails. The rows already written stay: 2 000 here. The next successful run completes
   them.
-
-`total_path` is optional on every strategy; a `soap` endpoint ignores it. It also lets `offset` stop once every row is in.
-The `drf-page`, `drf-limit-offset` and `sequelize` presets set it for you (`total_path: $.count`).
-
+- `total_path` is optional on every strategy. A `soap` endpoint ignores it.
+- On `offset`, it also stops the read once every row is in.
+- Most presets set it for you, e.g. `drf-page`, `drf-limit-offset` and `sequelize` set
+  `total_path: $.count`. The [presets table](rest/pagination.md#presets) names each one's total.
 - Point `total_path` at an exact **row** count: not a page count, not an estimate.
 - The check does not run on an incremental endpoint.
 
 **A total that changes during the read.** A row deleted on a page already read moves every later
-row up one place. One row then sits on no page, and the read ends without it. The total is the only
-sign, so when it changes between two pages, the run reads the list again from page 1:
+row up one place. One row then sits on no page, and the read ends without it. So when the total
+changes between two pages, the run reads the list again from page 1:
 
 - The rows read twice are written once (the `unique_key` upsert). `IN` counts both reads.
 - If the total changes again during the second read, the run fails.
@@ -849,13 +930,16 @@ that is just the list: name the header with `total_header` instead of `total_pat
 pagination: { kind: link-header, response_path: $, total_header: X-Total-Count }
 ```
 
-- The header's name is matched in any case. A response without it is no witness.
-- Its value must be a whole number from 0: `pagination.total_header must read a row count: a whole
-  number from 0` otherwise.
+- The header's name is matched in any case.
+- A response without the header checks nothing.
+- Its value is a whole number from 0, or the total of a range: `Content-Range: items 0-19/57`
+  reads 57.
+- Anything else is refused, a range total of `*` or a `bytes` range included:
+  `pagination.total_header must read a row count: a whole number from 0, or the total of a range
+  (items 0-19/57)`. `lm source rest test` reads the header the way a run does.
 - `total_path` and `total_header` together are refused at `lm validate`: one witness per endpoint.
-- It checks the count only; the pages are read as without it. On `offset`, which can also stop on
-  `total_path`, the read ends on its first short page: one more request when the total is a
-  multiple of the limit.
+- It checks the count only: the pages are read as without it. On `offset`, the read ends on its
+  first short page: one more request when the total is a multiple of the limit.
 
 ## CLI
 
@@ -866,7 +950,7 @@ lm connector run <connector>
 lm endpoint enable|disable|reset-cursor|purge <connector>/<endpoint>
 lm source rest test <connector>                      # pre-flight every enabled endpoint, no write
 lm source rest probe <connector> --endpoint <path>   # sample one path, draft its endpoint block
-lm source rest from-openapi <url> --name N --scope S -o FILE
+lm source rest from-openapi <url> --name N [--scope S] -o FILE
 ```
 
 ## TUI
@@ -888,7 +972,9 @@ lm source rest test <connector>
 **Result:** for each enabled endpoint, the hub sends the first request a run would send (same
 method, path, headers, auth and pagination) and reports what came back. Nothing is written.
 
-- `200` with `0` items: the response arrived but nothing matched `response_path`.
+- `200`, `0` items and `ok`: the response arrived and `response_path` reads a list, which is empty.
+  When `response_path` reads nothing, or reads something that is not a list, the verdict is the
+  message a run would fail with (`pagination.response_path reads nothing on the first page`).
 - Disabled endpoints are skipped and counted on stderr.
 - `-o json` adds the URL called (host and path; the query string is not shown) and an excerpt
   of the body:
@@ -940,11 +1026,10 @@ $ lm source rest probe acme-partners --endpoint /spring/partners
 **Result:** an endpoint **fragment** — paste it under `spec.endpoints:`, review it, then
 `lm apply`.
 
-- The pagination kind is a guess from the response envelope; an unknown envelope gives
+- The pagination kind is a guess from the response envelope. An unknown envelope gives
   `kind: unknown` for you to fill in.
-- `response_path` says where the list sits in the answer. The draft carries it whatever the kind,
-  because the paging kinds need it to apply. An answer that is itself one record has no list, so
-  the draft has none.
+- `response_path` says where the list sits in the answer. The draft carries it whatever the kind.
+  An answer that is itself one record has no list, so the draft has none.
 - A list found with no paging signal is drafted as `kind: none`, with its `response_path` and a
   comment that gives the number of items read, such as
   `# 6 items, no paging signal in the answer: if the source pages, declare how`. A round count
@@ -1130,7 +1215,9 @@ change, unless you `lm endpoint reset-cursor` first.
 | Symptom | Cause | Gesture |
 |---|---|---|
 | Not sure the credential is valid | — | `lm source rest test <connector>` — one request per enabled endpoint, nothing written; an unresolved secret is named in `VERDICT` |
-| Run completed, `IN` is 0 | the response arrived but nothing matched `response_path` | `lm source rest test <connector>` shows `200` with `0` items; check `response_path` against the body |
+| Run failed on `pagination.response_path reads nothing on the first page` | the first response arrived, but nothing matched `response_path` | `lm source rest test <connector>` shows the same message as its verdict; check `response_path` against the body, or use the source's preset |
+| Run failed on `pagination.response_path must read a list` | `response_path` points at an object or a value, not at the rows | point it at the list itself |
+| Run completed, `IN` is 0 | `response_path` reads a list, and the list is empty | nothing to fix: the source holds no rows (for an incremental read, none changed) |
 | Run failed on `the source declared N rows` | `total_path` points at a number the run did not match | check the source; if `total_path` points at a page count or an estimate, see [The declared total](#the-declared-total-a-witness-on-the-count) |
 | Run failed on `the list changed while it was read, and again` | rows are added or deleted faster than the list is read | run it at a quieter hour (`window:`), or raise the page size so the read is shorter |
 | Run failed on `the source answered the same page twice in a row` | the source ignores the paging parameter and answers page one again — PrestaShop, for one, ignores `offset=` | check the pagination's parameter names against the API's documentation, or use the source's preset |
@@ -1138,10 +1225,11 @@ change, unless you `lm endpoint reset-cursor` first.
 | `429 Too Many Requests` from the API | `default_rate_limit` exceeds what the API tolerates | lower it (`100/s` → `50/s`); it is one bucket for the whole connector |
 | Sync stops picking up new rows | the stored watermark is stale or points at a column the source does not touch | `lm endpoint reset-cursor <connector>/<endpoint>` → the next run is a full read |
 | A run reads far more pages than expected | `cursor`, `body-link` and `link-header` send no size parameter | put the size in the endpoint's `path:` — see [the page-size warning](rest/pagination.md#strategies) |
-| `lm apply` refused with an unknown transform | a `promote` entry's `transform:` is not one of the supported values | see [Transformers](transformers.md) |
+| `lm apply` refused with an unknown transform | a `promote` entry's `transform:` is not one of the supported values | see [Transform a promoted value](#transform-a-promoted-value) |
 | `column 'x' is not in the row here` at `…mapping…` | a hook reads a field the endpoint does not promote | promote it: a hook sees the promoted columns only |
 | `path is required … this endpoint has none` | a `promote` entry without `path`, and no `mapping` to fill it | give the entry a `path`, or the endpoint a `mapping` |
 | Run failed on `the mapping writes column 'x', which no promote entry declares` | a script writes a column the table does not have | add `{ name: x, type: … }` to `promote`, without `path` |
+| A process on an `ext.*` table is refused with `is not in the '…' scope` | no run has created the table yet, so the scope's card does not carry it | run the connector once and let it complete (the hub refreshes the card); if the table is still missing, `lm source rediscover --scope <tag>`, then apply |
 | Need to wipe an endpoint's rows | — | `lm endpoint purge <connector>/<endpoint>` — see [Empty one endpoint's rows](#empty-one-endpoints-rows) |
 
 ## See also

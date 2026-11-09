@@ -1,5 +1,6 @@
 package io.lumnik.hub.notify;
 
+import io.lumnik.hub.event.EventPatterns;
 import jakarta.persistence.*;
 import java.time.Instant;
 
@@ -38,12 +39,9 @@ public class NotificationRule {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt = Instant.now();
 
-    /** Same matching contract as WebhookEndpoint.matches: exact, or "prefix.*". */
+    /** The shared contract of {@link EventPatterns}: exact, or "prefix.*". */
     public boolean matches(String eventType) {
-        if (!enabled || eventPattern == null) return false;
-        return eventPattern.equals(eventType)
-            || (eventPattern.endsWith(".*")
-                && eventType.startsWith(eventPattern.substring(0, eventPattern.length() - 2)));
+        return enabled && EventPatterns.matches(eventPattern, eventType);
     }
 
     public Long getId()            { return id; }

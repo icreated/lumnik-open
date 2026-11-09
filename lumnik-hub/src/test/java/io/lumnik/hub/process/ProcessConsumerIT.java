@@ -133,6 +133,35 @@ class ProcessConsumerIT {
         assertThat(countDecisions("decision.gold-e2e")).isZero();
     }
 
+    /** #1830: a result measured after its instrument's calibration ran out — two columns of one row,
+     *  a timestamptz against a date, read from the real table by the consumer. */
+    @Test
+    void aColumnAgainstAnotherColumnOfTheSameRow_emitsForTheRowThatIsOutOfCalibration() throws Exception {
+        exec("DROP TABLE IF EXISTS connector.t_proc_calib");
+        exec("CREATE TABLE connector.t_proc_calib "
+           + "(tenant_id bigint, _row_hash text, code text, measured_at timestamptz, calib_valid_until date)");
+        exec("INSERT INTO connector.t_proc_calib VALUES "
+           + "(4300, 'hash-expired', 'R-1', '2026-03-10 09:00:00+00', '2026-03-01'), "
+           + "(4300, 'hash-valid', 'R-2', '2026-02-10 09:00:00+00', '2026-03-01'), "
+           + "(4300, 'hash-unknown', 'R-3', '2026-03-10 09:00:00+00', NULL)");
+        exec("INSERT INTO core.process_manifest (tenant_id, name, yaml_text, scope, on_table, emit_type) VALUES "
+           + "(4300, 'calib-e2e', 'apiVersion: apps.lumnik.io/v1\n"
+           + "kind: Process\nmetadata: { name: calib-e2e }\nspec:\n  scope: e2e\n"
+           + "  on: { event: data.row.changed, table: connector.t_proc_calib }\n"
+           + "  when: [ \"measured_at>{calib_valid_until}\" ]\n"
+           + "  emit: { type: decision.calib-e2e, message: \"{code} out of calibration\" }', "
+           + "'e2e', 'connector.t_proc_calib', 'decision.calib-e2e')");
+        insertRowChanged("connector.t_proc_calib", "hash-expired");
+        insertRowChanged("connector.t_proc_calib", "hash-valid");
+        insertRowChanged("connector.t_proc_calib", "hash-unknown");
+
+        long maxId = maxEventId();
+        await().atMost(20, SECONDS).untilAsserted(() -> assertThat(consumerCursor()).isGreaterThanOrEqualTo(maxId));
+        assertThat(countDecisions("decision.calib-e2e")).isEqualTo(1L);   // not the valid row, not the null date
+        assertThat(new ObjectMapper().readTree(payloadOf("decision.calib-e2e")).get("message").asText())
+            .isEqualTo("R-1 out of calibration");   // and it is the expired row that fired
+    }
+
     private String payloadOf(String type) {
         try (Connection c = adminDs.getConnection();
              PreparedStatement ps = c.prepareStatement(

@@ -218,8 +218,9 @@ Resolution: open
 ```
 
 - Three modes: `soft` (the default) writes the row; `dlq` sets it aside; `fail` stops the run.
-- A blank cell (empty, spaces, tabs) is not unreadable: it stays empty, is not counted, and `on-error`
-  does not see it. A row whose amount is missing is `validate-row`'s: [rows missing mandatory fields](#validate-row-rows-missing-mandatory-fields).
+- For a `parse-*` hook, a blank cell (empty, spaces, tabs) is not unreadable. It stays empty, is not
+  counted, and `on-error` does not see it.
+- A row whose amount is missing is `validate-row`'s job: [rows missing mandatory fields](#validate-row-rows-missing-mandatory-fields).
 - `fields` names the `column:` of a hook. Full example: `docs/connectors/csv/72-on-error-dlq.yaml`.
 
 ## Broken text
@@ -350,6 +351,29 @@ cell:
 - An unknown zone is refused at `lm validate`.
 - Fusing these dates with an ERP's in an entity: [Dates across sources](../entities-types.md).
 
+#### A two-digit year
+
+A year written `98` does not say its century. Say where the 100 years start with `century-from`:
+
+```yaml
+cell:
+  - parse-date: { column: since, formats: ["MM/dd/yy"], century-from: 1950 }
+```
+
+| In | `century-from` | Stored |
+|---|---|---|
+| `12/03/98` | `1950` | `1998-12-03` |
+| `01/15/05` | `1950` | `2005-01-15` |
+| `01/01/49` | `1950` | `2049-01-01` |
+| `01/01/50` | `1950` | `1950-01-01` |
+| `12/03/98` | `1900` | `1998-12-03` |
+| `01/15/05` | `1900` | `1905-01-15` |
+
+- `century-from: 1950` reads `yy` as 1950 to 2049.
+- A `yy` format without `century-from` is refused at `lm validate`: no default is right for every source.
+- `century-from` with no `yy` format is refused too: it would do nothing.
+- A four-digit year (`yyyy`) needs neither.
+
 ### `parse-number` — numbers are `1 234,56 €` or `(123)`
 
 ```yaml
@@ -364,8 +388,8 @@ cell:
 | `$1,234.50` with `decimal-separator: "."` | `1234.50` |
 | `n/a` | *(empty)*, +1 `cell_errors` |
 
-It removes currency signs and spaces. A new column holds decimals: `1024944` reads
-`1024944.0000`.
+It removes currency signs and spaces. A new column is a decimal column (`NUMERIC`): each value
+keeps the decimals it was written with, `3250.00` stays `3250.00`.
 
 #### An integer column: `integer: true`
 
@@ -410,7 +434,8 @@ A word in both lists is refused when the manifest is checked.
 
 - If the first rows leave the column empty, it is created as text, and stays text.
 - Adding `parse-date`, `parse-number` or `parse-boolean` to a connector that already ran does not change its
-  column. Create the table again: [the four steps](../entities-types.md#type-it-at-the-door-four-steps).
+  column. `lm apply` tells you, with a warning naming the column and its type. Create the table again:
+  [the four steps](../entities-types.md#type-it-at-the-door-four-steps). The next run reads the files again.
 
 ## Codes and labels
 
@@ -494,8 +519,10 @@ cell:
 | `DUPONT SARL` | `SARL` |
 | `Standard` | *(empty)*: no match |
 
-- Each group writes into a **new** column. `lm validate` refuses a column the row already holds.
-  To rewrite a value in place, use `regex-replace`.
+- Each group writes into a **new** column. A column the row already holds is refused: by
+  `lm validate` when the file's columns are known before it is read, otherwise by the run,
+  which fails with `regex-extract: column '…' is already in the row`. To rewrite a value in
+  place, use `regex-replace`.
 - A miss is not counted: an optional field misses on many rows. A column that is empty on every
   row means the pattern never matched.
 - Every row must match? Add `required: true`: a miss then counts one `cell_errors`.

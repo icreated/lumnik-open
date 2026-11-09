@@ -41,6 +41,7 @@ public class PlatformIndexer {
     @Inject HookChunkBuilder hookChunkBuilder;
 
     @Inject Instance<ExtractionSink> sinks;
+    @Inject StoredChunks storedChunks;
 
     @ConfigProperty(name = "lumnik.rag.index-on-startup", defaultValue = "true")
     boolean indexOnStartup;
@@ -89,12 +90,18 @@ public class PlatformIndexer {
         // edition) is answered honestly with "none".
         String provider = embeddingPorts.isUnsatisfied() ? "none" : embeddingPorts.get().name();
         String model    = embeddingPorts.isUnsatisfied() ? "none" : embeddingPorts.get().model();
+        var rag = manifestRegistry.statuses().stream()
+            .filter(st -> "rag".equals(st.manifest().id())).findFirst();
+        // Switched off is not absent: the module is installed and keeps its chunks, so the store is
+        // counted whenever the module is there. No module (Open): nothing to count (#1895).
         return new RagStatusDto(
             lastIndexedAt.get() != null,
             lastChunkCount.get(),
             lastIndexedAt.get(),
             provider,
-            model
+            model,
+            rag.map(st -> ModuleManifestRegistry.AI_SWITCHED_OFF.equals(st.inactiveReason())).orElse(false),
+            rag.isPresent() ? storedChunks.countVisible() : null
         );
     }
 

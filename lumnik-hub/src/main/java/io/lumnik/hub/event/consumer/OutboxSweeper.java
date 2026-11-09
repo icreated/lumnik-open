@@ -2,6 +2,7 @@ package io.lumnik.hub.event.consumer;
 
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.common.tenant.TenantContext;
+import io.lumnik.hub.event.EventDeadLetters;
 import io.lumnik.hub.event.EventOutboxRow;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -25,8 +26,9 @@ import java.util.function.Supplier;
  * sweep reads across all tenants via the '0' sentinel and fails closed otherwise.
  *
  * Processors MUST NOT rely on throwing for retry: a processor exception is
- * logged and the cursor still advances (no head-of-line blocking). Consumers
- * that need redelivery own their retry state (e.g. webhook_delivery).
+ * logged, kept in {@code core.event_dead_letter} (#1837) and the cursor still advances (no head-of-line
+ * blocking). The dead letter is what an integrator replays; a consumer that needs redelivery on its own
+ * schedule owns its retry state (e.g. webhook_delivery).
  *
  * A consumer tick {@link #drain drains} the log: batch after batch, each in its own
  * transaction, while they come back full and the tick's budget lasts.
@@ -53,6 +55,7 @@ public class OutboxSweeper {
     private static final Duration TICK_BUDGET = Duration.ofSeconds(4);
 
     @Inject EntityManager em;
+    @Inject EventDeadLetters deadLetters;
 
     /**
      * One consumer tick. {@code perBatch} supplies a fresh processor for every batch, so a
@@ -130,8 +133,11 @@ public class OutboxSweeper {
                     processor.accept(row);
                 });
             } catch (RuntimeException e) {
-                LOG.errorf(e, "Consumer %s failed on event %d (%s) — advancing past it",
+                LOG.errorf(e, "Consumer %s failed on event %d (%s) — kept as a dead letter, advancing past it",
                            consumerName, row.getId(), row.getEventType());
+                // In the batch's transaction, which also moves the cursor: if this write fails the batch fails and the
+                // next tick reads the event again, so a failure is never both unkept and passed.
+                deadLetters.record(consumerName, row.getId(), EventDeadLetters.WHOLE_EVENT, e);
             } finally {
                 CurrentTenantHolder.clear();
             }

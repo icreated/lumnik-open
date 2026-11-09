@@ -30,6 +30,7 @@ public class RestConnectorApplyHandler implements ConnectorApplyHandler {
     private static final String HEADERS = "headers";
     private static final String AUTH = "auth";
     private static final String TLS = "tls";
+    private static final String HTTP_VERSION = "http_version";
     private static final String DEFAULTS = "defaults";
 
     @Inject ConnectorRepository connRepo;
@@ -82,6 +83,8 @@ public class RestConnectorApplyHandler implements ConnectorApplyHandler {
         ApplyUpsert.putOrRemove(connCfg, HEADERS, spec.path(HEADERS), List.class);
         // #1609: the connector's trust in an internal CA, read by every run and pre-flight (CaTrust).
         ApplyUpsert.putOrRemove(connCfg, TLS, spec.path(TLS), Map.class);
+        // #1859: the protocol the connector speaks; absent on a re-apply, the client negotiates again.
+        ApplyUpsert.putOrRemove(connCfg, HTTP_VERSION, spec.path(HTTP_VERSION), String.class);
         return connCfg;
     }
 

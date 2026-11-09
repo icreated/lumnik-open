@@ -39,7 +39,7 @@ How a change at the source reaches the mirror tables:
 |---|---|---|
 | `jdbc-generic` | replaced by source key | stays in the mirror |
 | `rest-generic` (GraphQL, SOAP included) | replaced by its `unique_key` | stays in the mirror |
-| `csv-file` reading one local file (no glob) | replaced: the old version is removed by the next run that reads the whole file; a run that would remove more than 30 % of the rows is refused | removed the same way |
+| `csv-file` reading one local file (no glob) | replaced: the old version is removed by the next run that reads the whole file; a run that would remove more than 30 % of the rows is refused (`refresh.max_removed` changes the share) | removed the same way |
 | `csv-file` reading a folder, a glob, SFTP or S3; `kafka` | **added as a new row; the old version stays** | stays in the mirror |
 
 ## The rights, in practice

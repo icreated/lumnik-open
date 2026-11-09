@@ -57,19 +57,23 @@ public class SchemaInferrer {
   }
 
   /**
-   * The two numeric DDL strings, named because {@code DynamicTableWriter} must agree with them
-   * byte for byte: it widens a registered {@link #BIGINT} column to {@link #NUMERIC} when a later
-   * chunk carries a fraction, and compares the registered string to decide. A second spelling of
-   * either in that class would silently stop widening anything.
+   * The numeric DDL strings, named because {@code DynamicTableWriter} must agree with them byte for byte: it
+   * widens a registered {@link #BIGINT} (or {@link #LEGACY_NUMERIC}) column to {@link #NUMERIC} when a later chunk
+   * needs it, and compares the registered string to decide. A second spelling of any of them in that class would
+   * silently stop widening anything.
    */
   static final String BIGINT = "BIGINT";
-  static final String NUMERIC = "NUMERIC(18,4)";
   /**
-   * A {@link #BIGINT} column widened by a fraction (#1600): {@code numeric} without precision or scale, so whole values
-   * keep scale 0 ({@code 1000}, not {@code 1000.0000}) and nothing overflows at 10^14. The registry says it as it is —
-   * the raw tables' schema cards publish this label.
+   * {@code numeric} without precision or scale (#1600, #1862): a value is stored as it was read — {@code 195.08765}
+   * stays {@code 195.08765} and whole values keep scale 0 ({@code 1000}, not {@code 1000.0000}). The registry says it
+   * as it is; the raw tables' schema cards publish this label.
    */
-  static final String WIDENED_NUMERIC = "NUMERIC";
+  static final String NUMERIC = "NUMERIC";
+  /**
+   * What a decimal column was created as before #1862, and still is on a table that has not met a fifth decimal yet.
+   * Never emitted for a new column; read back from the registry and the catalog so such a column can be widened.
+   */
+  static final String LEGACY_NUMERIC = "NUMERIC(18,4)";
 
   /**
    * Candidate column types in priority order. A column gets the first type whose predicate holds
@@ -111,8 +115,8 @@ public class SchemaInferrer {
   /**
    * Maps a {@link java.sql.Types} code to the PostgreSQL DDL type string this inferrer emits,
    * so source-declared types and value-inferred types stay consistent: a source's INTEGER answers
-   * BIGINT because an {@code Integer} value does, and a source's DECIMAL answers NUMERIC(18,4)
-   * because a {@code BigDecimal} does — a declared scale is the source's own opinion and is kept.
+   * BIGINT because an {@code Integer} value does, and a source's DECIMAL answers NUMERIC
+   * because a {@code BigDecimal} does — unbounded, so the scale the source's values carry is kept.
    * Unknown codes → TEXT. {@code SchemaTypingInventoryTest} enforces the agreement.
    */
   public static String pgTypeForSqlType(int sqlType) {

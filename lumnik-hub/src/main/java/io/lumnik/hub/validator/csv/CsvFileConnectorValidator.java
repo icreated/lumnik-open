@@ -1,6 +1,7 @@
 package io.lumnik.hub.validator.csv;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.lumnik.hub.connector.csv.CsvFileConnectorType;
 import io.lumnik.hub.connector.csv.CsvFileReader;
 import io.lumnik.hub.connector.csv.CsvFullRefresh;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
@@ -91,6 +92,8 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
         List<ValidationError> errs = new ArrayList<>();
         errs.addAll(localCannotRelocate(tKind, afterProc));
         errs.addAll(linesConflicts(spec));
+        errs.addAll(skipLeadingNeedsDeclaredColumns(spec));
+        errs.addAll(escapeConflicts(spec));
         errs.addAll(scheduleCronIsValid(spec));
         WindowField.check(spec.path("window"), errs);
         errs.addAll(aggregatorRefused(spec));
@@ -167,13 +170,56 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
         if (!JsonNodes.blankOrNull(parser.path("delimiter"))) {
             errs.add(linesRefuses("delimiter", "lines: true splits nothing — a line is one value"));
         }
+        if (!JsonNodes.blankOrNull(parser.path("escape"))) {
+            errs.add(linesRefuses("escape", "lines: true reads no quotes — there is nothing to escape"));
+        }
         if (!JsonNodes.blankOrNull(parser.path("has_header"))) {
             errs.add(linesRefuses("has_header", "lines: true has no header — the first line is data, like every other"));
+        }
+        if (!JsonNodes.blankOrNull(parser.path("short_rows"))) {
+            errs.add(linesRefuses("short_rows", "lines: true gives one value per line — a line is never short"));
         }
         if (parser.path("columns").size() > 1) {
             errs.add(linesRefuses("columns", "lines: true gives one column — name it with columns: [<name>]"));
         }
         return errs;
+    }
+
+    /**
+     * #1863: {@code short_rows: skip-leading} skips what comes BEFORE the table, and only a headerless table has a
+     * "before" the reader can tell from the table: with a header line the first line is the header, whatever it holds.
+     * Accepted then ignored is the defect this refuses. {@code lines: true} answers for itself ({@link #linesConflicts}).
+     */
+    private static List<ValidationError> skipLeadingNeedsDeclaredColumns(JsonNode spec) {
+        JsonNode parser = spec.path("parser");
+        if (!CsvFileConnectorType.SKIP_LEADING.equals(parser.path("short_rows").asText(null))
+            || parser.path("lines").asBoolean(false)
+            || (parser.path("has_header").isBoolean() && !parser.path("has_header").asBoolean())) {
+            return List.of();
+        }
+        return List.of(new ValidationError("spec.parser.short_rows", Severity.ERROR,
+            "short_rows: skip-leading needs has_header: false — with a header line, the first line is the header",
+            List.of("Add parser.has_header: false and parser.columns: [...] in file order, or remove parser.short_rows")));
+    }
+
+    /**
+     * #1877: the escape character is the third special character of a CSV line, and the tokenizer cannot tell it apart
+     * from the quote or the delimiter: one equal to either would be read as that one. {@code lines: true} answers for
+     * itself ({@link #linesConflicts}).
+     */
+    private static List<ValidationError> escapeConflicts(JsonNode spec) {
+        JsonNode parser = spec.path("parser");
+        String escape = parser.path("escape").asText(null);
+        if (parser.path("lines").asBoolean(false) || escape == null || escape.length() != 1) {
+            return List.of();
+        }
+        boolean quote = escape.charAt(0) == '"';
+        if (!quote && !escape.equals(parser.path("delimiter").asText(null))) {
+            return List.of();
+        }
+        return List.of(new ValidationError("spec.parser.escape", Severity.ERROR,
+            "escape: " + escape + " is the " + (quote ? "quote" : "delimiter") + " — it cannot escape itself",
+            List.of("Use another character, usually a backslash: escape: \"\\\\\"", "Or remove spec.parser.escape for a file that doubles its quotes")));
     }
 
     private static ValidationError linesRefuses(String key, String message) {

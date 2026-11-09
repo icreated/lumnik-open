@@ -1,6 +1,7 @@
 package io.lumnik.hub.process;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
 import io.lumnik.hub.event.EventOutboxRow;
 import io.lumnik.hub.event.RowEventGate;
 import org.junit.jupiter.api.Test;
@@ -31,9 +32,16 @@ class ProcessConsumerFailureTest {
         when(conn.prepareStatement(anyString())).thenThrow(driver);
         ProcessConsumer consumer = new ProcessConsumer();
         consumer.adminDs = ds;
+        consumer.entityTargets = new EntityProcessTargets() {
+            @Override public List<Target> observing(long tenantId, String sourceTable) { return List.of(); }
+            @Override public List<Target> joining(long tenantId, String lookupTable) { return List.of(); }
+        };
+        consumer.tables = new DynamicTableRegistry() {
+            @Override public String rowHashColumn(Long tenantId, String fqn) { return "_row_hash"; }
+        };
         consumer.store = new ProcessManifestStore() {
             @Override public List<StoredProcess> findEnabledFor(long tenantId, String table) {
-                return List.of(new StoredProcess("p", null, table, List.of(), "decision.p", "m", List.of(), true));
+                return List.of(new StoredProcess("p", null, table, List.of(), "decision.p", "m", List.of(), null, true));
             }
         };
         EventOutboxRow row = EventOutboxRow.ofFull(1L, null, RowEventGate.DATA_ROW_CHANGED, "connector:test",

@@ -20,10 +20,11 @@ This page is the operating manual for that. Four habits of `lm` make the loop po
 | Kotlin scripts (`.kts`) — the operator copies them into the hub's [hooks directory](deploy.md#offer-kotlin-scripts-to-the-integrators); `lm hook scripts` lists them | the OIDC token in `~/.lm/config.yaml` | the RAG corpus (re-indexed from what was ingested) |
 | the apply order (below) — a `Makefile` or a numbered prefix | ingested rows, dead letters, run history | discovered schema cards (`lm source rediscover`) |
 
-Credentials are referenced by name and resolved where the **hub** runs — its environment or
-its secret store, depending on the connector; each connector page states which. A manifest is
-therefore safe to commit, and the same manifest works against dev, staging and production
-because only the name travels.
+Credentials are referenced by name and resolved where the **hub** runs: in its environment or in
+its secret store, depending on the connector. Each connector page states which.
+
+- A manifest is therefore safe to commit.
+- The same manifest works against dev, staging and production: only the name travels.
 
 !!! danger "Two fields break that, and a repository should ban them"
     Two manifest fields take a secret **inline**, both declared *dev/test only*:
@@ -152,8 +153,8 @@ $ echo $?
 
 ## In CI
 
-`lm validate` exits **1** when the manifest carries at least one error, **0** otherwise — so
-it is a gate with no wrapper:
+`lm validate` exits **1** when the manifest carries at least one error, **0** otherwise. It is
+a gate with no wrapper.
 
 A fresh runner has no `lm` context. Create one first: the URL and the token alone are not
 enough.
@@ -198,7 +199,12 @@ Asserting on the ledger at once would read `Queued` or `Running`. Runs are liste
 so `.[0]` is the one just scheduled.
 
 Statuses are `Queued`, `Running`, `Completed`, `Partial`, `Failed`, `Cancelled`. Decide whether
-`Partial` fails your pipeline: the run read less than its target, nothing broke.
+`Partial` fails your pipeline. Nothing broke, but either:
+
+- the run read less than its target, or
+- it read everything and was not sure it read it right (a guessed encoding).
+
+`error:` says which.
 
 A pre-flight worth one line — the secrets the manifests reference must exist on the target,
 and `secret list` never returns a value:

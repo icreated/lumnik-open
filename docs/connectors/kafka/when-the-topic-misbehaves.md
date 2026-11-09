@@ -36,8 +36,8 @@ Resolution: open
 
 - `IN 1000 = OUT 857 + SKIPPED 143`, and the table holds 857 rows.
 - Each entry names `topic:partition:offset` and keeps the raw value.
-- A bad message is set aside once, and never read again. A long run of them stops the run early,
-  `Partial`; the next run continues after them.
+- A bad message is set aside once, and never read again.
+- A long run of them stops the run early, `Partial`. The next run continues after them.
 - The producer sent a fixed message? Once a run has read it, close the old entry:
   `lm dlq replayed <id> --new-run-id <run>`. Otherwise: `lm dlq discard <id>`.
 
@@ -115,19 +115,20 @@ $ lm run get 49b90bd6 > /dev/null
 
 - Run 2 read the 107 messages left and ended **`Partial`**, naming the lost range (5000..5499).
   Those messages cannot be recovered.
-- A **first** run (or one after `lm endpoint reset-cursor`) on a topic whose start moved completes
-  normally: nothing was lost for this connector.
+- A **first** run on a topic whose start moved completes normally, and so does a run after
+  `lm endpoint reset-cursor`: nothing was lost for this connector.
 - When it repeats: raise the topic's retention, or run more often.
 
 ## An empty poll, and what it does not prove
 
 A run ends when a poll returns nothing. On a slow link with a short `poll_timeout_ms`, a poll can
-time out before the first fetch and end the run with less than the topic holds.
+time out before the first fetch. The run then ends with less than the topic holds.
 
-- The run stays **`Completed`**. A green run that read less than expected: raise
-  `poll_timeout_ms`. The hub log names the topic with a warning.
+The run stays **`Completed`**. The hub log names the topic in a warning:
+`<topic>: the poll returned no record within <poll_timeout_ms> ms and the position is below the
+high watermark …`. A green run that read less than expected: raise `poll_timeout_ms`.
 
-An empty topic, with no such line:
+An empty topic logs no such warning:
 
 ```
 $ lm run list --connector acme-kafka-empty

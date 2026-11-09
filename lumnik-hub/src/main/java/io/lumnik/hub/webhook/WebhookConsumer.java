@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.rest.OutboundFailure;
+import io.lumnik.hub.event.DeadLetterReplayer;
 import io.lumnik.hub.event.EntityFilters;
 import io.lumnik.hub.event.EventOutboxRow;
 import io.lumnik.hub.event.consumer.BatchProcessor;
@@ -34,7 +35,7 @@ import static io.quarkus.scheduler.Scheduled.ConcurrentExecution.SKIP;
  * failed deliveries are redelivered by the retry sweep in Task 3.
  */
 @ApplicationScoped
-public class WebhookConsumer {
+public class WebhookConsumer implements DeadLetterReplayer {
 
     /**
      * The cross-tenant sentinel this consumer runs its sweeps under. RLS reads
@@ -246,19 +247,37 @@ public class WebhookConsumer {
     /** A first delivery recorded by a batch, and the lease the batch gave it. */
     private record Pending(Claim claim, OffsetDateTime leasedUntil) {}
 
-    private void record(EventOutboxRow row, Map<Long, List<WebhookEndpoint>> liveByTenant, List<Pending> pending) {
+    @Override
+    public String consumer() {
+        return CONSUMER_NAME;
+    }
+
+    /**
+     * Records the event's deliveries again (#1837). The event failed before its deliveries existed, so none is served
+     * twice; they are leased, not sent here, and the retry sweep delivers them once the lease has run out. A replay that
+     * recorded none (no live endpoint wants the event any more) redid nothing, and
+     * says so: the letter stays open.
+     */
+    @Override
+    public void replay(EventOutboxRow event, String targetKey) {
+        if (record(event, new HashMap<>(), new ArrayList<>()) == 0)
+            throw new IllegalStateException("no live endpoint takes event " + event.getId());
+    }
+
+    /** @return how many deliveries were recorded */
+    private int record(EventOutboxRow row, Map<Long, List<WebhookEndpoint>> liveByTenant, List<Pending> pending) {
         List<WebhookEndpoint> targets =
             liveByTenant.computeIfAbsent(row.getTenantId(), endpointRepo::findEnabled).stream()
                 .filter(ep -> wants(ep, row.getEventType(), row.getEntity()))
                 .toList();
-        if (targets.isEmpty()) return;
+        if (targets.isEmpty()) return 0;
 
         String body;
         try {
             body = mapper.writeValueAsString(row.getPayload());
         } catch (JsonProcessingException e) {
-            LOG.warnf(e, "Failed to serialize payload for event %d", row.getId());
-            return;
+            // The sweeper keeps it as a dead letter (#1837); a quiet skip would advance the cursor over a lost event.
+            throw new IllegalStateException("the payload of event " + row.getId() + " cannot be written as JSON", e);
         }
         JsonNode payloadNode = mapper.valueToTree(row.getPayload());
 
@@ -278,6 +297,7 @@ public class WebhookConsumer {
             pending.add(new Pending(
                 new Claim(d.getId(), row.getTenantId(), ep, row.getEventType(), row.getId(), body), leasedUntil));
         }
+        return targets.size();
     }
 
     /**

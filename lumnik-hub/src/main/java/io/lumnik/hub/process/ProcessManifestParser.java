@@ -29,7 +29,7 @@ public class ProcessManifestParser {
     private static final Set<String> METADATA_KEYS = Set.of("name");
     private static final Set<String> SPEC_KEYS = Set.of("scope", "on", "when", "emit");
     private static final Set<String> ON_KEYS = Set.of("event", "table");
-    private static final Set<String> EMIT_KEYS = Set.of("type", "message", "fields");
+    private static final Set<String> EMIT_KEYS = Set.of("type", "message", "fields", "key");
 
     private static final ManifestSurface SURFACE = ManifestSurface.builder()
         .group("", "root", ROOT_KEYS)
@@ -111,6 +111,14 @@ public class ProcessManifestParser {
                 "spec.emit.type is required and must start with 'decision.' — the governed taxonomy");
         String emitMessage = ManifestKeys.requiredText(emit, "message", "spec.emit.message");
         return new ProcessManifest(name, scope, onEvent, onTable, when, emitType, emitMessage,
-            ManifestKeys.columnNames(emit.path("fields"), "spec.emit.fields"));
+            ManifestKeys.columnNames(emit.path("fields"), "spec.emit.fields"), emitKey(emit.path("key")));
+    }
+
+    /** The decision's key column: absent or null is the row hash; anything else must be a column name. */
+    private static String emitKey(JsonNode key) {
+        if (key.isMissingNode() || key.isNull()) return null;
+        if (!key.isTextual() || Text.blank(key.asText()))
+            throw new IllegalArgumentException("spec.emit.key must be a column name");
+        return key.asText();
     }
 }

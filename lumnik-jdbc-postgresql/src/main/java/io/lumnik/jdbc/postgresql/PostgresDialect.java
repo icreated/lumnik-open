@@ -83,12 +83,22 @@ public class PostgresDialect implements JdbcDialect {
 
   @Override
   public List<String> listTables(Connection conn, String schema) throws SQLException {
+    return listRelations(conn, schema, "BASE TABLE");
+  }
+
+  @Override
+  public List<String> listViews(Connection conn, String schema) throws SQLException {
+    return listRelations(conn, schema, "VIEW");
+  }
+
+  private static List<String> listRelations(Connection conn, String schema, String tableType) throws SQLException {
     String sql = "SELECT table_name FROM information_schema.tables " +
-                 "WHERE table_schema = ? AND table_type = 'BASE TABLE' " +
+                 "WHERE table_schema = ? AND table_type = ? " +
                  "ORDER BY table_name";
     List<String> out = new ArrayList<>();
     try (PreparedStatement ps = conn.prepareStatement(sql)) {
       ps.setString(1, schema);
+      ps.setString(2, tableType);
       try (ResultSet rs = ps.executeQuery()) {
         while (rs.next()) out.add(rs.getString(1));
       }

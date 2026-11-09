@@ -246,6 +246,12 @@
       } ]
     }
   }, {
+    "name" : "http_version",
+    "type" : "STRING",
+    "importance" : "LOW",
+    "required" : false,
+    "doc" : "HTTP version every request asks for: \"1.1\" or \"2\" (omit => negotiated, HTTP/2 when the server offers it)"
+  }, {
     "name" : "headers",
     "type" : "LIST",
     "importance" : "MEDIUM",
@@ -289,6 +295,12 @@
         "importance" : "LOW",
         "required" : false,
         "doc" : "Not accepted in spec.defaults — refused by validation; declare it at spec.tls"
+      }, {
+        "name" : "http_version",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Not accepted in spec.defaults — refused by validation; declare it at spec.http_version"
       }, {
         "name" : "default_rate_limit",
         "type" : "STRING",

@@ -32,9 +32,13 @@ func newProcessCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return printApplied(cmd, resp, func(w io.Writer, a processApplied) {
+			if err := printApplied(cmd, resp, func(w io.Writer, a processApplied) {
 				fmt.Fprintf(w, "Applied process \"%s\" → table %s, emits %s\n", a.Name, a.Table, a.Emit)
-			})
+			}); err != nil {
+				return err
+			}
+			printPlainWarnings(cmd, resp)
+			return nil
 		},
 	}
 	apply.Flags().StringVarP(&file, "file", "f", "", "kind:Process YAML manifest, or - for stdin (required)")

@@ -124,6 +124,19 @@ public class ModuleManifestRegistry {
         return statuses;
     }
 
+    /** The registry's reason for a module the operator switched off with {@code lumnik.ai.enabled=false}. */
+    public static final String AI_SWITCHED_OFF = "disabled:lumnik.ai.enabled";
+
+    /**
+     * The RAG module is installed and the operator switched the AI off: what it needed to index can be
+     * indexed again once the setting is back on. False when the module is absent (an Open build, where
+     * nothing will ever index) and when it is active.
+     */
+    public boolean ragSwitchedOff() {
+        return statuses.stream()
+            .anyMatch(st -> "rag".equals(st.manifest().id()) && AI_SWITCHED_OFF.equals(st.inactiveReason()));
+    }
+
     /** The modules that are carried, allowed and whose dependencies are active. */
     public List<ModuleManifest> active() {
         return active;

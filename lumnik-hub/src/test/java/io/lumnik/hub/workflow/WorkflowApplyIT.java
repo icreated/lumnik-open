@@ -369,4 +369,27 @@ class WorkflowApplyIT {
             .body("dataTruth.dueProblem", equalTo("spec.due.column confirmed_on is not a column of"
                 + " connector.t_wf_due_apply_it (yet)"));
     }
+
+    /** #1816: a REST connector's hybrid table, in ext, is watched like an ingest table, and the report reads it. */
+    @Test
+    @Order(70)
+    void an_ext_table_is_watched_and_its_data_confronted() throws Exception {
+        try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
+            st.execute("CREATE SCHEMA IF NOT EXISTS ext");
+            st.execute("CREATE TABLE IF NOT EXISTS ext.wf_apply_it (id BIGSERIAL PRIMARY KEY,"
+                + " tenant_id BIGINT NOT NULL, external_id TEXT NOT NULL, statut TEXT, row_hash TEXT,"
+                + " indexed_at TIMESTAMPTZ DEFAULT now())");
+            st.execute("DELETE FROM ext.wf_apply_it");
+            st.execute("INSERT INTO ext.wf_apply_it (tenant_id, external_id, statut) VALUES ("
+                + TENANT + ", 'S-1', 'A')");
+        }
+        asIntegrator()
+            .contentType("application/yaml")
+            .body(YAML.replace("wf-apply-it", "wf-ext-apply-it").replace("connector.t_wf_apply_it", "ext.wf_apply_it"))
+            .when().post("/api/workflows/apply")
+            .then().statusCode(200)
+            .body("table", equalTo("ext.wf_apply_it"))
+            .body("dataTruth.tableMissing", equalTo(false))
+            .body("dataTruth.unobserved", contains("B"));
+    }
 }

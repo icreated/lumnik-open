@@ -12,7 +12,7 @@ class EntityFusionOrderTest {
   @Test
   void a_day_beside_a_time_orders_the_ledger_like_the_value_times_first_then_the_preferred_source() {
     // Source 0 holds times, source 1 holds days and is preferred: a day still never hides the hour.
-    EntityViewCompiler.Fusion f = new EntityViewCompiler.Fusion("timestamptz", List.of(0), 1, true);
+    EntityViewCompiler.Fusion f = new EntityViewCompiler.Fusion("timestamptz", List.of(0), 1, true, "UTC");
     String order = "ORDER BY _ord NOT IN (0), _ord <> 1, _ord, \"due\"";
     assertThat(f.representative("due")).contains(order);
     assertThat(f.ledger("due")).contains(order);
@@ -20,7 +20,7 @@ class EntityFusionOrderTest {
 
   @Test
   void without_a_preference_nor_a_day_the_order_is_the_source_order() {
-    EntityViewCompiler.Fusion f = new EntityViewCompiler.Fusion(null, null, null, true);
+    EntityViewCompiler.Fusion f = new EntityViewCompiler.Fusion(null, null, null, true, "UTC");
     assertThat(f.representative("city")).contains("ORDER BY _ord, \"city\"");
     assertThat(f.ledger("city")).contains("ORDER BY _ord, \"city\"");
   }
@@ -28,7 +28,7 @@ class EntityFusionOrderTest {
   /** #1449: a column whose sources progress (a stage across flows) declares conflicts: false — it is never compared. */
   @Test
   void a_column_that_is_not_compared_has_no_ledger_and_keeps_its_value_rule() {
-    EntityViewCompiler.Fusion f = new EntityViewCompiler.Fusion(null, null, null, false);
+    EntityViewCompiler.Fusion f = new EntityViewCompiler.Fusion(null, null, null, false, "UTC");
     assertThat(f.ledger("stage")).isEqualTo("NULL::jsonb");
     assertThat(f.representative("stage")).contains("ORDER BY _ord, \"stage\"");
   }

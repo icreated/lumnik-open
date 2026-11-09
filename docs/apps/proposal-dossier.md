@@ -16,7 +16,8 @@ curl -X POST "$HUB/api/proposal/check?workflow=<name>" \
 
 It needs `lm_integrator`. Mint `$TOKEN` as in [Test the API](../recipes/test-the-api.md#mint-a-token). The answer is the
 same file, checked; nothing is applied, and the original answers are untouched.
-Without `workflow=`, the dossier is only recomputed.
+Without `workflow=`, the dossier is only recomputed. A workflow name that does not exist, or one
+outside your scopes, gives the same answer: check the name if nothing was confirmed.
 
 | Point | Confirmed when | Refuted when |
 |---|---|---|

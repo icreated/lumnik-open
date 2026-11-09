@@ -89,11 +89,15 @@ refusal is written to the audit table. [Refusals](index.md#refusals)
 
 ## A scope-bound integrator
 
-**Administering a connector follows the writing rule.** Every connector command (`get`, `apply`,
-`run`, `pause`, `resume`, `delete`, `scope`, and the endpoint commands) acts only on a connector
-whose scopes the bound integrator holds **all** of. `lm connector list` shows only those, so a
-connector outside those scopes, a connector spanning a scope you do not hold, or a scopeless one
-is simply not found. Moving a connector you hold into a scope you don't hold is refused:
+**Administering a connector follows the writing rule.** A bound integrator acts only on a
+connector whose scopes they hold **all** of.
+
+- This covers every connector command: `get`, `apply`, `run`, `pause`, `resume`, `delete`,
+  `scope`, and the endpoint commands.
+- `lm connector list` shows only those connectors.
+- Any other connector is simply not found: one outside your scopes, one spanning a scope you do
+  not hold, a scopeless one.
+- Moving a connector you hold into a scope you don't hold is refused:
 
 ```
 $ lm connector list
@@ -111,10 +115,12 @@ The same hub, listed by an integrator with no `scope:*` role, shows `stock-magas
 unbound integrators keep administering the whole tenant.
 
 **What a connector left behind follows the same rule.** A run carries counts, table names and
-the error message, and a dead letter carries the rejected row's values. A bound integrator's
-`lm run list` and `lm dlq list` show only the connectors whose scopes they hold all of.
-`lm run get`/`cancel`, `lm dlq get`/`discard`/`replayed`, and `--connector`/`--run` filters
-naming a connector outside those scopes answer `403`.
+the error message. A dead letter carries the rejected row's values.
+
+- A bound integrator's `lm run list` and `lm dlq list` show only the connectors whose scopes
+  they hold all of.
+- On a connector outside those scopes, these answer `403`: `lm run get`/`cancel`,
+  `lm dlq get`/`discard`/`replayed`, and the `--connector`/`--run` filters.
 
 The `lm source` doors create or reuse connectors, so they follow the writing rule:
 

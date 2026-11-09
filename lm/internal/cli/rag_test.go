@@ -121,6 +121,31 @@ func TestRagStatusSaysNothingIsIndexedWhenTheAiIsOff(t *testing.T) {
 	}
 }
 
+// With the AI switched off the corpus is kept, not absent: the status says the AI is off and what
+// the store holds, instead of reading like an empty corpus (#1895).
+func TestRagStatusSaysTheAiIsSwitchedOffAndWhatTheStoreKeeps(t *testing.T) {
+	ragStatusHub(t, map[string]any{"indexed": false, "chunks": 0, "indexedAt": nil,
+		"provider": "none", "embeddingModel": "none", "switchedOff": true, "storedChunks": 36})
+	out := runRoot(t, "rag", "status")
+	for _, want := range []string{"ai: switched off (LUMNIK_AI_ENABLED=false)", "stored_chunks: 36"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in %q", want, out)
+		}
+	}
+}
+
+func TestRagStatusWithTheAiOnDoesNotClaimItIsSwitchedOff(t *testing.T) {
+	ragStatusHub(t, map[string]any{"indexed": true, "chunks": 42, "indexedAt": "2026-09-01T00:00:00Z",
+		"provider": "ollama", "embeddingModel": "nomic-embed-text", "switchedOff": false, "storedChunks": 50})
+	out := runRoot(t, "rag", "status")
+	if strings.Contains(out, "switched off") {
+		t.Errorf("claims the AI is off: %q", out)
+	}
+	if !strings.Contains(out, "stored_chunks: 50") {
+		t.Errorf("missing stored_chunks in %q", out)
+	}
+}
+
 // -o is a persistent root flag, so cobra accepts it on `rag status` whether or not the command
 // reads it. Before #532 it silently ignored the flag; the JSON must carry the hub's fields.
 func TestRagStatusHonoursJson(t *testing.T) {

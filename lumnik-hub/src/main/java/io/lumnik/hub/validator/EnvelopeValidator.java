@@ -36,7 +36,8 @@ public final class EnvelopeValidator {
 
         if (manifest.path("metadata").path("name").asText().isBlank()) {
             errs.add(new ValidationError("metadata.name", Severity.ERROR,
-                "metadata.name is required (kebab-case)", List.of()));
+                "metadata.name is required",
+                List.of("To take over a one-shot ingest, use the name `lm connector list` shows.")));
         }
 
         if (manifest.path("metadata").path("connector_type").asText().isBlank()) {

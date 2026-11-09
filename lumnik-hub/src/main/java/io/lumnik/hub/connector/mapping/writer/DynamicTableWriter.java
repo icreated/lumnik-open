@@ -16,6 +16,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -304,14 +305,14 @@ public class DynamicTableWriter {
       Set<String> narrow = new LinkedHashSet<>();
       for (String col : tooNarrow) {
         String physical = actual == null ? null : actual.get(col);
-        if (BIGINT.equals(physical)) narrow.add(col);
+        if (BIGINT.equals(physical) || LEGACY_NUMERIC.equals(physical)) narrow.add(col);
         else if (physical != null) updated.put(col, physical);
       }
       if (!narrow.isEmpty()) {
         rebuilt.addAll(widenColumns(c, spec, narrow));
-        for (String col : narrow) updated.put(col, WIDENED_NUMERIC);
-        LOG.infof("%s.%s: %d column(s) widened to %s by this chunk's first fractional value: %s",
-            spec.schema(), spec.name(), narrow.size(), WIDENED_NUMERIC, String.join(", ", narrow));
+        for (String col : narrow) updated.put(col, NUMERIC);
+        LOG.infof("%s.%s: %d column(s) widened to %s by this chunk (a fraction, or a decimal past the old scale of 4): %s",
+            spec.schema(), spec.name(), narrow.size(), NUMERIC, String.join(", ", narrow));
       }
     }
 
@@ -360,10 +361,10 @@ public class DynamicTableWriter {
     exec(c, "ALTER TABLE " + fqn(spec) + " ADD COLUMN IF NOT EXISTS " + quoteIdent(column) + " " + pgType);
   }
 
-  /** The widening pair, read from the inferrer that emits them: {@code bigint -> numeric(18,4)}. */
+  /** The widening types, read from the inferrer that emits them: {@code bigint} and {@code numeric(18,4)} -> {@code numeric}. */
   private static final String BIGINT = SchemaInferrer.BIGINT;
+  private static final String LEGACY_NUMERIC = SchemaInferrer.LEGACY_NUMERIC;
   private static final String NUMERIC = SchemaInferrer.NUMERIC;
-  private static final String WIDENED_NUMERIC = SchemaInferrer.WIDENED_NUMERIC;
 
   /**
    * The registered {@code BIGINT} columns this chunk feeds a number that is not whole.
@@ -374,8 +375,10 @@ public class DynamicTableWriter {
    * fifth chunk's INSERT would die ("column is of type bigint but expression is of type double
    * precision") and take the run with it, for what is a cosmetic gain.
    *
-   * <p>ONE direction and ONE pair. {@code bigint → numeric(18,4)} loses nothing, so it needs no
-   * arbitration; every other drift stays what it was — the first chunk types the column, and a
+   * <p>ONE direction, two origins. {@code bigint → numeric} loses nothing, so it needs no arbitration; neither
+   * does {@code numeric(18,4) → numeric}, the column of a table created before #1862, and it is due only for a
+   * value that type cannot hold as read (a fifth decimal, or past 14 digits before the point) — a value that fits rewrites
+   * nothing. Every other drift stays what it was — the first chunk types the column, and a
    * value that cannot be bound to it is the source contradicting itself. Pure and
    * package-visible so the detection can be pinned without a datasource.
    */
@@ -383,13 +386,25 @@ public class DynamicTableWriter {
     Set<String> out = new LinkedHashSet<>();
     for (Map<String, Object> row : rows) {
       for (Map.Entry<String, Object> e : row.entrySet()) {
-        if (BIGINT.equals(registered.get(e.getKey()))
-            && e.getValue() instanceof Number && !SchemaInferrer.isIntegral(e.getValue())) {
+        if (out.contains(e.getKey())) continue;
+        String type = registered.get(e.getKey());
+        Object v = e.getValue();
+        if (BIGINT.equals(type) ? v instanceof Number && !SchemaInferrer.isIntegral(v)
+            : LEGACY_NUMERIC.equals(type) && exceedsLegacyNumeric(v)) {
           out.add(e.getKey());
         }
       }
     }
     return out;
+  }
+
+  /** True when {@code v} does not fit {@code numeric(18,4)}: more than four decimals, or more than 14 digits before the point. */
+  private static boolean exceedsLegacyNumeric(Object v) {
+    if (!(v instanceof Number n)) return false;
+    if ((v instanceof Double || v instanceof Float) && !Double.isFinite(n.doubleValue())) return false;
+    // toString, not doubleValue: a Float 1.1f is 1.1, not the 1.10000002384... its binary expansion gives.
+    BigDecimal d = v instanceof BigDecimal b ? b : new BigDecimal(v.toString());
+    return d.precision() - d.scale() > 14 || d.scale() > 4 && d.stripTrailingZeros().scale() > 4;
   }
 
   /**
@@ -402,7 +417,7 @@ public class DynamicTableWriter {
    */
   private List<EntityManifest> widenColumns(Connection c, MappingTarget.Table spec, Set<String> columns) {
     String alters = columns.stream()
-        .map(col -> "ALTER COLUMN " + quoteIdent(col) + " TYPE " + WIDENED_NUMERIC)
+        .map(col -> "ALTER COLUMN " + quoteIdent(col) + " TYPE " + NUMERIC)
         .collect(Collectors.joining(", "));
     // On the connection applyDrift already holds: a second one from the admin pool while it waits would starve it.
     return viewCompiler.reshape(c, spec.schema(), spec.name(), columns,
@@ -432,14 +447,24 @@ public class DynamicTableWriter {
   static final String SEEN_RUN = "_seen_run";
   private static final String TENANT_ID = "tenant_id";
 
+  /** The system columns every table starts with, in table order; {@code tenant_id} follows them (and {@link #SEEN_RUN}). */
+  private static final List<TableColumn> SYSTEM_PRELUDE = List.of(
+      new TableColumn(ID, "BIGSERIAL PRIMARY KEY"),
+      new TableColumn(ROW_HASH, "TEXT NOT NULL"),
+      new TableColumn(INGESTED_AT, "TIMESTAMPTZ NOT NULL DEFAULT now()"),
+      new TableColumn(SOURCE, "TEXT"),
+      new TableColumn(RUN_ID, "UUID"),
+      new TableColumn(MAPPING_VERSION, "INT"));
+  private static final TableColumn TENANT = new TableColumn(TENANT_ID, "BIGINT NOT NULL");
+
   /**
    * The columns {@link #createTableDdl} always creates. A payload column carrying one of these
    * names cannot be written: on a fresh table Postgres refuses the duplicate, and on an existing
    * one {@code ADD COLUMN IF NOT EXISTS} would silently no-op and drop the values from then on.
-   * Pinned against the DDL by {@code DynamicTableSystemColumnsTest}.
+   * The names of the declarations the DDL is written from ({@link #SYSTEM_PRELUDE}, {@link #TENANT});
+   * {@code DynamicTableSystemColumnsTest} still reads them back from the DDL.
    */
-  public static final Set<String> SYSTEM_COLUMNS =
-      Set.of(ID, ROW_HASH, INGESTED_AT, SOURCE, RUN_ID, MAPPING_VERSION, TENANT_ID);
+  public static final Set<String> SYSTEM_COLUMNS = TableColumn.namesOf(SYSTEM_PRELUDE, List.of(TENANT));
 
   /**
    * The system columns as a message renders them: comma-separated, alphabetical. The TreeSet is
@@ -501,23 +526,17 @@ public class DynamicTableWriter {
   }
 
   /**
-   * The {@code CREATE TABLE} body: the fixed system prelude ({@link #SYSTEM_COLUMNS}) followed by
-   * every inferred payload column. Package-visible and pure so it can be pinned in a test without a
+   * The {@code CREATE TABLE} body: the fixed system prelude ({@link #SYSTEM_PRELUDE}, then
+   * {@code _seen_run} when the table marks seen rows, then {@link #TENANT}) followed by every inferred
+   * payload column. Package-visible and pure so it can be pinned in a test without a
    * datasource.
    */
   String createTableDdl(MappingTarget.Table spec, Map<String, String> schema) {
     StringBuilder t = new StringBuilder();
-    t.append("CREATE TABLE IF NOT EXISTS ")
-     .append(fqn(spec))
-     .append(" (")
-     .append("id BIGSERIAL PRIMARY KEY, ")
-     .append("_row_hash TEXT NOT NULL, ")
-     .append("_ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(), ")
-     .append("_source TEXT, ")
-     .append("_run_id UUID, ")
-     .append("_mapping_version INT, ")
-     .append(spec.marksSeen() ? SEEN_RUN + " UUID, " : "")
-     .append("tenant_id BIGINT NOT NULL");
+    t.append("CREATE TABLE IF NOT EXISTS ").append(fqn(spec)).append(" (");
+    SYSTEM_PRELUDE.forEach(col -> t.append(col.sql()).append(", "));
+    if (spec.marksSeen()) t.append(SEEN_RUN).append(" UUID, ");
+    t.append(TENANT.sql());
     for (var e : schema.entrySet()) {
       t.append(", ").append(quoteIdent(e.getKey())).append(' ').append(e.getValue());
     }
@@ -626,7 +645,8 @@ public class DynamicTableWriter {
     return Math.clamp(MAX_BIND_PARAMS / colsPerRow, 1, EMIT_SUB_BATCH);
   }
 
-  private static final String OUTBOX_SQL =
+  /** The outbox insert a row writer stages its {@code data.row.changed} with — the hybrid writer's too (#1816). */
+  static final String OUTBOX_SQL =
       "INSERT INTO core.event_outbox "
       + "(tenant_id, event_type, source, entity, entity_key, payload, occurred_at, created_at) "
       + "VALUES (?, ?, ?, ?, ?, ?::jsonb, NOW(), NOW())";
@@ -780,7 +800,7 @@ public class DynamicTableWriter {
           written++;
           // A keyed table returns a row only when it changed (#1196): its new version is an event too.
           if (inserted || spec.key() != null) {
-            stageEvent(outbox, tenantId, source, fqn, hash, runId, inserted ? "insert" : "update");
+            stageEvent(outbox, mapper, tenantId, source, fqn, hash, runId, inserted ? "insert" : "update", null);
           }
         }
       }
@@ -788,8 +808,14 @@ public class DynamicTableWriter {
     return new SubBatchResult(written, returned);
   }
 
-  private void stageEvent(PreparedStatement outbox, Long tenantId, String source, String fqn, String hash,
-                          UUID runId, String op) throws SQLException, JsonProcessingException {
+  /**
+   * One {@code data.row.changed} added to {@code outbox}'s batch: the payload every row writer stages (#1816).
+   *
+   * @param rowId the row's own id, which a hybrid table is read back by; {@code null} leaves it out. A JSON string:
+   *              a bigserial can exceed 2^53, past what a JavaScript number holds exactly.
+   */
+  static void stageEvent(PreparedStatement outbox, ObjectMapper mapper, Long tenantId, String source, String fqn,
+                         String hash, UUID runId, String op, Long rowId) throws SQLException, JsonProcessingException {
     outbox.setLong(1, tenantId);
     outbox.setString(2, RowEventGate.DATA_ROW_CHANGED);
     outbox.setString(3, source);
@@ -801,6 +827,7 @@ public class DynamicTableWriter {
     payload.put("entity_key", hash);
     payload.put("op", op);
     if (runId != null) payload.put("run_id", runId.toString());
+    if (rowId != null) payload.put("row_id", rowId.toString());
     outbox.setString(6, mapper.writeValueAsString(payload));
     outbox.addBatch();
   }

@@ -7,6 +7,7 @@ import io.lumnik.identity.Require;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.TenantWide;
+import io.lumnik.hub.event.EventPatterns;
 import io.lumnik.hub.event.EventRegistry;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.hub.tenant.TenantContextFilter;
@@ -69,6 +70,7 @@ public class IntegrationResource {
         if (Text.present(in.secret()))
             e.setSecretEncrypted(cipher.encrypt(in.secret()));
         requireSecretForSigning(e);
+        requireAcceptedPatterns(in.eventTypes());
         e.setEventTypes(in.eventTypes());
         e.setEnabled(in.enabled() == null || in.enabled());
         repo.persist(e);
@@ -87,7 +89,10 @@ public class IntegrationResource {
         if (in.targetUrl()  != null) e.setTargetUrl(in.targetUrl());
         if (in.platform()   != null) e.setPlatform(in.platform());
         if (in.authMode()   != null) e.setAuthMode(in.authMode());
-        if (in.eventTypes() != null) e.setEventTypes(in.eventTypes());
+        if (in.eventTypes() != null) {
+            requireAcceptedPatterns(in.eventTypes());
+            e.setEventTypes(in.eventTypes());
+        }
         if (in.enabled()    != null) e.setEnabled(in.enabled());
         if (Text.present(in.secret()))
             e.setSecretEncrypted(cipher.encrypt(in.secret()));
@@ -129,6 +134,15 @@ public class IntegrationResource {
         if (holder == null || holder.getId().equals(selfId)) return;
         throw new ClientErrorException(ApiErrors.conflict(
             "an integration named " + name + " already exists (id " + holder.getId() + ")"));
+    }
+
+    /** A pattern that could never match is refused here, not stored; EventPatterns owns the contract. */
+    private static void requireAcceptedPatterns(List<String> patterns) {
+        if (patterns == null) return;
+        for (String p : patterns) {
+            String why = EventPatterns.refusal(p);
+            if (why != null) throw new BadRequestException(ApiErrors.badRequest(why));
+        }
     }
 
     /**

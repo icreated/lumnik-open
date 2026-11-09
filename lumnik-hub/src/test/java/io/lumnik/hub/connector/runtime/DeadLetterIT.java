@@ -47,6 +47,28 @@ class DeadLetterIT {
 
   @Test
   @TestTransaction
+  void a_payload_holding_a_nul_byte_is_stored_with_the_replacement_character() {
+    TenantContext.runAsSystem(() -> {
+      Connector c = new Connector();
+      c.setTenantId(1L);
+      c.setName("dlq-nul");
+      c.setTypeId("hello-world");
+      connectors.persist(c);
+      connectors.flush();
+
+      var payload = mapper.createObjectNode().put("packed", "a\u0000b");
+      capture.capture(c.getId(), null, payload,
+          new SkipReason.MappingFailed("packed", "has a \u0000"));
+      dlqs.flush();
+
+      var letter = dlqs.findPendingByConnector(c.getId(), 10).getFirst();
+      assertThat(letter.getPayload().path("packed").asText()).isEqualTo("a\uFFFDb");
+      assertThat(letter.getErrorMessage()).isEqualTo("packed: has a \uFFFD");
+    });
+  }
+
+  @Test
+  @TestTransaction
   void discard_marks_dlq_resolved() {
     TenantContext.runAsSystem(() -> {
       Connector c = new Connector();

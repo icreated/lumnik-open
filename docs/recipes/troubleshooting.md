@@ -79,7 +79,7 @@ The ask is Pro only; `lm source schema` and `rediscover` exist on both editions.
 |---|---|
 | A webhook never arrived | `lm outputs list` (failures first), then `lm outputs replay <ID>` — or `^R` in the TUI `:outputs` ([Outputs](../admin-console-guide.md#watch-deliveries-and-replay-a-failure)) |
 | The Records list on a phone looks empty | see the table below |
-| The PWA shows an old version | the service worker re-installs only when `sw.js` changes — [the shell-cache note](../apps/pwa.md) |
+| The PWA shows an old version after a hub upgrade | the phone keeps the app's screens between openings ([offline](../apps/pwa.md#sign-in-offline)). Close the app and open it again, twice if needed: a new version is fetched at one opening and shown at the next |
 | `lm view -f v.yaml` (the list), `lm view KEY -f v.yaml` (one record) or `lm view apply` refused | a manifest field/column mismatch, or a missing scope role — [Views troubleshooting](../apps/views.md#troubleshooting) |
 | `lm process apply` refused, or a declared process never fires | a manifest/schema mismatch, or its trigger table broke at runtime — [Processes troubleshooting](../apps/processes.md#troubleshooting) |
 | `lm workflow apply` refused | an unknown field, a lifecycle collision, or dormancy declared without `on.key` — [Workflows troubleshooting](../apps/workflows.md#troubleshooting) |

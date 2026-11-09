@@ -5,48 +5,46 @@ hangs from — the page to read when evaluating lumnik.
 
 ## Read-only first
 
-Ingestion is one-way: there is no write path back to your systems — not behind a flag, not
-for administrators. The hub lands data in its own PostgreSQL, and fusion, chat, apps and events
-work on that copy. Your system of record stays the sole owner of its data.
+Ingestion is one-way. There is no write path back to your source systems — not behind a flag,
+not for administrators.
 
-The same posture extends downstream: the SQL that answers a chat question executes on
-a **separate, physically read-only database connection** — see the next commitment.
+- The hub lands the data in its own PostgreSQL.
+- Fusion, chat, apps and events work on that copy.
+- Your system of record stays the sole owner of its data.
+
+The SQL that answers a chat question runs on a **separate, read-only database connection** — see
+the next commitment.
 
 ## Isolation lives in the database
 
-Multi-tenant isolation is not application code you have to trust; it is PostgreSQL
-Row-Level Security, enforced by the layer that cannot be bypassed by a bug in the
-layer above. Three database roles carry three trust levels:
+Tenant isolation is not application code you have to trust. PostgreSQL Row-Level Security enforces
+it, below the application, so a bug in the application cannot bypass it. Three database roles carry
+three trust levels:
 
-- the request path runs **RLS-enforced**, and owns nothing;
-- LLM-generated SQL runs on a role that can **only read**, with an empty
-  `search_path`;
-- deliberate cross-tenant work (migrations, purges) runs on a separate role that
-  every code path must use *explicitly*.
+- requests run **under RLS**, on a role that owns nothing;
+- SQL written by the model runs on a role that can **only read**;
+- migrations, table creation and purges run on a third role, which bypasses RLS.
 
-The full mechanics — policies, the tenant GUC, what RLS does and does not protect
-against — are on [RLS & database roles](security/rls.md).
+Which work uses which role, and what RLS does not protect against:
+[RLS & database roles](security/rls.md).
 
 ## Refusal over guessing
 
 The system prefers a refusal to a plausible guess:
 
-- on the way **in**, a run's arithmetic always closes — a row is written, benignly
-  skipped, or quarantined with its reason
-  ([seeing what was ingested](transparency/ingestion-honesty.md));
-- on the way **out**, deterministic guards stand between a question and its answer,
-  and an empty result is never phrased as a confident "there are none"
-  ([its guards](transparency/ask-honesty.md));
-- disagreements between sources are preserved in a ledger instead of silently
+- on the way **in**, every row is counted: written, skipped, or set aside in the DLQ with
+  its reason ([seeing what was ingested](transparency/ingestion-honesty.md));
+- on the way **out**, guards stand between a question and its answer. An empty result
+  is never phrased as a confident "there are none" ([when Ask refuses](transparency/ask-honesty.md));
+- disagreements between sources are kept in the `_conflicts` ledger, never silently
   resolved ([entities](entities.md)).
 
 ## Declared over inferred
 
-Where meaning enters the system, a human declares it: connectors, entities, views,
-processes and lifecycles are all **manifests** an integrator applies — validated,
-refusable, versionable in git. A [workflow](apps/workflows.md) even records *how* its
-lifecycle is known (`provenance: declared`), so the day something is inferred instead,
-the difference will be citable — not retrofitted.
+Where meaning enters the system, a human declares it. Connectors, entities, views,
+processes and lifecycles are all **manifests** an integrator applies: validated,
+refusable, versionable in git. A [workflow](apps/workflows.md) even says so in its manifest:
+`provenance: declared` is required, and it is the only value accepted.
 
 ## One hub, optional extensions
 

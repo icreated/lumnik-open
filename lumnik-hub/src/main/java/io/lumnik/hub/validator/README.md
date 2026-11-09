@@ -48,7 +48,7 @@ CDI discovery picks it up via `Instance<ConnectorValidator>` — no registration
 |---|---|
 | `isUrl()` | Asserts absolute URL (scheme + host) |
 | `matchesRegex(pattern, desc)` | Asserts the value matches a regex; `desc` appears in the error message |
-| `inRange(min, max)` | Asserts integer in `[min, max]` |
+| `inRange(min, max)` | Asserts a whole number in `[min, max]` (bounds are longs, so a `LONG` field can use it) |
 | `nonEmpty()` | Asserts non-blank string |
 
 All return `Function<JsonNode, Optional<String>>` — drop into `ConfigDef.requireCustom(...)`.

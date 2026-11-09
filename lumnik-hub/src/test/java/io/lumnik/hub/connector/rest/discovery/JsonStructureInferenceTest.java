@@ -7,6 +7,8 @@ import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
 import org.junit.jupiter.api.Test;
 import java.util.*;
 import java.util.stream.Collectors;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import static org.junit.jupiter.api.Assertions.*;
 
 class JsonStructureInferenceTest {
@@ -53,8 +55,8 @@ class JsonStructureInferenceTest {
     }
 
     /** #1650: the whole list at once is a positive absence — a list found, and no paging signal at all. */
-    @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(strings = {
+    @ParameterizedTest
+    @ValueSource(strings = {
         "{\"vetList\":[{\"id\":1}]}",                                   // Spring PetClinic of before Boot
         "[{\"id\":1},{\"id\":2}]"                                        // a bare array, no Link header
     })
@@ -63,8 +65,8 @@ class JsonStructureInferenceTest {
     }
 
     /** Envelopes the five detectors do not name are paged all the same: they stay unknown, never none. */
-    @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(strings = {
+    @ParameterizedTest
+    @ValueSource(strings = {
         "{\"count\":120,\"next\":\"http://x/?page=2\",\"previous\":null,\"results\":[{\"id\":1}]}",   // DRF
         "{\"data\":[{\"id\":\"1\"}],\"links\":{\"next\":\"http://x/?page[offset]=10\"}}",          // JSON:API
         "{\"items\":[{\"id\":1}],\"total\":120,\"page\":1,\"size\":50,\"pages\":3}",               // FastAPI

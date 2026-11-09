@@ -4,6 +4,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.extraction.spi.CitationLocator;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
 import io.lumnik.hub.sql.TemporalText;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.quarkus.agroal.DataSource;
@@ -55,6 +56,8 @@ public class DataRowResource {
     String mappingId = mapping.get();
 
     // 2. The registered table, and whether its rows' scope is granted (#1201).
+    // The hash is in `row_hash` for a hybrid table, `_row_hash` for the others; two rows of a hybrid table (one per
+    // external_id) may share it and a citation names the hash only: the oldest answers, a provisional choice that keeps the answer repeatable (#1821).
     // 3. SELECT * from it, on the same connection. Schema/table come from the system's own
     // connector.dynamic_table registry, quoted the way the writer created them.
     //
@@ -68,7 +71,8 @@ public class DataRowResource {
       Optional<String> table = DynamicTableScope.readableTable(c, mappingId, tenant);
       if (table.isEmpty()) return Response.status(404).build();
       Optional<Map<String, Object>> row = Jdbc.queryOne(c, "DataRowResource.get",
-          "SELECT * FROM " + table.get() + " WHERE _row_hash = ? AND tenant_id = ?", ps -> {
+          "SELECT * FROM " + table.get() + " WHERE " + DynamicTableRegistry.rowHashColumnOf(mappingId)
+              + " = ? AND tenant_id = ? ORDER BY id LIMIT 1", ps -> {
         ps.setString(1, rowHash);
         ps.setLong(2, tenant);
       }, rs -> {

@@ -119,10 +119,11 @@ the ERP had no city for it, the CRM did, and the fused row simply carries Aarhus
 | Field | Required | Meaning |
 |---|---|---|
 | `kind` | yes | must be `Entity` |
-| `name` | yes | a simple identifier (letters, digits, `_`), at most 61 characters — becomes the view `connector.v_<name>`, lower-cased, and the name the chat advertises |
+| `name` | yes | a simple identifier (letters, digits, `_`), at most 61 characters. It names the view `connector.v_<name>` (lower-cased) and the entity in the chat |
 | `label` | no | the entity's human name — a `kind: View` that declares no `title:` is headed with it, and the schema card shows it beside the view name. Without one, both fall back to `name` |
 | `description` | no | free text for humans |
-| `match` | yes (≥ 1) | the canonical column(s) that identify the same real-world row across sources; several make a composite key. **Every source must map every match column, in the same case** |
+| `match` | yes (≥ 1), unless `resolution` | the canonical column(s) that identify the same real-world row across sources; several make a composite key. **Every source must map every match column, in the same case** |
+| `resolution` | no | instead of `match`, when the systems share no key — see [kind: Entity — resolve](entities-resolution.md) |
 | `sources[]` | yes (≥ 1) | ordered — **the order is the merge priority**; the first source wins a disagreement, unless the column names its own (`columns.<col>.prefer`) |
 | `sources[].table` | yes | the source's dynamic table in the `connector` schema, without the schema prefix (`t_acme_desk_erp`) |
 | `sources[].map` | yes (≥ 1) | `source column: canonical column`, per source |
@@ -131,6 +132,7 @@ the ERP had no city for it, the CRM did, and the fused row simply carries Aarhus
 | `joins[].from` | yes | a **canonical** column of the fused entity (it may be a `match` column) — the value looked up |
 | `joins[].to` | yes | a **physical** column of the lookup table — the key it is matched on (it need not appear in `map`) |
 | `joins[].map` | yes (≥ 1) | `lookup column: canonical column`; the new canonical names must not collide with any source column, any other join, or a reserved name, and none may be a `match` column |
+| `zone` | no | the business's time zone, a region such as `Europe/Paris`: a date meets a time on the day it has there. Without it the day is the UTC one — see [The business's day](entities-types.md#the-businesss-day) |
 | `scopes` | no | the business scopes whose chat and views may read this entity — an entity with none is not discoverable by anyone |
 | `columns` | no | per-canonical-column [grounding](#the-columns-grounding-block) |
 
@@ -139,16 +141,17 @@ the ERP had no city for it, the CRM did, and the fused row simply carries Aarhus
 - **Reserved names:** `_conflicts`, `_src`, `_ord`, `_entity_id`, `_resolution`, `_source_id`,
   `_handle`, `_canonical_key`.
 - **Case:** `email` in one source and `Email` in another is refused, not split into two columns.
-- **Every value reads as a string:** `credit_limit` reads `"500"`, not `500`. A column every source
-  holds as a date or a timestamp stays one — see [Dates across sources](entities-types.md) — and
-  one every source holds as a number stays a number, so it orders and compares as one — see
-  [Numbers across sources](entities-types.md). Any other column is text: cast where you consume.
+- **Every value reads as a string:** `credit_limit` reads `"500"`, not `500`.
+- **A typed column keeps its type** when every source holds it with that type: a date or a timestamp
+  stays one, a number stays a number and orders as one. See
+  [Dates and numbers across sources](entities-types.md). Any other column is text: cast where you
+  consume it.
 
 The key set is closed: an unknown key such as `scope:` for `scopes:` is refused, not dropped:
 
 ```
 $ lm entity apply -f docs/apps/demo/entities/63-refused-unknown-key.yaml
-Error: API error 400: unknown key(s) in the manifest: scope — kind:Entity honors root {apiVersion, columns, description, joins, kind, label, match, name, resolution, scopes, sources}, sources[] {map, table}, joins[] {from, map, table, to}, resolution {cascade, identity}, resolution.cascade[] {exact, id, propose}, resolution.cascade[].exact {fields, normalize}, resolution.cascade[].propose {acceptAbove, provider, reviewAbove}
+Error: API error 400: unknown key(s) in the manifest: scope — kind:Entity honors root {apiVersion, columns, description, joins, kind, label, match, name, resolution, scopes, sources, zone}, sources[] {map, table}, joins[] {from, map, table, to}, resolution {cascade, identity}, resolution.cascade[] {exact, id, propose}, resolution.cascade[].exact {fields, normalize}, resolution.cascade[].propose {acceptAbove, provider, reviewAbove}
 ```
 
 ## Fusion semantics
@@ -163,15 +166,15 @@ flowchart LR
 
 The compiled view unions every source and groups by the `match` column(s):
 
-- a source row whose match column is `NULL` is **excluded** — it cannot be matched to anything;
-- for every other column, the representative is the **first non-null by source order**. The
-  choice is made **per column, independently**: a source that wins `name` has no claim on `city`;
-- a **`NULL` is not an opinion**: a source with no value lets the next one fill the gap, and that
-  is never recorded as a conflict. Only two or more *distinct non-null* values are;
-- when sources genuinely **disagree**, the representative still follows source order, and *all*
-  the values land in the `_conflicts` ledger;
-- a column may name the source that goes **first for it alone** — `prefer:` in its
-  [`columns:` entry](#the-columns-grounding-block). The others keep the declared order.
+- A source row whose match column is `NULL` is **excluded**: it cannot be matched to anything.
+- Every other column takes the **first non-null value, in source order**.
+- The choice is made **per column**: a source that wins `name` has no claim on `city`.
+- **A `NULL` is not an opinion.** A source with no value lets the next one fill the gap. That is
+  never a conflict: only two or more *distinct non-null* values are.
+- When sources **disagree**, the column still follows source order, and *all* the values land in
+  the `_conflicts` ledger.
+- A column may name the source that goes **first for it alone**: `prefer:` in its
+  [`columns:` entry](#the-columns-grounding-block). The other columns keep the declared order.
 
 Flip the order and nothing but the representatives changes. `20-crm-first.yaml` lists the CRM
 first over the same two tables:
@@ -342,9 +345,9 @@ This is where you teach the surfaces what a column *means* — the input the
 
 | Key | Meaning |
 |---|---|
-| `label` | the human name — a `kind: View` prints it as the column header and the detail's field name, [Search](search/search-indexes.md#human-names-for-fields) shows it on its results; the schema card shows it beside the raw name |
-| `description` | the business meaning, fed to the SQL-generation prompt so the model stops guessing |
-| `example` | an example value, same purpose |
+| `label` | the human name: the column header and field name in a `kind: View`, the field name on [Search](search/search-indexes.md#human-names-for-fields) results, and beside the raw name on the schema card |
+| `description` | the business meaning. The model that writes Ask's SQL reads it, so it does not have to guess |
+| `example` | an example value, for the same model |
 | `values` | the allowed domain — a filter on any other value is **refused, not run** (the [domain guard](transparency/ask-rules.md#6-domain-guard-the-declared-values-contract)) |
 | `prefer` | the source table that goes first **for this column**: each system is the reference for its own fields |
 | `conflicts` | `false`: the sources **progress** rather than disagree — the value still follows the source order, the column is never in `_conflicts` |
@@ -377,9 +380,11 @@ $ lm view -f docs/apps/demo/views/10-customers.yaml --filter segment=PLATINUM
 Error: API error 400: 'PLATINUM' is not an allowed value for segment (allowed: GOLD, SILVER, BRONZE)
 ```
 
-A grounded column must exist in the canonical shape (a typo is refused at apply), and a declared
-value may not be blank or carry leading or trailing whitespace — it would never exact-match and
-would silently zero-row:
+Apply checks the block:
+
+- A grounded column must exist in the entity: a typo is refused.
+- A declared value may not be blank, or carry leading or trailing spaces. It would never match, and
+  every filter on it would return nothing:
 
 ```
 $ lm entity apply -f docs/apps/demo/entities/64-refused-domain-whitespace.yaml
@@ -498,12 +503,12 @@ LIMIT 500
   try: lm conflicts list  — where this scope has source conflicts or lookup ambiguities, row by row
 ```
 
-- The model answers in the question's language. The hub's own sentences (the zero-row warning
-  above) follow `--lang`, else your locale (`fr_FR` here). The SQL and the lines `lm` writes
-  (`data as of`, the table, the row count) stay in English.
-- A re-apply refreshes every card that lists the entity, in every tenant: yours before the apply
-  answers, the other tenants' just after. A scope it left, or a column it dropped, leaves those
-  cards.
+- The model answers in the question's language.
+- The hub's own sentences (the zero-row warning above) follow `--lang`, else your locale (`fr_FR`
+  here).
+- The SQL and the lines `lm` writes (`data as of`, the table, the row count) stay in English.
+- A re-apply updates what the chat knows of the entity, in every tenant. A scope it left, or a
+  column it dropped, is no longer offered to the chat.
 - If a scope is missing from the chat, `lm source rediscover --scope <tag>` refreshes it.
 
 ## Refusals
@@ -537,6 +542,7 @@ The last one is a `409`, not a `400`: the manifest is fine, the world is not rea
 | `canonical column '…' conflicts with '…' across sources (case-insensitive collision); use one consistent case` | `email` vs `Email` would silently become two SQL columns | one consistent spelling |
 | `source '…' does not map the match column: …` | every source must produce the match column, same case — else its rows could never be matched | add it to that source's `map` |
 | `scope must be lowercase, start with a letter, then letters/digits/_/- (max 41): …` | a scope is a Keycloak role name — the same rule as connector scopes, see [Scopes](rag/scopes.md) | rename the scope |
+| `'zone' is not a time zone: "…"` / `'zone' must name a region, not an offset: "…"` | a `zone:` the hub does not read, or an offset such as `+02:00` | a region name: `Europe/Paris`, `America/New_York`, `UTC` |
 | `unknown key(s) in the manifest: …` | a key `kind:Entity` does not honor — `scope:` for `scopes:` | the message lists what it honors |
 | `columns references unknown canonical column '…' (known: …)` | grounding for a column that does not exist — almost always a typo | use a canonical name |
 | `column '…' has a blank allowed value` / `… has an allowed value with leading/trailing whitespace …` | a domain value that can never match makes the guard lie | trim or remove it |
@@ -558,11 +564,15 @@ case-insensitive; an unknown entity is a `404`, an empty result prints `no rows`
 | `--limit N` | 1..1000, default 100; a full page prints `note: result hit the limit` on stderr |
 | `--offset N` | skip N rows, to page further |
 
-A [date column](entities-types.md) reads as its UTC instant, `2026-07-01T14:30:00Z`, or
-as its day, `2026-07-02`; `--filter due=2026-07-01` is equal as an instant (the day's midnight UTC),
-as in a view. A [number column](entities-types.md) is equal by value, `--filter amount=1500.00`
-finding `1500`. Every other column is text and `--filter` matches it exactly; a timestamp held as text
-reads in UTC, `2026-07-01 00:00:00+00`, whatever zone the hub runs in.
+How a value reads and filters depends on the column's type:
+
+- A [date column](entities-types.md) reads as its UTC instant, `2026-07-01T14:30:00Z`, or as its
+  day, `2026-07-02`.
+- `--filter due=2026-07-01` on a date column is equal as an instant: the day's midnight in the
+  entity's [zone](entities-types.md#the-businesss-day), UTC without one. A view's filter is always UTC.
+- A [number column](entities-types.md) is equal by value: `--filter amount=1500.00` finds `1500`.
+- Every other column is text, and `--filter` matches it exactly.
+- A timestamp held as text reads in UTC, `2026-07-01 00:00:00+00`, whatever zone the hub runs in.
 
 - A scope-bound user who holds none of the entity's scopes gets `403 scope not granted`
   (see [Scopes](rag/scopes.md)).
@@ -607,7 +617,8 @@ up to 1000). The TUI's `:conflicts` page shows the full ledger under `d`.
   nothing has resolved it.
 - A scope-bound user's list **omits** the entities they hold no scope for, without a `403`.
 - An entity whose view cannot be read is left out; the hub log names it. The rest still answers.
-- Over HTTP: `GET /api/entities/conflicts?limit=N`.
+- Over HTTP: `GET /api/entities/conflicts?limit=N&entity=NAME`. Without `limit`, the hub answers
+  100 rows.
 
 ## Remove
 
@@ -636,6 +647,17 @@ The `409` names one entity at a time: delete each entity that reads the table, t
 - In a script, pass `--force`; without it and without a keyboard nothing is deleted:
   `aborted: no confirmation read (EOF) — pass --force in a script`.
 - A scope-bound integrator must hold **all** the entity's scopes. An unknown name is a `404`.
+
+## Several hub nodes
+
+You can run the hub on more than one machine. Apply or delete an entity on any of them: the others follow, with no
+restart.
+
+- It takes **a few seconds** (3 by default). In that time another machine still shows the old entity.
+- Add a source to an entity: processes on the other machines react to that source's changes from then on. A change that
+  arrives during those seconds, on a machine that has not caught up, does not trigger them.
+- If an entity cannot be read, the machine keeps the last one it could read, and the log says which.
+- To change the delay, set `lumnik.entity.registry.refresh-every`, for example `1s`.
 
 ## How to…
 

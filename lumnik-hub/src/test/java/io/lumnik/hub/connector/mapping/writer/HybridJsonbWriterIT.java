@@ -60,6 +60,53 @@ class HybridJsonbWriterIT {
             .as("the V21 guard must be born with the table").contains("NULLIF");
     }
 
+    /** #1873: the drill-down from a citation looks a row up by {@code (tenant_id, row_hash)}; the table must serve it. */
+    @Test
+    void aNewTableCarriesTheRowHashIndexTheCitationLookupUses() throws Exception {
+        String bare = "test_rh_new_" + System.nanoTime();
+        writeOne("ext." + bare);
+
+        Assertions.assertThat(rowHashIndexDef(bare)).contains("(tenant_id, row_hash)");
+    }
+
+    /** A table created before the index existed gets it on its next write, with no migration. */
+    @Test
+    void aTableCreatedBeforeTheIndexGetsItOnItsNextWrite() throws Exception {
+        String bare = "test_rh_old_" + System.nanoTime();
+        try (Connection c = adminDs.getConnection(); var st = c.createStatement()) {
+            st.execute("CREATE SCHEMA IF NOT EXISTS ext");
+            st.execute(HybridJsonbWriter.createTableSql("ext." + bare, List.of()));
+        }
+        Assertions.assertThat(rowHashIndexDef(bare)).as("an old table has no such index").isNull();
+
+        writeOne("ext." + bare);
+
+        Assertions.assertThat(rowHashIndexDef(bare)).contains("(tenant_id, row_hash)");
+    }
+
+    private void writeOne(String table) {
+        HybridJsonbSpec spec = new HybridJsonbSpec(table, "$.id", List.of());
+        TenantContext.runAsSystem(() -> {
+            try {
+                utx.begin();
+                writer.write(spec, List.of(Map.of("id", "r_1")), 1L, UUID.randomUUID(), UUID.randomUUID());
+                utx.commit();
+            } catch (Exception e) {
+                try { utx.rollback(); } catch (Exception ignored) { /* no transaction left to roll back */ }
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
+    private String rowHashIndexDef(String bare) throws SQLException {
+        try (Connection c = adminDs.getConnection();
+             var ps = c.prepareStatement("SELECT indexdef FROM pg_indexes WHERE schemaname = 'ext' AND tablename = ?"
+                 + " AND indexdef LIKE '%row_hash%'")) {
+            ps.setString(1, bare);
+            try (var rs = ps.executeQuery()) { return rs.next() ? rs.getString(1) : null; }
+        }
+    }
+
     @Test
     void auto_creates_table_then_upserts_with_conflict() throws Exception {
         UUID connId = UUID.randomUUID();

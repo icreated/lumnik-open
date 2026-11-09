@@ -1,13 +1,16 @@
 # kind: Workflow — declare
 
-> The fourth rung: a **declarative document lifecycle** over a status column ingestion already
-> landed — states, aliases for the spellings the source really uses, the transition graph, and a
-> threshold past which a document that has not moved is a decision.
+> A **declarative document lifecycle** over a status column that ingestion already landed. It
+> declares:
+>
+> - the states, and aliases for the spellings the source really uses;
+> - the transition graph;
+> - a threshold past which a document that has not moved is a decision.
 
 | | |
 |---|---|
 | **Kind** | `Workflow` — `apps.lumnik.io/v1` |
-| **Over** | one column of one table: a raw `connector.t_*`, or a fused `connector.v_*` (dormancy there needs `spec.on.order`) |
+| **Over** | one column of one table: a raw `connector.t_*`, a REST connector's `ext.*`, or a fused `connector.v_*` (dormancy there needs `spec.on.order`) |
 | **Declares** | states with aliases, transitions, `provenance: declared`; optionally a business key and a dormancy threshold |
 | **Produces** | a report at apply on what the data holds, and after each import when asked (`workflow.undeclared.<name>`); answers in the chat (Pro); `decision.dormant.<name>` and `decision.overdue.<name>` alerts, and an observation tape, when watched |
 | **Commands** | `lm workflow apply` · `list` · `get` · `disable` · `enable` · `rm` — `lm_integrator`, scope-bound; one lifecycle per column |
@@ -100,7 +103,7 @@ One `200`, stored and indexed, with what the declaration and the data disagree o
 | `metadata.name` | yes | kebab-case identifier (`[a-z0-9-]+`) — the name `apply` updates under, and the alert's `decision.dormant.<name>` |
 | `spec.scope` | yes | the business scope the lifecycle belongs to; must be a **discovered** scope — [below](#the-scope-must-exist-the-table-need-not) |
 | `spec.provenance` | yes | **must be `declared`** — the only accepted value; the chat cites it |
-| `spec.on.table` | yes | the table to watch — an ingest table (`connector.t_<table>`) or a fused entity view (`connector.v_<entity>`, always lower-case) |
+| `spec.on.table` | yes | the table to watch — an ingest table (`connector.t_<table>`), a REST connector's table (`ext.<table>`) or a fused entity view (`connector.v_<entity>`, always lower-case) |
 | `spec.on.column` | yes | the column whose values this taxonomy explains — **whatever the source called it** |
 | `spec.on.key` | no (required by `dormancy` and `due`) | the business key linking a document's successive versions |
 | `spec.on.order` | no (required by `dormancy` on a fused view) | the column ordering a document's versions: a date, a timestamp, a number, or ISO 8601 text with `Z` or an offset — requires `spec.on.key`, [below](#the-current-version-speconorder) |
@@ -155,13 +158,28 @@ on:
 
 Quote them in the YAML if they contain spaces or punctuation; the hub adds the SQL quotes.
 
-`on.table` must be a table ingestion owns — `connector.t_<table>`, or `connector.v_<entity>` —
-spelled the way the hub created it (a connector's target keeps your capitals, a fused view is
-lower case, neither contains a space). Anything else is refused, the hub's own tables included:
+`on.table` must be a table ingestion owns — `connector.t_<table>` or `ext.<table>` — or a fused view,
+`connector.v_<entity>`, spelled the way the hub created it (a connector's target keeps your capitals,
+a fused view is lower case, none contains a space). Anything else is refused, the hub's own tables included:
 
 ```
 $ lm workflow apply -f docs/apps/demo/workflows/66-refused-foreign-table.yaml
-Error: API error 400: spec.on.table is required and must name a table in the 'connector' schema that ingestion owns (connector.t_<table>) or a fused entity view (connector.v_<entity>, always lower-case), spelled the way the hub created it (letters, digits and underscores — a space is a typo): identity.app_user
+Error: API error 400: spec.on.table is required and must name a table ingestion owns (connector.t_<table> or ext.<table>) or a fused entity view (connector.v_<entity>, always lower-case), spelled the way the hub created it (letters, digits and underscores — a space is a typo): identity.app_user
+```
+
+An `ext.<table>` is a REST connector's table. A dormancy or a due date there works as on a
+`connector.t_*` table, with one difference: a key's versions are ordered by the moment the row last changed (`indexed_at`).
+A re-read that changes nothing does not move a document. The table exists after the first ingest: apply the workflow after it, or let the
+apply report the table as missing.
+
+```yaml
+--8<-- "docs/apps/demo/workflows/40-rest-review.yaml"
+```
+
+```
+$ lm workflow apply -f docs/apps/demo/workflows/40-rest-review.yaml
+Applied workflow "lab-result-review" → ext.lab_results.review_state, scope lab
+  the data matches the declaration
 ```
 
 A fused view carries a **taxonomy** as it is. A `dormancy` on one needs `spec.on.order`, because a
@@ -258,6 +276,13 @@ spec:
   and is news again if a later declaration drops it.
 - A failed or cancelled run checks nothing. A fused view (`connector.v_*`) is checked after a run that
   writes a table its entity fuses or looks up.
+- `spec.check.trigger: ingestion` is not available on a REST table, under `ext` or under `connector`.
+  The apply refuses it. Drop `spec.check`: the apply still checks.
+
+    ```
+    $ lm workflow apply -f docs/apps/demo/workflows/68-refused-check-on-rest.yaml
+    Error: API error 400: spec.check.trigger 'ingestion' cannot watch ext.lab_results: the check follows the tables a run reports as written, and a run does not report a hybrid (REST) table. Drop spec.check: the apply still checks.
+    ```
 
 The event reaches what you subscribe to it, like any other: `lm integration add --events 'workflow.undeclared.*'`
 or an e-mail rule ([Outputs](../outputs.md)). It never appears in the inbox, which holds `decision.*` only.
@@ -491,8 +516,9 @@ spec:
 | Watched | Without `order` | With `order` |
 |---|---|---|
 | `connector.t_*` | the last version ingested | the greatest `order` value; ingestion breaks a tie |
+| a REST table (`ext.*`, or kept under `connector`) | the last version that changed (`indexed_at`) | the greatest `order` value; `indexed_at` breaks a tie |
 | `connector.v_*`, dormancy | refused at apply | the greatest `order` value; a tie follows the rule below |
-| `connector.v_*`, due date | every row, as before | the greatest `order` value; a tie follows the rule below |
+| `connector.v_*`, due date | every row | the greatest `order` value; a tie follows the rule below |
 
 **The column.** A date, a timestamp or a number orders as itself, when it is finite: `NaN` and
 `infinity` are no position. Text must be an ISO 8601 instant with an explicit offset, and is
@@ -563,16 +589,13 @@ value.
 - An empty value renders as nothing in the sentence and stays `null` in `fields`. A timestamp is
   its UTC instant in both. A number loses its trailing zeros in the sentence (`-67.4`); `fields`
   keeps it as the column holds it (`-67.4000`). A [Process](processes.md) decision does the same.
-- The order of the keys in `fields` is not part of the contract: the event log stores the payload
-  as `jsonb`.
-- Without a cited column or `fields`, the payload is exactly what it was before.
+- The order of the keys in `fields` is not guaranteed.
+- Without a cited column or `fields`, the payload has no `fields` key.
 - At apply, a cited or declared name the table lacks is refused, naming it. A sentence's refusal
   also lists the reserved names, in case one was misspelt (`{sinse}`). A table not ingested yet is
   not checked: the report says `not verified until the table exists`, with the names.
-- A cited column the table no longer has, after an entity re-apply, renders empty: the alert still
-  fires, and the hub log says so once (`… cites owner, which … no longer has: it renders empty`).
-  Stop citing it and cite it again while it is still missing: the log says it again. So does a
-  workflow disabled or deleted, then applied again.
+- A cited column the table no longer has, after an entity re-apply, renders empty. The alert still
+  fires, and the hub log says so once: `… cites owner, which … no longer has: it renders empty`.
 
 !!! warning "Who receives `fields`"
     Fields included in a decision payload can leave the hub through tenant-wide webhooks, e-mail
@@ -641,10 +664,14 @@ and the alert ages out with the event log (30 days by default). The tape keeps i
 ### Add the value the report says nobody declared
 
 The report named `EN LITIGE` (`in the data, not declared`). Add it as a state (or an alias of one) and re-apply
-under the same name. **Result:** the report no longer lists it, the chat knows what it means, and
-the sweep watches it as a declared state. The documents the tape held as `EN LITIGE`, and the source still
-holds, read the declared code from the next tick; a meaning is not a movement, so their `SINCE`, their alert and
-the transition journal stay as they were.
+under the same name. **Result:**
+
+- the report no longer lists it;
+- the chat knows what it means;
+- the sweep watches it as a declared state.
+
+The documents the tape held as `EN LITIGE` read the declared code from the next tick. A meaning is
+not a movement: their `SINCE`, their alert and the transition journal stay as they were.
 
 ### Get told when a new spelling arrives
 
@@ -668,7 +695,8 @@ it into a workflow, and checking it against your data: [Proposal dossiers](propo
 | apply refused: `spec.dormancy on a fused view needs spec.on.order …` | `on.table` is a `connector.v_*` view with `spec.dormancy` | add `spec.on.order`, the column that orders a document's versions |
 | apply refused: `spec.on.order … is not a column of …` | the table exists and has no such column | name a column it has |
 | apply refused: `spec.on.order … is boolean: a date, a timestamp, a number, or ISO 8601 text with an offset can order versions` | a column of another type | order by a date, a timestamp, a number or an ISO 8601 text column |
-| apply refused: `spec.on.table … must name a table in the 'connector' schema that ingestion owns` | another schema, or one of the hub's own tables | `connector.t_<the connector's target>` |
+| apply refused: `spec.on.table is required and must name a table ingestion owns …` | another schema, or one of the hub's own tables | `connector.t_<the connector's target>` or `ext.<the REST target>` |
+| apply refused: `spec.check.trigger 'ingestion' cannot watch ext.…` | `spec.check` on a REST connector's table | drop `spec.check`: the apply still checks |
 | apply refused: `alias '…' … collides with state code` / `exactly one state must be initial` / `terminal state '…' has an outgoing transition` | a contradiction in the declaration | fix the graph |
 | apply refused: `spec.check.trigger must be 'ingestion' …` | another trigger, `apply` included: the apply always checks | write `ingestion`, or drop `spec.check` |
 | apply refused: `spec.due requires spec.on.key …` | `spec.due` without `spec.on.key` | add `spec.on.key` |

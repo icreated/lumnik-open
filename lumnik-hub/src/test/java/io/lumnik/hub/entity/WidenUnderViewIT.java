@@ -340,9 +340,9 @@ class WidenUnderViewIT {
         }
     }
 
-    /** 11: the registry says the physical type: NUMERIC once widened, NUMERIC(18,4) for a decimal from the start. */
+    /** 11: the registry says the physical type: plain NUMERIC, widened or created as a decimal (#1862). */
     @Test
-    void the_registry_labels_a_widened_column_numeric_and_a_created_decimal_numeric_18_4() throws Exception {
+    void the_registry_labels_a_widened_column_and_a_created_decimal_numeric() throws Exception {
         long n = System.nanoTime();
         String widened = "t_widen_label_" + n, created = "t_decimal_label_" + n;
         writeChunk(widened, "x1", Map.of("no", "X1", "qty", 1));
@@ -354,7 +354,30 @@ class WidenUnderViewIT {
             + "AND mapping_id = '" + widened + "'")).isEqualTo("NUMERIC");
         assertThat(type(widened, "qty")).isEqualTo("numeric");
         assertThat(one("SELECT schema_inferred->>'qty' FROM connector.dynamic_table WHERE tenant_id = 1 "
-            + "AND mapping_id = '" + created + "'")).isEqualTo("NUMERIC(18,4)");
-        assertThat(type(created, "qty")).isEqualTo("numeric(18,4)");
+            + "AND mapping_id = '" + created + "'")).isEqualTo("NUMERIC");
+        assertThat(type(created, "qty")).isEqualTo("numeric");
+    }
+
+    /**
+     * 12 (#1862): a table created before the fix has a NUMERIC(18,4) decimal. The first value with a fifth decimal
+     * widens it, losslessly, and the value lands as read; a value that fits the scale rewrites nothing.
+     */
+    @Test
+    void a_legacy_numeric_18_4_column_is_widened_by_the_first_fifth_decimal() throws Exception {
+        String t = "t_legacy_dec_" + System.nanoTime();
+        writeChunk(t, "z1", Map.of("no", "Z1", "mz", new BigDecimal("524.2650")));
+        sql("ALTER TABLE connector." + t + " ALTER COLUMN mz TYPE numeric(18,4)");
+        sql("UPDATE connector.dynamic_table SET schema_inferred = jsonb_set(schema_inferred, '{mz}', "
+            + "'\"NUMERIC(18,4)\"') WHERE tenant_id = 1 AND mapping_id = '" + t + "'");
+
+        writeChunk(t, "z2", Map.of("no", "Z2", "mz", new BigDecimal("524.2")));       // fits the scale: no DDL
+        assertThat(type(t, "mz")).isEqualTo("numeric(18,4)");
+
+        writeChunk(t, "z3", Map.of("no", "Z3", "mz", new BigDecimal("524.26496")));
+        assertThat(type(t, "mz")).isEqualTo("numeric");
+        assertThat(one("SELECT mz::text FROM connector." + t + " WHERE _row_hash = 'z3'")).isEqualTo("524.26496");
+        assertThat(one("SELECT mz::text FROM connector." + t + " WHERE _row_hash = 'z1'")).isEqualTo("524.2650");
+        assertThat(one("SELECT schema_inferred->>'mz' FROM connector.dynamic_table WHERE tenant_id = 1 "
+            + "AND mapping_id = '" + t + "'")).isEqualTo("NUMERIC");
     }
 }

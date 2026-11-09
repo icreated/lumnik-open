@@ -48,8 +48,9 @@ lm apply -f stripe.yaml
 lm connector run stripe          # apply declares it; this starts the first run
 ```
 
-- `lm validate` stops at the first envelope error. Fix it, run it again.
-- An endpoint's id comes from its whole path: `/v1/charges` is `stripe/v1-charges`.
+- `lm validate` checks `apiVersion`, `kind` and `metadata` first. While one of them is wrong,
+  it does not check `spec`. Fix it, run it again.
+- An endpoint is named after its whole path: `/v1/charges` becomes `v1-charges`.
   Silence one with `lm endpoint disable stripe/v1-charges`.
 
 Then ask in the scope you declared (Pro), once the run is `Completed`:
@@ -78,8 +79,8 @@ lm csv ingest sftp://lumnik@sftp.acme.io/export/billing-latest.csv \
 ### Make it nightly
 
 The one-shot leaves no manifest. Write a `csv-file` manifest under **the name the one-shot
-registered**. `lm` turns `acme-billing` into `acme_billing`: read it in `lm connector list`.
-Another name creates a second connector.
+registered**: `--name acme-billing` was registered as `acme_billing`. Read it in
+`lm connector list`. Another name creates a second connector.
 
 ```yaml
 apiVersion: connectors.lumnik.io/v1
@@ -120,6 +121,10 @@ lm csv ingest s3://acme-exports/billing/ \
 
 - The S3 source reads these two secret names by default.
 - Other names? Pass `--access-key-secret NAME --secret-key-secret NAME`.
+- Each file under the prefix lands in its own table, named after the file. `--name` is refused
+  when the prefix holds more than one file: point at a single file instead.
+- The summary says how many files were loaded, then lists each table with its file, its rows and
+  its own columns. `lm connector list` shows one dormant connector per file.
 - MinIO, Cloudflare R2, GCS in S3 mode: add `--endpoint https://…`.
 
 ## Troubleshooting
@@ -127,7 +132,7 @@ lm csv ingest s3://acme-exports/billing/ \
 | You see | Do this |
 |---|---|
 | `Bearer token unavailable (env=STRIPE_API_KEY)` | The secret is missing. `lm secret set STRIPE_API_KEY`. |
-| `apply failed: …` (400) | The hub refused the manifest. `lm validate -f` names the field. |
+| `✗ stripe.yaml — 1 error(s), …` on `lm apply` | The hub refused the manifest. Each `ERROR` line names the field and the fix. |
 | `429 Too Many Requests` from the API | Add `default_rate_limit: 50/s` under `spec:`, then `lm apply -f` again. |
-| `WARN metadata.scopes — no scopes declared` on validate | Add `scopes: [<scope>]` under `metadata`. Without it, Ask cannot see the tables. |
+| `WARN  metadata.scopes`, `no scopes declared — …` on validate | Add `scopes: [<scope>]` under `metadata`. Without it, Ask cannot see the tables, and a user bound to a scope cannot see the connector. |
 | An empty `lm run list` after a one-shot | Expected: a one-shot records no run. A connector run does. |

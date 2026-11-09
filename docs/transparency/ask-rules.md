@@ -5,8 +5,7 @@
 
 ## The pipeline, in order
 
-Seven stages: abstention counts once though it stands at two points, and SQL safety sits beneath
-the guards.
+Every question passes the same seven stages, in order.
 
 ```mermaid
 flowchart TB
@@ -28,8 +27,9 @@ flowchart TB
   g6 -.-> ref
 ```
 
-Stages 1–6 each eject to a refusal when they trigger. Stage 7 never refuses — an
-empty result is delivered with a caveat, never phrased as a confident *"there are none"*.
+- Stages 1 to 6 each stop the question with a refusal when they trigger.
+- Stage 7 never refuses. An empty result comes with a caveat, never as a confident *"there are
+  none"*.
 
 ### 1. Abstention floor — nothing declared yet
 
@@ -89,7 +89,7 @@ An accepted query reads at most 500 rows, read-only.
 boundary within a tenant. A [scope-bound user](../rag/scopes.md#binding-users-to-scopes-opt-in)
 asking a scope they do not hold gets `Error: access refused (403): scope not granted` before any SQL is generated.
 
-> I won't run this: '`<schema.table>`' is not a table in this scope (declared: …). The query may not read data outside the declared scope.
+> I won't run this: '`<schema.table>`' is not a table in this scope (declared: …). The query may only read the tables this scope declares.
 
 **Do next:** ask in the scope that holds the table (`lm source schema --scope <tag>`), or add this scope to the
 connector's `metadata.scopes` and re-run it.
@@ -176,10 +176,15 @@ Tune the size of the sample with `LUMNIK_ASK_ANSWER_BUDGET_CHARS` (default `6000
 
 ## Unbacked figures — the phrased answer checked against its rows
 
-Every standalone number in the model's sentence must be backed by the rows: the row count, a cell, or
-a numeric column's sum, minimum, maximum or average at the precision written. A figure the query compares
-a column against backs it too: *"orders over 15 000 euros"* restating `amount_eur > 15000`, or *"in 2025"* restating
-`order_date >= '2025-01-01'`. Otherwise the sentence is withheld, never the rows:
+Every standalone number in the model's sentence must be backed. A figure is backed by:
+
+- the row count;
+- a cell;
+- a numeric column's sum, minimum, maximum or average, at the precision written;
+- a value the query compares a column against: *"orders over 15 000 euros"* restating
+  `amount_eur > 15000`, or *"in 2025"* restating `order_date >= '2025-01-01'`.
+
+Otherwise the sentence is withheld, never the rows:
 
 > The phrased answer stated a figure these rows do not back, so it is withheld. The rows and the SQL below are the answer.
 
@@ -188,10 +193,12 @@ result `"abstained": true` ([see both](../cli/lm-reference.md#the-rows-under-the
 
 - It catches a figure the model took from an ingested text that reads like an instruction.
 - A figure the question wrote but the query did not use is not backed: *"50 cancelled orders?"*
-  answered *"yes, 50"* over a count of 26 is withheld. Nor are numbers the query does not compare
-  a column against: `LIMIT 500`, `ROUND(…, 2)`, `GROUP BY 1`, `WHERE 9999 = 9999`, `current_date = '2025-01-01'`. A column the check
-  cannot read — qualified (`o.amount_eur`) or inside a function — backs nothing either. Of a date,
-  only its year backs a figure.
+  answered *"yes, 50"* over a count of 26 is withheld.
+- A number the query does not compare a column against backs nothing: `LIMIT 500`, `ROUND(…, 2)`,
+  `GROUP BY 1`, `WHERE 9999 = 9999`, `current_date = '2025-01-01'`.
+- A column the check cannot read backs nothing either: a qualified one (`o.amount_eur`), or one
+  inside a function.
+- Of a date, only its year backs a figure.
 - Not numbers: identifiers (`SO-000004`), dates, list markers. Grouped thousands (`1,250`,
   `312 480`) are one figure. A number quoted from a text cell with its words is a quote, not a claim.
 - It cannot see a cell that already holds a false sentence: an answer repeating it passes.
@@ -271,11 +278,15 @@ A date the question writes is a filter, and the column's type decides how:
 | a month, *« … en juillet 2026 après le 4 »* | `>= '2026-07-05' AND < '2026-08-01'` | the same range |
 | a day no row holds | no row, with the zero-row caveat — not a refusal | the same |
 
-- The wordings are an ISO date (`2026-07-02`, a time after it allowed) or a month with its year (*juillet 2026*,
-  *1er juillet 2026*, *July 2026*, *July 2, 2026*). `01/07/2026` (first of July or seventh of January?), *hier*, an
-  abbreviated month (*juil. 2026*), a year alone, a code built from a date (`SO-2026-07-02`, `SO/2026-07-02`, asked
-  for by its exact value) or a day the calendar does not have (`2026-02-31`) are left to the model.
-- A day is the platform's midnight UTC, as everywhere else: Ask reads in UTC whatever zone the hub runs in.
+- Recognised: an ISO date (`2026-07-02`, a time after it allowed), or a month with its year
+  (*juillet 2026*, *1er juillet 2026*, *July 2026*, *July 2, 2026*).
+- Left to the model:
+    - `01/07/2026` (first of July or seventh of January?);
+    - *hier*, an abbreviated month (*juil. 2026*), a year alone;
+    - a code built from a date (`SO-2026-07-02`, `SO/2026-07-02`), asked for by its exact value;
+    - a day the calendar does not have (`2026-02-31`).
+- A day starts at midnight UTC: Ask reads in UTC whatever zone the hub runs in. An entity's
+  [`zone:`](../entities-types.md#the-businesss-day) does not change it.
 - The column must carry a date type. A date a source landed as text (a CSV without
   [`parse-date`](../connectors/transformers.md#parse-date-dates-are-31122019)) is compared as text; on an entity, see
   [Dates across sources](../entities-types.md).
@@ -304,9 +315,15 @@ Et seulement celles de la catégorie Pompes ?  → Donne-moi les références de
 | *« aussi »*, *« également »*, *"also"*, *"as well"* | **widens**: the new value is accepted beside the old one |
 | a complete question | answered as asked |
 
-A value is recognised when written in capitals (*HAWARD*), with a digit (*SO-000005*), between quotes,
-or capitalised inside the sentence (*Pentair*). All in lower case (as on a phone), it is recognised
-only when the previous question searched exactly one text, one word or quoted text ending its clause:
+A value is recognised when it is:
+
+- written in capitals (*HAWARD*);
+- written with a digit (*SO-000005*);
+- between quotes;
+- capitalised inside the sentence (*Pentair*).
+
+All in lower case (as on a phone), it is recognised only when the previous question searched exactly
+one text: one word, or a quoted text, ending its clause:
 
 ```text
 Donne-moi les références dont la description contient badu.

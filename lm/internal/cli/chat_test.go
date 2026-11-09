@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -131,5 +132,42 @@ func TestHandleSlash_helpListsScope(t *testing.T) {
 
 	if !strings.Contains(raw.String(), ":scope") {
 		t.Errorf(":help must list :scope, got %q", raw.String())
+	}
+}
+
+// The hub refuses every question with a topK outside 1..50, so the REPL must refuse the value
+// when it is typed, not accept it and fail each later question (#1914).
+func TestHandleSlash_topKOutsideTheHubRangeIsRefused(t *testing.T) {
+	for _, in := range []string{":topK 0", ":topK 51", ":topK 80", ":topK -3", ":topK 3.5", ":topK 5abc", ":topK abc"} {
+		var out, errOut bytes.Buffer
+		cmd := &cobra.Command{}
+		cmd.SetOut(&out)
+		cmd.SetErr(&errOut)
+		s := &chatSession{topK: 4}
+
+		handleSlash(cmd, s, in)
+
+		if s.topK != 4 {
+			t.Errorf("%s: topK = %d, must stay 4", in, s.topK)
+		}
+		if !strings.Contains(errOut.String(), "1 to 50") {
+			t.Errorf("%s: message must name the range, got %q", in, errOut.String())
+		}
+	}
+}
+
+func TestHandleSlash_topKAtTheRangeEdgesIsAccepted(t *testing.T) {
+	for _, n := range []int{1, 50} {
+		var out bytes.Buffer
+		cmd := &cobra.Command{}
+		cmd.SetOut(&out)
+		cmd.SetErr(new(bytes.Buffer))
+		s := &chatSession{topK: 4}
+
+		handleSlash(cmd, s, fmt.Sprintf(":topK %d", n))
+
+		if s.topK != n {
+			t.Errorf("topK = %d, want %d", s.topK, n)
+		}
 	}
 }

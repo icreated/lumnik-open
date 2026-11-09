@@ -11,6 +11,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * In-memory evaluation of resolved when-conditions against one row (AND semantics).
@@ -24,6 +25,8 @@ import java.util.Map;
  */
 public final class ProcessRuleEvaluator {
 
+    private static final Pattern NUMERIC_TEXT = Pattern.compile(ViewFilter.NUMERIC_SHAPE);
+
     private ProcessRuleEvaluator() {}
 
     public static boolean matches(Map<String, Object> row, List<ViewFilter> conditions) {
@@ -31,7 +34,10 @@ public final class ProcessRuleEvaluator {
             Object v = row.get(f.column());
             if (v == null) return false;
             boolean ok;
-            if ("~".equals(f.op())) {
+            String other = f.operandColumn();
+            if (other != null) {
+                ok = againstColumn(v, row.get(other), f.op());
+            } else if ("~".equals(f.op())) {
                 ok = String.valueOf(v).toLowerCase(Locale.ROOT)
                         .contains(f.value().toLowerCase(Locale.ROOT));
             } else if ("=".equals(f.op())) {
@@ -44,13 +50,44 @@ public final class ProcessRuleEvaluator {
         return true;
     }
 
+    /**
+     * A column against another column of the same row (#1830). {@code =} on two texts is exact text. Any
+     * other pair is read as numbers, else as instants, else (for {@code =} only) as text; a pair that is
+     * none of these never matches, and neither does a null on either side. The shapes of a number and of a date are disjoint, so the first
+     * reading that fits the left cell is the one the apply-time kind check announced.
+     */
+    private static boolean againstColumn(Object left, Object right, String op) {
+        if (right == null) return false;
+        // Two texts are equal as text: "01" is not "1", whatever they would read as. Ordering still reads them.
+        if ("=".equals(op) && left instanceof CharSequence && right instanceof CharSequence)
+            return left.toString().equals(right.toString());
+        Integer cmp = compareCells(left, right);
+        if (cmp != null) return holds(op, cmp);
+        return "=".equals(op) && !(left instanceof Number) && !(right instanceof Number)
+            && String.valueOf(left).equals(String.valueOf(right));
+    }
+
+    /** Two cells as numbers, else as instants; null when the pair is neither. */
+    private static Integer compareCells(Object left, Object right) {
+        BigDecimal a = numberOf(left);
+        BigDecimal b = a == null ? null : numberOf(right);
+        if (b != null) return a.compareTo(b);
+        Instant x = instantOf(left);
+        Instant y = x == null ? null : instantOf(right);
+        return y == null ? null : x.compareTo(y);
+    }
+
     /** cmp(row, operand) applied to the operator; an incomparable row value never matches. */
     private static boolean ordered(Object v, ViewFilter f) {
         if (f.operandType() == null) return false;   // not a valid ordering comparison → no match
         Integer cmp = f.operandType() == ViewFilter.OperandType.NUMERIC
             ? compareNumeric(v, f.value()) : compareTemporal(v, f.value());
-        if (cmp == null) return false;
-        return switch (f.op()) {
+        return cmp != null && holds(f.op(), cmp);
+    }
+
+    private static boolean holds(String op, int cmp) {
+        return switch (op) {
+            case "="  -> cmp == 0;
             case ">"  -> cmp > 0;
             case ">=" -> cmp >= 0;
             case "<"  -> cmp < 0;
@@ -87,24 +124,30 @@ public final class ProcessRuleEvaluator {
     }
 
     private static Integer compareNumeric(Object v, String operand) {
-        BigDecimal left;
-        if (v instanceof Number n) {
-            left = nativeNumber(n);
-            if (left == null) return null;
-        } else {
-            String s = String.valueOf(v);
-            if (!s.matches(ViewFilter.NUMERIC_SHAPE)) return null;   // dirty text: the same shape as the SQL guard
-            try {
-                left = new BigDecimal(s.strip());
-            } catch (NumberFormatException e) {
-                return null;   // an unparseable number is incomparable, never a thrown error
-            }
+        BigDecimal left = numberOf(v);
+        return left == null ? null : left.compareTo(new BigDecimal(operand.strip()));
+    }
+
+    /** The cell as a number — a native Number by value, a STRING only when it has the strict text shape; else null. */
+    private static BigDecimal numberOf(Object v) {
+        if (v instanceof Number n) return nativeNumber(n);
+        String s = String.valueOf(v);
+        if (!NUMERIC_TEXT.matcher(s).matches()) return null;   // dirty text: the same shape as the SQL guard
+        try {
+            return new BigDecimal(s.strip());
+        } catch (NumberFormatException e) {
+            return null;   // an unparseable number is incomparable, never a thrown error
         }
-        return left.compareTo(new BigDecimal(operand.strip()));
     }
 
     private static Integer compareTemporal(Object v, String operand) {
-        Instant left = switch (v) {
+        Instant left = instantOf(v);
+        return left == null ? null : left.compareTo(TemporalText.parse(operand));
+    }
+
+    /** The cell as an instant, or null when it is not a date or a timestamp. */
+    private static Instant instantOf(Object v) {
+        return switch (v) {
             // A DATE column: pgjdbc's midnight in the JVM's zone, read as the day it names at midnight
             // UTC — the rung TemporalText gives a date-only operand, whatever zone the hub runs in (#1301).
             case java.sql.Date d -> d.toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant();
@@ -113,7 +156,5 @@ public final class ProcessRuleEvaluator {
             case Instant i -> i;
             default -> TemporalText.parse(String.valueOf(v));
         };
-        if (left == null) return null;
-        return left.compareTo(TemporalText.parse(operand));
     }
 }

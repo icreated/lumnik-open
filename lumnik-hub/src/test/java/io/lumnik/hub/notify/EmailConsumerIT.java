@@ -142,6 +142,8 @@ class EmailConsumerIT {
             "the rendered process message is the headline");
         assertTrue(html.contains("12045"), "entity key visible");
         assertTrue(html.contains("erp.commandes"), "entity visible");
+        assertEquals("Commande 12045 bloquée depuis 32 jours", sent.get(0).getSubject(),
+            "the inbox line is the decision's sentence");
     }
 
     @Transactional

@@ -1,7 +1,7 @@
 # Inbox — the human side of the decision
 
-> The third rung: the tenant's recent `decision.*` events, newest first — what needs a human.
-> And the disposal gesture: **ack**.
+> The tenant's recent `decision.*` events, newest first: what needs a human.
+> And the gesture that disposes of one: **ack**.
 
 ```bash
 lm inbox                 # open decisions (ID, WHEN, PROCESS, MESSAGE, ENTITY_KEY)

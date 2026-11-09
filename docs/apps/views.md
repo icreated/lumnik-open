@@ -1,8 +1,8 @@
 # kind: View — see
 
-> The first rung of the app ladder: a **declarative, read-only list** over a
-> scope's table, rendered by the hub and displayed by `lm`, the TUI or the PWA. One YAML says
-> which columns; a filter it cannot apply is refused instead of showing an empty table.
+> A **declarative, read-only list** over a scope's table. The hub renders it; `lm`, the TUI or
+> the PWA display it. One YAML says which columns. A filter it cannot apply is refused instead of
+> showing an empty table.
 
 | | |
 |---|---|
@@ -439,7 +439,7 @@ export's own columns, unlabelled, filterable the same way.
 |---|---|---|
 | apply refused: `unknown key(s) in the manifest: …` | a misspelled field (`titel:`) | the message lists what `kind:View` honors — fix the spelling |
 | render or apply refused: column `is not in the '…' schema for table …` | `spec.columns` names a column the scope's card does not have | fix the column name, or add it to the scope's entity |
-| render refused: `column '…' is not in … — the entity changed since this view was written` | the entity lost that column, but the scope's card still lists it: in another tenant than the one that applied, for the moment it takes to rebuild the card; for good, if that rebuild failed (the hub log says so) | drop the column from `spec.columns`, or put it back in the entity; `lm source rediscover --scope <tag>` refreshes the card |
+| render refused: `column '…' is not in … — the entity changed since this view was written` | the entity lost that column, but the scope's card still lists it. In another tenant than the one that applied, this lasts until the card is rebuilt. If that rebuild failed (the hub log says so), it stays | drop the column from `spec.columns`, or put it back in the entity; `lm source rediscover --scope <tag>` refreshes the card |
 | filter refused: `cannot filter on '…' — the view does not show it` | filtering on a column not listed in `spec.columns` | add the column to `spec.columns` |
 | filter refused: `'…' is not an allowed value for …` | the entity declares a `values` domain for that column | one of the listed values — or fix the domain in the entity |
 | filter refused: `'…' is not a number or ISO date — > needs an ordered value` | an ordering filter with a value that is neither | a number, or `YYYY-MM-DD` |

@@ -108,8 +108,10 @@ Each hub runs these jobs. A job still busy at its next turn skips that turn.
 | Workflow dormancy sweep | every 15 min¹ | flags documents sitting unmoved past their [dormancy threshold](../apps/workflows.md#dormancy-the-memory-of-the-breathing) |
 | Workflow due-date sweep | every 15 min¹ | flags documents whose [due date](../apps/workflows.md#due-date-a-deadline-the-data-carries) has passed in a due state |
 | Webhook delivery | every 5 s | delivers new events to the tenant's integrations (`lm integration`) |
-| Webhook retry | every 30 s | re-attempts failed deliveries with backoff — the failure journal (`lm outputs`) |
-| Email delivery | every 5 s | mails events matching notification rules (`lm notify`); a failed send is logged and skipped; mocked until the SMTP settings are set |
+| Webhook retry | every 30 s | re-attempts each failed delivery once per turn, three attempts in all — the failure journal (`lm outputs`) |
+| Process evaluation | every 5 s | evaluates new events against each [`kind: Process`](../apps/processes.md) and writes its decisions |
+| Email delivery | every 5 s | mails events matching notification rules (`lm notify`); mocked until the SMTP settings are set |
+| Email retry | every 30 s | sends a failed mail again, three attempts in all, then gives it up (`lm notify deliveries`) |
 | Search projection | every 1 min | brings search indexes up to date (Search provider builds only) |
 | Event retention purge | daily 04:30 | trims the event outbox — never past what the slowest consumer has seen |
 | Audit retention purge | daily 04:45 | trims the audit trail past its window (default 365 d; `0` disables) |

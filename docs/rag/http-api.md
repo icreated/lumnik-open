@@ -66,15 +66,42 @@ One endpoint, two modes, selected by the `mode` field:
 |---|---|---|---|
 | `question` | string | the natural-language question — **required** (blank → 400) | — |
 | `mode` | string | `"analytic"` (case-insensitive) = text-to-SQL over the ingested hub; anything else or absent = semantic retrieval + chat | semantic |
-| `scope` | string | the data-scope tag. `"all"` = no specific scope; blank or absent = **your default** (`lm scope set`) if set, else none. Semantic: filters retrieval to chunks carrying the tag. Analytic: names the schema card to ask over — a scope-bound user must name, or default to, a granted scope ([scopes](scopes.md#binding-users-to-scopes-opt-in)). | your default / `system` |
+| `scope` | string | the data-scope tag — see below | your default / `system` |
 | `corpus` | string | **semantic only**: restrict retrieval to one corpus (usually a connector source, see [corpora](#corpora)) | all corpora |
 | `topK` | integer | **semantic only**: how many chunks to retrieve as context, 1 to 50. Outside → `400 {"error":"topK must be between 1 and 50"}` | 10 |
-| `lang` | string | the answer language, a two-letter code (`"fr"`). The answer is written in it whatever the question's language — a terse question such as `SO-000004 statut ?` carries none. Absent = the question's own language. Any other value → `400 {"error":"lang must be a two-letter language code"}`, in either mode. The PWA sends `fr`; `lm ask` sends `--lang`, else the language of `LC_ALL`, `LC_MESSAGES` or `LANG`, in that order. | the question's |
-| `previous` | string | **analytic only**: the question the last answer was given for, so that this one may continue it (*« Et HAWARD ? »*). See [follow-up questions](#follow-up-questions). Blank or absent = a standalone question. Over 1000 characters → `400 {"error":"previous must be at most 1000 characters"}`. Sent in semantic mode → `400 {"error":"previous is only read in analytic mode"}`. | — |
+| `lang` | string | the answer language, a two-letter code (`"fr"`) — see below | the question's |
+| `previous` | string | **analytic only**: the question the last answer was given for, so that this one may continue it (*« Et HAWARD ? »*) — see [follow-up questions](#follow-up-questions) | — |
 
-`corpus` and `topK` are silently ignored in analytic mode. Fixed sentences
-(abstentions, guard refusals) follow `lang` too, in French or English — see
-[how refusals surface](#how-refusals-surface-in-the-payload).
+`scope`:
+
+- `"all"` means no specific scope.
+- Blank or absent means **your default** (`lm scope set`) if you set one, else none.
+- Semantic mode: retrieval keeps only the chunks carrying the tag.
+- Analytic mode: it names the schema card to ask over. A scope-bound user must name a granted scope,
+  or have one as default ([scopes](scopes.md#binding-users-to-scopes-opt-in)).
+
+`lang`:
+
+- The answer is written in it, whatever the question's language. A terse question such as
+  `SO-000004 statut ?` has no language of its own.
+- Absent: the question's own language.
+- Any other value → `400 {"error":"lang must be a two-letter language code"}`, in either mode.
+- The PWA sends `fr`. `lm ask` sends `--lang`, else the language of `LC_ALL`, `LC_MESSAGES` or
+  `LANG`, in that order.
+- Fixed sentences (abstentions, guard refusals) follow `lang` too, in French or English — see
+  [how refusals surface](#how-refusals-surface-in-the-payload).
+
+`previous`:
+
+- Blank or absent: a standalone question.
+- Over 1000 characters → `400 {"error":"previous must be at most 1000 characters"}`.
+- Sent in semantic mode → `400 {"error":"previous is only read in analytic mode"}`.
+
+`corpus` and `topK`:
+
+- `corpus` sent in analytic mode → `400 {"error":"corpus is only read in semantic mode"}`.
+- `topK` sent in analytic mode → `400 {"error":"topK is only read in semantic mode"}`.
+- Leave them out of an analytic question.
 
 ### Semantic response
 
@@ -412,7 +439,7 @@ POST /api/platform/rag/reindex    (lm_admin)    lm rag reindex
 | `400` | `{"error": "question is required"}` (chat), `{"error": "query is required"}` (search), `{"error": "scope is required"}` (schema) | missing/blank required field |
 | `400` | `{"error": "previous must be at most 1000 characters"}`, `{"error": "previous is only read in analytic mode"}` | a [follow-up](#follow-up-questions) `previous` over the bound, or sent without `mode: analytic` |
 | `404` | `{"error": "Unable to find matching target resource method"}` under `/api/platform/rag/`, `{"error": "HTTP 404 Not Found"}` on `/api/rag/chat` | chat, search, scopes or corpora on lumnik Open: the hub has no such door. `lm` prints `this hub's build has no Ask: …` |
-| `404` | no body | the same doors on lumnik Pro with the AI switched off. `lm` prints `this hub has Ask switched off (LUMNIK_AI_ENABLED=false): …` |
+| `404` | no body | the same doors on lumnik Pro with the AI switched off. `lm` prints `this hub has the AI switched off (LUMNIK_AI_ENABLED=false): …` |
 | `401` | plain text `authentication required` + `WWW-Authenticate: Bearer` header | no/invalid token on `/api/platform/*` — note: **not** JSON |
 | `401` | `{"error": "no tenant in security context"}` | analytic ask/schema call whose token resolves no usable tenant |
 | `403` | plain text `missing role lm_integrator` | authenticated but not an integrator, on `/api/platform/*` |

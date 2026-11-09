@@ -77,6 +77,24 @@ func printApplied[T any](cmd *cobra.Command, resp []byte, human func(io.Writer, 
 	return nil
 }
 
+// printPlainWarnings says on stderr the plain-text `warnings` of an apply answer, one `warning:` line each. The
+// apply is done, so the exit stays 0 (#1838: a Process or an Entity applied while an index is
+// still being built). Under -o json nothing is said twice — the body a script reads already carries them.
+func printPlainWarnings(cmd *cobra.Command, resp []byte) {
+	if outputFormat(cmd) != "table" {
+		return
+	}
+	var body struct {
+		Warnings []string `json:"warnings"`
+	}
+	if json.Unmarshal(resp, &body) != nil {
+		return // another door's warnings are objects, and have their own renderer
+	}
+	for _, w := range body.Warnings {
+		fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", w)
+	}
+}
+
 // renderApplyWarnings prints the advisories a successful apply carried back, and returns nil.
 //
 // Applied, and still worth saying something: "no scopes declared" decides whether anything a

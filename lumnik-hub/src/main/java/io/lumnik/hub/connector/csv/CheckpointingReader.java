@@ -6,11 +6,13 @@ import java.io.InputStream;
 import java.io.Reader;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
+import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CoderResult;
 import java.nio.charset.CodingErrorAction;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -81,6 +83,32 @@ public class CheckpointingReader extends Reader {
     }
   }
 
+  /**
+   * The stream holds a byte its charset cannot decode (REPORT semantics): where it sits and what it is, so a reader
+   * can say it — the JDK's own exception carries neither. Every char decoded before it was delivered first.
+   */
+  public static final class UndecodableByteException extends CharacterCodingException {
+    private final Charset charset;
+    private final long byteOffset;
+    private final int value;
+
+    UndecodableByteException(Charset charset, long byteOffset, int value) {
+      this.charset = charset;
+      this.byteOffset = byteOffset;
+      this.value = value;
+    }
+
+    public Charset charset() { return charset; }
+
+    /** The byte as written in a sentence: {@code 0x90}. */
+    public String hex() { return "0x" + HexFormat.of().withUpperCase().toHexDigits((byte) value); }
+
+    @Override
+    public String getMessage() {
+      return charset.name() + " cannot decode the byte " + hex() + " at offset " + byteOffset;
+    }
+  }
+
   /** A resumable position: byte-seek to {@code anchorByte}, then skip {@code charDelta} chars. */
   public record Checkpoint(long anchorByte, long charDelta) {}
 
@@ -104,6 +132,7 @@ public class CheckpointingReader extends Reader {
   private long charsDelivered;      // total chars handed out via read()
   private boolean eofSeen;          // `in` returned -1
   private boolean finished;         // decoder flushed; nothing more will be produced
+  private UndecodableByteException failure;   // met while decoding; thrown once the chars before it are delivered
 
   public CheckpointingReader(InputStream in, Charset charset) {
     this(in, charset, DEFAULT_BATCH_SIZE);
@@ -252,6 +281,7 @@ public class CheckpointingReader extends Reader {
    */
   private boolean refill() throws IOException {
     while (!finished) {
+      if (failure != null) throw failure;
       // THE invariant: the batch starts where the previous pass's undecoded leftover began —
       // `streamBytes` alone (where the next raw read begins) would skip those carried bytes and
       // hand resume an anchor inside a multi-byte sequence. `bytes` is in drain mode here, so
@@ -262,8 +292,11 @@ public class CheckpointingReader extends Reader {
 
       ledger.add(new Batch(batchStart, charsProduced));
       chars.clear();
-      check(decoder.decode(bytes, chars, eofSeen));
-      if (eofSeen && !bytes.hasRemaining()) {
+      CoderResult decoded = decoder.decode(bytes, chars, eofSeen);
+      if (decoded.isError()) {
+        // The bytes before the bad one decoded fine: deliver them, throw at the next refill.
+        failure = new UndecodableByteException(charset, streamBytes - bytes.remaining(), bytes.get(bytes.position()) & 0xFF);
+      } else if (eofSeen && !bytes.hasRemaining()) {
         // Final decode consumed everything (with endOfInput=true an incomplete tail would have
         // been reported above): flush terminal state and finish.
         check(decoder.flush(chars));

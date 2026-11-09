@@ -20,12 +20,26 @@ import java.util.Set;
 public record HybridJsonbSpec(String table, String uniqueKeyPath, List<PromotedColumn> promote,
                               Optional<Transform> uniqueKeyTransform) {
 
+    /** The columns of a hybrid table before the promoted ones, in table order. */
+    static final List<TableColumn> LEADING_COLUMNS = List.of(
+        new TableColumn("id", "BIGSERIAL PRIMARY KEY"),
+        new TableColumn("tenant_id", "BIGINT NOT NULL"),
+        new TableColumn("external_id", "TEXT NOT NULL"));
+
+    /** The columns after them, in table order. */
+    static final List<TableColumn> TRAILING_COLUMNS = List.of(
+        new TableColumn("row_hash", "TEXT"),
+        new TableColumn("data", "JSONB NOT NULL"),
+        new TableColumn("indexed_at", "TIMESTAMPTZ DEFAULT now()"),
+        new TableColumn("connector_id", "UUID NOT NULL"),
+        new TableColumn("endpoint_id", "UUID NOT NULL"));
+
     /**
-     * The columns every hybrid table carries around the promoted ones — what {@link HybridJsonbWriter#createTableSql} writes besides
-     * them. A promote entry named like one would die at the first run on "column specified more than once" (#1781).
+     * The columns every hybrid table carries around the promoted ones — the names of {@link #LEADING_COLUMNS} and
+     * {@link #TRAILING_COLUMNS}, which {@link HybridJsonbWriter#createTableSql} writes. A promote entry named like one
+     * would die at the first run on "column specified more than once" (#1781).
      */
-    public static final Set<String> RESERVED_COLUMNS = Set.of(
-        "id", "tenant_id", "external_id", "row_hash", "data", "indexed_at", "connector_id", "endpoint_id");
+    public static final Set<String> RESERVED_COLUMNS = TableColumn.namesOf(LEADING_COLUMNS, TRAILING_COLUMNS);
 
     public HybridJsonbSpec(String table, String uniqueKeyPath, List<PromotedColumn> promote) {
         this(table, uniqueKeyPath, promote, Optional.empty());
@@ -99,6 +113,8 @@ public record HybridJsonbSpec(String table, String uniqueKeyPath, List<PromotedC
         /** A number with a unit suffix ({@code 100m}, {@code 64Mi}, {@code 99827146n}) in its base unit (#1618). */
         PARSE_QUANTITY,
         /** The last segment of a link's path, percent-decoded — the id of a resource named by its URL (#1630). */
-        LAST_PATH_SEGMENT
+        LAST_PATH_SEGMENT,
+        /** An OData v2 date, {@code /Date(<ms>)/} or {@code /Date(<ms>±<minutes>)/}, as the UTC instant it names (#1826). */
+        FROM_ODATA_DATE
     }
 }

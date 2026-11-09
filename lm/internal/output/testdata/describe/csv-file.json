@@ -191,6 +191,12 @@
         "required" : false,
         "doc" : "Field delimiter (single char) — auto-detected if absent"
       }, {
+        "name" : "escape",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "Escape character for a quote inside a quoted value (single char, e.g. \\) — absent means the quote is doubled (RFC 4180); DisplayTag and MySQL OUTFILE use a backslash"
+      }, {
         "name" : "encoding",
         "type" : "STRING",
         "importance" : "LOW",
@@ -224,6 +230,13 @@
         "required" : false,
         "doc" : "One line = one row, one column (`line`): no delimiter, no quoting — fixed-width files, logs",
         "default" : false
+      }, {
+        "name" : "short_rows",
+        "type" : "STRING",
+        "importance" : "LOW",
+        "required" : false,
+        "doc" : "A line with fewer values than the declared columns: error (dead letter, default) or skip-leading (skipped while the table has not begun: a key;value block before it)",
+        "allowed" : [ "skip-leading", "error" ]
       }, {
         "name" : "columns",
         "type" : "LIST",

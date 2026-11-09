@@ -1137,10 +1137,12 @@ public class ConnectorEngine {
                             // measured and left green. The sentences are not re-logged here: the
                             // reader's own planStart words them on the chunk that applies the
                             // repair, and the run row carries them as its message.
-                            return start.lostAtStart().isEmpty()
+                            // The reader's own notes (a guessed encoding, #1885) say the same thing from the
+                            // other side: everything was read, and not everything is known to be read right.
+                            List<String> said = said(start, scope);
+                            return said.isEmpty()
                                     ? completeRun(c, endpoint, runId, run)
-                                    : partialRun(c, endpoint, runId, run,
-                                            String.join("; ", start.lostAtStart()));
+                                    : partialRun(c, endpoint, runId, run, String.join("; ", said));
                         }
                         processed = s.processed();
                     }
@@ -1156,7 +1158,7 @@ public class ConnectorEngine {
                         // read `error:` to learn WHICH cause fired — so keeping only the last one
                         // answers a question with half an answer.
                         return partialRun(c, endpoint, runId, run,
-                                Stream.concat(start.lostAtStart().stream(), Stream.of(st.detail()))
+                                Stream.concat(said(start, scope).stream(), Stream.of(st.detail()))
                                         .collect(Collectors.joining("; ")));
                     }
                     case ChunkResult.Cancelled cancelled -> {
@@ -1222,18 +1224,24 @@ public class ConnectorEngine {
         }
     }
 
+    /** What a run that ends short of certain says: what its start found lost, and what its readers could not be sure of (#1885). */
+    private static List<String> said(RunStart start, RunScope scope) {
+        return Stream.concat(start.lostAtStart().stream(), RunNotes.of(scope).sentences().stream()).toList();
+    }
+
     /**
      * A run that ended without reaching the target it gave itself. Terminal, like every other
      * ending, and deliberately NOT Failed: nothing went wrong, everything read was written and the
      * position is persisted — the next run resumes from it and catches up.
      *
-     * <p>{@code RunStatus.Partial} has existed since the connector runtime was written and nothing
-     * ever produced it. It is one of the five values V53 allows in {@code connector_run.status}.
+     * <p>{@code RunStatus.Partial} is one of the five values V53 allows in {@code connector_run.status}.
      *
-     * <p>Partial means ONE thing: the run stopped below its target — a shortfall in POSITION. A
-     * shortfall in DELIVERY (rows read and dropped) is not this; {@code records_skipped}, the
+     * <p>Partial means the run did not read everything it was entitled to, or is not sure it read it right: it stopped
+     * below its target (a shortfall in POSITION), or its start found records the source deleted under its cursor, or
+     * a reader left a note in {@link RunNotes} (#1885: a guessed encoding; everything was read, and perhaps not right).
+     * A shortfall in DELIVERY (rows read and dropped) is not this; {@code records_skipped}, the
      * dead-letter list and OTK Law 1 already say it in full, and a status that answered both
-     * questions would end up lying to one of them.
+     * questions would end up lying to one of them. The detail says which of the three it was.
      */
     private RunStatus partialRun(Connector c, ConnectorEndpoint endpoint, UUID runId,
                                  ConnectorRun run, String detail) {

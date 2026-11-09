@@ -1,5 +1,6 @@
 package io.lumnik.hub.process;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
@@ -11,8 +12,9 @@ import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
 import io.lumnik.hub.entity.EntityManifest;
-import io.lumnik.hub.entity.EntityRegistry;
 import io.lumnik.hub.entity.EntityViewCompiler;
+import io.lumnik.hub.entity.UnreadableEntityException;
+import io.lumnik.hub.sql.ManagedIndex.Spec;
 import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
@@ -47,12 +49,20 @@ public class ProcessApplyResource {
     @Inject SchemaCardStore cards;
     @Inject ProcessManifestStore store;
     @Inject AuditRecorder audit;
-    @Inject EntityRegistry entities;
+    @Inject MatchIndexes matchIndexes;
     @Inject DynamicTableRegistry tables;
+
+    /** {@code event_outbox.source} is VARCHAR(120) and holds {@code process:<name>}. */
+    static final int MAX_NAME_LENGTH = 120 - "process:".length();
 
     private final ProcessManifestParser parser = new ProcessManifestParser();
 
-    public record ApplyResult(String name, String table, String emit) {}
+    public record ApplyResult(String name, String table, String emit,
+                              @JsonInclude(JsonInclude.Include.NON_EMPTY) List<String> warnings) {
+        public ApplyResult(String name, String table, String emit) {
+            this(name, table, emit, List.of());
+        }
+    }
     public record ProcessInfo(String name, String table, String emit, boolean enabled) {}
 
     @POST
@@ -64,6 +74,10 @@ public class ProcessApplyResource {
 
         JsonNode root = ApiErrors.orBadRequest(() -> parser.readTree(body));
         ProcessManifest m = ApiErrors.orBadRequest(() -> parser.parse(root));
+        if (m.name().length() > MAX_NAME_LENGTH) {
+            return ApiErrors.badRequest("metadata.name is at most " + MAX_NAME_LENGTH + " characters: a decision's source,"
+                + " 'process:' and the name, must fit the outbox's 120 — " + m.name().length() + " given");
+        }
 
         // C3: a key the parser does not honor used to be accepted and stored in silence — a
         // misspelled `mesage:` would have cost the decision its text with no word said.
@@ -100,13 +114,20 @@ public class ProcessApplyResource {
             return ApiErrors.badRequest(
                 "spec.on.table '" + m.onTable() + "' is not in the '" + m.scope() + "' scope");
         }
-        if (!tables.emitsRowEvents(tenant, m.onTable())) {
-            return ApiErrors.badRequest(cannotFireOn(m.onTable()));
+        String cannotFire = cannotFire(tenant, m.onTable());
+        if (cannotFire != null) {
+            return ApiErrors.badRequest(cannotFire);
         }
+        EntityManifest entity = matchIndexes.storedEntity(m.onTable()).orElse(null);
+        List<Spec> wantedIndexes = entity == null ? List.of() : matchIndexes.wanted(entity);
+        Optional<String> unindexable = matchIndexes.refusal(wantedIndexes)
+            .or(() -> matchIndexes.reverseRefusal(entity == null ? List.of() : matchIndexes.reverse(entity)));
+        if (unindexable.isPresent()) return ApiErrors.badRequest(unindexable.get());
         ApiErrors.checkOrBadRequest(() -> {
             ProcessConditionResolver.resolve(m.when(), table);
             ProcessConditionResolver.validateMessage(m.emitMessage(), table);
             ProcessConditionResolver.validateFields(m.emitFields(), table);
+            ProcessConditionResolver.validateKey(m.emitKey(), table);
         });
 
         // granted().orElse(null) — empty Optional means unscoped, i.e. every scope. The write's own
@@ -116,32 +137,70 @@ public class ProcessApplyResource {
         // The store writes raw JDBC, so nothing else records the apply (#1234).
         audit.record("Process", m.name(), "APPLY", Map.of(
             "scope", m.scope(), "table", m.onTable(), "manifest_sha256", AuditRecorder.sha256(body)));
-        return Response.ok(new ApplyResult(m.name(), m.onTable(), m.emitType())).build();
+        List<String> warnings = entity == null ? List.of() : matchIndexes.pendingAndBuild(entity, wantedIndexes);
+        return Response.ok(new ApplyResult(m.name(), m.onTable(), m.emitType(), warnings)).build();
     }
 
     /**
-     * Why this trigger table cannot fire. Being in the scope's card is not enough: a card also
-     * advertises the {@code connector.v_} entity views {@code EntitySchemaBuilder} compiles and the
-     * {@code ext.*} targets {@code HybridJsonbWriter} registers, and no row is ever written INTO
-     * either — {@code data.row.changed} is staged by {@code DynamicTableWriter} alone. A manifest
-     * on one of those used to pass, return a clean 200, and sit in the list silent for ever.
+     * Why this trigger cannot fire, or null when it can. Being in the scope's card is not enough: a card also
+     * advertises the {@code connector.v_} entity views {@code EntityViewCompiler} compiles, and no row is ever written
+     * INTO a view — {@code data.row.changed} is staged by the row writers, on the {@code connector.t_*} tables and the
+     * hybrid tables (usually {@code ext.*}) a connector registered. A manifest on a name no connector registered used to
+     * pass, return a clean 200, and sit in the list silent for ever.
      *
-     * <p>A fused view earns the better sentence: the entity knows the raw tables it fuses, so the
-     * refusal names them and the fix is one edit away.
+     * <p>An Entity's view is the exception that is served (#1833): a process on a {@code match:} Entity is evaluated on
+     * the fused row whenever one of the Entity's sources changes. So the question moves to the sources — each must be a
+     * table a row writer fills, or a change there would never reach the process.
      */
-    private String cannotFireOn(String onTable) {
-        String why = "spec.on.table '" + onTable + "' cannot fire: data.row.changed is born only on"
-            + " the tables a connector's row writer fills, and this is not one of them";
+    private String cannotFire(long tenant, String onTable) {
         String entityName = EntityViewCompiler.entityNameFromView(onTable);
-        if (entityName == null) return why;
-        why = "spec.on.table '" + onTable + "' is a fused entity view — data.row.changed is born"
-            + " on the raw table a connector writes, never on a view, so this process could never fire";
-        EntityManifest entity = entities.findReloadingIfMissing(entityName);
-        if (entity == null || entity.sources() == null || entity.sources().isEmpty()) return why;
-        return why + " — declare it on " + entity.sources().stream()
-            .filter(Objects::nonNull)
-            .map(src -> "connector." + src.table())
+        if (entityName == null) {
+            return tables.emitsRowEvents(tenant, onTable) ? null : cannotFireOn(onTable);
+        }
+        // The stored row, not this node's copy: another node may have re-applied the Entity (with joins:, or other sources)
+        // since this registry loaded it, and this door decides what a process may be declared on.
+        EntityManifest entity;
+        try {
+            entity = matchIndexes.storedEntity(onTable).orElse(null);
+        } catch (UnreadableEntityException unreadable) {
+            // written by another version: said as a refusal, without the parser's words (they quote the text it choked on);
+            // a failure to reach the row is not caught here: it is the server's
+            return "spec.on.table '" + onTable + "' is the view of an Entity whose stored definition cannot be read — apply the Entity again first";
+        }
+        if (entity == null || entity.sources() == null || entity.sources().isEmpty()) {
+            return cannotFireOn(onTable) + " — no Entity is stored under that view";
+        }
+        if (!EntityProcessTargets.servable(entity)) {
+            return "spec.on.table '" + onTable + "' is a resolution: Entity — a process on one is not supported yet;"
+                + " declare it on a match: Entity, or on " + rawTables(entity);
+        }
+        for (EntityManifest.Source src : entity.sources()) {
+            String table = src.fqn();
+            if (!tables.emitsRowEvents(tenant, table)) {
+                return "spec.on.table '" + onTable + "' fuses " + table + ", which cannot fire: data.row.changed is born only on"
+                    + " the tables a connector's row writer fills, so a change there would never reach this process";
+            }
+        }
+        for (EntityManifest.Join join : entity.joins()) {
+            String table = EntityViewCompiler.SCHEMA + "." + join.table();
+            if (!tables.emitsRowEvents(tenant, table)) {
+                return "spec.on.table '" + onTable + "' joins " + table + ", which cannot fire: data.row.changed is born only on"
+                    + " the tables a connector's row writer fills, so a change there would never re-evaluate the rows it reaches";
+            }
+        }
+        return null;
+    }
+
+    private static String rawTables(EntityManifest entity) {
+        return entity.sources().stream().filter(Objects::nonNull).map(EntityManifest.Source::fqn)
             .collect(Collectors.joining(" or "));
+    }
+
+    private static String cannotFireOn(String onTable) {
+        return "spec.on.table '" + onTable + "' cannot fire: data.row.changed is born only on"
+            + " the tables a connector's row writer fills (a connector.t_<name> table, or a hybrid table,"
+            + " <schema>.<name>, usually ext.<name> (a REST endpoint's target or a one-shot ingest)), and this is"
+            + " not one of them";
     }
 
     /** The stored manifest, as applied — lets the TUI's edit loop round-trip a process.

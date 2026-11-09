@@ -89,7 +89,7 @@ class ParseNumberIntegerLandsAsBigintIT {
     write(table, parsed("1024944", "{\"column\":\"product_id\"}"));
 
     assertThat(columnType(table)).isEqualTo("numeric");
-    assertThat(ids(table)).containsExactly("1024944.0000");
+    assertThat(ids(table)).containsExactly("1024944");
   }
 
   @Test

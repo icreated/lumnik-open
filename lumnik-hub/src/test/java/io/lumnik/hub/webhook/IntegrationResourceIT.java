@@ -10,6 +10,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import static io.restassured.RestAssured.given;
+import static org.hamcrest.Matchers.allOf;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasItem;
@@ -28,6 +29,28 @@ class IntegrationResourceIT {
     @AfterEach
     void clearTenant() {
         TenantContextFilter.CURRENT_TENANT.remove();
+    }
+
+    @Test
+    void a_star_anywhere_but_a_final_dot_star_is_refused_on_create_and_update() {
+        String name = "star-" + System.nanoTime();
+        given().contentType("application/json").header("X-Tenant-ID", TENANT.toString())
+            .body("{\"name\":\"" + name + "\",\"targetUrl\":\"https://hook.example.com/x\",\"authMode\":\"NONE\","
+                + "\"eventTypes\":[\"repair.completed\",\"decision.cold-room-*\"]}")
+        .when().post("/api/tenants/" + TENANT + "/integrations")
+        .then().statusCode(400)
+            .body("error", allOf(containsString("'decision.cold-room-*'"),
+                containsString("exact event type"), containsString("prefix.*")));
+
+        Integer id = given().contentType("application/json").header("X-Tenant-ID", TENANT.toString())
+            .body("{\"name\":\"" + name + "\",\"targetUrl\":\"https://hook.example.com/x\",\"authMode\":\"NONE\","
+                + "\"eventTypes\":[\"decision.*\"]}")
+        .when().post("/api/tenants/" + TENANT + "/integrations")
+        .then().statusCode(201).extract().path("id");
+        given().contentType("application/json").header("X-Tenant-ID", TENANT.toString())
+            .body("{\"eventTypes\":[\"decision.cold-room-*\"]}")
+        .when().put("/api/tenants/" + TENANT + "/integrations/" + id)
+        .then().statusCode(400).body("error", containsString("'decision.cold-room-*'"));
     }
 
     @Test

@@ -18,7 +18,7 @@ The OAuth2 token request is not cleaned: its answer *is* the token, and lumnik n
 | Rule | Why |
 |---|---|
 | The whole `Authorization` value is replaced in every response: `Bearer eyJh…` becomes `Bearer <redacted>`. A query parameter whose name says it is a credential (`apikey=…`, `token=…`) becomes `apikey=<redacted>`. | No row writes `Bearer` followed by your token, or `apikey=` followed by your key. These forms are a credential wherever they appear, whatever their length. |
-| A response that is **not ingested** loses the bare value too: an HTTP error, a GraphQL `errors` answer, a SOAP Fault. The value is replaced as sent, JSON-escaped (`\/`) and URL-encoded. The user and password of a Basic credential are replaced decoded as well. | This text only ever reaches a failure message or a test sample, never your tables, so replacing too much costs nothing. |
+| A response that is **not ingested** loses the bare value too: an HTTP error, a GraphQL `errors` answer, a SOAP Fault. The value is replaced as sent, JSON-escaped (`\/`) and URL-encoded. The user and password of a Basic credential are replaced decoded as well, and each value of a `Cookie` header on its own. | This text only ever reaches a failure message or a test sample, never your tables, so replacing too much costs nothing. |
 | In that same response, a value shorter than 8 characters is replaced only where it stands alone, not inside a longer word or number. | A short value is often part of the error text itself. Replacing it inside every word would make the message unreadable. |
 | A response that **is ingested** never loses a bare value. | A token `12345678` and a `"customer_id": 12345678` are the same text. Rewriting it would change your data, and no length tells one from the other. |
 | An OAuth2 `access_token` shorter than 8 characters is refused before the first page. No other credential is refused for its length. | lumnik obtains that token itself, so it can refuse one too short to keep out of an error text. A static key is yours, and lumnik will not lock you out for its length. |
@@ -29,7 +29,7 @@ The OAuth2 token request is not cleaned: its answer *is* the token, and lumnik n
 | Case | What happens |
 |---|---|
 | A credential sent in the **request body**: a `{{secret:…}}` inside a SOAP envelope, a form or JSON login. | Only headers and query parameters are known as credentials. A source that echoes a body credential shows it in the failure message. Prefer a header credential where the API offers one. |
-| A header whose name does not contain `key`, `token`, `secret`, `password` or `auth`, for example `X-Signature` or `Cookie`. | It is not treated as a credential, and an echo of it is not hidden. |
+| A header whose name does not contain `key`, `token`, `secret`, `password`, `auth` or `cookie`, for example `X-Signature`. | It is not treated as a credential, and an echo of it is not hidden. |
 | An echo in a **response header**. | Nothing lumnik prints shows a response header in full. A redirect's failure message names its host only. |
 
 ## See also

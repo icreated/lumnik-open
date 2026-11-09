@@ -13,6 +13,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.List;
+import org.mockito.ArgumentMatchers;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
@@ -69,8 +70,8 @@ class WriterTiersTest {
     DataSource ds = mock(DataSource.class);
     Connection conn = mock(Connection.class);
     when(ds.getConnection()).thenReturn(conn);
-    when(conn.prepareStatement(org.mockito.ArgumentMatchers.anyString())).thenThrow(failure);
-    when(conn.unwrap(org.mockito.ArgumentMatchers.any(Class.class))).thenThrow(failure);
+    when(conn.prepareStatement(ArgumentMatchers.anyString())).thenThrow(failure);
+    when(conn.unwrap(ArgumentMatchers.any(Class.class))).thenThrow(failure);
     return ds;
   }
 

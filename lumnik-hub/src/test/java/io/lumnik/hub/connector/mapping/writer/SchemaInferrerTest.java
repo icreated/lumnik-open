@@ -34,7 +34,7 @@ class SchemaInferrerTest {
         Map.<String,Object>of("price", new BigDecimal("12.5")),
         Map.<String,Object>of("price", new BigDecimal("99")));
     var schema = inferrer.infer(rows);
-    assertThat(schema.get("price")).isEqualTo("NUMERIC(18,4)");
+    assertThat(schema.get("price")).isEqualTo("NUMERIC");
   }
 
   @Test

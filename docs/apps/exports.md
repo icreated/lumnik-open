@@ -46,8 +46,9 @@ SHA-256       9c1e5a0f3b7d2e48a6c4f19d0b3e7a25c8f61d4e0a9b72c35e8d1f6a4b0c9e27
 Location      /inbound/customers-2026-09-24.csv
 ```
 
-- **`--wait` exits 0 only on `Completed`.** Without it, `lm export run` returns as soon as the
-  hub has *accepted* the run (`accepted`; the run is `Running`, or `Queued` with the run queue on), which does not mean delivered.
+- **`--wait` exits 0 only on `Completed`.**
+- Without `--wait`, `lm export run` returns as soon as the hub has *accepted* the run. Accepted
+  does not mean delivered: the run is `Running`, or `Queued` with the run queue on.
 - The `SHA-256` is computed over the exact bytes sent. Compare it with what the partner received.
 - Times are shown in your terminal's time zone. The hub stores them in UTC.
 
@@ -486,7 +487,8 @@ With the run queue on ([Turning on the run queue](../operations/upgrade.md#turni
 
 - A queued run's file name is fixed when the hub accepts it: queued at 23:59, it keeps that day's
   `${date}`.
-- A run not started within an hour ends `Failed`, `interrupted`.
+- A run not started within `LUMNIK_RUN_QUEUE_MAX_AGE` (an hour by default) ends `Failed`,
+  `interrupted`.
 
 ## Recovering from a crash
 

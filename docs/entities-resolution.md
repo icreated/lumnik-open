@@ -234,7 +234,7 @@ Corrections are made in `:entities`: `Enter` on the entity, `m` marks a row, `=`
 
 - **[`joins[]`](entities-joins.md) work on a `resolution:` entity too.** They are read on top
   of the resolved customers: each row gets the lookup's value. A key that the lookup holds more than once
-  leaves the joined column empty and lists those rows in `_conflicts`; it never picks one.
+  leaves the joined column empty, and lists those rows in `_conflicts`. It never picks one.
 - **A [SearchIndex](search/search-indexes.md#columns-joined-from-a-lookup-table) finds a customer
   once it is resolved.** A row still ambiguous, or with no rule, is not searchable yet.
 
@@ -242,7 +242,7 @@ Corrections are made in `:entities`: `Enter` on the entity, `m` marks a row, `=`
 
 | Key | What it says |
 |---|---|
-| `resolution.identity` | for each source table, the column that identifies one of its rows — one per source, every source listed. Write the column's **name in the entity** (the right side of the source's `map`), not the source's own name: `t_res_crm: crm_id`, although the CRM file calls it `contact_id` |
+| `resolution.identity` | for each source table, the column that identifies one of its rows. Every source is listed, once. Write the column's **name in the entity** (the right side of the source's `map`): `t_res_crm: crm_id`, although the CRM file calls it `contact_id` |
 | `resolution.cascade` | the rules, tried in order — at least one |
 | `cascade[].id` | the rule's name, shown in the history |
 | `cascade[].exact.fields` | canonical columns that must be equal — several fields must all be equal |
@@ -269,12 +269,23 @@ cascade:
 
 ## Operating it
 
-- **`LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET` is required**: the hub does not start without it.
-  `deploy/selfhost/up.sh` generates it; with Helm, set `secrets.entityResolutionHmacSecret`.
-  Changing it forces a full re-resolve at the next `lm entity resolve` and breaks open view page
-  links. Back it up with your other secrets.
+- **`LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET` is required**: the hub does not start without it. It is
+  at least 16 characters.
+    - `deploy/selfhost/up.sh` generates it. With Helm, set `secrets.entityResolutionHmacSecret`.
+    - Keep it stable for as long as the entity holds resolved data, and back it up with your other
+      secrets. **Rotating it in place is not supported.**
+    - If it changed by accident, put the old secret back **before** the next `lm entity resolve`.
+      Then nothing has moved.
+    - Once `lm entity resolve` has run under a new secret, every row an `exact` rule linked is
+      **ambiguous**, with no entity id. Pairs declared with `lm entity assert-same` keep their link.
+    - Nothing mends those rows: not a second resolve, not the old secret put back, not
+      `lm entity assert-same`. A new `LUMNIK_ENTITY_RESOLUTION_HMAC_KEY_ID` does not avoid it.
+    - Every open view page link stops working: it answers
+      `this page link is no longer valid — reload the view from its first page`.
+    - If the secret leaked and you must rotate anyway, plan it as a rebuild of that entity's links.
+      No command does it for you yet.
 - **After upgrading the hub**, apply each `resolution:` entity again with the same manifest, then run
-  `lm entity resolve NAME`.
+  `lm entity resolve NAME` ([Upgrade](operations/upgrade.md#the-short-version)).
 
 ## See also
 

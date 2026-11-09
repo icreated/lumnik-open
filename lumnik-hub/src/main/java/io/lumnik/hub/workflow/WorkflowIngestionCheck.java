@@ -7,6 +7,7 @@ import io.lumnik.hub.connector.event.ConnectorRunCompleted;
 import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityRegistry;
 import io.lumnik.hub.entity.EntityViewCompiler;
+import io.lumnik.hub.event.OutboxKey;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -145,7 +146,7 @@ public class WorkflowIngestionCheck {
             ps.setString(2, "workflow.undeclared." + g.name());
             ps.setString(3, "workflow:" + g.name());
             ps.setString(4, g.table());
-            ps.setString(5, WorkflowDormancySweep.bounded(g.name()));
+            ps.setString(5, OutboxKey.bounded(g.name()));
             ps.setString(6, payload);
         });
     }

@@ -28,6 +28,7 @@ class JdbcDialectRegistryTest {
     public String limitClause(int l) { throw new UnsupportedOperationException(); }
     public List<String> defaultSkipPatterns() { throw new UnsupportedOperationException(); }
     public List<String> listTables(Connection c, String s) { throw new UnsupportedOperationException(); }
+    public List<String> listViews(Connection c, String s) { throw new UnsupportedOperationException(); }
     public boolean tableExists(Connection c, String s, String t) { throw new UnsupportedOperationException(); }
     public List<ColumnDescriptor> listColumns(Connection c, String s, String t) { throw new UnsupportedOperationException(); }
     public List<FkDescriptor> listForeignKeys(Connection c, String s, String t) { throw new UnsupportedOperationException(); }

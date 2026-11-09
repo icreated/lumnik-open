@@ -11,6 +11,7 @@ import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.Mutability;
 import io.lumnik.hub.connector.persistence.converters.ImmutableJsonNodePlan;
+import io.lumnik.hub.sql.PgText;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -163,4 +164,9 @@ public class ConnectorRun extends TenantedEntity {
     all.forEach(v -> node.addObject().put("name", v.name()).put("sha256", v.sha256()));
     scripts = node;
   }
+
+  // A failure's text may quote what failed, and what failed can hold a NUL byte, which text refuses (#1855):
+  // a run that cannot record why it failed ends as "Error invoking subclass method".
+  public void setErrorMessage(String errorMessage) { this.errorMessage = PgText.storable(errorMessage); }
+  public void setErrorStack(String errorStack) { this.errorStack = PgText.storable(errorStack); }
 }

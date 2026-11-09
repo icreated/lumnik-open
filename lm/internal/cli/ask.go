@@ -101,9 +101,6 @@ func printDisputed(out io.Writer, disputed []client.Disputed, truncated bool) {
 	}
 }
 
-// cellEscapes keeps a value on its row and under its header: a raw tab would move it to the next column.
-var cellEscapes = strings.NewReplacer("\t", `\t`, "\n", `\n`, "\r", `\r`)
-
 // printRows tabulates every row the hub returned, after what qualifies the answer and before the SQL
 // (#1105): when the phrased answer is withheld or failed, these rows are the answer. The hub's LIMIT
 // bounds them, and the count line says how many were printed. An answer that ran no SQL has no result.
@@ -122,7 +119,7 @@ func printRows(out io.Writer, res *client.AskResult) {
 		for _, cells := range append([][]string{headers}, res.Rows...) {
 			shown := make([]string, len(cells))
 			for i, c := range cells {
-				shown[i] = cellEscapes.Replace(c)
+				shown[i] = output.Cell(c)
 			}
 			fmt.Fprintln(tw, "  "+strings.Join(shown, "\t"))
 		}

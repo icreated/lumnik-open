@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The webhook consumer reads a tenant's live endpoints once per outbox batch, not once per event,
@@ -36,5 +37,23 @@ class WebhookConsumerBatchTest {
 
         consumer.batchProcessor().accept(EventOutboxRow.of(1L, "order.created", Map.of()));
         assertThat(endpointReads).containsExactly(1L, 2L, 1L);
+    }
+
+    /** #1837: an event whose payload cannot be written is a failure of the consumer, kept as a dead letter — not a quiet skip. */
+    @Test
+    void a_payload_that_cannot_be_written_fails_the_event_instead_of_skipping_it() {
+        WebhookEndpoint live = new WebhookEndpoint();
+        live.setEventTypes(List.of("order.*"));
+        consumer.endpointRepo = new WebhookEndpointRepository() {
+            @Override public List<WebhookEndpoint> findEnabled(Long tenantId) { return List.of(live); }
+        };
+        consumer.mapper = new com.fasterxml.jackson.databind.ObjectMapper() {
+            @Override public String writeValueAsString(Object value) throws com.fasterxml.jackson.core.JsonProcessingException {
+                throw new com.fasterxml.jackson.core.JsonProcessingException("no") {};
+            }
+        };
+
+        assertThatThrownBy(() -> consumer.batchProcessor().accept(EventOutboxRow.of(1L, "order.created", Map.of())))
+            .isInstanceOf(IllegalStateException.class);
     }
 }

@@ -36,6 +36,14 @@ func ConnectorDeleteTakes(takes types.DeleteTakes) string {
 	return strings.Join(append(parts, "its run history and RAG chunks"), ", ")
 }
 
+// cellEscapes shows a tab or a line break inside a cell instead of obeying it: a raw one cuts the row
+// or moves the cell to the next column, and every column after it loses its header (#1889). Only the
+// table is concerned; json and yaml keep the value exact.
+var cellEscapes = strings.NewReplacer("\t", `\t`, "\n", `\n`, "\r", `\r`)
+
+// Cell is a value ready for one cell of a human table or label list.
+func Cell(s string) string { return cellEscapes.Replace(s) }
+
 // Print renders items in the requested format.
 //
 // format: "table" | "json" | "yaml"
@@ -62,7 +70,7 @@ func Print[T any](w io.Writer, format string, headers []string, rows []T, toRow 
 				if i > 0 {
 					_, _ = fmt.Fprint(tw, "\t")
 				}
-				_, _ = fmt.Fprint(tw, c)
+				_, _ = fmt.Fprint(tw, Cell(c))
 			}
 			_, _ = fmt.Fprintln(tw)
 		}

@@ -1,10 +1,13 @@
 # The demo desk
 
-> Three small exports of the same fictional company — an ERP, a CRM that contradicts it, and
-> an order book with twenty years of keyboard habits in its status column — and one manifest
-> per rung of the ladder over them. The source every screen of the
-> [Entities](../entities.md), [Views](views.md), [Processes](processes.md) and
-> [Workflows](workflows.md) pages reads.
+> Three small exports of the same fictional company, and the manifests over them:
+>
+> - an ERP;
+> - a CRM that contradicts it;
+> - an order book with twenty years of keyboard habits in its status column.
+>
+> Every screen of the [Entities](../entities.md), [Views](views.md), [Processes](processes.md)
+> and [Workflows](workflows.md) pages reads them.
 
 It ships with the repo, under `docs/apps/demo/`. Nothing is generated: every fused row, every
 disagreement and every undeclared status below was **counted by hand**.
@@ -87,11 +90,11 @@ next run removes the newer orders, and `lm run get <id>` says so (from day 3:
 
 | Folder | Files | The page |
 |---|---|---|
-| `entities/` | `10-customer` fuses the ERP and the CRM; `20-crm-first` flips the priority; `40-customer-crm-city` prefers the CRM for the city; `50-order-stage` and `55-order-due` read the extra sources below; `60`–`65` must each be refused | [Entities](../entities.md) |
+| `entities/` | `10-customer` fuses the ERP and the CRM; `20-crm-first` flips the priority; `40-customer-crm-city` prefers the CRM for the city; `50-order-stage` and `55-order-due` read the extra sources below; `60`–`65` must each be refused; `66-partner-by-amount` applies, and is what `processes/63` is refused on | [Entities](../entities.md) |
 | `sources/` | `10-erp`, `20-crm`, `30-orders` land the desk; `55`–`56-stage-*` (`conflicts: false`) and `70`–`72-due-*` (dates and numbers) land the extra examples, same `docker cp` | [Entities](../entities.md), [Dates and numbers](../entities-types.md) |
 | `views/` | `10-customers` over the fused entity, `20-orders` straight over the raw order book; `60`–`62` must be refused | [Views](views.md) |
 | `processes/` | `10-litige` emits a decision when an order lands in dispute, `20-grosse-commande` when it is above 1 000 €; `60`–`64` must each be refused | [Processes](processes.md) |
-| `workflows/` | `10-order-lifecycle` declares what the status column means, with a dormancy threshold; `60`–`67` must be refused | [Workflows](workflows.md) |
+| `workflows/` | `10-order-lifecycle` declares what the status column means, with a dormancy threshold; `60`–`68` must be refused | [Workflows](workflows.md) |
 
 The `6x` files are **not** broken files to fix: each one is meant to be refused, with the
 message its page shows.
@@ -138,12 +141,16 @@ lm view rm acme-customers; lm view rm acme-orders
 lm process rm litige-ouvert; lm process rm grosse-commande
 lm workflow rm acme-order-lifecycle
 lm entity delete AcmeCustomer --force; lm entity delete AcmeCustomerCrmFirst --force
+lm entity delete AcmeCustomerCrmCity --force
 for n in erp crm orders; do lm connector delete acme-desk-$n --force; done
 ```
 
-`--force` skips the `delete` confirmation both commands ask for. Entities go before connectors:
-a connector whose table feeds an entity is refused with a `409` naming the entity. An `rm` of
-something you never applied answers `404`; the next command still runs.
+- `--force` skips the `delete` confirmation both commands ask for.
+- An entity delete drops its view **for every tenant**. A connector delete drops its table, its
+  run history and its RAG chunks.
+- Entities go before connectors: a connector whose table feeds an entity is refused with a `409`
+  naming the entity.
+- An `rm` of something you never applied answers `404`; the next command still runs.
 
 !!! note "One scope for the whole desk"
     Every source connector carries `scopes: [desk]`, and so does the entity. That is what lets a

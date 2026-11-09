@@ -79,19 +79,20 @@ class SourceFieldOrderTest {
      * is how a defect in the DDL parse stayed invisible: a type carrying a comma,
      * {@code NUMERIC(18,4)}, was split into two and invented a column called {@code 4)}. A test
      * about column ORDER that never exercises a typed column proves less than its name says, and
-     * whole-number typing (#497) is what put that type within reach of these very tests.
+     * whole-number typing (#497) is what put that type within reach of these very tests. The inferrer no
+     * longer emits it (#1862), but a registered schema still can: the column is retyped by hand below.
      */
     @Test
     void theOrderHoldsWhenTheTypesThemselvesCarryCommas() {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("code", "C1");                 // TEXT
         row.put("qty", 3);                     // BIGINT
-        row.put("credit_limit", 748.5d);       // NUMERIC(18,4) — the comma that broke the parse
+        row.put("credit_limit", 748.5d);       // NUMERIC
         row.put("city", "Lyon");               // TEXT
 
-        Map<String, String> schema = new SchemaInferrer().infer(List.of(row));
-        assertThat(schema.get("credit_limit")).as("the case must really produce the comma")
-            .isEqualTo("NUMERIC(18,4)");
+        Map<String, String> schema = new LinkedHashMap<>(new SchemaInferrer().infer(List.of(row)));
+        schema.put("credit_limit", SchemaInferrer.LEGACY_NUMERIC);   // the comma that broke the parse
+        assertThat(schema.get("credit_limit")).as("the case must really produce the comma").contains(",");
 
         String ddl = new DynamicTableWriter().createTableDdl(
             new MappingTarget.Table("connector", "t_typed", true, MappingTarget.OnConflict.SKIP, List.of()),

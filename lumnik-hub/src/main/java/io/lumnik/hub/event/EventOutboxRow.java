@@ -7,6 +7,7 @@ import org.hibernate.type.SqlTypes;
 
 import javax.sql.DataSource;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.Objects;
 
@@ -126,6 +127,22 @@ public class EventOutboxRow {
         r.dedupKey = dedupKey;
         r.occurredAt = Objects.requireNonNull(occurredAt, "occurredAt");
         r.createdAt = Instant.now();
+        return r;
+    }
+
+    /**
+     * An event as a dead letter kept it (#1837): {@code to_jsonb} of the outbox row, read back. The row is the one that
+     * was swept, id and all — a replay hands a consumer what it first received.
+     */
+    @SuppressWarnings("unchecked")
+    public static EventOutboxRow restored(Map<String, Object> envelope) {
+        EventOutboxRow r = ofFull(((Number) envelope.get("tenant_id")).longValue(),
+            envelope.get("org_id") == null ? null : ((Number) envelope.get("org_id")).longValue(),
+            (String) envelope.get("event_type"), (String) envelope.get("source"), (String) envelope.get("entity"),
+            (String) envelope.get("entity_key"), (Map<String, Object>) envelope.get("payload"),
+            (String) envelope.get("dedup_key"), OffsetDateTime.parse((String) envelope.get("occurred_at")).toInstant());
+        r.id = ((Number) envelope.get("id")).longValue();
+        r.createdAt = OffsetDateTime.parse((String) envelope.get("created_at")).toInstant();
         return r;
     }
 

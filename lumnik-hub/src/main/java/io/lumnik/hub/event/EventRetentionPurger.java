@@ -67,6 +67,27 @@ public class EventRetentionPurger {
             .setParameter("floor", floor.longValue())
             .setParameter("days", retentionDays)
             .executeUpdate();
+        // A letter goes with the retention, replayed or not (#1837): an open one has had that long to be looked at, and a
+        // consumer without a replay (e-mail) closes none, so its letters would otherwise stay for ever. Two statements,
+        // one per partial index.
+        int closed = em.createNativeQuery(
+            "DELETE FROM core.event_dead_letter WHERE replayed_at < NOW() - make_interval(days => :days)")
+            .setParameter("days", retentionDays)
+            .executeUpdate()
+            + em.createNativeQuery(
+            "DELETE FROM core.event_dead_letter WHERE replayed_at IS NULL AND failed_at < NOW() - make_interval(days => :days)")
+            .setParameter("days", retentionDays)
+            .executeUpdate();
+        if (closed > 0) LOG.infof("EventRetentionPurger: purged %d dead letter(s)", closed);
+        // A mail's delivery carries its rendered body (#1848): kept for the same window, once resolved — sent, or given up.
+        int sent = em.createNativeQuery("""
+            DELETE FROM core.notification_delivery
+            WHERE (succeeded OR attempts >= 3) AND created_at < NOW() - make_interval(days => :days)
+              AND (claimed_until IS NULL OR claimed_until < NOW())
+            """)
+            .setParameter("days", retentionDays)
+            .executeUpdate();
+        if (sent > 0) LOG.infof("EventRetentionPurger: purged %d e-mail delivery row(s)", sent);
         if (purged > 0) LOG.infof("EventRetentionPurger: purged %d event(s) (floor=%d, retention=%dd)",
                                   purged, floor.longValue(), retentionDays);
     }

@@ -78,7 +78,7 @@ The screens below are the desk app on a phone, against the demo desk.
   message asking for one.
 - A view opens on its first 50 rows. **Next ›** and **‹ Previous** move a page.
 - **Filters are built, not typed:** a column, an operator, a value. A text column offers
-  *contains* and *=*; a number or a date also offers `<` and `>`; declared values use a list. Each filter is
+  *contient* (contains) and *=*; a number or a date also offers `<` and `>`; declared values use a list. Each filter is
   a chip; tap it to remove it.
 - **Tap a row:** its record opens, ending with its conflicts and ambiguities — here, the city of P-1008: *Lyon*
   in the ERP, *Villeurbanne* in the CRM.

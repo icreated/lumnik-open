@@ -42,6 +42,8 @@ class SubscriptionsTenantWideIT {
   @Test
   void a_bound_admin_is_refused_every_notification_rule_door() {
     refused(bound().get("/api/notifications"));
+    refused(bound().get("/api/platform/notification-deliveries"));
+    refused(bound().post("/api/platform/notification-deliveries/1/replay"));
     refused(bound().body("{\"eventPattern\":\"decision.*\",\"recipient\":\"a@b.c\"}").post("/api/notifications"));
     refused(bound().delete("/api/notifications/1"));
   }
@@ -74,5 +76,6 @@ class SubscriptionsTenantWideIT {
     as(ADMIN).get("/api/tenants/1/integrations").then().statusCode(200);
     as(ADMIN).get("/api/platform/integrations").then().statusCode(200);
     as(ADMIN).get("/api/platform/deliveries").then().statusCode(200);
+    as(ADMIN).get("/api/platform/notification-deliveries").then().statusCode(200);
   }
 }

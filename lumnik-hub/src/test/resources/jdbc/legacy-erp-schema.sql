@@ -37,6 +37,10 @@ CREATE TABLE c_order (
 CREATE TABLE t_temp (id BIGINT PRIMARY KEY, payload TEXT);
 CREATE TABLE ad_meta (id BIGINT PRIMARY KEY, key VARCHAR(60), value TEXT);
 
+-- A view: listed by discovery only when it is asked for
+CREATE VIEW v_bpartner_active AS
+  SELECT c_bpartner_id, name, updated FROM c_bpartner WHERE is_active = 'Y';
+
 INSERT INTO c_bp_group VALUES (1, 'Standard', 'Default group', '2026-05-01 10:00');
 INSERT INTO c_bpartner VALUES
   (1, 'Acme Corp',     'Strategic account', 'Y', 1, '2026-05-20 09:00'),

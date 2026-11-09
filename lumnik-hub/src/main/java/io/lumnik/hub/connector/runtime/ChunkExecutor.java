@@ -502,20 +502,30 @@ public class ChunkExecutor {
 
   /**
    * Drains malformed source rows the reader isolated during this read pass and routes each to the
-   * dead-letter queue, within the chunk transaction. Returns the count (added to recordsSkipped).
+   * dead-letter queue, within the chunk transaction. Returns the count (added to recordsSkipped). A row the config
+   * declared skippable (#1863) is in the count and in no dead letter: it was read, and it was not written.
    *
    * <p>{@code drainMalformed()} does not depend on the reader's element type, so {@code ItemReader<?>}
    * yields a properly typed {@code List<MalformedRecord>} — no raw type, no cast.
    */
   private int captureMalformed(ItemReader<?> reader, UUID connectorId, UUID runId) {
     List<MalformedRecord> malformed = reader.drainMalformed();
+    int declared = 0;
     for (MalformedRecord m : malformed) {
+      if (m.declaredSkip()) {   // counted below as read and skipped, but nothing is wrong: no dead letter
+        declared++;
+        continue;
+      }
       Map<String, Object> payload = new HashMap<>();
       payload.put("file", m.file());
       payload.put("line", m.line());
       payload.put("raw", m.rawValues());
       deadLetter.capture(connectorId, runId, mapper.valueToTree(payload),
           new SkipReason.MalformedSource(m.file(), m.line(), m.message()));
+    }
+    if (declared > 0) {
+      Logger.getLogger(ChunkExecutor.class).infof("%d leading short row(s) skipped, run %s (parser.short_rows: skip-leading)",
+          declared, runId);
     }
     return malformed.size();
   }

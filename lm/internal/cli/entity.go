@@ -286,12 +286,16 @@ func newEntityApplyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if format := outputFormat(cmd); format != "table" {
+				return output.PrintObject(cmd.OutOrStdout(), format, json.RawMessage(resp))
+			}
 			var result struct {
 				Name string `json:"name"`
 				View string `json:"view"`
 			}
 			if json.Unmarshal(resp, &result) == nil && result.Name != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "Applied entity %q → %s\n", result.Name, result.View)
+				printPlainWarnings(cmd, resp)
 				return nil
 			}
 			fmt.Fprintln(cmd.OutOrStdout(), string(resp))

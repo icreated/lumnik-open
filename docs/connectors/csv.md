@@ -67,10 +67,11 @@ ID        CONNECTOR         ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS 
 2e37cb12  csv-local-simple  default   Completed  2   2    0        0             2026-10-19 01:39  2026-10-19 01:39
 ```
 
-- **A file already read is not read again** — the second run says `IN 0`, and `lm run get` adds
-  `• 1 file(s) unchanged since they were last read — not read again`. A file that changed
-  (replaced in place, or grown) is read again in full: the third run says `IN 3`, even when the copy
-  kept the file's size and date.
+- **A file already read is not read again.** The second run says `IN 0`, and `lm run get` adds
+  `• 1 file(s) unchanged since they were last read — not read again`.
+- **A file that changed is read again in full** — replaced in place, or grown. The third run
+  says `IN 3`. This holds even when the new copy kept the file's size and date.
+- **Every file is read again after you apply a changed `mapping:`.**
 - **The table deduplicates**: after three runs it holds 3 rows, not 5.
 - `SKIPPED` and `DEAD-LETTERS` are explained [below](#malformed-rows-the-per-row-dlq).
 
@@ -96,10 +97,13 @@ transport:
 
 - **The path is on the hub's filesystem.** The self-host stack mounts nothing: mount a volume,
   use `sftp`/`s3`, or upload one file with [`lm csv ingest`](csv-quick-look.md).
-- **Glob**: `*` and `?` only, in the **final filename segment** — `/imports/*/x.csv` never
-  matches, and there is no `**`.
+- **Glob**: `*` and `?`, in the **final filename segment** only. `**` does not reach into
+  subfolders.
+- **A glob in a folder name fails the run**: `/imports/*/x.csv` gives
+  `Failed to resolve path pattern: /imports/*/x.csv`. So does a glob whose folder does not exist.
 - **No name is excluded implicitly** — use `*.csv` to keep `.tmp` files out.
-- **A path that matches nothing is not an error**: the run completes with `IN 0`.
+- **A path that matches nothing is not an error**: the run completes with `IN 0`. This holds for
+  a glob in an existing folder, and for one file that does not exist.
 - **A path without `*` or `?` names one file**, and that file is the whole table — see
   [full refresh](#one-file-is-the-table-full-refresh).
 
@@ -197,9 +201,13 @@ ID        CONNECTOR                    ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-
 ✖ run failed: SFTP error (SSH_FX_PERMISSION_DENIED): Permission denied
 ```
 
-**A file is read once while it is unchanged**; one rewritten later (newer modification time) is
-read again, even under the same name and at the same size. Oldest first; a run that finds nothing new reads nothing.
-Zero-byte files are never listed — never ingested, never archived:
+**Which files a run reads:**
+
+- **A file is read once while it is unchanged.**
+- **A file rewritten later** (newer modification time) is read again, even under the same name
+  and at the same size.
+- Files are read oldest first. A run that finds nothing new reads nothing.
+- **Zero-byte files are never listed** — never ingested, never archived.
 
 ```
 $ lm run list --connector sftp-c-bpartner-credentials
@@ -228,7 +236,8 @@ transport:
 - `billing/` + `.csv` reads `billing/2026-09-01.csv` and ignores `billing/2026-09-01.csv.tmp`.
 - Same rule as SFTP: an object is read when new or rewritten, oldest first; zero-byte objects are skipped.
 - `access_key_env` / `secret_key_env` are secret **names** (`lm secret set AWS_ACCESS_KEY_ID`).
-  A rotated key takes effect at the next run.
+  A key rotated with `lm secret set` is used from the next run on. On a hub with several
+  replicas, allow up to 5 minutes.
 
 **One export, archived after commit** — the manifest of the
 [S3 how-to](#ingest-a-headerless-export-under-an-s3-prefix-and-archive-it):
@@ -256,10 +265,43 @@ parser:
   null_values: ["", "NULL", "null", "#N/A"]  # default as shown
   columns: [code, name, email]  # REQUIRED when has_header: false; ignored otherwise
   lines: false                  # true: one line = one row, one column `line` (fixed width, logs)
+  short_rows: error             # default; skip-leading skips a key;value block before the table
+  escape: "\\"                  # optional; the character that escapes a quote inside a value (default: the quote is doubled)
 ```
 
 - **The encoding and the delimiter are guessed per file.** Declare `delimiter` or `encoding`
   when the guess is wrong.
+- **A doubtful guess is said.** A DOS export (FoxPro, Clipper, dBase) read as windows-1252
+  turns `Huré` into `Hur‚`. When the guess looks like that, the run ends `Partial`. Its error
+  names the file and the encoding chosen. Declare the right encoding (`encoding: IBM850`), or the
+  guessed one if it is right: the next runs stop being `Partial`. Then run
+  `lm endpoint reset-cursor <connector>/<endpoint>`, so the next run reads the file again.
+- **A byte the encoding cannot read stops the file there.** The rows before it land. Its line
+  goes to the dead letters (`MalformedSource`): `windows-1252 has no character for the byte 0x90
+  at line 3`. The rows after it are not read. Declare the real encoding, then
+  `lm endpoint reset-cursor <connector>/<endpoint>`.
+- **A quote inside a quoted value may be escaped with a backslash**:
+  `"Client: \"never received\", chased"`. The file then stops at that line. The line goes to the
+  dead letters with `A quoted value does not close where expected`, and the rest of the file is
+  not read. Declare the character:
+
+    ```yaml
+    parser:
+      escape: "\\"
+    ```
+
+    The value then reads `Client: "never received", chased`. `escape` is one character, not the
+    delimiter or the quote, and not allowed with `lines: true`.
+- **A header name is trimmed.** ` DATE_MAJ ` gives `DATE_MAJ`. Values keep their padding;
+  `clean: { strip: true }` removes it.
+- **A value holding a NUL byte (`0x00`) sends its row to the dead letters** (`lm dlq list`).
+  The other rows land. To keep the row, remove the byte:
+
+    ```yaml
+    cell:
+      - { clean: { columns: [packed], remove-control-chars: true } }
+    ```
+
 - **Headerless files need names**, in file order (`"\t"` is a tab in YAML):
 
     ```yaml
@@ -282,6 +324,36 @@ parser:
     Fix errors above before running 'lm apply -f hl.yaml'.
     Error: validation failed: 1 error(s)
     ```
+
+- **A block before the table** (batch, instrument, method: an instrument export opens with a
+  `key;value` block) is skipped with `short_rows: skip-leading`. It needs `has_header: false`
+  and the `columns` of the table:
+
+    ```yaml
+    parser:
+      delimiter: ";"
+      has_header: false
+      columns: [sample, mz_theo, mz_meas]
+      short_rows: skip-leading
+    ```
+
+    Against this file:
+
+    ```
+    BATCH;B-42
+    INSTRUMENT;QTOF
+    METHOD;QC
+    caffeine;195.08765;195.08771
+    MRFA;524.26496
+    MRFA;524.26496;524.26524
+    ```
+
+    - **Only the lines before the table are skipped.** Short lines are skipped until the first
+      full one. Here the three first lines count in `SKIPPED`, with no dead letter. The run log
+      says `3 leading short row(s) skipped`.
+    - **A short line after that is still a dead letter.** Here the fifth line, `MRFA` with two
+      values, goes to `lm dlq list`. The other rows land.
+    - `short_rows` is refused with a header line and with `lines: true`.
 
 - **A fixed-width file** (positions, not separators: mainframe extracts, bank or payroll files)
   is read one line per row with `lines: true`. Each line lands in one column, `line`. Then
@@ -311,19 +383,19 @@ parser:
 
     ```
     lumnik=> select employee, name, salary from connector.t_payroll;
-     employee |     name      |  salary
-    ----------+---------------+-----------
-     E00001   | Martin Claire | 3250.0000
-     E00002   | Dupont Jean   | 2980.5000
-     E00003   | Nguyen Linh   | 4100.0000
+     employee |     name      | salary
+    ----------+---------------+---------
+     E00001   | Martin Claire | 3250.00
+     E00002   | Dupont Jean   | 2980.50
+     E00003   | Nguyen Linh   | 4100.00
     (3 rows)
     ```
 
     `lines: true` refuses `delimiter` and `has_header`. Full example:
     `docs/connectors/csv/73-lines-fixed-width.yaml`.
 
-- **An empty value is a present column.** `1,` against two columns is written, the second value
-  `null` (because `""` is in `null_values`; override the list to keep `""`).
+- **An empty value is a present column.** `1,` against two columns is written, and the second
+  value is `null`: `""` is in the default `null_values`. To keep `""`, declare your own list.
 
 ## Malformed rows — the per-row DLQ
 
@@ -453,12 +525,17 @@ ID        CONNECTOR  ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED  
 ✖ run failed: the file is empty: a full refresh never empties a table from an empty file — nothing was removed. If the source really is empty, delete the connector's data instead (lm connector delete).
 ```
 
+- **The file changed while the run was reading it** — the producer rewrote it mid-run. The run
+  fails with:
+  `the file changed while this run was reading it, so the run met parts of two versions — nothing was removed`.
+  Have the producer write elsewhere, then rename the file in.
+
 The guards speak only when rows would be removed. A dead letter on a new row, with nothing to
 remove, completes as usual (`IN 5  OUT 4  DEAD-LETTERS 1`).
 
 **A changed row is not a removed row.** The run writes its new version and drops the old one.
-The file still holds the row, so the run does not count it as removed, and the guard sees no
-shrink. Ten articles, then the price of `A03` changed:
+It is not counted as removed, and the guard sees no shrink. Ten articles, then the price of
+`A03` changed:
 
 ```
 $ lm run get dd0a52c4
@@ -466,8 +543,8 @@ ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTE
 dd0a52c4  articles   default   Completed  10  10   0        0             2026-10-25 11:17  2026-10-25 11:17  yes
 ```
 
-The removed count is how much the table shrank. The rows have no key, so a row lost while
-another is added looks like a changed row, and is not counted.
+The removed count is how much the table shrank. A row lost while another is added counts as a
+changed row: nothing is counted as removed.
 
 **What never removes a row:**
 
@@ -492,9 +569,10 @@ A removed row also leaves the entities fused from it, `lm ask`, and any Search i
 
 ## Scheduling & lifecycle
 
-- **`schedule`** — optional cron, 5 fields, in **UTC** (`0 6 * * *` = daily at 06:00 UTC),
-  checked at apply. The hub fires it — no OS cron. A re-apply without `schedule` unschedules
-  the connector. `window: "22:00-06:00"` (UTC, end exclusive) fences scheduled runs.
+- **`schedule`** — optional cron, 5 fields, in **UTC**: `0 6 * * *` is daily at 06:00 UTC.
+  It is checked at apply. The hub fires it — no OS cron. A re-apply without `schedule`
+  unschedules the connector.
+- **`window`** — `window: "22:00-06:00"` fences scheduled runs. UTC, end exclusive.
 - **`after_process`** — required. What happens to a file once its rows are committed:
 
 | | `none` | `archive` | `move` | `delete` |
@@ -623,7 +701,9 @@ add `endpoint:` — see `40-s3-prefix.yaml` in `docs/connectors/csv/`.
 | `SFTP host key refused for host:22 — the server presented SHA256:…` | `host_key_fingerprint` absent or wrong, with `strict_host_key: true` (the default) | confirm the presented fingerprint out of band (`ssh-keyscan -p 22 HOST \| ssh-keygen -lf -`), paste it into `host_key_fingerprint` |
 | `SFTP error (SSH_FX_PERMISSION_DENIED): Permission denied` | wrong password/key, or the user cannot read `path` | `lm secret list`, then `lm secret set <NAME>` (a private key is many lines — pipe it with `<NAME> -`); check the folder's rights |
 | `at least one of key_env, password_env is required when kind is sftp` | neither credential declared | `lm secret set <NAME>`, then `password_env: <NAME>` or `key_env: <NAME>` |
-| `S3 403 Forbidden` | invalid S3 credentials | check the secrets named by `access_key_env` / `secret_key_env` |
+| run `Failed`: `S3 credentials unavailable (access_key_env=…, secret_key_env=…)` | no secret, and no hub variable, holds one of those names | `lm secret set <NAME>` for each name the message gives |
+| run `Failed`: `… (Service: S3, Status Code: 403, …)` | invalid S3 credentials, or a bucket policy that refuses the user | check the secrets named by `access_key_env` / `secret_key_env`, and the bucket's policy |
+| dead letters `Record has 2 values but 12 columns are declared`, one per line of a `key;value` block | an export that opens with a block before its table | `has_header: false`, `columns`, and `parser.short_rows: skip-leading` — see [Parser](#parser) |
 | `required field missing (required when has_header is false and lines is off)` | a headerless parser without names | `parser.columns: [a, b, …]` in file order |
 | `after_process: archive is not executed on local connector runs` | a relocation on a local transport | `after_process: none`, or an sftp/s3 transport |
 | `… is not read by connector runs` | `file_filter`, `pre_process`, `post_process` or `max_file_size` in a connector manifest | drop the key |
@@ -631,7 +711,7 @@ add `endpoint:` — see `40-s3-prefix.yaml` in `docs/connectors/csv/`.
 | run completes with `IN 0` | nothing new — or the local path matches nothing on the **hub's** disk | `lm connector get NAME` shows the path (`config.transport.path`); check it exists on the hub |
 | a file dropped in a local folder is never read | its name sorts before the last file read ([drop-folder contract](#local-the-hubs-disk-not-yours)) | name incoming files monotonically, or switch to sftp/s3 |
 | run `Failed`: `The cursor's file … is gone, but files sorting after it are waiting` | a file was archived before the run that read it completed | `lm endpoint reset-cursor <connector>/<endpoint>`; archive only after `Completed` |
-| `DEAD-LETTERS` > 0, reason `MalformedSource` | value count differs from the declared columns — trailing delimiter, unclosed quote | `lm dlq get ID` shows the raw values, file and line; fix the export or `parser:` |
+| `DEAD-LETTERS` > 0, reason `MalformedSource` | value count differs from the declared columns — trailing delimiter, unclosed quote, or a quote escaped by a backslash (`parser.escape`) | `lm dlq get ID` shows the raw values, file and line; fix the export or `parser:` |
 | rows missing, DLQ empty | `filter-where` / `skip-empty-rows` excluded them (counted in `SKIPPED`) | see [Transformers § Troubleshooting](transformers.md#troubleshooting) |
 | a mapped column is blank for some rows | a `parse-*` or `lookup` hook nulled a value it could not read | `cell_errors` on `lm run get <id>` — see [the reference](transformers-reference.md#when-a-hook-cannot-deliver-cell_errors-and-on-error) |
 | run `Failed`: `N of M rows would be removed: the file holds …` | the one local file lost more rows than `refresh.max_removed` allows | check the file; for a real purge raise `refresh.max_removed` (or `off`), re-apply, run again — see [full refresh](#one-file-is-the-table-full-refresh) |

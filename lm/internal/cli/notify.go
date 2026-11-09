@@ -12,6 +12,13 @@ import (
 
 var notifyHeaders = []string{"ID", "EVENTS", "RECIPIENT", "TEMPLATE", "ENABLED"}
 
+var mailDeliveryHeaders = []string{"ID", "RECIPIENT", "EVENT", "STATUS", "ATTEMPTS", "WHEN", "ERROR"}
+
+func mailDeliveryRow(d client.MailDelivery) []string {
+	return []string{strconv.FormatInt(d.ID, 10), d.Recipient, d.EventType, d.Status,
+		strconv.Itoa(d.Attempts), output.HumanTime(&d.At), d.Error}
+}
+
 func notifyRow(r client.NotificationRule) []string {
 	return []string{strconv.FormatInt(r.ID, 10), r.EventPattern, r.Recipient,
 		r.Template, strconv.FormatBool(r.Enabled)}
@@ -87,6 +94,45 @@ func newNotifyCmd() *cobra.Command {
 		},
 	}
 
-	root.AddCommand(add, list, rm)
+	deliveries := &cobra.Command{
+		Use:   "deliveries",
+		Short: "List the mails the rules asked for, given-up ones first",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := ClientFromCmd(cmd)
+			if err != nil {
+				return err
+			}
+			items, err := c.MailDeliveryList(pageLimit(cmd))
+			if err != nil {
+				return err
+			}
+			return printPage(cmd, mailDeliveryHeaders, items, mailDeliveryRow)
+		},
+	}
+	addPageLimitFlag(deliveries, 200, client.MailDeliveriesPageCap, "max deliveries to list")
+
+	replay := &cobra.Command{
+		Use:   "replay ID",
+		Short: "Send one given-up mail again (the delivery keeps its row; no second mail is recorded)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.ParseInt(strings.TrimSpace(args[0]), 10, 64)
+			if err != nil {
+				return fmt.Errorf("ID must be a delivery number, as in the ID column of lm notify deliveries")
+			}
+			c, err := ClientFromCmd(cmd)
+			if err != nil {
+				return err
+			}
+			status, err := c.MailDeliveryReplay(id)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "delivery %d: %s\n", id, status)
+			return nil
+		},
+	}
+
+	root.AddCommand(add, list, rm, deliveries, replay)
 	return root
 }

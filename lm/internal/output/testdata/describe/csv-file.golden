@@ -67,6 +67,8 @@ parser               optional  [NESTED, HIGH]
   CSV parser config
   delimiter            optional  [STRING, LOW]
     Field delimiter (single char) — auto-detected if absent
+  escape               optional  [STRING, LOW]
+    Escape character for a quote inside a quoted value (single char, e.g. \) — absent means the quote is doubled (RFC 4180); DisplayTag and MySQL OUTFILE use a backslash
   encoding             optional  [STRING, LOW]
     Character encoding — auto-detected if absent
   has_header           optional  [BOOLEAN, MEDIUM]
@@ -81,6 +83,9 @@ parser               optional  [NESTED, HIGH]
   lines                optional  [BOOLEAN, MEDIUM]
     One line = one row, one column (`line`): no delimiter, no quoting — fixed-width files, logs
     default: false
+  short_rows           optional  [STRING, LOW]
+    A line with fewer values than the declared columns: error (dead letter, default) or skip-leading (skipped while the table has not begun: a key;value block before it)
+    one of: skip-leading, error
   columns              optional  [LIST, MEDIUM]
     Column names in file order
     required when has_header is false and lines is off

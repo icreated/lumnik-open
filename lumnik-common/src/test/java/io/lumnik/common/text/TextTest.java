@@ -31,4 +31,16 @@ class TextTest {
         assertThat(" ".isEmpty()).isFalse();
         assertThat(Text.blank(" ")).isTrue();
     }
+
+    @Test
+    void clipKeepsAShortStringAndCutsALongOneToTheLimit() {
+        assertThat(Text.clip("abc", 3)).isEqualTo("abc");
+        assertThat(Text.clip("abcd", 3)).isEqualTo("ab…");
+    }
+
+    @Test
+    void clipNeverSplitsASurrogatePair() {
+        assertThat(Text.clip("ab😀cd", 4)).isEqualTo("ab😀…");
+        assertThat(Text.clip("a😀😀😀", 3)).isEqualTo("a😀…");
+    }
 }

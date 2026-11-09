@@ -117,6 +117,25 @@ func TestWorkflowApply_printsTheAppliedLineAndTheDataTruthReport(t *testing.T) {
 		applyWorkflow(t, orderLifecycleApplied))
 }
 
+// Applied with the AI off: the lifecycle is stored but not indexed for chat. The hub says so in
+// `warnings`; the integrator reads it on stderr, the exit stays 0 (#1896).
+func TestWorkflowApply_saysOnStderrWhatTheHubCouldNotIndex(t *testing.T) {
+	warning := "not indexed for chat: the AI is switched off (LUMNIK_AI_ENABLED=false); apply it again once it is on"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"name":"w","scope":"desk","table":"connector.t_x","column":"status","dataTruth":null,`+
+			`"warnings":["`+warning+`"]}`)
+	}))
+	defer srv.Close()
+	f := filepath.Join(t.TempDir(), "w.yaml")
+	require.NoError(t, os.WriteFile(f, []byte("kind: Workflow\n"), 0o600))
+
+	out, errOut, err := runLm(t, srv, "workflow", "apply", "-f", f)
+
+	require.NoError(t, err)
+	assert.Equal(t, "Applied workflow \"w\" → connector.t_x.status, scope desk\n", out)
+	assert.Equal(t, "warning: "+warning+"\n", errOut)
+}
+
 func TestWorkflowApply_reportSaysWhenTheDataAgrees(t *testing.T) {
 	out := applyWorkflow(t, `{"name":"w","scope":"desk","table":"connector.t_x","column":"status","dataTruth":`+
 		`{"undeclared":[],"unobserved":[],"nullOrBlank":0,"tableMissing":false,"keyColumnMissing":false,`+

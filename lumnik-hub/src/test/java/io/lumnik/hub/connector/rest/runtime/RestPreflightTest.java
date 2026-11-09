@@ -12,6 +12,8 @@ import io.lumnik.hub.connector.rest.auth.AuthSpec;
 import io.lumnik.hub.connector.rest.auth.OAuth2AuthProviderFactory;
 import io.lumnik.hub.connector.rest.auth.OAuth2Tokens;
 import io.lumnik.hub.connector.rest.pagination.PaginationFactory;
+import io.lumnik.hub.connector.rest.pagination.PaginationStrategy;
+import io.lumnik.hub.connector.rest.soap.SoapPaginationStrategy;
 import io.lumnik.hub.connector.secret.SecretRefs;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -24,6 +26,7 @@ import java.security.cert.CertificateException;
 import java.lang.reflect.RecordComponent;
 import java.net.ConnectException;
 import java.net.http.HttpTimeoutException;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -403,5 +406,106 @@ class RestPreflightTest {
 
         assertThat(verdict.status()).isEqualTo(401);
         assertThat(verdict.sample()).contains("Bearer <redacted>").doesNotContain("tok-1-abcdef", "tok-2-abcdef");
+    }
+
+    private static final String FAULT_500 = "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body>"
+        + "<s:Fault><faultcode>s:Sender</faultcode><faultstring>Unknown user name or incorrect password.</faultstring>"
+        + "</s:Fault></s:Body></s:Envelope>";
+
+    private static ConnectorEndpoint soapEndpoint() {
+        return endpoint("open-orders", "POST", "/orders", Map.of(
+            "kind", "soap", "soap_action", "GetOpenOrders", "body", "<In/>",
+            "pagination", Map.of("kind", "soap", "page_size", 100,
+                "last_page_path", "$.Body.Out.LastPage", "response_path", "$.Body.Out.Order")));
+    }
+
+    /** #1866: the pre-flight reads {@code total_header} as the run does, so a header the run refuses is not {@code ok}. */
+    @Test
+    void aTotalHeaderTheRunWouldRefuseIsRefusedBeforeTheRun() {
+        ConnectorEndpoint ep = endpoint("view", "GET", "/view", Map.of("pagination",
+            Map.of("kind", "none", "response_path", "$", "total_header", "Content-Range")));
+
+        assertThat(answeringWith(Map.of("Content-Range", List.of("items 0-19/57")), ep).ok()).isTrue();
+        RestPreflight.Verdict refused = answeringWith(Map.of("Content-Range", List.of("items 0-19/*")), ep);
+        assertThat(refused.ok()).isFalse();
+        assertThat(refused.detail()).contains("pagination.total_header must read a row count");
+    }
+
+    /** #1925: a {@code response_path} that reads nothing on the first page fails the run, so the pre-flight says so. */
+    @Test
+    void aResponsePathThatReadsNothingIsRefusedLikeTheRunRefusesIt() {
+        ConnectorEndpoint ep = endpoint("view", "GET", "/view", Map.of("pagination",
+            Map.of("kind", "none", "response_path", "$.nope")));
+
+        RestPreflight.Verdict v = answering(200, "{\"items\":[{\"id\":1}]}", ep);
+
+        assertThat(v.ok()).isFalse();
+        assertThat(v.detail()).contains("pagination.response_path reads nothing on the first page");
+    }
+
+    @Test
+    void aResponsePathThatReadsAnObjectIsRefusedAndAnEmptyListStaysOk() {
+        ConnectorEndpoint ep = endpoint("view", "GET", "/view", Map.of("pagination",
+            Map.of("kind", "none", "response_path", "$.items")));
+
+        RestPreflight.Verdict object = answering(200, "{\"items\":{\"id\":1}}", ep);
+        assertThat(object.ok()).isFalse();
+        assertThat(object.detail()).contains("pagination.response_path must read a list, not an object");
+
+        RestPreflight.Verdict empty = answering(200, "{\"items\":[]}", ep);
+        assertThat(empty.ok()).as("a source that is really empty passes, as in a run").isTrue();
+        assertThat(empty.items()).isZero();
+    }
+
+    private RestPreflight.Verdict answeringWith(Map<String, List<String>> headers, ConnectorEndpoint ep) {
+        preflight.authReg = noAuth();
+        preflight.http = new RestHttpClient() {
+            @Override public RestResponse execute(RestRequest req) { return RestResponse.of(200, headers, "[{\"id\":1}]"); }
+        };
+        return preflight.check(connector(Map.of("base_url", "http://erp.invalid")), ep);
+    }
+
+    private RestPreflight.Verdict answering(int status, String body, ConnectorEndpoint ep) {
+        preflight.pagination = new PaginationFactory() {   // the SOAP strategy needs a secrets lookup
+            @Override public PaginationStrategy build(Map<String, Object> cfg) {
+                if (!"soap".equals(cfg.get("kind"))) return super.build(cfg);
+                Map<String, String> c = new HashMap<>();
+                cfg.forEach((k, v) -> c.put(k, String.valueOf(v)));
+                return new SoapPaginationStrategy(c, preflight.secrets::lookup);
+            }
+        };
+        preflight.authReg = noAuth();
+        preflight.http = new RestHttpClient() {
+            @Override public RestResponse execute(RestRequest req) { return RestResponse.of(status, Map.of(), body); }
+        };
+        return preflight.check(connector(Map.of("base_url", "http://erp.invalid")), ep);
+    }
+
+    /**
+     * #1861: SOAP 1.1 puts a Fault on HTTP 500, the common case. The run names it; the pre-flight, the integrator's
+     * first gesture, said {@code HTTP 500}. A non-2xx body is read by the validator the run would use.
+     */
+    @Test
+    void aSoapFaultOnHttp500IsNamedLikeTheRunNamesIt() {
+        RestPreflight.Verdict v = answering(500, FAULT_500, soapEndpoint());
+
+        assertThat(v.ok()).isFalse();
+        assertThat(v.status()).isEqualTo(500);
+        assertThat(v.detail()).isEqualTo("SOAP Fault: Unknown user name or incorrect password.");
+        assertThat(v.sample()).contains("Unknown user name");
+    }
+
+    /** A body the endpoint's validator does not read on a non-2xx keeps the status: an HTML 500, a GraphQL 502, a REST 401. */
+    @ParameterizedTest
+    @MethodSource("nonSuccessKeepingItsStatus")
+    void aBodyTheValidatorDoesNotReadStaysItsHttpStatus(int status, String body, ConnectorEndpoint ep) {
+        assertThat(answering(status, body, ep).detail()).isEqualTo("HTTP " + status);
+    }
+
+    static Stream<Arguments> nonSuccessKeepingItsStatus() {
+        return Stream.of(
+            arguments(500, "<html><body>Internal Server Error</body></html>", soapEndpoint()),
+            arguments(502, "{\"errors\":[{\"message\":\"boom\"}]}", graphQlEndpoint()),
+            arguments(401, "{\"error\":\"no\"}", offsetEndpoint()));
     }
 }

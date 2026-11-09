@@ -18,6 +18,7 @@ import io.lumnik.hub.connector.rest.RestHttpClient;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
 import io.lumnik.hub.connector.rest.ResponseStatusGuard;
+import io.lumnik.hub.connector.rest.auth.AuthConfigException;
 import io.lumnik.hub.connector.rest.auth.AuthProvider;
 import io.lumnik.hub.connector.rest.auth.AuthProviderRegistry;
 import io.lumnik.hub.connector.rest.auth.AuthSpec;
@@ -235,7 +236,8 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
             // made every SOAP+watermark run re-fetch the same window forever. Computed over ALL
             // items exactly as the pre-PR-B single fetch did, since a SOAP fetch is never partial.
             RestRequest req = firstRequest(pag, cfg, ep, inc, parsed, secrets::lookup);
-            List<Map<String, Object>> all = fetchAllPages(ep, conn, rl, retry, pag, req, bodyParser, ctx.scope());
+            List<Map<String, Object>> all = fetchAllPages(ep, conn, rl, retry, pag, req, bodyParser, ctx.scope(),
+                str(pagCfg.get("response_path")));
             // maxWatermark carries the prior watermark through when the path is null or no item
             // matches (see its own guard), so a path-less watermark misconfig preserves the prior
             // value instead of nulling it — matching the chunking branch and pre-PR-B single fetch.
@@ -254,7 +256,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
                                      : firstRequest(pag, cfg, ep, inc, parsed, secrets::lookup);
         PageWindow window = fetchPageWindow(ep, conn, rl, retry, pag, start, bodyParser,
             chunkSize, resuming ? parsed.pages : 0, resuming ? parsed.lastPage : null,
-            resuming ? parsed.declaredTotal : DeclaredTotal.NONE, totalPath, totalHeader);
+            resuming ? parsed.declaredTotal : DeclaredTotal.NONE, totalPath, totalHeader, str(pagCfg.get("response_path")));
 
         // `resuming` gates the running tally for the same reason it gates `pages` above: a cursor
         // left behind by a DEAD run makes this run start from page 1, so its counts are not ours.
@@ -460,7 +462,8 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
      */
     private List<Map<String, Object>> fetchAllPages(ConnectorEndpoint ep, RestConnection conn, RateLimiter rl,
                                                     RetryExecutor retry, PaginationStrategy pag, RestRequest first,
-                                                    BodyParser bodyParser, RunScope scope) {
+                                                    BodyParser bodyParser, RunScope scope,
+                                                    String responsePath) {
         List<Map<String, Object>> all = new ArrayList<>();
         RestRequest req = first;
         int pages = 0;
@@ -472,6 +475,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
                 RestResponse resp = send(conn, rl, retry, req);
                 ResponseStatusGuard.refuseNonSuccess(resp);   // a non-2xx must never read as an empty page
                 resp = bodyParser.reparse(resp);   // SOAP: XML→JSON; JSON/GraphQL: identity
+                if (pages == 0) requireRowsOnFirstPage(ep, resp, responsePath);
                 List<Map<String, Object>> page = pag.items(resp);
                 // The cursor's own echo check first: when the request itself came back, its message is the precise one.
                 RestRequest next = advancing(ep, req, pag.next(resp, req), pages == 0);
@@ -573,6 +577,12 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
             + " page; refusing to report a partial extract as a complete one (run it when the source is quieter)");
     }
 
+    /** The first page of a run must carry its rows where {@code response_path} says: no false success at zero rows (#1806). */
+    private static void requireRowsOnFirstPage(ConnectorEndpoint ep, RestResponse resp, String responsePath) {
+        String refusal = PaginationSupport.firstPageRefusal(resp.json(), responsePath);
+        if (refusal != null) throw new ConnectorException(named(ep) + ": " + refusal);
+    }
+
     /** The page cap reached with pages still to read: the read is partial, never complete (#1753). */
     private static ConnectorException pageCapReached(ConnectorEndpoint ep) {
         return new ConnectorException(named(ep) + ": reached the page cap (" + MAX_PAGES + " pages) before the source's"
@@ -590,7 +600,8 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
     private PageWindow fetchPageWindow(ConnectorEndpoint ep, RestConnection conn, RateLimiter rl, RetryExecutor retry,
                                        PaginationStrategy pag, RestRequest first, BodyParser bodyParser,
                                        int chunkSize, int pagesAlreadyFetched, String carriedLastPage,
-                                       DeclaredTotal carriedTotal, String totalPath, String totalHeader) {
+                                       DeclaredTotal carriedTotal, String totalPath, String totalHeader,
+                                       String responsePath) {
         List<Map<String, Object>> items = new ArrayList<>();
         RestRequest req = first;
         int pages = pagesAlreadyFetched;
@@ -602,6 +613,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
                 RestResponse resp = send(conn, rl, retry, req);
                 ResponseStatusGuard.refuseNonSuccess(resp);   // a non-2xx must never read as an empty page
                 resp = bodyParser.reparse(resp);   // SOAP: XML→JSON; JSON/GraphQL: identity
+                if (pages == 0) requireRowsOnFirstPage(ep, resp, responsePath);
                 List<Map<String, Object>> page = pag.items(resp);
                 // The cursor's own echo check first: when the request itself came back, its message is the precise one.
                 RestRequest next = advancing(ep, req, pag.next(resp, req), pages == 0);
@@ -852,7 +864,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         return (millis + 999) / 1000;
     }
 
-    private static String str(Object o) { return o == null ? null : String.valueOf(o); }
+    static String str(Object o) { return o == null ? null : String.valueOf(o); }
 
     /**
      * The credential a source is approached with, read off an effective config. Public because it
@@ -879,7 +891,17 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
         auth.probe();
         // Absent and empty are not the same here: an empty or blank tls block fails closed (CaTrust), absence is public.
         Map<String, Object> tls = cfg.get("tls") == null ? null : mapConfig(cfg, "tls");
-        return new RestConnection(auth, CaTrust.clientFor(tls, http, secrets));
+        return new RestConnection(auth, speaking(cfg.get("http_version"), CaTrust.clientFor(tls, http, secrets)));
+    }
+
+    /** #1859: the protocol a connector declares; absent, the client negotiates as it always did. */
+    private static RestHttpClient speaking(Object httpVersion, RestHttpClient client) {
+        if (httpVersion == null) return client;
+        try {
+            return client.speaking(String.valueOf(httpVersion));
+        } catch (IllegalArgumentException unknown) {
+            throw new AuthConfigException(unknown.getMessage());
+        }
     }
 
     /** Builds the {@link AuthSpec} from the connector's auth config block, for the connector it authenticates. */

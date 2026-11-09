@@ -30,6 +30,7 @@ class EventRegistryIT {
             "platform.secret.created", "platform.secret.updated",
             "platform.secret.deleted", "platform.secret.read",
             "data.row.changed", "annotation.decision.acked",
+            "notification.mail.given-up",
         };
         var body = given().when().get("/api/platform/events").then().statusCode(200);
         for (String type : emitted) {

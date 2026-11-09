@@ -36,7 +36,8 @@ class PresetCatalogTest {
             new P("drf-page", null), new P("drf-limit-offset", null), new P("fastapi", null),
             new P("nestjs", null), new P("json-api", null), new P("sequelize", null),
             new P("stripe", null), new P("spring-hateoas", "\"items\":\"products\""),
-            new P("prestashop", "\"resource\":\"products\""));
+            new P("prestashop", "\"resource\":\"products\""),
+            new P("odata-v2", null), new P("odata-v4", null));
         for (P p : presets) {
             JsonNode out = expand(p.name(), p.extra());
             assertTrue(REAL_KINDS.contains(out.path("kind").asText()),
@@ -54,6 +55,26 @@ class PresetCatalogTest {
         assertEquals("$.results", out.path("response_path").asText());
         // #1771: every DRF page carries its count — the witness that a run read the whole list
         assertEquals("$.count", out.path("total_path").asText());
+    }
+
+    /** #1827: SAP Gateway nests the answer under {@code d}; the total is a numeral inside a string. */
+    @Test
+    void odata_v2_follows_the_next_link_under_d() throws Exception {
+        JsonNode out = expand("odata-v2", null);
+        assertEquals("body-link", out.path("kind").asText());
+        assertEquals("$.d.__next", out.path("link_path").asText());
+        assertEquals("$.d.results", out.path("response_path").asText());
+        assertEquals("$.d.__count", out.path("total_path").asText());
+    }
+
+    /** #1827: OData v4 names its members with an {@code @odata.} prefix, so the paths are bracketed. */
+    @Test
+    void odata_v4_follows_the_next_link_in_value() throws Exception {
+        JsonNode out = expand("odata-v4", null);
+        assertEquals("body-link", out.path("kind").asText());
+        assertEquals("$['@odata.nextLink']", out.path("link_path").asText());
+        assertEquals("$.value", out.path("response_path").asText());
+        assertEquals("$['@odata.count']", out.path("total_path").asText());
     }
 
     /** #1794: nestjs-paginate puts the list's total on every page, as DRF does its count. */

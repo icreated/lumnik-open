@@ -25,6 +25,7 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 import java.util.Map;
+import java.util.stream.Stream;
 
 @Path("/api/platform/connectors")
 @Produces(MediaType.APPLICATION_JSON)
@@ -98,7 +99,8 @@ public class ConnectorApplyResource {
         // The advisories the validator produced above ride the success body: on this path they
         // have no other way out, and the one they warn about most — no scopes, so nothing the
         // connector ingests is askable in any scope — is silent everywhere else (#531).
-        return Response.ok(result.withWarnings(vr.warnings())).build();
+        return Response.ok(result.withWarnings(
+            Stream.concat(result.warnings().stream(), vr.warnings().stream()).toList())).build();
     }
 
     private ConnectorApplyHandler findHandler(String kind) {

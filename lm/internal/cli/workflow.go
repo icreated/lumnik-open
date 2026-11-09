@@ -33,7 +33,11 @@ func newWorkflowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return printApplied(cmd, resp, printWorkflowApplied)
+			if err := printApplied(cmd, resp, printWorkflowApplied); err != nil {
+				return err
+			}
+			printPlainWarnings(cmd, resp)
+			return nil
 		},
 	}
 	apply.Flags().StringVarP(&file, "file", "f", "", "kind:Workflow YAML manifest, or - for stdin (required)")

@@ -151,7 +151,16 @@ public class CsvFileConnectorType implements ConnectorType {
    * {@code nullValues}/{@code columns} are always honored (with their defaults).
    */
   record ParserOverrides(Character delimiter, Charset encoding, boolean hasHeader,
-                         boolean bomStrip, List<String> nullValues, List<String> columns) {}
+                         boolean bomStrip, List<String> nullValues, List<String> columns,
+                         boolean skipLeadingShortRows, Character escape) {
+    ParserOverrides(Character delimiter, Charset encoding, boolean hasHeader,
+                    boolean bomStrip, List<String> nullValues, List<String> columns) {
+      this(delimiter, encoding, hasHeader, bomStrip, nullValues, columns, false, null);
+    }
+  }
+
+  /** The {@code parser.short_rows} value that skips the too-short lines before the table (#1863). */
+  public static final String SKIP_LEADING = "skip-leading";
 
   /**
    * Reads the {@code parser} sub-map into {@link ParserOverrides}. Never returns null: an unset
@@ -177,7 +186,10 @@ public class CsvFileConnectorType implements ConnectorType {
           columns != null && !columns.isEmpty() ? columns : List.of("line"));
     }
     Character delimiter = (delim != null && !delim.toString().isEmpty()) ? delim.toString().charAt(0) : null;
-    return new ParserOverrides(delimiter, charset, hasHeader, bomStrip, nullValues, columns);
+    Object esc = parser.get("escape");   // #1877: validated to one character; blank is none
+    Character escape = (esc != null && !esc.toString().isEmpty()) ? esc.toString().charAt(0) : null;
+    return new ParserOverrides(delimiter, charset, hasHeader, bomStrip, nullValues, columns,
+        SKIP_LEADING.equals(parser.get("short_rows")), escape);
   }
 
   /**
@@ -186,11 +198,60 @@ public class CsvFileConnectorType implements ConnectorType {
    * left unset while still honoring every configured parser field.
    */
   static CsvFileReader.Config effectiveConfig(Path file, ParserOverrides o) {
-    CsvFileReader.Config base = CsvFileReader.autoDetect(file);
+    return merge(file, o, EncodingDetector.guess(file));
+  }
+
+  /**
+   * The same, inside a run: a weak guess is said to the run's notes (#1885). {@code label} names the source file in what
+   * the run says: a remote file is read from a temporary copy.
+   */
+  static CsvFileReader.Config effectiveConfig(Path file, ParserOverrides o, RunScope scope, String label) {
+    EncodingDetector.Guess guess = EncodingDetector.guess(file);
+    // A guess is said, where the run says what it could not be sure of; a declared encoding guesses nothing.
+    if (o.encoding() == null && guess.weak()) {
+      RunNotes.of(scope).note(new GuessedEncodingsKey(), GuessedEncodings::new).add(label, guess);
+    }
+    return merge(file, o, guess);
+  }
+
+  private static CsvFileReader.Config merge(Path file, ParserOverrides o, EncodingDetector.Guess guess) {
+    CsvFileReader.Config base = CsvFileReader.autoDetect(file, guess.charset());
     return new CsvFileReader.Config(
         o.encoding()  != null ? o.encoding()  : base.encoding(),
         o.delimiter() != null ? o.delimiter() : base.delimiter(),
-        o.hasHeader(), o.bomStrip(), o.nullValues(), o.columns());
+        o.hasHeader(), o.bomStrip(), o.nullValues(), o.columns(), o.skipLeadingShortRows(), o.escape());
+  }
+
+  /** The run-scope key of {@link GuessedEncodings}: one per run. */
+  record GuessedEncodingsKey() {}
+
+  /**
+   * The files of a run whose encoding was only guessed (#1885), said as ONE sentence: the first file, what was chosen for
+   * it, and how many others were guessed too. A folder of a thousand files is one sentence on the run row, not a thousand.
+   * A file is counted once, however many windows read it.
+   */
+  static final class GuessedEncodings implements RunNotes.Note {
+    private final Set<String> files = new LinkedHashSet<>();
+    private String firstFile;
+    private EncodingDetector.Guess first;
+
+    void add(String file, EncodingDetector.Guess guess) {
+      if (files.add(file) && first == null) {
+        firstFile = file;
+        first = guess;
+      }
+    }
+
+    /** Worded for the integrator who can declare {@code parser.encoding}. */
+    @Override
+    public String sentence() {
+      String charset = first.charset().name();
+      String more = files.size() > 1 ? "; " + (files.size() - 1) + " more file(s) were guessed too" : "";
+      return firstFile + ": the encoding was guessed as " + charset + " (confidence " + first.confidence() + "%), not declared — "
+          + "a guess can read a DOS code page (CP850, CP437) as another page, and the accents come out wrong; "
+          + "declare parser.encoding: " + charset + " if it is right, the file's real encoding if not — "
+          + "a declared encoding is not a guess, and the next runs stop being Partial" + more;
+    }
   }
 
   @Override
@@ -597,7 +658,7 @@ public class CsvFileConnectorType implements ConnectorType {
      */
     private WindowOutcome readOneWindow(Path file, long skip, int limit,
                                         List<Map<String, Object>> chunk, CsvCursor incoming) {
-      CsvFileReader.Config cfg = effectiveConfig(file, overrides);
+      CsvFileReader.Config cfg = effectiveConfig(file, overrides, scope, file.toString());
       if (source instanceof SeekableSource seekable && CheckpointingReader.canCheckpoint(cfg.encoding())) {
         FileDescriptor now = describe(file);
         if (now != null) {
@@ -628,7 +689,8 @@ public class CsvFileConnectorType implements ConnectorType {
       // The header line is behind the anchor: parse with the cursor's captured column names,
       // the same headerless-mode machinery has-header=false files always used.
       CsvFileReader.Config headerless = new CsvFileReader.Config(
-          cfg.encoding(), cfg.delimiter(), false, cfg.bomStrip(), cfg.nullValues(), incoming.headers());
+          cfg.encoding(), cfg.delimiter(), false, cfg.bomStrip(), cfg.nullValues(), incoming.headers(), false,
+          cfg.escape());
       CsvFileReader.CheckpointedWindow w =
           readWindowCheckpointed(rdr, now, headerless, limit, incoming.lineBase(), chunk);
       // Rows are flowing again, so parse failures past this point propagate exactly as on the

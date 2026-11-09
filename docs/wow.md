@@ -17,7 +17,7 @@ All in `docs/demo/wow-customer/`. Each command below runs from the root of the c
 <div class="lm-meta-item" markdown>
 <strong>Edition</strong>
 
-Every step runs on lumnik Open, except the three marked **(Pro)**.
+Every step runs on lumnik Open, except the parts marked **(Pro)**.
 </div>
 <div class="lm-meta-item lm-meta-item--accent" markdown>
 <strong>No Siebel at hand</strong>
@@ -47,7 +47,7 @@ docker compose -f docker-compose.selfhost.yml \
 
 - Wait one minute: the hub restarts. An `lm` call before that answers `401`.
 - ✔ `docker compose -f docker-compose.selfhost.yml exec hub ls /demo` lists `customer.csv`.
-- A later `up.sh` keeps this mount.
+- A later `up.sh` keeps this mount. After `down.sh`, run the second command again.
 - The steps marked (Pro) need Ollama and its models: [Prerequisites](quickstart/prerequisites.md#the-ai-layer-ollama).
 
 **2. The fake Siebel**, left running in its own terminal:
@@ -57,7 +57,7 @@ python3 docs/demo/wow-customer/fake-siebel.py
 ```
 
 - ✔ `curl -s -X POST http://localhost:8077/eai | head -c 60` prints `<soap:Envelope xmlns:soap=…`.
-- `address already in use` means it already runs.
+- `Address already in use` means it already runs.
 
 **3. `lm`, logged in** as `integrator` ([Quickstart, steps 1 and 2](quickstart/installer.md#1-install-lm)).
 
@@ -156,7 +156,7 @@ The answer reads the fused customer, and shows the SQL it ran.
 ### 5. It never answers a value that does not exist
 
 The entity declares `segment` with three values: `GOLD`, `SILVER`, `BRONZE`. A question about
-another value gets no number:
+another value gets no number (Pro):
 
 ```
 $ lm ask --scope clients "combien de clients du segment PLATINUM ?"
@@ -242,7 +242,7 @@ lm process apply -f docs/demo/wow-customer/lyon-process.yaml
 
 ```
 registered: fake-n8n (id 1000) — forwards subscribed events from now on
-{"name":"lyon-client-arrive","table":"connector.t_cust_csv","emit":"decision.lyon-client-arrive"}
+Applied process "lyon-client-arrive" → table connector.t_cust_csv, emits decision.lyon-client-arrive
 ```
 
 ??? note "The process manifest"
@@ -251,8 +251,8 @@ registered: fake-n8n (id 1000) — forwards subscribed events from now on
     --8<-- "docs/demo/wow-customer/lyon-process.yaml"
     ```
 
-A process fires on **new rows only**. Add a Lyon customer the file does not have, then run the
-connector again:
+A process sees only the rows that land **after** it is applied. The four Lyon customers already
+there raise nothing. Add one the file does not have, then run the connector again:
 
 ```bash
 echo 'C-400,Camille Roux,camille@x.fr,Lyon' >> docs/demo/wow-customer/customer.csv
@@ -384,8 +384,8 @@ More: [Dormancy](apps/workflows.md#dormancy-the-memory-of-the-breathing).
 
 1. **Point at the real database.** `lm source jdbc test`, then `discover`, then `add`. A
    `SELECT`-only account is enough. [The guided flow](connectors/jdbc.md#guided-flow-lm-source-jdbc)
-2. **Repair at the door.** On a file export, [transformers](connectors/transformers.md) fix
-   broken accents and legacy dates. A database table is read as it is: rename a column in its
+2. **Repair at the door.** On a file export or a REST endpoint, [transformers](connectors/transformers.md)
+   fix broken accents and legacy dates. A database table is read as it is: rename a column in its
    manifest, or read a view of the source.
 3. **Name a scope, run, ask (Pro).** [What makes a scope answerable](quickstart/installer.md#what-makes-a-scope-answerable)
 

@@ -4,11 +4,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.common.text.Text;
+import io.lumnik.hub.connector.mapping.Zones;
 import io.lumnik.hub.entity.resolution.NormalizerAllowlist;
 import io.lumnik.hub.manifest.HubYaml;
 import io.lumnik.hub.manifest.ManifestKeys;
 import jakarta.enterprise.context.ApplicationScoped;
 
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -35,7 +37,7 @@ public class EntityManifestParser {
   // would cry wolf on our own demo — the failure mode the C3 verdict named.
   private static final Set<String> ROOT_KEYS = Set.of(
       "apiVersion", "kind", "name", "label", "match", "sources", "scopes", "description", "columns",
-      "resolution", "joins");
+      "resolution", "joins", "zone");
   private static final Set<String> SOURCE_KEYS = Set.of("table", "map");
   private static final Set<String> JOIN_KEYS = Set.of("table", "from", "to", "map");
   // A joined column named like a lookup CTE alias would make the CREATE VIEW ambiguous: a 500, not a 400.
@@ -143,6 +145,7 @@ public class EntityManifestParser {
     if (!hasResolution) requireMatchColumns(m);
     requireSources(m);
     requireJoins(m);
+    requireZone(m);
     if (!hasResolution) requireSourcesMapTheMatch(m);
     requireScopes(m);
     Set<String> canonical = new HashSet<>(m.canonicalColumns());
@@ -204,6 +207,18 @@ public class EntityManifestParser {
     }
   }
 
+
+  /**
+   * #1881: the zone is a region the database reads as the JDK does. An offset ({@code +02:00}, {@code UTC+2}) is
+   * refused: PostgreSQL reads a bare offset with the opposite sign, and a day taken in the wrong zone is silent.
+   */
+  private static void requireZone(EntityManifest m) {
+    if (Text.blank(m.zone())) return;
+    String why = Zones.whyNot(m.zone()).orElse(null);
+    if (why == null && !ZoneId.getAvailableZoneIds().contains(m.zone()))
+      why = "'zone' must name a region, not an offset: \"" + m.zone() + "\" (for example Europe/Paris or UTC)";
+    if (why != null) throw new IllegalArgumentException(why);
+  }
 
   /**
    * #846: only what the manifest itself can say. {@code to} is a PHYSICAL column and need not be in

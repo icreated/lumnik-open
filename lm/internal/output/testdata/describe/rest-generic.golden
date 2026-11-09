@@ -81,6 +81,8 @@ tls                  optional  [NESTED, MEDIUM]
   Trust an internal CA for every endpoint: {ca_secret: the lm secret holding its PEM certificate(s)}
   ca_secret            REQUIRED  [STRING, HIGH]
     Name of the lm secret holding the CA's PEM certificate(s); only those CAs are trusted
+http_version         optional  [STRING, LOW]
+  HTTP version every request asks for: "1.1" or "2" (omit => negotiated, HTTP/2 when the server offers it)
 headers              optional  [LIST, MEDIUM]
   Static headers sent on every request, [{name, value | value_env}]
   → headers is a list of { name, value|value_env } objects
@@ -96,6 +98,8 @@ defaults             optional  [NESTED, LOW]
     Not accepted in spec.defaults — refused by validation; declare it at spec.auth
   tls                  optional  [NESTED, LOW]
     Not accepted in spec.defaults — refused by validation; declare it at spec.tls
+  http_version         optional  [STRING, LOW]
+    Not accepted in spec.defaults — refused by validation; declare it at spec.http_version
   default_rate_limit   optional  [STRING, LOW]
     Not accepted in spec.defaults — refused by validation; declare it at spec.default_rate_limit
   graphql_path         optional  [STRING, LOW]

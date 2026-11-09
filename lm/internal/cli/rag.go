@@ -59,8 +59,14 @@ func newRagCmd() *cobra.Command {
 			if st.IndexedAt != nil {
 				indexedAt = *st.IndexedAt
 			}
+			if st.SwitchedOff {
+				cmd.Println("ai: switched off (LUMNIK_AI_ENABLED=false)")
+			}
 			cmd.Printf("indexed: %t\nchunks: %d\nindexed_at: %s\nprovider: %s\nembedding_model: %s\n",
 				st.Indexed, st.Chunks, indexedAt, st.Provider, st.EmbeddingModel)
+			if st.StoredChunks != nil {
+				cmd.Printf("stored_chunks: %d\n", *st.StoredChunks)
+			}
 			return nil
 		},
 	})

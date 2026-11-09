@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.domain;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.common.domain.TenantedEntity;
+import io.lumnik.hub.sql.PgText;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -65,4 +66,10 @@ public class ConnectorDeadLetter extends TenantedEntity {
 
   @Column(name = "resolved_run_id")
   private UUID resolvedRunId;
+
+  // What was dead-lettered may hold a NUL byte, which neither text nor jsonb stores (#1855): the letter would be lost
+  // with the row it keeps.
+  public void setPayload(JsonNode payload) { this.payload = PgText.storableJson(payload); }
+  public void setSkipDetail(JsonNode skipDetail) { this.skipDetail = PgText.storableJson(skipDetail); }
+  public void setErrorMessage(String errorMessage) { this.errorMessage = PgText.storable(errorMessage); }
 }

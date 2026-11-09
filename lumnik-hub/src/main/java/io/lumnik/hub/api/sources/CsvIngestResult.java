@@ -20,7 +20,12 @@ public record CsvIngestResult(
     /** Whether this build carries the chat door (the seam resolves a sink). */
     boolean             chatAvailable,
     /** True when an existing one-shot connector took this ingest as one more breath. */
-    boolean             refreshed
+    boolean             refreshed,
+    /** What each file of a multi-file batch became; empty for one file (#1920). */
+    List<FileResult>    files
 ) {
+    /** One file of a batch: its own table, rows and columns. */
+    public record FileResult(String sourceFile, String tableName, int rowsWritten, List<PromoteColumn> promoteColumns,
+                             boolean refreshed) {}
     public record PromoteColumn(String name, String type, int inferredFromSamples) {}
 }
