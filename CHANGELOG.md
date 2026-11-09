@@ -7,6 +7,12 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.11.1 — 2026-11-09
+
+The README opens on a real terminal: six `lm` commands, replayed on a Siebel over SOAP and a CSV
+export, from the first run to a question answered with its SQL. No code change, no migration, `lm`
+stays at 1.8.0.
+
 ## v1.11.0 — 2026-11-09
 
 A Process can now run on REST rows and on a fused Entity; mails are stored, retried and replayable;

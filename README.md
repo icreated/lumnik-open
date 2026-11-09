@@ -1,16 +1,71 @@
-# lumnik — defrost the enterprise
+# lumnik — read your legacy systems without touching them
 
 [![ci](https://github.com/icreated/lumnik-open/actions/workflows/ci.yml/badge.svg)](https://github.com/icreated/lumnik-open/actions/workflows/ci.yml)
 
-Your ERP knows everything and tells you nothing. **lumnik** ingests the data trapped inside
-legacy systems — Siebel, AS/400, homegrown SQL, CSV drops, SOAP and REST and GraphQL
-backends — and un-freezes it into something people can actually use: fused entities, live
-per-scope views, and honest APIs over a multi-tenant PostgreSQL hub.
+A Siebel over SOAP, a CSV export, an AS/400 file: lumnik reads them with a read-only account,
+fuses them into one record, and answers questions in plain language, with the SQL it ran.
+
+```console
+# A Siebel CRM over SOAP and a CSV export, read. Every row counted.
+$ lm run list
+ID        CONNECTOR         ENDPOINT   STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+26e45aa1  cust-csv          default    Completed  8   8    0        0             2026-11-09 14:18  2026-11-09 14:18
+945e9b13  siebel-customers  customers  Completed  2   2    0        0             2026-11-09 14:18  2026-11-09 14:18
+
+# One customer from two systems. When they disagree, both values stay.
+$ lm view C-200 -f clients-view.yaml
+Clients / C-200
+
+  Code client   C-200
+  Nom           Marie
+  Ville         Lyon
+  Segment       SILVER
+
+  (!) Ambiguïtés et divergences
+  Nom   cust_siebel «Marie» · t_cust_csv «MARIE A.»
+
+# Ask in your own words: the answer shows its SQL. (Pro)
+$ lm ask --scope clients "how many customers are in Lyon?"
+There are 4 customers in Lyon.
+
+  COUNT
+  4
+  1 row returned
+
+  SQL: SELECT COUNT(*) FROM "connector"."v_customer" WHERE "city" = 'Lyon'
+LIMIT 500
+
+# No figure the data does not hold. (Pro)
+$ lm ask --scope clients "how many customers are in the PLATINUM segment?"
+I can't answer that from the data available for this scope — the question doesn't map to the declared schema.
+
+# Order statuses written six ways: the one nobody declared is named.
+$ lm workflow apply -f commande-workflow.yaml
+Applied workflow "commande-lifecycle" → connector.t_commandes_csv.statut, scope demo
+  in the data, not declared: EN LITIGE (2 rows)
+
+# Orders that stop moving become decisions.
+$ lm inbox
+ID  WHEN      PROCESS                      MESSAGE                                                                                                                              ENTITY_KEY
+11  just now  workflow:commande-lifecycle  CMD-007: observed unmoved in "EN LITIGE" since 2026-11-09 (first observed 2026-11-09) — declared threshold 1m in commande-lifecycle  CMD-007
+10  just now  workflow:commande-lifecycle  CMD-006: observed unmoved in "EN_COURS" since 2026-11-09 (first observed 2026-11-09) — declared threshold 1m in commande-lifecycle   CMD-006
+9   just now  workflow:commande-lifecycle  CMD-005: observed unmoved in "EN LITIGE" since 2026-11-09 (first observed 2026-11-09) — declared threshold 1m in commande-lifecycle  CMD-005
+8   just now  workflow:commande-lifecycle  CMD-004: observed unmoved in "BROUILLON" since 2026-11-09 (first observed 2026-11-09) — declared threshold 1m in commande-lifecycle  CMD-004
+7   just now  workflow:commande-lifecycle  CMD-001: observed unmoved in "EN_COURS" since 2026-11-09 (first observed 2026-11-09) — declared threshold 1m in commande-lifecycle   CMD-001
+```
+
+- **Reads, never writes.** A `SELECT`-only account, or the files and APIs as they come: JDBC,
+  CSV, REST, SOAP, GraphQL, fixed-width, EBCDIC.
+- **Every row accounted for.** `IN = OUT + SKIPPED`. A refused row is kept with its raw values
+  and its cause.
+- **Declared, not coded.** Sources, records, rules and lifecycles are YAML files, validated
+  before they apply.
+
+Every line above is the output of the [WOW walkthrough](/docs/wow.md), about 30 minutes on the
+self-host stack: see [Quickstart](#quickstart).
 
 **The name:** `lum` (light) + the Slavic agent suffix `-nik` — *the one who brings light into
 the frozen ERP*. The CLI binary is `lm` (the lumen symbol).
-
-Read-only entry: ingest first, risk nothing. lumnik never writes into your ERP.
 
 ## Where it stands
 
