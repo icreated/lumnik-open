@@ -55,7 +55,7 @@ services:
   hub:
     # Pull the published image by default; `up.sh --build` (or `docker compose ... up --build`)
     # compiles from source and tags the result as this same image name.
-    image: ghcr.io/icreated/lumnik-hub:${LUMNIK_VERSION:-main}
+    image: ghcr.io/icreated/lumnik:${LUMNIK_VERSION:-main}
     build:
       context: .
       dockerfile: Dockerfile

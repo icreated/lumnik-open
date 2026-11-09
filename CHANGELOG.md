@@ -7,6 +7,13 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.11.2 — 2026-11-10
+
+The open edition now has a public image. Each release tag builds the hub and pushes it to
+`ghcr.io/icreated/lumnik` (tags `X.Y.Z`, `latest`, `main`) and to Docker Hub as `icreated/lumnik`.
+`./deploy/selfhost/up.sh` pulls it: no more Maven inside Docker before a first run. `--build` still
+works. No code change, no migration, `lm` stays at 1.8.0.
+
 ## v1.11.1 — 2026-11-09
 
 The README opens on a real terminal: six `lm` commands, replayed on a Siebel over SOAP and a CSV

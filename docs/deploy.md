@@ -7,7 +7,7 @@
 <div class="lm-meta-item" markdown>
 <strong>Fastest path</strong>
 
-Self-host with Docker Compose and `./deploy/selfhost/up.sh --build`.
+Self-host with Docker Compose and `./deploy/selfhost/up.sh`.
 </div>
 <div class="lm-meta-item" markdown>
 <strong>What you get</strong>
@@ -43,17 +43,22 @@ Before anything: the [prerequisites checklist](quickstart/prerequisites.md).
 
 ```bash
 git clone https://github.com/icreated/lumnik-open.git && cd lumnik-open
-./deploy/selfhost/up.sh --build
+./deploy/selfhost/up.sh
 ```
 
 **Which edition you get:**
 
 | You run | You get |
 |---|---|
-| `up.sh --build` in a `lumnik-open` clone | **lumnik Open**: ingestion, entities, views, processes, workflows, outputs, the PWA. No chat, no `lm ask`, no Ollama. |
-| `up.sh` without `--build`, with access to the published image | **lumnik Pro**: Open plus chat and `lm ask`. [Prepare Ollama first](quickstart/prerequisites.md#the-ai-layer-ollama). |
+| `up.sh` in a `lumnik-open` clone | **lumnik Open**: ingestion, entities, views, processes, workflows, outputs, the PWA. No chat, no `lm ask`, no Ollama. |
+| `up.sh` in a lumnik Pro checkout | **lumnik Pro**: Open plus chat and `lm ask`. [Prepare Ollama first](quickstart/prerequisites.md#the-ai-layer-ollama). |
 
-The published image is private: the pull works only if your GitHub account was granted access.
+- **The Open image is public:** `ghcr.io/icreated/lumnik`, also `icreated/lumnik` on Docker Hub.
+- **The Pro image is private:** `ghcr.io/icreated/lumnik-hub` pulls only if your GitHub account was
+  granted access.
+- **`up.sh --build` compiles the hub from source** instead of pulling it. It takes a few minutes, and
+  needs only Docker.
+
 Check what runs with `lm module list` ([The two editions](editions.md)).
 
 The stack you get:

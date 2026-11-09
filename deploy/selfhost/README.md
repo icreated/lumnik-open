@@ -6,10 +6,13 @@ host with Docker. It runs anywhere Docker runs: a laptop, or a VM on any cloud (
 ## Prerequisites
 
 - Docker + Docker Compose v2 (`docker compose version`).
-- The published hub image `ghcr.io/icreated/lumnik-hub` is **private pre-launch** — `docker login ghcr.io`
-  authenticates you but grants **no access** unless your GitHub account was added to the package.
-  The path that works for everyone: `--build` (compiles from source inside Docker — no image access
-  and no local Maven/JDK needed, only Docker; the first build takes a few minutes).
+- The hub image `up.sh` pulls depends on the clone:
+  - a `lumnik-open` clone pulls the **public** Open image `ghcr.io/icreated/lumnik` (also
+    `icreated/lumnik` on Docker Hub);
+  - a lumnik Pro checkout pulls `ghcr.io/icreated/lumnik-hub`, which is **private**: `docker login ghcr.io`
+    grants access only if your GitHub account was added to the package.
+- `--build` compiles the hub from source inside Docker instead: no image access and no local
+  Maven/JDK needed, only Docker. The first build takes a few minutes.
 - **For the natural-language layer (RAG chat, semantic search, analytic "ask"):** an
   [Ollama](https://ollama.com) running on the host, with the three models pulled. Without it,
   *structured* ingestion, canonical fusion, and the REST API still work — but the embedding model
@@ -55,9 +58,9 @@ host with Docker. It runs anywhere Docker runs: a laptop, or a VM on any cloud (
 ## Quick start
 
 ```bash
-./deploy/selfhost/up.sh --build   # build from source — works for everyone (the image is private pre-launch)
-# ...or, if your GitHub account has access to the published image:
 ./deploy/selfhost/up.sh           # pull the image, generate secrets, start, wait for healthy
+# ...or compile the hub from source instead of pulling it (a few minutes):
+./deploy/selfhost/up.sh --build
 ```
 
 On the first run, `up.sh` creates `.env` with strong random secrets (`openssl rand`). When the hub is

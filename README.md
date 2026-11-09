@@ -95,9 +95,11 @@ before that word goes away.
 ## Quickstart
 
 ```bash
-cp .env.example .env      # fill every value (the compose fails fast on empty secrets)
-docker compose -f docker-compose.selfhost.yml up --build
+./deploy/selfhost/up.sh   # writes .env with random secrets, pulls the hub image, waits until it is healthy
 ```
+
+The image is public: `ghcr.io/icreated/lumnik`, also [`icreated/lumnik`](https://hub.docker.com/r/icreated/lumnik)
+on Docker Hub. `./deploy/selfhost/up.sh --build` compiles it from source instead.
 
 Then walk the WOW: [docs/wow.md](/docs/wow.md) ingests a fake Siebel + a CSV drop, fuses
 them into one `customer` entity, and serves it — every YAML in that page is transcluded
