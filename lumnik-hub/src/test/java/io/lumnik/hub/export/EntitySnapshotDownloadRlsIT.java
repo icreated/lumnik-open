@@ -2,6 +2,7 @@ package io.lumnik.hub.export;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.lumnik.hub.testsupport.EntitySourceTableFixture;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
@@ -48,7 +49,7 @@ class EntitySnapshotDownloadRlsIT {
     void applyEntityAndSeedBothTenants() throws Exception {
         EntitySourceTableFixture.create(adminDs, "t_snapshotrls677_erp", "v_snapshotrlsentity677",
             "cust_id", "cust_name");
-        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
+        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT))
             .contentType("application/yaml").body(ENTITY)
             .post("/api/entities/apply")
             .then().statusCode(200);

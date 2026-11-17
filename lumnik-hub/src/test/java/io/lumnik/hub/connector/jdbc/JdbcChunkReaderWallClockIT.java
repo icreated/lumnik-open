@@ -3,6 +3,7 @@ package io.lumnik.hub.connector.jdbc;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
 import io.lumnik.hub.connector.mapping.writer.WallClockTimestamp;
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -66,7 +67,7 @@ class JdbcChunkReaderWallClockIT {
 
   @Test
   void a_timestamp_column_is_marked_a_timestamptz_column_is_not() {
-    HikariPoolRegistry registry = new HikariPoolRegistry();
+    HikariPoolRegistry registry = new HikariPoolRegistry(TestOutbound.ADDRESSES);
     try {
       ReadResult<Map<String, Object>> r = reader(JdbcChunkReader.Mode.FULL, null, registry)
           .read(10, ConnectorCursor.empty(), null);
@@ -81,7 +82,7 @@ class JdbcChunkReaderWallClockIT {
 
   @Test
   void a_watermark_on_a_marked_column_reads_every_row_once() {
-    HikariPoolRegistry registry = new HikariPoolRegistry();
+    HikariPoolRegistry registry = new HikariPoolRegistry(TestOutbound.ADDRESSES);
     try {
       JdbcChunkReader reader = reader(JdbcChunkReader.Mode.WATERMARK, "ts", registry);
       List<Object> ids = new ArrayList<>();

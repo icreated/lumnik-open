@@ -57,7 +57,7 @@ public class EntitySnapshotDownloadResource {
         long tenantId = RequireTenant.current();
         Long actorId = TenantContextFilter.currentUser();
 
-        EntityManifest entity = registry.findReloadingIfMissing(name);
+        EntityManifest entity = registry.findReloadingIfMissing(tenantId, name);
         if (entity == null) return ApiErrors.notFound("entity " + name + " not found");
         if (!ScopeGrants.allowsAny(entity.scopes())) return ApiErrors.scopeNotGranted();
 

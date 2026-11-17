@@ -4,8 +4,10 @@ import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.domain.EffectiveConfig;
+import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.rest.OutboundFailure;
+import io.lumnik.hub.connector.rest.ResponseTooLargeException;
 import io.lumnik.hub.connector.rest.RestHttpClient;
 import io.lumnik.hub.connector.rest.RestRequest;
 import io.lumnik.hub.connector.rest.RestResponse;
@@ -19,6 +21,7 @@ import io.lumnik.hub.connector.rest.pagination.PaginationStrategy;
 import io.lumnik.hub.connector.rest.pagination.PaginationSupport;
 import io.lumnik.hub.connector.rest.reliability.ResponseValidator;
 import io.lumnik.hub.connector.secret.SecretRefs;
+import io.lumnik.hub.secret.SecretAudience;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -70,6 +73,11 @@ public class RestPreflight {
     }
 
     public Verdict check(Connector c, ConnectorEndpoint ep) {
+        // The connector's tags are the scopes its secrets must serve (#2015).
+        return SecretAudience.get(c.getTags(), () -> verdict(c, ep));
+    }
+
+    private Verdict verdict(Connector c, ConnectorEndpoint ep) {
         Map<String, Object> cfg = EffectiveConfig.of(c, ep);
 
         // Two refusals, not one, because they know different amounts. Both are named rather than
@@ -103,8 +111,9 @@ public class RestPreflight {
             resp = conn.send(req, signed -> conn.client().exchange(signed, validator));
         } catch (InterruptedException cancelled) {
             throw interrupted(cancelled);
-        } catch (AuthConfigException refused) {
-            // A credential renewed after the source's 401 and refused in turn (#1393): its sentence is ours.
+        } catch (AuthConfigException | ConfigValidationException | ResponseTooLargeException refused) {
+            // A credential renewed after the source's 401 and refused in turn (#1393), an address the hub refuses or
+            // a body past its cap (#2002): each sentence is ours.
             return refused(ep, req, refused);
         } catch (Exception unreachable) {
             // The kind, never the message: a JDK message can quote the URL, credential included

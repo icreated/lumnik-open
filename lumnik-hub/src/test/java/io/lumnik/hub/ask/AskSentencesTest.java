@@ -70,6 +70,17 @@ class AskSentencesTest {
     }
 
     @Test
+    void nothing_counted() {
+        assertThat(AskSentences.nothingCounted(null)).isEqualTo(
+            "The query returned 0 or no value. That may be the true answer, or the query did not capture your "
+                + "question — verify the SQL before relying on it.");
+        assertThat(AskSentences.nothingCounted("fr")).isEqualTo(
+            "La requête a renvoyé 0 ou aucune valeur. C'est peut-être la vraie réponse, ou la requête n'a pas saisi "
+                + "votre question — vérifiez le SQL avant de vous y fier.");
+        assertThat(AskSentences.nothingCounted("fr-CA")).isEqualTo(AskSentences.nothingCounted("fr"));
+    }
+
+    @Test
     void unbacked_answer() {
         assertThat(AskSentences.unbackedAnswer(null)).isEqualTo(
             "The phrased answer stated a figure these rows do not back, so it is withheld. "

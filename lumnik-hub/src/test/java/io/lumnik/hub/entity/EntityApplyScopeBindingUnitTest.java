@@ -57,7 +57,9 @@ class EntityApplyScopeBindingUnitTest {
         EntityApplyResource res = new EntityApplyResource();
         res.parser = new EntityManifestParser();
         res.registry = new EntityRegistry() {
-            @Override public Optional<List<String>> storedScopes(String name) { return storedScopes; }
+            @Override public Optional<Stored> storedHubwide(String name) {
+                return storedScopes.map(scopes -> new Stored("kind: Entity", scopes, 1L));   // the caller's own
+            }
         };
         return res;
     }

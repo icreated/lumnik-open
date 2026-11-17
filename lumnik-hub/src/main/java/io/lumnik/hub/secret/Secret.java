@@ -4,8 +4,12 @@ import io.lumnik.common.domain.TenantedEntity;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -44,4 +48,9 @@ public class Secret extends TenantedEntity {
 
     @Column(name = "rotated_at")
     private Instant rotatedAt;
+
+    /** The scopes a connector or an export must all carry to read this secret; empty serves the scopeless ones (#2015). */
+    @JdbcTypeCode(SqlTypes.ARRAY)
+    @Column(name = "scopes", nullable = false, columnDefinition = "text[]")
+    private List<String> scopes = new ArrayList<>();
 }

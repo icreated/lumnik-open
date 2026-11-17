@@ -2,15 +2,20 @@ package io.lumnik.hub.connector.jdbc;
 
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
+import io.lumnik.hub.outbound.OutboundAddress;
+import io.lumnik.hub.outbound.OutboundRefusedException;
 import io.lumnik.jdbc.spi.JdbcDialect;
 import io.quarkus.scheduler.Scheduled;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -44,6 +49,18 @@ public class HikariPoolRegistry {
 
   private static final int DEFAULT_POOL_SIZE = 5;
   private static final long IDLE_TIMEOUT_MS = 30_000L;
+  /**
+   * The tenant a door's pool is keyed under — the test, discovery, the guided add, Ask's labels — rather than a run's
+   * tenant. Its pool also bounds each read ({@link #DOOR_READ_TIMEOUT}).
+   */
+  public static final long DOOR = -1L;
+  /** Opening a connection and logging in, on every pool (#2002): a server that accepts and never answers held a door past 60 s. */
+  static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
+  /**
+   * Each read on a {@link #DOOR} pool, never on a run's: a run's query may rightly take longer. Generous: a catalog
+   * read on a large ERP can take tens of seconds; the hang it bounds is a server that stops answering.
+   */
+  static final Duration DOOR_READ_TIMEOUT = Duration.ofMinutes(2);
 
   /** A pool nobody asked for in this long is let go; the next ask builds it again. */
   static final long UNUSED_POOL_TTL_NANOS = TimeUnit.MINUTES.toNanos(10);
@@ -95,6 +112,12 @@ public class HikariPoolRegistry {
   }
 
   private final Map<Key, Held> pools = new ConcurrentHashMap<>();
+  private final OutboundAddress addresses;
+
+  @Inject
+  public HikariPoolRegistry(OutboundAddress addresses) {
+    this.addresses = addresses;
+  }
 
   public HikariDataSource acquire(String url, String user, String password, long tenantId,
                                   JdbcDialect dialect) {
@@ -109,12 +132,14 @@ public class HikariPoolRegistry {
     Objects.requireNonNull(dialect, "dialect");
     String driverClass = dialect.driverClass();
     requireDriverOnClasspath(driverClass, dialect);
+    requireAllowedHosts(url, dialect);
     Key key = new Key(url, user, tenantId, driverClass, dialect.id(), password);
     // compute, not computeIfAbsent: stamping the ask and the sweep's decision to close both run under the
     // map's lock on this key, so a sweep cannot close the pool an ask has just been handed. Only the entry is
     // made under the lock; the build runs after it.
     Held held = pools.compute(key, (k, existing) -> {
-      Held h = existing != null ? existing : new Held(() -> buildPool(url, user, password, dialect));
+      Held h = existing != null ? existing : new Held(() -> buildPool(url, user, password, dialect,
+          tenantId == DOOR ? Optional.of(DOOR_READ_TIMEOUT) : Optional.empty()));
       h.askedAtNanos = nowNanos;
       return h;
     });
@@ -126,6 +151,29 @@ public class HikariPoolRegistry {
     }
   }
 
+  /**
+   * Every host the URL connects to, as its dialect reads it, judged before a pool is handed out (#2002) — on every
+   * ask, so a pool built before a name changed its answer is not handed out unjudged. A URL whose hosts the dialect
+   * cannot tell is refused like a refused address: an {@link OutboundRefusedException} naming why, never the URL.
+   * A host that does not resolve is left to the driver ({@link OutboundAddress#requireAll}).
+   */
+  private void requireAllowedHosts(String url, JdbcDialect dialect) {
+    // A control character no parser here reads the way a driver might (Oracle Net trims them): refused outright.
+    if (url.chars().anyMatch(Character::isISOControl)) throw new OutboundRefusedException(UNREADABLE + "it holds a control character");
+    List<String> hosts;
+    try {
+      hosts = dialect.connectHosts(url);
+    } catch (IllegalArgumentException unreadable) {
+      // The provider's own reason, stored as written: only from a plain IllegalArgumentException, the SPI's contract.
+      // A JDK subclass (NumberFormatException…) may quote a piece of the URL.
+      throw new OutboundRefusedException(UNREADABLE + (unreadable.getClass() == IllegalArgumentException.class
+          ? unreadable.getMessage() : "the driver does not read it"));
+    }
+    addresses.requireAll(hosts);
+  }
+
+  private static final String UNREADABLE = "the hub cannot tell where this URL connects: ";
+
   /** Checked before Hikari so the message names the dialect instead of whatever Hikari wraps. */
   private static void requireDriverOnClasspath(String driverClass, JdbcDialect dialect) {
     try {
@@ -136,13 +184,17 @@ public class HikariPoolRegistry {
     }
   }
 
-  private HikariDataSource buildPool(String url, String user, String password, JdbcDialect dialect) {
+  private HikariDataSource buildPool(String url, String user, String password, JdbcDialect dialect,
+                                     Optional<Duration> read) {
     HikariConfig cfg = new HikariConfig();
+    dialect.timeoutProperties(CONNECT_TIMEOUT, read).forEach(cfg::addDataSourceProperty);
     cfg.setJdbcUrl(url);
     cfg.setDriverClassName(dialect.driverClass());
     dialect.sessionInitSql().ifPresent(cfg::setConnectionInitSql);
     cfg.setUsername(user);
-    cfg.setPassword(password);
+    // Never null (#2002): pgjdbc fills a missing password from the hub's own ~/.pgpass, and would send it to the host
+    // a tenant chose. A door may be asked without one.
+    cfg.setPassword(password == null ? "" : password);
     cfg.setReadOnly(true);
     cfg.setMaximumPoolSize(DEFAULT_POOL_SIZE);
     // Below the maximum, or idleTimeout retires nothing: at the default (= the maximum) a quiet pool would hold

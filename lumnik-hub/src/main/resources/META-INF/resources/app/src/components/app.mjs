@@ -34,6 +34,7 @@ export function App() {
   const [count, setCount] = useState(''); // header count slot — set by the tab on screen
   const [badges, setBadges] = useState({}); // tab id -> the count it wears (the inbox's unacked)
   const [chatLog, setChatLog] = useState([]); // D5: session-scoped, lifted so tab switches keep it
+  const [mapBackground, setMapBackground] = useState(null); // #2057: the operator's tile server, or none
   // Moving to a tab is one gesture: clear the header count slot the previous tab filled, then
   // switch. Both callers — the tab bar, and the door an abstention offers (#515) — go through it,
   // and a tab that is not effective for this app is not a place to go.
@@ -111,6 +112,7 @@ export function App() {
             apiRef.current.json('/api/bff/v1/me', { method: 'GET' }),
           ]);
           cacheRegistry(entries);
+          setMapBackground(me && me.map ? me.map : null);
           resolved = resolveFromRegistry(entries, location.search);
           if (resolved.screen === 'refused') {
             // The phase-1 guess must not linger in the head under a body that says
@@ -169,7 +171,7 @@ export function App() {
   const current = tabs.find(t => t.id === shownTab);
   const ctx = {
     api: apiRef.current, views: viewsRef.current, scope: metier.scope,
-    can: id => has(tabs, id), openTab: goTab, setCount, setBadge, chatLog, setChatLog,
+    can: id => has(tabs, id), openTab: goTab, setCount, setBadge, chatLog, setChatLog, mapBackground,
   };
 
   return html`

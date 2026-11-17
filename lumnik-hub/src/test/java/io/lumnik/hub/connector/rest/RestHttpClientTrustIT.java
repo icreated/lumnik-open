@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest;
 
+import io.lumnik.hub.testsupport.TestOutbound;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import java.util.ArrayList;
 import org.junit.jupiter.api.*;
@@ -49,26 +50,26 @@ class RestHttpClientTrustIT {
 
     @Test
     void the_default_trust_refuses_an_internal_ca() {
-        SSLHandshakeException e = assertThrows(SSLHandshakeException.class, () -> new RestHttpClient().execute(pods()));
+        SSLHandshakeException e = assertThrows(SSLHandshakeException.class, () -> new RestHttpClient(TestOutbound.ADDRESSES).execute(pods()));
         // What RetryPolicy reads to give up at once: the JDK puts a CertificateException under a trust refusal.
         assertTrue(OutboundFailure.isCertificateRefusal(e), "a trust refusal carries a CertificateException");
     }
 
     @Test
     void a_client_trusting_the_internal_ca_reads_the_source() throws Exception {
-        RestResponse resp = new RestHttpClient().trusting(serverPem).execute(pods());
+        RestResponse resp = new RestHttpClient(TestOutbound.ADDRESSES).trusting(serverPem).execute(pods());
         assertEquals(200, resp.status());
         assertEquals("{\"items\":[]}", resp.body());
     }
 
     @Test
     void trusting_another_ca_still_refuses() {
-        assertThrows(SSLHandshakeException.class, () -> new RestHttpClient().trusting(otherPem).execute(pods()));
+        assertThrows(SSLHandshakeException.class, () -> new RestHttpClient(TestOutbound.ADDRESSES).trusting(otherPem).execute(pods()));
     }
 
     @Test
     void the_same_ca_reuses_one_client() {
-        RestHttpClient base = new RestHttpClient();
+        RestHttpClient base = new RestHttpClient(TestOutbound.ADDRESSES);
         assertSame(base.trusting(serverPem), base.trusting(serverPem));
         assertNotSame(base.trusting(serverPem), base.trusting(otherPem));
     }

@@ -11,6 +11,7 @@ import io.lumnik.hub.connector.transport.FileSource;
 import io.lumnik.hub.testsupport.MinioTestImage;
 import io.lumnik.hub.connector.transport.FileSourceRegistry;
 import io.lumnik.hub.connector.transport.s3.S3FileSourceFactory;
+import io.lumnik.hub.testsupport.TestOutbound;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.AfterEach;
@@ -121,7 +122,7 @@ class FileSourceCursorReaderS3IT {
             case "AWS_S3_SECRET_KEY" -> SECRET;
             default -> null;
         };
-        var factory = new S3FileSourceFactory(SecretRefs.environmentOnly(env));
+        var factory = new S3FileSourceFactory(SecretRefs.of(env), TestOutbound.ADDRESSES);
         Map<String, Object> s3cfg = Map.of(
             "kind", "s3",
             "region", "us-east-1",

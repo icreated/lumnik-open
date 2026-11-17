@@ -21,6 +21,8 @@ class DynamicTableRegistryTest {
         assertThat(DynamicTableRegistry.isHubDynamicTable("identity", "t_user")).isFalse();      // wrong schema
         assertThat(DynamicTableRegistry.isHubDynamicTable("core", "event_outbox")).isFalse();
         assertThat(DynamicTableRegistry.isHubDynamicTable("connector", null)).isFalse();
+        // #2010: a table under ext is the hub's only when the hybrid writer recorded it, never by its schema.
+        assertThat(DynamicTableRegistry.isHubDynamicTable("ext", "orders")).isFalse();
     }
 
     /** #1821: the hash column is told by the registry row's mapping marker, with no query. */

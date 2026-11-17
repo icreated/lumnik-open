@@ -1,6 +1,8 @@
 package io.lumnik.identity.tenant;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.common.security.TenantWide;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.identity.IdentityErrors;
 import jakarta.enterprise.event.Event;
 import jakarta.inject.Inject;
@@ -12,9 +14,11 @@ import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriBuilder;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
+import org.hibernate.Session;
 
 import java.util.List;
 
+@TenantWide
 @Path("/api/tenants")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
@@ -49,6 +53,9 @@ public class TenantResource {
     @Transactional
     @Operation(summary = "Create a new tenant")
     public Response create(@Valid TenantCommands.Create cmd) {
+        // #1991: to the commit, so no deployment-wide write runs on a count taken before this tenant
+        tenants.getEntityManager().unwrap(Session.class)
+            .doWork(c -> Jdbc.advisoryXactLock(c, "TenantResource.create", Tenant.CREATION_LOCK));
         tenants.holderOfCode(cmd.code()).ifPresent(holder -> {
             throw IdentityErrors.conflict(
                 "tenant code " + holder.getCode() + " is already held by tenant " + holder.getId());

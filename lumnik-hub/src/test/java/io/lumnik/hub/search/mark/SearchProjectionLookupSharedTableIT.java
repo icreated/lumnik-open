@@ -64,8 +64,8 @@ class SearchProjectionLookupSharedTableIT {
         long tenant = 847_301;
         String n = String.valueOf(System.nanoTime());
         String cats = "t_sh_c_" + n, prods = "t_sh_p_" + n;
-        createTable(adminDs, cats, "cid text, cname text");
-        createTable(adminDs, prods, "pid text, cid text, pname text");
+        createTable(adminDs, tenant, cats, "cid text, cname text");
+        createTable(adminDs, tenant, prods, "pid text, cid text, pname text");
         String a = "ShareCat" + n, b = "ShareProd" + n;
         yaml(tenant).body("kind: Entity\nname: " + a + "\nmatch: [category_code]\nscopes: [lk]\nsources:\n"
             + "  - table: " + cats + "\n    map: { cid: category_code, cname: category_name }\n")
@@ -91,9 +91,9 @@ class SearchProjectionLookupSharedTableIT {
         long tenant = 847_302;
         String n = String.valueOf(System.nanoTime());
         String cats = "t_sh2_c_" + n, p1 = "t_sh2_p1_" + n, p2 = "t_sh2_p2_" + n;
-        createTable(adminDs, cats, "cid text, cname text");
-        createTable(adminDs, p1, "pid text, cid text, pname text");
-        createTable(adminDs, p2, "pid text, cid text, pname text");
+        createTable(adminDs, tenant, cats, "cid text, cname text");
+        createTable(adminDs, tenant, p1, "pid text, cid text, pname text");
+        createTable(adminDs, tenant, p2, "pid text, cid text, pname text");
         String e1 = "ShareOne" + n, e2 = "ShareTwo" + n;
         yaml(tenant).body(product(e1, p1, cats)).post("/api/entities/apply").then().statusCode(200);
         yaml(tenant).body(product(e2, p2, cats)).post("/api/entities/apply").then().statusCode(200);
@@ -115,8 +115,8 @@ class SearchProjectionLookupSharedTableIT {
         long tenant = 847_303;
         String n = String.valueOf(System.nanoTime());
         String cats = "t_sh3_c_" + n, prods = "t_sh3_p_" + n;
-        createTable(adminDs, cats, "cid text, cname text");
-        createTable(adminDs, prods, "pid text, cid text, pname text");
+        createTable(adminDs, tenant, cats, "cid text, cname text");
+        createTable(adminDs, tenant, prods, "pid text, cid text, pname text");
         String e = "ShareRollback" + n;
         yaml(tenant).body(product(e, prods, cats)).post("/api/entities/apply").then().statusCode(200);
         String idx = index(tenant, e);

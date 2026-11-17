@@ -78,7 +78,7 @@ class CsvFileConnectorApplyHandlerIT {
             spec:
               transport:
                 kind: local
-                path: /export/*.csv
+                path: export/*.csv
               after_process: none
             """.formatted(System.nanoTime());
 
@@ -238,7 +238,7 @@ class CsvFileConnectorApplyHandlerIT {
             spec:
               transport:
                 kind: local
-                path: /export/*.csv
+                path: export/*.csv
             %s  after_process: none
             """.formatted(name, specBlock);
 

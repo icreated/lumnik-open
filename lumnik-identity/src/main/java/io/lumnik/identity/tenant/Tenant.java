@@ -18,6 +18,12 @@ import static lombok.AccessLevel.PROTECTED;
 })
 public class Tenant extends AuditedEntity {
 
+    /**
+     * The advisory lock a tenant's creation takes exclusively, to its commit; a deployment-wide write takes it shared
+     * while it counts the tenants and writes (#1991). So no write is allowed by a count a creation makes stale.
+     */
+    public static final String CREATION_LOCK = "identity.tenant:creation";
+
     @Id
     @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "tenant_seq")
     @SequenceGenerator(name = "tenant_seq", sequenceName = "identity.tenant_id_seq", allocationSize = 1)

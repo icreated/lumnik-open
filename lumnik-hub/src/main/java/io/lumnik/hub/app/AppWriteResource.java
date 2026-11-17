@@ -3,7 +3,9 @@ package io.lumnik.hub.app;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.api.DeploymentWide;
 import io.lumnik.hub.audit.AuditRecorder;
+import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.Path;
@@ -22,6 +24,7 @@ import java.util.Optional;
  * {@code EntityWriteResource}/{@code EntityReadResource} split: that class stays {@code lm_user}
  * reads, this one is a write.
  */
+@DeploymentWide
 @Path("/api/apps")
 @Produces(MediaType.APPLICATION_JSON)
 @RequiresPermission("lm_integrator")
@@ -42,11 +45,12 @@ public class AppWriteResource {
     @Path("/{name}")
     public Response delete(@PathParam("name") String name) {
         String key = name.strip().toLowerCase(Locale.ROOT);
+        long tenant = RequireTenant.current();
 
-        Response refusal = refuseUnlessHeld(key);
+        Response refusal = refuseUnlessHeld(tenant, key);
         if (refusal != null) return refusal;
 
-        AppRegistrationStore.Deleted outcome = store.delete(key, ScopeGrants.granted().orElse(null));
+        AppRegistrationStore.Deleted outcome = store.delete(tenant, key, ScopeGrants.granted().orElse(null));
         Response asRefusal = switch (outcome) {
             case AppRegistrationStore.Deleted.Removed ignored -> null;
             case AppRegistrationStore.Deleted.NotFound ignored -> notFound(key);
@@ -61,17 +65,14 @@ public class AppWriteResource {
     }
 
     /**
-     * 404 when no app carries this name, 403 when the caller's scopes exclude it, 400 when it
-     * currently carries the default flag, else null. The row is already fetched for its scope, so
-     * reading {@code isDefault()} off the same row costs nothing extra — and answering here, ahead
-     * of {@link AppRegistrationStore#delete}, means an ORDINARY last-default request never pays for
-     * a {@code DELETE} doomed to touch zero rows and the disambiguating read that follows it.
+     * 404 when this tenant reads no app of this name, 403 when the caller's scopes exclude it, else null. Whether it
+     * is the shared default (the floor) or another owner's (a 404) is the store's answer: a tenant's own default reads
+     * as the default here but may go, its tenant then falls back on the shared one (#2050).
      */
-    private Response refuseUnlessHeld(String name) {
-        Optional<AppRegistrationStore.Row> row = store.find(name);
-        if (row.isEmpty()) return notFound(name);
-        if (!ScopeGrants.allows(row.get().scope())) return ApiErrors.scopeNotGranted();
-        if (row.get().isDefault()) return ApiErrors.badRequest(AppApplyResource.LAST_DEFAULT_REFUSAL);
+    private Response refuseUnlessHeld(long tenant, String name) {
+        Optional<String> scope = store.findScope(tenant, name);
+        if (scope.isEmpty()) return notFound(name);
+        if (!ScopeGrants.allows(scope.get())) return ApiErrors.scopeNotGranted();
         return null;
     }
 

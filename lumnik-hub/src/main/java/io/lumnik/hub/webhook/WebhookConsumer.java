@@ -52,8 +52,9 @@ public class WebhookConsumer implements DeadLetterReplayer {
     private static final int RETRY_BATCH_SIZE = 100;
 
     /**
-     * Claim lease. One delivery costs at most 15s of HTTP (WebhookDeliveryService: 5s connect +
-     * 10s request), so 60s covers a worst-case delivery four times over. It is also the maximum
+     * Claim lease. One delivery costs at most 25s of HTTP (WebhookDeliveryService: 5s connect +
+     * 10s request + 10s reading the body, #2002), plus the resolver's own time for the address
+     * rule, so 60s covers a worst-case delivery about twice over. It is also the maximum
      * time a delivery stays stranded if this process dies mid-flight: the claim then expires and
      * the next sweep — here or on another instance — picks the row up again. Deliberately not
      * configurable: it is derived from the HTTP budget, which is itself fixed.

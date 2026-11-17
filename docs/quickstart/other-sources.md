@@ -11,6 +11,7 @@ A password or a key never goes on the command line or in a manifest. Store it in
 |---|---|
 | `lm secret set NAME` | a password or a token. It prompts; nothing shows on screen or in your shell history. |
 | `lm secret set NAME -` | a value on several lines, such as a private SSH key. Paste it, then Ctrl+D (PowerShell: Ctrl+Z, Enter). |
+| `lm secret scope NAME SCOPES` | the scopes of the connectors that read it. A connector reads a secret only when it carries all the secret's scopes. |
 
 ```
 $ lm secret set SFTP_EXPORT_PASSWORD --description "nightly export server"
@@ -30,6 +31,7 @@ SFTP_EXPORT_PASSWORD           -                              nightly export ser
 
 ```bash
 lm secret set STRIPE_API_KEY
+lm secret scope STRIPE_API_KEY billing
 lm source rest from-openapi \
     https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json \
     --name stripe --scope billing -o stripe.yaml
@@ -68,6 +70,7 @@ The most common case: the ERP drops a file on an SFTP server every night.
 ```bash
 ssh-keyscan sftp.acme.io | ssh-keygen -lf -    # read the server's SHA256:… fingerprint
 lm secret set ACME_SFTP_KEY -                  # paste the private key, then Ctrl+D
+lm secret scope ACME_SFTP_KEY billing          # the --scope below
 lm csv ingest sftp://lumnik@sftp.acme.io/export/billing-latest.csv \
     --key-secret ACME_SFTP_KEY --host-key-fingerprint "SHA256:…" \
     --scope billing --name acme-billing
@@ -115,6 +118,8 @@ All the file options: [CSV & files](../connectors/csv.md).
 ```bash
 lm secret set AWS_ACCESS_KEY_ID
 lm secret set AWS_SECRET_ACCESS_KEY
+lm secret scope AWS_ACCESS_KEY_ID billing
+lm secret scope AWS_SECRET_ACCESS_KEY billing
 lm csv ingest s3://acme-exports/billing/ \
     --region eu-west-3 --suffix .csv --scope billing
 ```
@@ -132,6 +137,7 @@ lm csv ingest s3://acme-exports/billing/ \
 | You see | Do this |
 |---|---|
 | `Bearer token unavailable (env=STRIPE_API_KEY)` | The secret is missing. `lm secret set STRIPE_API_KEY`. |
+| `secret STRIPE_API_KEY does not serve scope billing` | The secret has no scope, or one the connector lacks. `lm secret scope STRIPE_API_KEY billing`. |
 | `✗ stripe.yaml — 1 error(s), …` on `lm apply` | The hub refused the manifest. Each `ERROR` line names the field and the fix. |
 | `429 Too Many Requests` from the API | Add `default_rate_limit: 50/s` under `spec:`, then `lm apply -f` again. |
 | `WARN  metadata.scopes`, `no scopes declared — …` on validate | Add `scopes: [<scope>]` under `metadata`. Without it, Ask cannot see the tables, and a user bound to a scope cannot see the connector. |

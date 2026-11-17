@@ -9,6 +9,7 @@ import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.lumnik.hub.sql.TenantRlsScope;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -152,6 +153,8 @@ class FusedReadPlanIT {
             }
             st.execute("DELETE FROM core.process_manifest WHERE tenant_id = 1 AND name = 'planit-" + kind + "'");
         }
+        RegisteredTables.register(adminDs, 1L, erp);
+        RegisteredTables.register(adminDs, 1L, crm);
         given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1)).contentType("application/yaml")
             .body("kind: Entity\nname: " + entity + "\nmatch: [code]\nscopes: [planit" + kind + "]\nsources:\n"
                 + "  - table: " + erp + "\n    map: { code: code, credit_limit: credit_limit }\n"

@@ -2,6 +2,7 @@ package io.lumnik.hub.entity;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -52,6 +53,7 @@ class EntityReadTimestampIT {
       st.execute("GRANT SELECT ON connector.t_stamp_erp TO lumnik_app");
       st.execute("INSERT INTO connector.t_stamp_erp VALUES (1,'SO-1','2026-07-01 00:00:00.000500+00')");
     }
+    RegisteredTables.register(adminDs, 1L, "t_stamp_erp");
     given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);

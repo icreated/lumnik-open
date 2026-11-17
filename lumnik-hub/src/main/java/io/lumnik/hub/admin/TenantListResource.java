@@ -2,6 +2,7 @@ package io.lumnik.hub.admin;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.common.security.TenantWide;
 import io.lumnik.common.sql.Jdbc;
 import io.quarkus.agroal.DataSource;
 import jakarta.inject.Inject;
@@ -31,6 +32,7 @@ import java.util.List;
  * disabled and needs no {@code SET LOCAL} to see rows. The annotation is the fix for the doors
  * that read tenant-scoped data as the tenant; this one is not one of them.
  */
+@TenantWide
 @Path("/api/platform/admin/tenants")
 @Produces(MediaType.APPLICATION_JSON)
 @RequiresPermission("lm_superadmin")

@@ -3,6 +3,7 @@ package io.lumnik.hub.connector.transport.sftp;
 import io.lumnik.hub.connector.secret.SecretRefs;
 import io.lumnik.hub.connector.transport.AfterProcessAction;
 import io.lumnik.hub.connector.transport.FileDescriptor;
+import io.lumnik.hub.testsupport.TestOutbound;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
@@ -65,7 +66,7 @@ class SftpFileSourceIT {
 
     @Test
     void list_open_delete_round_trip() throws Exception {
-        var factory = new SftpFileSourceFactory(SecretRefs.environmentOnly(name -> null));
+        var factory = new SftpFileSourceFactory(SecretRefs.of(name -> null), TestOutbound.ADDRESSES);
         var source = (SftpFileSource) factory.build(Map.of(
             "host", "localhost",
             "port", port,
@@ -93,7 +94,7 @@ class SftpFileSourceIT {
 
     @Test
     void stat_returns_exactly_what_the_listing_returns_for_that_path() throws Exception {
-        var factory = new SftpFileSourceFactory(SecretRefs.environmentOnly(name -> null));
+        var factory = new SftpFileSourceFactory(SecretRefs.of(name -> null), TestOutbound.ADDRESSES);
         var source = (SftpFileSource) factory.build(Map.of(
             "host", "localhost",
             "port", port,
@@ -122,7 +123,7 @@ class SftpFileSourceIT {
 
     @Test
     void openAt_uses_a_positioned_handle_read_to_start_exactly_at_the_requested_byte_offset() throws Exception {
-        var factory = new SftpFileSourceFactory(SecretRefs.environmentOnly(name -> null));
+        var factory = new SftpFileSourceFactory(SecretRefs.of(name -> null), TestOutbound.ADDRESSES);
         var source = (SftpFileSource) factory.build(Map.of(
             "host", "localhost",
             "port", port,
@@ -155,7 +156,7 @@ class SftpFileSourceIT {
     // -------------------------------------------------------------------------
 
     private static SftpFileSource newSource(String glob) {
-        var factory = new SftpFileSourceFactory(SecretRefs.environmentOnly(name -> null));
+        var factory = new SftpFileSourceFactory(SecretRefs.of(name -> null), TestOutbound.ADDRESSES);
         var source = (SftpFileSource) factory.build(Map.of(
             "host", "localhost",
             "port", port,

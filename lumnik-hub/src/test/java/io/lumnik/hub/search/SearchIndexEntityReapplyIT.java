@@ -3,6 +3,7 @@ package io.lumnik.hub.search;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.entity.EntityManifestParser;
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -80,7 +81,7 @@ class SearchIndexEntityReapplyIT {
     @Test
     void droppingAnIndexedColumnInvalidatesEveryTenantsIndexWithoutRefusingTheEntity() throws Exception {
         String name = "reapply-" + System.nanoTime();
-        yaml(1).body(entity(adminDs, ENTITY, TABLE, List.of("sales"), "code", "name", "city"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(entity(adminDs, ENTITY, TABLE, List.of("sales"), "code", "name", "city"))
             .post("/api/entities/apply").then().statusCode(200);
 
         yaml(1).body(searchIndex(name, ENTITY, "name", "city")).post("/api/search-indexes/apply")
@@ -89,7 +90,7 @@ class SearchIndexEntityReapplyIT {
             .then().statusCode(200).body("status", equalTo("valid"));
 
         // Re-apply the entity without `city`: the Entity door must still answer 200.
-        yaml(1).body(entityManifest(ENTITY, TABLE, List.of("sales"), "code", "name"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(entityManifest(ENTITY, TABLE, List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
 
         assertThat(status(1, name)).isEqualTo("invalid");
@@ -105,7 +106,7 @@ class SearchIndexEntityReapplyIT {
                 containsString("'city' is not a canonical column of entity '" + ENTITY + "'"));
 
         // Restoring the column does not silently revalidate: the declaration must be re-applied.
-        yaml(1).body(entityManifest(ENTITY, TABLE, List.of("sales"), "code", "name", "city"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(entityManifest(ENTITY, TABLE, List.of("sales"), "code", "name", "city"))
             .post("/api/entities/apply").then().statusCode(200);
         assertThat(status(1, name)).isEqualTo("invalid");
 
@@ -130,7 +131,7 @@ class SearchIndexEntityReapplyIT {
         String entityName = ENTITY + "Race";
         String table = TABLE + "_race";
         String current = entity(adminDs, entityName, table, List.of("sales"), "code", "name", "city");
-        yaml(1).body(current).post("/api/entities/apply").then().statusCode(200);
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(current).post("/api/entities/apply").then().statusCode(200);
         String replaced = "race-replaced-" + System.nanoTime();
         String recreated = "race-recreated-" + System.nanoTime();
         String untouched = "race-untouched-" + System.nanoTime();
@@ -175,7 +176,7 @@ class SearchIndexEntityReapplyIT {
         String entityName = ENTITY + "Delayed";
         String table = TABLE + "_delayed";
         String withoutCity = entityManifest(entityName, table, List.of("sales"), "code", "name");
-        yaml(1).body(entity(adminDs, entityName, table, List.of("sales"), "code", "name", "city"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(entity(adminDs, entityName, table, List.of("sales"), "code", "name", "city"))
             .post("/api/entities/apply").then().statusCode(200);
         String name = "delayed-" + System.nanoTime();
         yaml(1).body(searchIndex(name, entityName, "name", "city")).post("/api/search-indexes/apply")
@@ -201,11 +202,11 @@ class SearchIndexEntityReapplyIT {
         String name = "reapply-keep-" + System.nanoTime();
         String entityName = ENTITY + "Keep";
         String table = TABLE + "_keep";
-        yaml(1).body(entity(adminDs, entityName, table, List.of("sales"), "code", "name", "city"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(entity(adminDs, entityName, table, List.of("sales"), "code", "name", "city"))
             .post("/api/entities/apply").then().statusCode(200);
         yaml(1).body(searchIndex(name, entityName, "name")).post("/api/search-indexes/apply").then().statusCode(200);
 
-        yaml(1).body(entityManifest(entityName, table, List.of("sales", "magasin"), "code", "name"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(entityManifest(entityName, table, List.of("sales", "magasin"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
 
         assertThat(status(1, name)).isEqualTo("valid");

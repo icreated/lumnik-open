@@ -313,6 +313,16 @@ class RestConnectorValidatorTest {
         assertTrue(r.errors().getFirst().message().contains("'initial'"), () -> "names the column: " + r.errors());
     }
 
+    /** #1969: the same, with the written column named by a number — refused at validate, not at the first run. */
+    @Test void endpointMapping_hookWritingAnUndeclaredColumnNamedByANumber_isRefusedByPath() throws Exception {
+        ValidationResult r = validateEndpointMapping(PROMOTE_WITH_A_FILLED_COLUMN,
+            "{\"cell\":[{\"regex-extract\":{\"column\":\"restarts\",\"pattern\":\"(.)\",\"groups\":{\"1\":2024}}}]}");
+
+        assertEquals(List.of("spec.endpoints[0].mapping.cell[0].regex-extract"),
+            r.errors().stream().map(ValidationError::path).toList(), () -> "refused by path: " + r.errors());
+        assertTrue(r.errors().getFirst().message().contains("'2024'"), () -> "names the column: " + r.errors());
+    }
+
     /** #1617, code review: `path:` left empty reads as no path, as the run reads it; a transform needs a path. */
     @Test void promoteWithAnEmptyPath_isAColumnTheMappingFills_butATransformNeedsAPath() throws Exception {
         ValidationResult r = validateEndpointMapping("[{\"name\":\"restarts\",\"path\":\"$.restarts\",\"type\":\"integer\"},"
@@ -621,6 +631,8 @@ class RestConnectorValidatorTest {
         assertFalse(r.isValid());
         assertTrue(r.errors().stream().anyMatch(e -> e.path().contains("incremental.mode")),
             () -> "expected an incremental.mode error, got: " + r.errors());
+        assertTrue(r.errors().stream().noneMatch(e -> e.message().contains("used to")),
+            () -> "a refusal says the rule, not what an older hub did: " + r.errors());
     }
 
     @Test void incrementalWatermarkWithoutParam_isError() throws Exception {
@@ -666,6 +678,28 @@ class RestConnectorValidatorTest {
         assertFalse(r.isValid());
         assertTrue(r.errors().stream().anyMatch(e -> e.path().contains("target.table")),
             () -> "expected a target.table error, got: " + r.errors());
+    }
+
+    /** #1989: the validator holds the writer's rule, at the field's own path — a hub table under ext or connector. */
+    @ParameterizedTest
+    @ValueSource(strings = {"identity.app_user", "platform.secret", "pg_catalog.pg_class", "public.contacts", "contacts"})
+    void aTargetOutsideExtAndConnector_isRefusedAtItsPath(String table) throws Exception {
+        ValidationResult r = validateTargetTable(table);
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.endpoints[0].target.table")
+            && e.message().contains("ext.<name> or connector.<name>")), () -> table + " must be refused: " + r.errors());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ext.contacts", "connector.contacts"})
+    void aTargetUnderExtOrConnector_isValid(String table) throws Exception {
+        ValidationResult r = validateTargetTable(table);
+        assertTrue(r.isValid(), () -> table + " must be accepted: " + r.errors());
+    }
+
+    private ValidationResult validateTargetTable(String table) throws Exception {
+        return service.validate(mapper.readTree(REST_HEAD.formatted(
+            "{\"id\":\"contacts\",\"method\":\"GET\",\"path\":\"/v1/contacts\","
+            + EP_TAIL.replace("\"table\":\"ext.contacts\"", "\"table\":\"" + table + "\"") + "}")));
     }
 
     @Test void validManifest_passes() throws Exception {

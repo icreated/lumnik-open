@@ -195,7 +195,7 @@ kind: Export
 metadata:
   name: %s
 spec:
-  scope: otk
+  scope: %s
   source:
     entity: %s
   columns: [id, name]
@@ -211,7 +211,7 @@ spec:
     path: %q
     password_env: OTK_EXPORT_SFTP_PASSWORD
     host_key_fingerprint: %q
-`, name, generator.ExportEntity, os.Getenv("OTK_EXPORT_SFTP_HOST"), port,
+`, name, generator.ExportScope, generator.ExportEntity, os.Getenv("OTK_EXPORT_SFTP_HOST"), port,
 		os.Getenv("OTK_EXPORT_SFTP_USER"), path, os.Getenv("OTK_EXPORT_SFTP_FINGERPRINT"))
 	return name, manifest
 }
@@ -243,7 +243,8 @@ func exportApply(st *scenarioState) error {
 }
 
 // storeSecret creates or rotates an lm secret over the platform API (lm secret set reads its
-// value from a terminal or stdin, neither of which the runner gives it).
+// value from a terminal or stdin, neither of which the runner gives it), then gives it the
+// catalogue's export scope: an export reads a secret only when it carries the export's scope (#2015).
 func storeSecret(name, value string) error {
 	token, err := currentToken()
 	if err != nil {
@@ -259,6 +260,17 @@ func storeSecret(name, value string) error {
 		status, resp, err = inboxHTTPBody("PUT", "/api/platform/secrets/"+url.PathEscape(name), token, body, "application/json")
 		if err != nil {
 			return fmt.Errorf("export lane: rotate secret %s: %w", name, err)
+		}
+	}
+	if status >= 200 && status <= 299 {
+		scopes, _ := json.Marshal([]string{generator.ExportScope})
+		status, resp, err = inboxHTTPBody("PUT", "/api/platform/secrets/"+url.PathEscape(name)+"/scopes", token,
+			scopes, "application/json")
+		if err != nil {
+			return fmt.Errorf("export lane: scope secret %s: %w", name, err)
+		}
+		if status < 200 || status > 299 {
+			return fmt.Errorf("export lane: scope secret %s: status %d: %s", name, status, resp)
 		}
 	}
 	if status < 200 || status > 299 {

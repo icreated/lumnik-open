@@ -74,7 +74,7 @@ public class SplitHook implements CellHook {
       // `lm run get`). Quarantining the row here would be a louder contract than any other cell
       // hook has. What must never happen again is the third option: neither, in silence.
       if (parts.length != names.size()) {
-        s.counters().cellErrors().incrementAndGet();
+        s.refuseCell(parts.length + " parts for " + names.size() + " names");
       }
     } else if (params.path("into-array").asBoolean(false)) {
       List<String> arr = new ArrayList<>(parts.length);

@@ -5,6 +5,7 @@ import io.lumnik.hub.connector.csv.CsvFileConnectorType;
 import io.lumnik.hub.connector.csv.CsvFileReader;
 import io.lumnik.hub.connector.csv.CsvFullRefresh;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
+import io.lumnik.hub.connector.transport.LocalTransportRules;
 import io.lumnik.hub.validator.ConfigDef;
 import io.lumnik.hub.json.JsonNodes;
 import io.lumnik.hub.validator.ConfigDef.Importance;
@@ -91,6 +92,7 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
 
         List<ValidationError> errs = new ArrayList<>();
         errs.addAll(localCannotRelocate(tKind, afterProc));
+        errs.addAll(localPathForm(tr));
         errs.addAll(linesConflicts(spec));
         errs.addAll(skipLeadingNeedsDeclaredColumns(spec));
         errs.addAll(escapeConflicts(spec));
@@ -150,6 +152,18 @@ public class CsvFileConnectorValidator implements ConnectorValidator {
                 + "files stay in place (sftp and s3 connectors honor it)",
             List.of("Set after_process: none for a local connector, "
                 + "or move the files with an sftp/s3 transport")));
+    }
+
+    /**
+     * #2001: a local path is relative to its tenant's folder of the hub's local root, so an absolute one — or one that is
+     * not a path at all — is refused here, at apply, as the run refuses it. Its form only: no root, tenant or disk.
+     */
+    private static List<ValidationError> localPathForm(JsonNode tr) {
+        // An absent kind is the transport block's own refusal (requireEnum): judged once, there.
+        if (!tr.has("kind")) return List.of();
+        return LocalTransportRules.ofTransport(tr, "spec.transport.path")
+            .map(v -> List.of(new ValidationError(v.path(), Severity.ERROR, v.reason(), List.of(v.hint()))))
+            .orElse(List.of());
     }
 
     /**

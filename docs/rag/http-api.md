@@ -38,7 +38,8 @@ and [guards](../transparency/ask-honesty.md); only the role and the rate-limit b
 for end users uses `/api/rag/chat`.
 
 Four admin endpoints (`status`, `reindex`, `schema`, `rediscover`) also require `lm_admin`: the
-token must carry both `lm_integrator` and `lm_admin`.
+token must carry both `lm_integrator` and `lm_admin`. On a hub with several tenants, `reindex` rebuilds what every tenant
+reads, and requires `lm_superadmin` ([Roles & permissions](../security/role-management.md#on-a-hub-with-several-tenants)).
 
 ## Authentication
 
@@ -225,8 +226,6 @@ when the model abstained before writing any):
 `lm ask` prints the command as a `try:` line — see
 [Abstention exit](../transparency/ask-rules.md#2-abstention-exit-the-models-honest-i-cant).
 
-
-
 - The `answer` names no command: map each token to the gesture your surface has, and skip a token
   you do not recognise.
 - A token is offered only when the question is about what that door holds (sources that disagree; a
@@ -239,11 +238,13 @@ zero-row caveat) follow `lang`, in English or French; anything else gets English
 - the model's own "cannot answer", or a scope with no schema;
 - rejected SQL, or a table, column or value the scope does not declare;
 - a filter that matches several rows, or a query the database refused;
-- a query that returned no rows;
+- a query that returned no rows, or a count of 0 or a total with no value (`rows` holds that one row);
 - a phrased answer withheld for a figure the rows do not back;
 - a model that could not write the answer (the query ran: `rows` and `sql` are the result).
 
-Treat `rowCount: 0` as *"read the answer text"*, never as *"there are none"*.
+Treat `rowCount: 0` as *"read the answer text"*, never as *"there are none"*. A count of 0 under
+`abstained: true` keeps its row (`rowCount: 1`, `rows: [{"count": 0}]`): branch on `abstained`, not
+on `rowCount`.
 
 Refusals that happen **before** the ask — a scope-bound user naming a scope they don't hold —
 are HTTP errors instead: `403 {"error":"scope not granted"}` (see
@@ -251,7 +252,7 @@ are HTTP errors instead: `403 {"error":"scope not granted"}` (see
 
 ### Follow-up questions
 
-Send the previous question in `previous`; `lm ask` has no equivalent. The hub keeps nothing between
+Send the previous question in `previous` (`lm ask --previous "…"`). The hub keeps nothing between
 calls: your client holds the thread, one sentence long. Send the response's `understoodAs` back as the
 next `previous`; when it is absent (a first question), send the question as asked.
 
@@ -423,12 +424,18 @@ POST /api/platform/rag/reindex    (lm_admin)    lm rag reindex
 ```
 
 ```json
-{"indexed": true, "chunks": 8, "indexedAt": "2026-10-24T21:32:45.842950Z", "provider": "ollama-nomic", "embeddingModel": "nomic-embed-text"}
+{"indexed": true, "chunks": 9, "indexedAt": "2026-11-09T11:25:01.989332379Z", "provider": "ollama-nomic", "embeddingModel": "nomic-embed-text", "switchedOff": false, "storedChunks": 28}
 ```
 
+- `chunks` and `indexedAt` count what the platform indexed since the hub started.
+- `storedChunks` is what the store holds for your tenant; `null` on lumnik Open.
+- `switchedOff` is `true` when [the AI is switched off](models.md#switching-the-ai-off).
 - `provider` and `embeddingModel` are the live embedding model's; `"none"` when there is none.
-- `reindex` rebuilds the **platform corpus** (manifests, API, hooks) and returns
-  `202 {"status": "reindex_started"}` at once; poll `status`. Chunks of ingested rows are not
+- `reindex` rebuilds the **platform corpus** (manifests, API, hooks). It answers
+  `202 {"status": "reindex_started"}` after the rebuild has run, so allow for the embedding time.
+  `status` shows whether it indexed: `indexedAt` moves only when a store took the chunks, and
+  stays unchanged with no embedding model. Every tenant shares that corpus, so a
+  caller holding any `scope:*` role is refused: `403 {"error": "scope not granted"}`. Chunks of ingested rows are not
   touched: they are written at ingestion and erased with their connector
   ([GDPR → erasure](../security/gdpr.md#the-rights-in-practice)).
 
@@ -443,11 +450,12 @@ POST /api/platform/rag/reindex    (lm_admin)    lm rag reindex
 | `401` | plain text `authentication required` + `WWW-Authenticate: Bearer` header | no/invalid token on `/api/platform/*` — note: **not** JSON |
 | `401` | `{"error": "no tenant in security context"}` | analytic ask/schema call whose token resolves no usable tenant |
 | `403` | plain text `missing role lm_integrator` | authenticated but not an integrator, on `/api/platform/*` |
-| `403` | `{"error": "scope not granted"}` | a scope-bound user asked outside their granted set — the [uniform refusal](scopes.md#binding-users-to-scopes-opt-in) across the whole read surface |
+| `403` | `{"error": "scope not granted"}` | a scope-bound user asked outside their granted set — the [uniform refusal](scopes.md#binding-users-to-scopes-opt-in) across the whole read surface; on `reindex`, any scope-bound user |
 | `404` | `{"error": "No schema card found for scope: ..."}` | `GET .../schema` on a scope with no discovered schema card yet |
 | `409` | `{"error": "no schema discovered for scope '...' — apply an entity or run discovery first", "hint": "lm entity apply registers a schema for the scope; ask again after it lands"}` | analytic ask on a scope with no schema card at all — a fresh install, or a scope with no `kind: Entity` applied yet |
 | `429` | `{"error": "rate limit exceeded"}` + `Retry-After: <seconds>` header | bucket exhausted — honor `Retry-After` before retrying |
 | `503` | `{"error": "...", "hint": "..."}` | the model or embedding service is missing or unreachable — a deployment problem, not a caller problem. (An analytic ask whose SQL already ran is not a `503` when only the answer could not be written: it is a `200` with `abstained: true`, the rows and the SQL.) |
+| `503` | `{"error": "analytic ask is unavailable: the readonly database role is not hardened", "hint": "an operator must harden the readonly database role: docs/security/rls.md#what-the-read-only-role-cannot-call"}` | analytic ask before the install step for the read-only role has run — [what to do](../security/rls.md#what-the-read-only-role-cannot-call) |
 
 Rate limits are per **(bucket, tenant)** in a fixed 60-second window. The chat and search
 endpoints ride three buckets — `user-chat`, `platform-chat`, `platform-search` — each

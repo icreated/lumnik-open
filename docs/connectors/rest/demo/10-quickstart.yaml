@@ -5,6 +5,7 @@
 #
 # The password is never in this file. `password_env` names a secret:
 #   lm secret set ACME_BASIC_PW        # the demo API answers to demo-user / demo-pass
+#   lm secret scope ACME_BASIC_PW billing   # this connector's scope: a scopeless secret serves no connector with one
 #
 # Expect: 2 400 rows in ext.acme_partners.
 

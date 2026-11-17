@@ -118,7 +118,7 @@ public class ProcessApplyResource {
         if (cannotFire != null) {
             return ApiErrors.badRequest(cannotFire);
         }
-        EntityManifest entity = matchIndexes.storedEntity(m.onTable()).orElse(null);
+        EntityManifest entity = matchIndexes.storedEntity(tenant, m.onTable()).orElse(null);
         List<Spec> wantedIndexes = entity == null ? List.of() : matchIndexes.wanted(entity);
         Optional<String> unindexable = matchIndexes.refusal(wantedIndexes)
             .or(() -> matchIndexes.reverseRefusal(entity == null ? List.of() : matchIndexes.reverse(entity)));
@@ -161,7 +161,7 @@ public class ProcessApplyResource {
         // since this registry loaded it, and this door decides what a process may be declared on.
         EntityManifest entity;
         try {
-            entity = matchIndexes.storedEntity(onTable).orElse(null);
+            entity = matchIndexes.storedEntity(tenant, onTable).orElse(null);
         } catch (UnreadableEntityException unreadable) {
             // written by another version: said as a refusal, without the parser's words (they quote the text it choked on);
             // a failure to reach the row is not caught here: it is the server's

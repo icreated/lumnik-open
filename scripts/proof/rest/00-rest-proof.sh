@@ -27,7 +27,7 @@ admin_sql() {
 
 # ── Guard: platform up? ─────────────────────────────────────────────────────────
 hdr "platform reachable?"
-curl -s -m 5 "${WOW_SERVER}/q/openapi" >/dev/null 2>&1 \
+curl -sf -m 5 "${WOW_SERVER}/app/" >/dev/null 2>&1 \
   && ok "platform on ${WOW_SERVER}" \
   || { bad "platform down — mvn quarkus:dev -pl lumnik-hub -am"; summary; exit 1; }
 

@@ -2,6 +2,7 @@ package io.lumnik.hub.entity;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.ask.ReadonlyTransactionsProfile;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -82,6 +83,8 @@ class EntityZoneIT {
       st.execute("INSERT INTO connector.t_zn_erp VALUES (1,'L-106','2026-11-08')");
       st.execute("DELETE FROM connector.entity_manifest WHERE name IN ('znparis', 'znutc', 'zndays')");
     }
+    RegisteredTables.register(adminDs, 1L, "t_zn_erp");
+    RegisteredTables.register(adminDs, 1L, "t_zn_lims");
     for (String manifest : new String[]{PARIS, UTC, DAYS}) {
       given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
           .contentType("application/yaml").body(manifest)

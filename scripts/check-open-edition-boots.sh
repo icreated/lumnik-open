@@ -16,6 +16,7 @@ cd "$(dirname "$0")/.."
 PG_NAME=lumnik-open-edition-witness
 PG_PORT=${OPEN_EDITION_PG_PORT:-55432}
 HTTP_PORT=${OPEN_EDITION_HTTP_PORT:-8099}
+MGMT_PORT=${OPEN_EDITION_MGMT_PORT:-9099}
 LOG=$(mktemp -t open-edition-boot.XXXXXX)
 APP_PID=""
 BOOT_CWD=""
@@ -85,10 +86,15 @@ if [ -n "$scim_classes" ]; then
 fi
 echo "✓ no io/lumnik/hub/pro classes, no identity scim classes"
 
+# Throwaway role passwords, handed to both sides: a hub refuses the development defaults (#1995), and
+# infra/postgres/init creates the roles with whatever it is given.
+ROLE_PW="open-edition-witness-$$"
 echo "→ starting a throwaway Postgres on :$PG_PORT"
 docker rm -f "$PG_NAME" >/dev/null 2>&1 || true
 docker run -d --name "$PG_NAME" \
   -e POSTGRES_USER=adempiere -e POSTGRES_PASSWORD=adempiere -e POSTGRES_DB=lumnik \
+  -e LUMNIK_APP_DB_PASSWORD="$ROLE_PW-app" -e LUMNIK_ADMIN_DB_PASSWORD="$ROLE_PW-admin" \
+  -e LUMNIK_READONLY_DB_PASSWORD="$ROLE_PW-ro" \
   -p "$PG_PORT":5432 \
   -v "$PWD/infra/postgres/init:/docker-entrypoint-initdb.d:ro" \
   pgvector/pgvector:0.8.6-pg16 >/dev/null
@@ -117,13 +123,18 @@ BOOT_CWD=$(mktemp -d -t open-edition-boot-cwd.XXXXXX)
 JAR="$PWD/lumnik-hub/target/quarkus-app/quarkus-run.jar"
 (
   cd "$BOOT_CWD"
-  # Throwaway: MasterKeyValidator and FingerprintHmacKey both only ask for non-blank,
-  # not-the-placeholder, >= 16 chars. Neither key protects anything here — the container and
-  # both keys die with the script.
+  # Throwaway: MasterKeyValidator, FingerprintHmacKey and DeploymentDefaultsGuard (#1995) only ask for
+  # non-blank, not-the-published-default, >= 16 chars. No key protects anything here — the container and
+  # the keys die with the script. The bypass is deliberate, so it is acknowledged, as a normal launch requires.
   exec env \
     DB_URL="jdbc:postgresql://localhost:$PG_PORT/lumnik" \
     QUARKUS_HTTP_PORT="$HTTP_PORT" \
+    QUARKUS_MANAGEMENT_PORT="$MGMT_PORT" \
     LUMNIK_SECURITY_DEV_BYPASS=true \
+    LUMNIK_SECURITY_I_UNDERSTAND_NO_AUTH=true \
+    LUMNIK_CRYPTO_SECRET_KEY="open-edition-witness-throwaway-crypto-key" \
+    LUMNIK_APP_DB_PASSWORD="$ROLE_PW-app" LUMNIK_ADMIN_DB_PASSWORD="$ROLE_PW-admin" \
+    LUMNIK_READONLY_DB_PASSWORD="$ROLE_PW-ro" \
     LUMNIK_SECRET_MASTER_KEY="open-edition-witness-throwaway-key" \
     LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET="open-edition-witness-throwaway-hmac-secret" \
     "$JAVA" -jar "$JAR"
@@ -141,14 +152,30 @@ if ! grep -q 'started in' "$LOG"; then
   exit 1
 fi
 
-code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$HTTP_PORT/q/health/live" || echo 000)
+code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$MGMT_PORT/q/health/live" || echo 000)
 if [ "$code" != "200" ]; then
-  echo "❌ started but /q/health/live answered HTTP $code"
+  echo "❌ started but /q/health/live answered HTTP $code on the management port"
   exit 1
 fi
 
+# #1993: a packaged hub serves health, metrics and the spec on its management port only, and Swagger UI not at all.
+for path in /q/health/live /q/metrics /q/openapi /q/swagger-ui/; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$HTTP_PORT$path" || echo 000)
+  if [ "$code" != "404" ]; then
+    echo "❌ the application port answers $path with HTTP $code, not 404 (#1993)"
+    exit 1
+  fi
+done
+for path in /q/metrics /q/openapi; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$MGMT_PORT$path" || echo 000)
+  if [ "$code" != "200" ]; then
+    echo "❌ the management port answers $path with HTTP $code, not 200 (#1993)"
+    exit 1
+  fi
+done
+
 grep -m1 'started in' "$LOG" | sed 's/^/    /'
-echo "✓ the open edition boots and serves (health 200)"
+echo "✓ the open edition boots and serves (health 200 on the management port; /q/* 404 on the application port)"
 echo ""
 echo "Open-edition boot witness PASSED."
 echo "NOTE: this run left OPEN-edition classes in the modules' target/ trees. A later"

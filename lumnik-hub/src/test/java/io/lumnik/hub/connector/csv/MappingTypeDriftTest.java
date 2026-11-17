@@ -39,6 +39,23 @@ class MappingTypeDriftTest {
     }
   }
 
+  /** #1966: parse-coordinates types the two columns its `lat` and `lon` name. */
+  @ParameterizedTest(name = "parse-coordinates on lat {0}, lon {1}")
+  @CsvSource({
+      "text,    text,    2",
+      "text,    numeric, 1",
+      "numeric, text,    1",
+      "numeric, float8,  0"})
+  void aPairIsTypedColumnByColumn(String lat, String lon, int said) {
+    Map<String, Object> mapping = Map.of("cell",
+        List.of(Map.of("parse-coordinates", Map.of("lat", "latitude", "lon", "longitude", "reason", "why"))));
+    List<ValidationError> w = MappingTypeDrift.warnings("connector.t_probe", mapping,
+        Map.of("latitude", lat, "longitude", lon, "why", "text"));
+    assertThat(w).hasSize(said);
+    assertThat(w).allSatisfy(e -> assertThat(e.message()).contains("parse-coordinates", "text", "connector.t_probe"));
+    if (said == 1) assertThat(w.get(0).message()).contains("text".equals(lat) ? "\"latitude\"" : "\"longitude\"");
+  }
+
   @Test
   void aColumnTheTableDoesNotHoldYetIsNotDrift() {
     assertThat(MappingTypeDrift.warnings("connector.t_probe", mapping("parse-date", "delivered"), Map.of())).isEmpty();

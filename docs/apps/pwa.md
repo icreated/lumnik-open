@@ -40,7 +40,9 @@ The PWA reads the apps at every login: no rebuild, no redeploy.
 | `tabs` | which tabs, in which order. Absent: every tab the hub offers. [Choosing the tabs](#choosing-the-tabs). |
 
 - Change an app: `lm app get desk > desk.yaml`, edit, `lm app apply -f desk.yaml`.
-- Remove it: `lm app rm desk`.
+- Remove it: `lm app rm desk`, for good, with no prompt.
+- The default app is not removed, and not re-applied without `default: true`. Both answer
+  `cannot remove the last default app — apply a different app with default: true first, which demotes this one automatically`.
 
 ## Open it on a phone
 
@@ -83,6 +85,10 @@ The screens below are the desk app on a phone, against the demo desk.
 - **Tap a row:** its record opens, ending with its conflicts and ambiguities — here, the city of P-1008: *Lyon*
   in the ERP, *Villeurbanne* in the CRM.
 - The data age is the time since the last run that fed the scope.
+- **A view declared with a map** gets a **Liste · Carte** switch: one dot per row, tap a dot to open
+  its record. See [On a map](views.md#on-a-map).
+
+![The customers around the depot, on a map](img/pwa-07-map.png){ width="260" }
 
 ### Inbox — decisions
 
@@ -132,6 +138,7 @@ spec:
 ```
 
 - The manifest names are `fiches`, `inbox`, `chat`, and `search`.
+- Refused at apply: an empty list, a tab named twice, more than 16 tabs.
 - The app opens on the first tab of the list that the hub has.
 - A tab the hub does not have is accepted, with a warning. It appears the day the hub has it, so
   the same manifest works on Open and on Pro:

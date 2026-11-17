@@ -63,7 +63,7 @@ final class SqlFilters {
     }
 
     /** The index of the {@code )} closing the {@code (} at {@code open}, or -1 when unbalanced. */
-    private static int matchingParen(List<Token> tokens, int open) {
+    static int matchingParen(List<Token> tokens, int open) {
         int depth = 0;
         for (int i = open; i < tokens.size(); i++) {
             if (isPunct(tokens.get(i), "(")) depth++;
@@ -220,6 +220,6 @@ final class SqlFilters {
         return Optional.empty();
     }
 
-    private static boolean isPunct(Token t, String s) { return t.kind() == Kind.PUNCT && t.text().equals(s); }
-    private static boolean isOp(Token t, String s) { return t.kind() == Kind.OP && t.text().equals(s); }
+    static boolean isPunct(Token t, String s) { return t.kind() == Kind.PUNCT && t.text().equals(s); }
+    static boolean isOp(Token t, String s) { return t.kind() == Kind.OP && t.text().equals(s); }
 }

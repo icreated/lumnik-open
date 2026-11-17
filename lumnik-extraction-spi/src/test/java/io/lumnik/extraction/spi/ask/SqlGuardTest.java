@@ -158,6 +158,10 @@ class SqlGuardTest {
                          "SELECT $$x$$ FROM c_order"),
             Arguments.of("a NESTED block comment hiding a second statement",
                          "SELECT 1 /* /* */ ' */ ; SELECT 2"),
+            Arguments.of("a line comment ended by a carriage return, hiding a second statement",
+                         "SELECT 1 FROM c_order --x\r; DROP TABLE c_order"),
+            Arguments.of("a line comment ended by a carriage return, hiding a banned call",
+                         "SELECT 1 FROM c_order --x\r, set_config('app.current_tenant','11',true)"),
             Arguments.of("a nested block comment hiding a non-SELECT verb",
                          "/* /* */ SELECT 1 LIMIT 1 */ SHOW ALL"));
     }
@@ -170,12 +174,125 @@ class SqlGuardTest {
             .isInstanceOf(SqlGuard.SqlRejectedException.class);
     }
 
+    // ── a literal form the lexer does not read (#1988) ──────────────────────
+    // The two audit statements ran as lumnik_readonly on PostgreSQL 16 and read tables no card declares.
+
+    static Stream<Arguments> prefixedLiterals() {
+        return Stream.of(
+            Arguments.of("an E string hiding a FROM (the audit)",
+                         "SELECT E'\\'' AS q, count(*) AS n FROM connector.connector x -- '\nLIMIT 500"),
+            Arguments.of("an e string, lower case", "SELECT e'\\'' AS q FROM connector.connector x -- '"),
+            Arguments.of("an E string after a space", "SELECT E '\\'' AS q FROM connector.connector x -- '"),
+            Arguments.of("a U& identifier spelling a schema (the audit)",
+                         "SELECT count(*) AS n FROM U&\"c\\006fnnector\".connector_dead_letter\nLIMIT 500"),
+            Arguments.of("a u& identifier, lower case", "SELECT count(*) FROM u&\"c\\006fnnector\".connector_dead_letter"),
+            Arguments.of("a U& string", "SELECT U&'\\0041' FROM c_order"),
+            Arguments.of("a U& string after a space", "SELECT U& '\\0041' FROM c_order"),
+            Arguments.of("UESCAPE", "SELECT U&\"d!0061ta\" UESCAPE '!' FROM c_order"),
+            Arguments.of("an E string whose backslash hides a second statement",
+                         "SELECT E'\\'' ; SELECT 1 -- '"));
+    }
+
+    @ParameterizedTest(name = "refuses {0}")
+    @MethodSource("prefixedLiterals")
+    void refusesALiteralFormTheLexerDoesNotRead(String rule, String sql) {
+        assertThatThrownBy(() -> guard.check(sql))
+            .as("%s — the lexer and the server end this literal in different places", rule)
+            .isInstanceOf(SqlGuard.SqlRejectedException.class)
+            .hasMessageContaining("literal form the guard does not read");
+    }
+
+    static Stream<Arguments> plainLiterals() {
+        return Stream.of(
+            Arguments.of("a value that is the letter E", "SELECT * FROM c_order WHERE grade = 'E'"),
+            Arguments.of("a column named n compared to a string", "SELECT n FROM c_order WHERE n = 'x'"),
+            Arguments.of("an alias named e then a string", "SELECT e.name, 'x' AS k FROM c_order e"),
+            Arguments.of("a CASE whose branches are strings", "SELECT CASE WHEN a = 1 THEN 'x' ELSE 'b' END FROM c_order"),
+            Arguments.of("a typed DATE literal", "SELECT * FROM c_order WHERE d > DATE '2024-01-01'"),
+            Arguments.of("an INTERVAL literal", "SELECT now() - INTERVAL '1 day' FROM c_order"),
+            Arguments.of("a quoted column named E", "SELECT \"E\" FROM c_order"),
+            // The readonly transaction pins standard_conforming_strings=on (TenantRlsScope): a backslash in a plain
+            // string is data to the server, which is how the lexer reads it.
+            Arguments.of("a LIKE escaping its percent sign", "SELECT * FROM c_order WHERE rate LIKE '50\\%'"),
+            Arguments.of("a regex on digits", "SELECT * FROM c_order WHERE code ~ '^\\d+'"),
+            Arguments.of("a Windows path", "SELECT * FROM c_order WHERE path ILIKE '%C:\\data%'"),
+            Arguments.of("a bit string, read alike by both", "SELECT B'101' FROM c_order"),
+            Arguments.of("a hex string, read alike by both", "SELECT x'1F' FROM c_order"),
+            Arguments.of("a national string, read alike by both", "SELECT N'abc' FROM c_order"));
+    }
+
+    @ParameterizedTest(name = "accepts {0}")
+    @MethodSource("plainLiterals")
+    void aPlainLiteralIsAccepted(String rule, String sql) {
+        assertThat(guard.check(sql)).as("must not refuse %s", rule).isNotBlank();
+    }
+
+    // ── a function that moves the boundary or runs SQL from a string (#1987) ─
+
+    static Stream<Arguments> boundaryFunctions() {
+        return Stream.of(
+            Arguments.of("set_config in a materialised CTE (the audit)",
+                         "WITH s AS MATERIALIZED (SELECT set_config('app.current_tenant','11',true) AS x) "
+                             + "SELECT count(*) AS n FROM s, connector.t_zombie_workorder_p1 w WHERE s.x IS NOT NULL"),
+            Arguments.of("set_config in a scalar subquery",
+                         "SELECT count(*) FROM connector.t_x WHERE (SELECT set_config('app.current_tenant','11',true)) IS NOT NULL"),
+            Arguments.of("set_config, quoted", "SELECT \"set_config\"('app.current_tenant','11',true)"),
+            Arguments.of("set_config, upper case", "SELECT SET_CONFIG('app.current_tenant','11',true)"),
+            Arguments.of("set_config, schema-qualified", "SELECT pg_catalog.set_config('app.current_tenant','11',true)"),
+            Arguments.of("set_config poisoning the pooled session",
+                         "SELECT set_config('statement_timeout','1',false)"),
+            Arguments.of("query_to_xml (the audit)",
+                         "SELECT query_to_xml('select count(*) from connector.connector', false, false, '')::text AS x "
+                             + "FROM connector.t_zombie_workorder_p1 w LIMIT 1"),
+            Arguments.of("query_to_xml_and_xmlschema", "SELECT query_to_xml_and_xmlschema('select 1', false, false, '')"),
+            Arguments.of("query_to_xmlschema", "SELECT query_to_xmlschema('select 1', false, false, '')"),
+            Arguments.of("table_to_xml", "SELECT table_to_xml('connector.connector', false, false, '')"),
+            Arguments.of("table_to_xmlschema", "SELECT table_to_xmlschema('connector.connector', false, false, '')"),
+            Arguments.of("table_to_xml_and_xmlschema", "SELECT table_to_xml_and_xmlschema('connector.connector', false, false, '')"),
+            Arguments.of("cursor_to_xml", "SELECT cursor_to_xml('c', 10, false, false, '')"),
+            Arguments.of("cursor_to_xmlschema", "SELECT cursor_to_xmlschema('c', false, false, '')"),
+            Arguments.of("schema_to_xml", "SELECT schema_to_xml('connector', false, false, '')"),
+            Arguments.of("schema_to_xmlschema", "SELECT schema_to_xmlschema('connector', false, false, '')"),
+            Arguments.of("schema_to_xml_and_xmlschema", "SELECT schema_to_xml_and_xmlschema('connector', false, false, '')"),
+            Arguments.of("database_to_xml", "SELECT database_to_xml(false, false, '')"),
+            Arguments.of("database_to_xmlschema", "SELECT database_to_xmlschema(false, false, '')"),
+            Arguments.of("database_to_xml_and_xmlschema", "SELECT database_to_xml_and_xmlschema(false, false, '')"),
+            Arguments.of("ts_stat, which also runs a query held in a string",
+                         "SELECT * FROM ts_stat('select to_tsvector(name) from connector.connector')"),
+            Arguments.of("ts_rewrite, whose text argument is a query too",
+                         "SELECT ts_rewrite('a'::tsquery, 'SELECT to_tsquery(name), ''a''::tsquery FROM connector.connector_mapping')"),
+            Arguments.of("other sessions' SQL, read backend by backend",
+                         "SELECT pg_stat_get_backend_activity(id) FROM pg_stat_get_backend_idset() id"),
+            Arguments.of("a session advisory lock on a writer's key",
+                         "SELECT pg_advisory_lock(hashtextextended('connector.t_x', 0))"),
+            Arguments.of("a try advisory lock", "SELECT pg_try_advisory_lock(1)"),
+            Arguments.of("pg_sleep_for", "SELECT pg_sleep_for('4 seconds')"),
+            Arguments.of("pg_sleep_until", "SELECT pg_sleep_until(now() + interval '4 seconds')"),
+            Arguments.of("pg_read_binary_file", "SELECT pg_read_binary_file('/etc/passwd')"),
+            Arguments.of("pg_class, unqualified", "SELECT relname FROM pg_class"),
+            Arguments.of("pg_attribute, unqualified", "SELECT attname FROM pg_attribute"),
+            Arguments.of("pg_policies, unqualified", "SELECT * FROM pg_policies"),
+            Arguments.of("pg_roles, unqualified", "SELECT rolname FROM pg_roles"),
+            Arguments.of("pg_stat_activity: other tenants' SQL in flight", "SELECT query FROM pg_stat_activity"),
+            Arguments.of("pg_cancel_backend", "SELECT pg_cancel_backend(42)"),
+            Arguments.of("pg_terminate_backend", "SELECT pg_terminate_backend(42)"));
+    }
+
+    @ParameterizedTest(name = "refuses {0}")
+    @MethodSource("boundaryFunctions")
+    void refusesAFunctionThatMovesTheBoundaryOrRunsSqlFromAString(String rule, String sql) {
+        assertThatThrownBy(() -> guard.check(sql))
+            .as("must refuse %s", rule)
+            .isInstanceOf(SqlGuard.SqlRejectedException.class)
+            .hasMessageContaining("banned token in SQL");
+    }
+
     /**
      * The denylist reads NAMES, and a zero-width character makes a different name — for the server
      * too, which is what makes this fail-open safe rather than a bypass. Measured on PostgreSQL 16
-     * under the empty {@code search_path}: {@code pg_catalog<U+200B>.pg_tables} answers
-     * {@code relation "pg_catalog<U+200B>.pg_tables" does not exist} and
-     * {@code pg_sleep<U+200B>(1)} answers {@code function pg_sleep<U+200B>(integer) does not exist}.
+     * under the empty {@code search_path}: {@code set_config<U+200B>('app.current_tenant','11',true)}
+     * answers {@code function set_config<U+200B>(unknown, unknown, boolean) does not exist}, and
+     * {@code query_to_xml<U+200B>(…)} the same.
      *
      * <p>Before the identifier class became the server's, our lexer split such a name and the denylist
      * caught the fragment. The agreement is the stronger property: a name we read as ONE token is a
@@ -184,15 +301,16 @@ class SqlGuardTest {
      */
     @Test
     void aZeroWidthCharacterMakesADifferentName_whichTheServerCannotResolveEither() {
-        String evaded = "pg_catalog\u200B";
+        String evaded = "set_config\u200B";
+        String call = evaded + "('app.current_tenant','11',true)";
 
-        assertThat(SqlLexer.tokenize(evaded + ".pg_tables").get(0).text())
+        assertThat(SqlLexer.tokenize(call).get(0).text())
             .as("one token, and not the banned name — the same reading the server gives it")
             .isEqualTo(evaded);
-        assertThat(effectiveText(guard.check("SELECT * FROM " + evaded + ".pg_tables")))
-            .as("so the denylist does not fire, and the server refuses an object that does not exist")
+        assertThat(effectiveText(guard.check("SELECT " + call)))
+            .as("so the denylist does not fire, and the server refuses a function that does not exist")
             .contains(evaded);
-        assertThatThrownBy(() -> guard.check("SELECT * FROM pg_catalog.pg_tables"))
+        assertThatThrownBy(() -> guard.check("SELECT set_config('app.current_tenant','11',true)"))
             .as("the real name is still refused here, before it reaches the server")
             .isInstanceOf(SqlGuard.SqlRejectedException.class);
     }

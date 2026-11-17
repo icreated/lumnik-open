@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Set;
 
+import static io.lumnik.hub.tenant.DeploymentTenancy.HUBADMIN_TENANT;
 import static io.lumnik.hub.testsupport.AppManifestYaml.manifest;
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
@@ -83,11 +84,14 @@ class AppRegistryAuthIT {
      * Taking the default flag is a WRITE to whoever holds it. An integrator bound to one scope
      * would otherwise demote an app in a scope they cannot even read — and learn its name from
      * {@code demotedDefault} on the way. The refusal is the frozen one, and the registry is
-     * unmoved afterwards: the deployment-wide landing app is not something a bound caller takes.
+     * unmoved afterwards: the deployment-wide landing app is not something a bound caller takes. The shared default
+     * is the hub's, written from its own tenant by lm_superadmin (#2050).
      */
     @Test
     void takingTheDefaultFromAnotherMetierIsRefusedInTheFrozenWords() {
-        apply(Set.of("lm_integrator", "scope:stock"))
+        given().config(YamlBody.CONFIG).auth().oauth2(NoBypassOidcProfile.token(
+                Set.of("lm_integrator", "lm_superadmin", "scope:stock"), null, HUBADMIN_TENANT))
+            .contentType("application/yaml")
             .body(manifest("stock-vitrine", "stock", "  default: true\n"))
             .when().post("/api/apps/apply")
             .then().statusCode(403)

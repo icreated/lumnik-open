@@ -73,6 +73,14 @@ events:
       by:                string
       at:                string
       previousRotatedAt: string
+  - type: platform.secret.scoped
+    description: "The scopes a platform secret serves were replaced; both lists comma-separated."
+    payload:
+      name:           string
+      by:             string
+      at:             string
+      previousScopes: string
+      scopes:         string
   - type: platform.secret.deleted
     description: "A platform secret was deleted."
     payload:
@@ -80,7 +88,7 @@ events:
       by:   string
       at:   string
   - type: platform.secret.read
-    description: "A platform secret was read from the database (cache misses only)."
+    description: "A platform secret was read from the database; a trail of reads, not a count. A read is recorded once per value of the secret, per set of reader scopes and every 5 minutes on each replica; a rotated value is a new one."
     payload:
       name: string
       by:   string

@@ -1,5 +1,7 @@
 # WOW demo overlay for the self-host stack. Two things the demo needs beyond the base stack:
-#   1. mount this demo folder into the hub container so the csv-file connector reads /demo/customer.csv;
+#   1. mount this demo folder into the hub container, in tenant 1's folder of the local root
+#      (<root>/1/demo; the root is LUMNIK_CSV_LOCAL_ROOT from .env, /tmp/drop when unset), so the
+#      csv-file connector reads demo/customer.csv;
 #   2. make the host reachable as host.docker.internal so the SOAP connector can reach fake-siebel.py
 #      on the host (Docker Desktop provides this alias automatically; the extra_hosts line adds it on
 #      Linux too — self-contained here, not relying on the base compose).
@@ -9,5 +11,7 @@ services:
   hub:
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    environment:
+      LUMNIK_CSV_LOCAL_ROOT: ${LUMNIK_CSV_LOCAL_ROOT:-/tmp/drop}
     volumes:
-      - ./docs/demo/wow-customer:/demo:ro
+      - ./docs/demo/wow-customer:${LUMNIK_CSV_LOCAL_ROOT:-/tmp/drop}/1/demo:ro

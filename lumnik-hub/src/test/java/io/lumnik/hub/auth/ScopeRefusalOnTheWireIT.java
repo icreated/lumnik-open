@@ -78,7 +78,7 @@ class ScopeRefusalOnTheWireIT {
           connector_type: csv-file
           scopes: [%s]
         spec:
-          transport: { kind: local, path: /imports/*.csv }
+          transport: { kind: local, path: imports/*.csv }
           parser: { has_header: true }
           after_process: none
           target: {}

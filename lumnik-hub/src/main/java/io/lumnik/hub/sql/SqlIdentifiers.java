@@ -1,5 +1,7 @@
 package io.lumnik.hub.sql;
 
+import java.nio.charset.StandardCharsets;
+
 /**
  * PostgreSQL identifier quoting for the raw-JDBC layer (the readers/consumers that
  * build dynamic SQL over generic, non-{@code @Entity} schema — fused views, connector
@@ -88,5 +90,23 @@ public final class SqlIdentifiers {
         int dot = fqn.indexOf('.');
         if (dot < 0) return isPlainIdentifier(fqn);
         return isPlainIdentifier(fqn.substring(0, dot)) && isPlainIdentifier(fqn.substring(dot + 1));
+    }
+
+    /** NAMEDATALEN - 1: the most bytes Postgres keeps of a name. */
+    public static final int MAX_NAME_BYTES = 63;
+
+    /**
+     * The name Postgres keeps of {@code name}: its first {@link #MAX_NAME_BYTES} bytes, never half a character. A
+     * longer name given to Postgres names that one, which the catalog then shows.
+     */
+    public static String keptName(String name) {
+        int bytes = 0;
+        for (int i = 0; i < name.length(); ) {
+            int codePoint = name.codePointAt(i);
+            bytes += new String(Character.toChars(codePoint)).getBytes(StandardCharsets.UTF_8).length;
+            if (bytes > MAX_NAME_BYTES) return name.substring(0, i);
+            i += Character.charCount(codePoint);
+        }
+        return name;
     }
 }

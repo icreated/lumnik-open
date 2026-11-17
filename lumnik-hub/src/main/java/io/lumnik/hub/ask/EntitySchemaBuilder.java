@@ -7,6 +7,7 @@ import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityManifestParser;
 import io.lumnik.hub.entity.EntityViewCompiler;
+import io.lumnik.hub.tenant.ManifestOwner;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -33,12 +34,18 @@ public class EntitySchemaBuilder {
 
     @Inject EntityManifestParser parser;
 
-    /** Entity views visible in this scope, as SchemaCard tables (connector.v_&lt;name&gt; + canonical cols). */
-    public List<SchemaCard.Table> resolve(String scope) {
+    /**
+     * Entity views visible in this scope to this tenant, as SchemaCard tables (connector.v_&lt;name&gt; + canonical
+     * cols): another tenant's Entity is not on its card (#2050).
+     */
+    public List<SchemaCard.Table> resolve(long tenantId, String scope) {
         String sql = "SELECT name, yaml_text FROM connector.entity_manifest "
-            + "WHERE scopes && ARRAY[?]::text[] ORDER BY name";
+            + "WHERE scopes && ARRAY[?]::text[] AND " + ManifestOwner.READS + " ORDER BY name";
         try (Connection cx = adminDs.getConnection()) {
-            return Jdbc.query(cx, "EntitySchemaBuilder.resolve", sql, ps -> ps.setString(1, scope), rs -> {
+            return Jdbc.query(cx, "EntitySchemaBuilder.resolve", sql, ps -> {
+                ps.setString(1, scope);
+                ps.setLong(2, tenantId);
+            }, rs -> {
                 String name = rs.getString("name"); // stored lower-cased
                 EntityManifest m;
                 try {
@@ -70,11 +77,22 @@ public class EntitySchemaBuilder {
                 // manifest could carry one the ladder's every rung was the technical name
                 // and a generated view was headed `acmecustomer` (#501).
                 return new SchemaCard.Table(
-                    cardTableName(name), or(m.label(), name), cols, m.description());
+                    cardTableName(name), or(m.label(), name), cols, m.description(), usablePoints(m, types));
             });
         } catch (SQLException e) {
             throw new RuntimeException(Jdbc.failureText("EntitySchemaBuilder.resolve", e), e);
         }
+    }
+
+    /**
+     * #1974: the points whose two columns are numbers in the compiled view now. A run that retyped one to text leaves
+     * the entity standing; its point is simply not offered to the model any more.
+     */
+    static List<SchemaCard.Point> usablePoints(EntityManifest m, Map<String, String> types) {
+        return m.points().stream()
+            .filter(p -> EntityViewCompiler.isNumber(types.get(p.lat())) && EntityViewCompiler.isNumber(types.get(p.lon())))
+            .map(p -> new SchemaCard.Point(p.name(), p.lat(), p.lon()))
+            .toList();
     }
 
     /** The name an entity's view carries on a card: {@code connector.v_<name>}, unquoted. */

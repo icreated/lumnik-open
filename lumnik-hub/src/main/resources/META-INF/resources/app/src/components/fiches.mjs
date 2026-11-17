@@ -11,6 +11,8 @@ import { dataAsOfLabel } from '../format.mjs';
 import { createPager, truncationLabel, PAGE_SIZE } from '../pager.mjs';
 import { useMatchMedia } from '../media.mjs';
 import { resolveLink, followView, settleProbe } from '../links.mjs';
+import { MapView } from './map.mjs';
+import { mapState, splitRows, unplacedLabel, capLabel, createMapReader } from '../map.mjs';
 
 // B1-B7: the Fiches tab orchestrator. Owns discovery → picker/auto-select → yaml+render → the
 // cards-or-table → filters → detail sheet/panel. `views` is a createViews(api, scope) instance
@@ -26,7 +28,10 @@ import { resolveLink, followView, settleProbe } from '../links.mjs';
 // A followed link (#1050) probes its target on a CANDIDATE pager and takes over only when the first
 // page arrived: a refused or missing target leaves the current view on screen with the refusal, and
 // never opens the target without its filters.
-export function Fiches({ views, onCount }) {
+//
+// A view whose manifest asks for a map (#2057) gets a Liste · Carte switch. The map reads the unpaged
+// form (a page boundary is not a place), keeps the filters, and lists what the hub could not place.
+export function Fiches({ views, onCount, mapBackground }) {
   const [viewList, setViewList] = useState(null); // null = loading, [] = none, [...] = choices
   const [currentView, setCurrentView] = useState(null); // {name, title, ...} from the list
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -40,13 +45,27 @@ export function Fiches({ views, onCount }) {
   const filtersRef = useRef({ current: [] }); // the active pager's filters box, read by its load at request time
   const linkSeq = useRef(0); // the newest followed link wins; a view change cancels a pending one
   const [linkRefusal, setLinkRefusal] = useState(null); // {message} — scoped, the page on screen stays
+  const [mode, setMode] = useState('list'); // 'list' | 'map'
+  const [mapRead, setMapRead] = useState(null); // null | {status:'loading'|'ready'|'error', filters, result?, message?}
+  const [showUnplaced, setShowUnplaced] = useState(false);
+  const mapView = useRef(null); // the view the map reads: the reader outlives a render, so it reads this, not a closure
+  const mapReader = useRef(null);
+  if (!mapReader.current) {
+    mapReader.current = createMapReader({
+      read: async (withFilters) => views.render(await loadYaml(mapView.current.name), withFilters),
+      onState: (s) => { setMapRead(s); if (s.status === 'loading') setShowUnplaced(false); },
+      onCount,
+    });
+  }
+  const listStale = useRef(false); // filters changed while the map was on screen: the list reloads when shown
 
   const wide = useMatchMedia(WIDE_QUERY); // decides sheet vs panel (F)
   const tabletUp = useMatchMedia(ROW_QUERY); // decides cards vs table — only one is mounted
 
   // Leaving the tab must silence the pager: an in-flight page could otherwise land after unmount
   // and write the header count slot of whatever tab the user moved to.
-  useEffect(() => () => { linkSeq.current += 1; if (unsubRef.current) unsubRef.current(); }, []);
+  // A map read landing after the tab is left must not write another tab's count either.
+  useEffect(() => () => { linkSeq.current += 1; mapReader.current.reset(); if (unsubRef.current) unsubRef.current(); }, []);
 
   useEffect(() => {
     (async () => {
@@ -88,6 +107,12 @@ export function Fiches({ views, onCount }) {
     setError(null);
     setLinkRefusal(null);
     setDetail(null);
+    setMode('list');
+    setMapRead(null);
+    setShowUnplaced(false);
+    mapView.current = entry;
+    mapReader.current.reset();
+    listStale.current = false;
     if (unsubRef.current) unsubRef.current();
     filtersRef.current = box;
     pagerRef.current = pager;
@@ -127,8 +152,24 @@ export function Fiches({ views, onCount }) {
     setLinkRefusal(null);
     setFilters(next);
     filtersRef.current.current = next;
+    if (mode === 'map') { listStale.current = true; mapReader.current.refilter(next); return; }
     // a failure leaves the last good page on screen — the pager keeps it (B5)
     pagerRef.current.reset();
+  }
+
+  function showMode(next) {
+    setMode(next);
+    if (next === 'map') {
+      mapReader.current.show(filters);
+      return;
+    }
+    mapReader.current.hide();
+    if (listStale.current) {
+      listStale.current = false;
+      pagerRef.current.reset();
+    } else if (ps && ps.result) {
+      onPagerState(ps); // the header counts the list again
+    }
   }
 
   function onAddFilter(f) { applyFilters([...filters, f]); }
@@ -158,6 +199,7 @@ export function Fiches({ views, onCount }) {
   const result = ps && ps.result;
   if (!result) return html`<div class="center">…</div>`;
   const pageLabel = truncationLabel(ps);
+  const map = mapState(result);
 
   // The same controls above and below the rows, both driving the one pager.
   const pageNav = where => html`<${PageNav} where=${where} state=${ps}
@@ -177,17 +219,57 @@ export function Fiches({ views, onCount }) {
       ${dataAsOfLabel(result.dataAsOf)
         ? html`<div class="data-asof">${dataAsOfLabel(result.dataAsOf)}</div>`
         : null}
+      ${map.error ? html`<div class="map-note">Carte indisponible : ${map.error}</div>` : null}
+      ${map.offered
+        ? html`<div class="mode-switch" role="tablist">
+            <button role="tab" aria-selected=${mode === 'list'} class=${mode === 'list' ? 'on' : ''} onClick=${() => showMode('list')}>Liste</button>
+            <button role="tab" aria-selected=${mode === 'map'} class=${mode === 'map' ? 'on' : ''} onClick=${() => showMode('map')}>Carte</button>
+          </div>`
+        : null}
+      ${map.offered && mode === 'map'
+        ? mapBody()
+        : listBody()}
+      ${detail ? html`<${Detail} data=${detail} onClose=${closeDetail} wide=${wide} />` : null}
+    <//>
+  `;
+
+  function mapBody() {
+    if (!mapRead || mapRead.status === 'loading') return html`<div class="center">…</div>`;
+    if (mapRead.status === 'error') return html`<${Refusal} kind=${mapRead.kind} message=${mapRead.message} />`;
+    const r = mapRead.result;
+    // The point may have stopped being usable since the list was read: say so, as the list does.
+    const fresh = mapState(r);
+    if (!fresh.offered) return html`<div class="map-note">Carte indisponible : ${fresh.error || 'la vue ne déclare plus de carte'}</div>`;
+    const { unplaced } = splitRows(r.rows);
+    const missing = unplacedLabel(unplaced.length);
+    const cap = capLabel(r);
+    return html`
+      <${MapView} rows=${r.rows} columns=${r.columns} background=${mapBackground} onOpen=${openDetail} />
+      ${cap ? html`<div class="page-label">${cap}</div>` : null}
+      ${missing
+        ? html`<button class="map-unplaced" aria-expanded=${showUnplaced} onClick=${() => setShowUnplaced(!showUnplaced)}>${missing}</button>`
+        : null}
+      ${missing && showUnplaced
+        ? rowsOf(r.columns, unplaced, r.links)
+        : null}
+    `;
+  }
+
+  function listBody() {
+    return html`
       ${pageLabel ? html`<div class="page-label">${pageLabel}</div>` : null}
       ${pageNav('haut')}
       ${result.rows.length === 0
         ? html`<div class="center">Aucune ligne — la vue a rendu zéro résultat.</div>`
-        : html`
-          ${rowRepresentation(tabletUp) === 'table'
-            ? html`<${Table} columns=${result.columns} rows=${result.rows} links=${result.links} onFollow=${followLink} onOpen=${openDetail} />`
-            : html`<${Cards} columns=${result.columns} rows=${result.rows} links=${result.links} onFollow=${followLink} onOpen=${openDetail} />`}
-        `}
+        : rowsOf(result.columns, result.rows, result.links)}
       ${pageNav('bas')}
-      ${detail ? html`<${Detail} data=${detail} onClose=${closeDetail} wide=${wide} />` : null}
-    <//>
-  `;
+    `;
+  }
+
+  // The one place the viewport picks cards or table: the list, and the rows a map could not place.
+  function rowsOf(columns, rows, links) {
+    return rowRepresentation(tabletUp) === 'table'
+      ? html`<${Table} columns=${columns} rows=${rows} links=${links} onFollow=${followLink} onOpen=${openDetail} />`
+      : html`<${Cards} columns=${columns} rows=${rows} links=${links} onFollow=${followLink} onOpen=${openDetail} />`;
+  }
 }

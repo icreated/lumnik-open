@@ -161,6 +161,7 @@ nav:
     - SCIM deprovisioning: security/scim.md
     - Offboarding the integrator: security/offboarding.md
     - Credentials a source writes back: security/echoed-credentials.md
+    - Where the hub connects: security/outbound-addresses.md
     - GDPR & personal data: security/gdpr.md
   - Operations:
     - Troubleshooting, by symptom: recipes/troubleshooting.md
@@ -170,7 +171,7 @@ nav:
     - Backup & restore: operations/backup-restore.md
     - Upgrade: operations/upgrade.md
     - Observability: operations/observability.md
-    - Dead letters: operations/dead-letters.md
+    - Event dead letters: operations/dead-letters.md
     - Rate limits: operations/rate-limits.md
     - Sizing & load tests: operations/sizing.md
   - Recipes:

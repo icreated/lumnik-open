@@ -1,7 +1,7 @@
 # Inbound rate limits
 
-> Five endpoints are throttled, per tenant, in a fixed 60-second window. Everything else is
-> unlimited. The counters live in the hub process.
+> The endpoints below are throttled, per user, under a ceiling per tenant, in a fixed 60-second
+> window. Everything else is unlimited. The counters live in the hub process.
 
 ## What is limited
 
@@ -12,11 +12,22 @@
 | `platform-chat` | `POST /api/platform/rag/chat` | `lm chat`, `lm ask` | 60 | Pro |
 | `user-chat` | `POST /api/rag/chat` | the PWA chat | 60 | Pro |
 | `platform-search` | `POST /api/platform/rag/search` | `lm rag search` | 60 | Pro |
+| `source-probe` | `POST /api/platform/sources/jdbc/test`, `/jdbc/discover`, `/jdbc/add`, `/sources/rest/probe`, `/sources/rest/from-openapi` | `lm source jdbc test`, `discover`, `add`, `lm source rest probe`, `from-openapi` | 60 | all |
+| `scim` | `/scim/v2/Users` | your IdP's provisioning | **600** | Pro |
 
 - A bucket without its own setting uses `lumnik.ratelimit.default.rpm` (60).
-- On the open edition the three Pro endpoints do not exist, and neither do their limits.
-- Counting is per **(bucket, tenant)**: one tenant cannot exhaust another's budget, and buckets
-  are independent. Requests with no resolved tenant share one `system` budget.
+- On the open edition the Pro endpoints do not exist, and neither do their limits.
+- **Each user has their own budget** per bucket: the rpm above. One user looping the chat gets
+  `429`, and the other users of the tenant are still served.
+- **Each tenant has a ceiling** per bucket, over all its users: the rpm times
+  `lumnik.ratelimit.tenant-factor` (5). A refused call counts against neither. `0` switches the
+  ceiling off; a negative factor stops the hub at startup.
+- **A call with no user** (SCIM's bearer token) has a budget of its own per tenant, at the rpm.
+  Requests with no resolved tenant share one `system` budget.
+- **SCIM:** an IdP's first sync makes a GET and a POST or PATCH per user. Before you provision
+  thousands of users at once, raise `LUMNIK_RATELIMIT_SCIM_RPM`.
+- **Only authenticated calls are counted.** A burst of bad tokens gets `401`, never `429`.
+  Throttle failed logins at your proxy (Caddy `rate_limit`, your gateway's policy).
 
 ## The 429 contract
 
@@ -42,7 +53,12 @@ Property form (per bucket, falling back to `default`):
 ```properties
 lumnik.ratelimit.default.rpm=60
 lumnik.ratelimit.view-generate.rpm=10
+lumnik.ratelimit.scim.rpm=600
+lumnik.ratelimit.tenant-factor=5
 ```
+
+These are the shipped values. `view-generate` and `scim` have their own, so setting
+`LUMNIK_RATELIMIT_DEFAULT_RPM=0` leaves them limited: set theirs to `0` too.
 
 Environment form (non-alphanumerics become underscores):
 
@@ -50,6 +66,7 @@ Environment form (non-alphanumerics become underscores):
 LUMNIK_RATELIMIT_DEFAULT_RPM=120
 LUMNIK_RATELIMIT_VIEW_GENERATE_RPM=20
 LUMNIK_RATELIMIT_USER_CHAT_RPM=0    # 0 disables that bucket
+LUMNIK_RATELIMIT_TENANT_FACTOR=10   # each tenant's ceiling: 10 users' worth
 ```
 
 `0` disables a bucket: no counting, no 429. A misspelt bucket name is ignored.
@@ -74,12 +91,17 @@ $ docker compose -f docker-compose.selfhost.yml config hub | grep RATELIMIT
       LUMNIK_RATELIMIT_DEFAULT_RPM: "60"
       LUMNIK_RATELIMIT_PLATFORM_CHAT_RPM: ""
       LUMNIK_RATELIMIT_PLATFORM_SEARCH_RPM: ""
+      LUMNIK_RATELIMIT_SCIM_RPM: "600"
       LUMNIK_RATELIMIT_SEARCH_RPM: ""
+      LUMNIK_RATELIMIT_SOURCE_PROBE_RPM: ""
+      LUMNIK_RATELIMIT_TENANT_FACTOR: "5"
       LUMNIK_RATELIMIT_USER_CHAT_RPM: "0"
       LUMNIK_RATELIMIT_VIEW_GENERATE_RPM: "10"
 ```
 
-An empty value is the same as unset: that bucket uses `default`.
+- A variable left out of `.env`, or empty there, gets compose's own value: the one shown, except
+  `USER_CHAT`, which would be `""` without the line above.
+- `""` means the bucket has no value of its own, so it uses `default`.
 
 **Helm (cloud edition).** The chart has no value per bucket; pass them through `hub.extraEnv`, then restart the hub.
 On the kind cluster `up.sh` built:
@@ -97,11 +119,12 @@ kubectl --context kind-lumnik rollout restart deployment/lumnik-hub
 Every refusal shows twice on the hub side:
 
 - **A WARN log line:**
-  `rate limit exceeded: bucket=user-chat tenant=42 rpm=60 retryAfter=17s`
+  `rate limit exceeded: bucket=user-chat tenant=42 user=7 limit=own rpm=60 retryAfter=17s`
+  (`limit=tenant` when the tenant's ceiling refused it, with the ceiling's rpm)
 - **A counter:** `lumnik_rate_limited_total{bucket="…"}` in `/q/metrics`
   ([domain metrics](observability.md#domain-metrics)). No alert ships; wire one on its rate.
 
-A spike on one bucket from one tenant (the WARN lines name it) tells an attack from a busy
+A spike on one bucket from one user (the WARN lines name them) tells an attack from a busy
 Monday. Both reset when the hub restarts.
 
 ## Single-node caveat
@@ -118,5 +141,5 @@ Monday. Both reset when the hub restarts.
 |---|---|---|
 | Set `LUMNIK_RATELIMIT_*` in `.env`, the limit did not move | the hub reads it at startup only, or the bucket name is misspelt (an unknown bucket is ignored) | Recreate the hub (`up -d hub`) and check the name against the bucket list (see [Tuning](#tuning)). |
 | The chat or RAG search endpoints never return 429 | open edition: they do not exist | Expected; `view-generate` and `search` are limited there. |
-| A request seems to share its budget with unrelated callers | requests with no resolved tenant share the `system` budget | Check why the tenant did not resolve. |
+| A request seems to share its budget with unrelated callers | the tenant's ceiling is spent, or requests with no resolved tenant share the `system` budget | Raise `LUMNIK_RATELIMIT_TENANT_FACTOR`, or check why the tenant did not resolve. |
 | `429 Too Many Requests` in a connector run, not from an API client | the **source system** throttling lumnik's outbound calls | Lower `default_rate_limit` in the connector YAML ([REST](../connectors/rest.md)). |

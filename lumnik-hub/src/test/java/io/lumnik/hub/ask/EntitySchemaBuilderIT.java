@@ -75,7 +75,7 @@ class EntitySchemaBuilderIT {
 
     @Test
     void manifestLabelFlowsIntoTheCard_andMissingLabelFallsBackToTheName() {
-        SchemaCard.Table table = builder.resolve("labelscope").stream()
+        SchemaCard.Table table = builder.resolve(1L, "labelscope").stream()
                 .filter(t -> t.name().equals("connector.v_labeltest"))
                 .findFirst().orElseThrow();
 
@@ -92,7 +92,7 @@ class EntitySchemaBuilderIT {
 
     @Test
     void anEntityThatDeclaresNoLabelKeepsItsNameAsTheCardsLabel() {
-        SchemaCard.Table table = builder.resolve("labelscope").stream()
+        SchemaCard.Table table = builder.resolve(1L, "labelscope").stream()
                 .filter(t -> t.name().equals("connector.v_nolabeltest"))
                 .findFirst().orElseThrow();
 

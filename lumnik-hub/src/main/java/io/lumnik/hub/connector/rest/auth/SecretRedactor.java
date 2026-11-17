@@ -37,6 +37,11 @@ public final class SecretRedactor {
         return word != null && SCHEME.matcher(word).matches();
     }
 
+    /** Whether a header of this name carries a credential: the rule {@link #redactHeader} applies, for a read door too. */
+    public static boolean isSecretHeaderName(String name) {
+        return name != null && SECRET.matcher(name).matches();
+    }
+
     public static String redactHeader(String name, String value) {
         if (!SECRET.matcher(name).matches()) return value;
         if (value != null && value.startsWith("Bearer ")) return "Bearer <redacted>";

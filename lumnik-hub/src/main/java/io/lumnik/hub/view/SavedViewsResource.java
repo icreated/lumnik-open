@@ -4,7 +4,9 @@ import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.api.DeploymentWide;
 import io.lumnik.hub.audit.AuditRecorder;
+import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
@@ -45,15 +47,15 @@ public class SavedViewsResource {
       if (!ScopeGrants.allows(s)) {
         return ApiErrors.scopeNotGranted();
       }
-      return Response.ok(store.list(Set.of(s))).build();
+      return Response.ok(store.list(RequireTenant.current(), Set.of(s))).build();
     }
-    return Response.ok(store.list(granted)).build();
+    return Response.ok(store.list(RequireTenant.current(), granted)).build();
   }
 
   @GET
   @Path("/{name}")
   public Response get(@PathParam("name") String name) {  // inherits JSON+YAML; every response sets type()
-    Optional<SavedViewStore.Row> row = store.find(name);
+    Optional<SavedViewStore.Row> row = store.find(RequireTenant.current(), name);
     if (row.isEmpty()) {
       return ApiErrors.notFound("no saved view named '" + name + "'");
     }
@@ -70,13 +72,16 @@ public class SavedViewsResource {
    * touched, so a bound user cannot learn that a view they may not hold exists by deleting it.
    *
    * <p>Uses {@code findScope} rather than {@link #get}'s {@code find}: a delete has no yaml to
-   * return, so there is no reason to pull it off the row just to answer the boundary.
+   * return, so there is no reason to pull it off the row just to answer the boundary. A view this tenant reads but
+   * does not own (a shared one) is not deleted either: the same 404 (#2050).
    */
   @DELETE
   @Path("/{name}")
   @RequiresPermission("lm_integrator")
+  @DeploymentWide
   public Response delete(@PathParam("name") String name) {
-    Optional<String> scope = store.findScope(name);
+    long tenant = RequireTenant.current();
+    Optional<String> scope = store.findScope(tenant, name);
     if (scope.isEmpty()) {
       return ApiErrors.notFound("no saved view named '" + name + "'");
     }
@@ -85,9 +90,10 @@ public class SavedViewsResource {
     }
     // Recorded only when this call removed the row: the store writes raw JDBC on the admin
     // datasource, nothing else records it (#1232).
-    if (store.delete(name)) {
-      audit.record("SavedView", name.toLowerCase(Locale.ROOT), "DELETE", Map.of("scope", scope.get()));
+    if (!store.delete(tenant, name)) {
+      return ApiErrors.notFound("no saved view named '" + name + "'");
     }
+    audit.record("SavedView", name.toLowerCase(Locale.ROOT), "DELETE", Map.of("scope", scope.get()));
     return Response.noContent().build();
   }
 }

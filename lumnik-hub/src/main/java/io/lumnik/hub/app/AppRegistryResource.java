@@ -3,6 +3,7 @@ package io.lumnik.hub.app;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
@@ -35,13 +36,13 @@ public class AppRegistryResource {
 
     @GET
     public Response list() {
-        return Response.ok(store.list(ScopeGrants.granted().orElse(null))).build();
+        return Response.ok(store.list(RequireTenant.current(), ScopeGrants.granted().orElse(null))).build();
     }
 
     @GET
     @Path("/{name}")
     public Response get(@PathParam("name") String name) {
-        Optional<AppRegistrationStore.Row> row = store.find(name);
+        Optional<AppRegistrationStore.Row> row = store.find(RequireTenant.current(), ScopeGrants.granted().orElse(null), name);
         if (row.isEmpty()) {
             return ApiErrors.notFound("no app named '" + name + "'");
         }

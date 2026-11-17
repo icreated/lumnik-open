@@ -230,19 +230,6 @@ class HybridJsonbWriterEventsIT {
     }
 
     @Test
-    void schemalessTableUsesPublicInTheEvent() {
-        String bare = "ph_t_" + System.nanoTime();
-        // The rule's filter is the gate's answer: an event proves the gate was asked with public.<table>.
-        subscribe("public." + bare);
-
-        write(new HybridJsonbSpec(bare, "$.id", List.of()), List.of(item("A", 10)), List.of(sys("h1", null)));
-
-        List<Event> events = events("public." + bare);
-        assertEquals(1, events.size());
-        assertEquals("public." + bare, events.getFirst().payload().get("entity"));
-    }
-
-    @Test
     void eventWritesOfOneTableAndTenantWaitForEachOther() throws Exception {
         String table = table();
         subscribe(table);

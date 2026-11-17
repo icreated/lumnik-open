@@ -18,12 +18,24 @@ public record HookBinding(
 ) {
     public boolean matchesTenant(Long tenantId) {
         if (tenants == null || tenants.isEmpty()) return true;
-        if (tenantId == null) return tenants.stream().anyMatch("*"::equals);
-        for (Object t : tenants) {
+        for (Object t : tenants) {   // one pass: the dispatch path asks this for every binding
             if ("*".equals(t)) return true;
-            if (t instanceof Number n && n.longValue() == tenantId) return true;
+            if (tenantId != null && t instanceof Number n && n.longValue() == tenantId) return true;
         }
         return false;
+    }
+
+    /** Whether this binding runs for every tenant: no {@code tenants}, or a {@code "*"} among them. */
+    public boolean isGlobal() {
+        return tenants == null || tenants.isEmpty() || tenants.stream().anyMatch("*"::equals);
+    }
+
+    /**
+     * The tenants this binding runs for, as one tenant's admin may read them: {@code ["*"]} when global, else its own
+     * id — never another tenant's (#1992).
+     */
+    public List<Object> tenantsAsSeenBy(Long tenantId) {
+        return isGlobal() ? List.of("*") : List.of(tenantId);
     }
 
     public boolean isLifecycle()  { return action == null; }

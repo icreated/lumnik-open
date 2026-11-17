@@ -1,7 +1,13 @@
 package io.lumnik.hub.connector.rest.discovery;
 
+import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.naming.Identifiers;
+import io.lumnik.hub.connector.rest.OutboundFailure;
+import io.lumnik.hub.connector.rest.ResponseTooLargeException;
+import io.lumnik.hub.connector.rest.RestHttpClient;
+import io.lumnik.hub.connector.rest.RestRequest;
+import io.lumnik.hub.connector.rest.RestResponse;
 import io.lumnik.hub.connector.rest.Urls;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.Operation;
@@ -12,8 +18,10 @@ import io.swagger.v3.oas.models.parameters.Parameter;
 import io.swagger.v3.oas.models.responses.ApiResponse;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
-import io.swagger.v3.parser.OpenAPIV3Parser;
+import io.swagger.parser.OpenAPIParser;
+import io.swagger.v3.parser.core.models.ParseOptions;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import java.util.*;
 import java.util.function.Function;
 import java.util.regex.Pattern;
@@ -38,20 +46,33 @@ public class OpenApiImporter {
     /** An HTTP token (RFC 9110 tchar): what a header name can be, and all an API key name may be here. */
     private static final Pattern TOKEN = Pattern.compile("[!#$%&'*+.^_`|~0-9A-Za-z-]+");
 
+    @Inject RestHttpClient http;
+
+    /**
+     * Fetched by the hub's own client, then parsed as text (#2002): the address rule and the size cap hold, no
+     * redirect is followed, and no remote {@code $ref} is fetched — {@link #importFromYaml} resolves none. The
+     * parser fetched the URL itself before, and every remote {@code $ref} in it. A refused address is the
+     * client's {@code ConfigValidationException}; every other failure names the URL, never why the JDK says so.
+     */
     public String importFromUrl(String url, String name, List<String> tags) {
-        // What a URL holding no spec actually does, measured rather than assumed: OpenAPIV3Parser
-        // does not answer null — it raises a NullPointerException from inside itself (it iterates
-        // its own null message list) for an unreachable host AND for a reachable page that is not a
-        // spec. Escaping here, that reached the operator as Internal Server Error plus an error id,
-        // with the URL they mistyped nowhere in the answer. Naming it is this class's business:
-        // what the failure means is knowledge the caller does not have.
-        OpenAPI api;
+        RestResponse fetched;
         try {
-            api = new OpenAPIV3Parser().read(url);
-        } catch (RuntimeException unreadable) {
-            throw new ConnectorException(unreadableSpec(url), unreadable);
+            // The Accept the parser's own fetch sent: a docs server may answer HTML to anything else.
+            fetched = http.execute(RestRequest.get(url).withHeader("Accept", "application/json, application/yaml, */*"));
+        } catch (ConfigValidationException refused) {
+            throw refused;
+        } catch (ResponseTooLargeException tooLarge) {
+            throw new ConnectorException(unreadableSpec(url) + ": " + tooLarge.getMessage());
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new ConnectorException(unreadableSpec(url));
+        } catch (Exception unreachable) {
+            // The kind, never the message: it can quote the URL whole (#1164).
+            throw new ConnectorException(unreadableSpec(url) + ": " + OutboundFailure.describe(unreachable));
         }
-        if (api == null) throw new ConnectorException(unreadableSpec(url));   // belt: not observed
+        if (fetched.status() / 100 != 2) throw new ConnectorException(unreadableSpec(url) + ": HTTP " + fetched.status());
+        OpenAPI api = parse(fetched.body());
+        if (api == null) throw new ConnectorException(unreadableSpec(url) + ": not an OpenAPI spec, or one with no path");
         return toManifest(api, name, tags);
     }
 
@@ -62,14 +83,25 @@ public class OpenApiImporter {
      * helps nobody.
      */
     private static String unreadableSpec(String url) {
-        return "no OpenAPI spec could be read at " + Urls.forDisplay(url)
-            + " — unreachable, not a spec, or not parseable";
+        return "no OpenAPI spec could be read at " + Urls.forDisplay(url);
     }
 
     public String importFromYaml(String yaml, String name, List<String> tags) {
-        OpenAPI api = new OpenAPIV3Parser().readContents(yaml).getOpenAPI();
-        if (api == null) throw new ConnectorException("the supplied document is not a parseable OpenAPI spec");
+        OpenAPI api = parse(yaml);
+        if (api == null) throw new ConnectorException("the supplied document is not an OpenAPI spec, or one with no path");
         return toManifest(api, name, tags);
+    }
+
+    /**
+     * The document, or null when it is no spec or names no path. {@link OpenAPIParser} tries every parser extension, so a Swagger 2.0
+     * spec is converted as {@code OpenAPIV3Parser.read(url)} did. Parsed with {@code resolve} off (#2002):
+     * {@code readContents(String)} turns it on, and a remote {@code $ref} was then fetched by the parser from
+     * wherever the document pointed. The draft reads local references only ({@link #deref}).
+     */
+    private static OpenAPI parse(String document) {
+        OpenAPI api = new OpenAPIParser().readContents(document, null, new ParseOptions()).getOpenAPI();
+        // The v2 extension answers any JSON object with a spec of no path: there is nothing to draft from it.
+        return api == null || api.getPaths() == null || api.getPaths().isEmpty() ? null : api;
     }
 
     /** One GET path as the draft will write it. */

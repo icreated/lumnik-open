@@ -8,4 +8,4 @@ spec:
       path: /vets.json
       method: GET
       pagination: { kind: none, response_path: "$.vetList" }
-      target: { kind: hybrid, table: x_vets, unique_key: "$.id" }
+      target: { kind: hybrid, table: ext.x_vets, unique_key: "$.id" }

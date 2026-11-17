@@ -1,7 +1,8 @@
 # 50-kotlin-row-hook.yaml — Kotlin escape hatch: a cell hook normalizes the legacy
 # date format during ingestion so the hub stores clean ISO-8601 values.
 #
-# Apply and run:
+# Copy data/customers.csv into your tenant's folder of the hub's local root first
+# (docs/connectors/csv.md, quickstart). Then apply and run:
 #   lm apply -f docs/connectors/csv/50-kotlin-row-hook.yaml
 #   lm connector run csv-kotlin-hook
 #
@@ -39,7 +40,7 @@ metadata:
 spec:
   transport:
     kind: local
-    path: docs/connectors/csv/data/customers.csv
+    path: customers.csv
 
   parser:
     has_header: true

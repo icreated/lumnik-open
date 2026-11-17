@@ -21,6 +21,7 @@ spec:
     prefix: catalogue/
     filename: products.csv
     region: eu-west-3
+    # both secrets serve this export's scope only: lm secret scope NAME catalogue
     access_key_env: OUTBOUND_S3_ACCESS_KEY
     secret_key_env: OUTBOUND_S3_SECRET_KEY
   mode: snapshot

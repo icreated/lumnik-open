@@ -16,9 +16,10 @@ metadata:
 spec:
   transport:
     kind: local
-    # Path AS SEEN BY THE HUB. On the self-host stack the demo folder is mounted at /demo
-    # (docker-compose.wow.yml); with `quarkus:dev` on the host, use ./commandes.csv.
-    path: /demo/commandes.csv
+    # Relative to tenant 1's folder of the hub's local root, <root>/1. On the self-host stack
+    # docker-compose.wow.yml mounts the demo folder at <root>/1/demo; with `quarkus:dev` on the
+    # host, set LUMNIK_CSV_LOCAL_ROOT and copy this folder to <root>/1/demo.
+    path: demo/commandes.csv
   parser:
     has_header: true                 # header row drives the column names (num, client, statut, date_expedition)
   after_process: none                # leave the source file in place

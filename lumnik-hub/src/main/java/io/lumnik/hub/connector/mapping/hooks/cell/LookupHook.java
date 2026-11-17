@@ -53,7 +53,7 @@ public class LookupHook implements CellHook {
     String onMissing = onMissingNode.isNull() ? "null" : onMissingNode.asText("keep");
     switch (onMissing) {
       case "null" -> {
-        s.counters().cellErrors().incrementAndGet();
+        s.refuseCell();
         row.put(col, null);
       }
       case "keep" -> { /* leave original value as-is */ }

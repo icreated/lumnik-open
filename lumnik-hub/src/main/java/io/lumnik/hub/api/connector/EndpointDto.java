@@ -22,8 +22,8 @@ public record EndpointDto(
     public static EndpointDto from(ConnectorEndpoint ep) {
         return new EndpointDto(
             ep.getId(), ep.getConnectorId(), ep.getTenantId(),
-            ep.getName(), ep.getMethod(), ep.getPath(),
-            ep.getSchedule(), ep.isEnabled(), ep.getConfig(),
+            ep.getName(), ep.getMethod(), InlineCredentials.redactedUrl(ep.getPath()),   // #2003
+            ep.getSchedule(), ep.isEnabled(), InlineCredentials.redacted(ep.getConfig()),   // #2003
             ep.getLastRunAt(), ep.getLastRunStatus());
     }
 }

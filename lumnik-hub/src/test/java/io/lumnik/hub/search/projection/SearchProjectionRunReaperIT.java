@@ -9,6 +9,7 @@ import io.lumnik.hub.entity.EntityRegistry;
 import io.lumnik.hub.run.RunLock;
 import io.lumnik.hub.search.ProjectionSinkGate;
 import io.lumnik.hub.search.mark.SearchProjectionMarkStore;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
@@ -120,6 +121,7 @@ class SearchProjectionRunReaperIT {
 
     private void applyMatchEntity(long tenant, String name, String table) throws Exception {
         createMatchTable(table);
+        RegisteredTables.register(adminDs, tenant, table);
         yaml(tenant).body(matchEntityYaml(name, table)).post("/api/entities/apply").then().statusCode(200);
     }
 

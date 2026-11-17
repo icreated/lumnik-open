@@ -33,12 +33,12 @@ class EntityRegistryFingerprintIT {
 
     @BeforeEach
     void remember() {
-        shared = registry.all();
+        shared = registry.allHubwide();
     }
 
     @AfterEach
     void clean() {
-        shared.forEach(registry::put);
+        shared.forEach(m -> registry.put(m, null));
         exec("DELETE FROM connector.entity_manifest WHERE name = 'fpone'");
         registry.remove("fpone");
     }
@@ -66,6 +66,6 @@ class EntityRegistryFingerprintIT {
 
         registry.refreshIfChanged();
 
-        assertThat(registry.find("fpone")).isNotNull();
+        assertThat(registry.findHubwide("fpone")).isNotNull();
     }
 }

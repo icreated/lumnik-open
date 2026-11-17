@@ -8,6 +8,7 @@ import io.lumnik.extraction.spi.search.ProviderStatus;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.lumnik.hub.entity.EntityRegistry;
 import io.lumnik.hub.search.mark.SearchProjectionMarkStore;
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
@@ -106,7 +107,7 @@ class SearchProjectionTenantIsolationIT {
      *  tenant's identity, and visible to every tenant's own SearchIndex declaration afterward. */
     private void applySharedMatchEntity(long applyingTenant, String name, String table) throws Exception {
         createMatchTable(table);
-        yaml(applyingTenant).body(matchEntityYaml(name, table, "city")).post("/api/entities/apply").then().statusCode(200);
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(matchEntityYaml(name, table, "city")).post("/api/entities/apply").then().statusCode(200);
     }
 
     private void applySearchIndex(long tenant, String name, String entity, String... fields) {

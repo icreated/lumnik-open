@@ -3,9 +3,11 @@ package io.lumnik.hub.entity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.api.ScopeGuardedUpsert;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -14,13 +16,14 @@ import java.sql.Statement;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The name-overwrite guard's scope predicate, asked of the COMPILER rather than of the door.
  *
- * <p>{@code EntityApplyResource} calls {@code registry.storedScopes(name)} and then
+ * <p>{@code EntityApplyResource} calls {@code registry.storedHubwide(name)} and then
  * {@code compiler.apply} — two connections, two
  * transactions, and a window in between where another transaction can take that name under a scope
  * the caller does not hold. The property that survives that race is not "the door refuses" but
@@ -40,6 +43,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @QuarkusTest
 class EntityNameOverwriteScopeIT {
 
+    private static final UUID WRITER = UUID.fromString("05820000-0000-0000-0000-000000000001");
+
     private static final String OWNER = "proprietaire-ent-582";
     private static final String SIBLING = "voisin-ent-582";
     private static final String INTRUDER = "intrus-ent-582";
@@ -56,6 +61,24 @@ class EntityNameOverwriteScopeIT {
         try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
             st.execute("CREATE TABLE IF NOT EXISTS connector.t_ent_582 "
                 + "(tenant_id bigint NOT NULL, code text, libelle text)");
+            // #2048: a bound caller publishes only a table they may read — its writer carries both callers' scopes
+            st.execute("INSERT INTO connector.connector (id, tenant_id, name, type_id, config, enabled, tags, sync_mode, "
+                + "skip_policy) VALUES ('" + WRITER + "', 1, 'ent-582-writer', 'jdbc-generic', '{}'::jsonb, true, "
+                + "ARRAY['" + OWNER + "', '" + INTRUDER + "'], 'Incremental', "
+                + "'{\"type\":\"SkipUpTo\",\"maxSkips\":100}'::jsonb) ON CONFLICT (id) DO NOTHING");
+            st.execute("INSERT INTO connector.dynamic_table (tenant_id, mapping_id, table_schema, table_name, "
+                + "schema_inferred, connector_id) VALUES (1, 'jdbc:t_ent_582', 'connector', 't_ent_582', '{}'::jsonb, '"
+                + WRITER + "') ON CONFLICT DO NOTHING");
+        }
+        RegisteredTables.register(adminDs, 1L, "t_ent_582");
+    }
+
+    /** The writer row is the tenant's: other ITs list and count tenant 1's connectors. */
+    @AfterEach
+    void dropWriter() throws Exception {
+        try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
+            st.execute("DELETE FROM connector.dynamic_table WHERE connector_id = '" + WRITER + "'");
+            st.execute("DELETE FROM connector.connector WHERE id = '" + WRITER + "'");
         }
     }
 
@@ -87,7 +110,7 @@ class EntityNameOverwriteScopeIT {
     private ScopeGuardedUpsert apply(String name, String label, List<String> scopes,
                                      Set<String> grants) {
         String text = yaml(name, label, scopes);
-        return compiler.apply(new EntityManifestParser().parse(text), text, grants);
+        return compiler.apply(new EntityManifestParser().parse(text), text, grants, 1L);
     }
 
     /** Puts the name in {@link #OWNER}'s hands, as an unscoped integrator legitimately would. */
@@ -113,7 +136,7 @@ class EntityNameOverwriteScopeIT {
                 + "storedScopes check")
             .isInstanceOf(ScopeGuardedUpsert.NameHeldOutOfScope.class);
 
-        assertThat(registry.storedScopes("ent_nom_582"))
+        assertThat(registry.storedHubwide("ent_nom_582").map(EntityRegistry.Stored::scopes))
             .as("refused AND untouched — the row must not have been re-homed on the way out")
             .contains(List.of(OWNER));
         assertThat(storedYaml("ent_nom_582")).contains(yaml("ent_nom_582", "Owned", List.of(OWNER)));
@@ -128,7 +151,7 @@ class EntityNameOverwriteScopeIT {
             apply("ent_relais_582", "Re-homed", List.of(INTRUDER), null);
 
         assertThat(outcome).isInstanceOf(ScopeGuardedUpsert.Applied.class);
-        assertThat(registry.storedScopes("ent_relais_582")).contains(List.of(INTRUDER));
+        assertThat(registry.storedHubwide("ent_relais_582").map(EntityRegistry.Stored::scopes)).contains(List.of(INTRUDER));
     }
 
     @Test
@@ -139,7 +162,7 @@ class EntityNameOverwriteScopeIT {
             apply("ent_neuf_582", "Neuf", List.of(INTRUDER), Set.of(INTRUDER));
 
         assertThat(outcome).isInstanceOf(ScopeGuardedUpsert.Applied.class);
-        assertThat(registry.storedScopes("ent_neuf_582")).contains(List.of(INTRUDER));
+        assertThat(registry.storedHubwide("ent_neuf_582").map(EntityRegistry.Stored::scopes)).contains(List.of(INTRUDER));
     }
 
     @Test
@@ -165,7 +188,7 @@ class EntityNameOverwriteScopeIT {
             apply("ent_chevauche_582", "Narrowed", List.of(OWNER), Set.of(OWNER));
 
         assertThat(outcome).isInstanceOf(ScopeGuardedUpsert.NameHeldOutOfScope.class);
-        assertThat(registry.storedScopes("ent_chevauche_582")).contains(List.of(OWNER, SIBLING));
+        assertThat(registry.storedHubwide("ent_chevauche_582").map(EntityRegistry.Stored::scopes)).contains(List.of(OWNER, SIBLING));
     }
 
     @Test
@@ -179,6 +202,6 @@ class EntityNameOverwriteScopeIT {
             apply("ent_sans_scope_582", "Claimed", List.of(INTRUDER), Set.of(INTRUDER));
 
         assertThat(outcome).isInstanceOf(ScopeGuardedUpsert.NameHeldOutOfScope.class);
-        assertThat(registry.storedScopes("ent_sans_scope_582")).contains(List.of());
+        assertThat(registry.storedHubwide("ent_sans_scope_582").map(EntityRegistry.Stored::scopes)).contains(List.of());
     }
 }

@@ -9,6 +9,7 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -23,6 +24,8 @@ class ExportRunSftpIT extends ExportRunScenarios {
     static final String PASS = "lumipass";
     static final String PASS_ENV = SECRET_ENV_PREFIX + "SFTP_PASS";
     static final String WRONG_ENV = SECRET_ENV_PREFIX + "SFTP_WRONG";
+    /** The destination's credentials, by the names its `*_env` keys give: every SFTP export IT's. */
+    static final Map<String, String> SECRETS = Map.of(PASS_ENV, PASS, WRONG_ENV, WRONG_SECRET);
 
     @BeforeAll
     static void startSftp() throws Exception {
@@ -33,15 +36,10 @@ class ExportRunSftpIT extends ExportRunScenarios {
         sftp.start();
         port = sftp.getMappedPort(22);
         fingerprint = SftpTestHelper.readHostKeyFingerprint("localhost", port, USER, PASS);
-        // SecretRefs falls back to a JVM system property when the tenant registry has no entry.
-        System.setProperty(PASS_ENV, PASS);
-        System.setProperty(WRONG_ENV, WRONG_SECRET);
     }
 
     @AfterAll
     static void stopSftp() {
-        System.clearProperty(PASS_ENV);
-        System.clearProperty(WRONG_ENV);
         if (sftp != null) sftp.stop();
     }
 
@@ -52,6 +50,11 @@ class ExportRunSftpIT extends ExportRunScenarios {
     @Override
     String entity() {
         return "ExportRunSftpEntity680";
+    }
+
+    @Override
+    Map<String, String> secrets() {
+        return ExportRunSftpIT.SECRETS;
     }
 
     @Override

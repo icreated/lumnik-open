@@ -202,7 +202,7 @@ public class EntityResolutionPass {
   public PassSummary runIncremental(long tenantId, UUID runId, Set<String> tablesWritten) {
     PassSummary total = PassSummary.EMPTY;
     RuntimeException firstFailure = null;
-    for (EntityManifest m : registry.all()) {
+    for (EntityManifest m : registry.all(tenantId)) {
       if (m.resolution() == null) continue;
       try {
         total = total.plus(resolveEntityIncremental(tenantId, m, runId, tablesWritten));
@@ -231,7 +231,7 @@ public class EntityResolutionPass {
 
   /** Crosswalk rows of one entity stuck in {@code unresolved_provider} — the retry selection. */
   public PassSummary runRetry(long tenantId, String entityName) {
-    EntityManifest m = requireResolvable(entityName);
+    EntityManifest m = requireResolvable(tenantId, entityName);
     PassSummary total = PassSummary.EMPTY;
     for (EntityManifest.Source s : m.sources()) {
       total = total.plus(resolveRetryEligible(tenantId, m, s));
@@ -244,7 +244,7 @@ public class EntityResolutionPass {
    * this entity only, exactly the runs that were already finished when the replay STARTED (#748).
    */
   public PassSummary runReplay(long tenantId, String entityName) {
-    EntityManifest m = requireResolvable(entityName);
+    EntityManifest m = requireResolvable(tenantId, entityName);
     String entityType = m.name().toLowerCase(Locale.ROOT);
     // Frozen BEFORE the scan: a run still active may commit after the scan crossed its table, so it is not
     // in the set and keeps blocking. Finished runs with an unknown (NULL) fence are included.
@@ -292,8 +292,8 @@ public class EntityResolutionPass {
     return total;
   }
 
-  private EntityManifest requireResolvable(String entityName) {
-    EntityManifest m = registry.findReloadingIfMissing(entityName);
+  private EntityManifest requireResolvable(long tenantId, String entityName) {
+    EntityManifest m = registry.findReloadingIfMissing(tenantId, entityName);
     if (m == null)
       throw new IllegalArgumentException("entity '" + entityName + "' not found");
     if (m.resolution() == null)

@@ -6,6 +6,8 @@ import io.lumnik.hub.connector.mapping.spec.MappingSpec;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.util.HashMap;
 import java.util.List;
@@ -158,7 +160,7 @@ class CellErrorPolicyTest {
     assertThat(rows).extracting(r -> r.get("app")).containsExactly("ERP");
     assertThat(state.dropped()).singleElement().satisfies(d -> {
       assertThat(d.row()).containsEntry("url", "ftp://srv-edi-prd01:21");
-      assertThat(d.reason()).isEqualTo(new SkipReason.MappingFailed("url", "regex-extract could not read the value"));
+      assertThat(d.reason()).isEqualTo(new SkipReason.MappingFailed("url", "regex-extract could not read the value: the pattern did not match"));
     });
   }
 
@@ -212,5 +214,155 @@ class CellErrorPolicyTest {
     assertThatThrownBy(() -> spec("on-error: { fields: { amount: quarantine } }"))
         .isInstanceOf(MappingValidationException.class)
         .hasMessageContaining("soft, dlq or fail");
+  }
+
+  // #1966: parse-coordinates reads a pair and has no `column`, so `default` decides its row; `fields` never does.
+
+  private static MappingSpec sites(String onError) {
+    return MappingLoader.load("""
+        id: cell-error-policy-pair
+        version: 1
+        target: x
+        cell:
+          - { parse-coordinates: { lat: latitude, lon: longitude } }
+        """ + onError);
+  }
+
+  private static List<Map<String, Object>> twoSites() {
+    return List.of(
+        new HashMap<>(Map.of("site", "S01", "latitude", "45.7302", "longitude", "4.8309")),
+        new HashMap<>(Map.of("site", "S08", "latitude", "574357.82", "longitude", "6279642.97")));
+  }
+
+  @Test
+  void an_unreadable_pair_is_written_emptied_and_counted_once_by_default() {
+    MappingState state = new MappingState();
+
+    List<Map<String, Object>> rows = engine.transform(sites(""), twoSites(), state, false);
+
+    assertThat(rows).hasSize(2);
+    assertThat(rows.get(1)).containsEntry("latitude", null).containsEntry("longitude", null);
+    assertThat(state.counters().cellErrors()).hasValue(1);
+  }
+
+  @Test
+  void default_dlq_dead_letters_the_site_as_it_was_read_named_by_the_hook_with_its_reason() {
+    MappingState state = new MappingState();
+
+    List<Map<String, Object>> rows = engine.transform(sites("on-error: { default: dlq }"), twoSites(), state, false);
+
+    assertThat(rows).extracting(r -> r.get("site")).containsExactly("S01");
+    assertThat(state.dropped()).singleElement().satisfies(d -> {
+      assertThat(d.row()).containsEntry("latitude", "574357.82").containsEntry("longitude", "6279642.97");
+      assertThat(d.reason()).isEqualTo(
+          new SkipReason.MappingFailed("parse-coordinates", "parse-coordinates could not read the value: not degrees"));
+    });
+    assertThat(state.counters().cellErrors()).hasValue(0);
+  }
+
+  @Test
+  void a_reason_given_by_one_hook_does_not_reach_the_next_hook_of_the_same_row() {
+    MappingState state = new MappingState();
+    MappingSpec spec = MappingLoader.load("""
+        id: cell-error-policy-pair-then-number
+        version: 1
+        target: x
+        on-error: { fields: { amount: dlq } }
+        cell:
+          - { parse-coordinates: { lat: latitude, lon: longitude } }
+          - { parse-number: { column: amount } }
+        """);
+    List<Map<String, Object>> rows = List.of(
+        new HashMap<>(Map.of("latitude", "574357.82", "longitude", "6279642.97", "amount", "n/a")));
+
+    engine.transform(spec, rows, state, false);
+
+    // The pair is refused under `soft` with a reason; the amount, under `dlq`, without one.
+    assertThat(state.dropped()).extracting(MappingState.DroppedRow::reason).containsExactly(
+        new SkipReason.MappingFailed("amount", "parse-number could not read the value"));
+  }
+
+  @Test
+  void a_fields_entry_on_one_column_of_the_pair_does_not_decide_it() {
+    MappingState state = new MappingState();
+
+    List<Map<String, Object>> rows =
+        engine.transform(sites("on-error: { fields: { latitude: dlq } }"), twoSites(), state, false);
+
+    assertThat(rows).hasSize(2);
+    assertThat(state.dropped()).isEmpty();
+  }
+
+  @Test
+  void default_fail_stops_on_an_unreadable_pair() {
+    assertThatThrownBy(() -> engine.transform(sites("on-error: { default: fail }"), twoSites(), new MappingState(), false))
+        .isInstanceOf(MappingValidationException.class)
+        .hasMessage("on-error: fail — parse-coordinates could not read a value: not degrees");
+  }
+
+  // #1971: a transformer that knows why it refused the value says it in the dead letter; the reason names the
+  // structure, never the value.
+  @ParameterizedTest(name = "{0}")
+  @CsvSource(delimiter = '|', textBlock = """
+      split: { column: v, by: /, into: [a, b] }                 | 1/2/3   | v                | split could not read the value: 3 parts for 2 names
+      fix-mojibake: { columns: [v] }                            | Ã©日    | fix-mojibake     | fix-mojibake could not read the value: not Windows-1252 text in v
+      fix-mojibake: { columns: [v] }                            | Ã©Ã    | fix-mojibake     | fix-mojibake could not read the value: not valid UTF-8 once repaired in v
+      to-uuid: { column: v, on-invalid: null }                  | N/A     | v                | to-uuid could not read the value: not a UUID
+      to-uuid: { column: id, generate-from: v }                 | ' '     | id               | to-uuid could not read the value: nothing to derive it from
+      parse-date: { column: v, formats: [yyyy-MM-dd] }          | soon    | v                | parse-date could not read the value: none of the declared formats
+      to-uuid: { column: v, on-invalid: generate, generate-from: w } | N/A | v                | to-uuid could not read the value: nothing to derive it from
+      parse-number: { column: v }                               | n/a     | v                | parse-number could not read the value
+      parse-boolean: { column: v }                              | maybe   | v                | parse-boolean could not read the value
+      parse-email: { column: v }                                | nobody  | v                | parse-email could not read the value
+      """)
+  void a_dead_letter_says_why_the_transformer_refused_the_value(String hook, String value, String field, String message) {
+    MappingSpec spec = MappingLoader.load("""
+        id: cell-error-reason
+        version: 1
+        target: x
+        on-error: { default: dlq }
+        cell:
+          - { %s }
+        """.formatted(hook));
+    MappingState state = new MappingState();
+
+    engine.transform(spec, List.of(new HashMap<>(Map.of("v", value))), state, false);
+
+    assertThat(state.dropped()).singleElement()
+        .satisfies(d -> assertThat(d.reason()).isEqualTo(new SkipReason.MappingFailed(field, message)));
+  }
+
+  @Test
+  void a_transformer_refusing_two_columns_names_the_first() {
+    MappingSpec spec = MappingLoader.load("""
+        id: cell-error-reason-two-columns
+        version: 1
+        target: x
+        on-error: { default: dlq }
+        cell:
+          - { fix-mojibake: { columns: [a, b] } }
+        """);
+    MappingState state = new MappingState();
+
+    engine.transform(spec, List.of(new HashMap<>(Map.of("a", "Ã©日", "b", "Ã©Ã"))), state, false);
+
+    assertThat(state.dropped()).singleElement().satisfies(d -> assertThat(d.reason()).isEqualTo(
+        new SkipReason.MappingFailed("fix-mojibake", "fix-mojibake could not read the value: not Windows-1252 text in a")));
+  }
+
+  @Test
+  void default_fail_stops_with_the_reason() {
+    MappingSpec spec = MappingLoader.load("""
+        id: cell-error-reason-fail
+        version: 1
+        target: x
+        on-error: { default: fail }
+        cell:
+          - { split: { column: v, by: /, into: [a, b] } }
+        """);
+
+    assertThatThrownBy(() -> engine.transform(spec, List.of(new HashMap<>(Map.of("v", "1/2/3"))), new MappingState(), false))
+        .isInstanceOf(MappingValidationException.class)
+        .hasMessage("on-error: fail — split could not read a value of column 'v': 3 parts for 2 names");
   }
 }

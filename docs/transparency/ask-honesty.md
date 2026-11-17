@@ -52,6 +52,7 @@ LIMIT 500
 | *… not a table in this scope* | the answer would read a table outside the selected scope | Ask in that scope, or add this scope to the connector |
 | *I couldn't translate that into a safe query.* | the model wrote something that is not one plain read | Ask a simpler question |
 | *La requête n'a renvoyé aucune ligne. Il peut n'y en avoir réellement aucune…* | zero rows. Maybe none exist; maybe the query missed the question | Read the SQL before saying "there are none" |
+| *La requête a renvoyé 0 ou aucune valeur. C'est peut-être la vraie réponse…* | a count of 0, or a total with no value. The same doubt | Same |
 | *That filter matches N rows, so the question has no single answer…* | a name shared by several records | Ask again with the code the message lists |
 | *The answer summarises the first 48 of the 312 rows returned.* | the sentence is written from a sample; every row is still printed | For an exact figure, ask for the count |
 | *The SQL query stops at 500 rows: there may be more.* | the result was cut at the query's limit, 500 at most | Narrow the question |
@@ -99,19 +100,23 @@ Pass the previous question with `--previous`. The PWA's Chat does it for you:
 
 ```
 $ lm ask --scope desk --previous "Combien de clients GOLD sont à Lyon ?" "Et à Paris ?"
-Il n'y a pas de clients GOLD à Paris.
+La requête a renvoyé 0 ou aucune valeur. C'est peut-être la vraie réponse, ou la requête n'a pas saisi votre question — vérifiez le SQL avant de vous y fier.
   understood as: Combien de clients GOLD sont à Paris ?
-  data as of: 2026-10-24T21:35:11.811114Z (last completed run)
+  data as of: 2026-11-13T21:41:19.439212Z (last completed run)
 
   COUNT
   0
   1 row returned
 
-  SQL: SELECT COUNT(*) FROM "connector"."v_acmecustomer" WHERE "segment" = 'GOLD' AND "city" = 'Paris'
+  SQL: SELECT COUNT(*)
+FROM "connector"."v_acmecustomer"
+WHERE "segment" = 'GOLD' AND "city" = 'Paris'
 LIMIT 500
 ```
 
 - `understood as` is the question really answered. Read it before trusting the figure.
+- A count of 0 comes with this doubt, not as "there are none". Some counts are not checked: before
+  you trust a 0, read its SQL.
 - *« Et X ? »* replaces a value; *« seulement … »* narrows; *« aussi … »* widens.
 - Only the previous **question** is remembered, never its rows: *« le deuxième »* is refused.
 - How a follow-up is resolved, case by case:

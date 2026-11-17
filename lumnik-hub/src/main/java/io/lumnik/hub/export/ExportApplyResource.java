@@ -78,12 +78,12 @@ public class ExportApplyResource {
         // ORDERED — read, then write, which a race can jump; the store re-asks atomically below.
         // It runs HERE, before the entity is even resolved, for ViewApplyResource's own reason:
         // the cross-checks below name the entity's declared scopes and its canonical columns, and
-        // the entity registry is deployment-global — so a caller refused for the NAME must not
+        // entity names are hub-wide — so a caller refused for the NAME must not
         // read another scope's entity shape on the way out (#582). It also refuses before the
         // audit record below and any future side effect this one cannot roll back (#509).
         ApplyScopeBoundary.refuseUnlessCallerHoldsScope(store.findScope(tenant, name));
 
-        EntityManifest entity = entities.findReloadingIfMissing(manifest.entity());
+        EntityManifest entity = entities.findReloadingIfMissing(tenant, manifest.entity());
         if (ExportDefinitionCheck.resolve(manifest, entity, formatters)
                 instanceof ExportDefinitionCheck.Problem problem) {
             return ApiErrors.badRequest(problem.sentence());

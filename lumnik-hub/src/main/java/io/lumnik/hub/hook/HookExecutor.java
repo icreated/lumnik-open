@@ -13,7 +13,6 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.util.List;
-import java.util.Optional;
 
 /**
  * Real HookSpi implementation. Declared @Alternative @Priority(1) to override
@@ -105,13 +104,8 @@ public class HookExecutor implements HookSpi {
     private void invokeKotlin(HookHandler.KotlinHandler kh, HookBinding b,
                               LifecycleEvent event, Object entity, HookContext ctx) {
         try {
-            Long tenantId = TenantContextFilter.CURRENT_TENANT.get();
-            Optional<String> scriptOverride = overrides.findScript(tenantId, b.id());
-            if (scriptOverride.isPresent()) {
-                kotlinHost.executeSource(scriptOverride.get(), event, entity, ctx);
-            } else {
-                kotlinHost.execute(kh.scriptPath(), event, entity, ctx);
-            }
+            // The operator's script only: a tenant's override switches a hook, it never carries code (#2011).
+            kotlinHost.execute(kh.scriptPath(), event, entity, ctx);
         } catch (HookCancellation hc) {
             throw hc; // re-throw; caught by invoke()'s outer catch
         } catch (Exception e) {

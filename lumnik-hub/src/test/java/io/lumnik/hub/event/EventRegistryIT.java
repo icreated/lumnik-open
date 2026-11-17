@@ -27,7 +27,7 @@ class EventRegistryIT {
             "org.created", "org.updated", "org.moved", "org.archived",
             "connector.run.started", "connector.run.completed",
             "connector.run.partial", "connector.run.cancelled", "connector.run.failed",
-            "platform.secret.created", "platform.secret.updated",
+            "platform.secret.created", "platform.secret.updated", "platform.secret.scoped",
             "platform.secret.deleted", "platform.secret.read",
             "data.row.changed", "annotation.decision.acked",
             "notification.mail.given-up",

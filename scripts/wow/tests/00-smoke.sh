@@ -4,7 +4,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 hdr "platform reachable?"
-if curl -s -m 5 "${WOW_SERVER}/q/openapi" >/dev/null 2>&1 || lm connector list >/dev/null 2>&1; then
+if curl -sf -m 5 "${WOW_SERVER}/app/" >/dev/null 2>&1 || lm connector list >/dev/null 2>&1; then
   ok "platform answers on ${WOW_SERVER}"
 else
   bad "platform not reachable on ${WOW_SERVER} — start it: mvn quarkus:dev -pl lumnik-hub -am"

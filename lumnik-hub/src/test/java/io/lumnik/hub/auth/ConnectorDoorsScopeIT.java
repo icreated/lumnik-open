@@ -199,7 +199,7 @@ class ConnectorDoorsScopeIT {
           connector_type: csv-file
           %s
         spec:
-          transport: { kind: local, path: /tmp/race.csv }
+          transport: { kind: local, path: tmp/race.csv }
           parser: { has_header: true }
           after_process: none
           target: {}

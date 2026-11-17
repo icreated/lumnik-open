@@ -5,13 +5,13 @@
 
 ## What's exposed out of the box
 
-| Endpoint | What it answers | Auth |
+| Endpoint | What it answers | Where |
 |---|---|---|
-| `GET /q/health` | overall UP/DOWN, all checks (the database connections) | none |
-| `GET /q/health/live` | "the process is alive" — watched by the selfhost compose healthcheck | none |
-| `GET /q/health/ready` | "I can serve traffic" — the Helm chart's startup and readiness probe | none |
-| `GET /q/metrics` | Prometheus text format: JVM, HTTP server, and the [domain metrics](#domain-metrics) below | none |
-| `lm module list` | each installed module, its version and whether it is active | `lm_integrator` |
+| `GET /q/health` | overall UP/DOWN, all checks (the database connections) | port 9000 |
+| `GET /q/health/live` | "the process is alive" — watched by the selfhost compose healthcheck | port 9000 |
+| `GET /q/health/ready` | "I can serve traffic" — the Helm chart's startup and readiness probe | port 9000 |
+| `GET /q/metrics` | Prometheus text format: JVM, HTTP server, and the [domain metrics](#domain-metrics) below | port 9000 |
+| `lm module list` | each installed module, its version and whether it is active | `lm_integrator` token |
 
 ```
 $ lm module list
@@ -22,27 +22,32 @@ llm       0.1.0    Model provider      INACTIVE  disabled:lumnik.ai.enabled
 rag       0.1.0    Platform RAG        INACTIVE  disabled:lumnik.ai.enabled
 ```
 
-The `/q/*` endpoints sit on the application port (8080):
+The `/q/*` endpoints answer on the hub's **management port, 9000**, and nowhere on 8080:
 
-- **They carry no authentication**, and `/q/metrics` names your connectors in its labels.
-- **The TLS proxy forwards them**: it sends everything except `/realms/*` and `/resources/*` to
-  the hub. On a public origin, block `/q/*` at your proxy or firewall.
+- **Nothing routes it.** The selfhost compose file does not publish it, the TLS proxy answers
+  `/q/*` with 404, and the Helm chart creates no Service or route for it.
+- **So they carry no authentication**, though `/q/metrics` names your connectors in its labels.
+- **Read them from inside:** `./deploy/selfhost/health.sh` for the health,
+  `docker compose -f docker-compose.selfhost.yml exec -T hub curl -s localhost:9000/q/metrics` for
+  the metrics, or `kubectl port-forward deploy/<release>-hub 9000` on a cluster. A hub in dev mode
+  serves them on 9002.
 
 `GET /api/platform/health` returns the same module data plus the Search provider's state, for a
-monitoring probe. It needs an `lm_integrator` token — except on a Helm install set to
-dev-bypass, where **every** endpoint answers without one
+monitoring probe. It needs an `lm_integrator` token. The exception is a Helm install set to
+dev-bypass: there **every** endpoint answers without one
 ([Security](../security/index.md#before-you-expose-the-hub)).
 
 ## Scraping with Prometheus
 
-Point a scrape job at `/q/metrics`:
+Point a scrape job at `/q/metrics` on port 9000, from a Prometheus that runs in the same network
+as the hub (the compose network, or the cluster):
 
 ```yaml
 scrape_configs:
   - job_name: lumnik-hub
     metrics_path: /q/metrics
     static_configs:
-      - targets: ["your-hub-host:8080"]
+      - targets: ["hub:9000"]
 ```
 
 No push gateway, no agent.
@@ -54,7 +59,7 @@ Besides the JVM and HTTP meters, the hub emits:
 | Metric | Tags | When it moves |
 |---|---|---|
 | `lumnik_runs_total` | `status` (`Completed`, `Partial`, `Failed`, `Cancelled`) | a connector run reaches a terminal status |
-| `lumnik_rate_limited_total` | `bucket` | a request is refused `429` by [rate limiting](rate-limits.md); the tenant is in the WARN log line |
+| `lumnik_rate_limited_total` | `bucket` | a request is refused `429` by [rate limiting](rate-limits.md); the tenant and the user are in the WARN log line |
 | `lumnik_dead_letters_total` | `reason` | a row is quarantined to the DLQ — real losses only; benign skips (duplicates, policy-excluded) do not count |
 | `csv_filesource_list_total` | `transport`, `connector` | files listed on a remote source |
 | `csv_filesource_list_duration_seconds` | `transport`, `connector` | time spent listing |
@@ -68,7 +73,7 @@ Besides the JVM and HTTP meters, the hub emits:
 | `lumnik_search_catchup_failures_total` | — | a search index catch-up attempt failed |
 
 ```
-$ curl -s http://localhost:8080/q/metrics | grep '^lumnik_'
+$ docker compose -f docker-compose.selfhost.yml exec -T hub curl -s localhost:9000/q/metrics | grep '^lumnik_'
 lumnik_runs_total{status="Failed"} 1.0
 lumnik_runs_total{status="Completed"} 5.0
 lumnik_dead_letters_total{reason="MalformedSource"} 2.0

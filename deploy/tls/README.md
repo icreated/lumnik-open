@@ -52,6 +52,11 @@ warning, but the browser will not install the PWA.)
 
 ## Things to know
 
+- **HSTS is off until you set `LUMNIK_TLS_HSTS=true`.** Then the façade answers
+  `Strict-Transport-Security: max-age=31536000`: a browser that has seen the https origin never
+  falls back to http, for a year. Set it on a public domain with a Let's Encrypt certificate only.
+  On a LAN name with the internal CA, losing the `caddy_data` volume would lock out every device
+  that saw it, with no way past the warning. Keycloak's own HSTS header is dropped either way.
 - **Bare-IP clients send no SNI** (RFC 6066 forbids it), and without a `default_sni`
   global option Caddy matches no certificate and aborts every handshake with TLS
   alert 80. The shipped Caddyfile sets it.

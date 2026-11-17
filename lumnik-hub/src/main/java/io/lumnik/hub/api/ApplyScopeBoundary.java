@@ -104,6 +104,7 @@ public final class ApplyScopeBoundary {
      * @param outcome what the guarded write was allowed to do
      * @throws WebApplicationException 403 {@link ScopeGrants#REFUSAL}, when the write met a row the
      *         caller's grants do not reach — nothing was committed
+     * @throws WebApplicationException 409, when another tenant holds the name (#2050) — nothing was committed
      */
     public static void refuseUnlessApplied(ScopeGuardedUpsert outcome) {
         // An exhaustive switch rather than an instanceof: a third arm added to the sealed family
@@ -113,6 +114,8 @@ public final class ApplyScopeBoundary {
             case ScopeGuardedUpsert.Applied ignored -> { }
             case ScopeGuardedUpsert.NameHeldOutOfScope ignored ->
                 throw new WebApplicationException(ApiErrors.scopeNotGranted());
+            case ScopeGuardedUpsert.NameTaken ignored ->
+                throw new WebApplicationException(ApiErrors.conflict(ScopeGuardedUpsert.NAME_TAKEN));
         }
     }
 }

@@ -4,6 +4,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.lumnik.hub.testsupport.EntitySourceTableFixture;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
@@ -103,9 +104,11 @@ class EntityViewCompilerResolutionIT {
         st.execute("GRANT SELECT ON " + t + " TO lumnik_readonly");
       }
     }
+    RegisteredTables.register(adminDs, 1L, ERP);
+    RegisteredTables.register(adminDs, 1L, CRM);
 
     EntityManifest m = new EntityManifestParser().parse(MANIFEST);
-    ScopeGuardedUpsert outcome = compiler.apply(m, MANIFEST, null);
+    ScopeGuardedUpsert outcome = compiler.apply(m, MANIFEST, null, 1L);
     assertThat(outcome).as("setup: compiler.apply must succeed").isInstanceOf(ScopeGuardedUpsert.Applied.class);
   }
 
@@ -230,10 +233,10 @@ class EntityViewCompilerResolutionIT {
   @Test
   void the_readonly_role_can_read_the_resolved_view_without_permission_denied() throws Exception {
     // Ask-to-SQL executes as lumnik_readonly (SqlGuard layer 1). core.entity_identity itself is
-    // only default-privileged to lumnik_app (01-roles.sh) — V15's ALTER DEFAULT PRIVILEGES for
-    // lumnik_readonly is scoped to schema connector, not core — so without an explicit grant on
-    // core.entity_identity, a security_invoker view joining it is unreadable there even though
-    // the view's own GRANT SELECT succeeded.
+    // only default-privileged to lumnik_app (01-roles.sh), and no default privilege names
+    // lumnik_readonly (V93) — so without V50's explicit grant on core.entity_identity, a
+    // security_invoker view joining it is unreadable there even though the view's own GRANT
+    // SELECT succeeded.
     long tenant = 96204;
     insertErp(tenant, "ro-1", "Dave");
 
@@ -288,7 +291,7 @@ class EntityViewCompilerResolutionIT {
     insertIdentity("resit967", tenant, erp, "e-1", "resolved", entity);
 
     EntityManifest m = new EntityManifestParser().parse(manifest);
-    assertThat(compiler.apply(m, manifest, null)).isInstanceOf(ScopeGuardedUpsert.Applied.class);
+    assertThat(compiler.apply(m, manifest, null, 1L)).isInstanceOf(ScopeGuardedUpsert.Applied.class);
 
     List<List<String>> rows = new ArrayList<>();
     try (Connection c = appDs.getConnection(); Statement st = c.createStatement()) {

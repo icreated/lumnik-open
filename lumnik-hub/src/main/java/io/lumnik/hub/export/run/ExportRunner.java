@@ -25,9 +25,12 @@ import io.lumnik.hub.export.format.ColumnFormatterRegistry;
 import io.lumnik.hub.export.run.ExportRunLedger.Claim;
 import io.lumnik.hub.export.run.ExportRunLedger.Claimed;
 import io.lumnik.hub.export.run.ExportRunLedger.NewRun;
+import io.lumnik.hub.outbound.OutboundRefusedException;
 import io.lumnik.hub.run.RunLock;
 import io.lumnik.hub.run.RunQueueSettings;
 import io.lumnik.hub.scheduler.TenantScope;
+import io.lumnik.hub.secret.SecretAudience;
+import io.lumnik.hub.secret.SecretNotServedException;
 import io.lumnik.hub.sql.TenantRlsScope;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.arc.Arc;
@@ -280,9 +283,10 @@ public class ExportRunner {
         // read starts, the read's while it runs, the transport's again for the commit.
         ExportFailureCode otherwise = ExportFailureCode.PUBLICATION;
         try {
-            // SecretRefs reads the tenant's lm secret registry, so build() runs inside the tenant.
-            FileDestination built =
-                TenantScope.get(tenantId, () -> destinations.build(definition.cfg()));
+            // SecretRefs reads the tenant's lm secret registry, so build() runs inside the tenant — and as the export's
+            // scope, which every secret it names must serve (#2015).
+            FileDestination built = TenantScope.get(tenantId, () -> SecretAudience.get(
+                List.of(definition.manifest().scope()), () -> destinations.build(definition.cfg())));
             destination = built;
             OutputStream out = built.open();
 
@@ -326,7 +330,7 @@ public class ExportRunner {
             throw new ExportRunFailure(ExportFailureCode.DEFINITION, e.getMessage(), e);
         }
         EntityManifest entity =
-            inTenant(tenantId, () -> registry.findReloadingIfMissing(manifest.entity()));
+            inTenant(tenantId, () -> registry.findReloadingIfMissing(tenantId, manifest.entity()));
         SnapshotShape shape = switch (ExportDefinitionCheck.resolve(manifest, entity, formatters)) {
             case ExportDefinitionCheck.Problem problem ->
                 throw new ExportRunFailure(ExportFailureCode.DEFINITION, problem.sentence());
@@ -352,12 +356,16 @@ public class ExportRunner {
      * The failure code, read from the failure itself: an authored ExportRunFailure carries its
      * own; a destination's exception is a collision or a publication failure wherever it was
      * thrown (a write the destination refused mid-stream is an upload failure, not a read one);
-     * anything else is {@code otherwise}, the stage it happened in.
+     * a secret the export's scope may not read (#2015), or an address the hub refuses (#2002), is its definition to
+     * fix; anything else is
+     * {@code otherwise}, the stage it happened in.
      */
     static ExportFailureCode classify(Throwable failure, ExportFailureCode otherwise) {
         List<Throwable> chain = Throwables.causeChain(failure);
         for (Throwable t : chain)
             if (t instanceof ExportRunFailure f) return f.code();
+        if (chain.stream().anyMatch(t -> t instanceof SecretNotServedException || t instanceof OutboundRefusedException))
+            return ExportFailureCode.DEFINITION;
         if (chain.stream().anyMatch(FileDestinationCollisionException.class::isInstance))
             return ExportFailureCode.COLLISION;
         if (chain.stream().anyMatch(FileDestinationException.class::isInstance))

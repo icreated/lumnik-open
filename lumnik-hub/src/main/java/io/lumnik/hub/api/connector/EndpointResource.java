@@ -4,7 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
-import io.lumnik.hub.connector.mapping.MapColumnsRules;
+import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
+import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
 import io.lumnik.hub.connector.repository.ConnectorCursorEntityRepository;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
@@ -16,10 +17,10 @@ import jakarta.transaction.Transactional;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import org.hibernate.Session;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
@@ -35,9 +36,6 @@ public class EndpointResource {
     @Inject EntityManager em;
     @Inject RestPreflight preflight;
     @Inject ObjectMapper json;
-
-    /** Schemas dynamic ingestion writes to — the only ones an endpoint purge may target. */
-    private static final Set<String> PURGEABLE_SCHEMAS = Set.of("connector", "ext");
 
     /**
      * The refusal for a non-hybrid endpoint, worded for the integrator (#1181): never the config key
@@ -78,17 +76,16 @@ public class EndpointResource {
         // A jdbc table's rename lives here, and a rename INTO a hub system column kills the run
         // (JdbcConnectorType.validateRename) — refuse it at write time, same rule, same shape.
         if (body.config() != null) {
-            Response bad = MapColumnsRules.firstStoredConfigViolation(json.valueToTree(body.config()))
-                .map(v -> ApiErrors.badRequest("config '" + v.path() + "' " + v.reason()))
-                .orElse(null);
+            // and a local path whose form the run refuses (#2001): StoredConfigRules, judged in an endpoint's shape
+            Response bad = StoredConfigRules.endpointRefusal(json.valueToTree(body.config())).map(ApiErrors::badRequest).orElse(null);
             if (bad != null) return bad;
         }
 
         if (body.method() != null) ep.setMethod(body.method());
-        if (body.path() != null) ep.setPath(body.path());
+        if (body.path() != null) ep.setPath(InlineCredentials.restoredPath(body.path(), ep.getPath(), false));   // #2003
         if (body.schedule() != null) ep.setSchedule(body.schedule());
         ep.setEnabled(body.enabled());
-        if (body.config() != null) ep.setConfig(body.config());
+        if (body.config() != null) ep.setConfig(InlineCredentials.restored(body.config(), ep.getConfig()));   // #2003
 
         return Response.ok(EndpointDto.from(ep)).build();
     }
@@ -170,35 +167,28 @@ public class EndpointResource {
         // connector.t_* table the config never names.
         if (table == null) return ApiErrors.badRequest(NOT_PURGEABLE_ON_ITS_OWN);
 
-        // Bound the blast radius: dynamic ingestion only ever writes to the `connector` (t_*)
-        // and `ext` schemas, so purge must target one of those — a mis-set target.table can
-        // never DELETE from identity/core/rag/platform. Quote each part (doubling embedded
-        // quotes) so the identifier is injection-safe by construction, not just by the allowlist.
-        // Enforce the schema.table SHAPE only (known schema + a non-blank single identifier). Safety
-        // is the escaping SqlIdentifiers.quoteIdent, NOT a character allowlist — an allowlist wrongly
-        // rejects valid Postgres identifiers (e.g. names containing '-').
-        String[] parts = table.split("\\.", 2);
-        if (parts.length != 2 || !PURGEABLE_SCHEMAS.contains(parts[0])
-                || parts[1].isBlank() || parts[1].contains(".")) {
+        // Bound the blast radius with the writer's own rule (#1989): a hybrid target is ext.<name> or
+        // connector.<name>, so a mis-set target.table can never DELETE from identity/core/rag/platform.
+        // Each part is still quoted (doubling embedded quotes): injection-safe by construction too.
+        if (HybridJsonbSpec.targetProblem(table).isPresent()) {
             return ApiErrors.badRequest("invalid or out-of-scope table: " + table);
         }
+        String[] parts = table.split("\\.", 2);
         String fqn = quoteIdent(parts[0]) + "." + quoteIdent(parts[1]);
 
-        // Purge is by endpoint, so the table must carry endpoint_id — the hybrid tables
-        // (ext.* and connector.<hybrid>) do; a connector.t_* table (DynamicTableWriter) has no
-        // endpoint column and is not purgeable this way. The schema allowlist gates by SCHEMA, but
-        // "has endpoint_id" is a per-TABLE property, so check it here and fail cleanly (400) rather
-        // than let the native DELETE raise a raw 500. A table that does not exist yet — a hybrid
-        // endpoint that has never run — has nothing to purge. The catalog, not information_schema:
-        // that one hides a table lumnik_app has no privilege on, a false "0 deleted" (EndpointPurgeRlsIT).
-        Object[] found = (Object[]) em.createNativeQuery(
-            "SELECT r IS NOT NULL, EXISTS (SELECT 1 FROM pg_attribute "
-          + "WHERE attrelid = r AND attname = 'endpoint_id' AND NOT attisdropped) "
-          + "FROM to_regclass(CAST(? AS text)) r")
+        // Purge is by endpoint, and only from a table the hybrid writer made and recorded (#1989, #2010).
+        // The schema rule gates by SCHEMA, but under connector sit the hub's own tables, and
+        // connector_run carries an endpoint_id too; "is a hybrid table" is a per-TABLE property, so
+        // check it here and fail cleanly (400). A table that does not exist yet — a hybrid endpoint that
+        // has never run — has nothing to purge. The catalog, not information_schema: that one hides a
+        // table lumnik_app has no privilege on, a false "0 deleted" (EndpointPurgeRlsIT).
+        boolean exists = (Boolean) em.createNativeQuery("SELECT to_regclass(CAST(? AS text)) IS NOT NULL")
             .setParameter(1, fqn)
             .getSingleResult();
-        if (!(Boolean) found[0]) return purged(0, table, dryRun);
-        if (!(Boolean) found[1]) return ApiErrors.badRequest(NOT_PURGEABLE_ON_ITS_OWN);
+        if (!exists) return purged(0, table, dryRun);
+        if (!em.unwrap(Session.class).doReturningWork(c -> DynamicTableRegistry.ownsHybridTable(c, parts[0], parts[1]))) {
+            return ApiErrors.badRequest(NOT_PURGEABLE_ON_ITS_OWN);
+        }
 
         long rows = dryRun
             ? ((Number) em.createNativeQuery("SELECT count(*) FROM " + fqn + " WHERE endpoint_id = ?")

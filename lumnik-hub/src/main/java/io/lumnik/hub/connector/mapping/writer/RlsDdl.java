@@ -1,5 +1,8 @@
 package io.lumnik.hub.connector.mapping.writer;
 
+import java.util.List;
+import java.util.regex.Pattern;
+
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
 
 /**
@@ -15,13 +18,18 @@ import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
  * {@link io.lumnik.hub.sql.SqlIdentifiers}. A {@code null} schema means an unqualified table.
  *
  * <p>Both writers grant the same set (app DML, readonly select, sequence usage) and both issue
- * <b>one guarded block per grant</b>. That is a rule, not a style: {@link #guarded} swallows with
- * {@code EXCEPTION WHEN OTHERS}, which aborts the whole block, so grants sharing one block are
+ * <b>one guarded block per grant</b>. That is a rule, not a style: a guarded block's handler
+ * aborts the whole block, so grants sharing one block are
  * cancelled by the first that fails — and the javadoc below says plainly that the target roles
  * may not exist. Grouping once put the readonly SELECT second behind the app's DML.
  * {@link #guarded} takes a single statement so that arrangement cannot be written again;
  * {@code RlsDdlCharacterizationTest} asserts the resulting one-grant-per-block property over the
  * writers' output, so a grant added later inherits it.
+ *
+ * <p>No default privilege covers the readonly grants since V93 (#2008), so a failed one must not pass in silence:
+ * {@link #readonlySelectGrant} comes out ALREADY guarded against a missing role only. The hybrid writer guards every
+ * grant that way (#2010): its DDL is one transaction under an exclusive lock, and no default privilege covers
+ * {@code ext} at all. DynamicTableWriter keeps {@link #guarded} for its app grants.
  */
 final class RlsDdl {
 
@@ -37,6 +45,9 @@ final class RlsDdl {
      * requires the identifier to contain this exact literal substring, not just any two dollars.
      */
     private static final String TAG = "$lumnik_rls$";
+
+    /** {@code DO} as the first word, whatever follows it: a space, a newline, a dollar tag. */
+    private static final Pattern NESTED_BLOCK = Pattern.compile("\\s*DO(?![A-Za-z0-9_])", Pattern.CASE_INSENSITIVE);
 
     private RlsDdl() {
     }
@@ -64,11 +75,10 @@ final class RlsDdl {
      */
     static String tenantIsolationPolicy(String schema, String table) {
         String t = qualify(schema, table);
-        String literal = t.replace("'", "''");
         return "DO " + TAG + " BEGIN " +
                "  IF NOT EXISTS (" +
                "    SELECT 1 FROM pg_policy " +
-               "    WHERE polname = 'tenant_isolation' AND polrelid = '" + literal + "'::regclass" +
+               "    WHERE polname = 'tenant_isolation' AND polrelid = " + literal(t) + "::regclass" +
                "  ) THEN " +
                "    CREATE POLICY tenant_isolation ON " + t +
                "      USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::bigint); " +
@@ -105,23 +115,54 @@ final class RlsDdl {
         return "GRANT SELECT ON " + qualify(schema, table) + " TO lumnik_readonly";
     }
 
+    /** {@link #grantReadonlySelect}, guarded against a missing role only: for DDL that runs as one transaction. */
+    static String readonlySelectGrant(String schema, String table) {
+        return guardedAgainstMissingRole(grantReadonlySelect(schema, table));
+    }
+
     static String grantSequenceUsage(String schema, String sequence) {
         return "GRANT USAGE, SELECT ON SEQUENCE " + qualify(schema, sequence) + TO_APP_ROLE;
     }
 
     /**
-     * Schema-level USAGE the app role needs to reach anything inside a schema
-     * {@code HybridJsonbWriter} auto-creates for its {@code ext.*} tables — that schema is not
-     * covered by any migration's grant (schema-usage-grant-gap). Lives here, not hand-rolled at
-     * the call site, so it shares this class's single {@link #TAG} instead of duplicating it.
+     * The hybrid writer's grants (#2010): the app's DML and its sequence, the readonly SELECT, both roles' USAGE on the
+     * schema. One block each, guarded against a missing role only (its DDL is one transaction under an exclusive lock),
+     * and each made only where it is missing: a grant a relation already has still rewrites its catalog row, which drops
+     * every session's cached plans on it. So a lost grant comes back, and a healthy table is left as it is.
      */
-    static String grantSchemaUsageApp(String schema) {
-        return "GRANT USAGE ON SCHEMA " + quoteIdent(schema) + TO_APP_ROLE;
+    static List<String> hybridGrants(String schema, String table) {
+        String rel = literal(qualify(schema, table));
+        // A long table's sequence is not <table>_id_seq: Postgres shortens the table part to keep 63 characters.
+        String sequence = "pg_get_serial_sequence(" + rel + ", 'id')";
+        return List.of(
+            ifMissing(privileges("has_table_privilege('lumnik_app', " + rel, "INSERT", "SELECT", "UPDATE", "DELETE"),
+                grantAppDml(schema, table)),
+            ifMissing(privileges("has_table_privilege('lumnik_readonly', " + rel, "SELECT"),
+                grantReadonlySelect(schema, table)),
+            ifMissing(privileges("has_sequence_privilege('lumnik_app', " + sequence, "USAGE", "SELECT"),
+                "EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE %s" + TO_APP_ROLE + "', " + sequence + ")"),
+            ifMissing(privileges("has_schema_privilege('lumnik_app', " + literal(schema), "USAGE"),
+                "GRANT USAGE ON SCHEMA " + quoteIdent(schema) + TO_APP_ROLE),
+            ifMissing(privileges("has_schema_privilege('lumnik_readonly', " + literal(schema), "USAGE"),
+                "GRANT USAGE ON SCHEMA " + quoteIdent(schema) + " TO lumnik_readonly"));
     }
 
-    /** Same USAGE grant for the read-only role (ask-to-SQL). */
-    static String grantSchemaUsageReadonly(String schema) {
-        return "GRANT USAGE ON SCHEMA " + quoteIdent(schema) + " TO lumnik_readonly";
+    /** {@code call(..., 'P')} for each privilege, AND-ed: one call naming several answers whether ANY is held. */
+    private static String privileges(String callHead, String... privileges) {
+        StringBuilder all = new StringBuilder();
+        for (String privilege : privileges) {
+            if (!all.isEmpty()) all.append(" AND ");
+            all.append(callHead).append(", '").append(privilege).append("')");
+        }
+        return all.toString();
+    }
+
+    private static String ifMissing(String held, String grant) {
+        return guardedAgainstMissingRole("IF NOT (" + held + ") THEN " + grant + "; END IF");
+    }
+
+    private static String literal(String text) {
+        return "'" + text.replace("'", "''") + "'";
     }
 
     /**
@@ -137,7 +178,25 @@ final class RlsDdl {
      * the table and the grants are the real thing.
      */
     static String guarded(String statement) {
-        return "DO " + TAG + " BEGIN   " + statement + "; EXCEPTION WHEN OTHERS THEN NULL; END " + TAG;
+        return block(statement, "OTHERS");
+    }
+
+    private static String block(String statement, String condition) {
+        // a DO block inside another, both tagged TAG, would end the outer one early: every table creation would fail
+        if (NESTED_BLOCK.matcher(statement).lookingAt()) {
+            throw new IllegalArgumentException("already a guarded block: " + statement);
+        }
+        return "DO " + TAG + " BEGIN   " + statement + "; EXCEPTION WHEN " + condition + " THEN NULL; END " + TAG;
+    }
+
+    /**
+     * {@link #guarded} for a grant no default privilege covers, in DDL that runs as one transaction (#2008): failed, it
+     * would leave a relation its role cannot reach, and nothing would say why. Only the expected failure is swallowed —
+     * the role is absent ({@code undefined_object}, a plain {@code %test} database); any other one stops the DDL that
+     * asked for it, and rolls it back.
+     */
+    static String guardedAgainstMissingRole(String statement) {
+        return block(statement, "undefined_object");
     }
 
     private static String qualify(String schema, String table) {

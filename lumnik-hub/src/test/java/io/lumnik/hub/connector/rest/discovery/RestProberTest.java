@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.discovery;
 
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
@@ -49,7 +50,7 @@ class RestProberTest {
     RestProberTest() {
         prober.inference = new JsonStructureInference();
         prober.llm = new LlmManifestAugmenter();
-        prober.secrets = SecretRefs.environmentOnly(name -> null);
+        prober.secrets = SecretRefs.of(name -> null);
         prober.authReg = new AuthProviderRegistry() {
             @Override public AuthProvider build(AuthSpec spec) {
                 presented = spec;
@@ -60,7 +61,7 @@ class RestProberTest {
     }
 
     private void answer(int status, String body) {
-        prober.http = new RestHttpClient() {
+        prober.http = new RestHttpClient(TestOutbound.ADDRESSES) {
             @Override public RestResponse execute(RestRequest req) {
                 sent = req;
                 return RestResponse.of(status, Map.of(), body);
@@ -87,7 +88,7 @@ class RestProberTest {
                 return request -> request.withHeader("Authorization", "Bearer probe-tok-a1b2c3");
             }
         };
-        prober.http = new RestHttpClient() {
+        prober.http = new RestHttpClient(TestOutbound.ADDRESSES) {
             @Override public RestResponse execute(RestRequest req) {
                 return RestResponse.of(401, Map.of(), "{\"seen\":\"" + req.headers().get("Authorization") + "\"}");
             }
@@ -135,12 +136,11 @@ class RestProberTest {
 
     /**
      * The connector's declared headers go out on the probe too, a {@code value_env} read like the
-     * run reads it — lm secret first. A source gated on a header answered the probe 401 otherwise.
+     * run reads it — through lm secret. A source gated on a header answered the probe 401 otherwise.
      */
     @Test
     void theConnectorsDeclaredHeadersAreSent() throws Exception {
-        prober.secrets = new SecretRefs(name -> "CLIENT_ID".equals(name) ? Optional.of("from-registry") : Optional.empty(),
-                                        name -> "from-env");
+        prober.secrets = new SecretRefs(name -> "CLIENT_ID".equals(name) ? Optional.of("from-registry") : Optional.empty());
 
         prober.probe(connector(Map.of("base_url", "http://erp.invalid", "headers", List.of(
                          Map.of("name", "X-Api-Version", "value", "2026-01"),
@@ -154,7 +154,7 @@ class RestProberTest {
     /** A header reference nothing holds is refused by name, before anything is sent. */
     @Test
     void aHeaderThatDoesNotResolveIsRefusedBeforeAnythingIsSent() {
-        prober.secrets = SecretRefs.environmentOnly(name -> null);
+        prober.secrets = SecretRefs.of(name -> null);
 
         assertThatThrownBy(() -> prober.probe(connector(Map.of("base_url", "http://erp.invalid", "headers",
                                                   List.of(Map.of("name", "X-Client-Id", "value_env", "CLIENT_ID")))),
@@ -373,7 +373,7 @@ class RestProberTest {
      */
     @Test
     void anInterruptedProbeIsRaised_andTheFlagSurvives() {
-        prober.http = new RestHttpClient() {
+        prober.http = new RestHttpClient(TestOutbound.ADDRESSES) {
             @Override public RestResponse execute(RestRequest req) throws Exception {
                 throw new InterruptedException("cancelled");
             }
@@ -393,7 +393,7 @@ class RestProberTest {
         String pem = "cluster CA";
         InternalCaApi api = new InternalCaApi("{\"items\":[{\"uid\":\"a\"}]}");
         prober.http = api;
-        prober.secrets = SecretRefs.environmentOnly(name -> "CLUSTER_CA".equals(name) ? pem : null);
+        prober.secrets = SecretRefs.of(name -> "CLUSTER_CA".equals(name) ? pem : null);
 
         prober.probe(connector(Map.of("base_url", "https://kubernetes.default.svc",
             "tls", Map.of("ca_secret", "CLUSTER_CA"))), "/api/v1/pods", "draft");

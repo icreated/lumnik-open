@@ -8,6 +8,7 @@ import static io.restassured.RestAssured.given;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.entity.EntityRegistry;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -104,6 +105,7 @@ class ProcessConsumerIsolationIT {
     void aValidEntityKeepsItsProcessWhileAnotherStoredEntityIsUnreadable() {
         exec("INSERT INTO connector.dynamic_table (tenant_id, mapping_id, table_schema, table_name, schema_inferred) "
            + "VALUES (4301, 'iso-src', 'connector', 't_iso', '{}'::jsonb)");
+        RegisteredTables.register(adminDs, 4301L, "t_iso");
         given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(4301)).contentType("application/yaml")
             .body("kind: Entity\nname: IsoGood\nmatch: [code]\nscopes: [iso]\nsources:\n  - table: t_iso\n    map: { code: code }\n")
             .post("/api/entities/apply").then().statusCode(200);

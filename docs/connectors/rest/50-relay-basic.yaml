@@ -33,7 +33,7 @@ spec:
   auth:
     kind: basic
     username: demo-user
-    password_env: REST_DEMO_BASIC_PW  # same credential as 20-page-basic.yaml
+    password_env: REST_DEMO_BASIC_PW  # same credential as 20-page-basic.yaml; lm secret scope REST_DEMO_BASIC_PW demo
 
   endpoints:
     - id: nodes

@@ -36,7 +36,7 @@ public class MatchIndexReconciler {
     /** Exposed for tests: one pass over every tenant's enabled process on an Entity. */
     public void sweep() {
         for (String view : store.allEnabledEntityViews()) {
-            matchIndexes.storedEntity(view).ifPresent(matchIndexes::ensureAll);
+            matchIndexes.storedEntityHubwide(view).ifPresent(matchIndexes::ensureAll);
         }
     }
 }

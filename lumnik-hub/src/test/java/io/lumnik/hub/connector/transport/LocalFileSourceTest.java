@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.transport;
 
+import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import java.io.*;
@@ -8,6 +9,7 @@ import java.nio.file.attribute.FileTime;
 import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 class LocalFileSourceTest {
@@ -23,7 +25,7 @@ class LocalFileSourceTest {
         Files.setLastModifiedTime(f1, FileTime.from(Instant.parse("2026-01-01T00:00:00Z")));
         Files.setLastModifiedTime(f2, FileTime.from(Instant.parse("2026-03-01T00:00:00Z")));
 
-        var source = new LocalFileSource(dir.toString() + "/*.csv");
+        var source = new LocalFileSource(LocalRoot.at(dir), dir.toString() + "/*.csv");
         List<FileDescriptor> all = source.listSince(Instant.EPOCH).collect(Collectors.toList());
         assertEquals(2, all.size(), "should exclude .tmp");
         assertEquals("a.csv", all.get(0).name(), "should be sorted by mtime ASC");
@@ -52,7 +54,7 @@ class LocalFileSourceTest {
         probes.add("a.csv");
 
         for (String glob : List.of(dir + "/*.csv", dir + "/a.csv")) {
-            var source = new LocalFileSource(glob);
+            var source = new LocalFileSource(LocalRoot.at(dir), glob);
             Map<String, FileDescriptor> listed = source.listSince(Instant.EPOCH)
                 .collect(Collectors.toMap(FileDescriptor::path, d -> d));
             assertFalse(listed.isEmpty(), glob);
@@ -65,7 +67,7 @@ class LocalFileSourceTest {
     @Test
     void open_returns_streaming_inputstream() throws Exception {
         Files.write(dir.resolve("data.csv"), "hello,world".getBytes());
-        var source = new LocalFileSource(dir.toString() + "/*.csv");
+        var source = new LocalFileSource(LocalRoot.at(dir), dir.toString() + "/*.csv");
         var desc = source.listSince(Instant.EPOCH).findFirst().orElseThrow();
         try (InputStream in = source.open(desc)) {
             assertEquals("hello,world", new String(in.readAllBytes()));
@@ -75,7 +77,7 @@ class LocalFileSourceTest {
     @Test
     void markProcessed_delete_removes_file() throws Exception {
         Path f = Files.write(dir.resolve("doomed.csv"), "x".getBytes());
-        var source = new LocalFileSource(dir.toString() + "/*.csv");
+        var source = new LocalFileSource(LocalRoot.at(dir), dir.toString() + "/*.csv");
         var desc = source.listSince(Instant.EPOCH).findFirst().orElseThrow();
         source.markProcessed(desc, AfterProcessAction.DELETE, Map.of());
         assertFalse(Files.exists(f));
@@ -84,7 +86,7 @@ class LocalFileSourceTest {
     @Test
     void markProcessed_leave_is_noop() throws Exception {
         Path f = Files.write(dir.resolve("kept.csv"), "x".getBytes());
-        var source = new LocalFileSource(dir.toString() + "/*.csv");
+        var source = new LocalFileSource(LocalRoot.at(dir), dir.toString() + "/*.csv");
         var desc = source.listSince(Instant.EPOCH).findFirst().orElseThrow();
         source.markProcessed(desc, AfterProcessAction.LEAVE, Map.of());
         assertTrue(Files.exists(f));
@@ -94,7 +96,7 @@ class LocalFileSourceTest {
     void openAt_starts_stream_exactly_at_the_requested_byte_offset() throws Exception {
         String content = "0123456789ABCDEFGHIJ"; // 20 bytes, ASCII so byte offset == char offset
         Files.write(dir.resolve("seek.csv"), content.getBytes());
-        var source = new LocalFileSource(dir.toString() + "/*.csv");
+        var source = new LocalFileSource(LocalRoot.at(dir), dir.toString() + "/*.csv");
         var desc = source.listSince(Instant.EPOCH).findFirst().orElseThrow();
 
         try (InputStream in = source.openAt(desc, 10)) {
@@ -106,7 +108,7 @@ class LocalFileSourceTest {
     @Test
     void openAt_zero_offset_yields_the_whole_file() throws Exception {
         Files.write(dir.resolve("zero.csv"), "hello,world".getBytes());
-        var source = new LocalFileSource(dir.toString() + "/*.csv");
+        var source = new LocalFileSource(LocalRoot.at(dir), dir.toString() + "/*.csv");
         var desc = source.listSince(Instant.EPOCH).findFirst().orElseThrow();
 
         try (InputStream in = source.openAt(desc, 0)) {
@@ -117,7 +119,7 @@ class LocalFileSourceTest {
     @Test
     void openAt_offset_at_eof_yields_an_empty_stream() throws Exception {
         Files.write(dir.resolve("eof.csv"), "hello".getBytes());
-        var source = new LocalFileSource(dir.toString() + "/*.csv");
+        var source = new LocalFileSource(LocalRoot.at(dir), dir.toString() + "/*.csv");
         var desc = source.listSince(Instant.EPOCH).findFirst().orElseThrow();
 
         try (InputStream in = source.openAt(desc, 5)) {
@@ -128,9 +130,49 @@ class LocalFileSourceTest {
     @Test
     void openAt_negative_offset_throws_rather_than_silently_starting_at_zero() throws Exception {
         Files.write(dir.resolve("neg.csv"), "hello".getBytes());
-        var source = new LocalFileSource(dir.toString() + "/*.csv");
+        var source = new LocalFileSource(LocalRoot.at(dir), dir.toString() + "/*.csv");
         var desc = source.listSince(Instant.EPOCH).findFirst().orElseThrow();
 
         assertThrows(IllegalArgumentException.class, () -> source.openAt(desc, -1));
+    }
+
+    // ── #2001: confined to lumnik.csv.local-root ──────────────────────────────────────────────────
+
+    @Test
+    void a_folder_outside_the_root_is_refused_when_the_source_is_built() throws Exception {
+        Path drop = Files.createDirectories(dir.resolve("drop"));
+        assertThrows(ConfigValidationException.class, () -> new LocalFileSource(LocalRoot.at(drop), "/etc/hostname"));
+        assertThrows(ConfigValidationException.class, () -> new LocalFileSource(LocalRoot.at(drop), "/etc/*.conf"));
+        assertThrows(ConfigValidationException.class,
+            () -> new LocalFileSource(LocalRoot.at(drop), drop + "/../*.csv"));
+        assertThrows(ConfigValidationException.class,
+            () -> new LocalFileSource(LocalRoot.of(Optional.empty()), drop + "/*.csv"), "unset: the local transport is off");
+    }
+
+    @Test
+    void a_file_symlinked_out_of_the_root_is_not_listed_nor_statted() throws Exception {
+        Path drop = Files.createDirectories(dir.resolve("drop"));
+        Path secret = Files.write(Files.createDirectories(dir.resolve("outside")).resolve("secret.csv"), "s".getBytes());
+        Files.createSymbolicLink(drop.resolve("link.csv"), secret);
+        Files.write(drop.resolve("own.csv"), "x".getBytes());
+
+        var source = new LocalFileSource(LocalRoot.at(drop), drop + "/*.csv");
+        assertEquals(List.of("own.csv"), source.listSince(Instant.EPOCH).map(FileDescriptor::name).toList());
+        assertTrue(source.stat(drop.resolve("link.csv").toString()).isEmpty());
+    }
+
+    @Test
+    void markProcessed_move_refuses_an_archive_outside_the_root() throws Exception {
+        Path drop = Files.createDirectories(dir.resolve("drop"));
+        Path f = Files.write(drop.resolve("a.csv"), "x".getBytes());
+        var source = new LocalFileSource(LocalRoot.at(drop), drop + "/*.csv");
+        FileDescriptor d = source.listSince(Instant.EPOCH).findFirst().orElseThrow();
+
+        assertThrows(ConfigValidationException.class, () -> source.markProcessed(d, AfterProcessAction.MOVE,
+            Map.of("archive_path", dir.resolve("elsewhere").toString())));
+        assertTrue(Files.exists(f), "the file stays where it was");
+
+        source.markProcessed(d, AfterProcessAction.MOVE, Map.of("archive_path", drop.resolve("archive").toString()));
+        assertFalse(Files.exists(f));
     }
 }

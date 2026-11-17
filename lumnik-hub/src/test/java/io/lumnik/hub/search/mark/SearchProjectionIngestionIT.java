@@ -59,7 +59,7 @@ class SearchProjectionIngestionIT {
         long tenant = 701_401;
         String entityName = "SearchIngest701A" + System.nanoTime();
         String table = "t_search_ingest_701a_" + System.nanoTime();
-        createMatchSourceTable(adminDs, table);
+        createMatchSourceTable(adminDs, tenant, table);
 
         yaml(tenant).body(entityManifest(entityName, table, List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
@@ -89,7 +89,7 @@ class SearchProjectionIngestionIT {
         long tenant = 701_402;
         String entityName = "SearchIngest701B" + System.nanoTime();
         String table = "t_search_ingest_701b_" + System.nanoTime();
-        createMatchSourceTable(adminDs, table);
+        createMatchSourceTable(adminDs, tenant, table);
 
         yaml(tenant).body(entityManifest(entityName, table, List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
@@ -120,7 +120,7 @@ class SearchProjectionIngestionIT {
         long tenant = 701_403;
         String entityName = "SearchIngest701C" + System.nanoTime();
         String table = "t_search_ingest_701c_" + System.nanoTime();
-        createMatchSourceTable(adminDs, table);
+        createMatchSourceTable(adminDs, tenant, table);
 
         yaml(tenant).body(entityManifest(entityName, table, List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
@@ -182,7 +182,7 @@ class SearchProjectionIngestionIT {
     void twoEntitiesSharingOneSourceTableBothGetMarkedFromTheSameScan() throws Exception {
         long tenant = 701_405;
         String table = "t_search_ingest_701e_shared_" + System.nanoTime();
-        createMatchSourceTable(adminDs, table);
+        createMatchSourceTable(adminDs, tenant, table);
 
         String entityA = "SearchIngest701EA" + System.nanoTime();
         String entityB = "SearchIngest701EB" + System.nanoTime();

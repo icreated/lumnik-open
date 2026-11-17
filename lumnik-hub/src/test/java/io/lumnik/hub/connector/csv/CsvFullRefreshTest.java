@@ -1,25 +1,32 @@
 package io.lumnik.hub.connector.csv;
 
+import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
 import io.lumnik.hub.connector.api.types.RunScope;
 import io.lumnik.hub.connector.api.types.StreamEnd;
+import io.lumnik.hub.connector.api.types.SyncMode;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.mapping.writer.UnseenRowSweeper;
+import io.lumnik.hub.connector.transport.LocalRoot;
+import io.lumnik.hub.connector.transport.LocalRoots;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.Mockito;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.attribute.FileTime;
+import java.time.Clock;
 import java.util.List;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -75,7 +82,7 @@ class CsvFullRefreshTest {
 
     reader(file).read(500, ConnectorCursor.empty(), ReaderTestContexts.of(scope));
 
-    CsvFullRefresh.Pass pass = scope.get(file);
+    CsvFullRefresh.Pass pass = scope.pass();
     assertThat(pass.fromStart).isTrue();
     assertThat(pass.events).isEqualTo(3);
   }
@@ -91,7 +98,7 @@ class CsvFullRefreshTest {
     MapScope scope = new MapScope();
     reader(file).read(500, midFile, ReaderTestContexts.of(scope));
 
-    assertThat(scope.get(file).fromStart).as("the first two rows were met by another run").isFalse();
+    assertThat(scope.pass().fromStart).as("the first two rows were met by another run").isFalse();
   }
 
   @Test
@@ -105,7 +112,7 @@ class CsvFullRefreshTest {
     Files.writeString(file, "id,name\n9,z\n1,a\n2,b\n3,c\n");   // rewritten while the run reads it
     reader(file).read(500, midFile, ReaderTestContexts.of(scope));
 
-    assertThat(scope.get(file).changed).as("the run met parts of two versions").isTrue();
+    assertThat(scope.pass().changed).as("the run met parts of two versions").isTrue();
   }
 
   @Test
@@ -115,8 +122,8 @@ class CsvFullRefreshTest {
     Path file = dir.resolve("ref.csv");
     Files.writeString(file, "id,name\n1,a\n2,b\n3,c\n");
     MapScope scope = new MapScope();
-    var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(),
-        CsvFileConnectorType.buildParserOverrides(Map.of("has_header", true)), true) {
+    var reader = new CsvFileConnectorType.CsvGlobCursorReader(GlobReaders.ANYWHERE, file.toString(),
+        CsvFileConnectorType.buildParserOverrides(Map.of("has_header", true)), true, false) {
       @Override
       Walk fillChunk(List<Map<String, Object>> chunk, int chunkSize, int fileIndex, CsvCursor start) {
         Walk walk = super.fillChunk(chunk, chunkSize, fileIndex, start);
@@ -132,16 +139,41 @@ class CsvFullRefreshTest {
 
     reader.read(500, ConnectorCursor.empty(), ReaderTestContexts.of(scope));
 
-    assertThat(scope.get(file).changed).as("the run read a file that was being rewritten").isTrue();
+    assertThat(scope.pass().changed).as("the run read a file that was being rewritten").isTrue();
   }
 
   private static CsvFileConnectorType.CsvGlobCursorReader reader(Path file) {
-    return new CsvFileConnectorType.CsvGlobCursorReader(file.toString(),
+    return GlobReaders.of(file.toString(),
         CsvFileConnectorType.buildParserOverrides(Map.of("has_header", true)), true);
   }
 
   private static Map<String, Object> transport(String kind, String path) {
     return Map.of("transport", Map.of("kind", kind, "path", path));
+  }
+
+  /**
+   * #2001: the manifest writes the file relative to its tenant's folder, the reader reads the absolute path it names.
+   * The run's record of its pass must be found by the end of the stream all the same — it was keyed by the path once,
+   * and the two sides held it in two forms: nothing was ever removed.
+   */
+  @Test
+  void a_relative_path_still_reaches_the_sweep(@TempDir Path drop) throws Exception {
+    Files.createDirectories(drop.resolve("1"));
+    Files.writeString(drop.resolve("1/ref.csv"), "id,name\n1,a\n2,b\n");
+    CsvFileConnectorType type = new CsvFileConnectorType();
+    type.localRoots = new LocalRoots(LocalRoot.at(drop));
+    type.sweeper = Mockito.mock(UnseenRowSweeper.class);
+    Mockito.when(type.sweeper.count(Mockito.any(), Mockito.anyLong(), Mockito.any(), Mockito.any()))
+        .thenReturn(new UnseenRowSweeper.Count(2, 2, 0));
+    MapScope scope = new MapScope();
+    ConnectorContext ctx = new ConnectorContext(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1L, "ref",
+        CsvFileConnectorType.TYPE_ID, Map.of("name", "ref", "transport", Map.of("kind", "local", "path", "ref.csv")),
+        new SyncMode.Incremental(), null, null, Clock.systemUTC(), null, scope);
+
+    type.reader(ctx).read(500, ConnectorCursor.empty(), ctx);
+    type.endOfStream(ctx);
+
+    Mockito.verify(type.sweeper).count(Mockito.any(), Mockito.eq(1L), Mockito.any(), Mockito.any());
   }
 
   /** A scope that keeps what it built, so the test can read the run's record of its pass. */
@@ -159,8 +191,9 @@ class CsvFullRefreshTest {
       held.remove(key);
     }
 
-    CsvFullRefresh.Pass get(Path file) {
-      return (CsvFullRefresh.Pass) held.get(new CsvFullRefresh.PassKey(file.toString()));
+    /** The run's one pass: a full refresh has one file per run (#1195). */
+    CsvFullRefresh.Pass pass() {
+      return (CsvFullRefresh.Pass) held.get(new CsvFullRefresh.PassKey());
     }
   }
 }

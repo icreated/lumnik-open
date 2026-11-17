@@ -3,6 +3,7 @@ package io.lumnik.hub.connector.transport.s3;
 import io.lumnik.hub.connector.secret.SecretRefs;
 import io.lumnik.hub.connector.transport.FileSource;
 import io.lumnik.hub.connector.transport.FileSourceFactory;
+import io.lumnik.hub.outbound.OutboundAddress;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -12,10 +13,12 @@ import java.util.Map;
 public class S3FileSourceFactory implements FileSourceFactory {
 
     private final SecretRefs secrets;
+    private final OutboundAddress addresses;
 
     @Inject
-    public S3FileSourceFactory(SecretRefs secrets) {
+    public S3FileSourceFactory(SecretRefs secrets, OutboundAddress addresses) {
         this.secrets = secrets;
+        this.addresses = addresses;
     }
 
     @Override
@@ -28,6 +31,6 @@ public class S3FileSourceFactory implements FileSourceFactory {
         String bucket = (String) cfg.get("bucket");
         String prefix = (String) cfg.getOrDefault("prefix", "");
         String suffix = (String) cfg.getOrDefault("suffix", "");
-        return new S3FileSource(S3Clients.build(cfg, secrets), bucket, prefix, suffix);
+        return new S3FileSource(S3Clients.build(cfg, secrets, addresses), bucket, prefix, suffix);
     }
 }

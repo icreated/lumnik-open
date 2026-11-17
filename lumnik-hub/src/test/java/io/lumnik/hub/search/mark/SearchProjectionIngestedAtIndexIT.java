@@ -67,7 +67,7 @@ class SearchProjectionIngestedAtIndexIT {
     private String observedTable(long tenant, String label) throws Exception {
         String entityName = "SearchIdx945" + label + System.nanoTime();
         String table = "t_search_idx_945" + label.toLowerCase() + "_" + System.nanoTime();
-        createMatchSourceTable(adminDs, table);
+        createMatchSourceTable(adminDs, tenant, table);
         yaml(tenant).body(entityManifest(entityName, table, List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
         yaml(tenant).body(searchIndex(unique("ing-idx"), entityName, "name"))

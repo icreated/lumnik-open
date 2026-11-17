@@ -11,7 +11,7 @@ metadata:
 spec:
   transport:
     kind: local
-    path: docs/connectors/csv/data/bank-statement.csv
+    path: bank-statement.csv
   parser:
     has_header: true
   after_process: none

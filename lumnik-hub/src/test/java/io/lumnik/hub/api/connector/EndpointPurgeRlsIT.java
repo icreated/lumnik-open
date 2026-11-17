@@ -41,10 +41,12 @@ class EndpointPurgeRlsIT {
         UUID cid = UUID.randomUUID();
         UUID eid = UUID.randomUUID();
         String table = "hybrid_noprivs_" + System.nanoTime();
-        exec("CREATE TABLE connector.\"" + table + "\" (id bigint, endpoint_id uuid)");
+        // A table the hybrid writer made and recorded: purge deletes from nothing else (#1989, #2010).
+        exec("CREATE TABLE connector.\"" + table + "\" (id bigint, tenant_id bigint, external_id text, data jsonb, connector_id uuid, endpoint_id uuid, UNIQUE (tenant_id, external_id))");
+        exec("INSERT INTO connector.hybrid_table (table_schema, table_name) VALUES ('connector', '" + table + "')");
         try {
             exec("REVOKE ALL ON connector.\"" + table + "\" FROM lumnik_app, PUBLIC");
-            exec("INSERT INTO connector.\"" + table + "\" VALUES (1, '" + eid + "')");
+            exec("INSERT INTO connector.\"" + table + "\" (id, endpoint_id) VALUES (1, '" + eid + "')");
             exec("INSERT INTO connector.connector (id, tenant_id, name, type_id) VALUES ('"
                 + cid + "', " + TENANT + ", 'purge-noprivs-" + cid + "', 'rest-generic')");
             exec("INSERT INTO connector.connector_endpoint (id, connector_id, tenant_id, name, path, config) VALUES ('"
@@ -62,6 +64,7 @@ class EndpointPurgeRlsIT {
         } finally {
             exec("DELETE FROM connector.connector WHERE id = '" + cid + "'");
             exec("DROP TABLE IF EXISTS connector.\"" + table + "\"");
+            exec("DELETE FROM connector.hybrid_table WHERE table_name = '" + table + "'");
         }
     }
 

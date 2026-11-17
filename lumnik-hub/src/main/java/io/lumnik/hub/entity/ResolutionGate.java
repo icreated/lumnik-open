@@ -2,6 +2,7 @@ package io.lumnik.hub.entity;
 
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.ws.rs.WebApplicationException;
 
 /**
@@ -22,7 +23,7 @@ public final class ResolutionGate {
    * same asymmetry every other write/read door in the hub already applies.
    */
   public static EntityManifest requireResolvable(EntityRegistry registry, String name, boolean writeAccess) {
-    EntityManifest m = registry.findReloadingIfMissing(name);
+    EntityManifest m = registry.findReloadingIfMissing(RequireTenant.current(), name);
     if (m == null) {
       throw new WebApplicationException(ApiErrors.notFound("entity '" + name + "' not found"));
     }

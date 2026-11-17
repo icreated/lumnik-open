@@ -24,12 +24,12 @@ import { probeSearch } from './search.mjs';
 // that throws keeps it (a failed read proves nothing about absence).
 //
 // ctx, built by the shell on every render: api, views, scope, can(id), openTab(id), setCount(text),
-// setBadge(id, n), chatLog, setChatLog. A boot(ctx) gets the quiet subset the shell has at start-up:
+// setBadge(id, n), chatLog, setChatLog, mapBackground (#2057: the operator's tile server or null). A boot(ctx) gets the quiet subset the shell has at start-up:
 // api, views, scope, can(id) and setBadge.
 export const TABS = [
   {
     id: 'fiches', label: 'Fiches', icon: '▦',
-    screen: (ctx) => html`<${Fiches} views=${ctx.views} onCount=${ctx.setCount} />`,
+    screen: (ctx) => html`<${Fiches} views=${ctx.views} onCount=${ctx.setCount} mapBackground=${ctx.mapBackground} />`,
   },
   {
     id: 'inbox', label: 'Décisions', icon: '⚡',

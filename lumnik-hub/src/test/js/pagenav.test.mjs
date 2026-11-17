@@ -10,7 +10,7 @@ test('Fiches draws ONE PageNav definition twice — above and below the results 
   assert.equal((src.match(/<\$\{PageNav\}/g) || []).length, 1, 'the controls are defined once');
   assert.match(src, /pageNav\('haut'\)/);
   assert.match(src, /pageNav\('bas'\)/);
-  const top = src.indexOf("pageNav('haut')"), rows = src.indexOf('<${Table}'), bottom = src.indexOf("pageNav('bas')");
+  const top = src.indexOf("pageNav('haut')"), rows = src.indexOf('rowsOf(result.columns'), bottom = src.indexOf("pageNav('bas')");
   assert.ok(top > 0 && top < rows && rows < bottom, 'haut < résultats < bas');
   for (const call of ['pagerRef.current.first()', 'pagerRef.current.prev()', 'pagerRef.current.next()'])
     assert.equal(src.split(call).length - 1, 1, `${call} is wired once`);

@@ -3,69 +3,58 @@ package io.lumnik.hub.connector.rest.auth;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.secret.SecretRefs;
 import io.lumnik.hub.connector.rest.RestRequest;
-import io.lumnik.hub.secret.SecretResolver;
+import io.lumnik.hub.secret.SecretAudience;
+import io.lumnik.hub.testsupport.TestSecrets;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
-import jakarta.persistence.EntityManager;
-import jakarta.transaction.UserTransaction;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
+/** Read as a scopeless connector's: the tenant's own, served by every secret of the tenant (#2015). */
 @QuarkusTest
 class AuthProviderLayeredResolutionTest {
 
-    @Inject SecretResolver resolver;
-    @Inject EntityManager em;
-    @Inject UserTransaction utx;
+    @Inject SecretRefs refs;
+    @Inject TestSecrets secrets;
 
     @Test
-    void db_secret_beats_env_var_fallback() throws Exception {
-        // Seed DB: token name LAYERED_TEST_BEARER → "from-db"
-        TenantContext.runAsSystem(() -> {
-            try {
-                utx.begin();
-                em.createNativeQuery("SET LOCAL app.current_tenant = 1").executeUpdate();
-                em.createNativeQuery(
-                    "INSERT INTO platform.secret(id, tenant_id, org_id, name, value_encrypted) " +
-                    "VALUES (gen_random_uuid(), 1, 0, 'LAYERED_TEST_BEARER', " +
-                    "        pgp_sym_encrypt('from-db', 'master-key-test-ok', 'cipher-algo=aes256'))"
-                ).executeUpdate();
-                utx.commit();
-            } catch (Exception e) {
-                try { utx.rollback(); } catch (Exception ignored) {}
-                throw new RuntimeException(e);
-            }
-        });
+    void a_token_env_resolves_from_the_tenants_registry() {
+        secrets.put(1L, "LAYERED_TEST_BEARER", "from-db");
 
-        // Build factory with env lookup that would return "from-env" if used
-        var factory = new BearerAuthProviderFactory(new SecretRefs(
-            resolver,
-            name -> "LAYERED_TEST_BEARER".equals(name) ? "from-env" : null));
+        var factory = new BearerAuthProviderFactory(refs);
 
-        TenantContext.callAs(1L, () -> {
+        TenantContext.callAs(1L, () -> SecretAudience.get(List.of(), () -> {
             var spec = new AuthSpec("bearer", Map.of("token_env", "LAYERED_TEST_BEARER"), null);
             AuthProvider p = factory.build(spec);
             RestRequest signed = p.apply(RestRequest.get("https://x"));
-            // DB value wins over env
             assertEquals("Bearer from-db", signed.headers().get("Authorization"));
             return null;
-        });
+        }));
     }
 
+    /**
+     * #2000: a name the registry does not hold sends no credential, whatever the hub's process holds under it — the
+     * registry's master key, or a JVM property. The production wiring, not a stub: {@link SecretRefs} as injected.
+     */
     @Test
-    void env_var_fallback_when_db_miss() {
-        var factory = new BearerAuthProviderFactory(new SecretRefs(
-            resolver,
-            name -> "NOT_IN_DB_BEARER".equals(name) ? "from-env-only" : null));
-
-        TenantContext.callAs(1L, () -> {
-            var spec = new AuthSpec("bearer", Map.of("token_env", "NOT_IN_DB_BEARER"), null);
-            AuthProvider p = factory.build(spec);
-            RestRequest signed = p.apply(RestRequest.get("https://x"));
-            assertEquals("Bearer from-env-only", signed.headers().get("Authorization"));
-            return null;
-        });
+    void the_hubs_environment_is_never_sent() {
+        String property = "LUMNIK_LAYERED_TEST_2000";
+        System.setProperty(property, "from-a-jvm-property");
+        try {
+            var factory = new BearerAuthProviderFactory(refs);
+            for (String name : List.of("LUMNIK_SECRET_MASTER_KEY", "PATH", property)) {
+                TenantContext.callAs(1L, () -> SecretAudience.get(List.of(), () -> {
+                    AuthProvider p = factory.build(new AuthSpec("bearer", Map.of("token_env", name), null));
+                    assertNull(p.apply(RestRequest.get("https://x")).headers().get("Authorization"), name);
+                    assertThrows(AuthConfigException.class, p::probe, name);
+                    return null;
+                }));
+            }
+        } finally {
+            System.clearProperty(property);
+        }
     }
 }

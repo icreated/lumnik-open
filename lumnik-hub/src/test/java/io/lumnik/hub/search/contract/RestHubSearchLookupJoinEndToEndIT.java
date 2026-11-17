@@ -61,8 +61,8 @@ class RestHubSearchLookupJoinEndToEndIT {
         String n = String.valueOf(System.nanoTime());
         String products = "t_e2e_lk_p_" + n;
         lookup = "t_e2e_lk_c_" + n;
-        createTable(adminDs, products, "pid text, cid text, pname text");
-        createTable(adminDs, lookup, "cid text, cname text");
+        createTable(adminDs, t, products, "pid text, cid text, pname text");
+        createTable(adminDs, t, lookup, "cid text, cname text");
         String entity = "E2eLookup" + n;
         apply("/api/entities/apply", joinEntityYaml(entity, products, lookup, "category_name"));
         apply("/api/search-indexes/apply", searchIndex("e2e-lookup-" + n, entity, "product_name", "category_name"));

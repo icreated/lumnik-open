@@ -7,7 +7,6 @@ import io.lumnik.hub.connector.mapping.ScalarParams;
 import io.lumnik.hub.connector.mapping.hooks.CellHook;
 import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.HookId;
-import io.lumnik.hub.json.JsonNodes;
 import jakarta.enterprise.context.ApplicationScoped;
 
 import java.nio.charset.StandardCharsets;
@@ -47,6 +46,9 @@ import java.util.UUID;
 @HookId("to-uuid")
 public class ToUuidHook implements CellHook {
 
+  private static final String NOT_A_UUID = "not a UUID";
+  private static final String NOTHING_TO_DERIVE = "nothing to derive it from";
+
   /** The closed set of {@code on-invalid} answers. Enumerated ONCE — see {@link #of}. */
   private enum OnInvalid {
     NULL, GENERATE, KEEP;
@@ -73,8 +75,8 @@ public class ToUuidHook implements CellHook {
     ScalarParams.optionalBoolean("to-uuid hook", "generate", params.path("generate"), false);
     JsonNode from = params.path("generate-from");
     if (from.isMissingNode() || from.isNull()) return;
-    if (!JsonNodes.nonBlank(from) || from.asText().equals(params.path("column").asText())) {
-      String got = from.isTextual() ? "'" + from.asText() + "'" : MappingValidationException.typeName(from);
+    if (!ScalarParams.isText(from) || from.asText().isBlank() || from.asText().equals(params.path("column").asText())) {
+      String got = ScalarParams.isText(from) ? "'" + from.asText() + "'" : MappingValidationException.typeName(from);
       throw new MappingValidationException(
           "to-uuid hook: 'generate-from' must name a column other than the id column (got " + got + ")");
     }
@@ -84,7 +86,7 @@ public class ToUuidHook implements CellHook {
   public void apply(Map<String, Object> row, JsonNode params, MappingState s) {
     String col = params.path("column").asText();
     OnInvalid onInvalid = OnInvalid.of(params);
-    String from = params.path("generate-from").isTextual() ? params.path("generate-from").asText() : null;
+    String from = ScalarParams.isText(params.path("generate-from")) ? params.path("generate-from").asText() : null;
 
     Object v = row.get(col);
     if (v == null) {
@@ -93,7 +95,7 @@ public class ToUuidHook implements CellHook {
       if (params.path("generate").asBoolean(false) || from != null) {
         String minted = mint(row, from, col);
         row.put(col, minted);
-        if (minted == null) s.counters().cellErrors().incrementAndGet();   // nothing to derive it from
+        if (minted == null) s.refuseCell(NOTHING_TO_DERIVE);
       }
       return;
     }
@@ -101,13 +103,17 @@ public class ToUuidHook implements CellHook {
     if (isUuid(v.toString())) return;   // well-formed - never touched
 
     // A switch EXPRESSION over the enum, so the compiler refuses a new mode that forgets to say
-    // whether it counts. A statement switch would let it fall through to the increment in silence.
-    boolean counted = switch (onInvalid) {
-      case NULL -> { row.put(col, null); yield true; }
-      case GENERATE -> { row.put(col, mint(row, from, col)); yield true; }
-      case KEEP -> false;               // the source value is still exactly there
+    // why it refuses the cell, or that it does not. A statement switch would let it fall through in silence.
+    String refusal = switch (onInvalid) {
+      case NULL -> { row.put(col, null); yield NOT_A_UUID; }
+      case GENERATE -> {
+        String minted = mint(row, from, col);
+        row.put(col, minted);
+        yield minted == null ? NOTHING_TO_DERIVE : NOT_A_UUID;
+      }
+      case KEEP -> null;               // the source value is still exactly there
     };
-    if (counted) s.counters().cellErrors().incrementAndGet();
+    if (refusal != null) s.refuseCell(refusal);
   }
 
   /** A random id, or with {@code generate-from} the same id for the same value; null when that value is empty. */
@@ -147,7 +153,7 @@ public class ToUuidHook implements CellHook {
     // An absent id column is minted only with `generate` or `generate-from`; otherwise the hook reads it, and one
     // that does not exist would leave it doing nothing.
     ColumnEffect.Builder b = ColumnEffect.builder().reads("generate-from", params.path("generate-from"));
-    boolean mints = params.path("generate").asBoolean(false) || params.path("generate-from").isTextual();
+    boolean mints = params.path("generate").asBoolean(false) || ScalarParams.isText(params.path("generate-from"));
     return (mints ? b.adds(params.path("column")) : b.reads("column", params.path("column"))).build();
   }
 }

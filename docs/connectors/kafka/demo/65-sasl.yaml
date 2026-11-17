@@ -1,7 +1,8 @@
 # 65-sasl.yaml — SASL/PLAIN credentials, by name.
 #
 # Neither the username nor the password is in this file: `username_env` and `password_env`
-# name secrets (`lm secret set ACME_KAFKA_USER`, `lm secret set ACME_KAFKA_PW`).
+# name secrets (`lm secret set ACME_KAFKA_USER`, `lm secret set ACME_KAFKA_PW`), each
+# serving this connector's scope (`lm secret scope ACME_KAFKA_PW billing`).
 # `security_protocol`: SASL_SSL (the default), or SASL_PLAINTEXT for a broker without TLS.
 #
 # The demo broker authenticates nobody, so this manifest cannot complete against it. It shows

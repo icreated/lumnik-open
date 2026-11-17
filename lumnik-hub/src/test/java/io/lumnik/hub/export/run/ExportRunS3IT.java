@@ -14,6 +14,7 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 
 import java.net.URI;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -49,19 +50,17 @@ class ExportRunS3IT extends ExportRunScenarios {
             .forcePathStyle(true)
             .build();
         admin.createBucket(b -> b.bucket(BUCKET));
-        // SecretRefs falls back to a JVM system property when the tenant registry has no entry.
-        System.setProperty(ACCESS_ENV, ACCESS);
-        System.setProperty(SECRET_ENV, SECRET);
-        System.setProperty(WRONG_ENV, WRONG_SECRET);
     }
 
     @AfterAll
     static void stopMinio() {
-        System.clearProperty(ACCESS_ENV);
-        System.clearProperty(SECRET_ENV);
-        System.clearProperty(WRONG_ENV);
         if (admin != null) admin.close();
         if (minio != null) minio.stop();
+    }
+
+    @Override
+    Map<String, String> secrets() {
+        return Map.of(ACCESS_ENV, ACCESS, SECRET_ENV, SECRET, WRONG_ENV, WRONG_SECRET);
     }
 
     @Override

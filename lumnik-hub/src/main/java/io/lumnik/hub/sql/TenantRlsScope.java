@@ -91,8 +91,10 @@ public final class TenantRlsScope {
         // default_transaction_read_only=on and SELECT-only grants — the physical firewall
         // is the role, not a driver flag. TenantRlsScopeEnlistedIT pins the enlisted posture.
         try (Statement st = c.createStatement()) {
-            st.execute("SET LOCAL app.current_tenant = '" + tenantId + "'");
-            st.execute("SET LOCAL search_path = ''");
+            // These three in one round-trip (the zone follows, shared with other readers). standard_conforming_strings (#1988): a backslash in a plain string is data only under it,
+            // which is how the SQL guards' lexer reads it — pinned, not trusted to the server's default or the session.
+            st.execute("SET LOCAL app.current_tenant = '" + tenantId + "'; SET LOCAL search_path = ''; "
+                + "SET LOCAL standard_conforming_strings = on");
         }
         TemporalText.utcSession(c);
     }

@@ -13,6 +13,7 @@
 # XML has no types: `promote` gives each column its type.
 #
 #   lm secret set ACME_BASIC_PW        # the demo API answers to demo-user / demo-pass
+#   lm secret scope ACME_BASIC_PW billing   # this connector's scope
 #
 # Expect: 2 400 rows in ext.acme_soap_partners, read 500 at a time.
 

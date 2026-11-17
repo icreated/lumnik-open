@@ -9,6 +9,7 @@ import io.lumnik.hub.entity.EntityRegistry;
 import io.lumnik.hub.search.mark.MarkRow;
 import io.lumnik.hub.search.mark.MatchKeyEncoding;
 import io.lumnik.hub.search.mark.SearchProjectionMarkStore;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -77,6 +78,7 @@ class SearchProjectionCatchupBacklogIT {
     /** A match entity over rows c1..c3 of a fresh table, one SearchIndex over it, built once. */
     private String builtIndex(long tenant, String entity, String table) throws Exception {
         createMatchTable(table);
+        RegisteredTables.register(adminDs, tenant, table);
         yaml(tenant).body(matchEntityYaml(entity, table, "city")).post("/api/entities/apply").then().statusCode(200);
         for (String code : List.of("c1", "c2", "c3")) {
             execute("INSERT INTO connector." + table + " (tenant_id, src_code, src_name, src_city) VALUES (?, ?, ?, 'Lyon')",

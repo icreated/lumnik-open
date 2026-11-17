@@ -51,9 +51,9 @@ class SearchProjectionResolvedLookupSharedTableIT {
     private Fx fixture(long tenant) throws Exception {
         String n = String.valueOf(System.nanoTime());
         String lookup = "t_rs_c_" + n, mp = "t_rs_mp_" + n, rp = "t_rs_rp_" + n;
-        createTable(adminDs, lookup, "cid text, cname text");
-        createTable(adminDs, mp, "pid text, cid text, pname text");
-        createTable(adminDs, rp, "pid text, cid text, pname text");
+        createTable(adminDs, tenant, lookup, "cid text, cname text");
+        createTable(adminDs, tenant, mp, "pid text, cid text, pname text");
+        createTable(adminDs, tenant, rp, "pid text, cid text, pname text");
         String me = "ResShareMatch" + n, re = "ResShareRes" + n;
         yaml(tenant).body(joinEntityYaml(me, mp, lookup, "category_label")).post("/api/entities/apply").then().statusCode(200);
         yaml(tenant).body(resolutionJoinEntityYaml(re, rp, lookup, "category_label")).post("/api/entities/apply").then().statusCode(200);

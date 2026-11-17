@@ -19,8 +19,11 @@ import io.lumnik.hub.connector.event.ConnectorRunCompleted;
 import io.lumnik.hub.connector.event.RunTableStats;
 import io.lumnik.hub.connector.registry.ConnectorTypeRegistry;
 import io.lumnik.hub.event.EventOutboxRow;
+import io.lumnik.hub.outbound.OutboundRefusedException;
 import io.lumnik.hub.process.ProcessManifestStore;
 import io.lumnik.hub.scheduler.TenantScope;
+import io.lumnik.hub.secret.SecretAudience;
+import io.lumnik.hub.secret.SecretNotServedException;
 import io.lumnik.hub.connector.repository.ConnectorCursorEntityRepository;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
@@ -779,7 +782,9 @@ public class ConnectorEngine {
         // empty for everything a run wrote, because no one on this thread ever filled it.
         MDC.put(MDC_RUN_ID, runId.toString());
         try {
-            return TenantScope.get(c.getTenantId(), () -> doRunEndpoint(c, endpoint, runId, lock));
+            // The connector's tags are the scopes its secrets must serve (#2015).
+            return TenantScope.get(c.getTenantId(),
+                () -> SecretAudience.get(c.getTags(), () -> doRunEndpoint(c, endpoint, runId, lock)));
         } finally {
             MDC.remove(MDC_RUN_ID);
         }
@@ -848,14 +853,17 @@ public class ConnectorEngine {
      * already holds the reader's answer — the source cannot be reached — and degrading there buys
      * nothing but a second full timeout for the same sentence: measured against a dead broker,
      * 60 s to say "reading unbounded" and 60 s more to fail, with 198 client WARN lines between
-     * them (#486). It travels up to {@code runChunks}, which fails the run at once.
+     * them (#486). It travels up to {@code runChunks}, which fails the run at once. So does
+     * {@link SecretNotServedException} (#2015) — a jdbc or kafka target reads the connector's secrets —
+     * and {@link OutboundRefusedException}, an address the hub refuses (#2002). A refusal is the run's
+     * answer, not a measure that could not be taken.
      */
     private RunStart runStartOf(ConnectorRun run, Connector c, ConnectorType type,
                                 ConnectorEndpoint endpoint, ConnectorCursor cursor, RunScope scope) {
         try {
             return chunkExecutor.runStart(run, c, type, endpoint, cursor, scope);
-        } catch (SourceUnreachableException unreachable) {
-            throw unreachable;
+        } catch (SourceUnreachableException | SecretNotServedException | OutboundRefusedException answered) {
+            throw answered;
         } catch (Exception e) {
             LOG.warnf(e, "run %s: could not measure the run's target, reading unbounded — %s: %s",
                     run.getId(), e.getClass().getSimpleName(), e.getMessage());
@@ -1110,6 +1118,9 @@ public class ConnectorEngine {
                 // TransientFailureException, and ChunkExecutor reads the same property the same way.
                 return failRun(runId, new ChunkResult.Failure(
                         unreachable.getMessage(), unreachable.getCause(), unreachable.isRetryable()));
+            } catch (SecretNotServedException | OutboundRefusedException refused) {
+                // A secret it does not serve (#2015), an address the hub refuses (#2002): final, said once.
+                return failRun(runId, new ChunkResult.Failure(refused.getMessage(), refused, false));
             }
             final RunBound bound = start.bound();
             if (bound != null) {

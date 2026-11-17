@@ -12,7 +12,7 @@ metadata:
 spec:
   transport:
     kind: local
-    path: docs/connectors/csv/data/order-lines.csv
+    path: order-lines.csv
   parser:
     has_header: true
   after_process: none

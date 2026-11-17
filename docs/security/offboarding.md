@@ -28,8 +28,8 @@ whether the account still exists.
 Do both. Your own IdP's lifespans may differ.
 
 IdP verification is off by default and costs one IdP round trip per request. On Helm, set
-`auth.verifyWithIdp=true`. The self-host compose file does not pass its variable,
-`LUMNIK_AUTH_VERIFY_WITH_IDP`, to the hub.
+`auth.verifyWithIdp=true`. On self-host, set `LUMNIK_AUTH_VERIFY_WITH_IDP=true` in `.env`, then
+run `./deploy/selfhost/up.sh`.
 
 ## The last-day checklist
 
@@ -53,6 +53,7 @@ the tenant. Check *before* the last day that the departing consultant is not the
         ```
           hubadmin: per-install password set (HUBADMIN_PASSWORD in .env)
           integrator: per-install password set (INTEGRATOR_PASSWORD in .env)
+          tenant_id and user_id: admin-only
         ```
 
       On a TLS install, run the [overlay command](../deploy.md#one-https-origin-the-tls-proxy)

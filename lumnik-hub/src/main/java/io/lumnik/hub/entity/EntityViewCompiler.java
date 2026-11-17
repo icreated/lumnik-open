@@ -7,7 +7,11 @@ import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.lumnik.hub.ask.SchemaCardRefresher;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
+import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
+import io.lumnik.hub.connector.mapping.writer.DynamicTableWriter;
+import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
 import io.lumnik.hub.sql.JoinKeys;
+import io.lumnik.hub.tenant.ManifestOwner;
 import io.lumnik.hub.view.ColumnKind;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -18,6 +22,7 @@ import org.jboss.logging.Logger;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -31,6 +36,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -83,39 +89,52 @@ public class EntityViewCompiler {
    * first it costs one statement instead of five, and does not take an ACCESS EXCLUSIVE lock on the
    * view name only to hand it straight back. The manifest row is not read by the view it compiles,
    * so nothing here depends on the old order.
+   *
+   * <p>The row is stamped with its owner ({@link ManifestOwner#of}), and another owner's row is
+   * never rewritten: that is {@code NameTaken} (#2050).
    */
-  public ScopeGuardedUpsert apply(EntityManifest m, String yaml, Set<String> callerScopes) {
+  public ScopeGuardedUpsert apply(EntityManifest m, String yaml, Set<String> callerScopes, long tenant) {
+    Caller caller = new Caller(callerScopes, tenant);
+    Long owner = ManifestOwner.of(tenant);
     ScopeGuardedUpsert outcome;
     try {
       outcome = Jdbc.transaction(adminDs, "EntityViewCompiler.apply", c -> {
         // #669: a SearchIndex write validated against this definition holds the shared side until its
         // commit; rewriting the definition waits for it, so the re-check after this apply sees it.
-        EntityDefinitionLock.exclusive(c, m.name());
+        lockDefinitions(c, m);
         // The predicate reads the EXISTING row — which in a DO UPDATE is the one spelled with the
         // table name, `excluded` being the row we proposed.
         int upserted = Jdbc.update(c, "EntityViewCompiler.apply upsert",
-            "INSERT INTO connector.entity_manifest (name, yaml_text, scopes) VALUES (?, ?, ?) "
+            "INSERT INTO connector.entity_manifest (name, yaml_text, scopes, owner_tenant_id) VALUES (?, ?, ?, ?) "
             + "ON CONFLICT (name) DO UPDATE SET yaml_text = EXCLUDED.yaml_text, "
             + "scopes = EXCLUDED.scopes, updated_at = now() "
-            + "WHERE (?::text[] IS NULL OR (connector.entity_manifest.scopes <@ ?::text[] "
+            + "WHERE connector.entity_manifest.owner_tenant_id IS NOT DISTINCT FROM EXCLUDED.owner_tenant_id "
+            + "AND (?::text[] IS NULL OR (connector.entity_manifest.scopes <@ ?::text[] "
             + "AND cardinality(connector.entity_manifest.scopes) > 0))",
             ps -> {
               ps.setString(1, m.name().toLowerCase(Locale.ROOT));
               ps.setString(2, yaml);
               ps.setArray(3, c.createArrayOf("text", m.scopes().toArray()));
-              ScopeGuardedUpsert.bindGrants(ps, 4, callerScopes);
+              ManifestOwner.bind(ps, 4, owner);
+              ScopeGuardedUpsert.bindGrants(ps, 5, callerScopes);
             });
-        // Refused before any change: committing the empty transaction only releases the lock.
+        // Refused before any change: committing the empty transaction only releases the lock. The conflicting row is
+        // locked by this transaction, so asking which predicate refused is not raced.
         if (upserted == 0) {
-          return new ScopeGuardedUpsert.NameHeldOutOfScope();
+          return Jdbc.exists(c, "EntityViewCompiler.apply owner", "SELECT 1 FROM connector.entity_manifest "
+              + "WHERE name = ? AND " + ManifestOwner.OWNED_ELSEWHERE, ps -> {
+                ps.setString(1, m.name().toLowerCase(Locale.ROOT));
+                ManifestOwner.bind(ps, 2, owner);
+              }) ? new ScopeGuardedUpsert.NameTaken() : new ScopeGuardedUpsert.NameHeldOutOfScope();
         }
-        for (EntityManifest.Source src : m.sources()) preflight(c, src);
-        for (EntityManifest.Join j : m.joins()) preflight(c, j);
+        for (EntityManifest.Source src : m.sources()) preflight(c, m.scopes(), caller, src);
+        for (EntityManifest.Join j : m.joins()) preflight(c, m.scopes(), caller, j);
         for (String sql : buildStatements(m, sources(c, m))) {
           try (Statement st = c.createStatement()) {
             st.execute(sql);
           }
         }
+        requirePointsAreNumbers(c, m);
         return new ScopeGuardedUpsert.Applied();
       });
     } catch (RuntimeException e) {
@@ -134,6 +153,22 @@ public class EntityViewCompiler {
     // roll the apply back or fail it — the recycle is best-effort and never throws.
     if (outcome instanceof ScopeGuardedUpsert.Applied) planCaches.afterEntityApplied(m.name());
     return outcome;
+  }
+
+  /**
+   * The entity's own definition lock, exclusive, and the shared one of each Entity whose view it reads (#2042), all in
+   * name order — the order {@link #reshape} takes them in, so the two never wait on each other in a cycle.
+   */
+  private static void lockDefinitions(Connection c, EntityManifest m) {
+    String self = m.name().toLowerCase(Locale.ROOT);
+    TreeSet<String> names = new TreeSet<>(List.of(self));
+    Stream.concat(m.sources().stream().map(EntityManifest.Source::table), m.joins().stream().map(EntityManifest.Join::table))
+        .map(t -> entityNameFromView(SCHEMA + "." + t)).filter(Objects::nonNull)
+        .forEach(n -> names.add(n.toLowerCase(Locale.ROOT)));
+    for (String name : names) {
+      if (name.equals(self)) EntityDefinitionLock.exclusive(c, name);
+      else EntityDefinitionLock.shared(c, name);
+    }
   }
 
   /** The first line of the first {@code 42P01} (undefined_table) in the cause chain, or null. */
@@ -155,14 +190,8 @@ public class EntityViewCompiler {
   /**
    * The inverse of {@link #apply}: DROP the entity's view and remove its manifest row, atomically
    * on the admin (BYPASSRLS) datasource. {@code DROP VIEW IF EXISTS} is idempotent, so a
-   * half-applied entity (row present, view already gone) still deletes cleanly.
-   */
-  public void delete(String name) {
-    delete(name, null);
-  }
-
-  /**
-   * As {@link #delete(String)}, plus {@code extra} run on this SAME connection before commit — for
+   * half-applied entity (row present, view already gone) still deletes cleanly. Plus {@code extra}
+   * (may be null), run on this SAME connection before commit — for
    * a caller with its own write that must land in the exact same transaction as the drop (design
    * §4 row 6: {@code EntityWriteResource.delete} purging every tenant's SearchIndex over this
    * entity). Before this overload existed, that purge ran in its own, separately-committed
@@ -171,15 +200,22 @@ public class EntityViewCompiler {
    * a purge already landed with the entity's view/manifest row not actually dropped yet if this
    * method's own DROP/DELETE then failed. {@code extra} now runs inside the same
    * commit-or-rollback boundary, closing it for real rather than narrowing it.
+   *
+   * <p>Only the Entity this tenant would own by applying it ({@link ManifestOwner#of}, #2050), asked by the DELETE itself
+   * under the definition lock: false, and nothing dropped, when another owner's holds the name.
    */
-  public void delete(String name, ConnectionWork extra) {
-    String view = viewName(name);
-    Jdbc.transaction(adminDs, "EntityViewCompiler.delete", c -> {
+  public boolean delete(long tenant, String name, ConnectionWork extra) {
+    return Jdbc.transaction(adminDs, "EntityViewCompiler.delete", c -> {
       EntityDefinitionLock.exclusive(c, name);
-      Jdbc.update(c, "EntityViewCompiler.delete drop view", "DROP VIEW IF EXISTS " + view, ps -> {});
-      Jdbc.update(c, "EntityViewCompiler.delete manifest row", "DELETE FROM connector.entity_manifest WHERE name = ?",
-          ps -> ps.setString(1, name.toLowerCase(Locale.ROOT)));
+      int removed = Jdbc.update(c, "EntityViewCompiler.delete manifest row",
+          "DELETE FROM connector.entity_manifest WHERE name = ? AND " + ManifestOwner.OWNED_BY, ps -> {
+            ps.setString(1, name.toLowerCase(Locale.ROOT));
+            ManifestOwner.bind(ps, 2, ManifestOwner.of(tenant));
+          });
+      if (removed == 0) return false;
+      Jdbc.update(c, "EntityViewCompiler.delete drop view", "DROP VIEW IF EXISTS " + viewName(name), ps -> {});
       if (extra != null) extra.run(c);
+      return true;
     });
   }
 
@@ -249,6 +285,7 @@ public class EntityViewCompiler {
         String yaml = locked.get(name);
         if (yaml == null) continue;   // deleted meanwhile: its view went with it
         EntityManifest m = parser.parse(yaml);
+        requireIngested(tx, m);   // a manifest stored before #2003 is not rebuilt over a hub table
         for (String sql : buildStatements(m, sources(tx, m))) {
           try (Statement st = tx.createStatement()) {
             st.execute(sql);
@@ -320,10 +357,15 @@ public class EntityViewCompiler {
 
   /** Names the lookup's physical columns once each; LIMIT 0 reads nothing but keeps the relation locked to commit. */
   static String preflightSql(EntityManifest.Join j) {
+    return preflightSql(j.table(), lookupColumns(j));
+  }
+
+  /** The lookup's physical columns, once each: its key, then what it maps. */
+  private static LinkedHashSet<String> lookupColumns(EntityManifest.Join j) {
     LinkedHashSet<String> cols = new LinkedHashSet<>();
     cols.add(j.to());
     cols.addAll(j.map().keySet());
-    return preflightSql(j.table(), cols);
+    return cols;
   }
 
   /** The same probe for a source: every mapped physical column, once. */
@@ -336,12 +378,131 @@ public class EntityViewCompiler {
         + " FROM " + SCHEMA + "." + quoteIdent(table) + " LIMIT 0";
   }
 
-  private void preflight(Connection c, EntityManifest.Source s) throws SQLException {
-    probe(c, preflightSql(s), dbMessage -> new MissingSourceColumnException(s.table(), dbMessage));
+  private void preflight(Connection c, List<String> scopes, Caller caller, EntityManifest.Source s) throws SQLException {
+    requireIngested(c, scopes, caller, "source", s.table());
+    Function<String, RuntimeException> missing = dbMessage -> new MissingSourceColumnException(s.table(), dbMessage);
+    requireRegistered(c, caller, s.table(), s.map().keySet(), missing);
+    probe(c, preflightSql(s), missing);
   }
 
-  private void preflight(Connection c, EntityManifest.Join j) throws SQLException {
-    probe(c, preflightSql(j), dbMessage -> new MissingLookupColumnException(j.table(), dbMessage));
+  private void preflight(Connection c, List<String> scopes, Caller caller, EntityManifest.Join j) throws SQLException {
+    requireIngested(c, scopes, caller, "lookup", j.table());
+    Function<String, RuntimeException> missing = dbMessage -> new MissingLookupColumnException(j.table(), dbMessage);
+    requireRegistered(c, caller, j.table(), lookupColumns(j), missing);
+    probe(c, preflightSql(j), missing);
+  }
+
+  /**
+   * #2023: a {@code t_*} table is one for every tenant ingesting under its name, and so are its columns. An Entity a
+   * tenant applies reads only what that tenant's own writers recorded, deny by default: a table it records none of is
+   * answered as one not made yet, a column it did not record (the writers' own columns aside) as one that does
+   * not exist — in PostgreSQL's own words, so the refusal tells nothing of another tenant. The hub's own tenant and the
+   * operator's rebuild read the table whole: what they apply is shared. Another Entity's view is judged by its owner
+   * instead (#2050).
+   */
+  /** The columns {@link DynamicTableWriter} adds to its {@code t_*} tables beside the source's: no tenant registers them. */
+  private static final Set<String> TABLE_WRITER_COLUMNS = Stream.concat(DynamicTableWriter.SYSTEM_COLUMNS.stream(),
+      Stream.of(DynamicTableWriter.SEEN_RUN)).collect(Collectors.toUnmodifiableSet());
+
+  private static void requireRegistered(Connection c, Caller caller, String table, Collection<String> columns,
+                                        Function<String, RuntimeException> missingColumn) {
+    if (caller.tenant() == null || ManifestOwner.fromTheHub(caller.tenant())) return;
+    if (entityNameFromView(SCHEMA + "." + table) != null) return;
+    DynamicTableRegistry.Columns registered = DynamicTableRegistry.columns(c, caller.tenant(), SCHEMA, table);
+    // The writer's own columns of THIS table's kind only: a name one writer reserves may be a source column elsewhere.
+    Set<String> writersOwn = DynamicTableRegistry.ownsHybridTable(c, SCHEMA, table)
+        ? HybridJsonbSpec.RESERVED_COLUMNS : TABLE_WRITER_COLUMNS;
+    if (!registered.tenantIngests()) {
+      throw new MissingSourceTableException("relation \"" + SCHEMA + "." + table + "\" does not exist");
+    }
+    for (String column : columns) {
+      if (!registered.mine().contains(column) && !writersOwn.contains(column)) {
+        throw missingColumn.apply("column \"" + column + "\" does not exist");
+      }
+    }
+  }
+
+
+  private static void requireIngested(Connection c, EntityManifest m) {
+    // the operator's rebuild: no caller to hide anything from
+    for (EntityManifest.Source s : m.sources()) requireIngested(c, m.scopes(), Caller.OPERATOR, "source", s.table());
+    for (EntityManifest.Join j : m.joins()) requireIngested(c, m.scopes(), Caller.OPERATOR, "lookup", j.table());
+  }
+
+  /**
+   * #2003: a table a connector writes — a {@code t_*} one (DynamicTableWriter's) or a REST target the hub recorded
+   * under {@code connector} — or another Entity's view ({@code v_*}, built from such tables); never one of the hub's
+   * own, which a view would hand to every reader of the Entity. A name nothing holds yet passes: it exposes nothing,
+   * and the probe after this answers it as a table its connector has not made yet (409). A bound caller is judged on
+   * the table's writers first ({@link #requireWritersCarry}): a name none of the tenant's connectors writes, made or
+   * not, a hub table included, is the uniform 403.
+   */
+  private static void requireIngested(Connection c, List<String> scopes, Caller caller, String role, String table) {
+    String entity = entityNameFromView(SCHEMA + "." + table);
+    if (entity != null) {
+      requireWithinScopes(c, scopes, caller, role, table, entity.toLowerCase(Locale.ROOT));
+      return;
+    }
+    // Before the existence check: a bound caller learns no more of a table they may not read than of one that is not.
+    if (caller.grants() != null) requireWritersCarry(c, caller.tenant(), scopes, role, table);
+    if (DynamicTableRegistry.isHubDynamicTable(SCHEMA, table)) return;   // a connector's: the probe answers the rest
+    boolean exists = Jdbc.exists(c, "EntityViewCompiler.requireIngested", "SELECT 1 WHERE to_regclass(?) IS NOT NULL",
+        ps -> ps.setString(1, SCHEMA + "." + quoteIdent(table)));
+    if (!exists) return;   // the probe answers it: a table its connector has not made yet (409)
+    if (!DynamicTableRegistry.ownsHybridTable(c, SCHEMA, table)) throw new SourceNotIngestedException(role, table);
+  }
+
+  /**
+   * #2048: a bound caller publishes a table only within its writers' scopes — {@link #requireWithinScopes}' rule for a
+   * table: every connector of the tenant writing it carries every scope the Entity declares, and one does. Entity reads
+   * ask {@code allowsAny}, so a declared scope a writer lacks would show that writer's rows to its holders. A tenant-wide
+   * caller is not asked: publishing a scoped connector's table under the scopes they choose stays their gesture.
+   */
+  private static void requireWritersCarry(Connection c, Long tenant, List<String> scopes, String role, String table) {
+    List<List<String>> writers = tenant == null ? List.of() : DynamicTableRegistry.writerTags(c, tenant, SCHEMA, table);
+    if (writers.isEmpty() || !writers.stream().allMatch(tags -> tags.containsAll(scopes))) {
+      throw new SourceNotReadableException(role, table);
+    }
+  }
+
+  /**
+   * Who asks for a compile: their grants ({@code null} = tenant-wide) and tenant (null without a tenant context), read
+   * only for a bound caller. {@link #OPERATOR} is the hub's own rebuild ({@link #reshape}), which publishes nothing new
+   * and hides nothing.
+   */
+  private record Caller(Set<String> grants, Long tenant) {
+    static final Caller OPERATOR = new Caller(null, null);
+  }
+
+  /**
+   * #2042: an Entity over another Entity's view reaches no reader that one does not. Reads ask {@code allowsAny}, so
+   * this Entity's scopes must be among the other's: a scopeless one is read by tenant-wide callers only, who read the
+   * other already. Its scopes are read under its definition lock, shared ({@link #lockDefinitions}): a re-apply
+   * narrowing them waits for this one's commit, then cannot drop the view this one reads.
+   *
+   * <p>A caller who may not read the other Entity ({@code callerScopes} meets none of its scopes; null = tenant-wide),
+   * or whose tenant does not read it (#2050), is answered as if it were not applied: the refusal never tells them it
+   * exists, nor its scopes.
+   */
+  private static void requireWithinScopes(Connection c, List<String> scopes, Caller caller, String role,
+                                          String table, String entity) {
+    EntityDefinitionLock.shared(c, entity);
+    List<String> held = Jdbc.queryOne(c, "EntityViewCompiler.requireWithinScopes",
+            "SELECT scopes FROM connector.entity_manifest WHERE name = ? "
+                + "AND (?::bigint IS NULL OR " + ManifestOwner.READS + ")",
+            ps -> {
+              ps.setString(1, entity);
+              ps.setObject(2, caller.tenant(), Types.BIGINT);
+              ps.setObject(3, caller.tenant(), Types.BIGINT);
+            },
+            rs -> EntityRegistry.scopes(rs.getArray(1)))
+        .orElseThrow(() -> new SourceEntityNotAppliedException(role, table, entity));
+    if (held.containsAll(scopes)) return;
+    Set<String> callerScopes = caller.grants();
+    if (callerScopes != null && held.stream().noneMatch(callerScopes::contains)) {
+      throw new SourceEntityNotAppliedException(role, table, entity);
+    }
+    throw new SourceEntityScopesException(role, table, entity, held, scopes);
   }
 
   private void probe(Connection c, String sql, Function<String, RuntimeException> missingColumn) throws SQLException {
@@ -580,6 +741,26 @@ public class EntityViewCompiler {
     return "'" + s.replace("'", "''") + "'";
   }
 
+  /** #1974: each point's columns, as the view just compiled types them; a text one refuses the apply. */
+  private static void requirePointsAreNumbers(Connection c, EntityManifest m) {
+    if (m.points().isEmpty()) return;
+    Map<String, String> types = viewColumnTypes(c, m.name());
+    for (int i = 0; i < m.points().size(); i++) {
+      EntityManifest.Point p = m.points().get(i);
+      requireNumber("points[" + i + "].lat", p.lat(), types);
+      requireNumber("points[" + i + "].lon", p.lon(), types);
+    }
+  }
+
+  private static void requireNumber(String at, String column, Map<String, String> types) {
+    if (!isNumber(types.get(column))) throw new PointNotANumberException(at, column, types.getOrDefault(column, "absent"));
+  }
+
+  /** #1974: whether a column of this catalog type can hold a point's coordinate — at apply, and when the card is built. */
+  public static boolean isNumber(String type) {
+    return type != null && ColumnKind.ofType(type).number();
+  }
+
   public static String viewName(String entityName) {
     return SCHEMA + "." + quoteIdent("v_" + entityName.toLowerCase(Locale.ROOT));
   }
@@ -658,8 +839,9 @@ public class EntityViewCompiler {
         "DROP VIEW IF EXISTS " + view,
         create,
         "GRANT SELECT ON " + view + " TO " + APP_ROLE,
+        // only the absent role (a plain %test database) is swallowed: no default privilege covers a failed grant (#2008)
         "DO " + GRANT_TAG + " BEGIN GRANT SELECT ON " + view + " TO " + READONLY_ROLE
-            + "; EXCEPTION WHEN OTHERS THEN NULL; END " + GRANT_TAG);
+            + "; EXCEPTION WHEN undefined_object THEN NULL; END " + GRANT_TAG);
   }
 
   /** #846: wrap the untouched fused view in one LEFT JOIN per lookup. See the design doc §5. */

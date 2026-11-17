@@ -52,7 +52,7 @@
         "type" : "STRING",
         "importance" : "HIGH",
         "required" : false,
-        "doc" : "Password source: lm secret name, else env var (basic, session)",
+        "doc" : "Password source: lm secret name (basic, session)",
         "required_when" : {
           "when" : "kind is basic or session"
         }
@@ -72,7 +72,7 @@
         "type" : "STRING",
         "importance" : "HIGH",
         "required" : false,
-        "doc" : "API key value source: lm secret name, else env var",
+        "doc" : "API key value source: lm secret name",
         "required_when" : {
           "field" : "kind",
           "equals" : "api-key",
@@ -90,7 +90,7 @@
         "type" : "STRING",
         "importance" : "HIGH",
         "required" : false,
-        "doc" : "Bearer token source: lm secret name, else env var (bearer)"
+        "doc" : "Bearer token source: lm secret name (bearer)"
       }, {
         "name" : "token_value",
         "type" : "STRING",
@@ -141,7 +141,7 @@
         "type" : "STRING",
         "importance" : "HIGH",
         "required" : false,
-        "doc" : "OAuth2 client secret source: lm secret name, else env var",
+        "doc" : "OAuth2 client secret source: lm secret name",
         "required_when" : {
           "field" : "kind",
           "equals" : "oauth2",

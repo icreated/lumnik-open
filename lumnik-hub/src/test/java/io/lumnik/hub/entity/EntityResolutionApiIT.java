@@ -70,7 +70,7 @@ class EntityResolutionApiIT {
   private EntityResolutionReadResource readResource() {
     EntityResolutionReadResource res = new EntityResolutionReadResource();
     res.registry = new EntityRegistry() {
-      @Override public EntityManifest findReloadingIfMissing(String name) { return resolvableCustomer(); }
+      @Override public EntityManifest findReloadingIfMissing(long tenant, String name) { return resolvableCustomer(); }
     };
     res.repository = repository;
     return res;
@@ -79,7 +79,7 @@ class EntityResolutionApiIT {
   private EntityAssertionResource assertionResource() {
     EntityAssertionResource res = new EntityAssertionResource();
     res.registry = new EntityRegistry() {
-      @Override public EntityManifest findReloadingIfMissing(String name) { return resolvableCustomer(); }
+      @Override public EntityManifest findReloadingIfMissing(long tenant, String name) { return resolvableCustomer(); }
     };
     res.resolver = resolver;
     return res;

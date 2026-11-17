@@ -4,10 +4,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
-import io.lumnik.hub.secret.PgcryptoSecretResolver;
 import io.lumnik.hub.secret.SecretEvents;
 import io.lumnik.hub.secret.SecretRepository;
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.common.security.ScopeGrants;
+import io.lumnik.common.security.TenantWide;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.hub.tenant.TenantContextFilter;
 import io.quarkus.agroal.DataSource;
@@ -30,6 +31,7 @@ import java.util.Map;
 import java.util.UUID;
 
 @ApplicationScoped
+@TenantWide
 @Path("/api/platform/secrets")
 public class SecretResource {
 
@@ -37,7 +39,6 @@ public class SecretResource {
 
     @Inject SecretRepository repo;
     @Inject EntityManager em;
-    @Inject PgcryptoSecretResolver resolver;
     @Inject SecretEvents events;
     @Inject ObjectMapper mapper;
     @Inject @DataSource("admin") AgroalDataSource adminDs;
@@ -108,7 +109,6 @@ public class SecretResource {
             .setParameter("desc", req.description())
             .executeUpdate();
 
-        resolver.invalidate();   // ensure cache picks up new value next read
         events.emitCreated(tid, req.name(), null);
         recordAudit(tid, "CREATE", id.toString(), snapshot(req.name(), req.description(), null));
         return Response.status(Response.Status.CREATED)
@@ -145,11 +145,10 @@ public class SecretResource {
 
         // TOCTOU guard: the existence check above and this UPDATE are two statements, not one —
         // a concurrent DELETE between them (same tenant + name) removes the row, and this UPDATE
-        // matches nothing. Zero rows means the write never happened, so nothing downstream (cache
-        // invalidation, the lifecycle event, the audit row) may run as if it did.
+        // matches nothing. Zero rows means the write never happened, so nothing downstream (the
+        // lifecycle event, the audit row) may run as if it did.
         if (rows == 0) return Response.status(Response.Status.NOT_FOUND).build();
 
-        resolver.invalidate();
         events.emitUpdated(tid, name, null, previousRotatedAt);
         recordAudit(tid, "UPDATE", existing.get().getId().toString(),
             snapshot(name, newDescription, rotatedAt));
@@ -175,10 +174,9 @@ public class SecretResource {
 
         // Only when the DELETE actually removed something. A concurrent delete between the
         // existence check above and this statement leaves rows == 0: that request already
-        // invalidated the cache, and flushing it again for a write that did not happen is an
+        // recorded the delete, and recording it again for a write that did not happen is an
         // observable side effect of a 404.
         if (rows > 0) {
-            resolver.invalidate();
             events.emitDeleted(tid, name, null);
             recordAudit(tid, "DELETE", existing.get().getId().toString(),
                 snapshot(name, existing.get().getDescription(), existing.get().getRotatedAt()));
@@ -186,6 +184,49 @@ public class SecretResource {
         return rows == 0
             ? Response.status(Response.Status.NOT_FOUND).build()
             : Response.noContent().build();
+    }
+
+    /**
+     * The scopes this secret serves (#2015): a connector or an export reads it only when it carries every one of
+     * its scopes, and an empty list serves the scopeless ones only. Replaces the list, as {@code lm scope set} does a
+     * connector's; the value is untouched, so giving a secret its scopes never means typing it again.
+     */
+    @PUT @Path("/{name}/scopes")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.APPLICATION_JSON)
+    @Transactional
+    @RequiresPermission("lm_admin")
+    public Response scope(@PathParam("name") String name, List<String> scopes) {
+        long tid = RequireTenant.current();
+        // No list is not an empty one: a body lost on the way must not strip a secret of the scopes it serves.
+        if (scopes == null) return ApiErrors.badRequest("a JSON list of scopes is required: [] for none");
+        List<String> given = scopes.stream().distinct().toList();
+        var problem = ScopeGrants.namesProblem(given);
+        if (problem.isPresent()) return ApiErrors.badRequest(problem.get());
+        var existing = repo.findByName(tid, name);
+        if (existing.isEmpty()) return ApiErrors.notFound("secret " + name + " not found");
+
+        // The list replaced, read under the row's lock: two admins scoping at once each record the one they replaced.
+        @SuppressWarnings("unchecked")
+        List<String> replaced = em.createNativeQuery(
+            "UPDATE platform.secret s SET scopes = :scopes, updated_at = now() " +
+            "FROM (SELECT id, scopes FROM platform.secret " +
+            "      WHERE tenant_id = :tid AND name = :name AND deleted_at IS NULL FOR UPDATE) prev " +
+            "WHERE s.id = prev.id RETURNING array_to_string(prev.scopes, ',')")
+            .setParameter("scopes", given.toArray(String[]::new))
+            .setParameter("tid", tid)
+            .setParameter("name", name)
+            .getResultList();
+        // The same TOCTOU guard as update(): a delete between the lookup and this statement wrote nothing.
+        if (replaced.isEmpty()) return ApiErrors.notFound("secret " + name + " not found");
+
+        List<String> previous = replaced.get(0).isEmpty() ? List.of() : List.of(replaced.get(0).split(","));
+        events.emitScoped(tid, name, null, previous, given);
+        Map<String, Object> changes = snapshot(name, existing.get().getDescription(), existing.get().getRotatedAt());
+        changes.put("previousScopes", previous);
+        changes.put("scopes", given);
+        recordAudit(tid, "UPDATE", existing.get().getId().toString(), changes);
+        return Response.ok(given).build();
     }
 
     /** Only the fields {@code Secret}'s (now-removed) {@code @Auditable} used to declare —

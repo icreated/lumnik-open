@@ -179,7 +179,7 @@ public class ParseDateHook implements CellHook {
     }
 
     // None matched — soft failure
-    s.counters().cellErrors().incrementAndGet();
+    s.refuseCell("none of the declared formats");
     row.put(col, null);
   }
 

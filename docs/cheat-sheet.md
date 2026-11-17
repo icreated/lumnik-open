@@ -5,10 +5,12 @@ The minimum that operates lumnik, on one page. Unknown word: [glossary](glossary
 ## Stand it up
 
 ```bash
-./deploy/selfhost/up.sh --build   # first run writes .env with fresh secrets — BACK IT UP
-curl -s http://localhost:8080/q/health   # UP, or DOWN with the failing check named
+./deploy/selfhost/up.sh           # first run writes .env with fresh secrets — BACK IT UP
+./deploy/selfhost/health.sh       # UP, or DOWN with the failing check named
 ./deploy/selfhost/logs.sh hub     # follow the hub (see: Reading the logs)
 ```
+
+- On an ARM Linux server (Raspberry Pi, AWS Graviton): `up.sh --build`. The image is `linux/amd64` only.
 
 Full walkthroughs: [Deploy](deploy.md) · [Reading the logs](recipes/logs.md).
 
@@ -25,7 +27,7 @@ Full walkthroughs: [Deploy](deploy.md) · [Reading the logs](recipes/logs.md).
 | 7 | `lm entity apply -f FILE` | fuse sources into one canonical entity. A connector that feeds an entity cannot be deleted: `lm entity delete NAME` first |
 | 8 | `lm workflow apply -f FILE` | declare a lifecycle. It lists the status values your data holds and the manifest does not declare |
 | 9 | `lm ask --scope S "question"` | ask the data. It prints the answer, the rows *and the SQL that ran*; `-o json` gives the whole result. **lumnik Pro** |
-| 10 | `lm secret set NAME` | store a secret. It prompts, and shows nothing. `lm secret set NAME -` reads stdin, for a multi-line key or a script. No command prints a value back |
+| 10 | `lm secret set NAME` | store a secret. It prompts, and shows nothing. `lm secret set NAME -` reads stdin, for a multi-line key or a script. No command prints a value back. `lm secret scope NAME SCOPES` lets the connectors carrying all those scopes read it |
 
 The full surface (sources, endpoints, mappings, tags, observations…) is in the
 [CLI & TUI reference](cli/lm-reference.md).
@@ -44,7 +46,6 @@ f0466804  orders        default   Completed  10  8    2        2             202
 - **`Failed`** is the run itself (source unreachable, bad credentials): `lm run get 3ccd21eb` prints the reason.
 - **`DEAD-LETTERS`** are rows set aside with their reason: `lm dlq list`.
 - **Stop a running run:** `lm run cancel ID`. It ends after the current batch of rows.
-
 - Every `-f` also takes `-f -` (stdin), and every listing takes `-o json`:
   [Integration as code](integration-as-code.md).
 - On the open edition, command 9 answers `Error: this hub's build has no Ask: …`. See
@@ -69,8 +70,8 @@ f0466804  orders        default   Completed  10  8    2        2             202
 
 | What | Where |
 |---|---|
-| Hub API | `http://localhost:8080` — health at [`/q/health`](operations/observability.md) |
-| Try the API | `http://localhost:8080/q/swagger-ui/` — spec at `/q/openapi`, [Postman recipe](recipes/test-the-api.md) |
+| Hub API | `http://localhost:8080` — health: `./deploy/selfhost/health.sh` ([observability](operations/observability.md)) |
+| Try the API | the spec, saved from inside the hub's container: [Postman recipe](recipes/test-the-api.md) |
 | Keycloak | `http://localhost:8180/realms/lumnik` |
 | The PWA | `http://localhost:8080/app/` |
 | This documentation | [docs.lumnik.io](https://docs.lumnik.io/) |

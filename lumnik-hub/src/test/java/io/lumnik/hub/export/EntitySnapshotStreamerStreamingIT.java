@@ -81,7 +81,7 @@ class EntitySnapshotStreamerStreamingIT {
 
     private String downloadAsSingleTenant(List<String> columns, List<String> orderColumns)
             throws Exception {
-        EntityManifest entity = registry.findReloadingIfMissing("SnapshotStreamerEntity677");
+        EntityManifest entity = registry.findReloadingIfMissingHubwide("SnapshotStreamerEntity677");
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         QuarkusTransaction.requiringNew().run(() -> {
             try (Connection c = readonlyDs.getConnection()) {
@@ -129,7 +129,7 @@ class EntitySnapshotStreamerStreamingIT {
 
     @Test
     void projectionExcludesInternalColumns() throws Exception {
-        EntityManifest entity = registry.findReloadingIfMissing("SnapshotStreamerEntity677");
+        EntityManifest entity = registry.findReloadingIfMissingHubwide("SnapshotStreamerEntity677");
         assertTrue(entity.canonicalColumns().stream().noneMatch(
             c -> c.equals("_conflicts") || c.equals("_entity_id") || c.equals("_resolution")));
     }
@@ -152,7 +152,7 @@ class EntitySnapshotStreamerStreamingIT {
      */
     @Test
     void streamsProgressivelyNotOneFinalBufferedWrite() throws Exception {
-        EntityManifest entity = registry.findReloadingIfMissing("SnapshotStreamerEntity677");
+        EntityManifest entity = registry.findReloadingIfMissingHubwide("SnapshotStreamerEntity677");
         try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
             st.execute("INSERT INTO connector.t_snapshotstreamer677_erp (tenant_id, cust_id, cust_name) "
                 + "SELECT 1, 'row' || g, 'Name' || g FROM generate_series(1, 700) AS g");

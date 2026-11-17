@@ -28,7 +28,7 @@ spec:
 
   auth:
     kind: bearer
-    token_env: ACME_BEARER_TOKEN   # lm secret set ACME_BEARER_TOKEN   → demo-token
+    token_env: ACME_BEARER_TOKEN   # lm secret set ACME_BEARER_TOKEN   → demo-token; lm secret scope ACME_BEARER_TOKEN billing
 
   endpoints:
     - id: cursor-partners

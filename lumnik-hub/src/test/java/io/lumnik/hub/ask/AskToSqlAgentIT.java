@@ -1,20 +1,37 @@
 package io.lumnik.hub.ask;
 
+import io.agroal.api.AgroalDataSource;
 import io.lumnik.llm.spi.Analytic;
 import io.lumnik.llm.spi.ChatPort;
 import io.lumnik.extraction.spi.ask.AskResult;
+import io.lumnik.extraction.spi.ask.AskUnavailableException;
 import io.lumnik.extraction.spi.ask.SchemaCard;
+import io.lumnik.extraction.spi.ask.SqlGuard;
+import io.lumnik.hub.sql.TenantRlsScope;
+import io.quarkus.agroal.DataSource;
+import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.test.InjectMock;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
+import org.postgresql.core.BaseConnection;
+import org.postgresql.core.QueryExecutor;
+import org.postgresql.jdbc.PreferQueryMode;
 
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @QuarkusTest
 class AskToSqlAgentIT {
@@ -33,6 +50,171 @@ class AskToSqlAgentIT {
             new SchemaCard.Table("connector.t_demo_order", "Demo Order", List.of(
                 new SchemaCard.Column("documentno", "text", "Document No"),
                 new SchemaCard.Column("grandtotal", "numeric", "Grand Total"))))));
+    }
+
+    // --- the driver, a third reader (#2005) ----------------------------------------------------------
+
+    @Inject @DataSource("readonly") AgroalDataSource readonlyDs;
+
+    /** select() as the Ask path runs it: in a transaction, the tenant and the string reading bound (TenantRlsScope). */
+    private List<Map<String, Object>> selectAsAsk(String sql) {
+        return QuarkusTransaction.requiringNew().call(() -> {
+            try (Connection c = readonlyDs.getConnection()) {
+                TenantRlsScope.applyTo(c, 7L);
+                return AskToSqlAgent.select(c, sql);
+            }
+        });
+    }
+
+    /**
+     * #2005, #1988: a connection reading strings otherwise than the guards is refused where the SQL runs. A session
+     * SET, reset before the connection goes back: a SET LOCAL is not in force on this connection here, and a session
+     * setting left behind would reach the pool's next borrower.
+     */
+    @Test
+    void selectRefusesAConnectionThatReadsStringsOtherwiseThanTheGuards() throws Exception {
+        try (Connection c = readonlyDs.getConnection(); Statement st = c.createStatement()) {
+            st.execute("SET standard_conforming_strings = off");
+            try {
+                assertThatThrownBy(() -> AskToSqlAgent.select(c, "SELECT 1 AS x"))   // the deployment's fault, said so
+                    .isInstanceOf(DriverReading.MisconfiguredConnection.class)
+                    .hasMessageContaining("strings");
+            } finally {
+                st.execute("RESET standard_conforming_strings");
+            }
+        }
+    }
+
+    /** #2005: the text the guards accepted is the text the server gets — escape processing off (see select()). */
+    @Test
+    void aJdbcEscapeReachesTheServerAsWrittenNotRewritten() {
+        assertThatThrownBy(() -> selectAsAsk("SELECT {fn ucase('a')} AS x"))
+            .hasRootCauseInstanceOf(SQLException.class)
+            .rootCause().satisfies(e -> assertThat(((SQLException) e).getSQLState()).isEqualTo("42601"));   // syntax error
+    }
+
+    /**
+     * #2005: the extended mode is the one the driver's reading describes. In simple and extended-for-prepared the
+     * server splits the text; cache-everything runs a parse from the connection's cache. A deployment's fault, said.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"SIMPLE", "EXTENDED_FOR_PREPARED", "EXTENDED_CACHE_EVERYTHING"})
+    void selectRefusesAQueryModeTheReadingDoesNotDescribe(String mode) throws Exception {
+        try (Connection c = readonlyDs.getConnection()) {
+            QueryExecutor executor = c.unwrap(BaseConnection.class).getQueryExecutor();
+            PreferQueryMode before = executor.getPreferQueryMode();
+            executor.setPreferQueryMode(PreferQueryMode.valueOf(mode));
+            try {   // restored before the connection goes back to the pool
+                assertThatThrownBy(() -> AskToSqlAgent.select(c, "SELECT 1 AS x"))
+                    .isInstanceOf(DriverReading.MisconfiguredConnection.class)
+                    .isInstanceOf(AskUnavailableException.class)   // the chat door's 503
+                    .hasMessageContaining("query mode");
+            } finally {
+                executor.setPreferQueryMode(before);
+            }
+        }
+    }
+
+    /**
+     * #2005, measured on pgjdbc 42.7.13: a split, a rewrite inside the statement, a tail dropped — each its reason.
+     * Each passes the guard first, as on the Ask path: the guard alone accepts every row.
+     */
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {
+        "SELECT 1 /*/ ; SELECT 2 */        | the driver reads more than one statement",
+        "SELECT j ?? 'k' FROM t            | the driver would send other SQL than the guards read",
+        "SELECT x FROM t LIMIT 10 /*/ ;;   | the driver would send other SQL than the guards read",
+    })
+    void selectRefusesWhatTheDriverWouldNotSendAsTheGuardsReadIt(String sql, String reason) {
+        String guarded = new SqlGuard(500).check(sql);
+        assertThatThrownBy(() -> selectAsAsk(guarded))   // a runtime exception, passed through unwrapped
+            .isInstanceOf(SqlGuard.SqlRejectedException.class)
+            .hasMessage(reason);
+    }
+
+    /** What every reader reads alike runs, unchanged: ';' in literals and comments, nested comments, ?| ?&, a backslash. */
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "SELECT 1 /* a ; b */ AS x",
+        "SELECT 1 /* /* nested ; */ still ; */ AS x",
+        "SELECT 'a;b' AS x, \"x\" AS y FROM (SELECT 1 AS x) t",
+        "SELECT 'it''s' AS x",
+        "SELECT '{\"k\":1}'::jsonb ?| array['k'] AS x, '{\"k\":1}'::jsonb ?& array['k'] AS y",
+        "SELECT 'a\\b' AS x, 'ab' ~ '^\\w+$' AS y",
+    })
+    void selectRunsWhatEveryReaderReadsAlike(String sql) {
+        assertThat(selectAsAsk(new SqlGuard(500).check(sql))).hasSize(1);
+    }
+
+    @Test
+    void bracesInALiteralAndTheJsonbQuestionMarkStillRun() {
+        assertThat(selectAsAsk("SELECT '{fn now()}' AS x").get(0).get("x")).isEqualTo("{fn now()}");
+        assertThat(selectAsAsk("SELECT '{\"k\":1}'::jsonb ? 'k' AS x").get(0).get("x")).isEqualTo(true);
+    }
+
+    /**
+     * #2005: a text the guard reads as one statement and pgjdbc would send as two is refused where it runs, before
+     * the server, and said as the guard's refusal.
+     */
+    @Test
+    void sqlTheDriverWouldSplitIsRefusedLikeSqlTheGuardRefuses() {
+        String split = "SELECT documentno FROM connector.t_demo_order /*/ ; SELECT 2 */";
+        assertThat(new SqlGuard(500).check(split)).as("the guard alone accepts it: only the driver's reading refuses").isNotBlank();
+        // refused where it runs, before the server: the guard's sentence, never "the database refused it"
+        Mockito.when(chatPort.chat(Mockito.anyString())).thenReturn(split);
+
+        AskResult r = agent.ask(7L, "demo", "Which orders are there?", "en");
+
+        assertThat(r.abstained()).as(r.answer()).isTrue();
+        // the guard's refusal, not a read that failed on the server: the SQL never left the hub
+        assertThat(r.answer()).startsWith(AskSentences.couldNotTranslate("en"));
+    }
+
+    // --- a distance (#1974) ----------------------------------------------------------------------------
+
+    private void seedSites() {
+        agent.seedDdl("CREATE TABLE IF NOT EXISTS connector.t_demo_site (site text, latitude numeric, longitude numeric)");
+        agent.seedDdl("TRUNCATE connector.t_demo_site");
+        agent.seedDdl("INSERT INTO connector.t_demo_site VALUES ('Lyon', 45.7640, 4.8357), ('Paris', 48.8566, 2.3522)");
+        store.save(7L, "sites", new SchemaCard("sites", List.of(
+            new SchemaCard.Table("connector.t_demo_site", "Site", List.of(
+                new SchemaCard.Column("site", "text", "Site"),
+                new SchemaCard.Column("latitude", "numeric", "Latitude"),
+                new SchemaCard.Column("longitude", "numeric", "Longitude")), null,
+                List.of(new SchemaCard.Point("site", "latitude", "longitude"))))));
+    }
+
+    /**
+     * #1974: a query calling connector.distance_m passes every step of the ask path and runs. (In this profile the
+     * read-only datasource connects as lumnik_app; lumnik_readonly's EXECUTE grant is proven on the shipped migration.)
+     */
+    @Test
+    void aQueryCallingTheDistanceFunctionPassesTheWholeAskPath() {
+        seedSites();
+        Mockito.when(chatPort.chat(Mockito.anyString()))
+            .thenReturn("SELECT site FROM connector.t_demo_site "
+                + "WHERE connector.distance_m(latitude, longitude, 45.764, 4.8357) < 20000")
+            .thenReturn("Lyon.");
+
+        AskResult r = agent.ask(7L, "sites", "Which sites are within 20 km of 45.764, 4.8357?", "en");
+
+        assertThat(r.abstained()).as(r.answer()).isFalse();
+        assertThat(r.rows()).extracting(row -> row.get("site")).containsExactly("Lyon");
+    }
+
+    /** #1974: a place name has no coordinates in the hub — the ones the model supplied are refused before the query runs. */
+    @Test
+    void aDistanceFromAPlaceNameAbstainsAndSaysHowToTypeACentre() {
+        seedSites();
+        Mockito.when(chatPort.chat(Mockito.anyString()))
+            .thenReturn("SELECT site FROM connector.t_demo_site "
+                + "WHERE connector.distance_m(latitude, longitude, 45.764, 4.8357) < 20000");
+
+        AskResult r = agent.ask(7L, "sites", "Which sites are within 20 km of Lyon?", "en");
+
+        assertThat(r.abstained()).isTrue();
+        assertThat(r.rows()).isEmpty();
+        assertThat(r.answer()).isEqualTo(AskSentences.centreNotTyped("en"));
     }
 
     // --- a result larger than the model reads (#1067) ------------------------------------------------
@@ -387,6 +569,21 @@ class AskToSqlAgentIT {
         assertThat(r.answer()).isEqualTo(ZeroRowGuard.CAVEAT);
         assertThat(r.abstained()).isTrue();
         // The phrasing LLM must NEVER be reached on the empty path: only the SQL-gen call happened.
+        Mockito.verify(chatPort, Mockito.times(1)).chat(Mockito.anyString());
+    }
+
+    /** #1982: asked as a count, the same miss returned one row holding 0, and "0" was phrased as a fact. */
+    @Test
+    void aCountOfZeroIsCaveatedLikeZeroRowsAndKeepsItsRow() {
+        Mockito.when(chatPort.chat(Mockito.anyString()))
+            .thenReturn("SELECT COUNT(*) FROM connector.t_demo_order WHERE documentno = 'NOPE'");
+
+        AskResult r = agent.ask(7L, "demo", "combien de commandes pour NOPE ?", "fr");
+
+        assertThat(r.answer()).isEqualTo(AskSentences.nothingCounted("fr"));
+        assertThat(r.abstained()).isTrue();
+        assertThat(r.rowCount()).isEqualTo(1);
+        assertThat(r.rows()).singleElement().satisfies(row -> assertThat(row.values()).containsExactly(0L));
         Mockito.verify(chatPort, Mockito.times(1)).chat(Mockito.anyString());
     }
 

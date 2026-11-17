@@ -121,7 +121,7 @@ public final class MapColumnsRules {
     }
     List<Violation> out = new ArrayList<>();
     for (JsonNode col : drop) {
-      if (!col.isTextual()) {
+      if (!ScalarParams.isText(col)) {   // a header 2024 is a number in YAML (#1969)
         out.add(new Violation("drop", "every entry must be a column name (got "
             + MappingValidationException.typeName(col) + ")"));
       }

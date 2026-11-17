@@ -2,6 +2,7 @@ package io.lumnik.hub.source.csv;
 
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.api.sources.CsvIngestForm;
+import io.lumnik.hub.connector.transport.TestDirFileSourceFactory;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
@@ -33,7 +34,7 @@ class CsvIngestServiceLimitsTest {
             form.name = "big_test_" + System.nanoTime();
             form.scope = "system";
             form.transport = new HashMap<>(Map.of(
-                "kind", "local",
+                "kind", TestDirFileSourceFactory.KIND,
                 "path", bigFile.toAbsolutePath().toString(),
                 "max_file_size", 1024L
             ));

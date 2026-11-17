@@ -7,7 +7,7 @@ metadata:
 spec:
   transport:
     kind: local
-    path: /imports/*.csv
+    path: imports/*.csv
     file_filter: hooks/only-invoices.kts
     pre_process: hooks/unzip.kts
     max_file_size: 10485760

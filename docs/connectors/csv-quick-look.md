@@ -26,7 +26,7 @@ A dormant connector is registered — see `lm connector list`.
 - On lumnik Open, or with the AI off, the last lines read `A one-shot: no run recorded, nothing
   indexed for chat.` and `The rows are in ext.quick_look, and a dormant connector is registered`.
 
-A **dormant** connector is registered under the same name. It never runs on its own. Inspect it,
+A **dormant** connector is registered under the table's name, here `quick_look`. It never runs on its own. Inspect it,
 turn it into a manifest, or remove it with `lm connector delete quick_look`.
 
 ## Where the file can be

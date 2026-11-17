@@ -8,7 +8,7 @@ spec:
   connection:
     url: jdbc:postgresql://db.acme.io:5432/billing
     user: ro_user
-    password_env: ACME_DB_PASSWORD
+    password_env: ACME_DB_PASSWORD   # lm secret scope ACME_DB_PASSWORD erp
   defaults:
     schema: public
   source:

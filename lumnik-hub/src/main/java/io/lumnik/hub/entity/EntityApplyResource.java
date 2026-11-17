@@ -3,13 +3,16 @@ package io.lumnik.hub.entity;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
-import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.ApplyScopeBoundary;
+import io.lumnik.hub.api.DeploymentWide;
+import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.lumnik.hub.ask.SchemaCardRefresher;
 import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.process.MatchIndexes;
 import io.lumnik.hub.search.SearchIndexRevalidator;
+import io.lumnik.hub.tenant.ManifestOwner;
+import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
@@ -17,13 +20,18 @@ import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
+import org.jboss.logging.Logger;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
+@DeploymentWide
 @Path("/api/entities/apply")
 @RequiresPermission("lm_admin")
 public class EntityApplyResource {
+
+  private static final Logger LOG = Logger.getLogger(EntityApplyResource.class);
 
   @Inject EntityManifestParser parser;
   @Inject EntityViewCompiler compiler;
@@ -90,7 +98,13 @@ public class EntityApplyResource {
     // refuseUnlessApplied below is that second answer. This earlier one is kept because it refuses
     // BEFORE the compiler does any work and before the discovery/rediscover side effects, which no
     // rollback reaches (#582).
-    ApplyScopeBoundary.refuseUnlessCallerHolds(registry.storedScopes(m.name()));
+    long tenant = RequireTenant.current();
+    // #2050: a name another owner's Entity holds is refused first, before any check below can say more about it.
+    Optional<EntityRegistry.Stored> stored = registry.storedHubwide(m.name());
+    if (stored.filter(s -> !ManifestOwner.ownedBy(tenant, s.owner())).isPresent()) {
+      throw new WebApplicationException(ApiErrors.conflict(ScopeGuardedUpsert.NAME_TAKEN));
+    }
+    ApplyScopeBoundary.refuseUnlessCallerHolds(stored.map(EntityRegistry.Stored::scopes));
 
     // #1838: before anything is stored or compiled — a process already watching this Entity must not be left on a read
     // that can only scan.
@@ -102,14 +116,18 @@ public class EntityApplyResource {
       // granted().orElse(null) — empty Optional means unscoped, i.e. every scope. The compiler
       // rolled its whole transaction back on a refusal, DDL included, so the view is as it was.
       ApplyScopeBoundary.refuseUnlessApplied(
-          compiler.apply(m, body, ScopeGrants.granted().orElse(null)));
-    } catch (MissingSourceTableException e) {
+          compiler.apply(m, body, ScopeGrants.granted().orElse(null), tenant));
+    } catch (SourceNotReadableException e) {
+      LOG.infof("entity %s not applied: %s", m.name(), e.getMessage());   // the door answers the uniform 403 only
+      throw new WebApplicationException(ApiErrors.scopeNotGranted());
+    } catch (MissingSourceTableException | SourceEntityNotAppliedException e) {
       // Predictable fresh-install state — an honest refusal, not an anonymous 500.
       throw new WebApplicationException(ApiErrors.conflict(e.getMessage()));
-    } catch (MissingSourceColumnException | MissingLookupColumnException e) {
+    } catch (MissingSourceColumnException | MissingLookupColumnException | PointNotANumberException
+             | SourceNotIngestedException | SourceEntityScopesException e) {
       throw new WebApplicationException(ApiErrors.badRequest(e.getMessage()));
     }
-    registry.put(m);
+    registry.put(m, ManifestOwner.of(tenant));
     audit.record("Entity", m.name(), "APPLY", Map.of(
         "scopes", m.scopes(), "manifest_sha256", AuditRecorder.sha256(body)));
     // #669: a column this re-apply dropped turns every tenant's SearchIndex that used it invalid.
@@ -119,9 +137,8 @@ public class EntityApplyResource {
     // TenantContextFilter (header in dev, JWT in prod), NOT a raw header — and refresh every card, in
     // any tenant, that lists its view or describes one of its scopes: a scope it left, a column it
     // dropped, must not stay on a card Ask reads (#1538). Best-effort: the view + manifest are already
-    // committed, so a discovery failure must NOT fail the apply. No tenant context → no card is
-    // created for a bogus tenant 0; the stored cards are still refreshed.
-    cardRefresher.afterEntityChanged(m.name(), CurrentTenantHolder.get(), m.scopes());
+    // committed, so a discovery failure must NOT fail the apply.
+    cardRefresher.afterEntityChanged(m.name(), tenant, m.scopes());
     // #1838: a changed key expression may need an index no Process apply will ever ask for.
     return new ApplyResult(m.name(), EntityViewCompiler.viewName(m.name()), matchIndexes.afterEntityApplied(m));
   }

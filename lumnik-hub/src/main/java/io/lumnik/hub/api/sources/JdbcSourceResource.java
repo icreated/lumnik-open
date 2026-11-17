@@ -1,6 +1,8 @@
 package io.lumnik.hub.api.sources;
 
+import io.lumnik.hub.api.connector.InlineCredentials;
 import io.lumnik.common.text.Text;
+import io.lumnik.common.ratelimit.RateLimited;
 import io.lumnik.jdbc.spi.ColumnDescriptor;
 import io.lumnik.hub.sql.SqlIdentifiers;
 import io.quarkus.narayana.jta.QuarkusTransaction;
@@ -59,6 +61,7 @@ public class JdbcSourceResource {
 
   // ── POST /test ──────────────────────────────────────────────────────────────
 
+  @RateLimited("source-probe")   // an outbound connection per call, at the caller's choice (#1996)
   @POST
   @Path("/test")
   public Response test(TestRequest req) {
@@ -71,7 +74,7 @@ public class JdbcSourceResource {
     }
 
     try {
-      DataSource ds = poolRegistry.acquire(cc.url(), cc.user(), cc.password(), -1L,
+      DataSource ds = poolRegistry.acquire(cc.url(), cc.user(), cc.password(), HikariPoolRegistry.DOOR,
           dialectRegistry.resolve(cc.dialectId()));
       List<String> schemas = new ArrayList<>();
       String dbVersion;
@@ -85,8 +88,11 @@ public class JdbcSourceResource {
       }
       long latency = System.currentTimeMillis() - start;
       return Response.ok(new TestResponse(true, cc.dialectId(), dbVersion, latency, schemas)).build();
+    } catch (ConfigValidationException refused) {
+      // Where the hub may connect (#2002): the operator's decision, said in our words, not an unreachable source.
+      return ApiErrors.status(400, refused.getMessage(), "ok", false).build();
     } catch (Exception e) {
-      LOG.warnf("JDBC test failed for %s: %s", req.url(), e.getMessage());
+      LOG.warnf("JDBC test failed for %s: %s", JdbcConnectionConfig.forDisplay(req.url()), e.getMessage());
       return Response.status(502)
           .entity(new TestResponse(false, cc.dialectId(), null, System.currentTimeMillis() - start, List.of()))
           .build();
@@ -95,6 +101,7 @@ public class JdbcSourceResource {
 
   // ── POST /discover ──────────────────────────────────────────────────────────
 
+  @RateLimited("source-probe")   // an outbound connection per call, at the caller's choice (#1996)
   @POST
   @Path("/discover")
   public Response discover(DiscoverRequest req) {
@@ -105,14 +112,17 @@ public class JdbcSourceResource {
       List<TableDescriptor> tables = introspector.discover(
           cc, schema, req.skipPatterns(), req.includeViews());
       return Response.ok(new DiscoverResponse(tables)).build();
+    } catch (ConfigValidationException refused) {
+      return ApiErrors.badRequest(refused.getMessage());
     } catch (Exception e) {
-      LOG.errorf(e, "Discovery failed for %s/%s", req.url(), schema);
+      LOG.errorf(e, "Discovery failed for %s/%s", JdbcConnectionConfig.forDisplay(req.url()), schema);
       return ApiErrors.status(502, Jdbc.failureText("JDBC discovery", e)).build();
     }
   }
 
   // ── POST /add ───────────────────────────────────────────────────────────────
 
+  @RateLimited("source-probe")   // an outbound connection per call, at the caller's choice (#1996)
   @POST
   @Path("/add")
   public Response add(AddRequest req) {
@@ -264,7 +274,7 @@ public class JdbcSourceResource {
     connector.setTenantId(tenantId);
     connector.setName(p.connectorName());
     connector.setTypeId(JdbcConnectorType.TYPE_ID);
-    connector.setConfig(p.config());
+    connector.setConfig(InlineCredentials.restored(p.config(), null));   // #2003: a marker stands for nothing here
     connector.setCredentialId(credentialId);
     if (Text.present(req.scheduleCron())) {
       connector.setSchedule(req.scheduleCron());

@@ -1,7 +1,8 @@
 # Email notifications
 
 A rule routes matching events to a recipient — one mail per event, rendered through a template
-you choose. Needs the `lm_admin` role. For tools rather than people, use a [webhook](outputs.md#wire-a-webhook).
+you choose. Rules need the `lm_admin` role; `lm notify deliveries` and `replay` also need
+`lm_integrator`. For tools rather than people, use a [webhook](outputs.md#wire-a-webhook).
 
 ## Route events to a mailbox
 

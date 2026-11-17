@@ -29,6 +29,25 @@ class SchemaCardTest {
         assertThat(p).contains("documentno");
     }
 
+    /** #1974: a table with a point tells the model which two columns it is, and the function that measures it. */
+    @Test
+    void aTableWithAPointNamesItsColumnsAndTheDistanceFunction() {
+        SchemaCard c = new SchemaCard("sites", List.of(new SchemaCard.Table("connector.v_customer", "Customer", List.of(
+            new SchemaCard.Column("latitude", "numeric", "Latitude"),
+            new SchemaCard.Column("longitude", "numeric", "Longitude")), null,
+            List.of(new SchemaCard.Point("site", "latitude", "longitude")))));
+
+        assertThat(c.toPrompt()).contains("  -- point \"site\" = (\"latitude\", \"longitude\"), WGS84 degrees. "
+            + "Metres between two points, latitude first: connector.distance_m(lat1, lon1, lat2, lon2)\n");
+    }
+
+    /** #1974: a hub with no point declared sends the card it sent before — not a word about distance. */
+    @Test
+    void aTableWithoutAPointSaysNothingAboutDistance() {
+        assertThat(card().toPrompt()).doesNotContain("distance_m").doesNotContain("point");
+        assertThat(card().tables().getFirst().points()).isEmpty();
+    }
+
     @Test
     void listsAllowedTableNames() {
         assertThat(card().tableNames()).containsExactly("c_order");

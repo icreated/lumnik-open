@@ -1,7 +1,9 @@
 package io.lumnik.hub.entity;
 
 import io.lumnik.common.security.CurrentRolesHolder;
+import io.lumnik.common.tenant.CurrentTenantHolder;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import jakarta.ws.rs.core.Response;
@@ -19,15 +21,21 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class EntityConflictsScopeUnitTest {
 
+  @BeforeEach
+  void tenant() {
+    CurrentTenantHolder.set(1L);
+  }
+
   @AfterEach
   void clear() {
     CurrentRolesHolder.clear();
+    CurrentTenantHolder.clear();
   }
 
   @Test
   void bound_user_aggregate_skips_non_granted_entities_without_touching_the_db() {
     EntityRegistry registry = new EntityRegistry();
-    registry.put(new EntityManifest("Entity", "Stock", null, List.of("sku"), List.of(), List.of("magasin"), null, null, null));
+    registry.put(new EntityManifest("Entity", "Stock", null, List.of("sku"), List.of(), List.of("magasin"), null, null, null), null);
     CurrentRolesHolder.set(Set.of("lm_user", "scope:ventes")); // bound, but NOT scope:magasin
 
     EntityConflictsResource res = new EntityConflictsResource();
@@ -40,7 +48,7 @@ class EntityConflictsScopeUnitTest {
   @Test
   void bound_user_naming_a_non_granted_entity_gets_the_uniform_403() {
     EntityRegistry registry = new EntityRegistry();
-    registry.put(new EntityManifest("Entity", "Stock", null, List.of("sku"), List.of(), List.of("magasin"), null, null, null));
+    registry.put(new EntityManifest("Entity", "Stock", null, List.of("sku"), List.of(), List.of("magasin"), null, null, null), null);
     CurrentRolesHolder.set(Set.of("lm_user", "scope:ventes"));
 
     EntityConflictsResource res = new EntityConflictsResource();

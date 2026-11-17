@@ -209,9 +209,10 @@ public class MappingEngine {
       rows.forEach(row -> applyCellChain(spec, row, state));
       return rows;
     }
-    // CellHook.apply says nothing back: a hook that could not deliver its cell counts it, so the counter's
-    // move IS the failure. Safe because a MappingState is one chunk on one thread. A hook without `column:`
-    // (an every-column one) follows `default`, and its letter names the hook instead of a column.
+    // CellHook.apply returns nothing: a hook that could not deliver its cell calls MappingState.refuseCell, which
+    // counts it — so the counter's move IS the failure — and may keep why (#1968, #1971). atCellHook clears the
+    // reason, so it is read right after its own hook. Safe because a MappingState is one chunk on one thread.
+    // A hook without `column:` (an every-column one) follows `default`, and its letter names the hook instead.
     AtomicLong cellErrors = state.counters().cellErrors();
     List<Map<String, Object>> kept = new ArrayList<>(rows.size());
     rows:
@@ -225,14 +226,17 @@ public class MappingEngine {
         catalog.cell(inv.name()).apply(row, inv.params(), state);
         if (cellErrors.get() == before) continue;
         String column = inv.params().path("column").asText();
+        String refusal = state.cellRefusal();
+        String why = refusal == null ? "" : ": " + refusal;   // a hook that gives no reason keeps the bare sentence
         switch (policy.modeFor(column)) {
           case SOFT -> { }
           case FAIL -> throw new MappingValidationException("on-error: fail — " + inv.name()
-              + (column.isEmpty() ? " could not read a value" : " could not read a value of column '" + column + "'"));
+              + (column.isEmpty() ? " could not read a value" : " could not read a value of column '" + column + "'")
+              + why);
           case DLQ -> {
             cellErrors.set(rowStart);
             state.dropped().add(new MappingState.DroppedRow(read, new SkipReason.MappingFailed(
-                column.isEmpty() ? inv.name() : column, inv.name() + " could not read the value")));
+                column.isEmpty() ? inv.name() : column, inv.name() + " could not read the value" + why)));
             continue rows;
           }
         }

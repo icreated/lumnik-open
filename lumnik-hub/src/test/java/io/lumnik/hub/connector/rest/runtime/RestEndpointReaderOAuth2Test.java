@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.runtime;
 
+import io.lumnik.hub.testsupport.TestOutbound;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -43,6 +44,7 @@ class RestEndpointReaderOAuth2Test {
 
     /** The SaaS and its authorization server; {@link #revoked} tokens answer 401, as after a key rotation. */
     static final class Saas extends RestHttpClient {
+        Saas() { super(TestOutbound.ADDRESSES); }
         final List<RestRequest> calls = new ArrayList<>();
         final Set<String> revoked = new HashSet<>();
         int issued;
@@ -82,7 +84,7 @@ class RestEndpointReaderOAuth2Test {
 
     private RestEndpointReader reader() {
         OAuth2AuthProviderFactory oauth2 =
-            new OAuth2AuthProviderFactory(SecretRefs.environmentOnly(n -> "s3cret"), tokens, saas);
+            new OAuth2AuthProviderFactory(SecretRefs.of(n -> "s3cret"), tokens, saas);
         AuthProviderRegistry registry = new AuthProviderRegistry() {
             @Override public AuthProvider build(AuthSpec spec) {
                 owners.add(spec.owner());
@@ -90,7 +92,7 @@ class RestEndpointReaderOAuth2Test {
             }
         };
         return new RestEndpointReader(new ConnectorEndpoint(), registry, pagination, new RateLimiterRegistry(), saas,
-            new ObjectMapper(), SecretRefs.environmentOnly(name -> null));
+            new ObjectMapper(), SecretRefs.of(name -> null));
     }
 
     private static ConnectorContext ctx() {
@@ -197,7 +199,7 @@ class RestEndpointReaderOAuth2Test {
     void a_credential_equal_to_a_business_value_leaves_the_rows_intact(long token) {
         // Reviews of #1394: a token equal to a value of the rows — "1", and "12345678", which oauth2 accepts —
         // and a 200: the rows come back exactly as the source wrote them, never transformed.
-        RestHttpClient source = new RestHttpClient() {
+        RestHttpClient source = new RestHttpClient(TestOutbound.ADDRESSES) {
             @Override public RestResponse execute(RestRequest req) {
                 return RestResponse.of(200, Map.of(), "{\"data\":[{\"id\":" + token + ",\"quantity\":" + token + "}]}");
             }
@@ -222,7 +224,7 @@ class RestEndpointReaderOAuth2Test {
             @Override public AuthProvider build(AuthSpec spec) { return r -> r.withHeader("Authorization", "Bearer " + token); }
         };
         var read = new RestEndpointReader(new ConnectorEndpoint(), bearerOne, bodyItems, new RateLimiterRegistry(), source,
-            new ObjectMapper(), SecretRefs.environmentOnly(name -> null)).read(10, null, ctx());
+            new ObjectMapper(), SecretRefs.of(name -> null)).read(10, null, ctx());
         assertThat(((ReadResult.HasMore<Map<String, Object>>) read).records())
             .containsExactly(Map.of("id", token, "quantity", token));
     }

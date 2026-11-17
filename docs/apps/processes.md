@@ -57,7 +57,7 @@ Nothing fired: the two orders already in `EN LITIGE` were there before the proce
 **day 2** — the next morning's export, with one new order in dispute:
 
 ```
-$ docker compose -f docker-compose.selfhost.yml cp docs/apps/demo/data/acme-orders-day2.csv hub:/tmp/acme-desk/acme-orders.csv
+$ docker compose -f docker-compose.selfhost.yml cp docs/apps/demo/data/acme-orders-day2.csv hub:/tmp/drop/1/acme-desk/acme-orders.csv
 $ lm connector run acme-desk-orders
 run scheduled: dc0a38a3-3caf-40b8-9461-4fd202978dfb
 $ lm run list --connector acme-desk-orders
@@ -176,8 +176,8 @@ The full file is `docs/apps/demo/processes/30-lyon-customer.yaml`.
   `managed index on connector.t_results is pending; Entity Process reads may be slower until it is ready`.
   The warning disappears once the index exists.
 - **Match keys it can serve:** text, whole numbers, and timestamps with a time zone. A decimal key,
-  or a date matched with a timestamp, is refused: at the process apply, and at an Entity re-apply
-  while a process listens on it. Make the key a text or a whole number in the Entity.
+  or a date matched with a timestamp, is refused. The refusal comes at the process apply, and at an
+  Entity re-apply while a process listens on it. Make the key a text or a whole number in the Entity.
   A process applied on such a key by an older hub keeps running, slowly: change the key, then apply the process again.
 - **A change in a lookup:** see [below](#a-change-in-a-lookup).
 - **Not covered:** a deleted row, the old key of a row whose match key changed, and the rows already
@@ -424,7 +424,7 @@ Apply it, then load **day 3** — one more order, in dispute **and** above 1 000
 ```
 $ lm process apply -f docs/apps/demo/processes/20-grosse-commande.yaml
 Applied process "grosse-commande" → table connector.t_acme_desk_orders, emits decision.grosse-commande
-$ docker compose -f docker-compose.selfhost.yml cp docs/apps/demo/data/acme-orders-day3.csv hub:/tmp/acme-desk/acme-orders.csv
+$ docker compose -f docker-compose.selfhost.yml cp docs/apps/demo/data/acme-orders-day3.csv hub:/tmp/drop/1/acme-desk/acme-orders.csv
 $ lm connector run acme-desk-orders
 run scheduled: 36f56e82-40cf-4ec1-9604-b48e46a1a327
 $ lm inbox
@@ -433,10 +433,10 @@ ID  WHEN      PROCESS          MESSAGE                                          
 24  just now  litige-ouvert    Commande SO-000014 du client P-1003 en litige — 5000.00 €  3a47cea8e762663021d4c5bba36b5a410ad0731a1271e17706ce6976ee8c138b
 ```
 
-**Result:** two processes, two decisions, the same `ENTITY_KEY`. `amount` is a text column, as
-every CSV column is; `amount>1000` still compares it as a number, like a view filter.
+**Result:** two processes, two decisions, the same `ENTITY_KEY`.
 
-A process compares numbers and dates like a [view filter](views.md#filter-grammar). A CSV amount
+`amount` is a text column, as every CSV column is. `amount>1000` still compares it as a number:
+a process compares numbers and dates like a [view filter](views.md#filter-grammar). A CSV amount
 must be a plain decimal (`5000.00`); a date is read as UTC.
 
 ### Turn a process off

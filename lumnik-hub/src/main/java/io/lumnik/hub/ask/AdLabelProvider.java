@@ -56,7 +56,7 @@ public class AdLabelProvider implements SchemaLabelProvider {
             "LEFT JOIN ad_element e ON e.ad_element_id = c.ad_element_id " +
             "WHERE lower(t.tablename) = lower(?)";
         try {
-            DataSource ds = poolRegistry.acquire(cc.url(), cc.user(), cc.password(), -1L,
+            DataSource ds = poolRegistry.acquire(cc.url(), cc.user(), cc.password(), HikariPoolRegistry.DOOR,
                 dialectRegistry.resolve(cc.dialectId()));
             List<String[]> rows = Jdbc.query(ds, "AdLabelProvider.labelsForTable", sql, ps -> {
                 ps.setQueryTimeout(5);
@@ -70,7 +70,7 @@ public class AdLabelProvider implements SchemaLabelProvider {
             }
         } catch (Exception e) {
             LOG.warnf("AdLabelProvider: AD read failed for %s (%s) — labels skipped: %s",
-                      tableName, cc.url(), e.getMessage());
+                      tableName, JdbcConnectionConfig.forDisplay(cc.url()), e.getMessage());
             return new LinkedHashMap<>();
         }
         return out;

@@ -2,7 +2,10 @@ package io.lumnik.hub.connector.transport.sftp;
 
 import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
+import io.lumnik.hub.outbound.OutboundAddress;
 import org.apache.sshd.client.SshClient;
+import org.apache.sshd.client.config.hosts.HostConfigEntryResolver;
+import org.apache.sshd.common.keyprovider.KeyIdentityProvider;
 import org.apache.sshd.client.keyverifier.AcceptAllServerKeyVerifier;
 import org.apache.sshd.client.keyverifier.ServerKeyVerifier;
 import org.apache.sshd.client.session.ClientSession;
@@ -16,6 +19,7 @@ import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import java.security.KeyPair;
 import java.security.Security;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -29,8 +33,10 @@ public final class SftpConnectionFactory {
     private SftpConnectionFactory() {
     }
 
-    public static SftpConnection connect(String host, int port, String user, SftpAuthMethod auth,
+    /** {@code addresses} judges the host first (#2002): a refused one is an {@code OutboundRefusedException}, nothing started. */
+    public static SftpConnection connect(OutboundAddress addresses, String host, int port, String user, SftpAuthMethod auth,
                                           boolean strictHostKey, String hostKeyFingerprint) {
+        addresses.requireAll(Collections.singletonList(host));
         // Ensure the Bouncy Castle JCE provider is registered so MINA SSHD can handle Ed25519 key
         // types (sshd's supported EdDSA provider since 2.15).
         if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
@@ -43,7 +49,7 @@ public final class SftpConnectionFactory {
         SshClient sshClient = null;
         ClientSession session = null;
         try {
-            sshClient = SshClient.setUpDefaultClient();
+            sshClient = withoutTheHubsOwnSsh(SshClient.setUpDefaultClient());
             // ALWAYS set a verifier. Leaving MINA's own default in place is not "strict": its
             // ClientBuilder.DEFAULT_SERVER_KEY_VERIFIER is AcceptAllServerKeyVerifier.
             sshClient.setServerKeyVerifier(serverKeyVerifier(strictHostKey, hostKeyFingerprint, refused));
@@ -94,6 +100,17 @@ public final class SftpConnectionFactory {
             + " host_key_fingerprint: \"" + presented + "\" in the transport block."
             + " Setting strict_host_key: false connects without checking at all — which accepts"
             + " an impostor as readily as the real server.";
+    }
+
+    /**
+     * A client that reads nothing of the hub's own SSH setup (#2002): MINA's default reads {@code ~/.ssh/config}, whose
+     * HostName or ProxyJump would swap the judged host for another, and offers {@code ~/.ssh/id_*} to the server —
+     * the operator's keys, to a server a tenant chose. Only the identities {@link #authenticate} adds are offered.
+     */
+    static SshClient withoutTheHubsOwnSsh(SshClient client) {
+        client.setHostConfigEntryResolver(HostConfigEntryResolver.EMPTY);
+        client.setKeyIdentityProvider(KeyIdentityProvider.EMPTY_KEYS_PROVIDER);
+        return client;
     }
 
     /** Register a password or public-key identity on the live session before auth().verify(). */

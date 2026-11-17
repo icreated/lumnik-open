@@ -7,6 +7,7 @@ import io.lumnik.hub.connector.transport.sftp.SftpFileSourceFactory;
 import io.lumnik.hub.connector.transport.sftp.SftpTestHelper;
 import io.lumnik.hub.connector.transport.sftp.SftpTestImage;
 import io.lumnik.hub.testsupport.MinioTestImage;
+import io.lumnik.hub.testsupport.TestOutbound;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
@@ -69,7 +70,7 @@ class RemoteListingCostProbe {
                         admin.putObject(b -> b.bucket(bucket).key(key), RequestBody.fromString("id,name\n1,a\n2,b\n"));
                     }
                     Function<String, String> env = n -> n.equals("K") ? access : n.equals("S") ? secret : null;
-                    var factory = new S3FileSourceFactory(SecretRefs.environmentOnly(env));
+                    var factory = new S3FileSourceFactory(SecretRefs.of(env), TestOutbound.ADDRESSES);
                     Map<String, Object> cfg = Map.of("region", "us-east-1", "endpoint", endpoint, "bucket", bucket,
                         "prefix", "in/", "suffix", ".csv", "access_key_env", "K", "secret_key_env", "S");
                     try (var src = factory.build(cfg)) {
@@ -87,7 +88,7 @@ class RemoteListingCostProbe {
                 .waitingFor(Wait.forLogMessage(".*Server listening on 0\\.0\\.0\\.0.*", 1))) {
             sftp.start();
             int port = sftp.getMappedPort(22);
-            var factory = new SftpFileSourceFactory(SecretRefs.environmentOnly(n -> null));
+            var factory = new SftpFileSourceFactory(SecretRefs.of(n -> null), TestOutbound.ADDRESSES);
             Map<String, Object> cfg = Map.of("host", "localhost", "port", port, "user", user,
                 "password_env", "UNSET", "path", "/upload/*.csv", "strict_host_key", false);
             try (var helper = new SftpTestHelper("localhost", port, user, pass)) {

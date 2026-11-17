@@ -8,6 +8,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 
+import static io.lumnik.hub.tenant.DeploymentTenancy.HUBADMIN_TENANT;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
@@ -44,7 +45,7 @@ class AppRegistrationStoreRollbackTest {
         store.adminDs = new SingletonInstance<>(ds);
         AppManifest manifest = new AppManifest("orders", "sales", "Orders", "box", null, null, true);
 
-        assertThatThrownBy(() -> store.upsert(manifest, "kind: App", null)).isSameAs(error);
+        assertThatThrownBy(() -> store.upsert(HUBADMIN_TENANT, manifest, "kind: App", null)).isSameAs(error);
 
         var order = inOrder(conn, demote, write);   // the demote ran inside the transaction that was rolled back
         order.verify(conn).setAutoCommit(false);

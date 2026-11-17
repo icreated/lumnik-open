@@ -376,7 +376,7 @@ public class SearchProjectionRunHook {
 
     /** The stored manifest of {@code entityName}, whichever its mode; empty when it is no longer stored. */
     private Optional<EntityManifest> storedManifest(String entityName) {
-        return registry.stored(entityName).map(stored -> parser.parse(stored.yaml()));
+        return registry.storedHubwide(entityName).map(stored -> parser.parse(stored.yaml()));
     }
 
     /** What an entity observes: its direct sources, and per join the sources able to reach its lookup. */
@@ -478,7 +478,7 @@ public class SearchProjectionRunHook {
 
     /** #748: true when the stored manifest of {@code entityName} declares {@code resolution:}. */
     public boolean isResolutionEntity(String entityName) {
-        return registry.stored(entityName)
+        return registry.storedHubwide(entityName)
             .map(stored -> parser.parse(stored.yaml()))
             .filter(m -> m.resolution() != null)
             .isPresent();

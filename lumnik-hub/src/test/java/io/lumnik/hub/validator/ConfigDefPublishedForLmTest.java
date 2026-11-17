@@ -43,4 +43,12 @@ class ConfigDefPublishedForLmTest {
         assertThat(published).as("the hub now publishes something else for " + kind + " than lm is tested against "
             + "— regenerate " + file + " (see this class), then run lm's tests").isEqualTo(Files.readString(file));
     }
+
+    /** {@code lm describe} prints these texts to an integrator: an issue number is our bookkeeping, not theirs. */
+    @ParameterizedTest
+    @ValueSource(strings = {"csv-file", "jdbc-generic", "rest-generic"})
+    void noPublishedTextCarriesAnIssueNumber(String kind) throws Exception {
+        String published = mapper.writeValueAsString(ConfigDefSerializer.toJson(service.configDefFor(kind).orElseThrow()));
+        assertThat(published).doesNotContainPattern("#\\d{2,}");
+    }
 }

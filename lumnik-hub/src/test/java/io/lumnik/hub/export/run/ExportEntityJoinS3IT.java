@@ -115,8 +115,9 @@ class ExportEntityJoinS3IT {
         return bearer(T1, "lm_integrator", "scope:catalogue");
     }
 
-    static String adminCatalogue() {
-        return bearer(T1, "lm_admin", "scope:catalogue");
+    /** Tenant-wide: a bound one publishes only tables a connector of its scope writes (#2048). */
+    static String admin() {
+        return bearer(T1, "lm_admin");
     }
 
     @BeforeEach
@@ -133,8 +134,8 @@ class ExportEntityJoinS3IT {
             "INSERT INTO connector.t_product_categories (tenant_id, m_product_category_id, name, description) "
           + "VALUES (2, 'C9', '" + SENTINEL + "', '" + SENTINEL + " d'), "
           + "(2, 'C1', '" + SENTINEL + "', '" + SENTINEL + " d')", ps -> {});
-        registerSecrets(T1);
-        given().config(YamlBody.CONFIG).header("Authorization", adminCatalogue())
+        registerSecrets(T1, shipped().scope());
+        given().config(YamlBody.CONFIG).header("Authorization", admin())
             .contentType("application/yaml").body(read("apps/demo/entities/30-product-with-category.yaml"))
             .post("/api/entities/apply").then().statusCode(200);
     }
@@ -161,13 +162,17 @@ class ExportEntityJoinS3IT {
         return Files.readString(DOCS.resolve(docsFile));
     }
 
-    static void registerSecrets(long tenant) {
+    /** Through the real doors, as {@code lm secret set} then {@code lm secret scope}: the export's scope (#2015). */
+    static void registerSecrets(long tenant, String scope) {
         for (String[] s : new String[][] {{ACCESS_NAME, ACCESS}, {SECRET_NAME, SECRET}}) {
             int status = given().header("Authorization", bearer(tenant, "lm_integrator", "lm_admin"))
                 .contentType("application/json")
                 .body("{\"name\":\"" + s[0] + "\",\"value\":\"" + s[1] + "\"}")
                 .post("/api/platform/secrets").statusCode();
             assertThat(status).as("register %s for tenant %d", s[0], tenant).isIn(201, 409);
+            given().header("Authorization", bearer(tenant, "lm_integrator", "lm_admin"))
+                .contentType("application/json").body("[\"" + scope + "\"]")
+                .put("/api/platform/secrets/" + s[0] + "/scopes").then().statusCode(200);
         }
     }
 

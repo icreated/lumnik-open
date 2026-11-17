@@ -148,7 +148,7 @@ class WidenUnderViewIT {
         String table = "t_widen_deleted_" + n, name = "WidenDeleted" + n, view = "v_widendeleted" + n;
         writeChunk(table, "d1", Map.of("no", "D1", "qty", 1000));
         applyEntity(entity(name, table, "no: no, qty: qty"));
-        compiler.afterWalk(c -> compiler.delete(name));
+        compiler.afterWalk(c -> compiler.delete(1L, name, null));
 
         writeChunk(table, "d2", Map.of("no", "D2", "qty", 1.5d));
 

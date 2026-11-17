@@ -14,7 +14,10 @@ import java.util.List;
 public class ViewResolver {
 
     public ResolvedView resolve(ViewManifest m, SchemaCard card) {
-        SchemaCard.Table table = findTable(m, card);
+        return resolve(m, findTable(m, card));
+    }
+
+    private ResolvedView resolve(ViewManifest m, SchemaCard.Table table) {
         List<ResolvedView.Column> cols = new ArrayList<>();
         for (String declared : m.columns()) {
             SchemaCard.Column c = table.columns().stream()
@@ -29,7 +32,40 @@ public class ViewResolver {
         }
         String title = Text.present(m.title()) ? m.title()
                 : Text.present(table.label()) ? table.label() : table.name();
-        return new ResolvedView(title, table.name(), cols);
+        return new ResolvedView(title, table.name(), cols, mapPoint(m, table));
+    }
+
+    /**
+     * The card's point the view's map names (#2057), or null. A point the card does not carry is not refused here: the
+     * card lists usable points only, so a run that retyped a column makes the point vanish, and a saved view must still
+     * render as a list. The apply door refuses it ({@link #resolveForApply}); the render reports it.
+     */
+    static SchemaCard.Point mapPoint(ViewManifest m, SchemaCard.Table table) {
+        if (m.mapPoint() == null) return null;
+        return table.points().stream().filter(p -> p.name().equals(m.mapPoint())).findFirst().orElse(null);
+    }
+
+    /**
+     * {@link #resolve}, strict where the render is lenient: the apply door refuses a map on a point the table does not
+     * offer, naming the offered ones, and a table whose column would be shadowed by the map's field.
+     */
+    public ResolvedView resolveForApply(ViewManifest m, SchemaCard card) {
+        SchemaCard.Table table = findTable(m, card);
+        ResolvedView rv = resolve(m, table);
+        requireMapPoint(m, rv, table);
+        return rv;
+    }
+
+    private static void requireMapPoint(ViewManifest m, ResolvedView rv, SchemaCard.Table table) {
+        if (m.mapPoint() != null && rv.map() == null) {
+            List<String> offered = table.points().stream().map(SchemaCard.Point::name).toList();
+            throw new IllegalArgumentException("spec.map.point: table " + table.name() + " offers no point '"
+                + m.mapPoint() + "' (" + (offered.isEmpty() ? "it offers none" : "offered: " + String.join(", ", offered))
+                + ") — declare it under the entity's points, with two numeric columns");
+        }
+        if (m.mapPoint() != null && table.columns().stream().anyMatch(c -> c.name().equals(MapPlacement.FIELD)))
+            throw new IllegalArgumentException("spec.map: table " + table.name() + " has a column named '"
+                + MapPlacement.FIELD + "', the field a map row carries — rename the column in the entity");
     }
 
     /**

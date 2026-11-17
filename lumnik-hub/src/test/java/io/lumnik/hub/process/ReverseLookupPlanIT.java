@@ -9,6 +9,7 @@ import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.lumnik.hub.entity.EntityManifest;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -74,7 +75,7 @@ class ReverseLookupPlanIT {
         fixture(kind, sourceType, lookupType);
         applyProcess(kind).statusCode(200);
 
-        EntityManifest entity = matchIndexes.storedEntity("connector.v_rlp" + kind).orElseThrow();
+        EntityManifest entity = matchIndexes.storedEntityHubwide("connector.v_rlp" + kind).orElseThrow();
         LookupReach reach = LookupReach.of(entity, fused.catalog(entity)).get(0);
         String plan = "";
         // The build is the hub's, in the background: ask again until it has landed (a regression is a plan that never loses its Seq Scan)
@@ -123,6 +124,8 @@ class ReverseLookupPlanIT {
                 + "(1, 'rlp-" + kind + "-reg', 'connector', '" + reg + "', '{}'::jsonb)");
             st.execute("DELETE FROM core.process_manifest WHERE tenant_id = 1 AND name = 'rlp-" + kind + "'");
         }
+        RegisteredTables.register(adminDs, 1L, res);
+        RegisteredTables.register(adminDs, 1L, reg);
         given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1)).contentType("application/yaml")
             .body("kind: Entity\nname: Rlp" + kind + "\nmatch: [id]\nscopes: [rlp" + kind + "]\nsources:\n"
                 + "  - table: " + res + "\n    map: { id: id, ref: ref }\n"

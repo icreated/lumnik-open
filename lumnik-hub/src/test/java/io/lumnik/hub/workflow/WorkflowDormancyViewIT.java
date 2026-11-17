@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.lumnik.hub.testsupport.LogProbe;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -107,7 +108,7 @@ class WorkflowDormancyViewIT {
         sql("ALTER TABLE " + table + " FORCE ROW LEVEL SECURITY");
         sql("CREATE POLICY tenant_isolation ON " + table
             + " USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::bigint)");
-        sql("GRANT SELECT ON " + table + " TO lumnik_app");
+        sql("GRANT SELECT ON " + table + " TO lumnik_app, lumnik_readonly");
     }
 
     private JsonNode onlyDormantPayload(long tenant) throws Exception {
@@ -142,9 +143,11 @@ class WorkflowDormancyViewIT {
         sql("ALTER TABLE " + EVENTS + " FORCE ROW LEVEL SECURITY");
         sql("CREATE POLICY tenant_isolation ON " + EVENTS
             + " USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::bigint)");
-        sql("GRANT SELECT ON " + EVENTS + " TO lumnik_app");
+        sql("GRANT SELECT ON " + EVENTS + " TO lumnik_app, lumnik_readonly");
         sql("DELETE FROM core.workflow_observation WHERE workflow_name = '" + WF + "'");
         sql("DELETE FROM core.workflow_manifest WHERE name = '" + WF + "'");
+        RegisteredTables.register(adminDs, 1L, "t_viewit_registry");
+        RegisteredTables.register(adminDs, 1L, "t_viewit_events");
         given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
             .contentType("application/yaml").body(ENTITY).post("/api/entities/apply").then().statusCode(200);
         declare(1L, YAML);

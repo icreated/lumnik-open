@@ -37,8 +37,11 @@ public class EntityManifestParser {
   // would cry wolf on our own demo — the failure mode the C3 verdict named.
   private static final Set<String> ROOT_KEYS = Set.of(
       "apiVersion", "kind", "name", "label", "match", "sources", "scopes", "description", "columns",
-      "resolution", "joins", "zone");
+      "resolution", "joins", "zone", "points");
   private static final Set<String> SOURCE_KEYS = Set.of("table", "map");
+  private static final Set<String> POINT_KEYS = Set.of("name", "lat", "lon");
+  /** The author's call (#1974): a card line per point, so a bound on what the model reads. */
+  private static final int MAX_POINTS = 8;
   private static final Set<String> JOIN_KEYS = Set.of("table", "from", "to", "map");
   // A joined column named like a lookup CTE alias would make the CREATE VIEW ambiguous: a 500, not a 400.
   private static final Set<String> LOOKUP_INTERNAL = Set.of(
@@ -53,6 +56,7 @@ public class EntityManifestParser {
     ALLOWED_BY_PATH.put("", ROOT_KEYS);
     ALLOWED_BY_PATH.put("sources[]", SOURCE_KEYS);
     ALLOWED_BY_PATH.put("joins[]", JOIN_KEYS);
+    ALLOWED_BY_PATH.put("points[]", POINT_KEYS);
     ALLOWED_BY_PATH.put("resolution", RESOLUTION_KEYS);
     ALLOWED_BY_PATH.put("resolution.cascade[]", CASCADE_RULE_KEYS);
     // `map`, `columns` and `resolution.identity` are keyed by the integrator's OWN names (source
@@ -121,7 +125,7 @@ public class EntityManifestParser {
    */
   public static String honoredSurface() {
     return "root {" + sorted(ROOT_KEYS) + "}, sources[] {" + sorted(SOURCE_KEYS) + "}, "
-        + "joins[] {" + sorted(JOIN_KEYS) + "}, "
+        + "joins[] {" + sorted(JOIN_KEYS) + "}, points[] {" + sorted(POINT_KEYS) + "}, "
         + "resolution {" + sorted(RESOLUTION_KEYS) + "}, resolution.cascade[] {"
         + sorted(CASCADE_RULE_KEYS) + "}, resolution.cascade[].exact {" + sorted(EXACT_KEYS)
         + "}, resolution.cascade[].propose {" + sorted(PROPOSE_KEYS) + "}";
@@ -153,7 +157,38 @@ public class EntityManifestParser {
     requirePreferredSourcesMapTheirColumn(m);
     requireUncomparedColumnsAreFused(m);
     if (hasResolution) requireResolution(m, canonical);
+    requirePoints(m, canonical);
     return m;
+  }
+
+  /**
+   * #1974: only what the manifest itself can say — a name, two different canonical columns. Whether both are numbers
+   * is the compiled view's to answer, at apply.
+   */
+  private static void requirePoints(EntityManifest m, Set<String> canonical) {
+    if (m.points().size() > MAX_POINTS)
+      throw new IllegalArgumentException("points: at most " + MAX_POINTS + " (got " + m.points().size() + ")");
+    Set<String> names = new HashSet<>();
+    for (int i = 0; i < m.points().size(); i++) {
+      EntityManifest.Point p = m.points().get(i);
+      String at = "points[" + i + "]";
+      if (p == null) throw new IllegalArgumentException(at + " is null");
+      if (Text.blank(p.name())) throw new IllegalArgumentException(at + ".name is required");
+      if (!p.name().matches("[A-Za-z_][A-Za-z0-9_]*"))
+        throw new IllegalArgumentException(at + ".name must be a simple identifier (letters, digits, _)");
+      if (!names.add(p.name().toLowerCase(Locale.ROOT)))
+        throw new IllegalArgumentException(at + ".name '" + p.name() + "' is declared more than once");
+      requirePointColumn(at + ".lat", p.lat(), canonical);
+      requirePointColumn(at + ".lon", p.lon(), canonical);
+      if (p.lat().equals(p.lon()))
+        throw new IllegalArgumentException(at + ": 'lat' and 'lon' must be two different columns");
+    }
+  }
+
+  private static void requirePointColumn(String at, String column, Set<String> canonical) {
+    if (Text.blank(column)) throw new IllegalArgumentException(at + " is required");
+    if (!canonical.contains(column))
+      throw new IllegalArgumentException(at + " '" + column + "' is not a canonical column of the entity");
   }
 
   private EntityManifest deserialize(String yamlText) {

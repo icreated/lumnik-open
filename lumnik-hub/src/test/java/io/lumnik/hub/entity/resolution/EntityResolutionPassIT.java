@@ -103,8 +103,8 @@ class EntityResolutionPassIT {
       st.execute("DELETE FROM core.entity_identity WHERE entity_type IN ('"
           + ENTITY_TYPE + "', '" + ENTITY_TYPE_PROVIDER + "')");
     }
-    registry.put(new EntityManifestParser().parse(MANIFEST));
-    registry.put(new EntityManifestParser().parse(MANIFEST_PROVIDER));
+    registry.put(new EntityManifestParser().parse(MANIFEST), null);
+    registry.put(new EntityManifestParser().parse(MANIFEST_PROVIDER), null);
   }
 
   /** Seeds an already-resolved anchor identity + its matching email fingerprint under a

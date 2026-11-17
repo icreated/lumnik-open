@@ -87,7 +87,7 @@ NAME                  TABLE                         COLUMN  SCOPE  ENABLED
 acme-order-lifecycle  connector.t_acme_desk_orders  status  desk   true
 ```
 
-One `200`, stored and indexed, with what the declaration and the data disagree on:
+The manifest is stored. The report says where the declaration and the data disagree:
 
 - `EN LITIGE` sits on two orders and nobody declared it; `Terminé` (with its accent) on one;
 - `ANNULE` is declared and no order has reached it;
@@ -141,8 +141,9 @@ $ lm workflow apply -f docs/apps/demo/workflows/65-refused-unknown-scope.yaml
 Error: API error 404: no schema for scope 'dsk' — run discovery first
 ```
 
-The table is **not** checked: you may declare a lifecycle before ingesting the data. The report
-then says `the table is not there yet`.
+The table need not exist: you may declare a lifecycle before ingesting the data. The report
+then says `the table is not there yet`. A table that another scope's card carries, and yours does
+not, is refused: `spec.on.table … belongs to another scope`.
 
 ### Names the source chose
 
@@ -168,9 +169,9 @@ Error: API error 400: spec.on.table is required and must name a table ingestion 
 ```
 
 An `ext.<table>` is a REST connector's table. A dormancy or a due date there works as on a
-`connector.t_*` table, with one difference: a key's versions are ordered by the moment the row last changed (`indexed_at`).
-A re-read that changes nothing does not move a document. The table exists after the first ingest: apply the workflow after it, or let the
-apply report the table as missing.
+`connector.t_*` table, with one difference: a key's versions are ordered by the moment the row
+last changed. A re-read that changes nothing does not move a document. The table exists after the
+first ingest: apply the workflow after it, or let the apply report the table as missing.
 
 ```yaml
 --8<-- "docs/apps/demo/workflows/40-rest-review.yaml"
@@ -256,8 +257,8 @@ Nothing to report: `the data matches the declaration`.
 
 ## After each import — `spec.check`
 
-The report above is computed when you apply. Without more, a spelling that the next night's export
-brings stays unseen until someone re-applies. `spec.check.trigger: ingestion` runs the same comparison after
+The report above is computed when you apply. A spelling that the next night's export brings stays
+unseen until someone re-applies. `spec.check.trigger: ingestion` runs the same comparison after
 each completed run that writes `spec.on.table`:
 
 ```yaml
@@ -297,12 +298,16 @@ Its payload:
 | `null_or_blank` | rows with no status |
 | `run_id` | the run that triggered the check |
 
-The comparison costs one `GROUP BY` on the column per completed run of the table. On a large table
+The check costs one aggregate query on the column per completed run of the table. On a large table
 imported every minute, that is one aggregate a minute.
 
 ## What the chat answers from it
 
-**lumnik Pro.** Two gestures, two kinds of answer:
+**lumnik Pro.** With [the AI switched off](../rag/models.md#switching-the-ai-off), the apply
+stores the manifest and prints
+`warning: not indexed for chat: the AI is switched off (LUMNIK_AI_ENABLED=false); apply it again once it is on`.
+
+Two gestures, two kinds of answer:
 
 | You ask with | It answers about |
 |---|---|
@@ -393,7 +398,7 @@ For the next screens the threshold was shortened to `after: 1m` and the manifest
 under the same name (the shipped file keeps `30d`). Then **day 2** was loaded:
 
 ```bash
-docker compose -f docker-compose.selfhost.yml cp docs/apps/demo/data/acme-orders-day2.csv hub:/tmp/acme-desk/acme-orders.csv
+docker compose -f docker-compose.selfhost.yml cp docs/apps/demo/data/acme-orders-day2.csv hub:/tmp/drop/1/acme-desk/acme-orders.csv
 lm connector run acme-desk-orders
 ```
 
@@ -497,10 +502,12 @@ ID  WHEN      PROCESS                           MESSAGE                         
 
 ## The current version — `spec.on.order`
 
-A sweep needs one version per document. On an ingest table it takes the last one ingested. That is
-wrong when the source sends events out of order, as Kafka can, and impossible on a fused view, which
-has no ingest order and may hold one row per event. `spec.on.order` names the column that orders a
-document's versions:
+A sweep needs one version per document. On an ingest table it takes the last one ingested.
+
+- That is wrong when the source sends events out of order, as Kafka can.
+- It is impossible on a fused view: a view has no ingest order, and may hold one row per event.
+
+`spec.on.order` names the column that orders a document's versions:
 
 ```yaml
 spec:
@@ -516,7 +523,7 @@ spec:
 | Watched | Without `order` | With `order` |
 |---|---|---|
 | `connector.t_*` | the last version ingested | the greatest `order` value; ingestion breaks a tie |
-| a REST table (`ext.*`, or kept under `connector`) | the last version that changed (`indexed_at`) | the greatest `order` value; `indexed_at` breaks a tie |
+| a REST table (`ext.*`, or kept under `connector`) | the last version that changed | the greatest `order` value; the last change breaks a tie |
 | `connector.v_*`, dormancy | refused at apply | the greatest `order` value; a tie follows the rule below |
 | `connector.v_*`, due date | every row | the greatest `order` value; a tie follows the rule below |
 
@@ -535,9 +542,12 @@ for a due date, the document is ambiguous: nothing is decided about it. When the
 picked by the view's canonical key. That pick is deterministic, not "the latest".
 
 **Unreadable documents.** A document with one version whose order value is invalid or empty is not
-watched: lumnik cannot tell which version is current, and a bad date must never make an older state
-current. It raises nothing, its `SINCE` restarts on every sweep while it stays unreadable, and its
-history stays on the tape. When it is readable again, its clock runs from there.
+watched: lumnik cannot tell which version is current.
+
+- It raises nothing.
+- Its `SINCE` restarts on every sweep while it stays unreadable.
+- Its history stays on the tape.
+- When it is readable again, its clock runs from there.
 
 On an ingest table, a later valid version does not clear the bad one: the table keeps every version.
 
@@ -629,9 +639,11 @@ $ lm workflow rm acme-order-lifecycle
 Error: API error 404: unknown workflow: acme-order-lifecycle
 ```
 
-`disable` stops the sweep (no new alerts) and removes the lifecycle from chat, keeping the
-manifest and the tape; `enable` restores both. `rm` removes it for good, with no prompt — its
-tape too (`lm observations stats` no longer lists it). Each gesture, and every apply, is recorded in the [audit trail](../security/index.md#the-audit-trail).
+- `disable` stops the sweep (no new alerts) and removes the lifecycle from chat. It keeps the
+  manifest and the tape. `enable` restores both.
+- `rm` removes it for good, with no prompt. Its tape goes too: `lm observations stats` no longer
+  lists it.
+- Each gesture, and every apply, is recorded in the [audit trail](../security/index.md#the-audit-trail).
 
 | Command | Role | Scope-bound |
 |---|---|---|
@@ -647,8 +659,8 @@ lm workflow apply -f docs/apps/demo/workflows/10-order-lifecycle.yaml
 lm workflow get acme-order-lifecycle
 ```
 
-**Result:** the manifest is stored and indexed in one `200`, with the data-truth report. The
-semantic chat in that scope now answers transition questions from the declared graph.
+**Result:** the manifest is stored, and the apply prints the data-truth report. The chat in that
+scope (Pro) now answers transition questions from the declared graph.
 
 ### Get told when a document stops moving
 
@@ -775,8 +787,7 @@ it into a workflow, and checking it against your data: [Proposal dossiers](propo
     `lm observations list` — the watched documents of every workflow in your scopes, **stillest
     first** (`--workflow`, `--limit`: default 200, at most 1000). `SINCE` is when lumnik started observing that
     state; `ALERTED` is empty until the sweep alerts. `lm observations stats` sums it up per workflow. The TUI's
-    `:observations` screen shows the same, with humanized ages. Both need `lm_admin` (or
-    `lm_superadmin`) on top of `lm_integrator`.
+    `:observations` screen shows the same, with humanized ages.
 
     `lm observations transitions` reads the journal: every observed move, **newest first**
     (`--workflow`, `--doc`, `--limit`). `IN_FROM_S` is the seconds the document spent in `FROM`,

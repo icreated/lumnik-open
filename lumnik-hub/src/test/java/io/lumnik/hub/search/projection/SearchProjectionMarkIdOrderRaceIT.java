@@ -7,6 +7,7 @@ import io.lumnik.extraction.spi.search.ProjectionSink;
 import io.lumnik.extraction.spi.search.ProviderStatus;
 import io.lumnik.hub.entity.EntityRegistry;
 import io.lumnik.hub.search.mark.SearchProjectionMarkStore;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -90,6 +91,7 @@ class SearchProjectionMarkIdOrderRaceIT {
 
     private void applyMatchEntity(long tenant, String name, String table) throws Exception {
         createMatchTable(table);
+        RegisteredTables.register(adminDs, tenant, table);
         yaml(tenant).body(matchEntityYaml(name, table)).post("/api/entities/apply").then().statusCode(200);
     }
 

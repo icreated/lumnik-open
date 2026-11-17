@@ -22,6 +22,17 @@ import java.util.UUID;
 @Setter
 public class Connector extends TenantedEntity {
 
+  /**
+   * Whether this request changed where the connector sends its requests (#2003): an endpoint's credential read back
+   * redacted is then not restored, it has to be written again. Never stored.
+   */
+  @Transient
+  private boolean destinationChanged;
+
+  public boolean destinationChanged() { return destinationChanged; }
+
+  public void destinationChanged(boolean changed) { this.destinationChanged = changed; }
+
   @Id
   @GeneratedValue
   private UUID id;

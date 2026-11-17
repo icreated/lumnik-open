@@ -10,10 +10,10 @@ metadata: { name: shop, connector_type: rest-generic, scopes: [commerce] }
 spec:
   base_url: https://myshop.example.com
   graphql_path: /api/graphql        # the single POST endpoint (default: /graphql)
-  auth: { kind: bearer, token_env: SHOP_TOKEN }
+  auth: { kind: bearer, token_env: SHOP_TOKEN }   # lm secret scope SHOP_TOKEN commerce
   headers:                          # applied to every request (static or env)
     - { name: X-Api-Version, value: "2024-10" }
-    - { name: X-Tenant,      value_env: SHOP_TENANT_HDR }
+    - { name: X-Tenant,      value_env: SHOP_TENANT_HDR }   # lm secret scope SHOP_TENANT_HDR commerce
   default_rate_limit: 50/s
   endpoints:
     - id: orders                    # endpoint identifier (kebab-case)

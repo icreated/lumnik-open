@@ -7,6 +7,7 @@ import io.lumnik.extraction.spi.search.ProjectionSink;
 import io.lumnik.extraction.spi.search.ProviderStatus;
 import io.lumnik.hub.entity.EntityRegistry;
 import io.lumnik.hub.search.mark.SearchProjectionMarkStore;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -98,6 +99,7 @@ class SearchProjectionFullRebuildIT {
 
     private void applyMatchEntity(long tenant, String name, String table) throws Exception {
         createMatchTable(table);
+        RegisteredTables.register(adminDs, tenant, table);
         yaml(tenant).body(matchEntityYaml(name, table, "city")).post("/api/entities/apply").then().statusCode(200);
     }
 
@@ -135,6 +137,7 @@ class SearchProjectionFullRebuildIT {
 
     private void applyResolutionEntity(long tenant, String name, String table) throws Exception {
         createResolutionTable(table);
+        RegisteredTables.register(adminDs, tenant, table);
         String manifest = "kind: Entity\n"
             + "name: " + name + "\n"
             + "scopes: [sales]\n"

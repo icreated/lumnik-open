@@ -133,8 +133,11 @@ the ERP had no city for it, the CRM did, and the fused row simply carries Aarhus
 | `joins[].to` | yes | a **physical** column of the lookup table — the key it is matched on (it need not appear in `map`) |
 | `joins[].map` | yes (≥ 1) | `lookup column: canonical column`; the new canonical names must not collide with any source column, any other join, or a reserved name, and none may be a `match` column |
 | `zone` | no | the business's time zone, a region such as `Europe/Paris`: a date meets a time on the day it has there. Without it the day is the UTC one — see [The business's day](entities-types.md#the-businesss-day) |
-| `scopes` | no | the business scopes whose chat and views may read this entity — an entity with none is not discoverable by anyone |
+| `scopes` | no | the business scopes whose chat and views may read this entity. With none, the chat cannot ask it and a [scope-bound](rag/scopes.md#binding-users-to-scopes-opt-in) user cannot read it |
 | `columns` | no | per-canonical-column [grounding](#the-columns-grounding-block) |
+| `points[]` | no | the GPS points of the entity, at most 8 — see [Ask by distance](#ask-by-distance-points) |
+| `points[].name` | yes | a simple identifier, unique in the entity |
+| `points[].lat`, `points[].lon` | yes | two different canonical columns, latitude first. Both must be numbers |
 
 - **Column order:** every `sources[].map` value in source order, then every `joins[].map` value
   in declared order, then `_conflicts`.
@@ -151,7 +154,7 @@ The key set is closed: an unknown key such as `scope:` for `scopes:` is refused,
 
 ```
 $ lm entity apply -f docs/apps/demo/entities/63-refused-unknown-key.yaml
-Error: API error 400: unknown key(s) in the manifest: scope — kind:Entity honors root {apiVersion, columns, description, joins, kind, label, match, name, resolution, scopes, sources, zone}, sources[] {map, table}, joins[] {from, map, table, to}, resolution {cascade, identity}, resolution.cascade[] {exact, id, propose}, resolution.cascade[].exact {fields, normalize}, resolution.cascade[].propose {acceptAbove, provider, reviewAbove}
+Error: API error 400: unknown key(s) in the manifest: scope — kind:Entity honors root {apiVersion, columns, description, joins, kind, label, match, name, points, resolution, scopes, sources, zone}, sources[] {map, table}, joins[] {from, map, table, to}, points[] {lat, lon, name}, resolution {cascade, identity}, resolution.cascade[] {exact, id, propose}, resolution.cascade[].exact {fields, normalize}, resolution.cascade[].propose {acceptAbove, provider, reviewAbove}
 ```
 
 ## Fusion semantics
@@ -226,7 +229,7 @@ the connector:
 ```bash
 sed 's/^P-1002,Fixations Milano 1002,Milano,/P-1002,Fixations Milano 1002,Milan,/' \
     docs/apps/demo/data/acme-erp.csv > acme-erp.csv
-docker compose -f docker-compose.selfhost.yml cp acme-erp.csv hub:/tmp/acme-desk/acme-erp.csv
+docker compose -f docker-compose.selfhost.yml cp acme-erp.csv hub:/tmp/drop/1/acme-desk/acme-erp.csv
 lm connector run acme-desk-erp
 ```
 
@@ -511,6 +514,180 @@ LIMIT 500
   column it dropped, is no longer offered to the chat.
 - If a scope is missing from the chat, `lm source rediscover --scope <tag>` refreshes it.
 
+## Ask by distance: `points`
+
+**lumnik Pro for the chat.** Declare which two columns are a GPS point. The chat can then answer
+"which sites are within 20 km of …".
+
+The delivery sites of [`parse-coordinates`](connectors/transformers.md#parse-coordinates-gps-points-typed-by-several-tools)
+land with their coordinates as numbers. Declare the point on an Entity:
+
+```yaml
+--8<-- "docs/apps/demo/entities/70-delivery-site-point.yaml"
+```
+
+```
+$ lm entity apply -f docs/apps/demo/entities/70-delivery-site-point.yaml
+Applied entity "DeliverySite" → connector."v_deliverysite"
+```
+
+Ask from coordinates. Type them as a pair, latitude first:
+
+```
+$ lm ask --scope dispatch "Which sites are within 20 km of 45.764, 4.8357?"
+There are 2 sites within 20 km of 45.764, 4.8357. The sites are S01 and S02.
+  data as of: 2026-11-13T13:10:21.140201Z (last completed run)
+
+  SITE
+  S01
+  S02
+  2 rows returned
+
+  SQL: SELECT "site"
+FROM "connector"."v_deliverysite"
+WHERE connector.distance_m(45.764, 4.8357, "latitude", "longitude") <= 20000
+LIMIT 500
+```
+
+Or from a row that has a point:
+
+```
+$ lm ask --scope dispatch "Quels sites sont à moins de 20 km du site S01 ?"
+There are 2 sites within 20 km of S01. The sites are S01 and S02.
+  data as of: 2026-11-13T13:10:21.140201Z (last completed run)
+
+  SITE
+  S01
+  S02
+  2 rows returned
+
+  SQL: SELECT "site"
+FROM "connector"."v_deliverysite"
+WHERE connector.distance_m("latitude", "longitude", (SELECT "latitude" FROM "connector"."v_deliverysite" WHERE "site" = 'S01'), (SELECT "longitude" FROM "connector"."v_deliverysite" WHERE "site" = 'S01')) <= 20000
+LIMIT 500
+```
+
+A place name has no coordinates in the hub. Here the model looks for a site called Grenoble, finds
+none, and the answer says so:
+
+```
+$ lm ask --scope dispatch "Which sites are within 20 km of Grenoble?"
+The query returned no rows. That can mean there are genuinely none, or that the query did not capture your question — verify the SQL before reporting that there are none.
+  data as of: 2026-11-13T13:10:21.140201Z (last completed run)
+
+  no rows returned
+
+  SQL: SELECT DISTINCT "site"
+FROM "connector"."v_deliverysite"
+WHERE connector.distance_m("latitude", "longitude", (SELECT "latitude" FROM "connector"."v_deliverysite" WHERE "site" = 'Grenoble'), (SELECT "longitude" FROM "connector"."v_deliverysite" WHERE "site" = 'Grenoble')) <= 20000
+LIMIT 500
+```
+
+If the model writes the coordinates of Grenoble itself, the query does not run. The answer is
+"I can't measure from there: I know no coordinates for that place. Name a row that has a point, or
+type the coordinates, latitude first: 45.764, 4.8357."
+
+- **Before the query runs, the hub checks every distance.** It measures from a declared point, in
+  `lat, lon` order, from one row's point, or from a pair the question typed. Anything else is
+  refused.
+- **A row's point is read from that row only.** A query that could take the latitude from one row
+  and the longitude from another, or bring in coordinates from elsewhere, is refused.
+- **A point's column next to a number is checked too, with or without a distance.** The number must
+  be typed in the question, its sign with it:
+
+```
+$ lm ask --scope dispatch "Which sites are north of latitude 45.75?"
+There are 4 sites north of latitude 45.75. The sites are S02, S03, S04, and S06.
+  data as of: 2026-11-13T19:30:49.097728Z (last completed run)
+
+  SITE
+  S02
+  S03
+  S04
+  S06
+  4 rows returned
+
+  SQL: SELECT "site" FROM "connector"."v_deliverysite" WHERE "latitude" > 45.75
+LIMIT 500
+```
+
+  A number the question did not type is refused. Here the question wrote it in words:
+
+```
+$ lm ask --scope dispatch "Which sites are north of latitude forty-six?"
+I won't run this: the query compares a latitude or a longitude with a number your question does not contain. Type that number in the question (north of latitude 45.75), or ask for a distance from a row that has a point.
+
+  no rows returned
+
+  SQL: SELECT "site" FROM "connector"."v_deliverysite" WHERE "latitude" > 46
+LIMIT 500
+```
+
+  0, 90 and 180 are always allowed: they mark the equator, the prime meridian, the poles and the date
+  line, not a place.
+  "Which sites are in the northern hemisphere?" runs `"latitude" > 0`.
+
+- **This check catches the usual ways of writing a coordinate, not every one.** When an answer
+  filters on a latitude or a longitude without `distance_m`, read its SQL before you trust it.
+- **A typed pair is two numbers side by side**: `45.764, 4.8357`, `45.764; 4.8357` or `45.764 4.8357`.
+  Decimals take a dot: `45,764` is not read as one number. A minus sign goes right before the number
+  (`-33.8688`); `33.8688 S` is not read.
+- **The distance is in metres**, on a sphere. Against the WGS84 ellipsoid it was within 0.3 % on
+  five measured pairs: Paris–Lyon 391,499 m against 391,713 m, Paris–New York off by 0.27 %.
+- **An entity without `points` cannot be measured**, whatever its columns are called.
+- **A point needs two numbers.** A column of text is refused at apply. Parse it at the door first:
+
+```
+$ lm entity apply -f docs/apps/demo/entities/71-refused-point-on-text.yaml
+Error: API error 400: points[0].lat: column 'city' is text, a point needs a number — parse it at the door (parse-coordinates)
+```
+
+- If a later run turns a point's column into text, the entity stays. The chat simply stops
+  measuring from that point.
+- The scope's raw connector tables have no point. When the model measures from one of them, the
+  query is refused.
+- **Each row against every other row depends on the wording** with the
+  [default model](rag/models.md#which-model-does-what) (`qwen2.5-coder:7b`). "Near another site" gets no SQL:
+
+```text
+$ lm ask --scope dispatch "Quels sites sont à moins de 20 km d'un autre site ?"
+I can't answer that from the data available for this scope — the question doesn't map to the declared schema.
+```
+
+  In French, "Pour chaque site, quels autres sites sont à moins de 20 km de lui ?" is answered. Here each pair
+  comes back twice, once from each side:
+
+```text
+$ lm ask --scope dispatch "Pour chaque site, quels autres sites sont à moins de 20 km de lui ?"
+There are 2 rows in the result set. The key totals are:
+
+- Count of rows: 2
+- Total unique sites: 2 (S01 and S02)
+  data as of: 2026-11-14T00:13:22.161018Z (last completed run)
+
+  SITE1  SITE2
+  S01    S02
+  S02    S01
+  2 rows returned
+
+  SQL: SELECT
+    ds1."site" AS "site1",
+    ds2."site" AS "site2"
+FROM
+    "connector"."v_deliverysite" ds1
+JOIN
+    "connector"."v_deliverysite" ds2
+ON
+    ds1."site" <> ds2."site"
+WHERE
+    connector.distance_m(ds1."latitude", ds1."longitude", ds2."latitude", ds2."longitude") <= 20000
+LIMIT 500
+```
+
+  The English wording tried, "For each site, which other sites are within 20 km of it?", got no SQL either.
+  When a wording gets no SQL, ask from one row at a time: "Quels sites sont à moins de 20 km du site S01 ?".
+  That row comes back too, in its own answer.
+
 ## Refusals
 
 Apply refuses with the exact problem. The ones an integrator meets first, each with a file under
@@ -534,7 +711,7 @@ The last one is a `409`, not a `400`: the manifest is fine, the world is not rea
 | `kind must be 'Entity'` | wrong or missing `kind` | `kind: Entity` |
 | `name must be a simple identifier (letters, digits, _) — it becomes the SQL view name v_<name> advertised to the chat: …` | the name flows into SQL and the chat | rename |
 | `name has 62 characters; at most 61 — its view v_<name> must fit PostgreSQL's 63-byte names` | PostgreSQL would cut the view's name short | shorten the name |
-| `match must declare at least one column` | v1 needs one match rule | declare the join key |
+| `match must declare at least one column` | an entity needs a key to fuse on | declare the `match` column, or a [`resolution:`](entities-resolution.md) block |
 | `match declares a duplicate column (case-insensitive): …` | the same key listed twice | remove the duplicate |
 | `sources must have at least one source` / `source '…' map must have at least one column` | an entity fuses real tables | declare table + map |
 | `source '…': canonical column '…' is reserved` | the name is one of the [reserved names](#the-manifest) | pick another canonical name |
@@ -546,7 +723,13 @@ The last one is a `409`, not a `400`: the manifest is fine, the world is not rea
 | `unknown key(s) in the manifest: …` | a key `kind:Entity` does not honor — `scope:` for `scopes:` | the message lists what it honors |
 | `columns references unknown canonical column '…' (known: …)` | grounding for a column that does not exist — almost always a typo | use a canonical name |
 | `column '…' has a blank allowed value` / `… has an allowed value with leading/trailing whitespace …` | a domain value that can never match makes the guard lie | trim or remove it |
-| `409 source relation "…" does not exist — … run the source connectors first` | a `sources[].table` no connector has created yet | run the source connector, then re-apply |
+| `points[0].lat: column '…' is text, a point needs a number — parse it at the door (parse-coordinates)` | a point's column is not a number in the fused view | read the coordinates with [`parse-coordinates`](connectors/transformers.md#parse-coordinates-gps-points-typed-by-several-tools), then re-apply |
+| `points[0].lat '…' is not a canonical column of the entity` / `points[0]: 'lat' and 'lon' must be two different columns` / `points: at most 8 (got …)` | a point the manifest cannot hold | name two canonical columns, latitude first |
+| `409 source relation "…" does not exist — … run the source connectors first` | a `sources[].table` no connector has created yet (bound to scopes: a 403, below, until one of your connectors registers it) | run the source connector, then re-apply |
+| `400 source table … is not a table a connector writes …` | a `sources[].table` or `joins[].table` that is one of the hub's own tables (bound to scopes: the 403 below) | name a `t_…` table, a REST target, or another entity's `v_…` view |
+| `409 … is entity …'s view, and no entity … is applied: apply entity … first` | a `v_…` source or lookup whose entity is not applied — or one in scopes you do not hold | apply that entity first, then this one |
+| `403 scope not granted`, at apply | you are bound to scopes, and a `sources[].table` or `joins[].table` has a writer that lacks one of this entity's `scopes:`, or no connector of your tenant writes it yet | keep this entity's `scopes:` among those of every connector writing the table, or ask a tenant-wide integrator to apply it |
+| `400 … is entity …'s view, scoped [...]: this entity's scopes [...] must be among them` | this entity declares a scope the entity it reads does not carry: that scope's users would read its rows | keep this entity's `scopes:` among the other's, or leave them out |
 | `400 source table …: column "…" does not exist — check the sources[].map keys …` | a `sources[].map` key the physical table does not have: a typo, or a column renamed upstream since the last apply | fix the key to the column the connector creates, then re-apply |
 
 ## Read API
@@ -660,17 +843,6 @@ restart.
 - To change the delay, set `lumnik.entity.registry.refresh-every`, for example `1s`.
 
 ## How to…
-
-### Fuse two systems' customer tables
-
-```bash
-lm entity apply -f docs/apps/demo/entities/10-customer.yaml
-lm entity get acmecustomer -o json
-```
-
-**Result:** one canonical row per `match` key, unioned from every declared source — the first
-source in `sources[]` wins a disagreement, and every disagreement is kept in that row's
-`_conflicts` ledger.
 
 ### See which source said what, on one record
 

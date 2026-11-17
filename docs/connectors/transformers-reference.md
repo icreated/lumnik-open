@@ -12,6 +12,8 @@
 - A column that does not exist is refused **when the file's columns are known before it is
   read**: `parser.lines: true`, or a headerless file with `columns:` declared. With a header read
   from the file, the run names the missing column instead.
+- A header that is a number, such as a year, needs no quotes: `columns: [2024]`. Quote the
+  numbers YAML rewrites: `"007"` (else `7`), `"2024.10"` (else `2024.1`).
 - A misspelt key under `mapping` is refused, naming the four it accepts:
   `spec.mapping.cel` → `mapping: unknown key 'cel' — accepted: dataset, row, cell, on-error`.
 
@@ -38,6 +40,7 @@
 | `parse-boolean` | `column`; `true` (`1, true, yes, y, oui, o, vrai, t`); `false` (`0, false, no, n, non, faux, f`) | `O`/`N`, `0`/`1` → a boolean, case and spaces ignored; declared lists replace the defaults |
 | `parse-email` | `column`; `lower` (false) | trims, optionally lowercases, checks the shape |
 | `parse-phone` | `column`; `default-region` (`US`) | `06 12 34 56 78` → `+33612345678` with `FR` |
+| `parse-coordinates` | `lat`, `lon` (the two columns); `within` (`[south, west, north, east]`); `swapped` (absent; or `fix`); `reason` (a column) | `48°50'12"N` and `2°22'58"E` → `48.836667` and `2.382778`; a swapped pair is exchanged with `swapped: fix` — [every case](transformers.md#parse-coordinates-gps-points-typed-by-several-tools) |
 | `mask` | `column`; `keep-first` (0); `keep-last` (0); `mask-char` (`*`) | masks the middle of the value |
 | `split` | `column`; `by` (`,`); `into` (list) or `into-array` (false) | parts into new columns, or an array |
 | `to-uuid` | `column`; `generate` (false); `generate-from` (column); `on-invalid` (`null`; or `keep` / `generate`) | makes the column a UUID — [every case](transformers.md#to-uuid-an-id-column-holds-junk-like-na-or-0) |
@@ -73,6 +76,7 @@
 | The cell is | Hooks |
 |---|---|
 | **emptied** | `parse-date`, `parse-number`, `parse-boolean`, `parse-email`, `parse-phone`, `lookup` with `on-missing: null`, `to-uuid` with `on-invalid: null`, `regex-extract` with `required: true` |
+| **emptied**, both cells of the pair, counted once | `parse-coordinates` |
 | **left as it arrived** | `fix-mojibake` declined; `split` found more or fewer parts than `into` |
 | **replaced** by a value the source never sent | `to-uuid` with `on-invalid: generate` |
 | **overwritten** | `map-columns` renamed onto a column the row already had |
@@ -98,5 +102,36 @@ A blank cell — empty, or only spaces and tabs — stays empty. A `parse-*` hoo
 | `dlq` | goes to the dead letters as it was read (`MappingFailed`) — [example](transformers.md#an-unreadable-amount-is-a-wrong-row-on-error-dlq) |
 | `fail` | stops the run |
 
-- `fields` names the `column:` of a single-column hook. Every other hook follows `default`.
+- `fields` names the `column:` of a single-column hook. Every other hook follows `default`:
+  `parse-coordinates` reads a pair, so `default` decides its row.
 - `dlq` is refused beside `split-row`: it would set aside parts, not source rows.
+
+**The dead letter says why**, when the transformer knows. A contact `Paris,Martin,Durand` split
+`into: [city, name]` has one part too many:
+
+```
+$ lm dlq get 6409bdfd-fea4-4cea-be7f-1554206c0493
+ID:        6409bdfd-fea4-4cea-be7f-1554206c0493
+Connector: site-contacts (6e17e049-5cf8-407b-8a88-0cb1063e12b5)
+Run:       909ff75e-52c2-41ac-821e-9d6db105feb5
+Reason:    MappingFailed
+Attempts:  1
+Message:   contact: split could not read the value: 3 parts for 2 names
+Detail:    {"field":"contact","message":"split could not read the value: 3 parts for 2 names"}
+Payload:   {"site":"S02","contact":"Paris,Martin,Durand"}
+Resolution: open
+```
+
+| Transformer | What the message adds |
+|---|---|
+| `split` | `3 parts for 2 names`: the parts found, the names in `into` |
+| `parse-date` | `none of the declared formats` |
+| `regex-extract` (`required: true`) | `the pattern did not match` |
+| `to-uuid` | `not a UUID`, or `nothing to derive it from` (the `generate-from` column is empty) |
+| `fix-mojibake` | `not Windows-1252 text in <column>`, or `not valid UTF-8 once repaired in <column>` |
+| `parse-coordinates` | one of [its reasons](transformers.md#parse-coordinates-gps-points-typed-by-several-tools) |
+
+- A transformer that refuses several columns of one row names the first.
+- The message never quotes the value. The payload shows it.
+- The other transformers do not say why. Their message stays `<transformer> could not read the value`.
+- `on-error: fail` stops the run with the same reason.

@@ -4,6 +4,7 @@ import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.api.sources.CsvIngestForm;
 import io.lumnik.hub.api.sources.CsvIngestResult;
+import io.lumnik.hub.connector.transport.TestDirFileSourceFactory;
 import io.lumnik.hub.connector.transport.hook.FileSourceHookRunner;
 import io.quarkus.test.junit.mockito.InjectSpy;
 import io.quarkus.test.junit.QuarkusTest;
@@ -124,7 +125,7 @@ class CsvIngestServiceArchiveAfterCommitTest {
         CsvIngestForm form = new CsvIngestForm();
         form.scope      = "system";
         form.transport  = new HashMap<>(Map.of(
-            "kind",          "local",
+            "kind",          TestDirFileSourceFactory.KIND,
             "path",          dir.toAbsolutePath() + "/*.csv",
             "after_process", "delete",
             "max_file_size", 1024L

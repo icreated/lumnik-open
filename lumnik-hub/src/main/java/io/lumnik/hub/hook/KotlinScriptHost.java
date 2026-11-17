@@ -85,20 +85,14 @@ public class KotlinScriptHost {
 
     private final KtsScriptRunner runner = new KtsScriptRunner();
 
-    // Bounded: the __src__ keys embed whole script sources, and a tenant editing an
-    // override mints a fresh key each time — unbounded, this map is a slow leak of
-    // heavyweight compiled scripts.
+    // Bounded: the __src__ keys embed whole script sources, and an operator editing a hooks: script
+    // mints a fresh key each time — unbounded, this map is a slow leak of heavyweight compiled scripts.
     private final Cache<String, KtsScriptRunner.Compiled> cache =
         Caffeine.newBuilder().maximumSize(256).build();
 
     public void execute(String scriptPath, LifecycleEvent event, Object entity, HookContext ctx)
             throws Exception {
         compiledClasspath(scriptPath).evaluate(lifecycleBindings(event, entity, ctx));
-    }
-
-    public void executeSource(String source, LifecycleEvent event, Object entity, HookContext ctx)
-            throws Exception {
-        compiledSource(source).evaluate(lifecycleBindings(event, entity, ctx));
     }
 
     /**
@@ -215,11 +209,6 @@ public class KotlinScriptHost {
 
     private KtsScriptRunner.Compiled compiledClasspath(String scriptPath) {
         return compiled(scriptPath, scriptPath, () -> readClasspath(scriptPath));
-    }
-
-    private KtsScriptRunner.Compiled compiledSource(String source) {
-        // Diagnostics name an inline source by its hash, so two overrides' errors stay apart.
-        return compiled("__src__:" + source, "inline-" + Integer.toHexString(source.hashCode()) + ".kts", () -> source);
     }
 
     private KtsScriptRunner.Compiled compiled(String key, String name, Supplier<String> source) {

@@ -116,12 +116,13 @@ Clients ACME / P-1005
 | `spec.title` | no | the display title — falls back to the entity's `label:`, then the table's name |
 | `spec.columns[]` | yes (≥ 1) | the columns to show, in order. **Every one must exist in the scope's card.** The first is the sort order and the detail key |
 | `spec.links[]` | no | cells that lead somewhere: another view, or an external page — see [Linking views](#linking-views) |
+| `spec.map.point` | no | draws the view on a map in the PWA, at one of the entity's [points](../entities.md#ask-by-distance-points) — see [On a map](#on-a-map) |
 
 `apply` refuses a key it does not know:
 
 ```
 $ lm view apply -f docs/apps/demo/views/61-refused-unknown-key.yaml
-Error: API error 400: unknown key(s) in the manifest: spec.titel — kind:View honors root {apiVersion, kind, metadata, spec}, metadata {name}, spec {columns, links, scope, table, title}, spec.links[] {column, filters, targetView, url}
+Error: API error 400: unknown key(s) in the manifest: spec.titel — kind:View honors root {apiVersion, kind, metadata, spec}, metadata {name}, spec {columns, links, map, scope, table, title}, spec.links[] {column, filters, targetView, url}, spec.map {point}
 ```
 
 `lm view -f` still renders such a file: the unknown key is ignored, so this one shows under the
@@ -174,6 +175,42 @@ applied: acme-orders (scope desk)
 - Limits: one link per column, 16 links, 8 filters per link.
 
 The same rules apply to a [search result's link to your ERP](../search/search-indexes.md#linking-a-result-to-your-erp).
+
+### On a map
+
+A view can be shown on a map in the PWA. Name one of the entity's [points](../entities.md#ask-by-distance-points):
+
+```yaml
+apiVersion: apps.lumnik.io/v1
+kind: View
+metadata: { name: customers-map }
+spec:
+  scope: sales
+  table: connector.v_customer
+  title: Clients autour du dépôt
+  columns: [customer_no, name, city, coord_issue]
+  map: { point: shop }
+```
+
+- In **Records**, the view gets a **Liste · Carte** switch. One dot per row, tap a dot: its record opens.
+- A row without a usable position is not drawn. It is counted under the map (*1 fiche sans position*);
+  tap the line to list those rows. The hub decides which rows are placed: two numbers, latitude
+  between -90 and 90, longitude between -180 and 180.
+- The view does not need to show the two columns. If it does not list them, they are read to place
+  the row and never sent: not in the list, not in the record.
+- The map reads up to 1 000 rows, and says so when there are more. Narrow it with a filter.
+- No background by default: a grid, and no request leaves your hub. To draw a real map, the operator
+  names a tile server — see [Show a map background](../deploy.md#show-a-map-background).
+
+A point the entity does not declare is refused:
+
+```
+$ lm view apply -f customers-map.yaml
+Error: API error 400: spec.map.point: table connector.v_customer offers no point 'nope' (offered: shop) — declare it under the entity's points, with two numeric columns
+```
+
+If a later run turns one of the two columns into text, the point stops being usable. The view still
+opens as a list, with the reason above it.
 
 ### A view over a raw table
 
@@ -377,8 +414,9 @@ spec:
 
 Within `generate`, `-o` is the output file, not the output format.
 
-- Generation is rate-limited per tenant: `lumnik.ratelimit.view-generate.rpm`, default 10 per
-  minute; past it, `lm` prints `rate limited (429): rate limit exceeded, retry in Ns`.
+- Generation is rate-limited per user: `lumnik.ratelimit.view-generate.rpm`, default 10 per
+  minute. The tenant as a whole gets 5 times that (`lumnik.ratelimit.tenant-factor`). Past
+  either, `lm` prints `rate limited (429): rate limit exceeded, retry in Ns`.
 
 ### Generation contract
 
@@ -448,7 +486,7 @@ export's own columns, unlabelled, filterable the same way.
 | following a link answers `Lien refusé : …` | the target refused the filter | fix the filter in `links[].filters`, or the target's columns |
 | `403 … scope not granted` | you do not hold the `spec.scope` role | ask for that `scope:` role |
 | apply refused: `metadata.name must be a URL-safe slug …` | the name is not a lowercase slug, or is `apply`/`render`/`detail`/`generate` | rename `metadata.name` |
-| `rate limited (429): rate limit exceeded, retry in Ns` on generate | over 10 `lm view generate` calls per minute for the tenant | wait the seconds it names, then retry |
+| `rate limited (429): rate limit exceeded, retry in Ns` on generate | over 10 `lm view generate` calls per minute from you, or 50 from your tenant | wait the seconds it names, then retry |
 | `404 … no schema for scope '…' — run discovery first` | discovery has never run for that scope | `lm source rediscover --scope <tag>` (`lm_integrator` + `lm_admin`) |
 | `generation abstained: …` / `generation failed: …` | the card cannot serve the description, the selection failed twice, or the hub has no chat model | rephrase, or write the filter by hand; `lm source schema --scope <tag>` shows what the card has |
 | the title reads like a table name | no `spec.title`, and the entity declares no `label:` | set `spec.title`, or give the entity a `label:` |

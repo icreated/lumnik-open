@@ -19,14 +19,14 @@ import java.util.regex.Pattern;
  *
  * <p>Placeholders ({@code {{...}}}): {@code page_size} / {@code cursor} are the pagination values,
  * {@code page} the 1-based page number a custom service pages by;
- * {@code secret:NAME} resolves through {@code secrets} (the hub passes the lm secret registry, then
- * the environment) and {@code env:NAME} through {@code environment} (the hub environment only). An
+ * {@code secret:NAME} and {@code env:NAME} resolve through {@code secrets} (the hub passes the tenant's lm secret
+ * registry). An
  * unresolved placeholder fails fast (never sent literally; never logged).
  */
 public final class SoapRequestBuilder {
 
     private static final String SOAP_NS = "http://schemas.xmlsoap.org/soap/envelope/";
-    // Hyphens are valid in env-var names (e.g. MY-TOKEN, AWS-SECRET-KEY) — include them so the
+    // Hyphens are accepted in names (e.g. MY-TOKEN, AWS-SECRET-KEY) — included so the
     // fail-fast "unresolved placeholder" guard applies instead of sending the literal on the wire.
     private static final Pattern TOKEN    = Pattern.compile("\\{\\{\\s*([A-Za-z0-9_:\\-]+)\\s*}}");
     // Broad sentinel: catches any {{...}} that TOKEN didn't match (e.g. a dot in the name).
@@ -36,13 +36,15 @@ public final class SoapRequestBuilder {
     public static final String PLACEHOLDERS =
         "{{page_size}}, {{cursor}} (row offset from 0), {{page}} (page number from 1), {{secret:NAME}}, {{env:NAME}}";
 
-    /** The placeholder shapes: one classification for rendering and for the validator (#1387). */
+    /**
+     * The placeholder shapes: one classification for rendering and for the validator (#1387). {@code {{env:NAME}}}
+     * is a {@code {{secret:NAME}}} under its older name: it read the hub's environment until #2000.
+     */
     private enum Token {
-        PAGE_SIZE, CURSOR, PAGE, SECRET, ENV;
+        PAGE_SIZE, CURSOR, PAGE, SECRET;
 
         static Optional<Token> of(String token) {
-            if (token.startsWith("secret:")) return Optional.of(SECRET);
-            if (token.startsWith("env:"))    return Optional.of(ENV);
+            if (token.startsWith("secret:") || token.startsWith("env:")) return Optional.of(SECRET);
             return switch (token) {
                 case "page_size" -> Optional.of(PAGE_SIZE);
                 case "cursor"    -> Optional.of(CURSOR);
@@ -69,15 +71,15 @@ public final class SoapRequestBuilder {
     public static RestRequest render(String baseUrl, String path, String soapAction,
                                      String headerTemplate, String bodyTemplate,
                                      String pageSize, String cursor, String page,
-                                     UnaryOperator<String> secrets, UnaryOperator<String> environment) {
+                                     UnaryOperator<String> secrets) {
         if (bodyTemplate == null) {
             throw new IllegalStateException("SOAP body template must not be null — the validator requires 'body'");
         }
-        String body = subst(bodyTemplate, pageSize, cursor, page, secrets, environment);
+        String body = subst(bodyTemplate, pageSize, cursor, page, secrets);
         StringBuilder env = new StringBuilder()
             .append("<soap:Envelope xmlns:soap=\"").append(SOAP_NS).append("\">");
         if (Text.present(headerTemplate)) {
-            env.append("<soap:Header>").append(subst(headerTemplate, pageSize, cursor, page, secrets, environment)).append("</soap:Header>");
+            env.append("<soap:Header>").append(subst(headerTemplate, pageSize, cursor, page, secrets)).append("</soap:Header>");
         }
         env.append("<soap:Body>").append(body).append("</soap:Body></soap:Envelope>");
 
@@ -95,11 +97,11 @@ public final class SoapRequestBuilder {
      * the never-echo guard that refuses anything which survived it.
      */
     private static String subst(String template, String pageSize, String cursor, String page,
-                                UnaryOperator<String> secrets, UnaryOperator<String> environment) {
+                                UnaryOperator<String> secrets) {
         Matcher m = TOKEN.matcher(template);
         StringBuilder out = new StringBuilder();
         while (m.find()) {
-            String value = resolveToken(m.group(1), pageSize, cursor, page, secrets, environment);
+            String value = resolveToken(m.group(1), pageSize, cursor, page, secrets);
             m.appendReplacement(out, Matcher.quoteReplacement(escapeXml(value)));
         }
         m.appendTail(out);
@@ -119,14 +121,13 @@ public final class SoapRequestBuilder {
      * out as the literal {@code {{secret:NAME}}}.
      */
     private static String resolveToken(String token, String pageSize, String cursor, String page,
-                                       UnaryOperator<String> secrets, UnaryOperator<String> environment) {
+                                       UnaryOperator<String> secrets) {
         Token kind = Token.of(token).orElseThrow(() -> new IllegalStateException("unknown placeholder: " + token));
         return switch (kind) {
             case PAGE_SIZE -> required(pageSize, token);
             case CURSOR    -> required(cursor, token);
             case PAGE      -> required(page, token);
             case SECRET    -> resolved(secrets, token);
-            case ENV       -> resolved(environment, token);
         };
     }
 

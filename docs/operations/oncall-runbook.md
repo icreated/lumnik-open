@@ -18,7 +18,7 @@ hold; the gestures are your cluster's (`kubectl rollout restart …`).
 `lm` has no health command; ask the hub directly:
 
 ```
-$ curl -s http://localhost:8080/q/health
+$ ./deploy/selfhost/health.sh
 {
     "status": "UP",
     "checks": [

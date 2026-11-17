@@ -1,7 +1,7 @@
 package io.lumnik.hub.webhook;
 
 import io.lumnik.common.security.RequiresPermission;
-import io.lumnik.hub.api.TenantWide;
+import io.lumnik.common.security.TenantWide;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.inject.Inject;
@@ -70,7 +70,7 @@ public class PlatformDeliveryResource {
      *  integration id would be redundant. A delivery belonging to another tenant is a 404, not a
      *  403: existence is not something to confirm across a tenant boundary. */
     @POST @Path("/{id}/replay")
-    public WebhookDeliveryService.DeliveryResult replay(@PathParam("id") Long id) {
+    public IntegrationResource.TestResponse replay(@PathParam("id") Long id) {
         long tenant = RequireTenant.current();
         // Read in a transaction of its own, not the method's: same shape and reasons as
         // IntegrationResource#replay.
@@ -85,6 +85,7 @@ public class PlatformDeliveryResource {
             if (e == null) throw new NotFoundException("endpoint for delivery " + id + " not found");
             return new Found(e, d);
         });
-        return replayService.replay(f.endpoint(), f.delivery());
+        // The status, never the receiver's body (#2002): the integration doors' own answer.
+        return IntegrationResource.TestResponse.of(replayService.replay(f.endpoint(), f.delivery()));
     }
 }

@@ -8,7 +8,11 @@ import static org.awaitility.Awaitility.await;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.lumnik.hub.entity.EntityManifest;
+import io.lumnik.hub.sql.IndexBuilds;
+import io.lumnik.hub.sql.ManagedIndex;
 import io.lumnik.hub.sql.ManagedIndex.Spec;
+import io.lumnik.hub.sql.ManagedIndex.State;
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -43,6 +47,7 @@ class LookupFanOutIT {
     @Inject @DataSource("admin") AgroalDataSource adminDs;
     @Inject LookupFanOut fanOut;
     @Inject MatchIndexes matchIndexes;
+    @Inject ManagedIndex indexes;
 
     private static final String ENTITY = """
         kind: Entity
@@ -119,7 +124,7 @@ class LookupFanOutIT {
                    + "VALUES (" + tenant + ", '" + t.replace("t_", "").replace('_', '-') + "', 'connector', '" + t + "', '{}'::jsonb)");
             }
         }
-        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
+        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT))
             .contentType("application/yaml").body(ENTITY)
             .post("/api/entities/apply").then().statusCode(200);
         for (int tenant : new int[] {1, 2}) {
@@ -130,7 +135,7 @@ class LookupFanOutIT {
     }
 
     private EntityManifest entity() {
-        return matchIndexes.storedEntity(VIEW).orElseThrow();
+        return matchIndexes.storedEntityHubwide(VIEW).orElseThrow();
     }
 
     private List<Spec> reverseIndexes() {
@@ -234,18 +239,41 @@ class LookupFanOutIT {
         assertThat(decidedKeys(1)).containsExactly("R-1", "R-2", "R-3", "R-4", "R-5");
     }
 
+    /**
+     * #2033: the hub builds this index in the background too (the Entity's apply, the reconciler), and one such pass
+     * could bring it back before the drain looked. The test holds the lock those builders take between nodes, from
+     * before the drop until the drain has looked: a build in flight is waited for, the next ones step aside.
+     */
     @Test
-    void aWorkRowWaitsForTheIndexThenDrains() {
-        dropTheReverseIndex();
-        recalibrate(1, "INST-1", "i1-v2");
-        awaitSwept();
+    void aWorkRowWaitsForTheIndexThenDrains() throws Exception {
+        List<Spec> reverse = reverseIndexes();
+        List<Spec> held = new ArrayList<>();
+        try (Connection builders = adminDs.getConnection()) {
+            builders.setAutoCommit(true);   // no snapshot of ours for a build in flight to wait on
+            try {
+                for (Spec s : reverse) {
+                    await().atMost(30, SECONDS).until(() -> IndexBuilds.tryLock(builders, s.buildLockKey()));
+                    held.add(s);
+                }
+                dropTheReverseIndex();
+                buildTheReverseIndex();   // a background pass, as the reconciler's: it steps aside
+                recalibrate(1, "INST-1", "i1-v2");
+                awaitSwept();
 
-        fanOut.drain(500);
+                fanOut.drain(500);
 
-        assertThat(text("SELECT status FROM core.process_fanout WHERE tenant_id = 1")).isEqualTo("waiting-index");
-        assertThat(decidedKeys(1)).as("nothing is lost, nothing is read without the index").isEmpty();
+                assertThat(text("SELECT status FROM core.process_fanout WHERE tenant_id = 1")).isEqualTo("waiting-index");
+                assertThat(decidedKeys(1)).as("nothing is lost, nothing is read without the index").isEmpty();
+            } finally {
+                for (Spec s : held) IndexBuilds.unlock(builders, s.buildLockKey());
+            }
+        }
 
-        buildTheReverseIndex();
+        // Built by this test or by a background pass that took the lock first: either way, valid before the drain.
+        await().atMost(30, SECONDS).untilAsserted(() -> {
+            buildTheReverseIndex();
+            assertThat(reverse).allMatch(s -> indexes.state(s) == State.VALID);
+        });
         fanOut.drain(500);
 
         assertThat(text("SELECT status FROM core.process_fanout WHERE tenant_id = 1")).isEqualTo("done");
@@ -304,7 +332,7 @@ class LookupFanOutIT {
             exec("INSERT INTO connector.dynamic_table (tenant_id, mapping_id, table_schema, table_name, schema_inferred) "
                + "VALUES (" + tenant + ", 'lf-results2', 'connector', 't_lf_results2', '{}'::jsonb)");
         }
-        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
+        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT))
             .contentType("application/yaml").body("""
                 kind: Entity
                 name: LfResult

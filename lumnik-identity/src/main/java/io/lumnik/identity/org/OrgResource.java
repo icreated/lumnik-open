@@ -2,6 +2,7 @@ package io.lumnik.identity.org;
 
 import io.lumnik.common.eventing.DomainEventPublisher;
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.common.security.TenantWide;
 import io.lumnik.identity.IdentityErrors;
 import io.lumnik.identity.Require;
 import io.lumnik.identity.TenantInPath;
@@ -29,6 +30,7 @@ import java.util.Map;
 import java.util.Set;
 
 @TenantInPath
+@TenantWide
 @Path("/api/tenants/{tenantId}/orgs")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)

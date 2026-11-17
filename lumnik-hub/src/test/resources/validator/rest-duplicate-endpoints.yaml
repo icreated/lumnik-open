@@ -22,7 +22,7 @@ spec:
         response_path: $.data
       target:
         kind: hybrid
-        table: x_a
+        table: ext.x_a
         unique_key: $.id
     - id: customers
       path: /b
@@ -36,5 +36,5 @@ spec:
         response_path: $.data
       target:
         kind: hybrid
-        table: x_b
+        table: ext.x_b
         unique_key: $.id

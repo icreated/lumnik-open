@@ -48,9 +48,11 @@ public final class EffectiveConfig {
      * Stamped LAST, after any endpoint overlay: {@code _credentialId} is not a key an endpoint may
      * declare. It is read back off this map to resolve a stored secret, so letting an endpoint's
      * config blob overwrite it would let that blob choose which credential a run presents — and the
-     * flat endpoint CRUD persists such a blob without connector-type validation.
+     * flat endpoint CRUD persists such a blob without connector-type validation. Removed first, so a connector with
+     * no credential of its own carries none either: a blob naming one would otherwise pick another connector's.
      */
     private static Map<String, Object> stampCredential(Connector c, Map<String, Object> config) {
+        config.remove("_credentialId");
         if (c.getCredentialId() != null) config.put("_credentialId", c.getCredentialId().toString());
         return config;
     }

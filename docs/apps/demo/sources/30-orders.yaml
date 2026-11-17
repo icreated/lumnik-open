@@ -14,7 +14,7 @@ metadata:
 spec:
   transport:
     kind: local
-    path: /tmp/acme-desk/acme-orders.csv      # on the HUB's filesystem — see the demo page for the docker cp
+    path: acme-desk/acme-orders.csv      # in your tenant's folder of the hub's local root — see the demo page
   parser:
     has_header: true
   after_process: none

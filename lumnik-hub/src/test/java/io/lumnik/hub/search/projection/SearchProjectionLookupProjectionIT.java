@@ -57,8 +57,8 @@ class SearchProjectionLookupProjectionIT {
         long tenant = 847_601L;
         String n = String.valueOf(System.nanoTime());
         String products = "t_lp_p_" + n, lookup = "t_lp_c_" + n;
-        createTable(adminDs, products, "pid text, cid text, pname text");
-        createTable(adminDs, lookup, "cid text, cname text");
+        createTable(adminDs, tenant, products, "pid text, cid text, pname text");
+        createTable(adminDs, tenant, lookup, "cid text, cname text");
         String entity = "LookupProjection" + n;
         yaml(tenant).body(joinEntityYaml(entity, products, lookup, "category_name"))
             .post("/api/entities/apply").then().statusCode(200);

@@ -2,6 +2,7 @@ package io.lumnik.hub.search.mark;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.entity.EntityViewCompiler;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -51,6 +52,8 @@ class SearchProjectionTemporalMatchKeyParityIT {
                 st.execute("GRANT SELECT ON connector." + t + " TO lumnik_app");
             }
         }
+        RegisteredTables.register(adminDs, tenant, days);
+        RegisteredTables.register(adminDs, tenant, stamps);
         yaml(tenant).body("kind: Entity\nname: " + entityName + "\nmatch: [day]\nscopes: [sales]\nsources:\n"
             + "  - table: " + days + "\n    map: { d: day, label: label }\n"
             + "  - table: " + stamps + "\n    map: { at: day, label: label }\n")

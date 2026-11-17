@@ -15,7 +15,7 @@ import java.lang.annotation.Target;
  * covered without remembering to, which a call in a shared helper never guaranteed — the inventory
  * could only see that the call appeared somewhere in the file.
  *
- * <p>Class only, like the hub's {@code @TenantWide}: {@code UrlTenantReconciliationInventoryTest}
+ * <p>Class only, like {@code io.lumnik.common.security.TenantWide}: {@code UrlTenantReconciliationInventoryTest}
  * reads the marker anywhere in a file as that whole file's decision, so on one method it would make
  * every other door of the resource look reconciled.
  */

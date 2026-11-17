@@ -23,9 +23,16 @@ final class SearchIndexItSupport {
      */
     static String entity(AgroalDataSource adminDs, String name, String table, List<String> scopes,
                          String... canonicalColumns) throws Exception {
+        return entity(adminDs, 1L, name, table, scopes, canonicalColumns);
+    }
+
+    /** {@link #entity(AgroalDataSource, String, String, List, String...)}, its table recorded for {@code tenant},
+     *  the tenant that applies the manifest (#2023). */
+    static String entity(AgroalDataSource adminDs, long tenant, String name, String table, List<String> scopes,
+                         String... canonicalColumns) throws Exception {
         String[] sourceColumns = new String[canonicalColumns.length];
         for (int i = 0; i < canonicalColumns.length; i++) sourceColumns[i] = "src_" + canonicalColumns[i];
-        EntitySourceTableFixture.create(adminDs, table, "v_" + name.toLowerCase(Locale.ROOT), sourceColumns);
+        EntitySourceTableFixture.create(adminDs, tenant, table, "v_" + name.toLowerCase(Locale.ROOT), sourceColumns);
         return entityManifest(name, table, scopes, canonicalColumns);
     }
 

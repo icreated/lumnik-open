@@ -8,8 +8,10 @@ import io.lumnik.hub.view.ViewFilter;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.math.RoundingMode;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -56,6 +58,8 @@ final class UnsupportedNumbers {
     /** A text cell that is a number and nothing else — grouped or not, like an answer's figure. */
     private static final Pattern WHOLE_NUMBER = Pattern.compile(
         "-?(?:\\d{1,3}(?:[,. \\u00A0\\u202F]\\d{3})+(?:[.,]\\d+)?|\\d+(?:[.,]\\d+)?)");
+    /** A unit of distance right after a number: {@code 5 km}, {@code 5 kilometres}. */
+    private static final Pattern KM_AFTER = Pattern.compile("\\s*(?:km|kilom)", Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
     private static final Set<String> COMPARISONS = Set.of("=", "<>", "!=", "<", ">", "<=", ">=");
 
     private UnsupportedNumbers() {}
@@ -69,7 +73,8 @@ final class UnsupportedNumbers {
     static List<String> in(String answer, List<Map<String, Object>> rows, String sql) {
         if (Text.blank(answer)) return List.of();
         List<BigDecimal> backed = backedBy(rows);
-        backed.addAll(comparedIn(sql));
+        List<BigDecimal> kilometres = new ArrayList<>();
+        backed.addAll(comparedIn(sql, kilometres));
         String text = LIST_MARKER.matcher(answer).replaceAll(" ");
         List<MatchResult> words = WORD.matcher(text).results().toList();
         List<String> cellTexts = null;  // folded only if a number is not backed — the rare path
@@ -79,6 +84,8 @@ final class UnsupportedNumbers {
         while (m.find()) {
             while (wordsBefore < words.size() && words.get(wordsBefore).end() <= m.start()) wordsBefore++;
             if (isBacked(m.group(), backed)) continue;
+            // #1974: a radius said in km backs a distance the answer writes in km, never a count
+            if (KM_AFTER.matcher(text).region(m.end(), text.length()).lookingAt() && isBacked(m.group(), kilometres)) continue;
             if (cellTexts == null) cellTexts = foldedTextCells(rows);
             if (quotedFromACell(words.subList(Math.max(0, wordsBefore - 2), wordsBefore), m.group(), cellTexts)) continue;
             out.add(m.group());
@@ -161,16 +168,29 @@ final class UnsupportedNumbers {
      * {@code WHERE 9999 = 9999} or {@code SELECT '2025-01-01'} any figure at all. A column the code cannot see —
      * qualified, wrapped in a function — fails safe: the sentence is withheld, never the rows.
      */
-    private static List<BigDecimal> comparedIn(String sql) {
+    private static List<BigDecimal> comparedIn(String sql, List<BigDecimal> kilometres) {
         List<BigDecimal> out = new ArrayList<>();
         List<Token> tokens = SqlLexer.tokenize(sql);
+        DistanceCalls calls = DistanceCalls.of(tokens);
         for (int i = 0; i < tokens.size(); i++) {
             Token t = tokens.get(i);
             // The lexer reads a sign as an operator of its own: `> -100` compares against -100.
             boolean signed = i > 0 && tokens.get(i - 1).kind() == Kind.OP && tokens.get(i - 1).text().equals("-");
-            if (!comparedWithAColumn(tokens, signed ? i - 1 : i)) continue;
+            // #1974: a centre among a distance call's arguments. PointGuard runs before this check and refuses every
+            // number there the question did not type, so each one left is the asker's own.
+            if (t.kind() == Kind.NUMBER && calls.inside(i)) {
+                String number = SqlFilters.canonicalNumber(t.text());   // null beyond a numeric column's width
+                if (number != null) out.add(signed ? new BigDecimal(number).negate() : new BigDecimal(number));
+                continue;
+            }
+            int operand = comparedWith(tokens, signed ? i - 1 : i, calls);
+            if (operand < 0) continue;
             String number = t.kind() == Kind.NUMBER ? SqlFilters.canonicalNumber(t.text()) : null;
-            if (number != null) out.add(signed ? new BigDecimal(number).negate() : new BigDecimal(number));
+            if (number != null) {
+                BigDecimal value = signed ? new BigDecimal(number).negate() : new BigDecimal(number);
+                out.add(value);
+                if (calls.closes(operand)) kilometres.add(value.movePointLeft(3));   // #1974: a radius in metres, said in km
+            }
             if (t.kind() == Kind.STRING && ViewFilter.isTemporal(t.text())) { // its year
                 out.add(new BigDecimal(t.text().strip().substring(0, 4)));
             }
@@ -178,19 +198,53 @@ final class UnsupportedNumbers {
         return out;
     }
 
-    /** The literal starting at {@code i} is the right side of {@code col <op>}, or a bound of {@code col BETWEEN}. */
-    private static boolean comparedWithAColumn(List<Token> tokens, int i) {
-        if (i < 2) return false;
+    /**
+     * The left operand of the comparison whose right side starts at {@code i} ({@code x <op>}, or a bound of
+     * {@code x BETWEEN}), when it is a column or a distance call (#1974); -1 otherwise.
+     */
+    private static int comparedWith(List<Token> tokens, int i, DistanceCalls calls) {
+        if (i < 2) return -1;
         Token before = tokens.get(i - 1);
         boolean comparison = before.kind() == Kind.OP && COMPARISONS.contains(before.text());
+        int operand = -1;
         if (comparison || SqlFilters.isKeyword(before, "between")) {
-            return isColumn(tokens, i - 2);
+            operand = i - 2;
+        } else if (SqlFilters.isKeyword(before, "and")) {
+            // `x BETWEEN [-]a AND [-]b`: the lower bound may carry its sign too.
+            int lower = i - 2;
+            if (lower > 0 && tokens.get(lower - 1).kind() == Kind.OP && tokens.get(lower - 1).text().equals("-")) lower--;
+            if (lower >= 2 && SqlFilters.isKeyword(tokens.get(lower - 1), "between")) operand = lower - 2;
         }
-        if (!SqlFilters.isKeyword(before, "and")) return false;
-        // `col BETWEEN [-]a AND [-]b`: the lower bound may carry its sign too.
-        int lower = i - 2;
-        if (lower > 0 && tokens.get(lower - 1).kind() == Kind.OP && tokens.get(lower - 1).text().equals("-")) lower--;
-        return lower >= 2 && SqlFilters.isKeyword(tokens.get(lower - 1), "between") && isColumn(tokens, lower - 2);
+        return operand >= 0 && (isColumn(tokens, operand) || calls.closes(operand)) ? operand : -1;
+    }
+
+    /**
+     * #1974: where the query's {@code distance_m(…)} calls sit — which tokens are their arguments, which {@code )} closes
+     * one. One pass, with the call read as {@link PointGuard#opensCall} reads it.
+     */
+    private record DistanceCalls(boolean[] inside, boolean[] closes) {
+        static DistanceCalls of(List<Token> tokens) {
+            boolean[] inside = new boolean[tokens.size()];
+            boolean[] closes = new boolean[tokens.size()];
+            Deque<Boolean> open = new ArrayDeque<>();   // per open parenthesis: does it open a distance call?
+            for (int k = 0; k < tokens.size(); k++) {
+                boolean close = SqlFilters.isPunct(tokens.get(k), ")") && !open.isEmpty();
+                if (close && open.pop()) closes[k] = true;
+                inside[k] = !open.isEmpty() && open.peek();   // a direct argument: a sub-query's own literals are not
+                if (SqlFilters.isPunct(tokens.get(k), "(")) {
+                    open.push(PointGuard.opensCall(tokens, k));
+                }
+            }
+            return new DistanceCalls(inside, closes);
+        }
+
+        boolean inside(int k) {
+            return inside[k];
+        }
+
+        boolean closes(int k) {
+            return closes[k];
+        }
     }
 
     /** A column name by {@link SqlFilters#isColumnRef}, and no value keyword ({@code current_date}, {@code null}). */

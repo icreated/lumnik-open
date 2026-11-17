@@ -97,8 +97,9 @@ public class SearchIndexStore {
      * Insert or replace this tenant's declaration, bound to the entity version the door validated.
      *
      * <p>Two guards, both inside the statement. The INSERT's own {@code SELECT … WHERE} proceeds only
-     * while the entity still has exactly {@code entityYaml} AND the caller holds every one of its
-     * scopes — so a concurrent re-apply of the entity (another instance moving it out of the caller's
+     * while the entity still has exactly {@code entityYaml}, is one this tenant reads (#2050: a name deleted and
+     * applied again by another tenant, with the same YAML, is not the entity validated), AND the caller holds every
+     * one of its scopes — so a concurrent re-apply of the entity (another instance moving it out of the caller's
      * scopes, or dropping a column) writes nothing. The conflict arm adds {@link #GUARD} over the entity
      * the name CURRENTLY indexes, so a re-apply cannot take over a declaration held elsewhere. A re-apply
      * always comes back {@code valid}: only an apply that passed the door's checks reaches this method.
@@ -126,7 +127,9 @@ public class SearchIndexStore {
                   + "(tenant_id, name, entity, language, manifest_yaml, manifest, created_by, updated_by, withheld) "
                   + "SELECT ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ? "
                   + "WHERE EXISTS (SELECT 1 FROM connector.entity_manifest n "
-                  + "  WHERE n.name = lower(?) AND n.yaml_text = ? AND (?::text[] IS NULL OR " + held("n") + ")) "
+                  + "  WHERE n.name = lower(?) AND n.yaml_text = ? "
+                  + "  AND (n.owner_tenant_id IS NULL OR n.owner_tenant_id = ?) "   // #2050: the Entity this tenant reads
+                  + "  AND (?::text[] IS NULL OR " + held("n") + ")) "
                   + "ON CONFLICT (tenant_id, name) DO UPDATE SET "
                   + "entity = excluded.entity, language = excluded.language, "
                   + "manifest_yaml = excluded.manifest_yaml, manifest = excluded.manifest, "
@@ -145,8 +148,9 @@ public class SearchIndexStore {
                         ps.setBoolean(9, withheld);
                         ps.setString(10, entity);
                         ps.setString(11, entityYaml);
-                        ScopeGuardedUpsert.bindGrants(ps, 12, callerScopes);
-                        ScopeGuardedUpsert.bindGrants(ps, 14, callerScopes);
+                        ps.setLong(12, tenantId);
+                        ScopeGuardedUpsert.bindGrants(ps, 13, callerScopes);
+                        ScopeGuardedUpsert.bindGrants(ps, 15, callerScopes);
                     }) == 1) {
                 // Trigger 4a (design §4, row 4a): a fresh apply or a changed declaration has no
                 // prior projected set to diff against — full re-project is the only sound option.
@@ -155,12 +159,15 @@ public class SearchIndexStore {
                 mark.markAll(conn, tenantId, name, entity, "index-apply");
                 return Applied.of(ApplyOutcome.APPLIED);
             }
-            // Nothing written: the entity moved since the door read it, or the name is held elsewhere.
+            // Nothing written: the entity moved since the door read it (another owner's under the same name included,
+            // #2050), or the name is held elsewhere.
             return Jdbc.exists(conn, "SearchIndexStore.upsert(entity unchanged?)",
-                    "SELECT 1 FROM connector.entity_manifest WHERE name = lower(?) AND yaml_text = ?",
+                    "SELECT 1 FROM connector.entity_manifest WHERE name = lower(?) AND yaml_text = ? "
+                  + "AND (owner_tenant_id IS NULL OR owner_tenant_id = ?)",
                     ps -> {
                         ps.setString(1, entity);
                         ps.setString(2, entityYaml);
+                        ps.setLong(3, tenantId);
                     })
                 ? Applied.of(ApplyOutcome.NAME_HELD_OUT_OF_SCOPE) : Applied.of(ApplyOutcome.ENTITY_CHANGED);
         });

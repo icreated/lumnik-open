@@ -2,6 +2,7 @@ package io.lumnik.hub.entity;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.hub.tenant.ManifestOwner;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.scheduler.Scheduled;
 import jakarta.annotation.PostConstruct;
@@ -18,10 +19,19 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
+/**
+ * The stored Entities, as this node holds them. A name is unique on the hub; an Entity is read by the tenant it was
+ * applied from, or by every tenant when it has no owner ({@link ManifestOwner}, #2050). So two families of reads: the
+ * tenant's ({@code find(tenant, name)} and the like), for every door and every check made at an apply, and the hub's
+ * own ({@code …Hubwide}), for the hub's work on rows RLS already isolates, through a binding an apply checked (a
+ * SearchIndex, a Process, a Workflow): never for what a caller reads.
+ */
 @ApplicationScoped
 public class EntityRegistry {
 
@@ -34,7 +44,10 @@ public class EntityRegistry {
   @Inject
   Instance<EntityManifestParser> parserInstance;
 
-  private final Map<String, EntityManifest> byName = new ConcurrentHashMap<>();
+  /** An Entity, and the tenant it belongs to ({@code null}: shared). */
+  private record Held(EntityManifest manifest, Long owner) {}
+
+  private final Map<String, Held> byName = new ConcurrentHashMap<>();
 
   /** What the table looked like when this node last read it; {@code null} until it has. */
   private final AtomicReference<String> seen = new AtomicReference<>();
@@ -63,13 +76,14 @@ public class EntityRegistry {
     loadFromDb();
   }
 
-  /** One stored Entity as the table holds it: the key, and the YAML not yet read. */
-  record Row(String name, String yaml) {}
+  /** One stored Entity as the table holds it: the key, the YAML not yet read, and its owner. */
+  record Row(String name, String yaml, Long owner) {}
 
   /** Every stored row, unparsed. A failure to reach the table is the server's and propagates; it is never "no such Entity". */
   List<Row> readRows() {
-    return Jdbc.query(adminDsInstance.get(), "EntityRegistry.loadFromDb", "SELECT name, yaml_text FROM connector.entity_manifest",
-        ps -> {}, rs -> new Row(rs.getString("name"), rs.getString("yaml_text")));
+    return Jdbc.query(adminDsInstance.get(), "EntityRegistry.loadFromDb",
+        "SELECT name, yaml_text, owner_tenant_id FROM connector.entity_manifest",
+        ps -> {}, rs -> new Row(rs.getString("name"), rs.getString("yaml_text"), rs.getObject("owner_tenant_id", Long.class)));
   }
 
   /** The row as an Entity; a row whose name is not its YAML's name is a data-integrity violation. */
@@ -96,7 +110,8 @@ public class EntityRegistry {
    */
   String fingerprint() {
     return Jdbc.queryOne(adminDsInstance.get(), "EntityRegistry.fingerprint",
-        "SELECT COALESCE(md5(string_agg(name || ':' || md5(yaml_text) || ':' || scopes::text, '|' ORDER BY name)), '') "
+        "SELECT COALESCE(md5(string_agg(name || ':' || md5(yaml_text) || ':' || scopes::text || ':' "
+        + "|| COALESCE(owner_tenant_id::text, ''), '|' ORDER BY name)), '') "
         + "FROM connector.entity_manifest",
         ps -> {}, rs -> rs.getString(1)).orElse("");
   }
@@ -119,12 +134,12 @@ public class EntityRegistry {
       writes = localWrites;
     }
     List<Row> rows = readRows();
-    Map<String, EntityManifest> temp = new LinkedHashMap<>();
+    Map<String, Held> temp = new LinkedHashMap<>();
     boolean allRead = true;
     for (Row row : rows) {
       try {
         EntityManifest m = parse(row);
-        temp.put(m.name().toLowerCase(Locale.ROOT), m);
+        temp.put(m.name().toLowerCase(Locale.ROOT), new Held(m, row.owner()));
       } catch (RuntimeException unreadable) {
         allRead = false;
         if (!fingerprint.equals(reported)) {
@@ -133,7 +148,7 @@ public class EntityRegistry {
         }
         LOG.debug("EntityRegistry refresh failure", unreadable);
         String key = row.name().toLowerCase(Locale.ROOT);   // the readable path's key, whatever the row's spelling
-        EntityManifest previous = byName.get(key);
+        Held previous = byName.get(key);
         if (previous != null) temp.put(key, previous);
       }
     }
@@ -160,10 +175,10 @@ public class EntityRegistry {
   }
 
   private void publish(List<Row> rows) {
-    Map<String, EntityManifest> temp = new LinkedHashMap<>();
+    Map<String, Held> temp = new LinkedHashMap<>();
     for (Row row : rows) {
       EntityManifest m = parse(row);
-      temp.put(m.name().toLowerCase(Locale.ROOT), m);
+      temp.put(m.name().toLowerCase(Locale.ROOT), new Held(m, row.owner()));
     }
     swap(temp);
   }
@@ -175,57 +190,126 @@ public class EntityRegistry {
    * misclassification. Add-or-update every current row first, then prune the keys the DB no longer
    * has: at no instant is a live entity absent from the map.
    */
-  private void swap(Map<String, EntityManifest> current) {
+  private void swap(Map<String, Held> current) {
     synchronized (swapLock) {   // also from the miss path: its prune must not interleave with a put or a remove
       byName.putAll(current);
       byName.keySet().retainAll(current.keySet());
     }
   }
 
-  public void put(EntityManifest m) {
+  /** An Entity this node just applied, and its owner ({@link ManifestOwner#of}). */
+  public void put(EntityManifest m, Long owner) {
     synchronized (swapLock) {
       localWrites++;
-      byName.put(m.name().toLowerCase(Locale.ROOT), m);
+      byName.put(m.name().toLowerCase(Locale.ROOT), new Held(m, owner));
     }
   }
 
-  public EntityManifest find(String name) {
+  /** The Entity of this name when this tenant reads it, else null. */
+  public EntityManifest find(long tenant, String name) {
+    Held h = held(name);
+    return h != null && ManifestOwner.reads(tenant, h.owner()) ? h.manifest() : null;
+  }
+
+  /** The Entity of this name, whoever owns it: the hub's own work only (see the class). */
+  public EntityManifest findHubwide(String name) {
+    Held h = held(name);
+    return h == null ? null : h.manifest();
+  }
+
+  private Held held(String name) {
     return name == null ? null : byName.get(name.toLowerCase(Locale.ROOT));
   }
 
   /**
-   * {@link #find} that re-reads the global manifests from the DB once on a cache miss, then retries.
-   * {@code entity_manifest} is global, so a second hub instance's cold/stale map must not be trusted
-   * to say an entity does not exist — every decision keyed on existence (delete's 404, the
-   * connector-delete 409's entity-vs-foreign wording) goes through here to stay drift-free.
+   * {@link #findReloadingIfMissingHubwide}, for this tenant: what it does not read is missing. A name this node holds
+   * for another owner is reloaded for too: another node may have seen it deleted and re-applied by this tenant.
    */
-  public EntityManifest findReloadingIfMissing(String name) {
-    EntityManifest m = find(name);
-    if (m == null) {
-      List<Row> rows = readRows();   // a failure to reach the table propagates: it is not a miss
+  public EntityManifest findReloadingIfMissing(long tenant, String name) {
+    EntityManifest m = find(tenant, name);
+    if (m != null) return m;
+    if (held(name) == null) reload(name);
+    else reloadOne(name);   // held for another owner: that row alone, not every manifest
+    return find(tenant, name);
+  }
+
+  /** The stored row of this name, unparsed. A failure to reach the table is the server's and propagates. */
+  Optional<Row> readRow(String key) {
+    return Jdbc.queryOne(adminDsInstance.get(), "EntityRegistry.readRow",
+        "SELECT name, yaml_text, owner_tenant_id FROM connector.entity_manifest WHERE name = ?",
+        ps -> ps.setString(1, key), rs -> new Row(rs.getString(1), rs.getString(2), rs.getObject(3, Long.class)));
+  }
+
+  /** The unreadable rows {@link #reloadOne} already said, by their text: said once each, not at every request. */
+  private final Map<String, String> unreadableRows = new ConcurrentHashMap<>();
+
+  /**
+   * Re-reads the one stored Entity of this name: as stored now, or gone. Read and parsed outside the lock, swapped in
+   * unless this node applied or deleted one meanwhile (as {@link #refreshIfChanged}); a row it cannot read keeps what it
+   * has, said once.
+   */
+  private void reloadOne(String name) {
+    String key = name.toLowerCase(Locale.ROOT);
+    long writes;
+    synchronized (swapLock) {
+      writes = localWrites;
+    }
+    Optional<Row> row = readRow(key);
+    Held now = null;
+    if (row.isPresent()) {
       try {
-        publish(rows);
-      } catch (RuntimeException e) {
-        // The reload parses EVERY stored Entity: one unreadable row must not hide the Entity asked for. Said, then this
-        // one row — from the rows already read, so nothing here can turn a database failure into a miss — is read on its own,
-        // with the same name check.
-        LOG.errorf("EntityRegistry: the manifests cannot all be reloaded (%s) — reading '%s' on its own", describe(e), name);
-        LOG.debug("EntityRegistry reload failure", e);
-        String key = name.toLowerCase(Locale.ROOT);
-        for (Row row : rows) {
-          if (!row.name().equals(key)) continue;
-          try {
-            EntityManifest one = parse(row);
-            byName.put(key, one);
-          } catch (RuntimeException unreadable) {
-            LOG.errorf("EntityRegistry: the stored Entity '%s' cannot be read (%s)", key, describe(unreadable));
-            LOG.debug("EntityRegistry single read failure", unreadable);
-          }
+        now = new Held(parse(row.get()), row.get().owner());
+      } catch (RuntimeException unreadable) {
+        if (!row.get().yaml().equals(unreadableRows.put(key, row.get().yaml()))) {
+          LOG.errorf("EntityRegistry: the stored Entity '%s' cannot be read (%s)", key, describe(unreadable));
         }
+        LOG.debug("EntityRegistry single read failure", unreadable);
+        return;
       }
-      m = find(name);
+    }
+    synchronized (swapLock) {
+      if (writes != localWrites) return;
+      if (now == null) byName.remove(key);
+      else byName.put(key, now);
+    }
+  }
+
+  /**
+   * {@link #findHubwide} that re-reads the manifests from the DB once on a cache miss, then retries:
+   * a second hub instance's cold/stale map must not be trusted to say an entity does not exist.
+   */
+  public EntityManifest findReloadingIfMissingHubwide(String name) {
+    EntityManifest m = findHubwide(name);
+    if (m == null) {
+      reload(name);
+      m = findHubwide(name);
     }
     return m;
+  }
+
+  /** Re-reads every stored Entity; one this node cannot read leaves the others, and {@code name} is read on its own. */
+  private void reload(String name) {
+    List<Row> rows = readRows();   // a failure to reach the table propagates: it is not a miss
+    try {
+      publish(rows);
+    } catch (RuntimeException e) {
+      // The reload parses EVERY stored Entity: one unreadable row must not hide the Entity asked for. Said, then this
+      // one row — from the rows already read, so nothing here can turn a database failure into a miss — is read on its own,
+      // with the same name check.
+      LOG.errorf("EntityRegistry: the manifests cannot all be reloaded (%s) — reading '%s' on its own", describe(e), name);
+      LOG.debug("EntityRegistry reload failure", e);
+      String key = name.toLowerCase(Locale.ROOT);
+      for (Row row : rows) {
+        if (!row.name().equals(key)) continue;
+        try {
+          EntityManifest one = parse(row);
+          byName.put(key, new Held(one, row.owner()));
+        } catch (RuntimeException unreadable) {
+          LOG.errorf("EntityRegistry: the stored Entity '%s' cannot be read (%s)", key, describe(unreadable));
+          LOG.debug("EntityRegistry single read failure", unreadable);
+        }
+      }
+    }
   }
 
   /** The registry's own words for an invariant it broke (they name the row, never the YAML); only the kind for a parser's, which quote the text. */
@@ -233,35 +317,25 @@ public class EntityRegistry {
     return e instanceof IllegalStateException ? e.getMessage() : e.getClass().getSimpleName();
   }
 
-  /**
-   * The scopes STORED on this name, read from the row rather than from the map, or empty when the
-   * name is free — the apply door's re-homing check ({@code ApplyScopeBoundary}).
-   *
-   * <p>Not {@link #findReloadingIfMissing}: that answers from the cache whenever the key is present,
-   * and a cache HIT is exactly the stale case here. Another hub instance may have re-applied the
-   * entity into a different scope set, and this map would still hold the old one — a security
-   * decision must not be made on a copy that can be behind. A cold-path read on apply.
-   *
-   * <p>An empty list is a real answer (a scopeless entity), distinct from an absent row.
-   */
-  public Optional<List<String>> storedScopes(String name) {
-    return stored(name).map(Stored::scopes);
-  }
-
-  /** One entity as stored right now: its exact YAML (a version other writes can bind to) and scopes. */
-  public record Stored(String yaml, List<String> scopes) {}
+  /** One entity as stored right now: its exact YAML (a version other writes can bind to), scopes and owner. */
+  public record Stored(String yaml, List<String> scopes, Long owner) {}
 
   /**
-   * The row itself — the same cold-path read as {@link #storedScopes}, for a door that must decide on
+   * The row itself, read from the table rather than from the map (a cache hit may be behind), for a door that must decide on
    * the stored definition rather than on this instance's copy (#669: a SearchIndex apply validates
    * columns and scopes against it, then binds its write to {@code yaml}).
    */
-  public Optional<Stored> stored(String name) {
+  public Optional<Stored> stored(long tenant, String name) {
+    return storedHubwide(name).filter(s -> ManifestOwner.reads(tenant, s.owner()));
+  }
+
+  /** {@link #stored(long, String)}, whoever owns it: the hub's own work only (see the class). */
+  public Optional<Stored> storedHubwide(String name) {
     if (name == null) return Optional.empty();
-    return Jdbc.queryOne(adminDsInstance.get(), "EntityRegistry.stored",
-        "SELECT yaml_text, scopes FROM connector.entity_manifest WHERE name = ?",
+    return Jdbc.queryOne(adminDsInstance.get(), "EntityRegistry.storedHubwide",
+        "SELECT yaml_text, scopes, owner_tenant_id FROM connector.entity_manifest WHERE name = ?",
         ps -> ps.setString(1, name.toLowerCase(Locale.ROOT)),
-        rs -> new Stored(rs.getString(1), scopes(rs.getArray(2))));
+        rs -> new Stored(rs.getString(1), scopes(rs.getArray(2)), rs.getObject(3, Long.class)));
   }
 
   /**
@@ -281,10 +355,17 @@ public class EntityRegistry {
     }
   }
 
-  /** Every registered manifest, sorted by name — deterministic iteration for the aggregate reads. */
-  public List<EntityManifest> all() {
-    return byName.values().stream()
-        .sorted(Comparator.comparing(EntityManifest::name, String.CASE_INSENSITIVE_ORDER))
-        .toList();
+  /** Every manifest this tenant reads, sorted by name — deterministic iteration for the aggregate reads. */
+  public List<EntityManifest> all(long tenant) {
+    return sorted(byName.values().stream().filter(h -> ManifestOwner.reads(tenant, h.owner())).map(Held::manifest));
+  }
+
+  /** Every manifest, whoever owns it: the hub's own work only (see the class). */
+  public List<EntityManifest> allHubwide() {
+    return sorted(byName.values().stream().map(Held::manifest));
+  }
+
+  private static List<EntityManifest> sorted(Stream<EntityManifest> manifests) {
+    return manifests.sorted(Comparator.comparing(EntityManifest::name, String.CASE_INSENSITIVE_ORDER)).toList();
   }
 }

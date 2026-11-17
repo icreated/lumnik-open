@@ -12,10 +12,9 @@ https origin, with Keycloak under `/realms/*`.
 
 | URL | Auth | What it is |
 |---|---|---|
-| `http://localhost:8080/q/health` | none | UP/DOWN with named checks — [observability](../operations/observability.md) |
-| `http://localhost:8080/q/metrics` | none | Prometheus metrics (block `/q/*` at the proxy on a public origin) |
-| `http://localhost:8080/q/openapi` | none | **the OpenAPI spec** — what Postman imports |
-| `http://localhost:8080/q/swagger-ui/` | none | the try-it console, shipped in the packaged hub |
+| `localhost:9000/q/health`, inside the hub's container | none | UP/DOWN with named checks — [observability](../operations/observability.md) |
+| `localhost:9000/q/metrics`, inside the hub's container | none | Prometheus metrics |
+| `localhost:9000/q/openapi`, inside the hub's container | none | **the OpenAPI spec** — what Postman imports |
 | `http://localhost:8080/app/` | browser login | the [PWA](../apps/pwa.md) |
 | `http://localhost:8080/api/rag/chat` | Bearer, `lm_user` | the chat door — semantic or analytic, [guards](../transparency/ask-honesty.md) apply |
 | `http://localhost:8080/api/entities/…` | Bearer: reads `lm_user`; apply and writes `lm_admin` | fused entities, reads scope-bound — [entities](../entities.md) |
@@ -72,11 +71,15 @@ Postman re-mints it when it expires.
 
 ## Import the whole API
 
-**Postman → Import → URL** → `http://localhost:8080/q/openapi`. Postman builds the
-collection from the running hub, every endpoint pre-filled. Set the collection auth as above.
+The spec answers on the hub's management port, which nothing publishes. Save it from inside the
+container, then **Postman → Import → File**:
 
-Prefer a browser? `http://localhost:8080/q/swagger-ui/` is the same spec with a
-try-it button — paste the token from *Mint a token* into its **Authorize** dialog.
+```bash
+docker compose -f docker-compose.selfhost.yml exec -T hub curl -s localhost:9000/q/openapi > lumnik-openapi.yaml
+```
+
+Postman builds the collection, every endpoint pre-filled. Set the collection auth as above.
+The try-it console (Swagger UI) runs only on a hub started in dev mode, at `/q/swagger-ui/`.
 
 !!! note "Testing as a business user, not an integrator"
     Everything above authenticates as `integrator`. To see what a scope-bound user

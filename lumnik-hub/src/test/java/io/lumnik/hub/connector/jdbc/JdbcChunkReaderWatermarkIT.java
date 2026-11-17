@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.jdbc;
 
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -40,7 +41,7 @@ class JdbcChunkReaderWatermarkIT {
 
   @Test
   void second_run_after_update_reads_only_changed_rows() throws Exception {
-    HikariPoolRegistry registry = new HikariPoolRegistry();
+    HikariPoolRegistry registry = new HikariPoolRegistry(TestOutbound.ADDRESSES);
     JdbcChunkReader reader = new JdbcChunkReader(PG.getJdbcUrl(), "u", "p", "postgres",
         "public", "t", "updated", List.of("id"),
         JdbcChunkReader.Mode.WATERMARK, new PostgresDialect(), registry, ZoneOffset.UTC);
@@ -71,7 +72,7 @@ class JdbcChunkReaderWatermarkIT {
       st.execute("INSERT INTO tn VALUES (1, TIMESTAMP '2026-01-01 00:00:01'), "
           + "(2, TIMESTAMP '2026-01-01 00:00:02'), (3, NULL)");
     }
-    HikariPoolRegistry registry = new HikariPoolRegistry();
+    HikariPoolRegistry registry = new HikariPoolRegistry(TestOutbound.ADDRESSES);
     JdbcChunkReader reader = new JdbcChunkReader(PG.getJdbcUrl(), "u", "p", "postgres",
         "public", "tn", "updated", List.of("id"),
         JdbcChunkReader.Mode.WATERMARK, new PostgresDialect(), registry, ZoneOffset.UTC);
@@ -96,7 +97,7 @@ class JdbcChunkReaderWatermarkIT {
   void a_chunk_of_rows_all_without_watermark_is_read_once_and_ends_the_stream() throws Exception {
     // No row can be a resume point: handing back the same (empty) cursor as HasMore would read the
     // same rows forever.
-    HikariPoolRegistry registry = new HikariPoolRegistry();
+    HikariPoolRegistry registry = new HikariPoolRegistry(TestOutbound.ADDRESSES);
     JdbcChunkReader reader = new JdbcChunkReader(PG.getJdbcUrl(), "u", "p", "postgres",
         "public", "tall", "updated", List.of("id"),
         JdbcChunkReader.Mode.WATERMARK, new PostgresDialect(), registry, ZoneOffset.UTC);

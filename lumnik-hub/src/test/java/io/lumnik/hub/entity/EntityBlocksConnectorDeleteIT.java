@@ -182,7 +182,7 @@ class EntityBlocksConnectorDeleteIT {
     // Simulate a second hub instance whose in-memory map never loaded this entity: the row + view
     // are in the DB, but the cache is cold. A naive delete would 404; the reload-on-miss must not.
     registry.remove(entityName);
-    assertThat(registry.find(entityName)).as("cache is cold for this entity").isNull();
+    assertThat(registry.findHubwide(entityName)).as("cache is cold for this entity").isNull();
 
     given().headers(TestIdentity.tenantAndUser(1))
         .when().delete("/api/entities/" + entityName)
@@ -204,6 +204,30 @@ class EntityBlocksConnectorDeleteIT {
         .then().statusCode(409)
         .body("error", containsString("lm entity delete " + entityName))
         .body("error", not(containsString("drop it first")));
+  }
+
+  /**
+   * #2050: the entity reading the table is another tenant's, or shared. The refusal names the gesture that works, and
+   * never another tenant's entity.
+   */
+  @Test
+  void connector_delete_names_who_removes_an_entity_this_tenant_does_not_own() {
+    UUID csvConn = seedCsvConnector();
+    TenantContext.callAsSystem(() -> engine.runSync(csvConn, new RunTrigger.Manual(1L)));
+    applyEntity();
+
+    execSql(adminDs, "UPDATE connector.entity_manifest SET owner_tenant_id = 20502 WHERE name = '" + entityName + "'");
+    given().headers(TestIdentity.tenantAndUser(1))
+        .when().delete("/api/platform/connectors/" + csvConn)
+        .then().statusCode(409)
+        .body("error", containsString("an entity of another tenant — the hub's operator removes it first, acting as"))
+        .body("error", not(containsString(entityName)));
+
+    execSql(adminDs, "UPDATE connector.entity_manifest SET owner_tenant_id = NULL WHERE name = '" + entityName + "'");
+    given().headers(TestIdentity.tenantAndUser(1))
+        .when().delete("/api/platform/connectors/" + csvConn)
+        .then().statusCode(409)
+        .body("error", containsString("the shared entity " + entityName + " — the hub's operator removes it first"));
   }
 
   private void applyEntity() {

@@ -1,0 +1,90 @@
+{
+  "_about": "The scope inventories' lists (#1992, #2014, #2017, #2018), read by both DoorInventoryTest / ScopeBoundaryInventoryTest (hub, rag) and scripts/check-scope-inventory.py (per PR). One file, so the Java tests and the script cannot drift apart. The deciding calls of ScopeGrants and ScopeAccess are not listed: both readers derive them from the @ScopeDecision methods — the Java tests by reflection on the classes, the script from the sources 'deciders' names. Each section's 'decider' is pinned by its Java test to the class it reflects on. doors.helper_deciders are calls that decide for the doors calling them; both sweeps count them, and each helper's file must itself ask ScopeGrants/ScopeAccess (or carry @TenantWide).",
+  "deciders": {
+    "ScopeGrants": "lumnik-common/src/main/java/io/lumnik/common/security/ScopeGrants.java",
+    "ScopeAccess": "lumnik-common/src/main/java/io/lumnik/common/security/ScopeAccess.java"
+  },
+  "doors": {
+    "min_doors": 70,
+    "helper_deciders": {
+      "ResolutionGate.requireResolvable(": "lumnik-hub/src/main/java/io/lumnik/hub/entity/ResolutionGate.java",
+      "DynamicTableScope.readableTable(": "lumnik-hub/src/main/java/io/lumnik/hub/api/data/DynamicTableScope.java",
+      "ConnectorScope.held(": "lumnik-hub/src/main/java/io/lumnik/hub/api/connector/ConnectorScope.java",
+      "ConnectorScope.heldForUpdate(": "lumnik-hub/src/main/java/io/lumnik/hub/api/connector/ConnectorScope.java",
+      "ConnectorScope.refuseUnlessHolds(": "lumnik-hub/src/main/java/io/lumnik/hub/api/connector/ConnectorScope.java",
+      "ConnectorScope::holds": "lumnik-hub/src/main/java/io/lumnik/hub/api/connector/ConnectorScope.java"
+    },
+    "exempt": {
+      "io.lumnik.hub.api.meta.VersionResource": "describes this hub's build, the same for every tenant: no tenant's row",
+      "io.lumnik.hub.health.PlatformHealthResource": "describes this hub's build, the same for every tenant: no tenant's row — its modules, its stores' reachability",
+      "io.lumnik.hub.manifest.ModuleManifestResource": "describes this hub's build, the same for every tenant: no tenant's row — the installed modules",
+      "io.lumnik.hub.api.migration.MigrationAdminResource": "describes this hub's build, the same for every tenant: no tenant's row — the migrations applied",
+      "io.lumnik.hub.event.EventResource": "describes this hub's build, the same for every tenant: no tenant's row — the catalogue of event types, never an event",
+      "io.lumnik.hub.screen.EnumResource": "describes this hub's build, the same for every tenant: no tenant's row — a module's declared enum values",
+      "io.lumnik.hub.screen.ScreenResource": "describes this hub's build, the same for every tenant: no tenant's row — a module's declared screen",
+      "io.lumnik.hub.security.roles.RoleResource": "describes this hub's build, the same for every tenant: no tenant's row — the roles the modules declare",
+      "io.lumnik.hub.hook.HookScriptResource": "describes this hub's build, the same for every tenant: no tenant's row — the operator's hooks directory, by name and digest: what a bound integrator's own manifest may name as hooks:",
+      "io.lumnik.hub.api.validator.ConnectorValidatorResource": "judges the manifest in the request and describes a kind's fields: it reads and stores nothing of the tenant; lm apply then judges the scopes",
+      "io.lumnik.hub.rag.RagResource": "the index status: storedChunks counts only the chunks of the caller's scopes (StoredChunks asks ScopeAccess, #1895); the rest describes the build",
+      "io.lumnik.hub.bff.user.UserScopeResource": "reads and sets the caller's own default scope, on the caller's own user row; the chat judges that scope with ScopeAccess when it uses it",
+      "io.lumnik.hub.app.AppRedirectResource": "redirects /app to /app/ for every caller: the PWA's shell is static, no tenant's data",
+      "io.lumnik.hub.bff.BffResource": "/me answers the caller's own context: their user row, their tenant's name, their roles, and this build's active modules and offered tabs — nothing of a scope",
+      "io.lumnik.hub.search.SearchCapabilityResource": "says whether Search is installed and up on this hub, the same for every tenant: no tenant's row; the search door itself asks the scope",
+      "io.lumnik.hub.hook.CalloutResource": "runs the callout a module declares for one field of the caller's own form (lm_user, the app surface): it reads the module registry to find that callout and holds no scope's rows",
+      "io.lumnik.hub.pro.scim.ScimServiceProviderConfigResource": "the static SCIM capabilities document (RFC 7643): ScimAuthFilter admits only a tenant's SCIM token, never a user's token, so no scope:* caller reaches it",
+      "io.lumnik.hub.pro.scim.ScimUserResource": "provisions the tenant's users for its IdP: ScimAuthFilter admits only a tenant's SCIM token (any other bearer is a 401), never a user's token, so no scope:* caller reaches it",
+      "io.lumnik.rag.api.UserChatResource": "hands every request to RagChatResource.chat, which it injects: a door of this sweep that asks ScopeAccess itself"
+    }
+  },
+  "hub_scope_boundary": {
+    "module": "lumnik-hub",
+    "package": "io/lumnik/hub",
+    "suffix": "Resource.java",
+    "decider": "ScopeGrants",
+    "touching": [
+      "SchemaCardStore",
+      "DiscoveryService",
+      "ApplyUpsert.scopes(",
+      "connector.dynamic_table",
+      "DynamicTableRegistry",
+      "DynamicTableScope.",
+      "NotificationRuleRepository",
+      "WebhookEndpointRepository",
+      "WebhookDeliveryRepository",
+      "IntegrationResource delegate",
+      "core.event_outbox",
+      "ConnectorRepository",
+      "CsvIngestService",
+      "WorkflowRegistry",
+      "WorkflowManifestStore",
+      "WorkflowObservationStore",
+      "HookOverrideStore",
+      "HookTenantOverrideRepository",
+      "HookRegistry"
+    ],
+    "extra_deciding_calls": [
+      "@TenantWide"
+    ],
+    "exempt": {
+      "CalloutResource.java": "runs the callout a module declares for one field of the caller's own form (lm_user, the app surface): it reads the registry to find that callout, switches nothing and lists no binding — refusing a bound user would refuse every scoped app its field logic"
+    }
+  },
+  "rag_scope_boundary": {
+    "module": "lumnik-rag",
+    "package": "io/lumnik/rag",
+    "suffix": "Resource.java",
+    "decider": "ScopeAccess",
+    "touching": [
+      "RetrievalService",
+      "AskPort",
+      "rag.chunk"
+    ],
+    "extra_deciding_calls": [],
+    "exempt": {}
+  },
+  "apply_doors": {
+    "suffix": "ApplyResource.java",
+    "manifest_marker": "apply(String ",
+    "stored_scope_call": "ApplyScopeBoundary.refuseUnless"
+  }
+}

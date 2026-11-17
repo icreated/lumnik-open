@@ -29,6 +29,9 @@ spec:
 - **Connect by service name**: `@//host:1521/SERVICE`, `@host:1521/SERVICE`, or a full
   `@(DESCRIPTION=…)` descriptor (quote it in YAML). The **SID** form (`@host:1521:SID`) works on a
   non-multitenant database only; on a multitenant one it fails with `ORA-01017`. TCPS and wallets are not tested.
+- **Write the host in the URL.** A TNS alias (`@ERPPROD`), an LDAP URL and `TNS_ADMIN` are refused:
+  the hub checks where a source connects before it opens it
+  ([Where the hub connects](../../security/outbound-addresses.md)).
 - **`lm` needs `--schema`.** `lm source jdbc discover` and `add` default to `--schema public`; for
   Oracle pass the owner, e.g. `--schema ERP`, or the listing is empty.
 - **Names are exact, never folded.** Write schema, table and column names exactly as

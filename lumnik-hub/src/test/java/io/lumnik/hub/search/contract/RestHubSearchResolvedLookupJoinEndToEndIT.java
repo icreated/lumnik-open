@@ -61,8 +61,8 @@ class RestHubSearchResolvedLookupJoinEndToEndIT {
         long t = tenant.tenantId();
         String n = String.valueOf(System.nanoTime());
         String products = "t_e2er_p_" + n, lookup = "t_e2er_c_" + n, entity = "E2eResolved" + n;
-        createTable(adminDs, products, "pid text, cid text, pname text");
-        createTable(adminDs, lookup, "cid text, cname text");
+        createTable(adminDs, t, products, "pid text, cid text, pname text");
+        createTable(adminDs, t, lookup, "cid text, cname text");
         apply("/api/entities/apply", resolutionJoinEntityYaml(entity, products, lookup, "category_name"));
         exec(adminDs, "INSERT INTO connector." + products + " (tenant_id, pid, cid, pname) VALUES (" + t + ", 'P1', 'C1', 'alpha')");
         exec(adminDs, "INSERT INTO connector." + products + " (tenant_id, pid, cid, pname) VALUES (" + t + ", 'P2', 'C2', 'bravo')");

@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.runtime;
 
+import io.lumnik.hub.testsupport.TestOutbound;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -39,6 +40,7 @@ class RestEndpointReaderGraphQlWatermarkTest {
 
     /** A GraphQL server: filters on {@code $updated_since}, pages by {@code $after}, two nodes a page. */
     static final class GraphQlApi extends RestHttpClient {
+        GraphQlApi() { super(TestOutbound.ADDRESSES); }
         final Map<String, String> updatedAt = new LinkedHashMap<>();
         final List<RestRequest> calls = new ArrayList<>();
 
@@ -72,7 +74,7 @@ class RestEndpointReaderGraphQlWatermarkTest {
         ep.setMethod("POST");
         ep.setPath("/graphql");
         return new RestEndpointReader(ep, none, new PaginationFactory(), new RateLimiterRegistry(), api, MAPPER,
-            SecretRefs.environmentOnly(name -> null));
+            SecretRefs.of(name -> null));
     }
 
     private static Map<String, Object> config() {

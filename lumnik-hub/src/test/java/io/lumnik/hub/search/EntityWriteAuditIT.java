@@ -3,6 +3,8 @@ package io.lumnik.hub.search;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.audit.AuditRecorder;
+import io.lumnik.hub.tenant.DeploymentTenancy;
+import io.lumnik.hub.testsupport.SharedEntities;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -51,14 +53,17 @@ class EntityWriteAuditIT {
         String table = "t_" + name.toLowerCase(Locale.ROOT) + "_erp";
         yaml(1).body(entity(adminDs, name, table, List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
+        SharedEntities.share(name);
         String indexA = "audit-cascade-a-" + System.nanoTime();
         String indexB = "audit-cascade-b-" + System.nanoTime();
         yaml(1).body(searchIndex(indexA, name, "name")).post("/api/search-indexes/apply").then().statusCode(200);
         yaml(2).body(searchIndex(indexB, name, "name")).post("/api/search-indexes/apply").then().statusCode(200);
 
-        given().headers(TestIdentity.tenantAndUser(1)).delete("/api/entities/" + name).then().statusCode(204);
+        // A shared entity (#2050), so tenant 2 can index it too; the hub's own tenant deletes it.
+        given().headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT)).delete("/api/entities/" + name)
+            .then().statusCode(204);
 
-        assertThat(rows(1, "Entity", name, "DELETE")).isEqualTo(1);
+        assertThat(rows(DeploymentTenancy.HUBADMIN_TENANT, "Entity", name, "DELETE")).isEqualTo(1);
         assertThat(rows(1, "SearchIndex", indexA, "DELETE")).isEqualTo(1);
         assertThat(rows(2, "SearchIndex", indexB, "DELETE")).as("audited in the tenant that owned it").isEqualTo(1);
         assertThat(changes(2, "SearchIndex", indexB, "DELETE")).contains(name);

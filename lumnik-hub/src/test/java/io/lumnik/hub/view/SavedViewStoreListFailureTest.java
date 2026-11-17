@@ -8,6 +8,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.Set;
 
+import static io.lumnik.hub.tenant.DeploymentTenancy.HUBADMIN_TENANT;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -29,7 +30,7 @@ class SavedViewStoreListFailureTest {
         SavedViewStore store = new SavedViewStore();
         store.adminDs = new SingletonInstance<>(ds);
 
-        assertThatThrownBy(() -> store.list(null))
+        assertThatThrownBy(() -> store.list(HUBADMIN_TENANT, null))
             .hasMessage("SavedViewStore.list failed (SQLSTATE 42501)")
             .hasCause(driver);
     }

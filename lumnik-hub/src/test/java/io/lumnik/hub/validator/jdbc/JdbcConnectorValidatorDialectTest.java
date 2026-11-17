@@ -13,7 +13,9 @@ import io.lumnik.jdbc.spi.KeyComparison;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
+import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -32,6 +34,8 @@ class JdbcConnectorValidatorDialectTest {
     public String id() { return "oracle"; }
     public boolean acceptsUrl(String url) { return url != null && url.startsWith("jdbc:oracle:"); }
     public String driverClass() { throw new UnsupportedOperationException(); }
+    public List<String> connectHosts(String url) { throw new UnsupportedOperationException(); }
+    public Map<String, String> timeoutProperties(Duration connect, Optional<Duration> read) { throw new UnsupportedOperationException(); }
     public String quoteIdentifier(String i) { throw new UnsupportedOperationException(); }
     public KeyComparison keyComparison(List<String> c, Comparison k) { throw new UnsupportedOperationException(); }
     public String limitClause(int l) { throw new UnsupportedOperationException(); }

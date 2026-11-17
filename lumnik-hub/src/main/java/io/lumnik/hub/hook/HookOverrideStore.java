@@ -1,6 +1,5 @@
 package io.lumnik.hub.hook;
 
-import io.lumnik.common.text.Text;
 import io.lumnik.hub.scheduler.TenantScope;
 import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -55,27 +54,6 @@ public class HookOverrideStore {
 
     public void invalidate(Long tenantId, String hookId) {
         cache.invalidate(tenantId + "|" + hookId);
-    }
-
-    @Transactional
-    public void setScript(Long tenantId, String hookId, String scriptContent) {
-        TenantScope.run(tenantId, () -> {
-            HookTenantOverride entity = repo.find(tenantId, hookId)
-                .orElseGet(() -> new HookTenantOverride(tenantId, hookId, true));
-            entity.setScriptContent(scriptContent);
-            entity.setEnabled(true);
-            entity.setUpdatedAt(OffsetDateTime.now());
-            repo.persist(entity);
-        });
-        invalidate(tenantId, hookId);
-    }
-
-    @Transactional(Transactional.TxType.SUPPORTS)
-    public Optional<String> findScript(Long tenantId, String hookId) {
-        if (tenantId == null) return Optional.empty();
-        return TenantScope.get(tenantId, () -> repo.find(tenantId, hookId)
-            .map(HookTenantOverride::getScriptContent)
-            .filter(Text::present));
     }
 
     @Transactional

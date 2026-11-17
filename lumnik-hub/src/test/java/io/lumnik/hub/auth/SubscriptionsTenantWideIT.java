@@ -2,15 +2,12 @@ package io.lumnik.hub.auth;
 
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
-import io.restassured.response.Response;
-import io.restassured.specification.RequestSpecification;
 import org.junit.jupiter.api.Test;
 
-import java.util.HashSet;
-import java.util.Set;
-
-import static io.restassured.RestAssured.given;
-import static org.hamcrest.Matchers.equalTo;
+import static io.lumnik.hub.auth.TenantWideCalls.ADMIN;
+import static io.lumnik.hub.auth.TenantWideCalls.as;
+import static io.lumnik.hub.auth.TenantWideCalls.bound;
+import static io.lumnik.hub.auth.TenantWideCalls.refused;
 
 /**
  * #1207: a subscription receives the whole tenant's events — another scope's row activity, the
@@ -21,23 +18,6 @@ import static org.hamcrest.Matchers.equalTo;
 @QuarkusTest
 @TestProfile(NoBypassOidcProfile.class)
 class SubscriptionsTenantWideIT {
-
-  private static final Set<String> ADMIN = Set.of("lm_admin", "lm_integrator");
-
-  private static RequestSpecification as(Set<String> roles) {
-    return given().header("Authorization", "Bearer " + NoBypassOidcProfile.token(roles, null))
-        .header("Content-Type", "application/json");
-  }
-
-  private static RequestSpecification bound() {
-    Set<String> roles = new HashSet<>(ADMIN);
-    roles.add("scope:magasin");
-    return as(roles);
-  }
-
-  private static void refused(Response r) {
-    r.then().statusCode(403).body("error", equalTo("scope not granted"));
-  }
 
   @Test
   void a_bound_admin_is_refused_every_notification_rule_door() {

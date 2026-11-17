@@ -52,8 +52,8 @@ class EntityViewCompilerCleanupTest {
 
   private void run(Operation op) {
     switch (op) {
-      case APPLY -> compiler.apply(CUSTOMER, "yaml", null);
-      case DELETE -> compiler.delete("Customer");
+      case APPLY -> compiler.apply(CUSTOMER, "yaml", null, 1L);
+      case DELETE -> compiler.delete(1L, "Customer", null);
       case RESHAPE -> compiler.reshape(c, "connector", "t_cust_src", List.of("ROW_ID"), conn -> {});
     }
   }
@@ -99,7 +99,7 @@ class EntityViewCompilerCleanupTest {
     SQLException rollback = new SQLException("connection gone");
     doThrow(rollback).when(c).rollback();
 
-    assertThatThrownBy(() -> compiler.apply(CUSTOMER, "yaml", null))
+    assertThatThrownBy(() -> compiler.apply(CUSTOMER, "yaml", null, 1L))
         .isInstanceOf(MissingSourceTableException.class)
         .satisfies(t -> assertThat(Throwables.causeChain(t)).flatMap(cause -> List.of(cause.getSuppressed()))
             .containsExactly(rollback));

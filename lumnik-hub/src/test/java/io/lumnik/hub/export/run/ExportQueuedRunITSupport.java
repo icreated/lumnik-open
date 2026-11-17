@@ -14,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -42,6 +43,11 @@ abstract class ExportQueuedRunITSupport extends ExportRunITSupport {
     @Override
     String entity() {
         return "ExportRunDispQueued952";
+    }
+
+    @Override
+    Map<String, String> secrets() {
+        return ExportRunSftpIT.SECRETS;
     }
 
     @Override

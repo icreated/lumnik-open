@@ -7,7 +7,7 @@
 <div class="lm-meta-item" markdown>
 <strong>Time</strong>
 
-About 30 minutes, on the self-host stack.
+60 to 90 minutes, on the self-host stack.
 </div>
 <div class="lm-meta-item" markdown>
 <strong>Files</strong>
@@ -37,17 +37,22 @@ Every step runs on lumnik Open, except the parts marked **(Pro)**.
 
 Check each ✔ line. A missing piece fails silently later.
 
-**1. The stack, with the demo folder mounted.** The hub must see the demo files under `/demo`:
+**1. The stack, with the demo folder mounted.** The hub must see the demo files in tenant `1`'s
+folder of its local root, `<root>/1/demo`. The overlay sets the root to `/tmp/drop`, unless `.env`
+names one:
 
 ```bash
-./deploy/selfhost/up.sh --build
+./deploy/selfhost/up.sh           # the stack already runs? skip this line
 docker compose -f docker-compose.selfhost.yml \
                -f docs/demo/wow-customer/docker-compose.wow.yml up -d hub
 ```
 
 - Wait one minute: the hub restarts. An `lm` call before that answers `401`.
-- ✔ `docker compose -f docker-compose.selfhost.yml exec hub ls /demo` lists `customer.csv`.
+- ✔ `docker compose -f docker-compose.selfhost.yml exec hub sh -c 'ls "$LUMNIK_CSV_LOCAL_ROOT/1/demo"'`
+  lists `customer.csv`.
 - A later `up.sh` keeps this mount. After `down.sh`, run the second command again.
+- The stack runs the TLS façade or Search? Name its file in the second command too, or the hub
+  restarts without it: `-f docker-compose.tls.yml`, `-f docker-compose.search.yml`.
 - The steps marked (Pro) need Ollama and its models: [Prerequisites](quickstart/prerequisites.md#the-ai-layer-ollama).
 
 **2. The fake Siebel**, left running in its own terminal:

@@ -8,6 +8,7 @@
 # the query string instead, which is what APIs that pre-date bearer tokens tend to want.
 #
 #   lm secret set ACME_API_KEY        # the demo API answers to demo-key
+#   lm secret scope ACME_API_KEY billing   # this connector's scope
 #
 # Expect: 2 400 rows in ext.acme_header_partners.
 

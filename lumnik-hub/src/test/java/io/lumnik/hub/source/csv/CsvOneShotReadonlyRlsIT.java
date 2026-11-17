@@ -33,8 +33,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * grants it {@code SELECT} on each {@code ext.*} table it creates, and stamps the same
  * {@code tenant_isolation} policy the {@code connector.t_*} tables carry. Nothing checked either.
  *
- * <p>Which matters more than an untested path usually does, because this one is <b>built to be
- * silent</b>: the grants ride {@code RlsDdl.guarded(...)}, whose block ends
+ * <p>Which matters more than an untested path usually does, because this one was <b>built to be
+ * silent</b>: until #2010 the grants rode {@code RlsDdl.guarded(...)}, whose block ends
  * {@code EXCEPTION WHEN OTHERS THEN NULL}. A grant that fails takes the ingest down with it in no
  * way at all — the rows land, the run completes, the card is built, and the ask discovers in
  * production that it cannot read the table it was just told about. This class is the observation

@@ -4,6 +4,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.lumnik.hub.search.mark.MatchKeyEncoding;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
@@ -79,9 +80,10 @@ class MatchKeyEncodingViewParityIT {
       st.execute("GRANT SELECT ON connector." + SRC + " TO lumnik_app");
       st.execute("GRANT SELECT ON connector." + SRC + " TO lumnik_readonly");
     }
+    RegisteredTables.register(adminDs, 1L, SRC);
 
     EntityManifest m = new EntityManifestParser().parse(MANIFEST);
-    ScopeGuardedUpsert outcome = compiler.apply(m, MANIFEST, null);
+    ScopeGuardedUpsert outcome = compiler.apply(m, MANIFEST, null, 1L);
     assertThat(outcome).as("setup: compiler.apply must succeed").isInstanceOf(ScopeGuardedUpsert.Applied.class);
   }
 

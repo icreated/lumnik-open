@@ -193,7 +193,7 @@ func entityReadVariants() []entityReadVariant {
 			readTarget:  "otk_customer",
 			readQuery:   "",
 			crossTenant: true,
-			feature:     "GET entity with tenant-B token must return 0 rows (RLS isolation enforced)",
+			feature:     "GET another tenant's entity with a tenant-B token must return 404: tenant B sees neither its rows nor its manifest",
 		},
 	}
 }
@@ -296,7 +296,7 @@ func renderEntityReadFeature(seed int64, v entityReadVariant) string {
 	case "huge-limit":
 		thenLine = "    Then the entity read response status is 200\n    And the entity read response has at most 1000 rows"
 	case "cross-tenant-read":
-		thenLine = "    Then the entity read response status is 200\n    And the entity read response contains no rows (RLS)"
+		thenLine = "    Then the entity read response status is 404"
 	default:
 		thenLine = "    Then the entity read response status is 200"
 	}

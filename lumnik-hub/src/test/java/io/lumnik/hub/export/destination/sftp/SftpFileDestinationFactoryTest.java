@@ -1,6 +1,7 @@
 package io.lumnik.hub.export.destination.sftp;
 
 import io.lumnik.hub.export.destination.FileDestinationException;
+import io.lumnik.hub.testsupport.TestOutbound;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
@@ -22,7 +23,7 @@ class SftpFileDestinationFactoryTest {
 
     @Test
     void a_missing_required_field_is_refused_before_any_connection() {
-        var factory = new SftpFileDestinationFactory(null);
+        var factory = new SftpFileDestinationFactory(null, TestOutbound.ADDRESSES);
         for (String field : new String[] {"host", "user", "path", "host_key_fingerprint"}) {
             assertThatThrownBy(() -> factory.build(cfgWithout(field)))
                 .isInstanceOf(FileDestinationException.class)
@@ -34,7 +35,7 @@ class SftpFileDestinationFactoryTest {
     void a_blank_path_is_refused() {
         Map<String, Object> cfg = cfgWithout("path");
         cfg.put("path", "  ");
-        assertThatThrownBy(() -> new SftpFileDestinationFactory(null).build(cfg))
+        assertThatThrownBy(() -> new SftpFileDestinationFactory(null, TestOutbound.ADDRESSES).build(cfg))
             .isInstanceOf(FileDestinationException.class)
             .hasMessage("SFTP destination: 'path' is required");
     }

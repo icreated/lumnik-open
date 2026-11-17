@@ -39,7 +39,7 @@ class DiscoveryServiceAdEnrichmentTest {
     }
 
     static final class FakeEntityViews extends EntitySchemaBuilder {
-        @Override public List<SchemaCard.Table> resolve(String scope) { return List.of(); }
+        @Override public List<SchemaCard.Table> resolve(long tenantId, String scope) { return List.of(); }
     }
 
     static final class CapturingLabels extends AdLabelProvider {

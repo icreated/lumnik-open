@@ -6,7 +6,7 @@ transport            REQUIRED  [NESTED, HIGH]
   path                 optional  [STRING, HIGH]
     File path (local) or glob path (sftp)
     required when kind is local or sftp
-    → Set path: /imports/*.csv (local) or a remote glob (sftp)
+    → Set path: imports/*.csv (local, relative to the tenant's folder of the hub's local root) or a remote glob (sftp)
   host                 optional  [STRING, HIGH]
     SFTP host
     required when kind = sftp
@@ -43,14 +43,14 @@ transport            REQUIRED  [NESTED, HIGH]
     S3 archive key prefix for after_process=archive|move
     default: archive/
   key_env              optional  [STRING, MEDIUM]
-    Env var for SSH private key (SFTP)
+    lm secret name of the SSH private key (SFTP)
   password_env         optional  [STRING, MEDIUM]
-    Env var for SSH password (SFTP)
+    lm secret name of the SSH password (SFTP)
   access_key_env       optional  [STRING, MEDIUM]
-    Env var for AWS access key (S3)
+    lm secret name of the AWS access key (S3)
     default: AWS_ACCESS_KEY_ID
   secret_key_env       optional  [STRING, MEDIUM]
-    Env var for AWS secret key (S3)
+    lm secret name of the AWS secret key (S3)
     default: AWS_SECRET_ACCESS_KEY
   at least one of key_env, password_env when kind is sftp
     → Use `lm secret set <NAME> ...` then reference it via key_env: <NAME>
@@ -114,8 +114,8 @@ target               optional  [NESTED, HIGH]
     → indexes is a list of { columns: [...], unique?: bool } objects — e.g. indexes: [{ columns: [email] }]
     indexes[]
       columns              REQUIRED  [LIST, HIGH]
-        Columns of the index, in order
+        Columns of the index, in order, after tenant_id
         → e.g. columns: [email] or [bpartner_id, dateordered]
       unique               optional  [BOOLEAN, LOW]
-        Unique index (default false)
+        Unique within the tenant (default false)
         default: false

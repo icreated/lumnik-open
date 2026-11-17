@@ -9,4 +9,4 @@ spec:
       method: GET
       # items is interpolated into a JSONPath ($._embedded.{items}); metacharacters must be rejected
       pagination: { kind: spring-hateoas, items: "a.b['x']" }
-      target: { kind: hybrid, table: x_items, unique_key: "$.id" }
+      target: { kind: hybrid, table: ext.x_items, unique_key: "$.id" }

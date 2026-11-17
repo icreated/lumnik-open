@@ -6,6 +6,7 @@ import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.AskToSqlAgent;
 import io.lumnik.hub.ask.EntitySchemaBuilder;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.llm.spi.Analytic;
 import io.lumnik.llm.spi.ChatPort;
@@ -64,10 +65,12 @@ class EntityJoinAskIT {
       st.execute("INSERT INTO connector.t_askjoin_categories VALUES ('C1', 'Pumps')");
       st.execute("INSERT INTO connector.t_askjoin_products VALUES ('P1', 'C1', 'Pump A'), ('P2', 'C1', 'Pump B')");
     }
+    RegisteredTables.register(adminDs, 1L, "t_askjoin_products");
+    RegisteredTables.register(adminDs, 1L, "t_askjoin_categories");
     given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
-    store.save(7L, "askjoin", new SchemaCard("askjoin", schemas.resolve("askjoin")));
+    store.save(7L, "askjoin", new SchemaCard("askjoin", schemas.resolve(1L, "askjoin")));
   }
 
   @Test

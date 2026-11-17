@@ -83,3 +83,25 @@ func TestSecrets_timesReadLikeEveryOtherPage(t *testing.T) {
 		}
 	}
 }
+
+// The scopes a secret serves (#2015) read in the table and in the describe panel: a run refused
+// "does not serve scope ventes" is answered by looking here.
+func TestSecrets_showTheScopesEachSecretServes(t *testing.T) {
+	s := NewSecrets(nil, nil, nil, nil)
+	s.renderList([]client.SecretMeta{
+		{Name: "erp-db", Scopes: []string{"ventes", "achats"}},
+		{Name: "open-key"},
+	}, nil)
+	if h := s.table.GetCell(0, 4).Text; h != "SCOPES" {
+		t.Fatalf("column 4 header = %q, want SCOPES", h)
+	}
+	for row, want := range map[int]string{1: "ventes,achats", 2: ""} {
+		if got := s.table.GetCell(row, 4).Text; got != want {
+			t.Errorf("row %d scopes = %q, want %q", row, got, want)
+		}
+	}
+	s.table.Select(1, 0)
+	if _, body, _ := s.SelectedDescribe(); !strings.Contains(body, "scopes:      ventes,achats") {
+		t.Errorf("describe misses the scopes:\n%s", body)
+	}
+}

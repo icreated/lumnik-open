@@ -1,10 +1,13 @@
 package io.lumnik.hub.api.connector;
 
+import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.ask.SchemaCardRefresher;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.audit.AuditRecorder;
+import io.lumnik.hub.entity.NewWriterScopes;
+import io.quarkus.agroal.DataSource;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import jakarta.ws.rs.*;
@@ -23,6 +26,7 @@ public class ConnectorTagsResource {
   @Inject ConnectorRepository repo;
   @Inject SchemaCardRefresher cardRefresher;
   @Inject AuditRecorder audit;
+  @Inject @DataSource("admin") AgroalDataSource adminDs;
 
   @GET
   @Transactional
@@ -44,13 +48,10 @@ public class ConnectorTagsResource {
     // The same rule the manifest declares under (ScopesValidator) and kind:Entity enforces —
     // this endpoint used to carry a third, stricter copy, so a scope `apply` accepted could be
     // refused by `scope set` one command later.
-    for (String t : tags) {
-      var problem = ScopeGrants.nameProblem(t);
-      if (problem.isPresent()) {
-        return ApiErrors.badRequest(problem.get());
-      }
-    }
+    var problem = ScopeGrants.namesProblem(tags);
+    if (problem.isPresent()) return ApiErrors.badRequest(problem.get());
     ConnectorScope.refuseUnlessHolds(tags);   // and the scopes it moves into (#1208)
+    NewWriterScopes.requireRetagWithinReaders(adminDs, c.getTenantId(), c.getId(), c.getName(), c.getTags(), tags);   // #2048
     cardRefresher.afterRetag(c.getTenantId(), c.getTags(), tags);
     c.setTags(tags);
     audit.recordAfterCommit("Connector", id.toString(), "APPLY", Map.of(

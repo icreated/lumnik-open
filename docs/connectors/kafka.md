@@ -88,14 +88,14 @@ What landed in `connector.t_acme_partners` — each top-level JSON field became 
 spec:
   name: erp_events                  # required — the table: connector.t_erp_events
   brokers: broker-1:9092,broker-2:9092   # bootstrap servers, literal…
-  # brokers_env: KAFKA_BROKERS      # …or by name, resolved at run time (lm secret, then the hub's environment)
+  # brokers_env: KAFKA_BROKERS      # …or by name, resolved at run time in lm secret
   topic: erp.events                 # required — one topic per connector
   format: json                      # the only value in v1: one JSON object per message
   poll_timeout_ms: 2000             # optional, [100, 60000]; what one poll may wait for the broker
   max_poll_records: 500             # optional; leave it at its default
   auth:                             # optional; omitted = no SASL handshake
     kind: sasl-plain                # none | sasl-plain
-    username_env: KAFKA_USER        # names, never values
+    username_env: KAFKA_USER        # a name — or `username: <the user>`, as written
     password_env: KAFKA_PW
     security_protocol: SASL_SSL     # or SASL_PLAINTEXT for a SASL broker without TLS
   schedule: "*/5 * * * *"           # optional cron, evaluated in UTC by the hub scheduler
@@ -123,15 +123,14 @@ Three more keys belong to the [Event Hubs preset](#azure-event-hubs-the-event-hu
 | `format` | `json` | the only accepted value; Avro and Protobuf are [not yet supported](#limitations) |
 | `poll_timeout_ms` | `2000` | integer in `[100, 60000]` |
 | `max_poll_records` | `500` | integer ≥ 1; leave it at its default |
-| `auth.kind` | `none` | `none` or `sasl-plain`; `sasl-plain` requires `username_env` and `password_env`, and refuses a blank one |
+| `auth.kind` | `none` | `none` or `sasl-plain`; `sasl-plain` requires `username` or `username_env` (not both), and `password_env`, and refuses a blank one |
 | `auth.security_protocol` | `SASL_SSL` | `SASL_SSL` or `SASL_PLAINTEXT`, in any case. `lm validate` names any other value; it is read only with `sasl-plain` |
 | `schedule` | — | five-field cron, validated at apply, evaluated in UTC |
 | `window` | — | `HH:MM-HH:MM`, UTC, end exclusive, may cross midnight; a manual run ignores it |
 | `promote` | — | a list of `{ name, path, type, transform? }`, rest's grammar: `path` a JSONPath, `type` one of `text`, `bigint`, `integer`, `decimal`, `boolean`, `date`, `timestamptz` (not `jsonb`); a name used once, never a [reserved one](#seven-column-names-are-reserved) |
 | `metadata.scopes` | — | the business scope(s) the table is askable in; the validator warns when none is declared |
 
-`lm validate` and `lm apply` enforce these rules. Five
-mistakes in one file, all named at once:
+`lm validate` and `lm apply` enforce these rules. Five mistakes in one file, all named at once:
 
 ```yaml
 --8<-- "docs/connectors/kafka/demo/90-refused.yaml"
@@ -263,7 +262,8 @@ acme-kafka-cadence  kafka  1       */5 * * * *  06:00-22:00
 - An external trigger works too: your own cron plus `lm connector run <name>`.
 
 **One connector reads one topic**, with no key or header filtering. To land the same messages
-twice, apply a second connector on the same topic with a different `name`.
+twice, apply a second connector on the same topic with a different `name`: each keeps its own
+position and its own table. Useful when two teams need the same events under two scopes.
 
 ## Storage layout
 
@@ -520,25 +520,27 @@ each case, as `lm` shows it, in [When the topic misbehaves](kafka/when-the-topic
 | `auth.kind` | Config | Wire |
 |---|---|---|
 | `none` | nothing — the default when `auth:` is omitted | plaintext, no SASL handshake |
-| `sasl-plain` | `username_env` + `password_env`, optional `security_protocol` | SASL/PLAIN over `SASL_SSL` (default) or `SASL_PLAINTEXT` |
+| `sasl-plain` | `username` (as written) or `username_env`, + `password_env`; optional `security_protocol` | SASL/PLAIN over `SASL_SSL` (default) or `SASL_PLAINTEXT` |
 
-`brokers_env`, `username_env` and `password_env` are **names**, resolved when the run starts: the
-[`lm secret`](../cli/lm-reference.md#data-runs-answers) registry of your tenant first, then the
-hub's environment.
+`username` is written as itself: a username is not a secret. `brokers_env`, `username_env` and
+`password_env` are **names**, resolved when the run starts in the
+[`lm secret`](../cli/lm-reference.md#data-runs-answers) registry of your tenant.
 
 ```yaml
 --8<-- "docs/connectors/kafka/demo/62-brokers-env.yaml"
 ```
 
-Run before the name resolves, the refusal names both places it looked:
+Run before the name resolves, the refusal names where it looked:
 
 ```
 $ lm run get 3e808fcf
 ID        CONNECTOR               ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
 3e808fcf  acme-kafka-brokers-env  default   Failed  0   0    0        0             2026-09-13 02:21  2026-09-13 02:21
-✖ run failed: 'ACME_KAFKA_BROKERS' (brokers_env) resolves to nothing — no 'lm secret' entry for this tenant, and nothing of that name in the hub's own environment
+✖ run failed: 'ACME_KAFKA_BROKERS' (brokers_env) resolves to nothing — no 'lm secret' entry of that name for this tenant
 $ lm secret set ACME_KAFKA_BROKERS          # prompts at the keyboard; what you type is not shown
 Created secret "ACME_KAFKA_BROKERS"
+$ lm secret scope ACME_KAFKA_BROKERS billing   # the connector's scope
+scopes: billing
 $ lm connector run acme-kafka-brokers-env
 $ lm run list --connector acme-kafka-brokers-env
 ID        CONNECTOR               ENDPOINT  STATUS     IN    OUT   SKIPPED  DEAD-LETTERS  STARTED           ENDED
@@ -556,7 +558,7 @@ d071091c  acme-kafka-brokers-env  default   Completed  2400  2400  0        0   
 $ lm run get 28d58a30
 ID        CONNECTOR        ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
 28d58a30  acme-kafka-sasl  default   Failed  0   0    0        0             2026-10-19 01:39  2026-10-19 01:39
-✖ run failed: 'ACME_KAFKA_USER' (username_env) resolves to nothing — no 'lm secret' entry for this tenant, and nothing of that name in the hub's own environment
+✖ run failed: 'ACME_KAFKA_USER' (username_env) resolves to nothing — no 'lm secret' entry of that name for this tenant
 ```
 
 Once both names resolve, a listener that does not speak SASL/PLAIN (the demo broker) refuses:
@@ -584,7 +586,7 @@ password the namespace connection string. `preset: event-hubs` writes that confi
 $ lm apply -f docs/connectors/kafka/20-event-hubs.yaml
 Applied connector "event-hubs-telemetry" — 1 endpoint
 $ lm connector get event-hubs-telemetry
-id: 55016bf3-406b-43ee-86c8-92da12ca26f3
+id: c7516b62-a172-4ab9-9529-08faae8000a3
 tenantId: 1
 name: event-hubs-telemetry
 typeId: kafka
@@ -594,7 +596,7 @@ config:
         kind: sasl-plain
         password_env: EVENTHUBS_CONN_STR
         security_protocol: SASL_SSL
-        username_env: EVENT_HUBS_SASL_USERNAME
+        username: $ConnectionString
     brokers: my-namespace.servicebus.windows.net:9093
     format: json
     kind: kafka
@@ -609,11 +611,12 @@ The stored config is plain kafka: `preset`, `namespace` and `connection_string_e
 Besides what the preset writes, it keeps `name`, `topic`, `format`, `promote`,
 `poll_timeout_ms` and `max_poll_records`. The two poll keys are checked as for plain kafka.
 
-Set the two names the config reads:
+Set the one secret the config names. The username is Azure's fixed `$ConnectionString`, written as
+itself:
 
 ```bash
 lm secret set EVENTHUBS_CONN_STR          # the namespace Primary Connection String, Endpoint=sb://…
-lm secret set EVENT_HUBS_SASL_USERNAME    # the fixed literal $ConnectionString
+lm secret scope EVENTHUBS_CONN_STR demo,azure   # the connector's scopes
 ```
 
 `lm validate` refuses an unknown preset (`unknown source preset 'event-hubbs'`) and names each
@@ -658,16 +661,6 @@ Full reference: [CLI & TUI](../cli/lm-reference.md).
 
 ## How to…
 
-### Keep a topic mirrored on a cadence
-
-```yaml
-spec:
-  schedule: "*/5 * * * *"
-  window: "06:00-22:00"      # optional
-```
-
-**Result:** every five minutes, a catch-up to the head. A night slot is skipped. A slot that meets a running run is skipped. See [Continuous consumption](#continuous-consumption).
-
 ### Read a topic again from the beginning
 
 ```bash
@@ -689,14 +682,6 @@ lm dlq get <id>                     # coordinates, reason, raw value
 **Result:** one entry per message, reason `MalformedSource`, coordinate `topic:partition:offset`.
 A tombstone's entry names the deleted key; a poison message's entry carries the raw value.
 
-### Read the same topic into two tables
-
-Apply a second manifest with the same `topic` and a different `name`. Each connector keeps its
-own position and its own table.
-
-**Result:** two connectors over one topic, useful when two teams need the same events under
-two scopes.
-
 ### Move to Event Hubs
 
 Replace `brokers` and `auth` with `preset: event-hubs`, `namespace` and `connection_string_env`,
@@ -711,7 +696,7 @@ and set the two secrets. **Result:** the same run ledger, the same table; see
 | a green run read less than expected | the broker answered slowly | raise `poll_timeout_ms` |
 | a run ends `Partial` | the broker deleted messages before they were read, or a long run of unreadable messages stopped the run | `lm run get` names which. Deleted messages cannot be recovered: raise the topic's retention, or run more often |
 | run fails: `kafka topic '…' does not exist on the broker` | no partition reported under that name, and the hub never creates one | first read: check `spec.topic` or create the topic; stored position: the topic was deleted or renamed on the broker |
-| run fails: `'NAME' (brokers_env) resolves to nothing` | neither the registry nor the hub's environment holds it | `lm secret set NAME`, or export it where the hub runs |
+| run fails: `'NAME' (brokers_env) resolves to nothing` | the tenant's `lm secret` does not hold it | `lm secret set NAME` |
 | run fails: `Unexpected handshake request with client mechanism PLAIN` | the listener does not speak SASL/PLAIN — wrong port, or `auth` on a plaintext broker | check the broker's listener; drop `auth` for a plaintext one |
 | run fails after ~60 s: `the kafka broker did not answer within the client's metadata timeout` | the bootstrap address answers nothing — wrong host, wrong listener, or a broker that is down | from the hub's container, prove the address; on Docker, `host.docker.internal`, not `localhost` |
 | run fails at once: `No resolvable bootstrap urls given in bootstrap.servers` | the hub cannot resolve the broker host name (e.g. `host.docker.internal` on a hub not running in Docker) | use a host name the hub resolves |

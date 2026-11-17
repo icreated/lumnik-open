@@ -61,6 +61,8 @@ final class DisputedRows {
         "join", "union", "intersect", "except", "or", "not", "like", "ilike", "similar", "between", "is");
     private static final Set<String> CLAUSE_END = Set.of("group", "order", "limit", "offset", "having", "fetch");
     private static final Set<String> AGGREGATES = Set.of("count", "sum", "avg", "min", "max");
+    /** Outside brackets, each makes an aggregate-only select list return other than its one row. */
+    private static final Set<String> NOT_ONE_ROW = Set.of("group", "having", "union", "intersect", "except");
 
     static Optional<Plan> plan(String rawSql, String safeSql, SchemaCard card) {
         if (card == null || safeSql == null) return Optional.empty();
@@ -69,37 +71,21 @@ final class DisputedRows {
         for (Token tok : t) if (isWord(tok) && REFUSED.contains(lower(tok))) return Optional.empty();
 
         int from = indexOf(t, "from", 0);
-        if (from + 3 >= t.size() || !isIdent(t.get(from + 1)) || !isPunct(t.get(from + 2), ".") || !isIdent(t.get(from + 3))) {
-            return Optional.empty();
-        }
-        String view = lower(t.get(from + 1)) + "." + lower(t.get(from + 3));
-        String entity = EntityViewCompiler.entityNameFromView(view);
-        Optional<SchemaCard.Table> table = card.tables().stream()
-            .filter(x -> x.name().equalsIgnoreCase(view)).findFirst();
-        if (entity == null || table.isEmpty()) return Optional.empty();
+        SqlRelation relation = SqlRelation.at(t, from + 1);
+        if (relation == null) return Optional.empty();
+        String entity = EntityViewCompiler.entityNameFromView(relation.fqn());
+        SchemaCard.Table table = relation.on(card);
+        if (entity == null || table == null) return Optional.empty();
 
-        // An optional table alias: AS ident, or a bare ident that is not a keyword.
-        int where = from + 4;
-        String qualifier = lower(t.get(from + 3));
-        if (where < t.size() && isKeyword(t.get(where), "as") && where + 1 < t.size() && isIdent(t.get(where + 1))) {
-            qualifier = lower(t.get(where + 1));
-            where += 2;
-        } else if (where < t.size() && isIdent(t.get(where)) && !isWord(t.get(where))) {
-            qualifier = lower(t.get(where));
-            where++;
-        } else if (where < t.size() && isWord(t.get(where)) && !isKeyword(t.get(where), "where")
-            && !CLAUSE_END.contains(lower(t.get(where)))) {
-            qualifier = lower(t.get(where));
-            where++;
-        }
+        int where = relation.next();
         if (where >= t.size() || !isKeyword(t.get(where), "where")) return Optional.empty();
         int end = where + 1;
         while (end < t.size() && !(isWord(t.get(end)) && CLAUSE_END.contains(lower(t.get(end))))) end++;
 
-        Optional<List<Lexed>> filters = conjunction(t.subList(where + 1, end), qualifier);
+        Optional<List<Lexed>> filters = conjunction(t.subList(where + 1, end), relation.qualifier());
         if (filters.isEmpty()) return Optional.empty();
         Map<String, String> declared = new HashMap<>();
-        for (SchemaCard.Column c : table.get().columns()) declared.put(c.name().toLowerCase(Locale.ROOT), c.pgType());
+        for (SchemaCard.Column c : table.columns()) declared.put(c.name().toLowerCase(Locale.ROOT), c.pgType());
         List<Filter> kept = new ArrayList<>();
         for (Lexed f : filters.get()) {
             if (!declared.containsKey(f.column())) return Optional.empty();
@@ -116,8 +102,8 @@ final class DisputedRows {
             kept.add(new Filter(f.column(), values, kind.temporal()));
         }
 
-        return Optional.of(new Plan(table.get().name(), entity, kept,
-            counted(rawSql, t, from)));
+        return Optional.of(new Plan(table.name(), entity, kept,
+            counted(rawSql, t)));
     }
 
     /** One filter as written: its values, and whether they were number literals rather than strings (#1338). */
@@ -132,7 +118,7 @@ final class DisputedRows {
         while (true) {
             if (i >= c.size() || !isIdent(c.get(i))) return Optional.empty();
             if (i + 2 < c.size() && isPunct(c.get(i + 1), ".")) {
-                if (!isIdent(c.get(i + 2)) || !lower(c.get(i)).equals(qualifier)) return Optional.empty();
+                if (!isIdent(c.get(i + 2)) || !SqlRelation.identifier(c.get(i)).equals(qualifier)) return Optional.empty();
                 i += 2;
             }
             String col = lower(c.get(i));
@@ -168,38 +154,63 @@ final class DisputedRows {
         return t.kind() == Kind.STRING || t.kind() == Kind.NUMBER;
     }
 
-    private static Counted counted(String rawSql, List<Token> t, int from) {
+    private static Counted counted(String rawSql, List<Token> t) {
         boolean having = indexOf(t, "having", 0) >= 0;
         if (having) return Counted.NEVER;
-        boolean grouped = indexOf(t, "group", 0) >= 0;
         List<Token> raw = SqlLexer.tokenize(rawSql == null ? "" : rawSql);
         boolean offset = indexOf(raw, "offset", 0) >= 0;
-        if (!grouped && aggregateOnly(t.subList(1, from))) return offset ? Counted.NEVER : Counted.IF_ANY_ROW;
+        if (!ungroupedAggregates(t).isEmpty()) return offset ? Counted.NEVER : Counted.IF_ANY_ROW;
         boolean modelBound = offset || indexOf(raw, "limit", 0) >= 0 || indexOf(raw, "fetch", 0) >= 0;
         return modelBound ? Counted.NEVER : Counted.IF_UNDER_CAP;
     }
 
-    /** Every top-level item of the select list is {@code agg(…)} with an optional alias. */
-    private static boolean aggregateOnly(List<Token> select) {
+    /**
+     * The functions of an ungrouped, aggregate-only select list ({@code SELECT count(*), sum(x) AS total FROM …}),
+     * lower-cased and in order; empty for any other query. Such a query returns exactly one row. Only the words
+     * outside brackets count: the list ends at the first such {@code FROM} ({@code max(extract(year FROM d))} is read
+     * whole), and a sub-select may group.
+     */
+    static List<String> ungroupedAggregates(List<Token> t) {
+        if (t.isEmpty() || !isKeyword(t.get(0), "select")) return List.of();
+        int depth = 0, from = -1;
+        for (int i = 1; i < t.size(); i++) {
+            Token tok = t.get(i);
+            if (isPunct(tok, "(")) depth++;
+            else if (isPunct(tok, ")")) depth--;
+            else if (depth == 0 && isWord(tok)) {
+                if (NOT_ONE_ROW.contains(lower(tok))) return List.of();
+                if (from < 0 && isKeyword(tok, "from")) from = i;
+            }
+        }
+        return from < 0 ? List.of() : aggregates(t.subList(1, from));
+    }
+
+    /**
+     * The function of each top-level item, lower-cased and in order, when every item of the select list is
+     * {@code agg(…)} with an optional alias; empty otherwise.
+     */
+    private static List<String> aggregates(List<Token> select) {
+        List<String> names = new ArrayList<>();
         int i = 0;
         while (i < select.size()) {
-            if (!isWord(select.get(i)) || !AGGREGATES.contains(lower(select.get(i)))) return false;
-            if (i + 1 >= select.size() || !isPunct(select.get(i + 1), "(")) return false;
+            if (!isWord(select.get(i)) || !AGGREGATES.contains(lower(select.get(i)))) return List.of();
+            if (i + 1 >= select.size() || !isPunct(select.get(i + 1), "(")) return List.of();
+            names.add(lower(select.get(i)));
             int depth = 0, j = i + 1;
             for (; j < select.size(); j++) {
                 if (isPunct(select.get(j), "(")) depth++;
                 else if (isPunct(select.get(j), ")") && --depth == 0) break;
             }
-            if (j >= select.size()) return false;
+            if (j >= select.size()) return List.of();
             i = j + 1;
             if (i < select.size() && isKeyword(select.get(i), "as")) i += 2;
             else if (i < select.size() && isIdent(select.get(i))) i += 1;
             if (i < select.size()) {
-                if (!isPunct(select.get(i), ",")) return false;
+                if (!isPunct(select.get(i), ",")) return List.of();
                 i++;
             }
         }
-        return !select.isEmpty();
+        return names;
     }
 
     private static int count(List<Token> t, String word) {

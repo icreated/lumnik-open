@@ -2,6 +2,7 @@ package io.lumnik.hub.validator.jdbc;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.hub.validator.ConfigDef;
 import io.lumnik.hub.validator.ConnectorValidationService;
 import io.lumnik.hub.testsupport.ValidationWarnings;
 import io.lumnik.hub.validator.ValidationError;
@@ -258,6 +259,13 @@ class JdbcConnectorValidatorTest {
         assertFalse(r.isValid());
         assertEquals(1, r.errors().stream().filter(e -> e.path().equals("spec.schedule")).count(),
             () -> "one defect, one refusal: " + r.errors());
+    }
+
+    /** Pasted as written, the hint must not earn a second refusal: it names every key a table requires. */
+    @Test void theHintForAnEmptyTableList_namesEveryRequiredKey() {
+        String hint = String.join(" ", SourceBlockValidator.configDef().fields().iterator().next().recommendations());
+        SourceBlockValidator.perTableDef().fields().stream().filter(ConfigDef.FieldSpec::required)
+            .forEach(f -> assertTrue(hint.contains(f.name() + ":"), () -> "the hint omits " + f.name() + ": " + hint));
     }
 
     @Test void indexesThatIsNotAList_isRefusedExactlyOnce() throws Exception {

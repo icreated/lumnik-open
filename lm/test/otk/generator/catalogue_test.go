@@ -57,7 +57,7 @@ func TestCatalogueIsSortedAndUnique(t *testing.T) {
 // names the lane and count that moved, then paste the new fingerprint below. That
 // paste is the corpus-version bump, and it is the moment a human looks at what moved.
 func TestCatalogueFingerprintIsPinned(t *testing.T) {
-	const pinned = "3fe6325f76d4"
+	const pinned = "0a7d88b7d94d"
 	got := CatalogueFingerprint()
 	if !regexp.MustCompile(`^[0-9a-f]{12}$`).MatchString(got) {
 		t.Fatalf("fingerprint %q is not 12 hex characters", got)

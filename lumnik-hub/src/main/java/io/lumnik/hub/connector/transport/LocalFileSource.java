@@ -10,12 +10,19 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Stream;
 
+/**
+ * The files of one local folder, inside {@code lumnik.csv.local-root} (#2001): the folder is refused when the source is
+ * built, a file whose link leads out of the root is not listed, and an {@code archive_path} must lie inside it too.
+ */
 public class LocalFileSource implements FileSource, SeekableSource {
 
+    private final LocalRoot root;
     private final Path baseDir;
     private final PathMatcher matcher;
 
-    public LocalFileSource(String pathGlob) {
+    /** @throws io.lumnik.hub.connector.exceptions.ConfigValidationException when the folder lies outside {@code root} */
+    public LocalFileSource(LocalRoot root, String pathGlob) {
+        this.root = root;
         int globIdx = pathGlob.indexOf('*');
         if (globIdx < 0) {
             Path full = Paths.get(pathGlob);
@@ -28,6 +35,7 @@ public class LocalFileSource implements FileSource, SeekableSource {
             PathMatcher m = FileSystems.getDefault().getPathMatcher("glob:" + pattern);
             this.matcher = p -> m.matches(p.getFileName());
         }
+        root.confine(baseDir);
     }
 
     @Override
@@ -56,7 +64,7 @@ public class LocalFileSource implements FileSource, SeekableSource {
 
     /** The listing's filters, shared with {@link #stat}: a non-empty regular file matching the glob. */
     private Optional<FileDescriptor> listed(Path p) {
-        if (!Files.isRegularFile(p) || !matcher.matches(p)) return Optional.empty();
+        if (!Files.isRegularFile(p) || !matcher.matches(p) || !root.holds(p)) return Optional.empty();
         FileDescriptor d = toDescriptor(p);
         return d.size() > 0 ? Optional.of(d) : Optional.empty();
     }
@@ -77,7 +85,7 @@ public class LocalFileSource implements FileSource, SeekableSource {
     @Override
     public InputStream open(FileDescriptor file) {
         try {
-            return Files.newInputStream(Paths.get(file.path()));
+            return Files.newInputStream(held(file));
         } catch (IOException e) {
             throw new RuntimeException("LocalFileSource.open failed for " + file.path(), e);
         }
@@ -94,7 +102,7 @@ public class LocalFileSource implements FileSource, SeekableSource {
                 "LocalFileSource.openAt: negative offset " + byteOffset + " for " + file.path());
         }
         try {
-            SeekableByteChannel channel = Files.newByteChannel(Paths.get(file.path()), StandardOpenOption.READ);
+            SeekableByteChannel channel = Files.newByteChannel(held(file), StandardOpenOption.READ);
             channel.position(byteOffset);
             return Channels.newInputStream(channel);
         } catch (IOException e) {
@@ -105,7 +113,7 @@ public class LocalFileSource implements FileSource, SeekableSource {
 
     @Override
     public void markProcessed(FileDescriptor file, AfterProcessAction action, Map<String, Object> cfg) {
-        Path p = Paths.get(file.path());
+        Path p = held(file);
         try {
             switch (action) {
                 case LEAVE -> {}
@@ -113,7 +121,7 @@ public class LocalFileSource implements FileSource, SeekableSource {
                 case MOVE -> {
                     String archive = (String) cfg.getOrDefault("archive_path", baseDir.resolve("archive").toString());
                     // Its own name and mtime, as sftp and s3 (#1382): REPLACE_EXISTING would overwrite an earlier one.
-                    Path dest = Paths.get(archive).resolve(file.archivedName());
+                    Path dest = root.confine(Paths.get(archive)).resolve(file.archivedName());
                     Files.createDirectories(dest.getParent());
                     Files.move(p, dest, StandardCopyOption.REPLACE_EXISTING);
                 }
@@ -123,5 +131,10 @@ public class LocalFileSource implements FileSource, SeekableSource {
         } catch (IOException e) {
             throw new RuntimeException("LocalFileSource.markProcessed failed for " + file.path(), e);
         }
+    }
+
+    /** The file a descriptor names, refused unless it lies inside the root: a read or a move never trusts where it came from. */
+    private Path held(FileDescriptor file) {
+        return root.confine(Paths.get(file.path()));
     }
 }

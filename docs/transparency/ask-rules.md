@@ -56,6 +56,10 @@ more before it declines.
 **Do next:** rephrase using the columns the scope declares (`lm source schema --scope <tag>` lists them), or
 ingest/declare the missing data.
 
+The default model also declines some questions the schema does answer: "Quels sites sont à moins de 20 km d'un
+autre site ?" is one. [Ask by distance](../entities.md#ask-by-distance-points) shows the French wording it
+answers; the English one tried got no SQL either.
+
 Two questions abstain because the analytic door cannot read what answers them. The refusal adds a
 sentence saying where the answer is:
 
@@ -117,6 +121,14 @@ re-apply; if it was a typo, re-ask with a declared value.
 **Trigger:** the query ran fine and returned 0 rows.
 
 > The query returned no rows. That can mean there are genuinely none, or that the query did not capture your question — verify the SQL before reporting that there are none.
+
+A count of 0 gets the same doubt. "How many customers are in Clermont-Ferrand?" shows the `0` it
+counted, with:
+
+> The query returned 0 or no value. That may be the true answer, or the query did not capture your question — verify the SQL before relying on it.
+
+A total or a latest date with no value gets it too. Some counts are not checked: before you trust a
+0, read its SQL.
 
 The SQL that ran is always shown with the answer (`lm ask` prints it; the TUI yanks it with `y`).
 
@@ -275,11 +287,16 @@ A date the question writes is a filter, and the column's type decides how:
 | The question says | On a date column | On a timestamp column |
 |---|---|---|
 | a day, *« … le 2026-07-02 »* | `= '2026-07-02'` | the whole day: `>= '2026-07-02' AND < '2026-07-03'` |
-| a month, *« … en juillet 2026 après le 4 »* | `>= '2026-07-05' AND < '2026-08-01'` | the same range |
+| a month, *« … en juillet 2026 »* | `>= '2026-07-01' AND < '2026-08-01'` | the same range |
+| a day inside a month, *« … en juillet 2026 après le 4 »* | `>= '2026-07-05' AND < '2026-08-01'` | the same range |
+| December, *« … en décembre 2026 après le 15 »* | `>= '2026-12-16' AND < '2027-01-01'` | the same range |
 | a day no row holds | no row, with the zero-row caveat — not a refusal | the same |
 
 - Recognised: an ISO date (`2026-07-02`, a time after it allowed), or a month with its year
-  (*juillet 2026*, *1er juillet 2026*, *July 2026*, *July 2, 2026*).
+  (*juillet 2026*, *1er juillet 2026*, *July 2026*, *July 2, 2026*, *the 4th of July 2026*).
+- A month written without a day (*juillet 2026*) has its bounds computed by the hub, the turn of the year included.
+  *« après le 4 »* moves only the start: the month still ends on its last day.
+- *« avant le 10 »* inside a month is left to the model. Check the end of the range in the SQL.
 - Left to the model:
     - `01/07/2026` (first of July or seventh of January?);
     - *hier*, an abbreviated month (*juil. 2026*), a year alone;

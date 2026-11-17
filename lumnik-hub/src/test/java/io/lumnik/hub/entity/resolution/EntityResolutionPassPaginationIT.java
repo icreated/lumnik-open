@@ -72,7 +72,7 @@ class EntityResolutionPassPaginationIT {
           + "\"CUSTOMER_ID\" text, \"EMAIL_COL\" text)");
       st.execute("DELETE FROM core.entity_identity WHERE entity_type = '" + ENTITY_TYPE + "'");
     }
-    registry.put(new EntityManifestParser().parse(MANIFEST));
+    registry.put(new EntityManifestParser().parse(MANIFEST), null);
   }
 
   private void insertRow(long tenant, String customerId, String email) throws Exception {

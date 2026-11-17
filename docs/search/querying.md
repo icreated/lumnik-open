@@ -487,7 +487,7 @@ $ lm search query hydraulique --entity Unknown
 Error: access refused (403): scope not granted
 ```
 
-An app narrows this further: the PWA sends the app's own scope (`scope=` below), so a search opened from
+An app narrows this further: the PWA sends the app's own scope (`scope=`, [above](#over-http)), so a search opened from
 the `stock` app only ever shows the entities that carry `stock`, even to a user who holds other scopes too.
 
 ## In the PWA

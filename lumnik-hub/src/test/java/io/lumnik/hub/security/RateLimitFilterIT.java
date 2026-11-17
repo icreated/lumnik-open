@@ -42,6 +42,10 @@ class RateLimitFilterIT {
     }
 
     @BeforeAll
+    static void avoidWindowEdgeOnce() throws InterruptedException {
+        avoidWindowEdge();
+    }
+
     static void avoidWindowEdge() throws InterruptedException {
         // The limiter's window is a fixed epoch minute; starting the 3-call sequence in
         // its dying seconds could roll the counter mid-test and flake the 429 assertion.
@@ -74,6 +78,26 @@ class RateLimitFilterIT {
     @Order(2)
     void another_tenant_has_its_own_window() {
         Assertions.assertNotEquals(429, chat("2000").statusCode());
+    }
+
+    private static Response chatAs(String tenant, String user) {
+        return given()
+            .header("X-Tenant-ID", tenant)
+            .header("X-User-ID", user)
+            .header("Content-Type", "application/json")
+            .body("{\"scope\":\"stock\",\"description\":\"liste des articles\"}")
+            .post("/api/views/generate");
+    }
+
+    /** #1996: the bucket is the user's; one user at the limit leaves the tenant's other users served. */
+    @Test
+    @Order(4)
+    void a_user_at_the_limit_leaves_another_user_of_the_tenant_served() throws InterruptedException {
+        avoidWindowEdge();   // its own four calls in one window
+        Assertions.assertNotEquals(429, chatAs("3000", "11").statusCode());
+        Assertions.assertNotEquals(429, chatAs("3000", "11").statusCode());
+        chatAs("3000", "11").then().statusCode(429);
+        Assertions.assertNotEquals(429, chatAs("3000", "12").statusCode());
     }
 
     @Inject

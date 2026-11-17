@@ -18,5 +18,5 @@ spec:
         response_path: $.items
       target:
         kind: hybrid
-        table: x_items
+        table: ext.x_items
         unique_key: $.id

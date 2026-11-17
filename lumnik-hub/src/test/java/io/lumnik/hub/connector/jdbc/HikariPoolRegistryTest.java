@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.jdbc;
 
 import com.zaxxer.hikari.HikariDataSource;
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.jdbc.postgresql.PostgresDialect;
 import java.util.ArrayList;
 import org.junit.jupiter.api.AfterEach;
@@ -40,6 +41,8 @@ class HikariPoolRegistryTest {
   /** PostgreSQL's dialect (no session init), pointed at the stub driver. */
   private static final PostgresDialect STUB = new PostgresDialect() {
     @Override public String driverClass() { return StubDriver.class.getName(); }
+    // A stub URL names no host; the rule is OutboundAddressTest's and JdbcSourceResourceIT's (#2002).
+    @Override public List<String> connectHosts(String url) { return List.of(); }
   };
 
   /** Opening a connection to this url waits for {@link #gate}; the one to {@link #FAILING_URL} is refused. */
@@ -50,7 +53,7 @@ class HikariPoolRegistryTest {
 
   private static final List<String> PASSWORDS_SEEN = new CopyOnWriteArrayList<>();
 
-  private final HikariPoolRegistry registry = new HikariPoolRegistry();
+  private final HikariPoolRegistry registry = new HikariPoolRegistry(TestOutbound.ADDRESSES);
   // Its own threads: the common pool is shared with the whole suite, and a test that blocks on a latch needs its thread.
   private final ExecutorService threads = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -79,6 +82,13 @@ class HikariPoolRegistryTest {
    * The secret is resolved on every ask, so a rotation reaches {@code acquire}. The pool built with the old
    * password must not answer it: it keeps its open sessions, then fails to open new ones, until a restart.
    */
+  /** #2002: no password is an empty one — pgjdbc fills a missing one from the hub's ~/.pgpass, for the tenant's host. */
+  @Test
+  void a_missing_password_reaches_the_driver_as_an_empty_one() throws Exception {
+    registry.acquire(URL, "u", null, 1L, STUB, T0).getConnection().close();
+    assertEquals("", PASSWORDS_SEEN.getLast());
+  }
+
   @Test
   void a_rotated_password_opens_its_connections_with_the_new_one() throws Exception {
     HikariDataSource before = registry.acquire(URL, "u", "old", 1L, STUB, T0);

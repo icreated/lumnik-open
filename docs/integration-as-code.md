@@ -20,8 +20,8 @@ This page is the operating manual for that. Four habits of `lm` make the loop po
 | Kotlin scripts (`.kts`) — the operator copies them into the hub's [hooks directory](deploy.md#offer-kotlin-scripts-to-the-integrators); `lm hook scripts` lists them | the OIDC token in `~/.lm/config.yaml` | the RAG corpus (re-indexed from what was ingested) |
 | the apply order (below) — a `Makefile` or a numbered prefix | ingested rows, dead letters, run history | discovered schema cards (`lm source rediscover`) |
 
-Credentials are referenced by name and resolved where the **hub** runs: in its environment or in
-its secret store, depending on the connector. Each connector page states which.
+Credentials are referenced by name and resolved in the hub's secret store,
+[`lm secret`](cli/lm-reference.md#data-runs-answers), per tenant.
 
 - A manifest is therefore safe to commit.
 - The same manifest works against dev, staging and production: only the name travels.
@@ -176,7 +176,7 @@ enough.
 ```yaml
 # on merge — converge the tenant, then wait for the ledger to settle
 - run: |
-    for f in 10-connectors/*.yaml 20-entities/*.yaml 30-apps/*.yaml; do lm apply -f "$f"; done
+    for f in 10-connectors/*.yaml; do lm apply -f "$f"; done        # kind: Connector only
     lm connector run ad_user
     for _ in $(seq 1 60); do
       status=$(lm run list --connector ad_user -o json | jq -r '.[0].status')
@@ -186,6 +186,10 @@ enough.
       esac
       sleep 5
     done
+    # an entity fuses tables the first run creates: apply it after the run
+    for f in 20-entities/*.yaml;  do lm entity apply -f "$f"; done
+    lm view apply -f 30-apps/clients-view.yaml
+    lm workflow apply -f 30-apps/commande-workflow.yaml
 ```
 
 **The wait is not optional.** `lm connector run` exits 0 as soon as the run is *scheduled*:

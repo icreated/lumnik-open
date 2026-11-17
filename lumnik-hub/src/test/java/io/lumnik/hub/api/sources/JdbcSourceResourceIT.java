@@ -7,17 +7,25 @@ import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import io.restassured.http.ContentType;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.utility.MountableFile;
 
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 import static io.restassured.RestAssured.given;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.*;
 
 /**
@@ -94,6 +102,57 @@ class JdbcSourceResourceIT {
         .then().statusCode(200)
               .body("tables.name", hasItems("c_bpartner", "m_product", "c_order"))
               .body("tables.name", not(hasItems("t_temp", "ad_meta")));
+  }
+
+  /** #2002: the cloud metadata address is never a source — refused at every door, before any connection. */
+  @ParameterizedTest
+  @ValueSource(strings = {"test", "discover", "add"})
+  void a_link_local_source_is_refused_at_each_door(String door) {
+    given().headers(TestIdentity.tenantAndUser(1))
+        .contentType(ContentType.JSON)
+        .body(Map.of("url", "jdbc:postgresql://169.254.169.254:5432/meta", "user", "u", "password", "p",
+            "schema", "public", "sourceName", "meta", "tables", List.of(Map.of("table", "t"))))
+        .when().post("/api/platform/sources/jdbc/" + door)
+        .then().statusCode(400)
+              .body("error", containsString("never connects to"))
+              .body("error", not(containsString("169.254")));
+  }
+
+  /** #2002: a control character no parser here reads as a driver might — Oracle Net trims them — is refused outright. */
+  @Test
+  void a_url_with_a_control_character_is_refused() {
+    given().headers(TestIdentity.tenantAndUser(1))
+        .contentType(ContentType.JSON)
+        .body(Map.of("url", "jdbc:postgresql://erp-db\u001f:5432/erp", "user", "u", "password", "p"))
+        .when().post("/api/platform/sources/jdbc/test")
+        .then().statusCode(400)
+              .body("error", containsString("control character"));
+  }
+
+  /**
+   * #2002: a server that accepts the connection and never answers held a test past 60 s. The login
+   * is bounded now, so the door answers within its own bound.
+   */
+  @Test
+  void a_source_that_never_answers_is_given_up() throws Exception {
+    try (ServerSocket silent = new ServerSocket(0, 50, InetAddress.getLoopbackAddress())) {
+      Thread acceptor = Thread.ofVirtual().start(() -> {
+        List<Socket> held = new ArrayList<>();
+        try {
+          while (true) held.add(silent.accept());   // accepted, never read, never answered
+        } catch (IOException closed) {
+          held.forEach(sk -> { try { sk.close(); } catch (IOException ignored) { } });
+        }
+      });
+      long start = System.nanoTime();
+      given().headers(TestIdentity.tenantAndUser(1))
+          .contentType(ContentType.JSON)
+          .body(Map.of("url", "jdbc:postgresql://127.0.0.1:" + silent.getLocalPort() + "/x", "user", "u", "password", "p"))
+          .when().post("/api/platform/sources/jdbc/test")
+          .then().statusCode(502);
+      assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofSeconds(25));
+      acceptor.interrupt();
+    }
   }
 
   /** The driver's words for a refused login quote the user; the 502 names the SQLSTATE only (#1679). */

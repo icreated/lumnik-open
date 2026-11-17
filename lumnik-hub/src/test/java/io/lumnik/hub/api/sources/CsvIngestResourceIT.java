@@ -1,6 +1,7 @@
 package io.lumnik.hub.api.sources;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.hub.connector.transport.TestDirFileSourceFactory;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -15,6 +16,7 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 
 import static org.hamcrest.Matchers.*;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -185,7 +187,7 @@ class CsvIngestResourceIT {
 
         RestAssured.given()
             .header("X-Tenant-Id", "1")
-            .multiPart("transport", "{\"kind\":\"local\",\"path\":\"" + dir.toAbsolutePath() + "/*.csv\"}")
+            .multiPart("transport", "{\"kind\":\"" + TestDirFileSourceFactory.KIND + "\",\"path\":\"" + dir.toAbsolutePath() + "/*.csv\"}")
             .multiPart("name", "it_a11_" + System.nanoTime())
             .post("/api/platform/sources/csv/ingest")
             .then()
@@ -211,13 +213,72 @@ class CsvIngestResourceIT {
 
         RestAssured.given()
             .header("X-Tenant-Id", "1")
-            .multiPart("transport", "{\"kind\":\"local\",\"path\":\"" + csv.toAbsolutePath()
+            .multiPart("transport", "{\"kind\":\"" + TestDirFileSourceFactory.KIND + "\",\"path\":\"" + csv.toAbsolutePath()
                 + "\",\"pre_process\":{\"kind\":\"kotlin\",\"script_ref\":\"/tmp/task6-evil.kts\"}}")
             .multiPart("name", "it_task6_" + System.nanoTime())
             .post("/api/platform/sources/csv/ingest")
             .then()
             .statusCode(400)
             .body("error", not(containsString("/tmp/task6-evil.kts")));
+    }
+
+    /**
+     * #2001: a local ingest is the uploaded file. A local transport naming a server path — with or without its kind —
+     * reads nothing and creates nothing, and the refusal does not echo the path.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {
+        "{\"kind\":\"local\",\"path\":\"/etc/hostname\"}",
+        "{\"path\":\"/etc/hostname\"}",
+        "{\"kind\":\"local\",\"path\":\"/etc/*\",\"max_file_size\":10}"})
+    void a_local_transport_naming_a_server_path_is_refused(String transport) {
+        String name = "it_2001_" + System.nanoTime();
+        RestAssured.given()
+            .header("X-Tenant-Id", "1")
+            .multiPart("transport", transport)
+            .multiPart("name", name)
+            .post("/api/platform/sources/csv/ingest")
+            .then()
+            .statusCode(400)
+            .body("error", containsString("a local ingest is the uploaded file"))
+            .body("error", not(containsString("/etc")));
+        assertEquals(0L, connectorsNamed(name), "nothing was created");
+    }
+
+    /** #2001: `after_process` on a local transport deleted or moved a file of the hub's disk; the file stays where it is. */
+    @Test
+    void a_local_after_process_leaves_the_servers_file_alone() throws Exception {
+        Path victim = Files.createTempFile("it_2001_victim_", ".csv");
+        Files.writeString(victim, "id,email\n1,a@x\n");
+        Path archive = Files.createTempDirectory("it_2001_archive_");
+        for (String action : new String[] {
+                "\"after_process\":\"delete\"",
+                "\"after_process\":\"move\",\"archive_path\":\"" + archive + "\""}) {
+            RestAssured.given()
+                .header("X-Tenant-Id", "1")
+                .multiPart("transport", "{\"kind\":\"local\",\"path\":\"" + victim + "\"," + action + "}")
+                .multiPart("name", "it_2001_" + System.nanoTime())
+                .post("/api/platform/sources/csv/ingest")
+                .then()
+                .statusCode(400);
+            assertEquals("id,email\n1,a@x\n", Files.readString(victim));
+        }
+        try (var archived = Files.list(archive)) {
+            assertEquals(0L, archived.count());
+        }
+    }
+
+    private long connectorsNamed(String name) {
+        try (Connection c = adminDs.getConnection();
+             PreparedStatement ps = c.prepareStatement("SELECT count(*) FROM connector.connector WHERE tenant_id = 1 AND name = ?")) {
+            ps.setString(1, name);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getLong(1);
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     /**

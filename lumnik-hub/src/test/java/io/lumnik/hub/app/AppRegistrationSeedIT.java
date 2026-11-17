@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static io.lumnik.hub.tenant.DeploymentTenancy.HUBADMIN_TENANT;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -21,11 +22,11 @@ class AppRegistrationSeedIT {
 
     @Test
     void v48SeedsTheTwoBuiltInsWithTodaysShippedIdentity() {
-        List<AppRegistrationStore.Row> all = store.list(null);
+        List<AppRegistrationStore.Row> all = store.list(HUBADMIN_TENANT, null);
         assertThat(all).extracting(AppRegistrationStore.Row::name)
             .contains("clients", "stock");
 
-        AppRegistrationStore.Row clients = store.find("clients").orElseThrow();
+        AppRegistrationStore.Row clients = store.find(HUBADMIN_TENANT, null, "clients").orElseThrow();
         assertThat(clients.title()).isEqualTo("Clients");
         assertThat(clients.icon()).isEqualTo("clients");
         assertThat(clients.scope()).isEqualTo("clients");
@@ -33,13 +34,13 @@ class AppRegistrationSeedIT {
         assertThat(clients.backgroundColor()).as("today's --bg").isEqualTo("#14121f");
         assertThat(clients.isDefault()).as("today's hardcoded fallback").isTrue();
 
-        assertThat(store.find("stock").orElseThrow().isDefault()).isFalse();
-        assertThat(store.findDefaultName()).contains("clients");
+        assertThat(store.find(HUBADMIN_TENANT, null, "stock").orElseThrow().isDefault()).isFalse();
+        assertThat(store.findOwnDefaultName(HUBADMIN_TENANT)).contains("clients");
     }
 
     @Test
     void theSeededAccentPassesTheRuleTheSameReleaseIntroduces() {
-        assertThat(WcagContrast.ratio(store.find("clients").orElseThrow().accentColor(),
+        assertThat(WcagContrast.ratio(store.find(HUBADMIN_TENANT, null, "clients").orElseThrow().accentColor(),
                                       WcagContrast.BUBBLE_TEXT))
             .isGreaterThanOrEqualTo(WcagContrast.AA_NORMAL_TEXT);
     }

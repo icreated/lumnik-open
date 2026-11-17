@@ -73,7 +73,7 @@ The full path, day by day: [Guided path](parcours.md).
 
 ## The system in one glance
 
-The system in one picture — data flows left to right, read-only at the door:
+Data flows left to right, read-only at the door:
 
 ```mermaid
 flowchart LR
@@ -93,7 +93,7 @@ flowchart LR
     conn --> tables --> ent --> ask
     tables -->|"new rows"| ev
   end
-  subgraph metier["Business users"]
+  subgraph users["Business users"]
     direction TB
     chat["Chat (Pro)"]
     pwa["PWA · views · inbox"]

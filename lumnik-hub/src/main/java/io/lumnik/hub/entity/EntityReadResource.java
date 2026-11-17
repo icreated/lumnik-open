@@ -6,6 +6,7 @@ import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.sql.TemporalText;
+import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.hub.tenant.TenantContextFilter;
 import io.lumnik.hub.view.ColumnKind;
 import io.lumnik.hub.view.ViewFilter;
@@ -62,7 +63,7 @@ public class EntityReadResource {
    */
   @GET
   public List<EntitySummary> list() {
-    return registry.all().stream()
+    return registry.all(RequireTenant.current()).stream()
         .filter(m -> ScopeGrants.allowsAny(m.scopes()))
         .map(m -> new EntitySummary(m.name(), m.label(), m.scopes(),
             m.sources().stream().map(EntityManifest.Source::table).toList(),
@@ -88,7 +89,7 @@ public class EntityReadResource {
                        @QueryParam("limit") @DefaultValue("100") int limit,
                        @QueryParam("offset") @DefaultValue("0") int offset,
                        @QueryParam("identity") @DefaultValue("false") boolean identity) {
-    EntityManifest m = registry.find(name);
+    EntityManifest m = registry.find(RequireTenant.current(), name);
     if (m == null) return ApiErrors.notFound("entity " + name + " not found");
 
     if (!ScopeGrants.allowsAny(m.scopes())) {

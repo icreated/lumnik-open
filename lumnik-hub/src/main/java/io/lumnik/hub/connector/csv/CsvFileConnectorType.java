@@ -21,6 +21,8 @@ import io.lumnik.hub.connector.transport.FileDescriptor;
 import io.lumnik.hub.connector.transport.FileSource;
 import io.lumnik.hub.connector.transport.FileSourceRegistry;
 import io.lumnik.hub.connector.transport.LocalFileSource;
+import io.lumnik.hub.connector.transport.LocalRoot;
+import io.lumnik.hub.connector.transport.LocalRoots;
 import io.lumnik.hub.connector.transport.SeekableSource;
 import io.lumnik.hub.sql.SqlIdentifiers;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -44,7 +46,7 @@ import java.util.*;
  * <p>Config keys (YAML):
  * <pre>{@code
  * config:
- *   path: /imports/*.csv      # plain path or glob
+ *   path: imports/*.csv       # plain path or glob, relative to the tenant's folder of the local root
  *   delimiter: ","            # optional — auto-detected if absent
  *   encoding: UTF-8           # optional — auto-detected if absent
  *   has-header: true
@@ -69,6 +71,8 @@ public class CsvFileConnectorType implements ConnectorType {
 
   @Inject MappingEngine mappingEngine;
   @Inject FileSourceRegistry fileSourceRegistry;
+  /** The one directory a local transport may read (#2001); unset, it reads nothing. */
+  @Inject LocalRoots localRoots = new LocalRoots(LocalRoot.of(Optional.empty()));
   @Inject UnseenRowSweeper sweeper;
   @Inject ConnectorDeadLetterRepository deadLetters;
 
@@ -89,7 +93,7 @@ public class CsvFileConnectorType implements ConnectorType {
    * Resolves the transport block from connector config, with backwards compatibility:
    * <ul>
    *   <li><b>Modern</b>: {@code { transport: { kind: local|sftp|s3, ... }, ... }}
-   *   <li><b>Legacy</b>: {@code { path: "/imports/*.csv", ... }} → wrapped as
+   *   <li><b>Legacy</b>: {@code { path: "imports/*.csv", ... }} → wrapped as
    *       {@code { kind: local, path: ... }}
    * </ul>
    *
@@ -129,20 +133,8 @@ public class CsvFileConnectorType implements ConnectorType {
     if (!(pathObj instanceof String p) || p.isBlank())
       throw new ConfigValidationException("Missing or blank 'path' in transport config");
 
-    // Local file-existence pre-check only: remote transports (sftp/s3) resolve at run time, and
-    // glob patterns can't be pre-checked.
-    String kind = String.valueOf(transport.getOrDefault("kind", LOCAL));
-    if (LOCAL.equals(kind)) {
-      boolean isGlob = CsvGlobResolver.isGlob(p);
-      // This message echoes a SERVER-SIDE path, and ConfigValidationException is now dressed as a
-      // 400 by ConfigValidationExceptionMapper. It is safe only because nothing in production calls
-      // csv's validateConfig — it never reaches a caller. If a future change makes
-      // CsvFileConnectorApplyHandler re-run it (the "validator == runtime" tightening kafka already
-      // has), this path becomes integrator-visible and NO guard would fail. Say what is missing
-      // without the resolved path first.
-      if (!isGlob && !Files.exists(Path.of(p)))
-        throw new ConfigValidationException("CSV file not found: " + p);
-    }
+    // No local file is looked at here (#2001): a check made without a tenant would read the whole root, and tell a
+    // caller whether a file exists in another tenant's folder. The run resolves the path in its tenant's folder.
   }
 
   /**
@@ -271,7 +263,10 @@ public class CsvFileConnectorType implements ConnectorType {
       // #1452: a mapping whose cell hooks carry values row to row is reset at each file, so it reads one per chunk.
       JsonNode mapping = mappingOf(ctx.config());
       boolean oneFilePerChunk = mapping != null && mappingEngine.carriesState(HookInvocation.parseList(mapping, "cell"));
-      return new CsvGlobCursorReader(pathObj.toString(), overrides, CsvFullRefresh.stateFile(ctx.config()).isPresent(),
+      // relative to the tenant's folder of the root (#2001): the reader gets the absolute path it names
+      return new CsvGlobCursorReader(localRoots.forTenant(ctx.tenantId()),
+          localRoots.resolve(ctx.tenantId(), pathObj.toString()), overrides,
+          CsvFullRefresh.stateFile(ctx.config()).isPresent(),
           oneFilePerChunk);
     }
     // Pass the FULL config — the remote reader needs top-level after_process / archive_path
@@ -316,10 +311,9 @@ public class CsvFileConnectorType implements ConnectorType {
     long notArchived = ctx.scope().resource(new FileSourceCursorReader.NotArchivedKey(),
         FileSourceCursorReader.NotArchived::new).paths.size();
     if (notArchived > 0) return new StreamEnd.NotArchived(notArchived);
-    Optional<String> file = CsvFullRefresh.stateFile(ctx.config());
-    if (file.isEmpty()) return new StreamEnd.Removed(0);
+    if (CsvFullRefresh.stateFile(ctx.config()).isEmpty()) return new StreamEnd.Removed(0);
     // Built here when no read of this run started the file (an unchanged file is not read): no sweep.
-    CsvFullRefresh.Pass pass = ctx.scope().resource(new CsvFullRefresh.PassKey(file.get()),
+    CsvFullRefresh.Pass pass = ctx.scope().resource(new CsvFullRefresh.PassKey(),
         () -> new CsvFullRefresh.Pass(false, null));
     if (!pass.fromStart) return new StreamEnd.Removed(0);
     String table = ctx.configValue("name", String.class);
@@ -463,6 +457,7 @@ public class CsvFileConnectorType implements ConnectorType {
 
     private static final Logger LOG = Logger.getLogger(CsvGlobCursorReader.class);
 
+    private final LocalRoot root;
     private final String pathPattern;
     private final ParserOverrides overrides;
     /** One reader per CsvGlobCursorReader lifetime, so its parse-work counter spans the run. */
@@ -484,19 +479,13 @@ public class CsvFileConnectorType implements ConnectorType {
     private List<Path> resolvedFiles;
     private final List<MalformedRecord> malformedBuffer = new ArrayList<>();
 
-    CsvGlobCursorReader(String pathPattern, ParserOverrides overrides) {
-      this(pathPattern, overrides, false);
-    }
-
-    CsvGlobCursorReader(String pathPattern, ParserOverrides overrides, boolean holdsTheSourceState) {
-      this(pathPattern, overrides, holdsTheSourceState, false);
-    }
-
-    CsvGlobCursorReader(String pathPattern, ParserOverrides overrides, boolean holdsTheSourceState,
+    /** @throws ConfigValidationException when the path lies outside {@code root} (#2001) */
+    CsvGlobCursorReader(LocalRoot root, String pathPattern, ParserOverrides overrides, boolean holdsTheSourceState,
                         boolean oneFilePerChunk) {
+      this.root = root;
       this.pathPattern = pathPattern;
       this.overrides = overrides;
-      this.source = new LocalFileSource(pathPattern);
+      this.source = new LocalFileSource(root, pathPattern);
       this.holdsTheSourceState = holdsTheSourceState;
       this.oneFilePerChunk = oneFilePerChunk;
     }
@@ -545,7 +534,7 @@ public class CsvFileConnectorType implements ConnectorType {
         // resumed at a row count that belonged to its previous content.
         // Size and mtime survive a copy that keeps them (docker cp, cp -p, rsync -t): with no etag,
         // the content's fingerprint decides (#1371). A token from before it carries none.
-        Path file = resolvedFiles.get(fileIndex);
+        Path file = listed(fileIndex);
         FileDescriptor now = describe(file);
         if (start.version() != null && start.version().matches(now, () -> sha256(file))) {
           ctx.scope().resource(new UnchangedKey(), Unchanged::new).files++;
@@ -559,20 +548,20 @@ public class CsvFileConnectorType implements ConnectorType {
       // #1452: a chunk that begins at a file's first record starts a carrying mapping empty; one that resumes mid-way
       // does so on the same bytes only.
       startsAFile = start.rowsProcessed() == 0;
-      if (oneFilePerChunk && !startsAFile) refuseChangedBytes(start, resolvedFiles.get(fileIndex));
+      if (oneFilePerChunk && !startsAFile) refuseChangedBytes(start, listed(fileIndex));
 
       // The run's first read decides it, once: a later chunk resumes mid-file by construction.
       CsvFullRefresh.Pass pass = null;
       FileDescriptor version = null;
       if (holdsTheSourceState) {
         boolean fromStart = startsAFile;
-        FileDescriptor first = version = describe(resolvedFiles.get(fileIndex));
-        pass = ctx.scope().resource(new CsvFullRefresh.PassKey(pathPattern), () -> new CsvFullRefresh.Pass(fromStart, first));
+        FileDescriptor first = version = describe(listed(fileIndex));
+        pass = ctx.scope().resource(new CsvFullRefresh.PassKey(), () -> new CsvFullRefresh.Pass(fromStart, first));
       }
 
       List<Map<String, Object>> chunk = new ArrayList<>(chunkSize);
       Walk walk = fillChunk(chunk, chunkSize, fileIndex, start);
-      if (pass != null) pass.observe(version, describe(resolvedFiles.get(fileIndex)), chunk.size() + malformedBuffer.size());
+      if (pass != null) pass.observe(version, describe(listed(fileIndex)), chunk.size() + malformedBuffer.size());
 
       if (walk.fileIndex() >= resolvedFiles.size()) {
         // The list is read to its end. The run ends here, so it hands over the finished position
@@ -582,7 +571,7 @@ public class CsvFileConnectorType implements ConnectorType {
         return new ReadResult.EndOfStream<>(chunk,
             wrap(CsvCursor.finished(walk.file(), walk.consumed(),
                 walk.lastStat() == null ? null
-                    : CsvCursor.Version.of(walk.lastStat(), sha256(Path.of(walk.file()))))));
+                    : CsvCursor.Version.of(walk.lastStat(), sha256(root.confine(Path.of(walk.file())))))));
       }
       return new ReadResult.HasMore<>(chunk, encodeCursor(walk.file(), walk.consumed(), walk.last(), walk.lastStat()));
     }
@@ -602,7 +591,8 @@ public class CsvFileConnectorType implements ConnectorType {
       FileDescriptor lastStat = null;   // taken BEFORE the file is read: a change during the read shows next run
 
       while (chunk.size() < chunkSize && fileIndex < resolvedFiles.size()) {
-        Path file = resolvedFiles.get(fileIndex);
+        // listed inside the root, judged again now: a swap for a link since the listing is caught here (#2001)
+        Path file = listed(fileIndex);
         lastStat = describe(file);
         boolean isCursorFile = file.toString().equals(currentFile);
         long skip = isCursorFile ? recordsConsumed : 0L;
@@ -802,13 +792,25 @@ public class CsvFileConnectorType implements ConnectorType {
      * appears afterwards waits for the next run; one that disappears fails the read that reaches it.
      */
     private void resolveFiles(ConnectorContext ctx) {
-      resolvedFiles = ctx.scope().resource(new LocalListingKey(pathPattern), () -> listing(pathPattern)).files();
+      resolvedFiles = ctx.scope().resource(new LocalListingKey(pathPattern), () -> listing(root, pathPattern)).files();
+    }
+
+    /**
+     * The listed file at {@code index}, judged against the root again (#2001): listed inside it, it may have been
+     * swapped for a link since. Every read of a listed file — its bytes, its fingerprint, its stat — takes its path
+     * from here; the helpers that read a path ({@code describe}, {@code sha256}, {@code contentHash},
+     * {@code refuseChangedBytes}) are handed a confined one, and the cursor file's fingerprints confine theirs before
+     * reading. It narrows the window, it does not close it: a swap between this check and the open is still followed.
+     * The drop folder is written by the operator's own transfer, not by a tenant through the hub.
+     */
+    private Path listed(int index) {
+      return root.confine(resolvedFiles.get(index));
     }
 
     /** A Supplier cannot throw a checked exception: the failure travels as it always has, unchecked. */
-    private static LocalListing listing(String pathPattern) {
+    private static LocalListing listing(LocalRoot root, String pathPattern) {
       try {
-        return new LocalListing(List.copyOf(CsvGlobResolver.resolve(pathPattern)));
+        return new LocalListing(List.copyOf(CsvGlobResolver.resolve(root, pathPattern)));
       } catch (IOException e) {
         throw new RuntimeException("Failed to resolve path pattern: " + pathPattern, e);
       }
@@ -882,7 +884,7 @@ public class CsvFileConnectorType implements ConnectorType {
           : stat != null && stat.path().equals(c.file()) ? CsvCursor.Version.of(stat) : null;
       if (v == null) return c;   // nothing to witness: the resume is refused
       CsvCursor.Version fingerprinted =
-          new CsvCursor.Version(v.size(), v.lastModified(), v.etag(), contentHash(Path.of(c.file())));
+          new CsvCursor.Version(v.size(), v.lastModified(), v.etag(), contentHash(root.confine(Path.of(c.file()))));
       return new CsvCursor(c.file(), c.rowsProcessed(), c.anchorByte(), c.charDelta(), c.lineBase(), c.headers(),
           fingerprinted);
     }

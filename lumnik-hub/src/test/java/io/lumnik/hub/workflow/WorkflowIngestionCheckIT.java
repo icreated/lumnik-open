@@ -10,6 +10,7 @@ import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.connector.event.ConnectorRunCompleted;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -87,10 +88,11 @@ class WorkflowIngestionCheckIT {
         admin("ALTER TABLE " + TABLE + " FORCE ROW LEVEL SECURITY");
         admin("CREATE POLICY tenant_isolation ON " + TABLE
             + " USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::bigint)");
-        admin("GRANT SELECT ON " + TABLE + " TO lumnik_app");
+        admin("GRANT SELECT ON " + TABLE + " TO lumnik_app, lumnik_readonly");
         admin("DELETE FROM core.workflow_undeclared_value WHERE workflow_name = '" + WF + "'");
         admin("DELETE FROM core.event_outbox WHERE event_type = '" + EVENT + "'");
         admin("DELETE FROM core.workflow_manifest WHERE name = '" + WF + "'");
+        RegisteredTables.register(adminDs, 1L, "t_ingit_orders");
         cards.save(1L, "registry", new SchemaCard("ingit", List.of()));
     }
 
@@ -175,13 +177,13 @@ class WorkflowIngestionCheckIT {
             .contentType("application/yaml").body(ENTITY)
             .post("/api/entities/apply").then().statusCode(200);
         String other = "connector.t_ingit_other";
-        assertThat(check.touched(TABLE, Set.of(TABLE))).isTrue();
-        assertThat(check.touched(TABLE, Set.of(other))).isFalse();
-        assertThat(check.touched(TABLE, null)).as("a run that cannot tell").isTrue();
-        assertThat(check.touched("connector.v_ingitorder", Set.of(TABLE))).isTrue();
-        assertThat(check.touched("connector.v_ingitorder", Set.of(other))).isFalse();
-        assertThat(check.touched("connector.v_ingitnosuchentity", Set.of(other))).as("an entity not found").isTrue();
-        assertThat(check.touched("connector.v_ingitnosuchentity", Set.of())).isFalse();
+        assertThat(check.touched(1L, TABLE, Set.of(TABLE))).isTrue();
+        assertThat(check.touched(1L, TABLE, Set.of(other))).isFalse();
+        assertThat(check.touched(1L, TABLE, null)).as("a run that cannot tell").isTrue();
+        assertThat(check.touched(1L, "connector.v_ingitorder", Set.of(TABLE))).isTrue();
+        assertThat(check.touched(1L, "connector.v_ingitorder", Set.of(other))).isFalse();
+        assertThat(check.touched(1L, "connector.v_ingitnosuchentity", Set.of(other))).as("an entity not found").isTrue();
+        assertThat(check.touched(1L, "connector.v_ingitnosuchentity", Set.of())).isFalse();
     }
 
     private List<JsonNode> events(long tenant) throws Exception {

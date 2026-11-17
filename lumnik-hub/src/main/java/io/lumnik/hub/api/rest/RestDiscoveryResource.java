@@ -1,6 +1,7 @@
 package io.lumnik.hub.api.rest;
 
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.common.ratelimit.RateLimited;
 import io.lumnik.hub.api.connector.ConnectorScope;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
@@ -40,6 +41,7 @@ public class RestDiscoveryResource {
      * Generate a connector manifest YAML from an OpenAPI spec URL.
      * Body: { "url": "...", "name": "...", "tags": ["..."] }
      */
+    @RateLimited("source-probe")   // an outbound connection per call, at the caller's choice (#1996)
     @POST
     @Path("/from-openapi")
     public Response fromOpenApi(Map<String, Object> body) {
@@ -47,8 +49,9 @@ public class RestDiscoveryResource {
         if (url == null) return ApiErrors.badRequest("url is required");
         // A url that is not a URL is the CALLER's mistake, and a different diagnosis from a URL
         // that holds no spec: fix your command, versus go look at the source. Same structural rule
-        // the manifest door applies to base_url, and it names the reason, never the value.
-        var notAUrl = Urls.whyNotAbsolute(url);
+        // the manifest door applies to base_url, and it names the reason, never the value. Http(s)
+        // only (#2002): the hub's client fetches it, and the parser it replaced read file:// too.
+        var notAUrl = Urls.whyNotHttp(url);
         if (notAUrl.isPresent()) return ApiErrors.badRequest("'url' " + notAUrl.get());
         String name = Configs.string(body, "name").orElse("connector");
 
@@ -56,6 +59,9 @@ public class RestDiscoveryResource {
 
         try {
             return Response.ok(importer.importFromUrl(url, name, tags)).build();
+        } catch (ConfigValidationException refused) {
+            // The address rule (#2002): where the hub may connect is the operator's decision, not the upstream's fault.
+            return ApiErrors.badRequest("'url': " + refused.getMessage());
         } catch (ConnectorException unreadable) {
             // A URL that holds no spec is the upstream's problem, not the hub's, and it used to
             // reach the operator as a bare 500 plus an error id. The importer names it; this only
@@ -73,6 +79,7 @@ public class RestDiscoveryResource {
      * <p>The connector is the only way in; why, and what the body used to carry instead, is written
      * where the rule lives — {@link RestProber#probe(Connector, String, String)}.
      */
+    @RateLimited("source-probe")   // an outbound connection per call, at the caller's choice (#1996)
     @POST
     @Path("/probe")
     public Response probe(Map<String, Object> body) throws Exception {

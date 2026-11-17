@@ -10,6 +10,7 @@ import static org.hamcrest.Matchers.nullValue;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
@@ -53,6 +54,8 @@ class MatchIndexWarningsIT {
             "DELETE FROM connector.dynamic_table WHERE tenant_id = 1 AND mapping_id IN ('mxw-erp', 'mxw-crm')",
             "INSERT INTO connector.dynamic_table (tenant_id, mapping_id, table_schema, table_name, schema_inferred) "
                 + "VALUES (1, 'mxw-erp', 'connector', '" + ERP + "', '{}'::jsonb), (1, 'mxw-crm', 'connector', '" + CRM + "', '{}'::jsonb)");
+        RegisteredTables.register(adminDs, 1L, ERP);
+        RegisteredTables.register(adminDs, 1L, CRM);
         applyEntity("code").statusCode(200);
         List<SchemaCard.Column> cols = List.of(new SchemaCard.Column("code", "text", "Code"),
             new SchemaCard.Column("segment", "text", "Segment"));

@@ -5,6 +5,7 @@ import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.api.sources.CsvIngestForm;
 import io.lumnik.hub.api.sources.CsvIngestResult;
 import io.lumnik.hub.connector.mapping.writer.MultiTargetWriter;
+import io.lumnik.hub.connector.transport.TestDirFileSourceFactory;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.mockito.InjectSpy;
 import jakarta.inject.Inject;
@@ -167,7 +168,7 @@ class CsvIngestServiceNamedBatchTest {
         CsvIngestForm form = new CsvIngestForm();
         form.scope      = "system";
         form.transport  = new HashMap<>(Map.of(
-            "kind", "local",
+            "kind", TestDirFileSourceFactory.KIND,
             "path", dir.toAbsolutePath() + "/*.csv"
         ));
         return form;

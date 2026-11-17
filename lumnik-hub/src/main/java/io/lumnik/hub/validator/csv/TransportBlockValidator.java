@@ -24,7 +24,7 @@ public final class TransportBlockValidator {
             .optional("path", Type.STRING, Importance.HIGH,
                 "File path (local) or glob path (sftp)", null)
                 .requiredWhen("kind", "local", "sftp")
-                .hint("Set path: /imports/*.csv (local) or a remote glob (sftp)")
+                .hint("Set path: imports/*.csv (local, relative to the tenant's folder of the hub's local root) or a remote glob (sftp)")
             .requireWhen("host", Type.STRING, Importance.HIGH,
                 "SFTP host", "kind", "sftp")
             .requireWhen("user", Type.STRING, Importance.HIGH,
@@ -57,13 +57,13 @@ public final class TransportBlockValidator {
             .optional("archive_prefix", Type.STRING, Importance.LOW,
                 "S3 archive key prefix for after_process=archive|move", "archive/")
             .optional("key_env", Type.STRING, Importance.MEDIUM,
-                "Env var for SSH private key (SFTP)", null)
+                "lm secret name of the SSH private key (SFTP)", null)
             .optional("password_env", Type.STRING, Importance.MEDIUM,
-                "Env var for SSH password (SFTP)", null)
+                "lm secret name of the SSH password (SFTP)", null)
             .optional("access_key_env", Type.STRING, Importance.MEDIUM,
-                "Env var for AWS access key (S3)", "AWS_ACCESS_KEY_ID")
+                "lm secret name of the AWS access key (S3)", "AWS_ACCESS_KEY_ID")
             .optional("secret_key_env", Type.STRING, Importance.MEDIUM,
-                "Env var for AWS secret key (S3)", "AWS_SECRET_ACCESS_KEY")
+                "lm secret name of the AWS secret key (S3)", "AWS_SECRET_ACCESS_KEY")
             // These name a SECRET: a key written empty, or blank, names none.
             .atLeastOneOf("kind is sftp", TransportBlockValidator::sftp,
                 "Use `lm secret set <NAME> ...` then reference it via key_env: <NAME>", "key_env", "password_env");

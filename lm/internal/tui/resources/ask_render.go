@@ -3,6 +3,7 @@ package resources
 import (
 	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -52,7 +53,8 @@ func rowsToCSV(cols []string, rows [][]string) string {
 }
 
 // friendlyAskError converts an ask failure into a calm, on-screen explanation.
-// Contract: 503 (engine unavailable) returns a specific message; 403 and 429
+// Contract: 503 (engine unavailable) returns the hub's own cause and hint — it has several (no agent on the classpath,
+// the model runtime down, a readonly role not hardened, #1987); 403 and 429
 // (scope refusal and rate limit) return the APIError message verbatim (Task 1
 // made those honest); 404 says the chat is not served here; every other APIError returns the error + a hint about
 // schema discovery (the dominant real-world cause for other 5xx errors);
@@ -61,7 +63,17 @@ func friendlyAskError(err error, scope string) string {
 	var apiErr *client.APIError
 	if errors.As(err, &apiErr) {
 		if apiErr.Status == 503 {
-			return "Analytic engine unavailable — the platform has no AskToSql agent on the classpath."
+			var body struct {
+				Err  string `json:"error"`
+				Hint string `json:"hint"`
+			}
+			if json.Unmarshal([]byte(apiErr.Body), &body) != nil || body.Err == "" {
+				return "Analytic engine unavailable."
+			}
+			if body.Hint == "" {
+				return "Analytic engine unavailable: " + body.Err
+			}
+			return "Analytic engine unavailable: " + body.Err + "\nHint: " + body.Hint
 		}
 		// 404: the chat door is not served by this hub (a build without it, or the operator
 		// switched the AI off). The hint below would name a cause the client cannot know.

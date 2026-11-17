@@ -235,13 +235,46 @@ class EndpointResourceIT {
                 .body("error", equalTo(NOT_PURGEABLE_ON_ITS_OWN));
     }
 
+    /**
+     * #1989: the hub's own connector.connector_run carries an endpoint_id, and lumnik_app may DELETE from it. A purge
+     * pointed at it erased the endpoint's run history. It is not a hybrid table, so it is refused as one, and no row goes.
+     */
+    @Test
+    void purge_refuses_a_hub_table_that_carries_an_endpoint_id() throws Exception {
+        String eid = createEndpointWithTargetTable("connector.connector_run");
+        given().headers(TestIdentity.tenantAndUser(1))
+            .when().post("/api/platform/connectors/" + connectorId + "/endpoints/" + eid + "/purge?dryRun=true")
+            .then()
+                .statusCode(400)
+                .body("error", equalTo(NOT_PURGEABLE_ON_ITS_OWN));
+    }
+
+    /** #2010: the columns and the key are a shape any DDL can copy; purge deletes only from a table the hub recorded. */
+    @Test
+    void purge_refuses_a_table_with_the_hybrid_shape_the_hub_did_not_record() throws Exception {
+        String table = "hybrid_lookalike_" + System.nanoTime();
+        exec("CREATE TABLE connector.\"" + table + "\" (id bigint, tenant_id bigint, external_id text, data jsonb, connector_id uuid, endpoint_id uuid, UNIQUE (tenant_id, external_id))");
+        try {
+            String eid = createEndpointWithTargetTable("connector." + table);
+            exec("INSERT INTO connector.\"" + table + "\" (id, endpoint_id) VALUES (1, '" + eid + "')");
+            given().headers(TestIdentity.tenantAndUser(1))
+                .when().post("/api/platform/connectors/" + connectorId + "/endpoints/" + eid + "/purge")
+                .then()
+                    .statusCode(400)
+                    .body("error", equalTo(NOT_PURGEABLE_ON_ITS_OWN));
+            assertThat(count("connector.\"" + table + "\"")).isEqualTo(1);
+        } finally {
+            exec("DROP TABLE IF EXISTS connector.\"" + table + "\"");
+        }
+    }
+
     @Test
     void purge_rejects_an_in_scope_table_without_an_endpoint_id_column() throws Exception {
-        // A connector.t_* table (DynamicTableWriter) is in a purgeable schema but has no endpoint
+        // A connector table that is not a hybrid one is in a purgeable schema but has no endpoint
         // column — purge-by-endpoint is undefined there. The guard is per-table, not just per-schema:
         // a clean 400, not the raw 500 the DELETE would raise hitting a missing column, in the same
         // words as the no-target case — never the internal column's name (#1181).
-        String table = "t_noepid_" + System.nanoTime();
+        String table = "noepid_" + System.nanoTime();
         exec("CREATE TABLE connector.\"" + table + "\" (id bigint)");
         try {
             String eid = createEndpointWithTargetTable("connector." + table);
@@ -280,10 +313,12 @@ class EndpointResourceIT {
     @Test
     void purge_dry_run_counts_the_endpoints_rows_and_deletes_nothing() throws Exception {
         String table = "hybrid_dryrun_" + System.nanoTime();
-        exec("CREATE TABLE connector.\"" + table + "\" (id bigint, endpoint_id uuid)");
+        // A table the hybrid writer made and recorded: purge deletes from nothing else (#1989, #2010).
+        exec("CREATE TABLE connector.\"" + table + "\" (id bigint, tenant_id bigint, external_id text, data jsonb, connector_id uuid, endpoint_id uuid, UNIQUE (tenant_id, external_id))");
+        exec("INSERT INTO connector.hybrid_table (table_schema, table_name) VALUES ('connector', '" + table + "')");
         try {
             String eid = createEndpointWithTargetTable("connector." + table);
-            exec("INSERT INTO connector.\"" + table + "\" VALUES (1, '" + eid + "'), (2, '" + eid + "'), "
+            exec("INSERT INTO connector.\"" + table + "\" (id, endpoint_id) VALUES (1, '" + eid + "'), (2, '" + eid + "'), "
                 + "(3, '" + UUID.randomUUID() + "')");
             String purge = "/api/platform/connectors/" + connectorId + "/endpoints/" + eid + "/purge";
 
@@ -305,6 +340,7 @@ class EndpointResourceIT {
             assertThat(count("connector.\"" + table + "\"")).as("the other endpoint's row stays").isEqualTo(1);
         } finally {
             exec("DROP TABLE IF EXISTS connector.\"" + table + "\"");
+            exec("DELETE FROM connector.hybrid_table WHERE table_name = '" + table + "'");
         }
     }
 

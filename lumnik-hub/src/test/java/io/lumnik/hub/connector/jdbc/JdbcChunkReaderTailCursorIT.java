@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.jdbc;
 
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -33,7 +34,7 @@ class JdbcChunkReaderTailCursorIT {
   static PostgreSQLContainer<?> PG = new PostgreSQLContainer<>("postgres:16-alpine")
       .withDatabaseName("s").withUsername("u").withPassword("p");
 
-  static final HikariPoolRegistry REGISTRY = new HikariPoolRegistry();
+  static final HikariPoolRegistry REGISTRY = new HikariPoolRegistry(TestOutbound.ADDRESSES);
   static final int ROWS = 100;
 
   @BeforeAll

@@ -2,12 +2,14 @@ package io.lumnik.hub.api.connector.handler;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.validator.jdbc.TableDefaultsMerger;
+import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -24,6 +26,7 @@ public class JdbcGenericConnectorApplyHandler implements ConnectorApplyHandler {
     private static final String DEFAULTS = "defaults";
 
     @Inject ConnectorRepository connRepo;
+    @Inject @DataSource("admin") AgroalDataSource adminDs;
     @Inject ConnectorEndpointRepository epRepo;
 
     @Override public String kind() { return KIND_JDBC_GENERIC; }
@@ -35,7 +38,7 @@ public class JdbcGenericConnectorApplyHandler implements ConnectorApplyHandler {
         String name = meta.path("name").asText();
         JsonNode spec = doc.path("spec");
 
-        Connector conn = ApplyUpsert.connector(connRepo, tenant, name, KIND_JDBC_GENERIC, meta, spec,
+        Connector conn = ApplyUpsert.connector(adminDs, connRepo, tenant, name, KIND_JDBC_GENERIC, meta, spec,
             c -> buildConnectorConfig(c, spec));
 
         int applied = 0;

@@ -1,6 +1,7 @@
 # lumnik — read your legacy systems without touching them
 
 [![ci](https://github.com/icreated/lumnik-open/actions/workflows/ci.yml/badge.svg)](https://github.com/icreated/lumnik-open/actions/workflows/ci.yml)
+[![Docker Pulls](https://img.shields.io/docker/pulls/icreated/lumnik)](https://hub.docker.com/r/icreated/lumnik)
 
 A Siebel over SOAP, a CSV export, an AS/400 file: lumnik reads them with a read-only account,
 fuses them into one record, and answers questions in plain language, with the SQL it ran.

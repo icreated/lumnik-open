@@ -23,8 +23,8 @@ spec:
     prefix: billing/
     region: us-east-1
     suffix: .csv
-    access_key_env: AWS_ACCESS_KEY_ID
-    secret_key_env: AWS_SECRET_ACCESS_KEY
+    access_key_env: AWS_ACCESS_KEY_ID   # lm secret scope AWS_ACCESS_KEY_ID s3-scenario
+    secret_key_env: AWS_SECRET_ACCESS_KEY   # lm secret scope AWS_SECRET_ACCESS_KEY s3-scenario
 
   parser:
     delimiter: "\t"

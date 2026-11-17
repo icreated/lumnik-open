@@ -10,7 +10,7 @@ metadata:
 spec:
   transport:
     kind: local
-    path: /tmp/acme-resolution/crm-contacts.csv    # on the HUB's filesystem
+    path: acme-resolution/crm-contacts.csv    # in your tenant's folder of the hub's local root
   parser:
     has_header: true
   after_process: none

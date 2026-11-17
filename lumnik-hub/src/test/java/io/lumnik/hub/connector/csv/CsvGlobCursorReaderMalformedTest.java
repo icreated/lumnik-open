@@ -26,7 +26,7 @@ class CsvGlobCursorReaderMalformedTest {
     Path file = tmp.resolve("data.csv");
     Files.writeString(file, "a,b,c\n1,2,3\nONLY_ONE\n7,8,9\n");
 
-    var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), DEFAULTS);
+    var reader = GlobReaders.of(file.toString(), DEFAULTS);
     ReadResult<Map<String, Object>> r = reader.read(500, ConnectorCursor.empty(), ReaderTestContexts.newRun());
 
     List<Map<String, Object>> good = recordsOf(r);
@@ -43,7 +43,7 @@ class CsvGlobCursorReaderMalformedTest {
     // events in order: G,G,BAD,G,G   (chunkSize=2 -> multiple reads)
     Files.writeString(file, "a,b,c\n1,1,1\n2,2,2\nONLY_ONE\n4,4,4\n5,5,5\n");
 
-    var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), DEFAULTS);
+    var reader = GlobReaders.of(file.toString(), DEFAULTS);
 
     List<Map<String, Object>> allGood = new ArrayList<>();
     List<MalformedRecord> allBad = new ArrayList<>();
@@ -67,7 +67,7 @@ class CsvGlobCursorReaderMalformedTest {
     Files.writeString(file,
         "a,b,c\n1,1,1\n2,2,2\n3,3,3\n4,4,4\nONLY_ONE\n6,6,6\n7,7,7\n");
 
-    var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), DEFAULTS);
+    var reader = GlobReaders.of(file.toString(), DEFAULTS);
 
     List<Map<String, Object>> allGood = new ArrayList<>();
     List<MalformedRecord> allBad = new ArrayList<>();
@@ -89,7 +89,7 @@ class CsvGlobCursorReaderMalformedTest {
     Path file = tmp.resolve("exact.csv");
     Files.writeString(file, "a,b\n1,1\n2,2\n");   // exactly 2 good rows, chunkSize 2
 
-    var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), DEFAULTS);
+    var reader = GlobReaders.of(file.toString(), DEFAULTS);
     ReadResult<Map<String, Object>> r = reader.read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
 
     // The chunk fills AND the file ends exactly there → EndOfStream in this read, not HasMore
@@ -103,7 +103,7 @@ class CsvGlobCursorReaderMalformedTest {
     Path file = tmp.resolve("tail.csv");
     Files.writeString(file, "a,b\n1,1\n2,2\nonly-one\n");   // two good rows, then a malformed one; chunk of 2
 
-    var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), DEFAULTS);
+    var reader = GlobReaders.of(file.toString(), DEFAULTS);
     var first = (ReadResult.HasMore<Map<String, Object>>) reader.read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
     var last = (ReadResult.EndOfStream<Map<String, Object>>) reader.read(2, first.nextCursor(), ReaderTestContexts.newRun());
 

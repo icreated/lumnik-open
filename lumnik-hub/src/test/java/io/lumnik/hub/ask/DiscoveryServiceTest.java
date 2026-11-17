@@ -35,7 +35,7 @@ class DiscoveryServiceTest {
 
     static final class FakeEntityViews extends EntitySchemaBuilder {
         List<SchemaCard.Table> tables = new ArrayList<>();
-        @Override public List<SchemaCard.Table> resolve(String scope) { return tables; }
+        @Override public List<SchemaCard.Table> resolve(long tenantId, String scope) { return tables; }
     }
 
     static final class RecordingLabels extends AdLabelProvider {

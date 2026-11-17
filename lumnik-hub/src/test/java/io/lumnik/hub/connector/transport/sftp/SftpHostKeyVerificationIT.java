@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.transport.sftp;
 
 import io.lumnik.hub.connector.secret.SecretRefs;
+import io.lumnik.hub.testsupport.TestOutbound;
 import org.apache.sshd.client.SshClient;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -90,7 +91,7 @@ class SftpHostKeyVerificationIT {
             "password_env", "SFTP_PASS_UNSET",
             "path", "/upload/*.csv"));
         cfg.putAll(extra);
-        var factory = new SftpFileSourceFactory(SecretRefs.environmentOnly(name -> null));
+        var factory = new SftpFileSourceFactory(SecretRefs.of(name -> null), TestOutbound.ADDRESSES);
         var source = (SftpFileSource) factory.build(cfg);
         source.setPasswordOverrideForTest(PASS);
         return source;
@@ -148,7 +149,7 @@ class SftpHostKeyVerificationIT {
 
     @Test
     void an_auth_failure_is_not_blamed_on_the_host_key() {
-        var factory = new SftpFileSourceFactory(SecretRefs.environmentOnly(name -> null));
+        var factory = new SftpFileSourceFactory(SecretRefs.of(name -> null), TestOutbound.ADDRESSES);
         var cfg = new HashMap<String, Object>(Map.of(
             "host", "localhost",
             "port", port,

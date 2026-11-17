@@ -829,7 +829,7 @@ public class SearchProjectionWorker {
     }
 
     private EntityScanContext resolveScanContext(String entity, String failureMessage) {
-        EntityManifest entityManifest = registry.findReloadingIfMissing(entity);
+        EntityManifest entityManifest = registry.findReloadingIfMissingHubwide(entity);
         if (entityManifest == null) {
             throw new IllegalStateException(failureMessage);
         }

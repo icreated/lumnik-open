@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Optional;
 import java.util.Set;
 
+import static io.lumnik.hub.tenant.DeploymentTenancy.HUBADMIN_TENANT;
 import static io.lumnik.hub.testsupport.AppManifestYaml.manifest;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -32,7 +33,7 @@ class AppDefaultDemoteScopeIT {
     /** The current default's row — read, never assumed: every @QuarkusTest in the module shares one
      *  database and JUnit guarantees no order between classes. */
     private AppRegistrationStore.Row currentDefault() {
-        return store.find(store.findDefaultName().orElseThrow()).orElseThrow();
+        return store.find(HUBADMIN_TENANT, null, store.findOwnDefaultName(HUBADMIN_TENANT).orElseThrow()).orElseThrow();
     }
 
     private static AppManifest app(String name, String scope, boolean isDefault) {
@@ -46,7 +47,7 @@ class AppDefaultDemoteScopeIT {
         // not depend on which app happens to be the default when this class runs.
         String foreign = "not-" + holder.scope();
 
-        AppRegistrationStore.Upserted outcome = store.upsert(
+        AppRegistrationStore.Upserted outcome = store.upsert(HUBADMIN_TENANT, 
             app("vitrine-toctou", foreign, true),
             manifest("vitrine-toctou", foreign, "  default: true\n"),
             Set.of(foreign));
@@ -55,9 +56,9 @@ class AppDefaultDemoteScopeIT {
             .as("the demote's own WHERE refuses, with no help from the resource's ordered check")
             .isInstanceOf(AppRegistrationStore.Upserted.DefaultHeldOutOfScope.class);
 
-        assertThat(store.findDefaultName()).contains(holder.name());
-        assertThat(store.find(holder.name()).orElseThrow().isDefault()).isTrue();
-        assertThat(store.find("vitrine-toctou"))
+        assertThat(store.findOwnDefaultName(HUBADMIN_TENANT)).contains(holder.name());
+        assertThat(store.find(HUBADMIN_TENANT, null, holder.name()).orElseThrow().isDefault()).isTrue();
+        assertThat(store.find(HUBADMIN_TENANT, null, "vitrine-toctou"))
             .as("the whole unit of work rolled back, insert included")
             .isEmpty();
     }
@@ -67,23 +68,23 @@ class AppDefaultDemoteScopeIT {
         // Half a rule proven is a rule that could be enforced by refusing everything.
         AppRegistrationStore.Row previous = currentDefault();
         try {
-            AppRegistrationStore.Upserted outcome = store.upsert(
+            AppRegistrationStore.Upserted outcome = store.upsert(HUBADMIN_TENANT, 
                 app("relais-toctou", "relais", true),
                 manifest("relais-toctou", "relais", "  default: true\n"),
                 null);
 
             assertThat(outcome)
                 .isEqualTo(new AppRegistrationStore.Upserted.Applied(Optional.of(previous.name())));
-            assertThat(store.findDefaultName()).contains("relais-toctou");
-            assertThat(store.find(previous.name()).orElseThrow().isDefault()).isFalse();
+            assertThat(store.findOwnDefaultName(HUBADMIN_TENANT)).contains("relais-toctou");
+            assertThat(store.find(HUBADMIN_TENANT, null, previous.name()).orElseThrow().isDefault()).isFalse();
         } finally {
             // Restores from the ROW, so the theme AppRegistrationSeedIT pins travels back intact.
-            store.upsert(
+            store.upsert(HUBADMIN_TENANT, 
                 new AppManifest(previous.name(), previous.scope(), previous.title(),
                     previous.icon(), previous.accentColor(), previous.backgroundColor(), true, previous.tabs()),
                 manifest(previous.name(), previous.scope(), "  default: true\n"),
                 null);
         }
-        assertThat(store.findDefaultName()).contains(previous.name());
+        assertThat(store.findOwnDefaultName(HUBADMIN_TENANT)).contains(previous.name());
     }
 }

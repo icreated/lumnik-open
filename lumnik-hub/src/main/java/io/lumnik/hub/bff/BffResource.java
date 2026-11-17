@@ -6,6 +6,7 @@ import io.lumnik.identity.user.User;
 import io.lumnik.identity.user.UserRepository;
 import io.lumnik.hub.edition.EditionMarker;
 import io.lumnik.hub.manifest.ModuleManifestRegistry;
+import io.lumnik.hub.view.MapTiles;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.hub.tenant.TenantContextFilter;
 import jakarta.enterprise.inject.Instance;
@@ -29,6 +30,7 @@ public class BffResource {
     @Inject TenantRepository tenants;
     @Inject ModuleManifestRegistry manifests;
     @Inject Instance<EditionMarker> editionMarker;
+    @Inject MapTiles mapTiles;
 
     @GET
     @Path("/me")
@@ -62,7 +64,8 @@ public class BffResource {
             roles,
             moduleList,
             editionOf(editionMarker),
-            manifests.offeredTabs()
+            manifests.offeredTabs(),
+            mapTiles.background().orElse(null)
         );
     }
 

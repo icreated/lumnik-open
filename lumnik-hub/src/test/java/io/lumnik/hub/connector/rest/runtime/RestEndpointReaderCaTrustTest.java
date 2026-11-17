@@ -41,7 +41,7 @@ class RestEndpointReaderCaTrustTest {
         ep.setMethod("GET");
         ep.setPath("/api/v1/pods");
         return new RestEndpointReader(ep, none, new PaginationFactory(), new RateLimiterRegistry(), api, MAPPER,
-            SecretRefs.environmentOnly(secrets::get));
+            SecretRefs.of(secrets::get));
     }
 
     private static ConnectorContext ctx(Map<String, Object> tls) {

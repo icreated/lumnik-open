@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.jdbc;
 
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -39,7 +40,7 @@ class JdbcReadOnlyEnforcementIT {
 
   @Test
   void connection_acquired_via_registry_is_read_only() throws Exception {
-    HikariPoolRegistry reg = new HikariPoolRegistry();
+    HikariPoolRegistry reg = new HikariPoolRegistry(TestOutbound.ADDRESSES);
     DataSource ds = reg.acquire(PG.getJdbcUrl(), "u", "p", 1L, PG_DIALECT);
 
     try (Connection c = ds.getConnection()) {
@@ -51,7 +52,7 @@ class JdbcReadOnlyEnforcementIT {
 
   @Test
   void read_only_transaction_rejects_writes() throws Exception {
-    HikariPoolRegistry reg = new HikariPoolRegistry();
+    HikariPoolRegistry reg = new HikariPoolRegistry(TestOutbound.ADDRESSES);
     DataSource ds = reg.acquire(PG.getJdbcUrl(), "u", "p", 1L, PG_DIALECT);
 
     try (Connection c = ds.getConnection()) {

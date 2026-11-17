@@ -10,4 +10,4 @@ spec:
       pagination:
         kind: none
         # response_path intentionally omitted — must error
-      target: { kind: hybrid, table: x_vets, unique_key: "$.id" }
+      target: { kind: hybrid, table: ext.x_vets, unique_key: "$.id" }

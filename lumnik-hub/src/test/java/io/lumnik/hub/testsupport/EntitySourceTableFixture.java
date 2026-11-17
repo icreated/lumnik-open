@@ -30,6 +30,13 @@ public final class EntitySourceTableFixture {
      *  dropped first so a re-run doesn't collide with a stale compile. */
     public static void create(AgroalDataSource adminDs, String tableName, String viewName,
                                String... textColumns) throws Exception {
+        create(adminDs, 1L, tableName, viewName, textColumns);
+    }
+
+    /** {@link #create(AgroalDataSource, String, String, String...)}, recorded for {@code tenant}, the tenant that
+     *  applies the Entity over it. */
+    public static void create(AgroalDataSource adminDs, long tenant, String tableName, String viewName,
+                               String... textColumns) throws Exception {
         try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
             c.setAutoCommit(false);
             st.execute("SET LOCAL lock_timeout = '" + LOCK_TIMEOUT + "'");
@@ -42,7 +49,13 @@ public final class EntitySourceTableFixture {
             st.execute("CREATE POLICY " + tableName + "_iso ON connector." + tableName
                 + " USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::bigint)");
             st.execute("GRANT SELECT ON connector." + tableName + " TO lumnik_app");
+            // as the hub's writers do: explicit, since no default privilege hands a table to the readonly role (V93);
+            // guarded, since the plain %test container has no such role
+            st.execute("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'lumnik_readonly') THEN "
+                + "GRANT SELECT ON connector." + tableName + " TO lumnik_readonly; END IF; END $$");
             c.commit();
         }
+        // as the hub's writer records a table it made, for the tenant that applies its Entity (#2023)
+        RegisteredTables.register(adminDs, tenant, tableName);
     }
 }

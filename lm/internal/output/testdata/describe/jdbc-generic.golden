@@ -5,7 +5,7 @@ connection           REQUIRED  [NESTED, HIGH]
   user                 REQUIRED  [STRING, HIGH]
     DB user
   password_env         REQUIRED  [STRING, HIGH]
-    Name of the DB password: a hub environment variable, else an lm secret
+    lm secret name of the DB password
   dialect              optional  [STRING, LOW]
     JDBC dialect (inferred from url scheme if absent)
   zone                 optional  [STRING, LOW]
@@ -30,10 +30,10 @@ defaults             optional  [NESTED, LOW]
     → indexes is a list of { columns: [...], unique?: bool } objects — e.g. indexes: [{ columns: [email] }]
     indexes[]
       columns              REQUIRED  [LIST, HIGH]
-        Columns of the index, in order
+        Columns of the index, in order, after tenant_id
         → e.g. columns: [email] or [bpartner_id, dateordered]
       unique               optional  [BOOLEAN, LOW]
-        Unique index (default false)
+        Unique within the tenant (default false)
         default: false
   rename               optional  [NESTED, LOW]
     Rename source columns before they become hub columns: {source: target}
@@ -44,12 +44,12 @@ source               REQUIRED  [NESTED, HIGH]
   Source tables
   tables               REQUIRED  [LIST, HIGH]
     List of tables to ingest (at least one)
-    → Add a table: { name: 'invoices', mode: 'full', pk_columns: ['id'] }
+    → Add a table: { name: 'invoices', schema: 'public', mode: 'full', pk_columns: ['id'] }
     tables[]
       name                 REQUIRED  [STRING, HIGH]
         Table name — also names the hub table connector.t_<name>, unless target names it
       target               optional  [STRING, MEDIUM]
-        Names the hub table connector.t_<target> in place of the source table's name (#1199)
+        Names the hub table connector.t_<target> in place of the source table's name
       mode                 REQUIRED  [STRING, HIGH]
         Ingest mode (here or in defaults)
         one of: watermark, full
@@ -67,10 +67,10 @@ source               REQUIRED  [NESTED, HIGH]
         → indexes is a list of { columns: [...], unique?: bool } objects — e.g. indexes: [{ columns: [email] }]
         indexes[]
           columns              REQUIRED  [LIST, HIGH]
-            Columns of the index, in order
+            Columns of the index, in order, after tenant_id
             → e.g. columns: [email] or [bpartner_id, dateordered]
           unique               optional  [BOOLEAN, LOW]
-            Unique index (default false)
+            Unique within the tenant (default false)
             default: false
       rename               optional  [NESTED, LOW]
         Rename source columns before they become hub columns: {source: target}

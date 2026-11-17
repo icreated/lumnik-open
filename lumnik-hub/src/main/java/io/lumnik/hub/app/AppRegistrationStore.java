@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.api.ScopeGuardedUpsert;
+import io.lumnik.hub.tenant.ManifestOwner;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
@@ -21,8 +22,9 @@ import java.util.Set;
 
 /**
  * Declared kind:App manifests — the registry the PWA reads its own identity from. Direct SQL over
- * the admin datasource (the SavedViewStore shape; no cache, the list is small and cold-path). Rows
- * are deployment-global; access control lives in the resources.
+ * the admin datasource (the SavedViewStore shape; no cache, the list is small and cold-path). A name is unique on the
+ * hub; a row is read by its owner only, or by every tenant when it has none ({@link ManifestOwner}, #2050). Each owner
+ * has at most one default: a tenant reads its own, else the shared one. Scope control lives in the resources.
  */
 @ApplicationScoped
 public class AppRegistrationStore {
@@ -72,8 +74,11 @@ public class AppRegistrationStore {
          */
         record NameHeldOutOfScope() implements Upserted {}
 
+        /** Nothing written — rolled back. Another tenant's app holds the name (#2050); whose is never said. */
+        record NameTaken() implements Upserted {}
+
         /**
-         * Nothing written — rolled back. The row this name addresses currently carries the default
+         * Nothing written — rolled back. The row this name addresses currently carries the shared default
          * flag and the incoming manifest does not, so the write would have left the deployment
          * with NO default and an absent {@code ?m=} resolving to nothing.
          *
@@ -95,14 +100,14 @@ public class AppRegistrationStore {
         /** Removed and committed. */
         record Removed() implements Deleted {}
 
-        /** Nothing to delete — no row carries this name. */
+        /** Nothing to delete — no row this tenant owns carries this name. */
         record NotFound() implements Deleted {}
 
         /** Nothing deleted. The row's scope is outside the caller's grants. */
         record HeldOutOfScope() implements Deleted {}
 
         /**
-         * Nothing deleted. This row currently carries the default flag, and removing it would
+         * Nothing deleted. This row currently carries the shared default flag, and removing it would
          * leave the deployment with NO default and an absent {@code ?m=} resolving to nothing —
          * the same floor {@link Upserted.LastDefaultWouldBeRemoved} protects on the write side.
          */
@@ -112,24 +117,50 @@ public class AppRegistrationStore {
     private static final String COLUMNS =
         "name, scope, title, icon, accent_color, background_color, is_default, tabs";
 
+    /** The tenant's own default, bound first: it hides the shared one, so a tenant reads one default at most. */
+    private static final String OWN_DEFAULT = "SELECT 1 FROM connector.app_registration own "
+        + "WHERE own.is_default AND own.owner_tenant_id = ?";
+
+    /** {@link #COLUMNS} as a tenant reads them; binds the reading tenant first. */
+    private static final String READ_COLUMNS = COLUMNS.replace("is_default",
+        "is_default AND (owner_tenant_id IS NOT NULL OR NOT EXISTS (" + OWN_DEFAULT + "))");
+
+    /**
+     * {@link #READ_COLUMNS} for a scope-bound caller: only an own default it can see hides the shared one, or a caller
+     * outside the scope of its tenant's default would read no default at all. Binds the tenant, then the scopes.
+     */
+    private static final String READ_COLUMNS_IN_SCOPES = COLUMNS.replace("is_default",
+        "is_default AND (owner_tenant_id IS NOT NULL OR NOT EXISTS (" + OWN_DEFAULT + " AND own.scope = ANY (?)))");
+
     @Inject
     @DataSource("admin")
     Instance<AgroalDataSource> adminDs;
 
-    /** scopes == null → all (unscoped caller); empty set → none (bound to nothing). */
-    public List<Row> list(Set<String> scopes) {
+    /** The apps this tenant reads; scopes == null → all (unscoped caller); empty set → none (bound to nothing). */
+    public List<Row> list(long tenant, Set<String> scopes) {
         if (scopes != null && scopes.isEmpty()) return List.of();
         // Two whole statements rather than one with a conditionally-appended WHERE, the
         // SavedViewStore.list reasoning: each placeholder sits in the same expression as the value
         // bound to it, which is what a reader — and a static analyser — can follow.
         if (scopes == null) {
             return Jdbc.query(adminDs.get(), "AppRegistrationStore.list",
-                "SELECT " + COLUMNS + " FROM connector.app_registration ORDER BY name",
-                ps -> {}, AppRegistrationStore::read);
+                "SELECT " + READ_COLUMNS + " FROM connector.app_registration WHERE " + ManifestOwner.READS
+                    + " ORDER BY name",
+                ps -> {
+                    ps.setLong(1, tenant);
+                    ps.setLong(2, tenant);
+                }, AppRegistrationStore::read);
         }
         return Jdbc.query(adminDs.get(), "AppRegistrationStore.list",
-            "SELECT " + COLUMNS + " FROM connector.app_registration WHERE scope = ANY (?) ORDER BY name",
-            ps -> ps.setArray(1, ps.getConnection().createArrayOf("text", scopes.toArray())),
+            "SELECT " + READ_COLUMNS_IN_SCOPES + " FROM connector.app_registration WHERE scope = ANY (?) AND "
+                + ManifestOwner.READS + " ORDER BY name",
+            ps -> {
+                Array granted = ps.getConnection().createArrayOf("text", scopes.toArray());
+                ps.setLong(1, tenant);
+                ps.setArray(2, granted);
+                ps.setArray(3, granted);
+                ps.setLong(4, tenant);
+            },
             AppRegistrationStore::read);
     }
 
@@ -144,28 +175,49 @@ public class AppRegistrationStore {
             : List.of((String[]) a.getArray());
     }
 
-    /** Lowercased on read because {@link #upsert} lowercases on write — one row per name. */
-    public Optional<Row> find(String name) {
+    /**
+     * The app by name, when this tenant reads it, with its default flag as {@link #list} gives it to a caller of these
+     * scopes ({@code null} = unscoped). Lowercased on read because {@link #upsert} lowercases on write.
+     */
+    public Optional<Row> find(long tenant, Set<String> scopes, String name) {
+        if (scopes == null) {
+            return Jdbc.queryOne(adminDs.get(), "AppRegistrationStore.find",
+                "SELECT " + READ_COLUMNS + " FROM connector.app_registration WHERE name = ? AND " + ManifestOwner.READS,
+                ps -> {
+                    ps.setLong(1, tenant);
+                    ps.setString(2, name.toLowerCase(Locale.ROOT));
+                    ps.setLong(3, tenant);
+                },
+                AppRegistrationStore::read);
+        }
         return Jdbc.queryOne(adminDs.get(), "AppRegistrationStore.find",
-            "SELECT " + COLUMNS + " FROM connector.app_registration WHERE name = ?",
-            ps -> ps.setString(1, name.toLowerCase(Locale.ROOT)),
+            "SELECT " + READ_COLUMNS_IN_SCOPES + " FROM connector.app_registration WHERE name = ? AND " + ManifestOwner.READS,
+            ps -> {
+                ps.setLong(1, tenant);
+                ps.setArray(2, ps.getConnection().createArrayOf("text", scopes.toArray()));
+                ps.setString(3, name.toLowerCase(Locale.ROOT));
+                ps.setLong(4, tenant);
+            },
             AppRegistrationStore::read);
     }
 
-    /** The scope of the row this name addresses, or empty when the name is free — the apply
-     *  door's re-homing check wants one column, not the whole row. */
-    public Optional<String> findScope(String name) {
+    /** The scope of the row this name addresses, or empty when the name is free or this tenant does not read it —
+     *  the apply door's re-homing check wants one column, not the whole row. */
+    public Optional<String> findScope(long tenant, String name) {
         return Jdbc.queryOne(adminDs.get(), "AppRegistrationStore.findScope",
-            "SELECT scope FROM connector.app_registration WHERE name = ?",
-            ps -> ps.setString(1, name.toLowerCase(Locale.ROOT)),
+            "SELECT scope FROM connector.app_registration WHERE name = ? AND " + ManifestOwner.READS,
+            ps -> {
+                ps.setString(1, name.toLowerCase(Locale.ROOT));
+                ps.setLong(2, tenant);
+            },
             rs -> rs.getString(1));
     }
 
-    /** The app an absent {@code ?m=} resolves to, deployment-wide. */
-    public Optional<String> findDefaultName() {
-        return Jdbc.queryOne(adminDs.get(), "AppRegistrationStore.findDefaultName",
-            "SELECT name FROM connector.app_registration WHERE is_default",
-            ps -> { },
+    /** The default among the apps this tenant would own by applying: the shared one, from the hub's own tenant. */
+    public Optional<String> findOwnDefaultName(long tenant) {
+        return Jdbc.queryOne(adminDs.get(), "AppRegistrationStore.findOwnDefaultName",
+            "SELECT name FROM connector.app_registration WHERE is_default AND " + ManifestOwner.OWNED_BY,
+            ps -> ManifestOwner.bind(ps, 1, ManifestOwner.of(tenant)),
             rs -> rs.getString(1));
     }
 
@@ -181,30 +233,40 @@ public class AppRegistrationStore {
      * priority as {@link #whyTheConflictArmRefused}: the scope answer comes first, because a row
      * outside the caller's grants must not learn it exists AND carries the flag.
      *
+     * <p>Only an app this tenant owns ({@link ManifestOwner#of}): another's is {@code NotFound}. The floor holds the
+     * shared default only; a tenant's own default can go, its tenant falls back on the shared one.
+     *
      * @param callerScopes an authorization predicate, not a filter — {@code null} = unscoped caller
      */
-    public Deleted delete(String name, Set<String> callerScopes) {
+    public Deleted delete(long tenant, String name, Set<String> callerScopes) {
         String key = name.toLowerCase(Locale.ROOT);
+        Long owner = ManifestOwner.of(tenant);
         int rows = Jdbc.update(adminDs.get(), "AppRegistrationStore.delete",
-            "DELETE FROM connector.app_registration WHERE name = ? "
-                + "AND (?::text[] IS NULL OR scope = ANY (?::text[])) AND NOT is_default",
+            "DELETE FROM connector.app_registration WHERE name = ? AND " + ManifestOwner.OWNED_BY + " "
+                + "AND (?::text[] IS NULL OR scope = ANY (?::text[])) "
+                + "AND NOT (is_default AND owner_tenant_id IS NULL)",
             ps -> {
                 ps.setString(1, key);
-                ScopeGuardedUpsert.bindGrants(ps, 2, callerScopes);
+                ManifestOwner.bind(ps, 2, owner);
+                ScopeGuardedUpsert.bindGrants(ps, 3, callerScopes);
             });
         if (rows > 0) return new Deleted.Removed();
-        return whyTheDeleteRefused(key, callerScopes);
+        return whyTheDeleteRefused(key, owner, callerScopes);
     }
 
-    private Deleted whyTheDeleteRefused(String key, Set<String> callerScopes) {
+    private Deleted whyTheDeleteRefused(String key, Long owner, Set<String> callerScopes) {
         return Jdbc.queryOne(adminDs.get(), "AppRegistrationStore.delete",
-            "SELECT scope, is_default FROM connector.app_registration WHERE name = ?",
-            ps -> ps.setString(1, key),
+            "SELECT scope, is_default FROM connector.app_registration WHERE name = ? "
+                + "AND " + ManifestOwner.OWNED_BY,
+            ps -> {
+                ps.setString(1, key);
+                ManifestOwner.bind(ps, 2, owner);
+            },
             rs -> {
                 if (callerScopes != null && !callerScopes.contains(rs.getString(1))) {
                     return new Deleted.HeldOutOfScope();
                 }
-                if (rs.getBoolean(2)) return new Deleted.IsTheLastDefault();
+                if (rs.getBoolean(2) && owner == null) return new Deleted.IsTheLastDefault();
                 throw new IllegalStateException("AppRegistrationStore.delete: the delete refused "
                     + key + " for neither of its two predicates — scope and flag both read as "
                     + "deletable, so the WHERE and this read disagree");
@@ -259,15 +321,16 @@ public class AppRegistrationStore {
      * NOT done here: changing locking behaviour deserves its own change, and this is a rare,
      * integrator-only path.
      */
-    public Upserted upsert(AppManifest m, String yaml, Set<String> callerScopes) {
+    public Upserted upsert(long tenant, AppManifest m, String yaml, Set<String> callerScopes) {
         String key = m.name().toLowerCase(Locale.ROOT);
+        Long owner = ManifestOwner.of(tenant);
         // One transaction: any failure rolls back, an Error included (#1649). Left open, the pool's reset would COMMIT
         // a demote whose write never came: a deployment with no default app. A refusal undoes the demote too.
         try {
             return Jdbc.transaction(adminDs.get(), "AppRegistrationStore.upsert", c -> {
                 Optional<String> demoted = Optional.empty();
                 if (m.isDefault()) {
-                    demoted = demoteCurrentDefault(c, key, callerScopes);
+                    demoted = demoteCurrentDefault(c, key, owner, callerScopes);
                     // Empty RETURNING says one of two things: nothing held the flag, or something
                     // did and the scope predicate refused it. This second read — same transaction,
                     // so it cannot be raced by the very window the predicate closes — tells them
@@ -275,7 +338,7 @@ public class AppRegistrationStore {
                     // touch. Skipped for an unscoped caller, whose predicate refuses nothing: there
                     // the empty result can only mean an empty flag, and asking again would turn the
                     // known concurrent-apply 500 below into a mystery 403.
-                    if (demoted.isEmpty() && callerScopes != null && defaultIsHeld(c, key)) {
+                    if (demoted.isEmpty() && callerScopes != null && defaultIsHeld(c, key, owner)) {
                         throw new Refused(new Upserted.DefaultHeldOutOfScope());
                     }
                 }
@@ -291,17 +354,19 @@ public class AppRegistrationStore {
                 // unique index admits no second holder. When the manifest itself says default:true
                 // the clause cannot fire, so it never interferes with the demote above.
                 int written = Jdbc.update(c, "AppRegistrationStore.upsert",
-                    "INSERT INTO connector.app_registration (" + COLUMNS + ", yaml_text) "
-                        + "VALUES (?,?,?,?,?,?,?,?,?) "
+                    "INSERT INTO connector.app_registration (" + COLUMNS + ", yaml_text, owner_tenant_id) "
+                        + "VALUES (?,?,?,?,?,?,?,?,?,?) "
                         + "ON CONFLICT (name) DO UPDATE SET scope = EXCLUDED.scope, "
                         + "title = EXCLUDED.title, icon = EXCLUDED.icon, "
                         + "accent_color = EXCLUDED.accent_color, "
                         + "background_color = EXCLUDED.background_color, "
                         + "is_default = EXCLUDED.is_default, tabs = EXCLUDED.tabs, "
                         + "yaml_text = EXCLUDED.yaml_text, updated_at = now() "
-                        + "WHERE (?::text[] IS NULL "
+                        + "WHERE connector.app_registration.owner_tenant_id IS NOT DISTINCT FROM EXCLUDED.owner_tenant_id "
+                        + "AND (?::text[] IS NULL "
                         + "OR connector.app_registration.scope = ANY (?::text[])) "
                         + "AND NOT (connector.app_registration.is_default "
+                        + "AND connector.app_registration.owner_tenant_id IS NULL "
                         + "AND NOT EXCLUDED.is_default)",
                     ps -> {
                         ps.setString(1, key);
@@ -314,7 +379,8 @@ public class AppRegistrationStore {
                         if (m.tabs() == null) ps.setNull(8, Types.ARRAY);
                         else ps.setArray(8, c.createArrayOf("text", m.tabs().toArray(new String[0])));
                         ps.setString(9, yaml);
-                        ScopeGuardedUpsert.bindGrants(ps, 10, callerScopes);
+                        ManifestOwner.bind(ps, 10, owner);
+                        ScopeGuardedUpsert.bindGrants(ps, 11, callerScopes);
                     });
                 // Zero rows used to be UNAMBIGUOUS here — one predicate, one reason — and the
                 // comment that stood in this place said so, and said no second read was needed.
@@ -325,7 +391,7 @@ public class AppRegistrationStore {
                 // conflict itself proves the row exists, so the ambiguity is only ever about
                 // WHICH clause said no, never about whether a row was there.
                 if (written == 0) {
-                    throw new Refused(whyTheConflictArmRefused(c, key, callerScopes, m.isDefault()));
+                    throw new Refused(whyTheConflictArmRefused(c, key, owner, callerScopes, m.isDefault()));
                 }
                 return new Upserted.Applied(demoted);
             });
@@ -358,16 +424,17 @@ public class AppRegistrationStore {
      * <p>The grants are bound TWICE, to the same array — see
      * {@link ScopeGuardedUpsert#bindGrants}.
      */
-    private static Optional<String> demoteCurrentDefault(Connection c, String key,
+    private static Optional<String> demoteCurrentDefault(Connection c, String key, Long owner,
                                                          Set<String> callerScopes) {
         return Jdbc.queryOne(c, "AppRegistrationStore.demoteCurrentDefault",
             "UPDATE connector.app_registration SET is_default = false, updated_at = now() "
-                + "WHERE is_default AND name <> ? "
+                + "WHERE is_default AND name <> ? AND " + ManifestOwner.OWNED_BY + " "
                 + "AND (?::text[] IS NULL OR scope = ANY (?::text[])) "
                 + "RETURNING name",
             ps -> {
                 ps.setString(1, key);
-                ScopeGuardedUpsert.bindGrants(ps, 2, callerScopes);
+                ManifestOwner.bind(ps, 2, owner);
+                ScopeGuardedUpsert.bindGrants(ps, 3, callerScopes);
             },
             rs -> rs.getString(1));
     }
@@ -392,21 +459,26 @@ public class AppRegistrationStore {
      * <p>A third outcome is a bug, not a silent success. Falling through to "applied" after a
      * statement wrote nothing is the worst reading of this result, so it throws.
      */
-    private static Upserted whyTheConflictArmRefused(Connection c, String key,
+    private static Upserted whyTheConflictArmRefused(Connection c, String key, Long owner,
                                                      Set<String> callerScopes,
                                                      boolean incomingIsDefault) {
-        record Holder(String scope, boolean holdsDefault) {}
+        record Holder(String scope, boolean holdsDefault, boolean ownedElsewhere) {}
         Holder holder = Jdbc.queryOne(c, "AppRegistrationStore.whyTheConflictArmRefused",
-            "SELECT scope, is_default FROM connector.app_registration WHERE name = ?",
-            ps -> ps.setString(1, key),
-            rs -> new Holder(rs.getString(1), rs.getBoolean(2)))
+            "SELECT scope, is_default, " + ManifestOwner.OWNED_ELSEWHERE + " FROM connector.app_registration WHERE name = ?",
+            ps -> {
+                ManifestOwner.bind(ps, 1, owner);
+                ps.setString(2, key);
+            },
+            rs -> new Holder(rs.getString(1), rs.getBoolean(2), rs.getBoolean(3)))
             .orElseThrow(() -> new IllegalStateException("AppRegistrationStore.upsert: the conflict arm "
                 + "refused but no row holds the name " + key + " — the row it conflicted "
                 + "with should still be locked by this transaction"));
+        // Another tenant's app first: nothing else about it is this caller's to learn.
+        if (holder.ownedElsewhere()) return new Upserted.NameTaken();
         if (callerScopes != null && !callerScopes.contains(holder.scope())) {
             return new Upserted.NameHeldOutOfScope();
         }
-        if (holder.holdsDefault() && !incomingIsDefault) {
+        if (holder.holdsDefault() && owner == null && !incomingIsDefault) {
             return new Upserted.LastDefaultWouldBeRemoved();
         }
         throw new IllegalStateException("AppRegistrationStore.upsert: the conflict arm "
@@ -414,11 +486,15 @@ public class AppRegistrationStore {
             + "read as writable, so the WHERE and this read disagree");
     }
 
-    /** Does any app other than this one hold the default flag? No scope predicate: the question is
+    /** Does any app of this owner other than this one hold the default flag? No scope predicate: the question is
      *  whether a holder EXISTS, which is exactly what the demote's empty result cannot say. */
-    private static boolean defaultIsHeld(Connection c, String key) {
+    private static boolean defaultIsHeld(Connection c, String key, Long owner) {
         return Jdbc.exists(c, "AppRegistrationStore.defaultIsHeld",
-            "SELECT 1 FROM connector.app_registration WHERE is_default AND name <> ?",
-            ps -> ps.setString(1, key));
+            "SELECT 1 FROM connector.app_registration WHERE is_default AND name <> ? "
+                + "AND " + ManifestOwner.OWNED_BY,
+            ps -> {
+                ps.setString(1, key);
+                ManifestOwner.bind(ps, 2, owner);
+            });
     }
 }

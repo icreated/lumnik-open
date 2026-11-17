@@ -2,6 +2,7 @@ package io.lumnik.hub.export.destination.s3;
 
 import io.lumnik.hub.export.destination.FileDestinationCollisionException;
 import io.lumnik.hub.export.destination.FileDestinationException;
+import io.lumnik.hub.testsupport.TestOutbound;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -228,7 +229,7 @@ class S3FileDestinationStatusMappingTest {
 
     @Test
     void a_missing_bucket_or_filename_is_refused_before_any_client_is_built() {
-        var factory = new S3FileDestinationFactory(null);
+        var factory = new S3FileDestinationFactory(null, TestOutbound.ADDRESSES);
         assertThatThrownBy(() -> factory.build(Map.of("filename", "x.csv")))
             .isInstanceOf(FileDestinationException.class).hasMessageContaining("'bucket' is required");
         assertThatThrownBy(() -> factory.build(Map.of("bucket", "b", "filename", " ")))

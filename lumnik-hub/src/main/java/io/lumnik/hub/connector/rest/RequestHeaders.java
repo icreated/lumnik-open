@@ -11,7 +11,7 @@ import java.util.function.UnaryOperator;
  * Applies declarative request headers from the connector config to every request.
  * Each entry is {@code { name, value }} (static) or {@code { name, value_env }} (resolved through
  * {@code secrets} — in production {@code SecretRefs::lookup}: the tenant's {@code lm secret}
- * registry first, then the hub's environment, exactly like the auth layer's {@code *_env} fields).
+ * registry only, never the hub's environment (#2000), exactly like the auth layer's {@code *_env} fields).
  * A {@code value_env} that resolves to nothing, or to a blank, is refused with the header's name
  * and the reference — never the value — instead of sending the request without it: the vendor's
  * 401 would blame the source for a secret the hub never found. Applied BEFORE auth so

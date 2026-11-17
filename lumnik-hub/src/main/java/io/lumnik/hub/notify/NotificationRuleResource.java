@@ -3,7 +3,7 @@ package io.lumnik.hub.notify;
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
-import io.lumnik.hub.api.TenantWide;
+import io.lumnik.common.security.TenantWide;
 import io.lumnik.hub.connector.mapping.writer.DynamicTableRegistry;
 import io.lumnik.hub.event.EventPatterns;
 import io.lumnik.hub.event.RowEventGate;

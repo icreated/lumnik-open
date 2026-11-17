@@ -19,6 +19,15 @@ class SqlIdentifiersTest {
         assertThat(SqlIdentifiers.quoteIdent("t\";DROP")).isEqualTo("\"t\"\";DROP\"");
     }
 
+    /** #2010: Postgres keeps a name's first 63 bytes, and never half a character. */
+    @Test
+    void keptName_is_what_postgres_keeps_of_a_name() {
+        assertThat(SqlIdentifiers.keptName("orders")).isEqualTo("orders");
+        assertThat(SqlIdentifiers.keptName("a".repeat(63))).isEqualTo("a".repeat(63));
+        assertThat(SqlIdentifiers.keptName("a".repeat(70))).isEqualTo("a".repeat(63));
+        assertThat(SqlIdentifiers.keptName("a".repeat(62) + "é")).isEqualTo("a".repeat(62));
+    }
+
     @Test
     void quoteTable_quotes_both_parts_of_a_qualified_name() {
         assertThat(SqlIdentifiers.quoteTable("connector.v_customer"))

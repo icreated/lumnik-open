@@ -27,13 +27,14 @@ paid tiers — see [Three tiers, two builds](#three-tiers-two-builds).
 | Connector: [kafka](connectors/kafka.md) | — | ✓ |
 | JDBC dialect: [Oracle](connectors/jdbc/oracle.md) (driver included) | — | ✓ |
 | Fusion: [entities](entities.md), `_conflicts` ledger | ✓ | ✓ |
+| [Points](entities.md#ask-by-distance-points) on an entity, and `connector.distance_m` in the database | ✓ | ✓ |
 | Apps ladder: [views](apps/views.md), [processes](apps/processes.md), [workflows](apps/workflows.md), [inbox](apps/inbox.md), [PWA](apps/pwa.md) | ✓ | ✓ |
 | [Outputs](outputs.md): webhooks (signed, journaled, replay), [email notifications](email.md) | ✓ | ✓ |
 | `lm` CLI / TUI, manifests, the whole integrator surface | ✓ | ✓ |
 | Multi-tenancy & RLS, audit trail, [backup](operations/backup-restore.md) | ✓ | ✓ |
 | [Search](search/search-indexes.md): declare an index (`kind: SearchIndex`). Querying needs a provider: without one, `lm search query` answers *not installed* | ✓ | ✓ |
 | Search [provider](search/search-indexes.md#choosing-a-provider): PostgreSQL (`up.sh --search`) or OpenSearch / Elasticsearch (`up.sh --search-cluster`), with the PWA's Search tab. Never in the published image | — | ✓ opt-in build |
-| **Ask**: [chat and `lm ask`](rag/http-api.md), semantic search, `lm view generate` (the AI writes a view) | — | ✓ |
+| **Ask**: [chat and `lm ask`](rag/http-api.md), semantic search, `lm view generate` (the AI writes a view), [asking by distance](entities.md#ask-by-distance-points) | — | ✓ |
 | Model providers ([Ollama & friends](rag/models.md)) | — | ✓ |
 | [JIT provisioning](security/byo-idp.md) for external IdPs | — | ✓ |
 | [SCIM deprovisioning](security/scim.md) | — | ✓ |

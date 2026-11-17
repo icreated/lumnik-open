@@ -3,10 +3,14 @@ package io.lumnik.hub.source.csv;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.api.sources.CsvIngestForm;
 import io.lumnik.hub.api.sources.CsvIngestResult;
+import io.lumnik.hub.outbound.OutboundRefusedException;
+import io.lumnik.hub.secret.SecretNotServedException;
 import io.lumnik.hub.testsupport.MinioTestImage;
+import io.lumnik.hub.testsupport.TestSecrets;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.BeforeEach;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -19,6 +23,7 @@ import software.amazon.awssdk.services.s3.S3Client;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -27,13 +32,12 @@ import static org.junit.jupiter.api.Assertions.*;
  * Integration test: verifies that {@code CsvIngestService} can ingest a CSV file
  * from an S3-compatible store (MinIO) via the remote (FileSource) path.
  *
- * <p>The test uses {@link System#setProperty} to expose credentials so that
- * {@code S3FileSourceFactory}'s {@code @Inject} constructor (which falls back to
- * {@code System.getProperty} before {@code System.getenv}) can resolve them
- * without requiring real environment variables.
+ * <p>The credentials are tenant 1's lm secrets, where {@code S3FileSourceFactory} resolves them.
  */
 @QuarkusTest
 class CsvIngestServiceRemoteTest {
+
+    @Inject TestSecrets testSecrets;
 
     static GenericContainer<?> minio;
     static String endpoint;
@@ -71,21 +75,62 @@ class CsvIngestServiceRemoteTest {
                 b -> b.bucket(BUCKET).key("data/customers.csv"),
                 RequestBody.fromString("id,email\n1,alice@x\n2,bob@x\n", StandardCharsets.UTF_8));
         }
-
-        // Expose credentials via system properties so S3FileSourceFactory's @Inject ctor resolves them.
-        System.setProperty("__INLINE_S3_ACCESS", ACCESS);
-        System.setProperty("__INLINE_S3_SECRET", SECRET);
     }
 
     @AfterAll
     static void stop() {
-        System.clearProperty("__INLINE_S3_ACCESS");
-        System.clearProperty("__INLINE_S3_SECRET");
         if (minio != null) minio.stop();
+    }
+
+    /**
+     * The connector's secrets, in tenant 1's lm secret registry: the only place a `*_env` reference resolves (#2000) —
+     * serving the ingest's scope, which every one-shot connector carries (#2015).
+     */
+    @BeforeEach
+    void holdTheSecrets() {
+        testSecrets.put(1L, "__INLINE_S3_ACCESS", ACCESS, List.of("system"));
+        testSecrets.put(1L, "__INLINE_S3_SECRET", SECRET, List.of("system"));
     }
 
     @Test
     void ingests_csv_from_s3_via_service() throws Exception {
+        CsvIngestResult result = TenantContext.callAsSystem(() -> service.execute(s3Form(), 1L));
+
+        assertEquals(2, result.rowsRead(),    "should have read 2 data rows");
+        assertEquals(2, result.rowsWritten(), "should have written 2 rows");
+        assertTrue(result.tableName().startsWith("ext."), "table must be in ext schema");
+        assertNotNull(result.connectorId());
+        assertNotNull(result.endpointId());
+    }
+
+    /**
+     * #2015: the ingest's connector is in scope system; a secret that serves no scope is refused, by name — and as
+     * itself, a configuration problem the door answers {@code 400}, not wrapped into a transport failure's {@code 500}.
+     */
+    @Test
+    void a_secret_outside_the_ingests_scope_is_refused() {
+        testSecrets.put(1L, "__INLINE_S3_SECRET", SECRET);
+
+        var refused = assertThrows(SecretNotServedException.class,
+            () -> TenantContext.callAsSystem(() -> service.execute(s3Form(), 1L)));
+
+        assertTrue(refused.getMessage().contains("secret __INLINE_S3_SECRET does not serve scope system"),
+            refused.getMessage());
+    }
+
+    /** #2002: an endpoint the hub refuses is refused as itself — the door's 400 — not wrapped into a transport's 500. */
+    @Test
+    void an_endpoint_the_hub_refuses_is_refused_as_itself() {
+        CsvIngestForm form = s3Form();
+        form.transport.put("endpoint", "http://169.254.169.254:9000");
+
+        var refused = assertThrows(OutboundRefusedException.class,
+            () -> TenantContext.callAsSystem(() -> service.execute(form, 1L)));
+
+        assertTrue(refused.getMessage().contains("never connects to"), refused.getMessage());
+    }
+
+    private CsvIngestForm s3Form() {
         CsvIngestForm form = new CsvIngestForm();
         form.name       = "svc_s3_test_" + System.nanoTime();
         form.scope      = "system";
@@ -99,13 +144,6 @@ class CsvIngestServiceRemoteTest {
             "access_key_env", "__INLINE_S3_ACCESS",
             "secret_key_env", "__INLINE_S3_SECRET"
         ));
-
-        CsvIngestResult result = TenantContext.callAsSystem(() -> service.execute(form, 1L));
-
-        assertEquals(2, result.rowsRead(),    "should have read 2 data rows");
-        assertEquals(2, result.rowsWritten(), "should have written 2 rows");
-        assertTrue(result.tableName().startsWith("ext."), "table must be in ext schema");
-        assertNotNull(result.connectorId());
-        assertNotNull(result.endpointId());
+        return form;
     }
 }

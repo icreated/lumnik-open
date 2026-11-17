@@ -2,8 +2,9 @@
 #   lm apply -f docs/connectors/csv/40-s3-prefix.yaml
 #   lm connector run csv-s3
 #
-# `access_key_env` / `secret_key_env` name environment variables holding the credentials (resolved
-# via secret store → system property → env). For AWS, omit `endpoint`; for MinIO set it explicitly.
+# `access_key_env` / `secret_key_env` name the lm secret entries holding the credentials
+# (lm secret set NAME), each serving this connector's scope (lm secret scope NAME demo).
+# For AWS, omit `endpoint`; for MinIO set it explicitly.
 
 apiVersion: connectors.lumnik.io/v1
 kind: Connector

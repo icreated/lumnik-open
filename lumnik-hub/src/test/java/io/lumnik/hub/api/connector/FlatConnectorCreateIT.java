@@ -7,6 +7,7 @@ import io.lumnik.hub.connector.api.types.RunTrigger;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.runtime.ConnectorEngine;
+import io.lumnik.hub.testsupport.TestLocalPaths;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -71,7 +72,7 @@ class FlatConnectorCreateIT {
         {"name":"flat-csv-%s","typeId":"csv-file","enabled":true,"config":{"kind":"csv-file",
          "after_process":"none","parser":{"has_header":true},
          "transport":{"kind":"local","path":"%s"}}}
-        """.formatted(suffix, csv.toAbsolutePath()));
+        """.formatted(suffix, TestLocalPaths.relative(csv)));
     try {
       RunStatus status = run(id);
       assertThat(status).as("flat csv run: %s", status).isInstanceOf(RunStatus.Completed.class);
@@ -91,7 +92,7 @@ class FlatConnectorCreateIT {
     String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 10);
     String flatId = create("""
         {"name":"same-ep-%s","typeId":"csv-file","enabled":true,"config":{"kind":"csv-file",
-         "transport":{"kind":"local","path":"/tmp/same-ep.csv"}}}
+         "transport":{"kind":"local","path":"tmp/same-ep.csv"}}}
         """.formatted(suffix));
     ConnectorEndpoint flat = only(flatId);
     delete(flatId);
@@ -104,7 +105,7 @@ class FlatConnectorCreateIT {
           name: same-ep-%s
           connector_type: csv-file
         spec:
-          transport: { kind: local, path: /tmp/same-ep.csv }
+          transport: { kind: local, path: tmp/same-ep.csv }
           parser: { has_header: true }
           after_process: none
           target: {}

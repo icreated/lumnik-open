@@ -9,4 +9,4 @@ spec:
       method: GET
       response_format: xml
       pagination: { kind: prestashop, resource: products, limit: 50, response_path: $.products.product }
-      target: { kind: hybrid, table: x_products, unique_key: "$.id" }
+      target: { kind: hybrid, table: ext.x_products, unique_key: "$.id" }

@@ -39,7 +39,7 @@ public class ViewDetailReader {
         String firstCol = cols.get(0).name();
         try (Connection c = readonlyDs.getConnection()) {
             TenantRlsScope.applyTo(c, tenantId);
-            ViewDataReader.refuseColumnsTheTableLost(c, rv);
+            ViewDataReader.refuseColumnsTheTableLost(c, rv, rv.columns().stream().map(ResolvedView.Column::name).toList());
             boolean ledgerPresent = hasConflictsColumn(c, rv.table());
 
             StringBuilder sql = new StringBuilder("SELECT ");

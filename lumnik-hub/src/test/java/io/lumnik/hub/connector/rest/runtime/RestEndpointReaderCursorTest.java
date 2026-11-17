@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.runtime;
 
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.hub.connector.runtime.OwnedRunScope;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -92,6 +93,8 @@ class RestEndpointReaderCursorTest {
     }
 
     static final class RecordingHttp extends RestHttpClient {
+
+        RecordingHttp() { super(TestOutbound.ADDRESSES); }
         final List<RestRequest> calls = new ArrayList<>();
         @Override public RestResponse execute(RestRequest req) {
             calls.add(req);
@@ -102,6 +105,7 @@ class RestEndpointReaderCursorTest {
     /** `followRedirects(NEVER)` means a 3xx now flows straight to the reader — this is what one
      * looks like on the wire: a redirect body (typically HTML), not JSON. */
     static final class RedirectingHttp extends RestHttpClient {
+        RedirectingHttp() { super(TestOutbound.ADDRESSES); }
         @Override public RestResponse execute(RestRequest req) {
             return RestResponse.of(302, Map.of("Location", List.of("https://erp.test/login")),
                 "<html>Found. Redirecting to <a href=\"/login\">/login</a></html>");
@@ -115,7 +119,7 @@ class RestEndpointReaderCursorTest {
 
     private RestEndpointReader reader() {
         return new RestEndpointReader(endpoint, new PassThroughAuth(), pagination,
-            new RateLimiterRegistry(), http, mapper, SecretRefs.environmentOnly(name -> null));
+            new RateLimiterRegistry(), http, mapper, SecretRefs.of(name -> null));
     }
 
     private ConnectorContext ctx(Map<String, Object> config) {
@@ -223,7 +227,7 @@ class RestEndpointReaderCursorTest {
             }
         };
         return new RestEndpointReader(endpoint, new PassThroughAuth(), stuck, new RateLimiterRegistry(), http, mapper,
-            SecretRefs.environmentOnly(name -> null));
+            SecretRefs.of(name -> null));
     }
 
     /** #1635: the source sends back the cursor it was given while saying more — a partial read, never Completed. */
@@ -260,7 +264,7 @@ class RestEndpointReaderCursorTest {
     void a_redirect_is_refused_loudly_instead_of_completing_as_a_silent_empty_run() {
         pagination.pages = List.of(List.of(item("2026-01-01")));
         RestEndpointReader reader = new RestEndpointReader(endpoint, new PassThroughAuth(),
-            pagination, new RateLimiterRegistry(), new RedirectingHttp(), mapper, SecretRefs.environmentOnly(name -> null));
+            pagination, new RateLimiterRegistry(), new RedirectingHttp(), mapper, SecretRefs.of(name -> null));
 
         var e = assertThrows(ConnectorException.class,
             () -> reader.read(100, null, ctx(Map.of("base_url", "https://erp.test"))));
@@ -294,7 +298,7 @@ class RestEndpointReaderCursorTest {
     /** A source that throws instead of answering. */
     static final class ThrowingHttp extends RestHttpClient {
         private final Exception thrown;
-        ThrowingHttp(Exception thrown) { this.thrown = thrown; }
+        ThrowingHttp(Exception thrown) { super(TestOutbound.ADDRESSES); this.thrown = thrown; }
         @Override public RestResponse execute(RestRequest req) throws Exception { throw thrown; }
     }
 
@@ -311,7 +315,7 @@ class RestEndpointReaderCursorTest {
                 Map.<String, Object>of("base_url", "https://erp.test"),
                 Map.<String, Object>of("base_url", "https://erp.test", "pagination", Map.of("kind", "soap")))) {
             RestEndpointReader reader = new RestEndpointReader(endpoint, new PassThroughAuth(),
-                pagination, new RateLimiterRegistry(), new ThrowingHttp(thrown), mapper, SecretRefs.environmentOnly(name -> null));
+                pagination, new RateLimiterRegistry(), new ThrowingHttp(thrown), mapper, SecretRefs.of(name -> null));
 
             var e = assertThrows(SourceCallException.class, () -> reader.read(100, null, ctx(cfg)));
 
@@ -328,7 +332,7 @@ class RestEndpointReaderCursorTest {
     void our_own_refusal_passes_through_unchanged() {
         ConnectorException ours = new ConnectorException("upstream returned HTTP 401 (permanent)");
         RestEndpointReader reader = new RestEndpointReader(endpoint, new PassThroughAuth(),
-            pagination, new RateLimiterRegistry(), new ThrowingHttp(ours), mapper, SecretRefs.environmentOnly(name -> null));
+            pagination, new RateLimiterRegistry(), new ThrowingHttp(ours), mapper, SecretRefs.of(name -> null));
 
         assertSame(ours, assertThrows(ConnectorException.class,
             () -> reader.read(100, null, ctx(Map.of("base_url", "https://erp.test")))));

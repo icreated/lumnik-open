@@ -22,7 +22,7 @@ class TableDdlTextTest {
         List<PromotedColumn> promote = List.of(new PromotedColumn("amount", "$.amount", SqlType.BIGINT, Optional.empty()));
 
         assertThat(HybridJsonbWriter.createTableSql("ext.t", promote)).isEqualTo(
-            "CREATE TABLE IF NOT EXISTS ext.t (id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, "
+            "CREATE TABLE ext.t (id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, "
                 + "external_id TEXT NOT NULL, \"amount\" BIGINT, row_hash TEXT, data JSONB NOT NULL, "
                 + "indexed_at TIMESTAMPTZ DEFAULT now(), connector_id UUID NOT NULL, endpoint_id UUID NOT NULL, "
                 + "UNIQUE (tenant_id, external_id))");
@@ -31,7 +31,7 @@ class TableDdlTextTest {
     @Test
     void theHybridTable_withNothingPromoted() {
         assertThat(HybridJsonbWriter.createTableSql("ext.t", List.of())).isEqualTo(
-            "CREATE TABLE IF NOT EXISTS ext.t (id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, "
+            "CREATE TABLE ext.t (id BIGSERIAL PRIMARY KEY, tenant_id BIGINT NOT NULL, "
                 + "external_id TEXT NOT NULL, row_hash TEXT, data JSONB NOT NULL, "
                 + "indexed_at TIMESTAMPTZ DEFAULT now(), connector_id UUID NOT NULL, endpoint_id UUID NOT NULL, "
                 + "UNIQUE (tenant_id, external_id))");

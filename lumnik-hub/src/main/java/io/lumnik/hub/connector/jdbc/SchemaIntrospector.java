@@ -24,7 +24,7 @@ public class SchemaIntrospector {
   public List<TableDescriptor> discover(JdbcConnectionConfig cc, String schema,
                                         List<String> skipPatterns, boolean includeViews) {
     JdbcDialect dialect = dialectRegistry.resolve(cc.dialectId());
-    DataSource ds = poolRegistry.acquire(cc.url(), cc.user(), cc.password(), -1L, dialect);
+    DataSource ds = poolRegistry.acquire(cc.url(), cc.user(), cc.password(), HikariPoolRegistry.DOOR, dialect);
     List<Pattern> skip = compilePatterns(skipPatterns != null ? skipPatterns : dialect.defaultSkipPatterns());
 
     List<TableDescriptor> out = new ArrayList<>();
@@ -43,7 +43,7 @@ public class SchemaIntrospector {
 
   public TableDescriptor describe(JdbcConnectionConfig cc, String schema, String table) {
     JdbcDialect dialect = dialectRegistry.resolve(cc.dialectId());
-    DataSource ds = poolRegistry.acquire(cc.url(), cc.user(), cc.password(), -1L, dialect);
+    DataSource ds = poolRegistry.acquire(cc.url(), cc.user(), cc.password(), HikariPoolRegistry.DOOR, dialect);
     try (Connection conn = ds.getConnection()) {
       // JDBC metadata answers an unknown table with empty lists, not an error — ask the catalog.
       if (!dialect.tableExists(conn, schema, table)) {

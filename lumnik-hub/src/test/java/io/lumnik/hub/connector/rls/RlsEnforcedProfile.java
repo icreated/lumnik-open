@@ -31,9 +31,16 @@ public class RlsEnforcedProfile implements QuarkusTestProfile {
    * before that value is frozen, so re-enabling it ONLY here — one opt-in {@code @TestProfile},
    * not "all profiles" — is what actually closes this harness's blind spot for the readonly
    * datasource, the same way {@code RlsEnforcedPgResource} already does for admin/default.
+   *
+   * <p>{@code lumnik.ask.require-hardened-readonly} is back on here (#1987): {@code %test} turns it off because its
+   * readonly role is the DevServices owner, while this harness connects as the real {@code lumnik_readonly}, with
+   * {@code 02-extensions.sql} applied by {@code RlsEnforcedPgResource} — so every Ask under this profile goes through
+   * the check production runs.
    */
   @Override
   public Map<String, String> getConfigOverrides() {
-    return Map.of("quarkus.datasource.\"readonly\".jdbc.transactions", "enabled");
+    return Map.of(
+        "quarkus.datasource.\"readonly\".jdbc.transactions", "enabled",
+        "lumnik.ask.require-hardened-readonly", "true");
   }
 }

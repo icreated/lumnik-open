@@ -9,7 +9,7 @@ The install creates three database roles:
 
 | Role | Sees | Can write | Use it for |
 |---|---|---|---|
-| `lumnik_readonly` | your ingested data only: schema `connector`, and `ext` for REST connectors. One tenant at a time | no — refused by PostgreSQL itself | day-to-day analysis of ingested data |
+| `lumnik_readonly` | your ingested data only: schema `connector`, and `ext` for REST connectors and one-shot `lm csv ingest` tables. One tenant at a time | no — refused by PostgreSQL itself | day-to-day analysis of ingested data |
 | `lumnik_app` | one tenant at a time (RLS applies) | yes | reproducing the application's own posture |
 | `lumnik_admin` | **every schema, every tenant** (bypasses RLS) | yes, including DDL | cross-tenant checks, the `core` and `identity` schemas — read only, unless you know why |
 
@@ -89,5 +89,5 @@ ERROR:  permission denied for table audit_event
 ```
 
 `\dn` lists the schemas: `connector`, `core`, `identity`, `platform`, `rag`, `public`, and `ext`
-once a REST connector has run. Outside your ingested data, connect as `lumnik_admin`; it sees every
+once a REST connector or an `lm csv ingest` has run. Outside your ingested data, connect as `lumnik_admin`; it sees every
 tenant without a `SET`.

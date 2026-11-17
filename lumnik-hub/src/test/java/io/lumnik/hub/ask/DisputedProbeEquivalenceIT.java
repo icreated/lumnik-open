@@ -8,6 +8,7 @@ import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityRegistry;
 import io.lumnik.hub.entity.EntityViewCompiler;
 import io.lumnik.hub.sql.TemporalText;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -147,6 +148,10 @@ class DisputedProbeEquivalenceIT {
              "INSERT INTO connector.t_eqv_pa VALUES ('X1','c1','Bolt'), ('X2','c2','Nut'), ('X3','c1','Bolt')",
              "INSERT INTO connector.t_eqv_pb VALUES ('X1','Bolt M8'), ('X2','Nut'), ('X3','Bolt')",
              "INSERT INTO connector.t_eqv_cat VALUES ('c1','Fasteners'), ('c2','Fasteners'), ('c2','Hardware')");
+        for (String t : List.of("t_eqv_da", "t_eqv_db", "t_eqv_a", "t_eqv_b", "t_eqv_c", "t_eqv_sa", "t_eqv_sb", "t_eqv_pa",
+                "t_eqv_pb", "t_eqv_cat")) {
+            RegisteredTables.register(adminDs, 1L, t);
+        }
         for (String m : List.of(CUSTOMER, CUSTOMER_PREFER, SITE, PRODUCT, DUE)) {
             given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
                 .contentType("application/yaml").body(m).post("/api/entities/apply").then().statusCode(200);
@@ -201,7 +206,7 @@ class DisputedProbeEquivalenceIT {
         seed();
         DisputedRows.Plan plan = new DisputedRows.Plan(c.view(), c.entity(), c.filters(), DisputedRows.Counted.IF_ANY_ROW);
         DisputedRows.Filter f = c.filters().get(c.probed());
-        EntityManifest manifest = registry.find(c.entity());
+        EntityManifest manifest = registry.findHubwide(c.entity());
         List<String> others = c.filters().stream().filter(o -> o != f).map(DisputedRows.Filter::column).toList();
 
         List<List<String>> viaView = run(DisputedRows.probe(plan, f, c.keys(), countedAdmissible), c.keys().size());
@@ -223,7 +228,7 @@ class DisputedProbeEquivalenceIT {
     @Test
     void the_lookup_beside_a_probe_is_left_to_the_view_and_the_fused_column_is_not() throws Exception {
         seed();
-        EntityManifest product = registry.find("eqvprod");
+        EntityManifest product = registry.findHubwide("eqvprod");
         EntityViewCompiler.Sources sources = sources(product);
         assertThat(compiler.probeRelation(product, sources, "cat_title", List.of())).isEmpty();
         assertThat(compiler.probeRelation(product, sources, "name", List.of("cat_title"))).isEmpty();

@@ -8,6 +8,7 @@ import io.lumnik.hub.run.RunLock;
 import io.lumnik.hub.search.SearchIndexManifest;
 import io.lumnik.hub.search.SearchIndexManifestParser;
 import io.lumnik.hub.search.mark.SearchProjectionMarkStore;
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -83,9 +84,9 @@ class SearchProjectionTriggerRebuildIT {
         // Apply a valid SearchIndex over a real match: entity/table so readDeclaration() sees status
         // = 'valid' with a real manifest, then hand triggerRebuild an authorizedSnapshot naming a
         // DIFFERENT entity — a re-apply between the REST handler's own check and this call.
-        String table = "widget_" + unique("t");
+        String table = "t_widget_" + unique("t");   // a table a connector writes (#2003)
         createMatchTable(table);
-        yaml(tenant).body(matchEntityYaml("widget", table)).post("/api/entities/apply").then().statusCode(200);
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(matchEntityYaml("widget", table)).post("/api/entities/apply").then().statusCode(200);
         yaml(tenant).body(searchIndexYaml(index, "widget", "name")).post("/api/search-indexes/apply").then().statusCode(200);
 
         SearchProjectionWorker worker = workerWith(mock(ProjectionSink.class), markStore, stateStore,
@@ -107,9 +108,9 @@ class SearchProjectionTriggerRebuildIT {
     void aSuccessfulOnDemandRebuildReleasesItsPermitOnceItReachesATerminalOutcome() throws Exception {
         long tenant = 903L;
         String index = unique("idx");
-        String table = "widget_" + unique("t");
+        String table = "t_widget_" + unique("t");   // a table a connector writes (#2003)
         createMatchTable(table);
-        yaml(tenant).body(matchEntityYaml("widget", table)).post("/api/entities/apply").then().statusCode(200);
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(matchEntityYaml("widget", table)).post("/api/entities/apply").then().statusCode(200);
         yaml(tenant).body(searchIndexYaml(index, "widget", "name")).post("/api/search-indexes/apply").then().statusCode(200);
 
         // The exact declaration triggerRebuild's own readDeclaration() will independently re-read —

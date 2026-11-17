@@ -1,5 +1,6 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
@@ -8,6 +9,7 @@ import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
 import io.restassured.http.ContentType;
+import io.restassured.response.ValidatableResponse;
 import jakarta.inject.Inject;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.BeforeEach;
@@ -51,13 +53,15 @@ class EntityApplyIT {
   @BeforeEach
   void createSourceTable() throws Exception {
     try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
-      st.execute("DELETE FROM connector.entity_manifest WHERE name = 'customer'");
+      st.execute("DELETE FROM connector.entity_manifest WHERE name IN ('customer', 'roster')");
+      st.execute("DROP VIEW IF EXISTS connector.\"v_roster\"");
       st.execute("DROP VIEW IF EXISTS connector.\"v_customer\"");
       st.execute("DROP TABLE IF EXISTS connector.t_cust_src");
       st.execute("CREATE TABLE connector.t_cust_src ("
           + "tenant_id bigint NOT NULL, \"ROW_ID\" text, \"NAME\" text, \"OU_TYPE_CD\" text)");
       st.execute("GRANT SELECT ON connector.t_cust_src TO lumnik_app");
     }
+    RegisteredTables.register(adminDs, 1L, "t_cust_src");
   }
 
   /**
@@ -85,6 +89,136 @@ class EntityApplyIT {
         .body("error", Matchers.containsString("t_never_ingested"))
         .body("error", Matchers.containsString("does not exist"))
         .body("error", Matchers.containsString("run the source connectors"));
+  }
+
+  /**
+   * #2003: an Entity fuses the tables connectors write, never the hub's own. A view over connector_credential or
+   * entity_manifest would hand their rows to every lm_user of the tenant, and the chat; some have no RLS at all.
+   * Refused before anything is compiled, as a source and as a lookup.
+   */
+  @Test
+  void a_platform_table_is_refused_as_a_source() {
+    String grab = """
+        kind: Entity
+        name: Grab
+        match: [id]
+        sources:
+          - table: connector_credential
+            map:
+              ROW_ID: id
+        """;
+    given().config(YamlBody.CONFIG)
+        .headers(TestIdentity.tenantAndUser(1))
+        .contentType("application/yaml").body(grab)
+        .post("/api/entities/apply")
+        .then().statusCode(400)
+        .body("error", Matchers.containsString("connector_credential is not a table a connector writes"));
+  }
+
+  /** A REST target not made yet (no t_ prefix, nothing recorded) is still the fresh-install 409, not a refusal. */
+  @Test
+  void a_rest_target_not_made_yet_is_still_run_your_connectors() {
+    given().config(YamlBody.CONFIG)
+        .headers(TestIdentity.tenantAndUser(1))
+        .contentType("application/yaml").body(MANIFEST.replace("t_cust_src", "cust_rest_not_yet"))
+        .post("/api/entities/apply")
+        .then().statusCode(409)
+        .body("error", Matchers.containsString("run the source connectors"));
+  }
+
+  @Test
+  void a_platform_table_is_refused_as_a_lookup() {
+    String grab = MANIFEST + """
+        joins:
+          - table: entity_manifest
+            from: name
+            to: NAME
+            map: { YAML: yaml }
+        """;
+    given().config(YamlBody.CONFIG)
+        .headers(TestIdentity.tenantAndUser(1))
+        .contentType("application/yaml").body(grab)
+        .post("/api/entities/apply")
+        .then().statusCode(400)
+        .body("error", Matchers.containsString("entity_manifest is not a table a connector writes"));
+  }
+
+  /**
+   * #2042: an Entity over another Entity's view reaches no reader the source does not. Reads ask {@code allowsAny}, so
+   * its scopes must be among the source's: a scope of its own would show the source's rows to that scope's holders,
+   * and a scopeless Entity is read by tenant-wide callers only, who read the source already.
+   */
+  @ParameterizedTest(name = "[{index}] customer {0}, roster {1} -> {2}")
+  @MethodSource("rosterScopes")
+  void an_entity_over_another_entitys_view_stays_within_its_scopes(String customerScopes, String rosterScopes,
+                                                                  int status) {
+    apply(customer(customerScopes)).statusCode(200);
+
+    apply(roster(rosterScopes, "v_customer")).statusCode(status);
+  }
+
+  static Stream<Arguments> rosterScopes() {
+    return Stream.of(
+        Arguments.of("[hr]", "[ops]", 400),
+        Arguments.of("[hr]", "[hr, ops]", 400),
+        Arguments.of("[]", "[hr]", 400),
+        Arguments.of("[hr]", "[]", 200),
+        Arguments.of("[hr]", "[hr]", 200),
+        Arguments.of("[hr, ops]", "[ops]", 200));
+  }
+
+  @Test
+  void the_refusal_names_the_entity_read_and_its_scopes() {
+    apply(customer("[hr]")).statusCode(200);
+
+    apply(roster("[ops]", "v_customer")).statusCode(400)
+        .body("error", Matchers.containsString("v_customer is entity customer's view, scoped [hr]"));
+  }
+
+  @Test
+  void an_entity_read_as_a_lookup_stays_within_its_scopes() {
+    apply(customer("[hr]")).statusCode(200);
+    String lookup = roster("[ops]", "t_cust_src") + """
+        joins:
+          - table: v_customer
+            from: id
+            to: id
+            map: { name: customer_name }
+        """;
+
+    apply(lookup).statusCode(400).body("error", Matchers.containsString("scoped [hr]"));
+  }
+
+  @Test
+  void a_view_of_an_entity_not_applied_yet_says_apply_it_first() {
+    apply(roster("[]", "v_customer")).statusCode(409)
+        .body("error", Matchers.containsString("apply entity customer first"));
+  }
+
+  private static String customer(String scopes) {
+    return MANIFEST.replace("match: [id]", "scopes: " + scopes + "\nmatch: [id]");
+  }
+
+  /** Roster over {@code table}: its key column is {@code id} in an entity view, {@code ROW_ID} in t_cust_src. */
+  private static String roster(String scopes, String table) {
+    return """
+        kind: Entity
+        name: Roster
+        scopes: %s
+        match: [id]
+        sources:
+          - table: %s
+            map:
+              %s: id
+        """.formatted(scopes, table, table.startsWith("v_") ? "id" : "ROW_ID");
+  }
+
+  private static ValidatableResponse apply(String yaml) {
+    return given().config(YamlBody.CONFIG)
+        .headers(TestIdentity.tenantAndUser(1))
+        .contentType("application/yaml").body(yaml)
+        .post("/api/entities/apply")
+        .then();
   }
 
   /**
@@ -119,6 +253,7 @@ class EntityApplyIT {
           + "tenant_id bigint NOT NULL, \"CUSTOMER_ID\" text)");
       st.execute("GRANT SELECT ON connector.t_erp_customers TO lumnik_app");
     }
+    RegisteredTables.register(adminDs, 1L, "t_erp_customers");
     String resolutionManifest = """
         kind: Entity
         name: CustomerResolved
@@ -190,8 +325,8 @@ class EntityApplyIT {
 
     registry.loadFromDb();
 
-    assertThat(registry.find("Customer")).isNotNull();
-    assertThat(registry.find("customer")).isNotNull();
+    assertThat(registry.findHubwide("Customer")).isNotNull();
+    assertThat(registry.findHubwide("customer")).isNotNull();
   }
 
   @Test

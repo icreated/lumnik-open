@@ -45,6 +45,15 @@ public sealed interface ScopeGuardedUpsert {
     record NameHeldOutOfScope() implements ScopeGuardedUpsert {}
 
     /**
+     * Nothing written. Another tenant's manifest holds the name (#2050): names are unique on the hub, a manifest is
+     * read by its own tenant. Empty for the reason above: the refusal never says whose it is.
+     */
+    record NameTaken() implements ScopeGuardedUpsert {}
+
+    /** What a caller refused for {@link NameTaken} reads. */
+    String NAME_TAKEN = "this name is already taken on this hub: choose another";
+
+    /**
      * Reads an affected-row count as an outcome — the single-predicate case, which is every kind but
      * {@code kind:App}.
      *

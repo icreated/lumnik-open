@@ -9,6 +9,7 @@ import io.lumnik.hub.connector.transport.sftp.SftpTestImage;
 import io.lumnik.hub.export.destination.FileDestinationCollisionException;
 import io.lumnik.hub.export.destination.FileDestinationException;
 import io.lumnik.hub.export.destination.PublishedArtifact;
+import io.lumnik.hub.testsupport.TestOutbound;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -54,7 +55,7 @@ class SftpFileDestinationIT {
     }
 
     static SftpFileDestinationFactory factory() {
-        return new SftpFileDestinationFactory(SecretRefs.environmentOnly(name -> PASS));
+        return new SftpFileDestinationFactory(SecretRefs.of(name -> PASS), TestOutbound.ADDRESSES);
     }
 
     static Map<String, Object> cfg(String path) {
@@ -257,7 +258,7 @@ class SftpFileDestinationIT {
 
     @Test
     void an_auth_failure_does_not_leak_the_password_or_be_blamed_on_the_host_key() {
-        var badFactory = new SftpFileDestinationFactory(SecretRefs.environmentOnly(name -> "not-the-password"));
+        var badFactory = new SftpFileDestinationFactory(SecretRefs.of(name -> "not-the-password"), TestOutbound.ADDRESSES);
         var cfg = cfg("/out/auth-fail.csv");
 
         Throwable thrown = catchThrowable(() -> badFactory.build(cfg));
@@ -278,7 +279,7 @@ class SftpFileDestinationIT {
         try (var helper = helper()) {
             helper.put("/out/disc/.keep", "x");
         }
-        var connection = SftpConnectionFactory.connect(
+        var connection = SftpConnectionFactory.connect(TestOutbound.ADDRESSES,
             "localhost", port, USER,
             new SftpAuthMethod.Password(PASS),
             true, fingerprint);

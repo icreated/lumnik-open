@@ -7,6 +7,7 @@ import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.ApplyDoorSupport;
 import io.lumnik.hub.api.ApplyScopeBoundary;
+import io.lumnik.hub.api.DeploymentWide;
 import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.lumnik.hub.ask.SchemaCardStore;
 import io.lumnik.hub.audit.AuditRecorder;
@@ -35,6 +36,7 @@ import java.util.Set;
  * against the applying tenant's card (the entity-apply asymmetry: manifests global,
  * validation tenant-local). Integrator door; the scope: boundary applies here too.
  */
+@DeploymentWide
 @Path("/api/views/apply")
 @Produces(MediaType.APPLICATION_JSON)
 @RequiresPermission("lm_integrator")
@@ -86,20 +88,20 @@ public class ViewApplyResource {
     // refuseUnlessApplied below is that second answer. This earlier one is kept because it refuses
     // BEFORE the 404 further down names a scope, and a caller refused for the NAME must not read
     // which scopes exist on the way out (#582).
-    ApplyScopeBoundary.refuseUnlessCallerHoldsScope(store.findScope(name));
+    ApplyScopeBoundary.refuseUnlessCallerHoldsScope(store.findScope(tenant, name));
 
     Optional<SchemaCard> card = cards.load(tenant, manifest.scope());
     if (card.isEmpty()) {
       return ApiErrors.notFound("no schema for scope '" + manifest.scope() + "' — run discovery first");
     }
 
-    ResolvedView rv = ApiErrors.orBadRequest(() -> resolver.resolve(manifest, card.get()));
+    ResolvedView rv = ApiErrors.orBadRequest(() -> resolver.resolveForApply(manifest, card.get()));
 
     // granted().orElse(null) — empty Optional means unscoped, i.e. every scope, the same
     // expression the scope-filtered list reads its filter from. The write's own answer goes
     // straight into the void guard, so it cannot be had and dropped.
     ApplyScopeBoundary.refuseUnlessApplied(
-        store.upsert(name, manifest.scope(), rv.title(), body, ScopeGrants.granted().orElse(null)));
+        store.upsert(tenant, name, manifest.scope(), rv.title(), body, ScopeGrants.granted().orElse(null)));
 
     // Audit P4: the upsert goes through raw JDBC, outside every Hibernate listener — this
     // explicit capture is the only record of who changed which scope's screen when.
@@ -110,7 +112,7 @@ public class ViewApplyResource {
     result.put("name", name);
     result.put("scope", manifest.scope());
     // Absent rather than empty, like the App and Connector doors: applied, and worth saying something.
-    List<ValidationError> warnings = linkWarnings(manifest, rv);
+    List<ValidationError> warnings = linkWarnings(tenant, manifest, rv);
     if (!warnings.isEmpty()) result.put("warnings", warnings);
     return Response.ok(result).build();
   }
@@ -157,14 +159,14 @@ public class ViewApplyResource {
    * client fails closed when the link is followed. A target that is missing and a target that belongs to
    * another scope get the same words: the door must not tell which scopes hold which view names.
    */
-  private List<ValidationError> linkWarnings(ViewManifest manifest, ResolvedView rv) {
+  private List<ValidationError> linkWarnings(long tenant, ViewManifest manifest, ResolvedView rv) {
     List<ValidationError> out = new ArrayList<>();
     for (int i = 0; i < manifest.links().size(); i++) {
       ViewLink link = manifest.links().get(i);
       if (link.targetView() == null) continue;
       String path = "spec.links[" + i + "]";
       out.addAll(typeWarnings(link, path, rv));
-      Optional<SavedViewStore.Row> target = store.find(link.targetView())
+      Optional<SavedViewStore.Row> target = store.find(tenant, link.targetView())
           .filter(r -> r.scope().equals(manifest.scope()));
       if (target.isEmpty()) {
         out.add(new ValidationError(path + ".targetView", ValidationError.Severity.WARNING,

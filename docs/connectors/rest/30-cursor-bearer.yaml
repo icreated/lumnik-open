@@ -12,8 +12,9 @@
 # when `$.has_more` is false.
 #
 # Auth: bearer — the platform sends `Authorization: Bearer <token>`.
-# The token is NEVER inline: `token_env` names an env var the platform holds.
-# Use `lm secret set REST_DEMO_TOKEN` (DB secret store, resolved first; OS env is the fallback).
+# The token is NEVER inline: `token_env` names an `lm secret` entry of your tenant.
+# Use `lm secret set REST_DEMO_TOKEN`, then `lm secret scope REST_DEMO_TOKEN demo`: a
+# connector reads a secret only when it carries all the secret's scopes.
 #
 # Pagination: cursor — opaque cursor extracted from the last record of each page.
 

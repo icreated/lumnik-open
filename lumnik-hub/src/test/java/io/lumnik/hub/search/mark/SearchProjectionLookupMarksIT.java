@@ -2,6 +2,7 @@ package io.lumnik.hub.search.mark;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.entity.EntityRegistry;
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -46,7 +47,7 @@ class SearchProjectionLookupMarksIT {
         createTable(adminDs, products, "pid text, cid text, pname text");
         createTable(adminDs, lookup, "cid text, cname text");
         String entity = "LkMarks" + n;
-        yaml(tenant).body(joinEntityYaml(entity, products, lookup, "category_name"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(joinEntityYaml(entity, products, lookup, "category_name"))
             .post("/api/entities/apply").then().statusCode(200);
         String index = unique("lk-marks");
         yaml(tenant).body(searchIndex(index, entity, "product_name")).post("/api/search-indexes/apply")
@@ -82,7 +83,7 @@ class SearchProjectionLookupMarksIT {
         createTable(adminDs, days, "pid text, day date");
         createTable(adminDs, cal, "day date, label text");
         String entity = "LkDay" + n;
-        yaml(tenant).body("kind: Entity\nname: " + entity + "\nmatch: [pid]\nscopes: [lk]\nsources:\n"
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body("kind: Entity\nname: " + entity + "\nmatch: [pid]\nscopes: [lk]\nsources:\n"
                 + "  - table: " + timed + "\n    map: { pid: pid, due: due }\n"
                 + "  - table: " + days + "\n    map: { pid: pid, day: due }\n"
                 + "joins:\n  - table: " + cal + "\n    from: due\n    to: day\n    map: { label: day_label }\n")
@@ -140,7 +141,7 @@ class SearchProjectionLookupMarksIT {
         createTable(adminDs, products, "pid text, cid text, pname text");
         createTable(adminDs, lookup, "cid text, cname text");
         String entity = "LkIso" + n;
-        yaml(t1).body(joinEntityYaml(entity, products, lookup, "category_name"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(joinEntityYaml(entity, products, lookup, "category_name"))
             .post("/api/entities/apply").then().statusCode(200);
         String i1 = unique("lk-iso-1"), i2 = unique("lk-iso-2");
         yaml(t1).body(searchIndex(i1, entity, "product_name")).post("/api/search-indexes/apply").then().statusCode(200);
@@ -177,7 +178,7 @@ class SearchProjectionLookupMarksIT {
         createTable(adminDs, products, "pid text, cid bigint, pname text");
         createTable(adminDs, lookup, "cid numeric(18,4), cname text");
         String entity = "LkScale" + n;
-        yaml(tenant).body(joinEntityYaml(entity, products, lookup, "category_name"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(joinEntityYaml(entity, products, lookup, "category_name"))
             .post("/api/entities/apply").then().statusCode(200);
         String index = unique("lk-scale");
         yaml(tenant).body(searchIndex(index, entity, "product_name")).post("/api/search-indexes/apply")
@@ -204,7 +205,7 @@ class SearchProjectionLookupMarksIT {
         createTable(adminDs, products, "pid text, cid text, pname text");
         createTable(adminDs, lookup, "cid text, cname text");
         String entity = "LkPaging" + n;
-        yaml(tenant).body(joinEntityYaml(entity, products, lookup, "category_name"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(joinEntityYaml(entity, products, lookup, "category_name"))
             .post("/api/entities/apply").then().statusCode(200);
         String index = unique("lk-paging");
         yaml(tenant).body(searchIndex(index, entity, "product_name")).post("/api/search-indexes/apply")
@@ -236,7 +237,7 @@ class SearchProjectionLookupMarksIT {
         createTable(adminDs, products, "pid text, cid text, pname text");
         createTable(adminDs, lookup, "cid text, cname text");
         String entity = "LkRelabel" + n;
-        yaml(tenant).body(joinEntityYaml(entity, products, lookup, "category_name")).post("/api/entities/apply")
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(joinEntityYaml(entity, products, lookup, "category_name")).post("/api/entities/apply")
             .then().statusCode(200);
         String index = unique("lk-relabel");
         yaml(tenant).body(searchIndex(index, entity, "product_name")).post("/api/search-indexes/apply")

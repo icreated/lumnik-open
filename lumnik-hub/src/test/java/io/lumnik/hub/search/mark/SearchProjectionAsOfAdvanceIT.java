@@ -91,8 +91,8 @@ class SearchProjectionAsOfAdvanceIT {
     private JoinFx joinFixture(long tenant) throws Exception {
         String n = String.valueOf(System.nanoTime());
         String products = "t_asj_p_" + n, lookup = "t_asj_c_" + n;
-        createTable(adminDs, products, "pid text, cid text, pname text");
-        createTable(adminDs, lookup, "cid text, cname text");
+        createTable(adminDs, tenant, products, "pid text, cid text, pname text");
+        createTable(adminDs, tenant, lookup, "cid text, cname text");
         String entity = "AsOfJoin" + n;
         yaml(tenant).body(joinEntityYaml(entity, products, lookup, "category_name"))
             .post("/api/entities/apply").then().statusCode(200);
@@ -272,8 +272,8 @@ class SearchProjectionAsOfAdvanceIT {
     private ResFx resolutionJoinFixture(long tenant) throws Exception {
         String n = String.valueOf(System.nanoTime());
         String products = "t_asr_p_" + n, lookup = "t_asr_c_" + n, entity = "AsOfRes" + n;
-        createTable(adminDs, products, "pid text, cid text, pname text");
-        createTable(adminDs, lookup, "cid text, cname text");
+        createTable(adminDs, tenant, products, "pid text, cid text, pname text");
+        createTable(adminDs, tenant, lookup, "cid text, cname text");
         yaml(tenant).body(resolutionJoinEntityYaml(entity, products, lookup, "category_name"))
             .post("/api/entities/apply").then().statusCode(200);
         String index = unique("asof-res");

@@ -1,5 +1,6 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
@@ -72,6 +73,8 @@ class EntityFusionIT {
       // C-300: exists ONLY in csv (no erp row) -> pure gap-fill, the entity is still fused -> _conflicts {}
       st.execute("INSERT INTO connector.t_fuse_csv VALUES (1,'C-300','Solo','solo@x.fr','Nice')");
     }
+    RegisteredTables.register(adminDs, 1L, "t_fuse_erp");
+    RegisteredTables.register(adminDs, 1L, "t_fuse_csv");
     given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);

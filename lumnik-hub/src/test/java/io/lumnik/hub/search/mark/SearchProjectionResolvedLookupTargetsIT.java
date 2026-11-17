@@ -28,8 +28,8 @@ class SearchProjectionResolvedLookupTargetsIT {
         long tenant = 850_201;
         String n = String.valueOf(System.nanoTime());
         String products = "t_rt_p_" + n, lookup = "t_rt_c_" + n;
-        createTable(adminDs, products, "pid text, cid text, pname text");
-        createTable(adminDs, lookup, "cid text, cname text");
+        createTable(adminDs, tenant, products, "pid text, cid text, pname text");
+        createTable(adminDs, tenant, lookup, "cid text, cname text");
         String entity = "ResTargets" + n;
         yaml(tenant).body(resolutionJoinEntityYaml(entity, products, lookup, "category_name"))
             .post("/api/entities/apply").then().statusCode(200);
@@ -60,8 +60,8 @@ class SearchProjectionResolvedLookupTargetsIT {
         long tenant = 850_202;
         String n = String.valueOf(System.nanoTime());
         String products = "t_rt2_p_" + n, lookup = "t_rt2_c_" + n;
-        createTable(adminDs, products, "pid text, cid text, pname text");
-        createTable(adminDs, lookup, "cid text, cname text");
+        createTable(adminDs, tenant, products, "pid text, cid text, pname text");
+        createTable(adminDs, tenant, lookup, "cid text, cname text");
         String entity = "ResTargetsNoIdx" + n;
         yaml(tenant).body(resolutionJoinEntityYaml(entity, products, lookup, "category_name"))
             .post("/api/entities/apply").then().statusCode(200);

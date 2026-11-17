@@ -108,8 +108,9 @@ public class SchemaCardRefresher {
     }
 
     /**
-     * An entity was applied or deleted. An entity is shared by every tenant, so its view changes the
-     * cards of every tenant that lists it, not only the caller's (#1538): the caller's cards of the
+     * An entity was applied or deleted. Its view is one on the hub, so it may change the cards of every
+     * tenant that lists it, not only the caller's (#1538) — another tenant's card then leaves out an entity
+     * it does not read (#2050), at the cost of the rebuild: the caller's cards of the
      * entity's scopes (created when absent), and every stored card, in any tenant, that lists the view
      * or describes one of those scopes — the scope a re-apply left included. Each rebuild runs as the
      * card's own tenant, so its credentials resolve under its own RLS. Best-effort: the entity is

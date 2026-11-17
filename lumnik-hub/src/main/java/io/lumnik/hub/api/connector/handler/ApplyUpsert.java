@@ -1,11 +1,13 @@
 package io.lumnik.hub.api.connector.handler;
 
+import io.lumnik.hub.api.connector.InlineCredentials;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
+import io.lumnik.hub.entity.NewWriterScopes;
 import io.lumnik.hub.json.JsonNodes;
 
 import java.util.List;
@@ -13,6 +15,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.StreamSupport;
+import javax.sql.DataSource;
 
 /**
  * The find-or-create preamble every connector apply handler shares.
@@ -41,8 +44,9 @@ public final class ApplyUpsert {
     /**
      * Find the tenant's connector by name or create it, write the shared fields and persist when new.
      * The {@code config} function receives the connector so a handler can merge onto the existing config.
+     * {@code admin} reads the entities over the connector's tables when a re-apply replaces its scopes (#2048).
      */
-    public static Connector connector(ConnectorRepository repo, long tenant, String name, String typeId,
+    public static Connector connector(DataSource admin, ConnectorRepository repo, long tenant, String name, String typeId,
                                       JsonNode meta, JsonNode spec,
                                       Function<Connector, Map<String, Object>> config) {
         // Held for the rest of the transaction, like the door's guard read a few lines earlier —
@@ -56,8 +60,14 @@ public final class ApplyUpsert {
             return c;
         });
 
-        conn.setConfig(config.apply(conn));
-        conn.setTags(scopes(meta));
+        Map<String, Object> next = config.apply(conn);
+        // #2003: a credential read back redacted is restored only toward where it was going; the endpoints learn it too.
+        conn.destinationChanged(existing.isPresent() && !InlineCredentials.sameDestinations(conn.getConfig(), next));
+        conn.setConfig(InlineCredentials.restored(next, conn.getConfig()));
+        List<String> scopes = scopes(meta);
+        // #2048: a re-apply narrowing the scopes of a table an entity reads is refused
+        if (existing.isPresent()) NewWriterScopes.requireRetagWithinReaders(admin, tenant, conn.getId(), conn.getName(), conn.getTags(), scopes);
+        conn.setTags(scopes);
         // A10: the scheduler selects on the COLUMN (WHERE c.schedule IS NOT NULL) — the
         // config copy alone never scheduled anything. Absent cron on re-apply = unschedule.
         conn.setSchedule(JsonNodes.textOrNull(spec.path(SCHEDULE)));
@@ -127,9 +137,9 @@ public final class ApplyUpsert {
             return n;
         });
         ep.setMethod(method);
-        ep.setPath(path);
+        ep.setPath(InlineCredentials.restoredPath(path, ep.getPath(), conn.destinationChanged()));   // #2003
         ep.setEnabled(true);
-        ep.setConfig(config);
+        ep.setConfig(InlineCredentials.restored(config, ep.getConfig(), conn.destinationChanged()));   // #2003
 
         if (ep.getId() == null) {
             repo.persist(ep);

@@ -44,9 +44,10 @@ class EntitySnapshotDownloadResourceIT {
 
     /** {@code EntityApplyResource} ({@code POST /api/entities/apply}) is {@code lm_admin}-gated,
      *  not {@code lm_integrator} — used ONLY by the fixture setup below, never by the download
-     *  assertions, so the door under test still proves its own {@code lm_integrator} gate. */
-    private static String adminSales() {
-        return NoBypassOidcProfile.token(Set.of("lm_admin", "scope:sales"), null);
+     *  assertions, so the door under test still proves its own {@code lm_integrator} gate.
+     *  Tenant-wide: a bound one publishes only tables a connector of its scope writes (#2048). */
+    private static String admin() {
+        return NoBypassOidcProfile.token(Set.of("lm_admin"), null);
     }
 
     private static String integratorMagasin() {
@@ -64,7 +65,7 @@ class EntitySnapshotDownloadResourceIT {
      *  per request) — so every call in this class, including this fixture setup, must authenticate
      *  with a real bearer JWT. `/api/entities/apply` (`EntityApplyResource`) is `lm_admin`-gated
      *  (not `lm_integrator` — verified against the source), so fixture setup uses a dedicated
-     *  `adminSales()` token; the download door under test is exercised exclusively with the
+     *  `admin()` token; the download door under test is exercised exclusively with the
      *  `lm_integrator` tokens below. */
     @BeforeEach
     void applyEntityAndSeedRows() throws Exception {
@@ -78,7 +79,7 @@ class EntitySnapshotDownloadResourceIT {
         EntitySourceTableFixture.create(adminDs, "t_snapshotdl677_erp",
             "v_snapshotdownloadentity677", "cust_id", "cust_name");
         given().config(YamlBody.CONFIG)
-            .header("Authorization", "Bearer " + adminSales())
+            .header("Authorization", "Bearer " + admin())
             .contentType("application/yaml").body(ENTITY)
             .post("/api/entities/apply")
             .then().statusCode(200);

@@ -3,6 +3,7 @@ package io.lumnik.hub.connector.csv;
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
 import io.lumnik.hub.connector.runtime.OwnedRunScope;
+import io.lumnik.hub.connector.transport.LocalRoot;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -39,10 +40,10 @@ class LocalGlobListingCostProbe {
                 Files.writeString(dir.resolve(String.format("f%06d.csv", f)), sb.toString());
             }
             String glob = dir.resolve("*.csv").toString();
-            for (int i = 0; i < 5; i++) CsvGlobResolver.resolve(glob);   // warm up
+            for (int i = 0; i < 5; i++) CsvGlobResolver.resolve(LocalRoot.at(dir), glob);   // warm up
             long t0 = System.nanoTime();
             int n = 20;
-            for (int i = 0; i < n; i++) CsvGlobResolver.resolve(glob);
+            for (int i = 0; i < n; i++) CsvGlobResolver.resolve(LocalRoot.at(dir), glob);
             double listMs = (System.nanoTime() - t0) / 1e6 / n;
 
             // The whole run: one scope, a fresh reader per chunk, as ChunkExecutor does.
@@ -52,7 +53,7 @@ class LocalGlobListingCostProbe {
             long start = System.nanoTime();
             try (OwnedRunScope scope = new OwnedRunScope("probe")) {
                 while (true) {
-                    var reader = new CsvFileConnectorType.CsvGlobCursorReader(glob, DEFAULTS);
+                    var reader = GlobReaders.of(glob, DEFAULTS);
                     ReadResult<Map<String, Object>> r = reader.read(CHUNK, cursor, ReaderTestContexts.of(scope));
                     chunks++;
                     if (r instanceof ReadResult.HasMore<Map<String, Object>> hm) {

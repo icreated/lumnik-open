@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest;
 
+import io.lumnik.hub.testsupport.TestOutbound;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -14,7 +15,7 @@ public final class InternalCaApi extends RestHttpClient {
     public RestRequest sent;
     private final String body;
 
-    public InternalCaApi(String body) { this.body = body; }
+    public InternalCaApi(String body) { super(TestOutbound.ADDRESSES); this.body = body; }
 
     @Override public RestResponse execute(RestRequest req) throws Exception {
         throw new SSLHandshakeException("PKIX path building failed");
@@ -22,7 +23,7 @@ public final class InternalCaApi extends RestHttpClient {
 
     @Override public RestHttpClient trusting(String caPem) {
         trustedPems.add(caPem);
-        return new RestHttpClient() {
+        return new RestHttpClient(TestOutbound.ADDRESSES) {
             @Override public RestResponse execute(RestRequest req) {
                 sent = req;
                 return RestResponse.of(200, Map.of(), body);

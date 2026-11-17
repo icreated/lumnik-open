@@ -29,7 +29,7 @@ public class ParsePhoneHook implements CellHook {
       var num = util.parse(v.toString(), region);
       row.put(col, util.format(num, PhoneNumberUtil.PhoneNumberFormat.E164));
     } catch (NumberParseException e) {
-      s.counters().cellErrors().incrementAndGet();
+      s.refuseCell();
       row.put(col, null);
     }
   }

@@ -1,6 +1,11 @@
 package io.lumnik.hub.webhook;
 
 import io.lumnik.hub.tenant.TenantContextFilter;
+import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
+import io.quarkus.agroal.DataSource;
+import io.quarkus.test.common.http.TestHTTPResource;
+import jakarta.inject.Inject;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.Response;
 import org.junit.jupiter.api.AfterEach;
@@ -9,17 +14,33 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.io.InputStream;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.Statement;
+import java.util.List;
+import java.util.Objects;
+
 import static io.restassured.RestAssured.given;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.allOf;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 import static org.hamcrest.Matchers.hasItem;
+import static org.hamcrest.Matchers.hasKey;
 import static org.hamcrest.Matchers.not;
 
 @QuarkusTest
 class IntegrationResourceIT {
 
     static final Long TENANT = 999921L;
+
+    @TestHTTPResource("/")
+    URL hubRoot;
+
+    @Inject @DataSource("admin") AgroalDataSource adminDs;
 
     @BeforeEach
     void setTenant() {
@@ -295,5 +316,88 @@ class IntegrationResourceIT {
         .when().get("/api/tenants/" + TENANT + "/integrations/" + id)
             .then().statusCode(200)
             .body("authMode", equalTo("NONE"));
+    }
+
+    private Integer integrationTo(String targetUrl) {
+        return given().contentType("application/json")
+            .header("X-Tenant-ID", TENANT.toString())
+            .body("{\"name\":\"to-" + System.nanoTime() + "\",\"targetUrl\":\"" + targetUrl
+                + "\",\"authMode\":\"NONE\",\"eventTypes\":[\"org.created\"]}")
+        .when().post("/api/tenants/" + TENANT + "/integrations")
+            .then().statusCode(201).extract().path("id");
+    }
+
+    /**
+     * #2002: the door hands back the receiver's status, never its body. Pointed at an internal
+     * service, the body was a read of the hub's network. The receiver here is the hub itself.
+     */
+    @Test
+    void the_test_door_answers_the_status_never_the_body() {
+        Integer id = integrationTo(hubRoot.getProtocol() + "://" + hubRoot.getAuthority() + "/q/no-such-receiver");
+        Response r = given().contentType("application/json")
+            .header("X-Tenant-ID", TENANT.toString())
+            .body("{\"eventType\":\"org.created\"}")
+        .when().post("/api/tenants/" + TENANT + "/integrations/" + id + "/test");
+        r.then().statusCode(200)
+            .body("ok", equalTo(false))
+            .body("httpStatus", greaterThanOrEqualTo(400))
+            .body("$", not(hasKey("responseBody")));
+        int status = r.path("httpStatus");
+        r.then().body("error", equalTo("HTTP " + status));
+    }
+
+    /** #2002: a target is an absolute http(s) URL, said at the door rather than at the first delivery. */
+    @ParameterizedTest
+    @ValueSource(strings = {"not a url", "ftp://example.com/hook", "file:///etc/passwd"})
+    void a_target_that_is_not_an_http_url_is_refused(String target) {
+        given().contentType("application/json")
+            .header("X-Tenant-ID", TENANT.toString())
+            .body("{\"name\":\"bad-" + System.nanoTime() + "\",\"targetUrl\":\"" + target
+                + "\",\"authMode\":\"NONE\",\"eventTypes\":[\"org.created\"]}")
+        .when().post("/api/tenants/" + TENANT + "/integrations")
+            .then().statusCode(400).body("error", containsString("targetUrl"));
+
+        Integer id = integrationTo("https://hook.example.com/ok");
+        given().contentType("application/json")
+            .header("X-Tenant-ID", TENANT.toString())
+            .body("{\"targetUrl\":\"" + target + "\"}")
+        .when().put("/api/tenants/" + TENANT + "/integrations/" + id)
+            .then().statusCode(400).body("error", containsString("targetUrl"));
+    }
+
+    /**
+     * #2002: a delivery stored before the release kept "HTTP 500: <the receiver's body>" in its
+     * error, which the delivery list hands back. The shipped V97, replayed twice, leaves the status
+     * alone there; the body column and every other error are kept.
+     */
+    @Test
+    void v97_cuts_the_receiver_body_out_of_a_stored_error() throws Exception {
+        Integer id = integrationTo("https://hook.example.com/v97");
+        String insert = "INSERT INTO core.webhook_delivery (tenant_id, endpoint_id, event_type, payload, attempted_at,"
+            + " attempts, succeeded, error, response_body) VALUES (" + TENANT + ", " + id + ", ?, '{}'::jsonb, NOW(), 1,"
+            + " FALSE, ?, 'internal SECRET')";
+        List<String> errors = List.of("HTTP 500: internal SECRET", "HTTP 404: ", "connection failed (ConnectException)",
+            "retry threw: HTTP 500: x");
+        try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
+            for (int i = 0; i < errors.size(); i++) {
+                try (var ps = c.prepareStatement(insert)) {
+                    ps.setString(1, "v97.case." + i);
+                    ps.setString(2, errors.get(i));
+                    ps.executeUpdate();
+                }
+            }
+            String v97;
+            try (InputStream in = Objects.requireNonNull(getClass().getClassLoader().getResourceAsStream(
+                    "db/migration/core/V97__webhook_error_names_the_status.sql"))) {
+                v97 = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            }
+            st.execute(v97);
+            st.execute(v97);
+        }
+        List<String> after = Jdbc.query(adminDs, "v97", "SELECT error || ' | ' || response_body FROM core.webhook_delivery"
+            + " WHERE endpoint_id = ? ORDER BY event_type", ps -> ps.setLong(1, id), rs -> rs.getString(1));
+        assertThat(after).containsExactly(
+            "HTTP 500 | internal SECRET", "HTTP 404 | internal SECRET",
+            "connection failed (ConnectException) | internal SECRET", "retry threw: HTTP 500: x | internal SECRET");
     }
 }

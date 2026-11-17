@@ -85,7 +85,7 @@ class EntityResolutionPassWinnerSetIT {
           + "id BIGSERIAL PRIMARY KEY, tenant_id bigint NOT NULL, _run_id uuid, "
           + "\"CUSTOMER_ID\" text, \"EMAIL_COL\" text)");
     }
-    registry.put(new EntityManifestParser().parse(MANIFEST));
+    registry.put(new EntityManifestParser().parse(MANIFEST), null);
     // Inserted in this order, so ids 1..12. Winners for TENANT, by id: c2 (3), c1 (5), c3 (7), c4 (8),
     // c5 (10), c6 (12) — six rows, three pages at batch size 2.
     insert(TENANT, RUN_1, "c1", "a1");          // 1   superseded by 2, then 5
@@ -111,7 +111,7 @@ class EntityResolutionPassWinnerSetIT {
 
   @Test
   void incremental_hands_the_resolver_exactly_the_latest_row_per_identity_among_the_runs_own_rows() {
-    EntityManifest m = registry.findReloadingIfMissing(ENTITY);
+    EntityManifest m = registry.findReloadingIfMissingHubwide(ENTITY);
 
     pass(2, record()).resolveEntityIncremental(TENANT, m, RUN_2, null);
 

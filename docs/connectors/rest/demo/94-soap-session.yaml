@@ -4,10 +4,11 @@
 # where no auth provider can put it. That is what the endpoint's own `header:` template is for —
 # same substitution as `body:`, same placeholders, same fail-fast.
 #
-# {{secret:NAME}} reads the `lm secret` registry first and the hub's environment second, like
-# password_env below. ({{env:NAME}} would read the hub's environment only.) So:
+# {{secret:NAME}} reads the `lm secret` registry of your tenant, like password_env below and
+# {{env:NAME}}. The hub's environment is never read. So:
 #
 #   lm secret set ACME_SESSION_TOKEN        # demo-session-42
+#   lm secret scope ACME_SESSION_TOKEN billing   # this connector's scope
 #
 # An unresolved placeholder FAILS THE RUN before the request is sent — the template never goes
 # on the wire with a literal {{...}} inside it, and the value is never echoed in the error.

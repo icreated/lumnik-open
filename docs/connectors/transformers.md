@@ -21,6 +21,10 @@ Every parameter, on one page: [Transformers — reference](transformers-referenc
 Try a manifest on a sample file first, read the result, then point it at the real feed.
 `lm validate` checks the manifest, not your data.
 
+The full examples under `docs/connectors/csv/` read their file by name, in your tenant's folder of
+the hub's [local root](csv.md#local-the-hubs-disk-not-yours). Copy it there first, from
+`docs/connectors/csv/data/` into `<root>/1/` on the self-host stack.
+
 ## How a mapping reads
 
 ```yaml
@@ -433,7 +437,7 @@ A word in both lists is refused when the manifest is checked.
 **A column is typed when the table is created.** Two consequences:
 
 - If the first rows leave the column empty, it is created as text, and stays text.
-- Adding `parse-date`, `parse-number` or `parse-boolean` to a connector that already ran does not change its
+- Adding `parse-date`, `parse-number`, `parse-boolean` or `parse-coordinates` to a connector that already ran does not change its
   column. `lm apply` tells you, with a warning naming the column and its type. Create the table again:
   [the four steps](../entities-types.md#type-it-at-the-door-four-steps). The next run reads the files again.
 
@@ -487,6 +491,162 @@ cell:
 | `abc` | *(empty)*, +1 `cell_errors` |
 
 Set `default-region` to the source's country. The default is `US`: French numbers would land wrong.
+
+## GPS coordinates
+
+### `parse-coordinates` — GPS points typed by several tools
+
+A sites export carries its points as each tool wrote them: a decimal comma, degrees-minutes-seconds,
+a hemisphere letter, a pair the wrong way round, a `0;0` left by a geocoder, metres:
+
+```csv
+--8<-- "docs/connectors/csv/data/delivery-sites.csv"
+```
+
+`parse-coordinates` reads the two columns together:
+
+```yaml
+  mapping:
+    cell:
+      - parse-coordinates:
+          lat: latitude
+          lon: longitude
+          within: [41.0, -5.5, 51.5, 10.0]   # south, west, north, east: mainland France
+          swapped: fix                        # exchange a swapped pair instead of emptying it
+          reason: coord_issue                 # the column that says why
+```
+
+```
+$ lm connector run delivery-sites
+$ lm run get 0dd0e3a4
+ID        CONNECTOR       ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+0dd0e3a4  delivery-sites  default   Completed  9   9    0        0             2026-11-13 04:42  2026-11-13 04:42
+⚠ 2 cell(s) not delivered as declared (a hook, or a promoted value of the wrong type) — the rows were still written
+```
+
+```
+lumnik=> select site, city, latitude, longitude, coord_issue from connector.t_delivery_sites order by site;
+ site |     city     | latitude  | longitude |        coord_issue
+------+--------------+-----------+-----------+---------------------------
+ S01  | Lyon         |   45.7302 |    4.8309 |
+ S02  | Villeurbanne |   45.7719 |    4.8902 |
+ S03  | Paris        | 48.836667 |  2.382778 |
+ S04  | Caen         |   49.1829 |   -0.3707 |
+ S05  | Marseille    |   43.2965 |    5.3698 | swapped: exchanged
+ S06  | Tours        |   47.3941 |    0.6848 | swapped: exchanged
+ S07  | Lille        |           |           | outside the declared area
+ S08  | Toulouse     |           |           | not degrees
+ S09  | Bordeaux     |           |           |
+(9 rows)
+```
+
+- Every site keeps its row.
+- Six pairs are numbers now, in decimal degrees. `latitude > 48` compares numbers.
+- Two pairs are emptied, and `coord_issue` says why. The run counts them: `2 cell(s)`.
+- Bordeaux had no point: nothing is counted.
+- To list the sites to fix at the source: `where coord_issue is not null`.
+
+**What it reads.** A cell is one of these, and nothing else:
+
+| Written as | Example | Read as |
+|---|---|---|
+| a decimal number, point or comma, with an optional sign | `45,7719`, `-1.5536` | `45.7719`, `-1.5536` |
+| a number with a hemisphere letter, before or after | `49.1829 N`, `O 0.3707` | `49.1829`, `-0.3707` |
+| degrees, minutes and optional seconds, with a hemisphere letter | `48°50'12"N`, `43°42'N`, `43 17 42 N` | `48.836667`, `43.7`, `43.295` |
+
+- `S`, `W` and `O` (Ouest) give a negative number.
+- A sign **and** a letter (`-49.1193 N`) is not read: nothing says which one is right.
+- The typographic marks a spreadsheet leaves (`′`, `″`) read like `'` and `"`.
+- Minutes without degrees (`30'N`) are not read.
+- A number lands with six decimals at most, about ten centimetres.
+
+**`within` says where your points are.** A pair outside it is emptied. This is what catches `0;0`:
+it is a real place, in the Gulf of Guinea, so only the rectangle can refuse it. Write it as south,
+west, north, east. A rectangle across the 180° meridian is refused.
+
+**A swapped pair.** Marseille arrived as `5.3698;43.2965`. Both numbers pass as a latitude and as a
+longitude, so only `within` shows the pair is the wrong way round. A letter shows it too: Tours has
+`0.6848 E` under `latitude`.
+
+- With `swapped: fix`, the two values are exchanged, and `coord_issue` reads `swapped: exchanged`.
+- Without it, the pair is emptied, and `coord_issue` reads `swapped`.
+- A letter is never contradicted. `6.1844 N;48.6921 E` is not exchanged: the export says north,
+  then east. It is `outside the declared area`.
+- Without `within`, a swapped pair with no letter is seen only when a number is out of range for
+  its column (`100.5;45.2`). `2.35;48.85` is left as it is, and `0;0` lands as a point.
+
+**The reasons `reason:` writes.** Leave `reason:` out and no column is added.
+
+A file with two points per row (pick-up and delivery) takes two `parse-coordinates` entries. Give
+each one its own reason column. With one shared column, a row shows only one of its two reasons.
+
+| Reason | When |
+|---|---|
+| `half a point` | one cell is blank, the other is not |
+| `not a coordinate` | a cell is none of the spellings above, or the two letters contradict each other |
+| `not degrees` | a latitude beyond ±90 or a longitude beyond ±180: metres, for example |
+| `outside the declared area` | real degrees, outside `within` |
+| `swapped` | a swapped pair, without `swapped: fix` |
+| `swapped: exchanged` | a swapped pair, exchanged; the point is kept |
+
+**To set a row aside instead of emptying its pair**, write `default: dlq` under
+[`on-error`](transformers-reference.md#when-a-hook-cannot-deliver-cell_errors-and-on-error):
+
+```yaml
+  mapping:
+    on-error:
+      default: dlq
+    cell:
+      - parse-coordinates:        # the same entry as above
+```
+
+The two sites go to the dead letters, as they were read:
+
+```
+$ lm run get 5ba46b70
+ID        CONNECTOR           ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+5ba46b70  delivery-sites-dlq  default   Completed  9   7    2        2             2026-11-13 08:33  2026-11-13 08:33
+⚠ 2 rows quarantined — see: lm dlq list --run 5ba46b70-6bba-4191-b56c-d8de7df880a7
+```
+
+Each dead letter says why its pair was refused, with the reasons of the table above:
+
+```
+$ lm dlq get fc2ff778-77d4-4479-8fee-3e3644bccc78
+ID:        fc2ff778-77d4-4479-8fee-3e3644bccc78
+Connector: delivery-sites-dlq (bb374365-4fed-4ecb-adf3-924806344f01)
+Run:       5ba46b70-6bba-4191-b56c-d8de7df880a7
+Reason:    MappingFailed
+Attempts:  1
+Message:   parse-coordinates: parse-coordinates could not read the value: outside the declared area
+Detail:    {"field":"parse-coordinates","message":"parse-coordinates could not read the value: outside the declared area"}
+Payload:   {"city":"Lille","site":"S07","latitude":"0","longitude":"0"}
+Resolution: open
+```
+
+- Write `default`, not `fields`. `fields: { latitude: dlq }` does nothing here: a pair is not one column.
+- `default` applies to every other transformer of the mapping too.
+- The message ends with the reason. The payload is the row as it was read, before the pair was emptied.
+- `default: fail` stops the run with the same reason.
+
+**A malformed `within` is refused before any row**, by name:
+
+```
+$ lm validate -f 74-parse-coordinates.yaml
+✗ 74-parse-coordinates.yaml — 1 error(s), 0 warning(s)
+
+  ERROR    spec.mapping.cell[0].parse-coordinates
+          parse-coordinates hook: 'within': south must be below north
+          → The Transformers page lists parse-coordinates's parameters
+```
+
+- It runs on a `csv-file` connector and on a REST endpoint, like every transformer. On a REST
+  endpoint, add the reason column to `promote`, without `path`:
+  `{ name: coord_issue, type: text }`.
+- It does not convert a projection: Lambert 93 metres are `not degrees`.
+- It does not find the coordinates of an address.
+
+Full example: `docs/connectors/csv/74-parse-coordinates.yaml`.
 
 ## Patterns
 

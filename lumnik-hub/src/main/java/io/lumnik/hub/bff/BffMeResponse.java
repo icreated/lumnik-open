@@ -1,6 +1,8 @@
 package io.lumnik.hub.bff;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import io.lumnik.hub.manifest.ModuleManifest;
+import io.lumnik.hub.view.MapTiles;
 
 import java.util.List;
 import java.util.Map;
@@ -15,7 +17,8 @@ public record BffMeResponse(
     Set<String> roles,
     List<ModuleSummary> modules,
     String edition,
-    List<String> tabs
+    List<String> tabs,
+    @JsonInclude(JsonInclude.Include.NON_NULL) MapTiles.Background map
 ) {
     public record TenantSummary(Long id, String code, String name) {}
 

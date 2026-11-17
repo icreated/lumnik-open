@@ -7,6 +7,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.Disputed;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.llm.spi.Analytic;
 import io.lumnik.llm.spi.ChatPort;
@@ -64,14 +65,14 @@ class DisputedRowsRlsIT {
                 st.execute("ALTER TABLE connector." + t + " FORCE ROW LEVEL SECURITY");
                 st.execute("CREATE POLICY tenant_isolation ON connector." + t
                     + " USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::bigint)");
-                st.execute("GRANT SELECT ON connector." + t + " TO lumnik_app");
+                st.execute("GRANT SELECT ON connector." + t + " TO lumnik_app, lumnik_readonly");
             }
         }
-        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
+        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT))
             .contentType("application/yaml").body(MANIFEST)
             .post("/api/entities/apply").then().statusCode(200);
-        store.save(1L, "dsprls", new SchemaCard("dsprls", schemas.resolve("dsprls")));
-        store.save(2L, "dsprls", new SchemaCard("dsprls", schemas.resolve("dsprls")));
+        store.save(1L, "dsprls", new SchemaCard("dsprls", schemas.resolve(1L, "dsprls")));
+        store.save(2L, "dsprls", new SchemaCard("dsprls", schemas.resolve(1L, "dsprls")));
     }
 
     @Test

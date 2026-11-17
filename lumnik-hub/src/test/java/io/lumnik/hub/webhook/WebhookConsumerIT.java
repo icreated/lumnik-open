@@ -236,7 +236,8 @@ class WebhookConsumerIT {
 
         Object[] row = retryOutcomeFor("whc.test.nul.retry");
         assertEquals(2, ((Number) row[0]).intValue(), "attempts");
-        assertEquals("HTTP 500: x\uFFFDy", row[1]);
+        assertEquals("HTTP 500", row[1]);
+        assertEquals("x\uFFFDy", responseBodyFor("whc.test.nul.retry"));
         assertEquals(Boolean.TRUE, row[2], "claim released");
     }
 

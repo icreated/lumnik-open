@@ -110,6 +110,21 @@ class EffectiveConfigTest {
         assertThat(cfg).containsEntry("_credentialId", "00000000-0000-0000-0000-00000000000a");
     }
 
+    /**
+     * The same rule when the connector has no credential of its own: then nothing must survive the merge. An endpoint
+     * blob or a manifest's own config naming {@code _credentialId} would otherwise choose a stored credential of the
+     * tenant — another connector's password, sent where this connector points (#2015's review).
+     */
+    @Test
+    void noConfigMayNameACredentialTheConnectorDoesNotHold() {
+        String someoneElses = "00000000-0000-0000-0000-00000000000b";
+
+        assertThat(EffectiveConfig.of(connector(Map.of("base_url", "http://erp.invalid")),
+            endpoint(Map.of("_credentialId", someoneElses)))).doesNotContainKey("_credentialId");
+        assertThat(EffectiveConfig.of(connector(Map.of("connection", Map.of("_credentialId", someoneElses)))))
+            .doesNotContainKey("_credentialId");
+    }
+
     @Test
     void theResultIsAFreshMapNeitherSideCanBeMutatedThrough() {
         Connector c = connector(Map.of("base_url", "http://erp.invalid"));

@@ -1,14 +1,25 @@
 package io.lumnik.hub.api.secret;
 
+import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.RestAssured;
+import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.hamcrest.CoreMatchers.*;
+import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.empty;
 import static org.hamcrest.Matchers.not;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 @QuarkusTest
 class SecretResourceIT {
+
+    @Inject @DataSource("admin") AgroalDataSource admin;
 
     @Test
     void create_then_list_then_describe_then_delete() {
@@ -138,5 +149,78 @@ class SecretResourceIT {
             .get("/api/platform/secrets/" + name)
             .then().statusCode(200)
             .body("description", equalTo("first desc"));
+    }
+
+    /**
+     * #2015: the scopes a secret serves are set apart from its value, so giving a secret its scopes on upgrade never means
+     * typing the value again. The list is replaced, and an empty one makes it scopeless again.
+     */
+    @Test
+    void the_scopes_door_replaces_the_scopes_and_keeps_the_value() {
+        String name = "SCOPES_KEY_" + System.nanoTime();
+        RestAssured.given().header("X-Tenant-Id", "1").contentType("application/json")
+            .body("{\"name\":\"" + name + "\",\"value\":\"v1\"}")
+            .post("/api/platform/secrets").then().statusCode(201);
+        RestAssured.given().header("X-Tenant-Id", "1")
+            .get("/api/platform/secrets/" + name).then().statusCode(200)
+            .body("scopes", empty());
+
+        RestAssured.given().header("X-Tenant-Id", "1").contentType("application/json")
+            .body("[\"ventes\",\"achats\",\"ventes\"]")
+            .put("/api/platform/secrets/" + name + "/scopes").then().statusCode(200)
+            .body("", contains("ventes", "achats"));
+        RestAssured.given().header("X-Tenant-Id", "1")
+            .get("/api/platform/secrets/" + name).then().statusCode(200)
+            .body("scopes", contains("ventes", "achats"))
+            .body("rotatedAt", nullValue());
+
+        RestAssured.given().header("X-Tenant-Id", "1").contentType("application/json")
+            .body("[]")
+            .put("/api/platform/secrets/" + name + "/scopes").then().statusCode(200);
+        RestAssured.given().header("X-Tenant-Id", "1")
+            .get("/api/platform/secrets/" + name).then().statusCode(200)
+            .body("scopes", empty());
+
+        // Widening and narrowing are both lifecycle changes: the event stream and the audit trail say from what to what.
+        assertEquals(List.of("|ventes,achats", "ventes,achats|"), Jdbc.query(admin, "it",
+            "SELECT payload->>'previousScopes' || '|' || (payload->>'scopes') FROM core.event_outbox"
+                + " WHERE event_type = 'platform.secret.scoped' AND payload->>'name' = ? ORDER BY id",
+            ps -> ps.setString(1, name), rs -> rs.getString(1)));
+        assertEquals(List.of("[]|[\"ventes\", \"achats\"]", "[\"ventes\", \"achats\"]|[]"), Jdbc.query(admin, "it",
+            "SELECT (changes->'previousScopes')::text || '|' || (changes->'scopes')::text FROM core.audit_outbox"
+                + " WHERE entity_type = 'Secret' AND changes->>'name' = ? AND changes->'scopes' IS NOT NULL ORDER BY id",
+            ps -> ps.setString(1, name), rs -> rs.getString(1)));
+    }
+
+    /**
+     * The connector doors' rule for a scope name, a 404 for a name nothing holds, and no list at all refused: an empty
+     * body must not strip a secret of its scopes, {@code []} says so.
+     */
+    @Test
+    void the_scopes_door_refuses_a_malformed_scope_and_an_unknown_secret() {
+        String name = "SCOPES_BAD_" + System.nanoTime();
+        RestAssured.given().header("X-Tenant-Id", "1").contentType("application/json")
+            .body("{\"name\":\"" + name + "\",\"value\":\"v1\"}")
+            .post("/api/platform/secrets").then().statusCode(201);
+
+        RestAssured.given().header("X-Tenant-Id", "1").contentType("application/json")
+            .body("[\"Ventes,achats\"]")
+            .put("/api/platform/secrets/" + name + "/scopes").then().statusCode(400)
+            .body("error", containsString("scope must be lowercase"));
+        RestAssured.given().header("X-Tenant-Id", "1").contentType("application/json")
+            .body("[\"ventes\"]")
+            .put("/api/platform/secrets/NO_SUCH_" + name + "/scopes").then().statusCode(404);
+        RestAssured.given().header("X-Tenant-Id", "1").contentType("application/json")
+            .body("[\"ventes\"]")
+            .put("/api/platform/secrets/" + name + "/scopes").then().statusCode(200);
+        for (String none : List.of("null", "")) {
+            RestAssured.given().header("X-Tenant-Id", "1").contentType("application/json")
+                .body(none)
+                .put("/api/platform/secrets/" + name + "/scopes").then().statusCode(400)
+                .body("error", containsString("[] for none"));
+        }
+        RestAssured.given().header("X-Tenant-Id", "1")
+            .get("/api/platform/secrets/" + name).then().statusCode(200)
+            .body("scopes", contains("ventes"));
     }
 }

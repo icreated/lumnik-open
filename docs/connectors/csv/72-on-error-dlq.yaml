@@ -11,7 +11,7 @@ metadata:
 spec:
   transport:
     kind: local
-    path: docs/connectors/csv/data/invoices.csv
+    path: invoices.csv
   parser:
     has_header: true
   after_process: none

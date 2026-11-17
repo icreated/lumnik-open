@@ -91,7 +91,7 @@ func secretKey(m client.SecretMeta) string { return m.Name }
 
 func (s *Secrets) render() {
 	s.table.Clear()
-	for c, h := range []string{"NAME", "DESCRIPTION", "UPDATED", "ROTATED"} {
+	for c, h := range []string{"NAME", "DESCRIPTION", "UPDATED", "ROTATED", "SCOPES"} {
 		s.table.SetCell(0, c, tview.NewTableCell(h).SetSelectable(false).SetExpansion(1).SetTextColor(tcell.ColorYellow))
 	}
 	if len(s.items) == 0 {
@@ -99,7 +99,8 @@ func (s *Secrets) render() {
 		return
 	}
 	for r, m := range s.items {
-		for c, v := range []string{m.Name, m.Description, output.HumanTimeStr(m.UpdatedAt), output.HumanTimeStr(m.RotatedAt)} {
+		for c, v := range []string{m.Name, m.Description, output.HumanTimeStr(m.UpdatedAt), output.HumanTimeStr(m.RotatedAt),
+			strings.Join(m.Scopes, ",")} {
 			s.table.SetCell(r+1, c, dataCell(v).SetExpansion(1))
 		}
 	}
@@ -211,6 +212,7 @@ func (s *Secrets) SelectedDescribe() (string, string, bool) {
 	fmt.Fprintf(&b, "created:     %s\n", esc(m.CreatedAt))
 	fmt.Fprintf(&b, "updated:     %s\n", esc(m.UpdatedAt))
 	fmt.Fprintf(&b, "rotated:     %s\n", esc(m.RotatedAt))
+	fmt.Fprintf(&b, "scopes:      %s\n", esc(strings.Join(m.Scopes, ",")))
 	b.WriteString("\nThe value is write-only: the hub never returns it.\n")
 	return m.Name, b.String(), true
 }

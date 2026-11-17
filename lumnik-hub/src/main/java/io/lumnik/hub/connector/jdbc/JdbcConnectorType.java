@@ -5,12 +5,12 @@ import io.lumnik.hub.connector.api.ConnectorType;
 import io.lumnik.hub.connector.api.ItemReader;
 import io.lumnik.hub.connector.api.ItemWriter;
 import io.lumnik.hub.connector.api.helpers.Configs;
-import io.lumnik.hub.connector.api.helpers.EnvSecrets;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.lumnik.hub.connector.api.types.*;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.exceptions.SourceUnreachableException;
+import io.lumnik.hub.connector.secret.SecretRefs;
 import io.lumnik.jdbc.spi.JdbcDialect;
 import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
 import io.lumnik.hub.connector.mapping.MappingEngine;
@@ -23,7 +23,6 @@ import io.lumnik.hub.connector.mapping.MapColumnsRules;
 import io.lumnik.hub.connector.mapping.writer.DynamicTableWriter;
 import io.lumnik.hub.connector.mapping.writer.SourceKeyIndex;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
-import io.lumnik.hub.secret.SecretResolver;
 import io.lumnik.hub.sql.SqlIdentifiers;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -48,7 +47,7 @@ public class JdbcConnectorType implements ConnectorType {
   @Inject HikariPoolRegistry  poolRegistry;
   @Inject MappingEngine       mappingEngine;
   @Inject SourceKeyIndex      keyIndex;
-  @Inject SecretResolver      secrets;
+  @Inject SecretRefs          secrets;
 
   @Override public String id() { return TYPE_ID; }
 
@@ -363,10 +362,8 @@ public class JdbcConnectorType implements ConnectorType {
    *       io.lumnik.hub.connector.domain.EffectiveConfig} from {@code Connector.credentialId}. Resolved via {@link io.lumnik.hub.connector.api.helpers.CredentialResolver}
    *       and cast to {@link ResolvedCredential.Basic} to extract the password.</li>
    *   <li>{@code "password"} in config — plain-text fallback for dev/test environments.</li>
-   *   <li>{@code "password_env"} — the hub's environment, then the tenant's {@code lm secret}
-   *       registry (#1349). Environment first, unlike {@link io.lumnik.hub.connector.secret.SecretRefs}:
-   *       a name that resolved before still resolves to the same value; only one that failed now
-   *       finds the tenant's secret.</li>
+   *   <li>{@code "password_env"} — a secret in the tenant's {@code lm secret} registry, through {@link SecretRefs} like
+   *       every other {@code *_env} key; never the hub's environment (#2000), which holds the admin database password.</li>
    * </ol>
    */
   String resolvePassword(ConnectorContext ctx) {
@@ -386,10 +383,9 @@ public class JdbcConnectorType implements ConnectorType {
     // Declarative manifest: 'password_env' names the secret, so it is never committed in the manifest.
     Object envName = ctx.config().get("password_env");
     if (envName instanceof String e && !e.isBlank()) {
-      String v = EnvSecrets.lookup(e);
+      String v = secrets.lookup(e);
       if (v != null && !v.isEmpty()) return v;
-      return secrets.resolve(e).filter(s -> !s.isEmpty()).orElseThrow(() -> new ConfigValidationException(
-          "password_env '" + e + "' is neither in the server environment nor in lm secret"));
+      throw new ConfigValidationException("password_env '" + e + "' is not in lm secret");
     }
     return "";
   }

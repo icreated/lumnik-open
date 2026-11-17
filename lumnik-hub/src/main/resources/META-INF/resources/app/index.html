@@ -19,26 +19,6 @@
 </head>
 <body>
 <div id="root"></div>
-<script type="module">
-  import { resolveCached, applyIdentity, applyTheme } from './src/appRegistry.mjs';
-  import { html, render } from './src/html.mjs';
-  import { App } from './src/components/app.mjs';
-
-  // wear the cached (or built-in/neutral fallback) identity AND theme: tab title,
-  // manifest, icons (iOS reads apple-touch-icon), accent and mobile-chrome tint.
-  // app.mjs corrects this once phase 2 resolves the real registry entry, so an
-  // unrecognised tag or a first-ever visit to a runtime app never sees the WRONG
-  // identity for more than one frame.
-  const cached = resolveCached(location.search);
-  applyIdentity(cached);
-  applyTheme(cached);
-
-  // app-shell cache only (E2) — data is never cached; a failed registration is not fatal
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/app/sw.js').catch(() => {});
-  }
-
-  render(html`<${App} />`, document.getElementById('root'));
-</script>
+<script type="module" src="src/boot.mjs"></script>
 </body>
 </html>

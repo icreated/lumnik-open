@@ -197,6 +197,11 @@ func TestFriendlyAskError(t *testing.T) {
 	if !strings.Contains(msg, "unavailable") {
 		t.Errorf("503 msg = %q, want 'unavailable'", msg)
 	}
+	// 503 — the readonly role is not hardened (#1987): the hub's own cause and hint, never "no agent on the classpath"
+	msg = friendlyAskError(&client.APIError{Status: 503, Body: `{"error":"analytic ask is unavailable: the readonly database role is not hardened","hint":"an operator must harden the readonly database role: docs/security/rls.md#what-the-read-only-role-cannot-call"}`}, "atelier")
+	if !strings.Contains(msg, "not hardened") || !strings.Contains(msg, "docs/security/rls.md") || strings.Contains(msg, "classpath") {
+		t.Errorf("503 hardening msg = %q, want the hub's cause and hint, not the classpath guess", msg)
+	}
 	// 404 — the hub does not answer on the chat door (Open edition, or lumnik.ai.enabled=false):
 	// say so; the "no discovered schema" hint would name a cause the client cannot know.
 	msg = friendlyAskError(&client.APIError{Status: 404, Body: ""}, "atelier")

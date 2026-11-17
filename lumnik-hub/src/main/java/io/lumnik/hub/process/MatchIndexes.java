@@ -44,10 +44,23 @@ public class MatchIndexes {
     @Inject EntityRegistry entities;
     private final EntityManifestParser entityParser = new EntityManifestParser();
 
-    /** The Entity behind an entity view, as stored — not this node's copy (#1836); empty when {@code view} is no entity view. */
-    Optional<EntityManifest> storedEntity(String view) {
+    /**
+     * The Entity behind an entity view, as stored — not this node's copy (#1836); empty when {@code view} is no entity
+     * view, or that of an Entity this tenant does not read (#2050).
+     */
+    Optional<EntityManifest> storedEntity(long tenant, String view) {
         String name = EntityViewCompiler.entityNameFromView(view);
-        return name == null ? Optional.empty() : entities.stored(name).map(stored -> {
+        return name == null ? Optional.empty() : parsed(name, entities.stored(tenant, name));
+    }
+
+    /** {@link #storedEntity(long, String)}, whoever owns it: the hub's own index upkeep. */
+    Optional<EntityManifest> storedEntityHubwide(String view) {
+        String name = EntityViewCompiler.entityNameFromView(view);
+        return name == null ? Optional.empty() : parsed(name, entities.storedHubwide(name));
+    }
+
+    private Optional<EntityManifest> parsed(String name, Optional<EntityRegistry.Stored> row) {
+        return row.map(stored -> {
             try {
                 return entityParser.parse(stored.yaml());
             } catch (RuntimeException unparsable) {

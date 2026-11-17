@@ -67,7 +67,7 @@ class CsvGlobListingScopeTest {
 
   /** One chunk with a fresh reader, as {@code ChunkExecutor} does. */
   private ReadResult<Map<String, Object>> readChunk(String pattern, CountingRunScope s, int size, ConnectorCursor cursor) {
-    return new CsvFileConnectorType.CsvGlobCursorReader(pattern, DEFAULTS).read(size, cursor, ReaderTestContexts.of(s));
+    return GlobReaders.of(pattern, DEFAULTS).read(size, cursor, ReaderTestContexts.of(s));
   }
 
   private Drained drain(String pattern, CountingRunScope s, int size, ConnectorCursor from, int maxChunks) {
@@ -269,7 +269,7 @@ class CsvGlobListingScopeTest {
     file("a.csv", 0, 12);
     ConnectorCursor cursor = drain(glob(), scope, 5, ConnectorCursor.empty(), 100).lastCursor();
 
-    var reader = new CsvFileConnectorType.CsvGlobCursorReader(glob(), DEFAULTS);
+    var reader = GlobReaders.of(glob(), DEFAULTS);
     var r = (ReadResult.EndOfStream<Map<String, Object>>) reader.read(5, cursor, ReaderTestContexts.of(run("next-run")));
 
     assertThat(r.records()).isEmpty();

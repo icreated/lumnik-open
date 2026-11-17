@@ -126,7 +126,7 @@ public class RegexExtractHook implements CellHook {
     // #1417: quiet by default (above); `required: true` is the integrator saying this column has no optional rows,
     // so a non-empty cell the pattern cannot read is a cell not delivered — and on-error decides its row.
     if (matched == null && params.path("required").asBoolean(false)) {
-      s.counters().cellErrors().incrementAndGet();
+      s.refuseCell("the pattern did not match");
     }
     Matcher result = matched;
     groups.fields().forEachRemaining(e -> row.put(e.getValue().asText(),

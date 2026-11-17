@@ -16,17 +16,19 @@ Roles are matched literally, with no hierarchy: `lm_superadmin` alone does not o
 | Wire webhooks | `lm integration` · `:integrations` | `lm_integrator` + `lm_admin`, no `scope:*` role (or `lm_admin` alone over `/api/tenants/{tid}/integrations`) |
 | Read and replay deliveries | `lm outputs` · `:outputs` | `lm_integrator` + `lm_admin` (or `lm_superadmin`), no `scope:*` role |
 | Runs and dead letters | `lm run`, `lm dlq` · `:runs`, `:dlq` | `lm_integrator` |
-| Read secrets (metadata) | `lm secret list`, `describe` | `lm_integrator` |
-| Create, rotate, delete secrets | `lm secret set`, `rm` | `lm_integrator` + `lm_admin` |
-| Migrations, modules, hooks list, event catalog | `lm migration`, `lm module`, `lm hook list`, `GET /api/platform/events` | `lm_integrator` |
+| Read secrets (metadata) | `lm secret list`, `describe` | `lm_integrator`, no `scope:*` role |
+| Create, rotate, scope, delete secrets | `lm secret set`, `scope`, `rm` | `lm_integrator` + `lm_admin`, no `scope:*` role |
+| Migrations, modules, event catalog | `lm migration`, `lm module`, `GET /api/platform/events` | `lm_integrator` |
 | Declared workflows | `lm workflow` | `lm_integrator` |
 | Live event stream | the TUI, or `GET /api/platform/events/stream` | `lm_integrator`, no `scope:*` role |
-| Toggle a hook for a tenant, read one hook | `POST /api/platform/hooks/{id}/toggle`, `lm hook get` | `lm_integrator` + `lm_admin` |
-| Tenants | `/api/tenants` | `lm_superadmin` |
-| Orgs, users, tenant roles | `/api/tenants/{tid}/…` | `lm_admin`, own tenant only |
+| Your tenant's hooks: list them, read one, toggle one | `lm hook list`, `lm hook get`, `POST /api/platform/hooks/{id}/toggle` | `lm_integrator` + `lm_admin`, no `scope:*` role |
+| Tenants | `/api/tenants` | `lm_superadmin`, no `scope:*` role |
+| Orgs, users, tenant roles | `/api/tenants/{tid}/…` | `lm_admin`, own tenant only, no `scope:*` role |
 
 A scope-bound integrator sees only the runs and dead letters of connectors whose scopes it holds
-([Scopes](rag/scopes.md#binding-users-to-scopes-opt-in)).
+([Scopes](rag/scopes.md#binding-users-to-scopes-opt-in)). It is refused every door marked "no
+`scope:*` role": those act on the whole tenant
+([the list](security/role-management.md#what-a-scope-bound-caller-cannot-do)).
 
 No `lm` command prints your roles. Ask the hub (needs `lm_user`):
 
@@ -140,10 +142,12 @@ connector.run.cancelled
 connector.run.failed
 platform.secret.created
 platform.secret.updated
+platform.secret.scoped
 platform.secret.deleted
 platform.secret.read
 data.row.changed
 annotation.decision.acked
+notification.mail.given-up
 ```
 
 Each entry also carries its module, a description and the payload fields. `decision.*` types
@@ -177,8 +181,8 @@ Value for ERP_DB_PASSWORD:
 Created secret "ERP_DB_PASSWORD"
 
 $ lm secret list
-NAME                           ROTATED_AT                     DESCRIPTION
-ERP_DB_PASSWORD                -                              ERP read account
+NAME                           ROTATED_AT                     SCOPES               DESCRIPTION
+ERP_DB_PASSWORD                -                              -                    ERP read account
 
 $ lm secret rm ERP_DB_PASSWORD
 Type 'delete' to confirm removal of "ERP_DB_PASSWORD": delete
@@ -188,9 +192,55 @@ Deleted secret "ERP_DB_PASSWORD"
 - The value is typed at the prompt and not shown. From a script: `lm secret set NAME -` reads stdin.
 - `set` on an existing name rotates the value (`Updated secret "…"`, `ROTATED_AT` filled).
   Without `--description`, the description stays; `--description ""` clears it.
+- A `set`, `scope` or `rm` reaches a connector the next time it reads the secret, whichever hub
+  replica runs it. Most connectors read their secrets at each batch; Kafka, an S3 or SFTP transport
+  and an export, when they connect. An OAuth2 or session login keeps the token or session it holds
+  until it renews it.
 - `lm secret describe NAME` shows metadata only; `lm secret rm --force` skips the prompt.
-- Which connectors read the store, and which read the hub's environment instead:
+- Every connector reads its `*_env` names here, and only here:
   [REST](connectors/rest.md), [CSV](connectors/csv.md), [JDBC](connectors/jdbc.md).
+
+### Which connectors may read a secret: its scopes
+
+A connector reads a secret only when the connector carries **every scope of the secret**
+(`metadata.scopes`). An export reads it only when the secret's one scope is the export's `spec.scope`.
+
+- A new secret has no scope. It serves only connectors without scopes.
+- A connector without scopes reads every secret of its tenant.
+- `lm secret scope NAME SCOPES` sets the scopes (comma-separated). It replaces the list. The value stays.
+- `lm secret scope NAME ""` removes them all.
+- A secret scoped `ventes,achats` serves only connectors carrying both. Only a caller holding both may write one.
+- One password for a `ventes` connector and an `achats` connector: store it twice, one secret per scope.
+
+Here the `orders` connector has `scopes: [ventes]`, and `ERP_PASSWORD` has none yet:
+
+```
+$ lm run get 6707cc13-af41-4cac-ba7f-ee939ce7f16a
+ID        CONNECTOR  ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+6707cc13  orders     orders    Failed  0   0    0        0             2026-11-15 13:12  2026-11-15 13:12
+✖ run failed: secret ERP_PASSWORD does not serve scope ventes: lm secret scope ERP_PASSWORD SCOPES replaces the scopes it serves
+
+$ lm secret scope ERP_PASSWORD ventes
+scopes: ventes
+
+$ lm secret list
+NAME                           ROTATED_AT                     SCOPES               DESCRIPTION
+ERP_PASSWORD                   -                              ventes
+
+$ lm connector run orders
+run scheduled: 65c6e188-db63-4d14-87d7-b372b31785b3
+$ lm run list --connector orders
+ID        CONNECTOR  ENDPOINT  STATUS     IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+65c6e188  orders     orders    Completed  1   1    0        0             2026-11-15 13:12  2026-11-15 13:12
+6707cc13  orders     orders    Failed     0   0    0        0             2026-11-15 13:12  2026-11-15 13:12
+```
+
+The refused run sent nothing: the secret is checked before any request leaves the hub.
+`lm source rest test` and `lm source rest probe` follow the same rule, and so do exports.
+
+Why: a scope-bound integrator may write connectors in its own scopes. Without this rule it could
+name the tenant's `ERP_PASSWORD` in one, point `base_url` at its own server, and receive the
+password ([role management](security/role-management.md#what-a-scope-bound-caller-cannot-do)).
 
 ## Trace a citation back to its source row
 
@@ -246,7 +296,8 @@ No `lm` command manages identity; use the HTTP doors. Deletes archive, never era
 in context (onboarding, offboarding): [Identity administration](security/identity-admin.md).
 
 The doors, under `/api/tenants` and `/api/tenants/{tid}/…`: tenants (`lm_superadmin`), orgs,
-users and tenant roles (`lm_admin`, your own tenant). Their full contract is in your hub's
+users and tenant roles (`lm_admin`, your own tenant). A caller holding any `scope:*` role is
+refused all of them. Their full contract is in your hub's
 `/q/openapi` ([Test the API](recipes/test-the-api.md)).
 
 Org changes emit `org.created`, `org.updated`, `org.moved`, `org.archived`. lumnik stores no
@@ -277,8 +328,8 @@ first login.
 | `401` with `WWW-Authenticate: Bearer` on `/api/platform/*` | the token expired or was not sent | `lm login` again |
 | `API error 403: missing role lm_integrator` | the token lacks `lm_integrator` | read your `roles` (above), then have it granted |
 | `API error 403 (forbidden): no details from the server — your account may lack the required role` (raw HTTP: `403`, empty body) | a role the door needs is missing — often `lm_admin` | read your `roles`, then have it granted |
-| `access refused (403): scope not granted` on `lm integration`, `lm outputs` (raw HTTP on the event stream: `403 {"error":"scope not granted"}`) | your account holds a `scope:*` role; these doors are tenant-wide | use an account with no `scope:*` role |
-| `403` on `/api/tenants/{tid}/…` while you hold `lm_admin` | `{tid}` is not your token's tenant | use `tenant` from `/api/bff/v1/me` |
+| `access refused (403): scope not granted` on `lm integration`, `lm outputs`, `lm secret`, `lm hook list`/`get` (raw HTTP on the event stream, the event dead letters or `/api/tenants/…`: `403 {"error":"scope not granted"}`) | your account holds a `scope:*` role; these doors are tenant-wide | use an account with no `scope:*` role |
+| `403` (empty body) on `/api/tenants/{tid}/…` while you hold `lm_admin` | `{tid}` is not your token's tenant | use `tenant` from `/api/bff/v1/me` |
 | `400 {"error": "Unknown event type: …"}` on `lm integration test --event …` | the type is not in the catalog — `decision.*` never is | test with a catalog type; verify `decision.*` with a real decision |
 | `API error 400: HMAC mode needs a secret …` on `lm integration add` | no `--secret-stdin` | pass the secret on stdin — see [Send events out](#send-events-out-to-another-system) |
 | A failed delivery is no longer retried | it used its 3 attempts | `lm outputs replay ID` |
@@ -286,7 +337,7 @@ first login.
 
 ## If none of that is it
 
-- Your hub serves its live API contract at `/q/openapi` and a try-it console at `/q/swagger-ui/`:
+- Your hub serves its live API contract at `/q/openapi`, on its management port:
   [Test the API](recipes/test-the-api.md).
 - Security reports: `contact@lumnik.fr` (acknowledged within 72 hours). It is not a support
   channel.

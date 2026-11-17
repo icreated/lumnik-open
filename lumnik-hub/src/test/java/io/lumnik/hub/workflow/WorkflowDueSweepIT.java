@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -90,11 +91,12 @@ class WorkflowDueSweepIT {
             st.execute("ALTER TABLE " + TABLE + " FORCE ROW LEVEL SECURITY");
             st.execute("CREATE POLICY tenant_isolation ON " + TABLE
                 + " USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::bigint)");
-            st.execute("GRANT SELECT ON " + TABLE + " TO lumnik_app");
+            st.execute("GRANT SELECT ON " + TABLE + " TO lumnik_app, lumnik_readonly");
             st.execute("DELETE FROM core.workflow_due_alert WHERE workflow_name = '" + WF + "'");
             st.execute("DELETE FROM core.event_outbox WHERE event_type = 'decision.overdue." + WF + "'");
             st.execute("DELETE FROM core.workflow_manifest WHERE name = '" + WF + "'");
         }
+        RegisteredTables.register(adminDs, 1L, "t_dueit_lines");
         given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
             .contentType("application/yaml").body(ENTITY)
             .post("/api/entities/apply").then().statusCode(200);
@@ -252,7 +254,7 @@ class WorkflowDueSweepIT {
             st.execute("ALTER TABLE " + TS_TABLE + " FORCE ROW LEVEL SECURITY");
             st.execute("CREATE POLICY tenant_isolation ON " + TS_TABLE
                 + " USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::bigint)");
-            st.execute("GRANT SELECT ON " + TS_TABLE + " TO lumnik_app");
+            st.execute("GRANT SELECT ON " + TS_TABLE + " TO lumnik_app, lumnik_readonly");
         }
         String tz = stampWorkflow("due_tz", null);
         manifests.upsert(1L, new WorkflowManifestParser().parse(tz), tz, null);

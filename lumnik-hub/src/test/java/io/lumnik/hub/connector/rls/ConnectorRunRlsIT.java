@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rls;
 
+import io.lumnik.hub.testsupport.TestLocalPaths;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
@@ -83,7 +84,7 @@ class ConnectorRunRlsIT {
           after_process: none
           target:
             table_prefix: t_
-        """.formatted(csv.toAbsolutePath());
+        """.formatted(TestLocalPaths.relative(csv));
 
     // Apply as tenant 1 — the same path `lm apply` uses; creates connector + endpoint.
     // ApplyResult record: { name, connectorId (UUID), endpointsApplied }

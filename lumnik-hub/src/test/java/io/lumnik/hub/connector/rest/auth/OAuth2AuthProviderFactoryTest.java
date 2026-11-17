@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.auth;
 
+import io.lumnik.hub.testsupport.TestOutbound;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -24,6 +25,7 @@ class OAuth2AuthProviderFactoryTest {
 
     /** The authorization server: hands out t1, t2, … or answers what {@link #refuse} says. */
     static final class TokenServer extends RestHttpClient {
+        TokenServer() { super(TestOutbound.ADDRESSES); }
         final List<RestRequest> asked = new ArrayList<>();
         RestResponse refuse;
         Exception unreachable;
@@ -41,7 +43,7 @@ class OAuth2AuthProviderFactoryTest {
     private final UUID connector = UUID.randomUUID();
 
     private AuthProvider provider(String secret) {
-        SecretRefs secrets = SecretRefs.environmentOnly(n -> "SAAS_SECRET".equals(n) ? secret : null);
+        SecretRefs secrets = SecretRefs.of(n -> "SAAS_SECRET".equals(n) ? secret : null);
         return new OAuth2AuthProviderFactory(secrets, tokens, server)
             .build(new AuthSpec("oauth2", CFG, List.of(), new AuthSpec.Owner(7L, connector)));
     }
@@ -52,8 +54,8 @@ class OAuth2AuthProviderFactoryTest {
 
     @Test
     void two_tenants_with_the_same_public_grant_and_two_secrets_each_get_their_own_token() throws Exception {
-        SecretRefs first = SecretRefs.environmentOnly(n -> "secret-of-tenant-7");
-        SecretRefs second = SecretRefs.environmentOnly(n -> "secret-of-tenant-8");
+        SecretRefs first = SecretRefs.of(n -> "secret-of-tenant-7");
+        SecretRefs second = SecretRefs.of(n -> "secret-of-tenant-8");
         List<String> sent = new ArrayList<>();
         AuthProvider.Sender record = r -> { sent.add(bearer(r)); return RestResponse.of(200, Map.of(), "{}"); };
         new OAuth2AuthProviderFactory(first, tokens, server).build(new AuthSpec("oauth2", CFG, List.of(), new AuthSpec.Owner(7L, connector)))
@@ -123,7 +125,7 @@ class OAuth2AuthProviderFactoryTest {
 
     @Test
     void a_credential_with_no_connector_is_not_built() {
-        SecretRefs secrets = SecretRefs.environmentOnly(n -> SECRET);
+        SecretRefs secrets = SecretRefs.of(n -> SECRET);
         assertThatThrownBy(() -> new OAuth2AuthProviderFactory(secrets, tokens, server)
             .build(new AuthSpec("oauth2", CFG, List.of())))
             .isInstanceOf(IllegalStateException.class);

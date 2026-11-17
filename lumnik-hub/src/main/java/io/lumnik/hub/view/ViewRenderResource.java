@@ -51,7 +51,8 @@ public class ViewRenderResource {
     public record RenderResponse(String title, List<ResolvedView.Column> columns,
                                  List<Map<String,Object>> rows, boolean truncated,
                                  String dataAsOf, boolean hasMore, String nextCursor,
-                                 @JsonInclude(JsonInclude.Include.NON_EMPTY) List<ViewLink> links) {}
+                                 @JsonInclude(JsonInclude.Include.NON_EMPTY) List<ViewLink> links,
+                                 @JsonInclude(JsonInclude.Include.NON_NULL) MapPlacement.Summary map) {}
 
     @POST
     @Path("/render")
@@ -87,14 +88,21 @@ public class ViewRenderResource {
         boolean paged = pageSize != null || Text.present(cursor);
         if (!paged) {
             ViewDataReader.ReadResult read = ApiErrors.orBadRequest(() -> reader.read(tenant, rv, viewFilters));
-            return Response.ok(new RenderResponse(rv.title(), rv.columns(), wired(rv, read.rows()), read.truncated(),
-                dataAsOf, read.truncated(), null, manifest.links())).build();
+            return respond(manifest, rv, read.rows(), read.spots(), read.truncated(), dataAsOf, null);
         }
 
         SealedPage sealed = ApiErrors.orBadRequest(() -> readPage(tenant, manifest, rv, viewFilters, pageSize, cursor));
         ViewDataReader.PageResult page = sealed.page();
-        return Response.ok(new RenderResponse(rv.title(), rv.columns(), wired(rv, page.rows()), page.hasMore(),
-            dataAsOf, page.hasMore(), sealed.next(), manifest.links())).build();
+        return respond(manifest, rv, page.rows(), page.spots(), page.hasMore(), dataAsOf, sealed.next());
+    }
+
+    /** The rows as served — wired, each with its place when the view draws a map — and the answer around them. */
+    private static Response respond(ViewManifest manifest, ResolvedView rv, List<Map<String, Object>> rows,
+                                    List<MapPlacement.Spot> spots, boolean more, String dataAsOf, String next) {
+        wired(rv, rows);
+        MapPlacement.Summary map = MapPlacement.attach(manifest.mapPoint(), rv, rows, spots);
+        return Response.ok(new RenderResponse(rv.title(), rv.columns(), rows, more, dataAsOf, more, next,
+            manifest.links(), map)).build();
     }
 
     /** The rows as JSON writes them ({@link ResolvedView#wire}). The reader keeps the JDBC types; text is the wire's business. */

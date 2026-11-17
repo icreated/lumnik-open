@@ -7,7 +7,7 @@
 |---|---|
 | **Type** | `rest-generic` |
 | **Protocol** | HTTP/JSON (+ the GraphQL and SOAP request shapes) |
-| **Target** | the table each endpoint declares in `target.table` (`ext.*`) |
+| **Target** | the table each endpoint declares in `target.table`: `ext.<name>`, or `connector.<name>` for an Entity to fuse it (not `v_*`: the entity views take those names) |
 | **Schedulable** | cron |
 | **Edition** | Open |
 
@@ -29,7 +29,12 @@ or an HTML page, fails the run with its Content-Type:
     lm secret set ACME_BASIC_PW        # demo-pass
     lm secret set ACME_BEARER_TOKEN    # demo-token
     lm secret set ACME_API_KEY         # demo-key
+    lm secret scope ACME_BASIC_PW billing
+    lm secret scope ACME_BEARER_TOKEN billing
+    lm secret scope ACME_API_KEY billing
     ```
+
+    Each connector of the demo carries `scopes: [billing]`, and reads only a secret that carries it too.
 
     The manifests point at `http://host.docker.internal:8099`, because the hub runs in a
     container and `localhost` inside it is that container. What each dialect imitates, and
@@ -88,8 +93,7 @@ lumnik->   FROM ext.acme_partners ORDER BY external_id LIMIT 4;
   [Run hooks over the promoted columns](#run-hooks-over-the-promoted-columns).
 - **`unique_key` makes a re-run safe.** It becomes `external_id`, unique per tenant, and every
   write is an upsert — see [Storage layout](#storage-layout).
-- **The password is never in the manifest.** `password_env` names an `lm secret` entry (or, if
-  none, an environment variable on the hub).
+- **The password is never in the manifest.** `password_env` names an `lm secret` entry.
 
 ## The manifest
 
@@ -140,12 +144,10 @@ $ lm validate -f my-api.yaml
 
 - `type` is one of `text`, `bigint`, `integer`, `decimal`, `boolean`, `date`, `timestamptz`,
   `jsonb`.
-- `name` is a new column. It cannot be a column the table already has: `id`, `tenant_id`,
-  `external_id`, `row_hash`, `data`, `indexed_at`, `connector_id`, `endpoint_id`. Two entries
-  cannot share a name.
-- `path` must be a JSONPath.
-- `lm validate` refuses a reserved name, a name used twice and a path that is not a JSONPath. It
-  names the entry.
+- `name` is a new column. `lm validate` refuses a column the table already has: `id`,
+  `tenant_id`, `external_id`, `row_hash`, `data`, `indexed_at`, `connector_id`, `endpoint_id`.
+  It also refuses a name used twice.
+- `path` is a JSONPath. `lm validate` refuses one that is not, and names the entry.
 - `transform:` is optional, e.g. `from_epoch` for a number of seconds:
   [the list](#transform-a-promoted-value).
 
@@ -194,8 +196,7 @@ A `promote` entry takes one `transform:`. A rule over several columns goes in th
 | `2008-04-18` | `2008-04-18T00:00:00Z`: a date alone is midnight |
 | `2026-08-01T14:30:00+02:00` | `2026-08-01T12:30:00Z`: the offset is applied |
 
-Any other shape leaves the column empty for that row and counts one cell error; the row is
-written and keeps the value in its payload.
+Any other shape is one cell error: the column stays empty for that row, and the row is written.
 
 `parse_quantity` reads the notation Kubernetes uses, which many APIs share:
 
@@ -224,8 +225,8 @@ lumnik=> SELECT pod, cpu, cpu_cores, memory, memory_bytes FROM ext.k8s_usage ORD
  checkout-worker-0            | 44515n    | 0.000044515 | 8544Ki |      8749056
 ```
 
-The suffix is case-sensitive: `m` is milli, `M` mega. `12 MB` or `1mi` is not a quantity: the
-column stays empty and the run counts one cell error, as for any transform.
+The suffix is case-sensitive: `m` is milli, `M` mega. `12 MB` or `1mi` is not a quantity: it is
+one cell error.
 
 #### Read an OData v2 date
 
@@ -238,9 +239,8 @@ SAP Gateway sends a date as `/Date(<milliseconds>)/`, and a date with a zone as
 | `/Date(1793577600000+0060)/` | `2026-11-02T00:00:00Z`: the milliseconds are already UTC; the offset only says the zone the source showed |
 | `/Date(-86400000)/` | `1969-12-31T00:00:00Z`: a date before 1970 |
 
-Any other shape leaves the column empty for that row and counts one cell error; the row is
-written and keeps the value in its payload. So does a date outside the years 0001 to 9999, and an
-offset above 1440 minutes.
+Any other shape is one cell error. So is a date outside the years 0001 to 9999, and an offset
+above 1440 minutes.
 
 ```yaml
 promote:
@@ -389,12 +389,16 @@ default is reported once, at `spec.defaults.<key>`.
 | `session` | `login_url`, `username`, `password_env: VAR_NAME`; optional `prime_url`, `username_field`, `password_field`, `csrf_field` — [below](#a-form-login-session) |
 | `none` | no credentials (the default when `auth:` is omitted) |
 
-Every auth `*_env` field names an [`lm secret`](../cli/lm-reference.md#data-runs-answers) entry
-first, then a variable of that name in the hub's environment. Set the value before `lm apply`:
+Every auth `*_env` field names an [`lm secret`](../cli/lm-reference.md#data-runs-answers) entry of
+your tenant. The hub's environment is not read. Set the value before `lm apply`:
 
 ```bash
 lm secret set ACME_BASIC_PW     # prompts at the keyboard; what you type is not shown
+lm secret scope ACME_BASIC_PW billing
 ```
+
+A connector reads a secret only when it carries every scope of the secret
+([secret scopes](../admin-console-guide.md#which-connectors-may-read-a-secret-its-scopes)).
 
 - `scheme` is the word before a bearer token. An API on Django REST Framework's token
   authentication, NetBox for one, wants `Authorization: Token <key>` and refuses `Bearer`:
@@ -545,9 +549,9 @@ Not covered: logins that need JavaScript, a second factor, or a redirect to SAML
 
 ## An internal CA
 
-An API served over HTTPS with a certificate your company's CA signed — an in-house service, a
-reverse proxy with its own PKI, a Kubernetes API server — is refused at the handshake: lumnik
-trusts the public CAs only. Name the CA in the connector:
+lumnik trusts the public CAs only. An API whose certificate your company's CA signed is refused
+at the handshake: an in-house service, a reverse proxy with its own PKI, a Kubernetes API server.
+Name the CA in the connector:
 
 ```yaml
 spec:
@@ -558,8 +562,11 @@ spec:
 
 ```bash
 lm secret set CLUSTER_CA - < ca.crt
+lm secret scope CLUSTER_CA <scopes>    # the connector's scopes, when it has any
 ```
 
+- **`kubernetes.default.svc` is a private address.** The Helm chart refuses those: set
+  `outbound.allowPrivate=true` ([Where the hub connects](../security/outbound-addresses.md)).
 - **Only the CAs in that secret are trusted** for this connector — the public ones no longer are.
   Its runs, `lm source rest test` and `lm source rest probe` all share that trust.
 - A secret may hold several PEM certificates (a root and an intermediate): each one is trusted.
@@ -678,12 +685,11 @@ Connector-level only — `spec.headers[]` goes out on **every** request:
 spec:
   headers:
     - { name: X-Api-Version, value: "2026-01" }       # static
-    - { name: X-Client-Id,   value_env: CLIENT_ID }   # from lm secret or the environment
+    - { name: X-Client-Id,   value_env: CLIENT_ID }   # from lm secret
 ```
 
 - Each entry needs `name` + **exactly one** of `value` / `value_env`.
-- `value_env` reads like an auth `*_env` field: the `lm secret` entry first, then a variable of
-  that name in the hub's environment.
+- `value_env` reads like an auth `*_env` field: an `lm secret` entry.
 - A `value_env` that resolves to nothing is an error, not a missing header: the run,
   `lm source rest test` and `lm source rest probe` stop before sending the request. The error
   names the header and the reference, never a value.
@@ -724,6 +730,8 @@ versioned   GET     -       0      Header X-Api-Version unavailable (env=ACME_AP
 Error: 2 of 2 enabled endpoint(s) did not answer with readable data
 $ lm secret set ACME_API_VERSION      # 2026-01
 Created secret "ACME_API_VERSION"
+$ lm secret scope ACME_API_VERSION billing
+scopes: billing
 $ lm source rest test acme-witness-env
 ENDPOINT    METHOD  STATUS  ITEMS  VERDICT
 incomplete  GET     200     500    ok
@@ -744,6 +752,7 @@ incremental:
   lookback: 10m           # optional — see "A change during a run" below
 ```
 
+The demo's `/offset/partners` filters on `updated_since`:
 
 ```yaml
 --8<-- "docs/connectors/rest/demo/40-watermark.yaml"
@@ -771,8 +780,8 @@ table still holds 2 400 rows.
 
 ### A change during a run
 
-An order that changes while a run is reading could be missed by the next run. So each run asks
-from a little before the last mark. The few orders read twice are simply updated again.
+A row that changes while a run is reading could be missed by the next run. So each run asks
+from a little before the last mark. The few rows read twice are updated again.
 
 - By default, the margin is the length of the run that set the mark, plus one minute.
 - `lookback: 10m` chooses that margin yourself; `lookback: 0s` turns it off.
@@ -1136,21 +1145,17 @@ things before you apply it:
   and `/spring/partners` takes `{ kind: spring-page }`.
 - **Target.** `promote` is empty: every row lands as JSONB only.
 
-A URL that holds no spec is refused:
+A URL that holds no spec is refused, with what it answered:
 
 ```
+$ lm source rest from-openapi http://127.0.0.1:8099/open/partners --name x --scope billing -o x.yaml
+Error: API error 502: no OpenAPI spec could be read at http://127.0.0.1:8099/open/partners: not an OpenAPI spec, or one with no path
 $ lm source rest from-openapi http://127.0.0.1:8099/spring/partners --name x --scope billing -o x.yaml
-Error: API error 502: no OpenAPI spec could be read at http://127.0.0.1:8099/spring/partners — unreachable, not a spec, or not parseable
+Error: API error 502: no OpenAPI spec could be read at http://127.0.0.1:8099/spring/partners: HTTP 401
 ```
 
-### Reset a stuck cursor
-
-```bash
-lm endpoint reset-cursor <connector>/<endpoint>
-```
-
-**Result:** the stored watermark is cleared and the next `lm connector run` is a full read.
-The command prints nothing.
+The hub fetches the spec itself, over `http` or `https`, and follows no `$ref` to another
+document. Where it may connect: [Where the hub connects](../security/outbound-addresses.md).
 
 ### Empty one endpoint's rows
 

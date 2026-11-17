@@ -66,7 +66,7 @@ class EntityResolutionRunHookTest {
       st.execute("DELETE FROM core.entity_identity WHERE entity_type = '" + ENTITY_TYPE + "'");
     }
     EntityManifest m = new EntityManifestParser().parse(MANIFEST);
-    registry.put(m);
+    registry.put(m, null);
   }
 
   @Test

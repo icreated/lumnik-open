@@ -19,7 +19,7 @@ public final class SourceBlockValidator {
             .requireListOf("tables", Importance.HIGH,
                 "List of tables to ingest (at least one)", perTableDef().describesOnly())
                 .nonEmpty()
-                .hint("Add a table: { name: 'invoices', mode: 'full', pk_columns: ['id'] }");
+                .hint("Add a table: { name: 'invoices', schema: 'public', mode: 'full', pk_columns: ['id'] }");
     }
 
     /**
@@ -41,7 +41,7 @@ public final class SourceBlockValidator {
                 // persists and kills the first run it is given.
                 ConfigDefValidators.plainIdentifier("the hub table connector.t_<name>"))
             .optionalCustom("target", Type.STRING, Importance.MEDIUM,
-                "Names the hub table connector.t_<target> in place of the source table's name (#1199)",
+                "Names the hub table connector.t_<target> in place of the source table's name",
                 ConfigDefValidators.plainIdentifier("the hub table connector.t_<target>"))
             .requireEnum("mode", Importance.HIGH, "Ingest mode (here or in defaults)", "watermark", "full")
             // Required because the run reads it unconditionally ("Missing config key: schema", #1243);

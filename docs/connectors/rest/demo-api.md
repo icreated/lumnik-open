@@ -66,7 +66,13 @@ lm secret set ACME_BASIC_PW        # demo-pass   — /spring, /offset, /hdr, /li
 lm secret set ACME_BEARER_TOKEN    # demo-token  — /v1 and /drf
 lm secret set ACME_API_KEY         # demo-key    — /link and /graphql
 lm secret set ACME_SESSION_TOKEN   # demo-session-42 — /session, inside the SOAP envelope
+lm secret scope ACME_BASIC_PW billing
+lm secret scope ACME_BEARER_TOKEN billing
+lm secret scope ACME_API_KEY billing
+lm secret scope ACME_SESSION_TOKEN billing
 ```
+
+Each connector of the demo carries `scopes: [billing]`, and reads only a secret scoped `billing`.
 
 !!! note "`host.docker.internal`, not `localhost`"
     The manifests point at `http://host.docker.internal:8099`. The hub runs in a container, and

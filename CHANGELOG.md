@@ -7,6 +7,90 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.12.0 — 2026-11-18
+
+A security release. Several things that used to pass are now refused: read **Before you upgrade**
+first. The upgrade guide (`docs/operations/upgrade.md`) has the exact messages and the
+gestures. Nine migrations (V91 to V99) run by themselves at start. `lm` 1.9.0.
+
+### Before you upgrade
+- **A hook override carries no code any more. The upgrade deletes the scripts already stored** (V94);
+  the on/off switches stay. Export them first with the query in the upgrade guide. To run one again,
+  add it to a module of your own hub build.
+- **A manifest reads `lm secret` only.** Every `*_env` key and SOAP's `{{env:NAME}}` no longer read the
+  hub's environment. Store each value in the tenant that uses it: `lm secret set NAME`. S3 without its
+  own keys reads the secrets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+- **A connector reads a secret only when it carries every scope of the secret.** Secrets stored before
+  have no scope and keep serving the connectors without scopes only. Scope them:
+  `lm secret scope ERP_PASSWORD ventes`. An export needs a secret scoped to the export's scope.
+- **The `local` file transport is off until you set `LUMNIK_CSV_LOCAL_ROOT`.** Each tenant reads
+  `<root>/<tenant id>/` only, and a `path` is relative to it. Move the files, make each `path`
+  relative, `lm apply`, then `lm endpoint reset-cursor <connector>/<endpoint>`.
+- **The hub checks where an address leads before it connects**: REST, OAuth2, SOAP, GraphQL,
+  `from-openapi`, webhooks, JDBC, S3, SFTP. The cloud metadata address is always refused. `localhost`
+  is refused unless `LUMNIK_OUTBOUND_ALLOW_LOOPBACK=true`. On Helm, private addresses too, unless
+  `outbound.allowPrivate=true`. A JDBC URL by TNS alias, LDAP or `service=` must name its host.
+- **A REST response over 64 MiB fails the run.** Page the endpoint, or raise
+  `LUMNIK_OUTBOUND_MAX_RESPONSE_MB`.
+- **A REST `target.table` is `ext.<name>` or `connector.<name>`, and the hub writes only the tables
+  it made.** The upgrade lists the existing ones (V98). Another table is refused before any change:
+  rename the target under `ext`, then `lm apply -f`.
+- **Declared `indexes:` start with `tenant_id`** and `unique` means unique within a tenant. The upgrade
+  rebuilds them (V96); writes to those tables wait meanwhile. With several replicas, stop the runs
+  during the upgrade. An index it cannot rebuild is named in the log: rebuild it by hand.
+- **Health and metrics moved to port 9000** (`/q/health`, `/q/metrics`, `/q/openapi`). On 8080 they
+  answer 404. Point Prometheus at `hub:9000/q/metrics` from inside the hub's network, and never
+  publish 9000. `GET /api/bff/v1/openapi.json` is gone.
+- **A hub started by hand refuses the published defaults**: dev-bypass, the crypto key, the three
+  database passwords. Set your own. The self-host stack and Helm already do.
+- **On a hub with several tenants, `lm_superadmin` writes entities, views and apps.** Give it to the
+  integrator who applies them. One tenant: nothing changes. `LUMNIK_TENANCY` is `auto` or `multi`.
+- **An entity, a view or an app belongs to the tenant that applied it** (V99). With one tenant,
+  yours stay yours. With several, what existed is shared: change it as `hubadmin`. A name is unique
+  on the hub; another tenant's answers `404`.
+- **Two tenants on one table name see only their own columns.** An entity naming another tenant's
+  column is refused as one that does not exist. Tables ingested before may still list another
+  tenant's columns. A coming release brings a command to set them.
+- **An Entity reads connector tables only, within their scopes.** A table no connector writes is
+  refused. An Entity over another Entity's view keeps that view's scopes. A connector cannot drop a
+  scope an Entity reading its tables needs. Re-apply your Entities after the upgrade to see any
+  refusal now.
+- **A caller with a `scope:*` role is refused the tenant-wide doors** (secrets, users and roles,
+  tenants, hooks, dead letters): `403 {"error":"scope not granted"}`. `lm hook list` needs `lm_admin`.
+- **The bundled Keycloak realm is stricter.** Run `./deploy/selfhost/up.sh`: it makes `tenant_id` and
+  `user_id` admin-only. Then set events, the password policy, and untick *Direct access grants* on
+  `lumnik-spa`, as the upgrade guide says.
+- **Rate limits are per user, under a tenant ceiling** (`LUMNIK_RATELIMIT_TENANT_FACTOR`, 5). Probing
+  sources has its own limit, 60 per minute (`LUMNIK_RATELIMIT_SOURCE_PROBE_RPM`).
+- **HSTS is opt-in on the TLS façade**: `LUMNIK_TLS_HSTS=true` for a public name with a real
+  certificate.
+- **The self-host compose now passes `OIDC_SUBJECT_CLAIM`, `LUMNIK_AUTH_VERIFY_WITH_IDP` and
+  `LUMNIK_CONNECTOR_MAX_CONCURRENT_SCHEDULED_RUNS` from `.env`.** A value set there was ignored; it
+  now takes effect.
+- **Webhooks show the receiver's status only**, never its body; the stored errors are trimmed (V97).
+- **`sort-by` refuses `max-rows`**, which never had an effect. A column named by a number
+  (`columns: [2024]`) is now checked like any other.
+
+### Added
+- **`lm` 1.9.0:** `lm secret scope NAME SCOPES` sets the scopes a secret serves, and `lm secret list`
+  shows them. `lm apply` refuses an absolute local `path`. When Ask is closed, `lm` shows the hub's
+  reason.
+- **`parse-coordinates`** reads a pair of columns as one GPS point: decimal commas, hemisphere letters,
+  degrees-minutes-seconds, swapped pairs.
+- **A view on a map.** A View names a point of its Entity, `spec.map: { point: <name> }`; **Records**
+  offers a list or a map. Set `LUMNIK_MAP_TILES` for a background map.
+
+### Fixed
+- A dead letter or an `on-error: fail` stop says why a transformer refused the value.
+- `to-uuid: { generate-from: 2024 }` and `map-columns: { drop: [2024] }` are accepted.
+- REST retries honour a `Retry-After` written as a date.
+- A secret written with `lm secret` reaches every hub replica at its next read.
+- A connector's inline credentials are returned as `<redacted>`, never in clear.
+- A JDBC test no longer reads the hub's own `~/.pgpass`, and gives up in about 12 s on a silent
+  server. SFTP no longer offers the hub's own SSH keys.
+- The PWA sends `nosniff`, `Referrer-Policy` and a Content-Security-Policy.
+- `./deploy/selfhost/backup.sh` writes files readable by their owner only.
+
 ## v1.11.2 — 2026-11-10
 
 The open edition now has a public image. Each release tag builds the hub and pushes it to

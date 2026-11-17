@@ -2,10 +2,11 @@ package io.lumnik.hub.security;
 
 import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.api.ApplyScopeBoundary;
-import io.lumnik.hub.api.TenantWide;
+import io.lumnik.common.security.TenantWide;
 import io.lumnik.hub.api.TenantWideFilter;
 import io.lumnik.testkit.sources.ScopeBoundaryRule;
 import io.lumnik.testkit.sources.ScopeBoundaryRule.Sweep;
+import io.lumnik.testkit.sources.ScopeInventory;
 import io.lumnik.testkit.sources.SourceTree;
 import jakarta.ws.rs.NameBinding;
 import jakarta.ws.rs.ext.Provider;
@@ -53,10 +54,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class ScopeBoundaryInventoryTest {
 
-  private static final SourceTree HUB_SOURCES = SourceTree.of("lumnik-hub", "io/lumnik/hub");
+  private static final SourceTree HUB_SOURCES = ScopeInventory.sources("hub_scope_boundary");
 
   /**
-   * Touching any of these means the door is working inside a scope. The first two are
+   * Touching any of these means the door is working inside a scope (the list: {@code scripts/scope-inventory.json},
+   * read per pull request by {@code check-scope-inventory.py}, #2018). The first two are
    * the scope's SCHEMA; the third is the scope's DECLARATION — a door that reads
    * {@code metadata.scopes} off a manifest is about to stamp those scopes on something, and
    * the connector apply door did exactly that for months without asking. Its scope side-effect
@@ -81,34 +83,38 @@ class ScopeBoundaryInventoryTest {
    *
    * <p>A kind:Workflow lives in its {@code spec.scope}: its graph and the tape of the documents it
    * watches are that scope's. The read door over them answered the whole tenant (#1254).
+   *
+   * <p>The hook stores act for the whole tenant: an override switches a hook on or off for every scope, and the
+   * registry names every binding. The override, toggle and admin-list doors passed a scope-bound caller on role
+   * alone (#1992, #2011).
    */
-  private static final List<String> SCOPE_TOUCHING =
-      List.of("SchemaCardStore", "DiscoveryService", "ApplyUpsert.scopes(",
-          "connector.dynamic_table", "DynamicTableRegistry", "DynamicTableScope.",
-          "NotificationRuleRepository", "WebhookEndpointRepository", "WebhookDeliveryRepository",
-          "IntegrationResource delegate", "core.event_outbox", "ConnectorRepository",
-          "CsvIngestService", "WorkflowRegistry", "WorkflowManifestStore", "WorkflowObservationStore");
+  private static final List<String> SCOPE_TOUCHING = ScopeInventory.list("hub_scope_boundary", "touching");
 
   /**
    * {@code ScopeGrants}' own decisions, and refusals built on them that no door can reach and
    * then ignore: the dynamic-table and connector rules refuse by throwing — for an id held, or for
-   * the tags a creating door is about to stamp — so calling one is acting on it; a {@code @TenantWide} door is refused to every scope-bound caller by its filter, before
-   * any method runs.
+   * the tags a creating door is about to stamp — so calling one is acting on it; a {@code @TenantWide} door is refused
+   * to every scope-bound caller by its filter, before any method runs. The helpers are {@code doors.helper_deciders},
+   * each held by {@code DoorInventoryTest} to a file that asks {@code ScopeGrants} or {@code ScopeAccess} itself.
    */
-  private static final List<String> DECIDING_CALLS = Stream.concat(
+  private static final List<String> DECIDING_CALLS = Stream.of(
       ScopeBoundaryRule.decidingCalls(ScopeGrants.class).stream(),
-      Stream.of("DynamicTableScope.readableTable(", "ConnectorScope.held(", "ConnectorScope.heldForUpdate(",
-          "ConnectorScope.refuseUnlessHolds(", "ConnectorScope::holds", "@TenantWide")).toList();
+      ScopeInventory.list("hub_scope_boundary", "extra_deciding_calls").stream(),
+      ScopeInventory.map("doors", "helper_deciders").keySet().stream()).flatMap(s -> s).toList();
 
   /**
    * Doors that touch a scope's schema and deliberately do NOT bind to it. Each needs a reason a
    * reader can check, not just a name — an exemption without one is how the rule erodes.
    */
-  private static final Map<String, String> EXEMPT = Map.of();
+  private static final Map<String, String> EXEMPT = ScopeInventory.exempt("hub_scope_boundary");
+
+  /** The file-name axes, from the same file: a door's suffix, and an apply door's. */
+  private static final String RESOURCE = ScopeInventory.value("hub_scope_boundary", "suffix").asText();
+  private static final String APPLY_RESOURCE = ScopeInventory.value("apply_doors", "suffix").asText();
 
   @Test
   void everyDoorThatTouchesAScopeDecidesWhetherTheCallerHoldsIt() throws IOException {
-    Sweep sweep = ScopeBoundaryRule.sweep(HUB_SOURCES, "Resource.java", SCOPE_TOUCHING,
+    Sweep sweep = ScopeBoundaryRule.sweep(HUB_SOURCES, RESOURCE, SCOPE_TOUCHING,
         DECIDING_CALLS, EXEMPT.keySet());
 
     assertThat(sweep.seen())
@@ -118,8 +124,8 @@ class ScopeBoundaryInventoryTest {
     assertThat(sweep.unguarded())
         .as("""
             These doors work inside a scope's schema but never ask whether the caller holds \
-            that scope. Either call ScopeGrants (403 "%s", the uniform refusal), or add the file to \
-            EXEMPT with a reason a reader can check.""".formatted("scope not granted"))
+            that scope. Either call ScopeGrants (403 "%s", the uniform refusal), or exempt the file in \
+            scripts/scope-inventory.json (hub_scope_boundary) with a reason a reader can check.""".formatted("scope not granted"))
         .isEmpty();
   }
 
@@ -182,7 +188,7 @@ class ScopeBoundaryInventoryTest {
    */
   @Test
   void everyApplyDoorAlsoAsksAboutTheScopeItIsAboutToOverwrite() throws IOException {
-    Sweep sweep = sweep(HUB_SOURCES, "ApplyResource.java",
+    Sweep sweep = sweep(HUB_SOURCES, APPLY_RESOURCE,
         ScopeBoundaryInventoryTest::consultsTheStoredScope);
 
     assertThat(sweep.seen())
@@ -207,8 +213,8 @@ class ScopeBoundaryInventoryTest {
   @Test
   void noDoorTakesAManifestWithoutBeingNamedLikeOne() throws IOException {
     List<String> takesAManifest = new ArrayList<>();
-    for (Path p : HUB_SOURCES.javaFiles("Resource.java")) {
-      if (SourceTree.code(Files.readString(p)).contains("apply(String ")) {
+    for (Path p : HUB_SOURCES.javaFiles(RESOURCE)) {
+      if (SourceTree.code(Files.readString(p)).contains(ScopeInventory.value("apply_doors", "manifest_marker").asText())) {
         takesAManifest.add(p.getFileName().toString());
       }
     }
@@ -217,12 +223,12 @@ class ScopeBoundaryInventoryTest {
         .as("a resource whose body takes a manifest but whose name does not end in "
             + "ApplyResource.java would never be swept for the stored-scope check")
         .isNotEmpty()
-        .allSatisfy(name -> assertThat(name).endsWith("ApplyResource.java"));
+        .allSatisfy(name -> assertThat(name).endsWith(APPLY_RESOURCE));
   }
 
   /** Does this door ask about the row it is about to overwrite? */
   static boolean consultsTheStoredScope(String javaSource) {
-    return SourceTree.code(javaSource).contains("ApplyScopeBoundary.refuseUnless");
+    return SourceTree.code(javaSource).contains(ScopeInventory.value("apply_doors", "stored_scope_call").asText());
   }
 
   /**
@@ -273,6 +279,14 @@ class ScopeBoundaryInventoryTest {
         .as("and the filter that refuses a bound caller must be bound to it").isTrue();
     assertThat(TenantWideFilter.class.isAnnotationPresent(Provider.class))
         .as("and registered").isTrue();
+  }
+
+  /** The script judges with the decider the file names; this test reflects on ScopeGrants: the two must be one. */
+  @Test
+  void theFileNamesTheDeciderThisTestReflectsOn() {
+    assertThat(ScopeInventory.value("hub_scope_boundary", "decider").asText()).isEqualTo(ScopeGrants.class.getSimpleName());
+    assertThat(ScopeInventory.value("deciders", ScopeGrants.class.getSimpleName()).asText())
+        .endsWith("src/main/java/" + ScopeGrants.class.getName().replace('.', '/') + ".java");
   }
 
   @Test

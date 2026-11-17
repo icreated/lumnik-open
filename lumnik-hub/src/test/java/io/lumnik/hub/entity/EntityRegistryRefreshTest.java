@@ -35,7 +35,7 @@ class EntityRegistryRefreshTest {
 
         void write(String name, String yaml) {
             table.removeIf(r -> r.name().equals(name));
-            table.add(new Row(name, yaml));
+            table.add(new Row(name, yaml, null));
             version++;
         }
 
@@ -49,7 +49,7 @@ class EntityRegistryRefreshTest {
             reads++;
             List<Row> rows = List.copyOf(table);
             duringRead.run();
-            return unreadable ? rows.stream().map(r -> new Row(r.name(), "kind: Entity\nname: [not closed")).toList() : rows;
+            return unreadable ? rows.stream().map(r -> new Row(r.name(), "kind: Entity\nname: [not closed", null)).toList() : rows;
         }
     }
 
@@ -58,12 +58,12 @@ class EntityRegistryRefreshTest {
         Node node = new Node();
         node.write("orders", yaml("Orders", ""));
         node.refreshIfChanged();
-        assertThat(node.find("orders").sources()).hasSize(1);
+        assertThat(node.findHubwide("orders").sources()).hasSize(1);
 
         node.write("orders", yaml("Orders", "  - table: t_b\n    map: { code: code }\n"));
         node.refreshIfChanged();
 
-        assertThat(node.find("orders").sources()).hasSize(2);
+        assertThat(node.findHubwide("orders").sources()).hasSize(2);
     }
 
     @Test
@@ -71,13 +71,13 @@ class EntityRegistryRefreshTest {
         Node node = new Node();
         node.write("orders", yaml("Orders", ""));
         node.refreshIfChanged();
-        assertThat(node.find("orders").resolution()).isNull();
+        assertThat(node.findHubwide("orders").resolution()).isNull();
 
         node.write("orders", "kind: Entity\nname: Orders\nsources:\n  - table: t_a\n    map: { code: code, mail: email }\n"
             + "resolution:\n  identity:\n    t_a: code\n  cascade:\n    - id: email\n      exact: { fields: [email] }\n");
         node.refreshIfChanged();
 
-        assertThat(node.find("orders").resolution()).isNotNull();
+        assertThat(node.findHubwide("orders").resolution()).isNotNull();
     }
 
     @Test
@@ -90,8 +90,8 @@ class EntityRegistryRefreshTest {
         node.delete("orders");
         node.refreshIfChanged();
 
-        assertThat(node.find("orders")).isNull();
-        assertThat(node.find("kept")).isNotNull();
+        assertThat(node.findHubwide("orders")).isNull();
+        assertThat(node.findHubwide("kept")).isNotNull();
     }
 
     @Test
@@ -113,14 +113,14 @@ class EntityRegistryRefreshTest {
         node.write("orders", yaml("Orders", ""));
         node.write("other", yaml("Other", ""));
         node.refreshIfChanged();
-        EntityManifest before = node.find("orders");
+        EntityManifest before = node.findHubwide("orders");
 
         node.write("orders", "kind: Entity\nname: [not closed");
         node.write("other", yaml("Other", "  - table: t_b\n    map: { code: code }\n"));
         node.refreshIfChanged();
 
-        assertThat(node.find("orders")).as("the last readable definition stays").isSameAs(before);
-        assertThat(node.find("other").sources()).as("the readable one is refreshed").hasSize(2);
+        assertThat(node.findHubwide("orders")).as("the last readable definition stays").isSameAs(before);
+        assertThat(node.findHubwide("other").sources()).as("the readable one is refreshed").hasSize(2);
     }
 
     /** A failure that was not the definition's own (the next tick reads it fine) must heal without another write. */
@@ -132,12 +132,12 @@ class EntityRegistryRefreshTest {
         node.unreadable = true;
         node.write("orders", yaml("Orders", "  - table: t_b\n    map: { code: code }\n"));
         node.refreshIfChanged();
-        assertThat(node.find("orders").sources()).hasSize(1);
+        assertThat(node.findHubwide("orders").sources()).hasSize(1);
 
         node.unreadable = false;
         node.refreshIfChanged();
 
-        assertThat(node.find("orders").sources()).hasSize(2);
+        assertThat(node.findHubwide("orders").sources()).hasSize(2);
     }
 
     /** A refresh that read before an apply on this node and swapped after it must not take the apply back. */
@@ -148,11 +148,11 @@ class EntityRegistryRefreshTest {
         node.refreshIfChanged();
         EntityManifest applied = new EntityManifestParser().parse(yaml("Orders", "  - table: t_b\n    map: { code: code }\n"));
         node.write("orders", yaml("Orders", "  - table: t_c\n    map: { code: code }\n"));
-        node.duringRead = () -> node.put(applied);
+        node.duringRead = () -> node.put(applied, null);
 
         node.refreshIfChanged();
 
-        assertThat(node.find("orders")).isSameAs(applied);
+        assertThat(node.findHubwide("orders")).isSameAs(applied);
     }
 
     /**
@@ -171,7 +171,7 @@ class EntityRegistryRefreshTest {
         List<Thread> writers = new ArrayList<>();
         java.util.concurrent.atomic.AtomicBoolean finishedInsideTheWindow = new java.util.concurrent.atomic.AtomicBoolean();
         node.afterCheck = () -> {
-            Thread put = new Thread(() -> node.put(applied));
+            Thread put = new Thread(() -> node.put(applied, null));
             Thread remove = new Thread(() -> node.remove("gone"));
             writers.add(put);
             writers.add(remove);
@@ -188,8 +188,8 @@ class EntityRegistryRefreshTest {
         for (Thread t : writers) t.join();
 
         assertThat(finishedInsideTheWindow).as("no writer completes before the swap has").isFalse();
-        assertThat(node.find("orders")).as("the apply made while the swap ran is not taken back").isSameAs(applied);
-        assertThat(node.find("gone")).as("nor is the delete").isNull();
+        assertThat(node.findHubwide("orders")).as("the apply made while the swap ran is not taken back").isSameAs(applied);
+        assertThat(node.findHubwide("gone")).as("nor is the delete").isNull();
     }
 
     /** A row spelled in capitals that cannot be read keeps the copy under the registry's own (lower-case) key. */
@@ -198,13 +198,13 @@ class EntityRegistryRefreshTest {
         Node node = new Node();
         node.write("orders", yaml("Orders", ""));
         node.refreshIfChanged();
-        EntityManifest before = node.find("orders");
+        EntityManifest before = node.findHubwide("orders");
 
         node.delete("orders");
         node.write("Orders", "kind: Entity\nname: [not closed");
         node.refreshIfChanged();
 
-        assertThat(node.find("orders")).isSameAs(before);
+        assertThat(node.findHubwide("orders")).isSameAs(before);
     }
 
     /** The miss path swaps too: its prune must wait for whoever holds the registry's lock, like the refresh's. */
@@ -215,7 +215,7 @@ class EntityRegistryRefreshTest {
         java.util.concurrent.atomic.AtomicBoolean done = new java.util.concurrent.atomic.AtomicBoolean();
         Thread reload;
         synchronized (node.swapLock) {
-            reload = new Thread(() -> { node.findReloadingIfMissing("orders"); done.set(true); });
+            reload = new Thread(() -> { node.findReloadingIfMissingHubwide("orders"); done.set(true); });
             reload.start();
             Thread.sleep(300);
             assertThat(done).as("the reload cannot swap while the lock is held").isFalse();
@@ -223,6 +223,6 @@ class EntityRegistryRefreshTest {
         reload.join(5000);
 
         assertThat(done).isTrue();
-        assertThat(node.find("orders")).isNotNull();
+        assertThat(node.findHubwide("orders")).isNotNull();
     }
 }

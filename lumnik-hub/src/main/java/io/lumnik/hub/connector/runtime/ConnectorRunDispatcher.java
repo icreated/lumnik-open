@@ -291,11 +291,14 @@ public class ConnectorRunDispatcher {
 
     private static final String LOCK_NOT_AVAILABLE = "55P03";
 
+    /** How long a cancel waits for a queued run's row while a dispatcher holds it, before answering "being started". */
+    public static final Duration QUEUED_CANCEL_ROW_WAIT = Duration.ofSeconds(5);
+
     /**
      * Ends a queued run at its owner's request: the row and its endpoint's last-run stamp commit together.
-     * The UPDATE waits up to five seconds while a dispatcher holds the row, then re-checks its status: a run that
-     * started in the meantime is {@code NOT_QUEUED} and left to the caller's in-flight cancel; a dispatcher that
-     * holds the row for longer is {@code BUSY}, and the run is being started.
+     * The UPDATE waits up to {@link #QUEUED_CANCEL_ROW_WAIT} while a dispatcher holds the row, then re-checks its
+     * status: a run that started in the meantime is {@code NOT_QUEUED} and left to the caller's in-flight cancel; a
+     * dispatcher that holds the row for longer is {@code BUSY}, and the run is being started.
      */
     public QueuedCancel cancelQueued(UUID runId, long tenantId) {
         OffsetDateTime at = Instant.now().atOffset(ZoneOffset.UTC);
@@ -304,7 +307,8 @@ public class ConnectorRunDispatcher {
             // One transaction: any failure rolls back, an Error included (#1649). Left open, the pool's reset would
             // COMMIT the run's ending without its endpoint's stamp.
             outcome = Jdbc.transaction(adminDs, "ConnectorRunDispatcher.cancelQueued", conn -> {
-                Jdbc.update(conn, "ConnectorRunDispatcher.cancelQueued lock_timeout 5s", "SET LOCAL lock_timeout = '5s'", ps -> {});
+                Jdbc.update(conn, "ConnectorRunDispatcher.cancelQueued lock_timeout",
+                    "SET LOCAL lock_timeout = '" + QUEUED_CANCEL_ROW_WAIT.toMillis() + "ms'", ps -> {});
                 List<UUID> ended = Jdbc.query(conn, "ConnectorRunDispatcher.cancelQueued", CANCEL, ps -> {
                     ps.setObject(1, at);
                     ps.setObject(2, at);
@@ -315,7 +319,7 @@ public class ConnectorRunDispatcher {
                 if (ended.isEmpty()) return QueuedCancel.NOT_QUEUED;   // nothing was written: its commit is a no-op
                 UUID endpointId = ended.get(0);
                 if (endpointId != null) {
-                    // The five seconds were for the dispatcher's row; the endpoint row is held only briefly by an ending.
+                    // The bounded wait was for the dispatcher's row; the endpoint row is held only briefly by an ending.
                     Jdbc.update(conn, "ConnectorRunDispatcher.cancelQueued lock_timeout reset", "SET LOCAL lock_timeout = 0", ps -> {});
                     stamp(conn, at, endpointId, tenantId);
                 }

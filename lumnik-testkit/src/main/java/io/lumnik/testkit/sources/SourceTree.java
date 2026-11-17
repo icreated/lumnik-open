@@ -27,6 +27,13 @@ public final class SourceTree {
 
     private SourceTree(Path root) { this.root = root; }
 
+    /** The tree at exactly this directory, for a caller that names it whole (ScopeInventory, #2018). */
+    static SourceTree at(Path dir) {
+        if (!Files.isDirectory(dir)) throw new IllegalStateException(
+            "no source tree at " + dir + " — an inventory cannot police what it cannot find");
+        return new SourceTree(dir);
+    }
+
     /**
      * The main sources of one module.
      *
@@ -71,6 +78,17 @@ public final class SourceTree {
     }
 
     public Path root() { return root; }
+
+    /**
+     * The reactor root — the directory holding every {@code lumnik-*} module — found the same way: from cwd, then
+     * each ancestor. For a sweep that spans every module rather than one.
+     */
+    public static Path reactorRoot() {
+        for (Path dir = Path.of("").toAbsolutePath(); dir != null; dir = dir.getParent()) {
+            if (Files.isDirectory(dir.resolve("lumnik-hub/src/main"))) return dir;
+        }
+        throw new IllegalStateException("cannot locate the reactor root from " + Path.of("").toAbsolutePath());
+    }
 
     /** Every {@code .java} file under this tree. */
     public List<Path> javaFiles() throws IOException {

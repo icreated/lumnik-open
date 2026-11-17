@@ -6,6 +6,7 @@ import java.io.EOFException;
 import java.security.cert.CertificateException;
 import javax.net.ssl.SSLHandshakeException;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
@@ -73,5 +74,30 @@ class RetryExecutorTest {
             throw cut;
         }));
         assertEquals(3, n.get());
+    }
+
+    // ── Retry-After: seconds, or an HTTP date (RFC 9110 §10.2.3) ──
+
+    static final Instant NOW = Instant.parse("2026-10-21T07:28:00Z");
+
+    @Test
+    void retryAfter_inSeconds_isThatWait() {
+        assertEquals(120_000L, RetryExecutor.retryAfterMillis(Optional.of(" 120 "), NOW));
+    }
+
+    @Test
+    void retryAfter_asAnHttpDate_isTheWaitUntilThatDate() {
+        assertEquals(90_000L, RetryExecutor.retryAfterMillis(Optional.of("Wed, 21 Oct 2026 07:29:30 GMT"), NOW));
+    }
+
+    @Test
+    void retryAfter_asADateAlreadyPast_isAnImmediateRetry() {
+        assertEquals(0L, RetryExecutor.retryAfterMillis(Optional.of("Wed, 21 Oct 2026 07:00:00 GMT"), NOW));
+    }
+
+    @Test
+    void retryAfter_absentOrUnreadable_leavesTheBackoff() {
+        assertEquals(-1L, RetryExecutor.retryAfterMillis(Optional.empty(), NOW));
+        assertEquals(-1L, RetryExecutor.retryAfterMillis(Optional.of("soon"), NOW));
     }
 }

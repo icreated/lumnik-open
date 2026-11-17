@@ -25,7 +25,7 @@ func baseline(seed int64) manifestFields {
 	return manifestFields{
 		name:          fmt.Sprintf("otk-adv-%d", seed),
 		transportKind: "local",
-		path:          "/tmp/otk/in/*.csv",
+		path:          "otk/in/*.csv", // relative to the tenant's folder of the local root: an absolute one is refused at apply (#2001)
 		delimiter:     ",",
 		chunkSize:     "1000",
 		afterProcess:  "none",
@@ -120,7 +120,7 @@ var variantsByCategory = map[string][]variant{
 		{name: "huge-scopes", field: "metadata.scopes", payloads: []string{""},
 			mutate: func(m *manifestFields, _ string) { m.scopes = manyScopes(10000) }},
 		{name: "unicode-glob-path", field: "spec.transport.path", payloads: []string{""},
-			mutate: func(m *manifestFields, _ string) { m.path = "/tmp/données/*.csv" }},
+			mutate: func(m *manifestFields, _ string) { m.path = "données/*.csv" }},
 	},
 	"textual": {
 		{name: "rtl-override", field: "name", payloads: []string{""},
@@ -134,7 +134,7 @@ var variantsByCategory = map[string][]variant{
 		{name: "bad-encoding", field: "spec.parser.encoding", payloads: []string{"NONSENSE-42", "UTF-99"},
 			mutate: func(m *manifestFields, p string) { m.encoding = p }},
 		{name: "confusable-path", field: "spec.transport.path", payloads: []string{""},
-			mutate: func(m *manifestFields, _ string) { m.path = "/tmp/\u043etk/*.csv" }}, // Cyrillic '\u043e'
+			mutate: func(m *manifestFields, _ string) { m.path = "\u043etk/*.csv" }}, // Cyrillic '\u043e'
 		{name: "zero-width-name", field: "name", payloads: []string{""},
 			mutate: func(m *manifestFields, _ string) { m.name = "otk\ufeffadv" }},
 	},

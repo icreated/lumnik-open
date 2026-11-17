@@ -28,6 +28,10 @@ const ExportPasswordSecret = "OTK_EXPORT_PASSWORD"
 // ExportEntity is the canonical entity every export case reads.
 const ExportEntity = "otk_customer"
 
+// ExportScope is every export case's scope, and so the one scope ExportPasswordSecret serves (#2015). It must be
+// one of ExportEntity's scopes, which the harness seeds (seed_entity.go).
+const ExportScope = "otk"
+
 // exportVariant is one export case. manifest is empty where the case builds none (oneshot) or
 // builds it at run time from its declared environment (managed/delivers).
 type exportVariant struct {
@@ -62,7 +66,7 @@ func exportManifest(name string, spec, destination []string) string {
 // validExportSpec is otk_customer's canonical columns, in the shape the apply door accepts.
 func validExportSpec() []string {
 	return []string{
-		"scope: otk",
+		"scope: " + ExportScope,
 		"source:",
 		"  entity: " + ExportEntity,
 		"columns: [id, name]",
@@ -73,13 +77,14 @@ func validExportSpec() []string {
 	}
 }
 
-// unreachableSftp is a destination nothing answers: port 1 on the hub's own loopback refuses the
-// connection, so a run gets as far as publication and no further.
+// unreachableSftp is a destination nothing answers: 192.0.2.1 is TEST-NET-1 (RFC 5737), never routed,
+// and an address the hub may reach, so a run gets as far as publication and no further. Not loopback:
+// the hub refuses that before publication, as a definition failure (#2002).
 func unreachableSftp() []string {
 	return []string{
 		"kind: sftp",
-		"host: 127.0.0.1",
-		"port: 1",
+		"host: 192.0.2.1",
+		"port: 22",
 		"user: otk",
 		"path: /otk/customers-${timestamp}.csv",
 		"password_env: " + ExportPasswordSecret,
@@ -189,7 +194,7 @@ func exportVariants() []exportVariant {
 			needsSeed: true, needsKey: true,
 			steps: []string{
 				`    When I apply its export manifest with lm`,
-				`    And a scope-bound identity lacking scope "otk" reads and runs the applied export with lm`,
+				`    And a scope-bound identity lacking scope "` + ExportScope + `" reads and runs the applied export with lm`,
 				`    Then lm reported the uniform scope refusal`,
 				`    And no export run was recorded by the refused identity`,
 				`    And no lm output echoed the export sentinel`,
@@ -211,7 +216,7 @@ func exportVariants() []exportVariant {
 			sub: "oneshot", name: "exact-bytes-to-file",
 			needsSeed: true,
 			steps: []string{
-				`    When I download entity "otk_customer" with lm to a new file`,
+				`    When I download entity "` + ExportEntity + `" with lm to a new file`,
 				`    Then the download holds the hub's exact snapshot bytes`,
 				`    And no lm output echoed the export sentinel`,
 			},
@@ -221,7 +226,7 @@ func exportVariants() []exportVariant {
 			sub: "oneshot", name: "exact-bytes-to-stdout",
 			needsSeed: true,
 			steps: []string{
-				`    When I download entity "otk_customer" with lm to stdout`,
+				`    When I download entity "` + ExportEntity + `" with lm to stdout`,
 				`    Then the download holds the hub's exact snapshot bytes`,
 				`    And no lm output echoed the export sentinel`,
 			},
@@ -230,7 +235,7 @@ func exportVariants() []exportVariant {
 		{
 			sub: "oneshot", name: "existing-file-refused",
 			steps: []string{
-				`    When I download entity "otk_customer" with lm to an existing file`,
+				`    When I download entity "` + ExportEntity + `" with lm to an existing file`,
 				`    Then lm refused the download and the existing file is untouched`,
 				`    And no lm output echoed the export sentinel`,
 			},
@@ -249,7 +254,7 @@ func exportVariants() []exportVariant {
 			sub: "oneshot", name: "scope-refusal-no-artifact",
 			needsSeed: true, needsKey: true,
 			steps: []string{
-				`    When a scope-bound identity lacking scope "otk" downloads entity "otk_customer" with lm to a new file`,
+				`    When a scope-bound identity lacking scope "` + ExportScope + `" downloads entity "` + ExportEntity + `" with lm to a new file`,
 				`    Then lm reported the uniform scope refusal`,
 				`    And lm refused the download and left no file behind`,
 				`    And no lm output echoed the export sentinel`,

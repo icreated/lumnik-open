@@ -56,7 +56,7 @@ class SearchProjectionMatchKeyPaginationIT {
         long tenant = 671_930_001L;
         String entityName = "SearchPage701" + System.nanoTime();
         String table = "t_search_page_701_" + System.nanoTime();
-        createMatchSourceTable(adminDs, table);
+        createMatchSourceTable(adminDs, tenant, table);
 
         yaml(tenant).body(entityManifest(entityName, table, List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);

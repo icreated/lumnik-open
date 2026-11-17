@@ -26,6 +26,8 @@ through stdin:
 ```
 $ lm secret set PARTNER_SFTP_KEY - < partner_ed25519
 Created secret "PARTNER_SFTP_KEY"
+$ lm secret scope PARTNER_SFTP_KEY desk     # the export's scope, and no other
+scopes: desk
 $ lm export apply -f docs/apps/exports/10-sftp-daily.yaml
 Applied export "customers-daily" → entity AcmeCustomer, scope desk
 $ lm export run customers-daily --wait

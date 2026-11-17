@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Set;
 
+import static io.lumnik.hub.tenant.DeploymentTenancy.HUBADMIN_TENANT;
 import static io.lumnik.hub.testsupport.AppManifestYaml.manifest;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -29,58 +30,58 @@ class AppRegistrationStoreDeleteIT {
 
     @Test
     void deletesAnOrdinaryAppAndReportsRemoved() {
-        store.upsert(app("kiosque-suppr", false), manifest("kiosque-suppr", SCOPE, ""), null);
+        store.upsert(HUBADMIN_TENANT, app("kiosque-suppr", false), manifest("kiosque-suppr", SCOPE, ""), null);
 
-        AppRegistrationStore.Deleted outcome = store.delete("kiosque-suppr", Set.of(SCOPE));
+        AppRegistrationStore.Deleted outcome = store.delete(HUBADMIN_TENANT, "kiosque-suppr", Set.of(SCOPE));
 
         assertThat(outcome).isInstanceOf(AppRegistrationStore.Deleted.Removed.class);
-        assertThat(store.find("kiosque-suppr")).isEmpty();
+        assertThat(store.find(HUBADMIN_TENANT, null, "kiosque-suppr")).isEmpty();
     }
 
     @Test
     void refusesAnUnknownName() {
-        AppRegistrationStore.Deleted outcome = store.delete("jamais-vu-suppr", Set.of(SCOPE));
+        AppRegistrationStore.Deleted outcome = store.delete(HUBADMIN_TENANT, "jamais-vu-suppr", Set.of(SCOPE));
 
         assertThat(outcome).isInstanceOf(AppRegistrationStore.Deleted.NotFound.class);
     }
 
     @Test
     void refusesANameHeldOutsideTheCallersScope() {
-        store.upsert(app("cave-suppr", false), manifest("cave-suppr", SCOPE, ""), null);
+        store.upsert(HUBADMIN_TENANT, app("cave-suppr", false), manifest("cave-suppr", SCOPE, ""), null);
 
-        AppRegistrationStore.Deleted outcome = store.delete("cave-suppr", Set.of("autre-metier"));
+        AppRegistrationStore.Deleted outcome = store.delete(HUBADMIN_TENANT, "cave-suppr", Set.of("autre-metier"));
 
         assertThat(outcome).isInstanceOf(AppRegistrationStore.Deleted.HeldOutOfScope.class);
-        assertThat(store.find("cave-suppr")).as("refused AND untouched").isPresent();
+        assertThat(store.find(HUBADMIN_TENANT, null, "cave-suppr")).as("refused AND untouched").isPresent();
     }
 
     @Test
     void theLastDefaultCannotBeDeletedEvenByACallerWhoHoldsItsScope() {
         AppRegistrationStore.Row previous =
-            store.find(store.findDefaultName().orElseThrow()).orElseThrow();
+            store.find(HUBADMIN_TENANT, null, store.findOwnDefaultName(HUBADMIN_TENANT).orElseThrow()).orElseThrow();
         try {
-            store.upsert(app("vitrine-suppr", true), manifest("vitrine-suppr", SCOPE, "  default: true\n"),
+            store.upsert(HUBADMIN_TENANT, app("vitrine-suppr", true), manifest("vitrine-suppr", SCOPE, "  default: true\n"),
                 null);
 
-            AppRegistrationStore.Deleted outcome = store.delete("vitrine-suppr", Set.of(SCOPE));
+            AppRegistrationStore.Deleted outcome = store.delete(HUBADMIN_TENANT, "vitrine-suppr", Set.of(SCOPE));
 
             assertThat(outcome)
                 .as("the DELETE statement's own WHERE refuses, with no help from a door's ordered "
                     + "pre-check")
                 .isInstanceOf(AppRegistrationStore.Deleted.IsTheLastDefault.class);
-            assertThat(store.find("vitrine-suppr"))
+            assertThat(store.find(HUBADMIN_TENANT, null, "vitrine-suppr"))
                 .as("refused AND untouched — the flag must not have been cleared on the way out")
                 .isPresent();
-            assertThat(store.findDefaultName())
+            assertThat(store.findOwnDefaultName(HUBADMIN_TENANT))
                 .as("an absent ?m= must still resolve to something after the refusal")
                 .contains("vitrine-suppr");
         } finally {
-            store.upsert(
+            store.upsert(HUBADMIN_TENANT, 
                 new AppManifest(previous.name(), previous.scope(), previous.title(), previous.icon(),
                     previous.accentColor(), previous.backgroundColor(), true, previous.tabs()),
                 manifest(previous.name(), previous.scope(), "  default: true\n"),
                 null);
-            store.delete("vitrine-suppr", null);
+            store.delete(HUBADMIN_TENANT, "vitrine-suppr", null);
         }
     }
 }

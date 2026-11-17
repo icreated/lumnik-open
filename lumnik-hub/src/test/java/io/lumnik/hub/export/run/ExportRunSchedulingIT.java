@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -56,6 +57,11 @@ class ExportRunSchedulingIT extends ExportRunITSupport {
     @Override
     String entity() {
         return "ExportRunSchedEntity680";
+    }
+
+    @Override
+    Map<String, String> secrets() {
+        return ExportRunSftpIT.SECRETS;
     }
 
     @Override

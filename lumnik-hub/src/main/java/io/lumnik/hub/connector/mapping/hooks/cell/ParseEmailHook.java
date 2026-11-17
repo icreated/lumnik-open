@@ -39,7 +39,7 @@ public class ParseEmailHook implements CellHook {
     if (EMAIL.matcher(str).matches()) {
       row.put(col, str);
     } else {
-      s.counters().cellErrors().incrementAndGet();
+      s.refuseCell();
       row.put(col, null);
     }
   }

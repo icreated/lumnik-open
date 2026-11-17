@@ -51,7 +51,7 @@ class SearchIndexTenantIsolationIT {
     void theSameNameLivesIndependentlyInTwoTenants() throws Exception {
         yaml(1).body(entity(adminDs, ENTITY_A, "t_searchtenant669_a", List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
-        yaml(2).body(entity(adminDs, ENTITY_B, "t_searchtenant669_b", List.of("sales"), "code", "name"))
+        yaml(2).body(entity(adminDs, 2, ENTITY_B, "t_searchtenant669_b", List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
 
         // 1) Tenant A declares the name first.

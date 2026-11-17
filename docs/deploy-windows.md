@@ -96,15 +96,19 @@ from Ubuntu is slow and mangles scripts.
     It has no chat and no natural-language *ask*. See also the
     [Deploy page](deploy.md#self-host-one-command).
 
-## Step 4 — Start the stack (one command; ~10–20 min the first time)
+## Step 4 — Start the stack (one command; a few minutes the first time)
 
 ```
-./deploy/selfhost/up.sh --build
+./deploy/selfhost/up.sh
 ```
 
-This single command builds and starts everything **inside Docker** — nothing
-else to install on your PC. The first run compiles lumnik from source: it's the
-long one, a coffee's worth. Later runs take seconds.
+This single command downloads and starts everything **inside Docker** — nothing
+else to install on your PC. The first run downloads the images: a few minutes,
+depending on your connection. Later runs take seconds.
+
+On a PC with an ARM processor, run `./deploy/selfhost/up.sh --build` instead: the
+image is `linux/amd64` only, and `--build` compiles lumnik for your machine. That
+first run takes 10 to 20 minutes.
 
 **What the end must look like** — the last lines, in this order:
 
@@ -112,8 +116,9 @@ long one, a coffee's worth. Later runs take seconds.
 ==> hub is healthy
   hubadmin: per-install password set (HUBADMIN_PASSWORD in .env)
   integrator: per-install password set (INTEGRATOR_PASSWORD in .env)
+  tenant_id and user_id: admin-only
 
-  Hub:       http://localhost:8080   (health: /q/health)
+  Hub:       http://localhost:8080   (health: ./deploy/selfhost/health.sh)
   Keycloak:  http://localhost:8180/realms/lumnik
   Next:      point lm at the hub — server http://localhost:8080, OIDC http://localhost:8180/realms/lumnik
 ```
@@ -123,17 +128,15 @@ password unique to your install, stored in a file named `.env`.
 
 !!! warning "The script stopped straight away, naming missing tools?"
     That's its preflight doing its job. Run the `sudo apt install` line from
-    step 3, then run `./deploy/selfhost/up.sh --build` again. It's safe to
-    re-run as often as you like.
+    step 3, then run `./deploy/selfhost/up.sh` again, with `--build` if you started
+    with it. It's safe to re-run as often as you like.
 
     A line reads `!! could not obtain a Keycloak admin token` instead of
     `password set`? The login server was slow to finish its first start.
-    Re-run `./deploy/selfhost/up.sh --build`: the passwords get set on the
+    Re-run `./deploy/selfhost/up.sh`: the passwords get set on the
     next pass.
 
-**See it live**: in your normal Windows browser, open
-`http://localhost:8080/q/health`. It starts like this (Windows sees Ubuntu's
-services on its own `localhost` — nothing to configure):
+**See it live**: in Ubuntu, run `./deploy/selfhost/health.sh`. It starts like this:
 
 ```
 {
@@ -245,7 +248,7 @@ One habit to take along: after every `lm connector run …`, check `lm run list`
 | `wsl --install` is "not recognized" | Windows too old — run Windows Update until version 21H2+, or install WSL from the Microsoft Store. |
 | WSL complains about virtualization / BIOS | The VT switch is off — see the note in step 1. |
 | `docker: command not found` in Ubuntu | The WSL-integration switch for Ubuntu is off — step 2, setting 3. |
-| `!! could not obtain a Keycloak admin token` at the end of up.sh | The login server was still starting. Re-run `./deploy/selfhost/up.sh --build`: the passwords get set on the next pass. |
+| `!! could not obtain a Keycloak admin token` at the end of up.sh | The login server was still starting. Re-run `./deploy/selfhost/up.sh`: the passwords get set on the next pass. |
 | `http://localhost:8080` suddenly unreachable (often after the PC slept) | WSL's plumbing went stale — in PowerShell `wsl --shutdown`, reopen Docker Desktop, wait a minute. |
 | Logins fail with 401 after the laptop slept | Ubuntu's clock drifted during sleep — same cure: `wsl --shutdown`, reopen Docker Desktop. |
 | The ask/chat errors after ~20 s | The model failed to load on the Windows side: update your **NVIDIA drivers** (the classic), then check the RAM note in step 5. |

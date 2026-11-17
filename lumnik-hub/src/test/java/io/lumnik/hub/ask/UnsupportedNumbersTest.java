@@ -240,4 +240,69 @@ class UnsupportedNumbersTest {
         List<Map<String, Object>> rows = List.of(Map.of("count", 3L));
         assertThat(UnsupportedNumbers.in("There are 9999 orders.", rows, sql)).containsExactly("9999");
     }
+
+    // #1974: the radius a distance is compared to is the query's own figure — in metres as written, in km as said.
+    private static final String WITHIN_20_KM = "SELECT c.\"customer_no\" FROM \"connector\".\"v_geo_customer\" c "
+        + "JOIN \"connector\".\"v_geo_depot\" d ON d.\"depot\" = 'Lyon' "
+        + "WHERE connector.distance_m(c.\"latitude\", c.\"longitude\", d.\"latitude\", d.\"longitude\") <= 20000 LIMIT 500";
+    private static final List<Map<String, Object>> TWO_CUSTOMERS =
+        List.of(Map.of("customer_no", "C-01"), Map.of("customer_no", "C-02"));
+
+    @Test
+    void the_radius_a_distance_is_compared_to_backs_itself_in_metres_and_in_kilometres() {
+        assertThat(UnsupportedNumbers.in("Customers C-01 and C-02 are within 20 km of the Lyon depot.", TWO_CUSTOMERS,
+            WITHIN_20_KM)).isEmpty();
+        assertThat(UnsupportedNumbers.in("Both are within 20000 m.", TWO_CUSTOMERS, WITHIN_20_KM)).isEmpty();
+    }
+
+    @Test
+    void the_centre_a_distance_is_measured_from_backs_itself() {
+        String sql = "SELECT customer_no FROM connector.\"v_geo_customer\" "
+            + "WHERE connector.distance_m(-33.8688, 151.2093, latitude, longitude) <= 20000 LIMIT 500";
+        assertThat(UnsupportedNumbers.in("C-01 and C-02 are within 20 km of -33.8688, 151.2093.", TWO_CUSTOMERS, sql))
+            .isEmpty();
+        assertThat(UnsupportedNumbers.in("C-01 is 33.8688 away.", TWO_CUSTOMERS, sql)).containsExactly("33.8688");
+    }
+
+    @Test
+    void a_distance_between_two_bounds_backs_both_in_km() {
+        String sql = "SELECT customer_no FROM connector.v_geo_customer "
+            + "WHERE connector.distance_m(latitude, longitude, 45.764, 4.8357) BETWEEN 5000 AND 20000 LIMIT 500";
+        assertThat(UnsupportedNumbers.in("C-01 and C-02 are between 5 and 20 km from 45.764, 4.8357.", TWO_CUSTOMERS, sql))
+            .isEmpty();
+    }
+
+    @Test
+    void the_radius_in_km_backs_a_distance_not_a_count() {
+        String sql = "SELECT customer_no FROM connector.v_geo_customer "
+            + "WHERE connector.distance_m(latitude, longitude, 48.8566, 2.3522) <= 5000 LIMIT 500";
+        assertThat(UnsupportedNumbers.in("There are 5 customers within 5 km.", TWO_CUSTOMERS, sql)).containsExactly("5");
+    }
+
+    @Test
+    void a_number_inside_a_row_centre_sub_query_backs_nothing() {
+        String sql = "SELECT customer_no FROM connector.v_geo_customer WHERE connector.distance_m(latitude, longitude, "
+            + "(SELECT latitude FROM connector.v_geo_customer WHERE name = 'A' LIMIT 1), "
+            + "(SELECT longitude FROM connector.v_geo_customer WHERE name = 'A' LIMIT 1)) <= 5000 LIMIT 500";
+        assertThat(UnsupportedNumbers.in("There is 1 customer.", TWO_CUSTOMERS, sql)).containsExactly("1");
+    }
+
+    @Test
+    void a_centre_too_long_for_a_number_column_withholds_instead_of_failing() {
+        String sql = "SELECT customer_no FROM connector.v_geo_customer WHERE connector.distance_m(latitude, longitude, "
+            + "45.7640000000000000000000000000000000000001, 4.8357) <= 5000 LIMIT 500";
+        assertThat(UnsupportedNumbers.in("C-01 is near 4.8357 and 99.", TWO_CUSTOMERS, sql)).containsExactly("99");
+    }
+
+    @Test
+    void another_radius_is_still_withheld() {
+        assertThat(UnsupportedNumbers.in("Both are within 30 km.", TWO_CUSTOMERS, WITHIN_20_KM)).containsExactly("30");
+    }
+
+    @Test
+    void a_number_compared_to_another_function_backs_nothing() {
+        String sql = "SELECT name FROM connector.v_geo_customer WHERE length(name) > 12 LIMIT 500";
+        assertThat(UnsupportedNumbers.in("Their names are longer than 12 characters, 0.012 of them.", TWO_CUSTOMERS, sql))
+            .containsExactly("12", "0.012");
+    }
 }

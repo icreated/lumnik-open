@@ -11,7 +11,7 @@ metadata:
 spec:
   transport:
     kind: local
-    path: /tmp/acme-desk/acme-deliveries.csv
+    path: acme-desk/acme-deliveries.csv
   parser:
     has_header: true
   after_process: none

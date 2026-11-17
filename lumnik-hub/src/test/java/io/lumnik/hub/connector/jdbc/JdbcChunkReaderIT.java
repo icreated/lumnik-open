@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.jdbc;
 
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -37,7 +38,7 @@ class JdbcChunkReaderIT {
 
   @Test
   void reads_in_chunks_until_end_of_stream() {
-    HikariPoolRegistry registry = new HikariPoolRegistry();
+    HikariPoolRegistry registry = new HikariPoolRegistry(TestOutbound.ADDRESSES);
     JdbcChunkReader reader = new JdbcChunkReader(
         PG.getJdbcUrl(), "u", "p", "postgres", "public", "c_bp", "updated",
         List.of("id"), JdbcChunkReader.Mode.WATERMARK,

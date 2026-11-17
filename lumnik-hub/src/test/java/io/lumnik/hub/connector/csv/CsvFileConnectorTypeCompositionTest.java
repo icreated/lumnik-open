@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.csv;
 
+import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.transport.FileSource;
 import io.lumnik.hub.connector.transport.FileSourceRegistry;
 import io.lumnik.hub.connector.transport.LocalFileSource;
@@ -32,7 +33,7 @@ class CsvFileConnectorTypeCompositionTest {
             assertEquals("local", transport.get("kind"));
             assertEquals(dir.toString() + "/*.csv", transport.get("path"));
 
-            FileSource src = registry.build(transport);
+            FileSource src = TenantContext.callAs(1L, () -> registry.build(transport));   // built for a tenant (#2001)
             assertInstanceOf(LocalFileSource.class, src);
         } finally {
             Files.walk(dir).sorted(Comparator.reverseOrder()).forEach(p -> p.toFile().delete());

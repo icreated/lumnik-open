@@ -90,7 +90,7 @@ class EntitySchemaBuilderResolutionIT {
   }
 
   private SchemaCard.Table tableNamed(String viewName) {
-    return builder.resolve("res622scope").stream()
+    return builder.resolve(1L, "res622scope").stream()
         .filter(t -> t.name().equals(viewName)).findFirst().orElseThrow();
   }
 

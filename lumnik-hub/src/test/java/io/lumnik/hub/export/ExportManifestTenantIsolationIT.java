@@ -76,7 +76,7 @@ class ExportManifestTenantIsolationIT {
     /** Same physical-table requirement Task 4's own execution surfaced: the declared source
      *  table must exist before /api/entities/apply can compile its view, or it refuses with 409. */
     private void seedTenantBSourceTable() throws Exception {
-        EntitySourceTableFixture.create(adminDs, "t_sharedentity_tb_erp",
+        EntitySourceTableFixture.create(adminDs, 2L, "t_sharedentity_tb_erp",
             "v_sharedentitytenantb676", "cust_id");
     }
 

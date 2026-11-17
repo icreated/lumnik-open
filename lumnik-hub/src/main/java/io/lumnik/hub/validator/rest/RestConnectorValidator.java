@@ -330,8 +330,7 @@ public class RestConnectorValidator implements ConnectorValidator {
                 List.of("Use mode: watermark for true incrementality")));
         } else if (!"full".equals(mode) && !"watermark".equals(mode)) {
             errs.add(new ValidationError(basePath + ".incremental.mode", Severity.ERROR,
-                "unknown incremental mode '" + mode + "' — allowed: full | watermark | api_cursor "
-                    + "(an unknown mode used to silently fall back to full)",
+                "unknown incremental mode '" + mode + "' — allowed: full | watermark | api_cursor",
                 List.of("Use mode: watermark with param + watermark_path, or drop the block")));
         } else if ("watermark".equals(mode)) {
             JsonNode lookback = inc.path("lookback");

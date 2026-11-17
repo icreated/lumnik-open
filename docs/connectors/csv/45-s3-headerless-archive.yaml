@@ -5,7 +5,8 @@
 #   lm connector run s3-c-bpartner
 #
 # No `endpoint:` → real AWS; set `region` to the region the bucket lives in (the default is eu-west-3).
-# `access_key_env` / `secret_key_env` name secrets stored with `lm secret set`, never the values.
+# `access_key_env` / `secret_key_env` name secrets stored with `lm secret set`, never the values,
+# and serving this connector's scope (`lm secret scope NAME s3-scenario`).
 # `has_header: false` makes `parser.columns` mandatory — the names, in file order.
 # `after_process: archive` moves each file to `archive_bucket`/`archive_prefix` once its rows are
 # in the table; the next run then finds nothing new and reads 0 rows.

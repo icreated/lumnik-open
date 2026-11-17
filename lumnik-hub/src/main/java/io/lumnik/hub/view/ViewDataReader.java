@@ -41,14 +41,18 @@ public class ViewDataReader {
     AgroalDataSource readonlyDs;
 
     /** The rows plus the honest cut: {@code truncated} is true when the cap dropped rows. */
-    public record ReadResult(List<Map<String,Object>> rows, boolean truncated) {}
+    /**
+     * {@code spots} (#2057): each row's place on the view's map, or null when the view draws none. The map point's
+     * columns the view does not show are read for it and leave the rows here, so no caller can serve them.
+     */
+    public record ReadResult(List<Map<String,Object>> rows, boolean truncated, List<MapPlacement.Spot> spots) {}
 
     public ReadResult read(long tenantId, ResolvedView rv, List<ViewFilter> filters) {
         String sql = buildSql(rv, filters);
         List<Map<String,Object>> out = new ArrayList<>();
         try (Connection c = readonlyDs.getConnection()) {
             TenantRlsScope.applyTo(c, tenantId);
-            refuseColumnsTheTableLost(c, rv);
+            refuseColumnsTheTableLost(c, rv, rv.selected());
             try (PreparedStatement ps = c.prepareStatement(sql)) {
                 ps.setQueryTimeout(TIMEOUT_S);
                 // Fetch one row beyond the cap: the only way to tell a full 1000-row result
@@ -72,12 +76,14 @@ public class ViewDataReader {
             throw mapSqlFailure(e);
         }
         boolean truncated = out.size() > MAX_ROWS;
-        return new ReadResult(truncated ? out.subList(0, MAX_ROWS) : out, truncated);
+        List<Map<String,Object>> rows = truncated ? out.subList(0, MAX_ROWS) : out;
+        return new ReadResult(rows, truncated, MapPlacement.take(rv, rows));
     }
 
 
     /** One served page: the rows, whether more exist beyond them, and where the next page starts. */
-    public record PageResult(List<Map<String,Object>> rows, boolean hasMore, ViewCursor.Boundary next) {}
+    public record PageResult(List<Map<String,Object>> rows, boolean hasMore, ViewCursor.Boundary next,
+                             List<MapPlacement.Spot> spots) {}
 
     /** What to read: at most {@code size} rows, starting after {@code after} (null = the first page). */
     public record Page(int size, ViewCursor.Boundary after) {}
@@ -93,12 +99,12 @@ public class ViewDataReader {
     public PageResult readPage(long tenantId, ResolvedView rv, List<ViewFilter> filters,
                                boolean relationHasId, Page page) {
         PageSql q = buildPageSql(rv, filters, relationHasId, page.after());
-        int n = rv.columns().size();
+        int n = rv.selected().size();
         List<Map<String,Object>> rows = new ArrayList<>();
         List<Long> ids = new ArrayList<>();
         try (Connection c = readonlyDs.getConnection()) {
             TenantRlsScope.applyTo(c, tenantId);
-            refuseColumnsTheTableLost(c, rv);
+            refuseColumnsTheTableLost(c, rv, rv.selected());
             if (relationHasId && page.after() != null && !boundaryRowExists(c, rv, q.boundaryParams().get(0)))
                 throw new IllegalArgumentException(ViewCursor.REFUSAL);
             try (PreparedStatement ps = c.prepareStatement(q.sql())) {
@@ -123,8 +129,8 @@ public class ViewDataReader {
         }
         boolean hasMore = rows.size() > page.size();
         List<Map<String,Object>> served = hasMore ? new ArrayList<>(rows.subList(0, page.size())) : rows;
-        if (!hasMore || served.isEmpty()) return new PageResult(served, hasMore, null);
-        return new PageResult(served, true, nextBoundary(relationHasId, served, ids, page.after()));
+        ViewCursor.Boundary next = !hasMore || served.isEmpty() ? null : nextBoundary(relationHasId, served, ids, page.after());
+        return new PageResult(served, hasMore, next, MapPlacement.take(rv, served));
     }
 
     /** Where the page after {@code served} starts. */
@@ -152,7 +158,7 @@ public class ViewDataReader {
      * table no longer has is refused here, by name — the read would fail in SQL, a bare 500. A table this lookup cannot
      * find is left to the read. Shared by the list, its pages and the detail.
      */
-    static void refuseColumnsTheTableLost(Connection c, ResolvedView rv) throws SQLException {
+    static void refuseColumnsTheTableLost(Connection c, ResolvedView rv, List<String> read) throws SQLException {
         Set<String> present = new HashSet<>();
         try (PreparedStatement ps = c.prepareStatement("SELECT attname FROM pg_catalog.pg_attribute "
                 + "WHERE attrelid = pg_catalog.to_regclass(?) AND attnum > 0 AND NOT attisdropped")) {
@@ -163,7 +169,7 @@ public class ViewDataReader {
             }
         }
         if (present.isEmpty()) return;
-        List<String> lost = rv.columns().stream().map(ResolvedView.Column::name)
+        List<String> lost = read.stream()
             .filter(name -> !present.contains(name)).map(name -> "'" + name + "'").toList();
         if (lost.isEmpty()) return;
         throw new IllegalArgumentException((lost.size() == 1 ? "column " : "columns ") + String.join(", ", lost)
@@ -193,10 +199,7 @@ public class ViewDataReader {
         List<String> key = ViewPageContract.orderKey(rv, relationHasId);
         List<Object> params = new ArrayList<>();
         StringBuilder sb = new StringBuilder("SELECT ");
-        for (int i = 0; i < cols.size(); i++) {
-            if (i > 0) sb.append(", ");
-            sb.append(quoteIdent(cols.get(i).name()));
-        }
+        sb.append(String.join(", ", rv.selected().stream().map(name -> quoteIdent(name)).toList()));
         if (relationHasId) sb.append(", ").append(quoteIdent("id"));
         sb.append(" FROM ").append(quoteTable(rv.table()));
         // Placeholders are numbered by their position in the text: the boundary (its sub-select is in
@@ -286,10 +289,7 @@ public class ViewDataReader {
     static String buildSql(ResolvedView rv, List<ViewFilter> filters) {
         StringBuilder sb = new StringBuilder("SELECT ");
         List<ResolvedView.Column> cols = rv.columns();
-        for (int i = 0; i < cols.size(); i++) {
-            if (i > 0) sb.append(", ");
-            sb.append(quoteIdent(cols.get(i).name()));
-        }
+        sb.append(String.join(", ", rv.selected().stream().map(name -> quoteIdent(name)).toList()));
         sb.append(" FROM ").append(quoteTable(rv.table()));
         for (int i = 0; i < filters.size(); i++) {
             ViewFilter f = filters.get(i);

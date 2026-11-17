@@ -14,6 +14,7 @@ import java.sql.Statement;
 
 import static io.lumnik.hub.testsupport.EventItSupport.execSql;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Why every grant gets its own guarded block — asserted against a real Postgres, not asserted in
@@ -66,6 +67,20 @@ class RlsDdlGuardedSemanticsIT {
         assertThat(tableExists(SPLIT_MARKER))
             .as("one block per statement: the doomed one is still swallowed, the next still runs")
             .isTrue();
+    }
+
+    /**
+     * #2008: the readonly grants are the only way lumnik_readonly reads a new relation, so their guard swallows the
+     * one expected failure — the role is absent (a plain %test database) — and lets every other one through.
+     */
+    @Test
+    void the_readonly_guard_swallows_a_missing_role_and_nothing_else() {
+        execSql(adminDs, RlsDdl.guardedAgainstMissingRole(DOOMED));
+
+        assertThatThrownBy(() -> execSql(adminDs,
+                RlsDdl.guardedAgainstMissingRole("GRANT SELECT ON connector.no_such_table_rls_probe TO lumnik_app")))
+            .as("a grant that fails for any other reason must say so, not leave a relation nobody can read")
+            .hasStackTraceContaining("no_such_table_rls_probe");
     }
 
     /**

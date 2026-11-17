@@ -58,6 +58,8 @@ git clone https://github.com/icreated/lumnik-open.git && cd lumnik-open
   granted access.
 - **`up.sh --build` compiles the hub from source** instead of pulling it. It takes a few minutes, and
   needs only Docker.
+- **On an ARM Linux server** (Raspberry Pi, AWS Graviton), use `--build`: the image is `linux/amd64`
+  only. A Mac with Apple silicon runs it through Docker Desktop's emulation.
 
 Check what runs with `lm module list` ([The two editions](editions.md)).
 
@@ -93,9 +95,9 @@ It writes your passwords and keys into `.env`, at the root of the clone. Only yo
 <article class="lm-step" markdown>
 <div class="lm-step__num">2</div>
 <div markdown>
-<h3>Build and start the stack</h3>
+<h3>Pull and start the stack</h3>
 
-It builds the hub image (`--build`) or pulls it, starts hub + Postgres + Keycloak, and waits for the hub to be healthy. The first boot can take a minute.
+It pulls the hub image, or builds it with `--build`. It starts hub + Postgres + Keycloak, and waits for the hub to be healthy. The first boot can take a minute.
 </div>
 </article>
 <article class="lm-step" markdown>
@@ -111,8 +113,9 @@ It sets the `hubadmin` and `integrator` passwords in Keycloak and prints the URL
 ==> hub is healthy
   hubadmin: per-install password set (HUBADMIN_PASSWORD in .env)
   integrator: per-install password set (INTEGRATOR_PASSWORD in .env)
+  tenant_id and user_id: admin-only
 
-  Hub:       http://localhost:8080   (health: /q/health)
+  Hub:       http://localhost:8080   (health: ./deploy/selfhost/health.sh)
   Keycloak:  http://localhost:8180/realms/lumnik
   Next:      point lm at the hub — server http://localhost:8080, OIDC http://localhost:8180/realms/lumnik
 ```
@@ -141,6 +144,10 @@ LUMNIK_TLS_HOST=erp.example.com \
 - A LAN IP or `localhost` gets a local certificate, for testing.
 - The proxy listens on **every interface**, so phones on the LAN reach it.
   `LUMNIK_TLS_BIND=127.0.0.1` restricts it.
+- **HSTS** is off by default. On a public name with its Let's Encrypt certificate, set
+  `LUMNIK_TLS_HSTS=true` (exactly `true`): browsers then refuse plain http to that name for a
+  year. Never on a LAN name or `localhost`: lose the local certificate and every device that
+  saw the name is locked out, with no way past the warning.
 - `up.sh` keeps the proxy: a later run re-applies the overlays the stack was started with.
 - **Choose the address once.** Changing it changes who signs the tokens: users created through
   the old address must be migrated ([Keep the same public address](security/byo-idp.md#keep-the-same-public-address)).
@@ -209,6 +216,26 @@ Chat tab. The value is exactly `true` or `false`: anything else stops the hub at
 
 Check it with `lm module list`: `rag` and `llm` read `INACTIVE  disabled:lumnik.ai.enabled`.
 What a switch back on restores: [Switching the AI off](rag/models.md#switching-the-ai-off).
+
+### Show a map background
+
+A [view on a map](apps/views.md#on-a-map) draws its dots on a grid. No request leaves your hub. To
+draw a real map under them, name a tile server:
+
+| Install | Gesture |
+|---|---|
+| Self-host | in `.env`: `LUMNIK_MAP_TILES=https://tile.openstreetmap.org/{z}/{x}/{y}.png` and `LUMNIK_MAP_ATTRIBUTION=© OpenStreetMap contributors`, then re-run `up.sh` with the flags you installed with |
+| Helm (cloud edition) | chart values `map.tiles` and `map.attribution` (`--set map.tiles=…`) |
+
+- **The tile server sees the areas your users look at.** That is where your customers are. Choose it
+  as you would choose any other processor of that data.
+- **Every browser receives the URL.** A provider key written in it is public, never a secret.
+- `https://` only (`http://` for `localhost`), with `{z}`, `{x}` and `{y}` and no other placeholder.
+  Anything else stops the hub at startup, naming `lumnik.map.tiles`.
+- The page allows images from that host only, and only once it is set.
+- OpenStreetMap's own servers are for light use. For real traffic, use a tile provider or your own
+  server.
+- A browser that opened the PWA before the change may block the tiles for up to a day (#2059).
 
 ### Turn on email delivery
 

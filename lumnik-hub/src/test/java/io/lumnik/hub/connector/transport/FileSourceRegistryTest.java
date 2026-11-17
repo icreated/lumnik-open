@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.transport;
 
+import io.lumnik.common.tenant.TenantContext;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
@@ -22,7 +23,8 @@ class FileSourceRegistryTest {
     void resolves_local_when_kind_is_local() throws Exception {
         var dir = Files.createTempDirectory("registry_local_");
         try {
-            FileSource src = registry.build(Map.of("kind", "local", "path", dir.toString() + "/*.csv"));
+            // a local source is built for the tenant in scope (#2001)
+            FileSource src = TenantContext.callAs(1L, () -> registry.build(Map.of("kind", "local", "path", dir.toString() + "/*.csv")));
             assertNotNull(src);
             assertInstanceOf(LocalFileSource.class, src);
         } finally {

@@ -1,6 +1,7 @@
 # 10-local-simple.yaml — the simplest CSV ingest: one local file, full load.
 #
-# Apply and run:
+# Copy data/customers.csv into your tenant's folder of the hub's local root first
+# (docs/connectors/csv.md, quickstart). Then apply and run:
 #   lm apply -f docs/connectors/csv/10-local-simple.yaml
 #   lm connector run csv-local-simple
 #
@@ -23,7 +24,7 @@ spec:
   transport:
     kind: local                   # no remote fetch — the path below is on the HUB's filesystem,
                                   # not on yours (mount a volume, or use sftp/s3 / lm csv ingest)
-    path: docs/connectors/csv/data/customers.csv   # plain path = single file
+    path: customers.csv           # relative to the tenant's folder <root>/<tenant id>; plain path = single file
 
   parser:
     has_header: true              # first row holds column names; they drive target column mapping

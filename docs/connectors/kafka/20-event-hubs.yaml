@@ -14,14 +14,13 @@
 #
 # The 'connection_string_env' field NAMES the entry that holds the Event Hubs
 # connection string (Primary Connection String from the Azure portal). Every *_env key
-# resolves the same way: the lm secret registry for your tenant first, then the hub
-# process's own environment (OS variable, then JVM system property).
-#   lm secret set EVENTHUBS_CONN_STR          # or: export EVENTHUBS_CONN_STR="Endpoint=sb://..."
+# resolves the same way: in the lm secret registry of your tenant.
+#   lm secret set EVENTHUBS_CONN_STR
+#   lm secret scope EVENTHUBS_CONN_STR demo,azure   # a connector reads a secret only when it carries all its scopes
 #
 # Auth: Event Hubs over Kafka uses SASL/PLAIN with the fixed username "$ConnectionString"
-# (the literal string, dollar sign included — it is not a secret). The preset reads it
-# from the fixed name EVENT_HUBS_SASL_USERNAME:
-#   lm secret set EVENT_HUBS_SASL_USERNAME    # or: export EVENT_HUBS_SASL_USERNAME='$ConnectionString'
+# (the literal string, dollar sign included — it is not a secret). The preset writes it
+# as itself: `username: $ConnectionString`.
 
 apiVersion: connectors.lumnik.io/v1
 kind: Connector

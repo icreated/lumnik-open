@@ -19,6 +19,7 @@ import io.lumnik.hub.connector.rest.runtime.RestConnectorType;
 import io.lumnik.hub.connector.rest.runtime.RestConnection;
 import io.lumnik.hub.connector.rest.runtime.RestEndpointReader;
 import io.lumnik.hub.connector.secret.SecretRefs;
+import io.lumnik.hub.secret.SecretAudience;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -58,7 +59,9 @@ public class RestProber {
         }
         Map<String, Object> cfg = EffectiveConfig.of(c);
         String baseUrl = RestConnectorType.requireBaseUrl(cfg);
-        return probe(baseUrl, endpointPath, cfg, new AuthSpec.Owner(c.getTenantId(), c.getId()), connectorName);
+        // The connector's tags are the scopes its secrets must serve (#2015).
+        return SecretAudience.call(c.getTags(),
+            () -> probe(baseUrl, endpointPath, cfg, new AuthSpec.Owner(c.getTenantId(), c.getId()), connectorName));
     }
 
     private String probe(String baseUrl, String endpointPath, Map<String, Object> cfg, AuthSpec.Owner owner,

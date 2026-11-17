@@ -58,7 +58,7 @@ class ManifestWriteAuditIT {
     @Test
     void aViewDeleteIsRecordedAndARefusedOrUnknownOneIsNot() {
         String name = "audit-view-" + System.nanoTime();
-        views.upsert(name, "clients", "Clients", VIEW_YAML, null);
+        views.upsert(1L, name, "clients", "Clients", VIEW_YAML, null);
 
         boundToMagasin().delete("/api/views/" + name).then().statusCode(403);
         unscoped().delete("/api/views/" + name + "-absent").then().statusCode(404);

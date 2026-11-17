@@ -78,7 +78,7 @@ class EntityScopeBindingUnitTest {
   private static EntityReadResource resourceServing(EntityManifest m) {
     EntityReadResource res = new EntityReadResource();
     res.registry = new EntityRegistry() {
-      @Override public EntityManifest find(String name) { return m; }
+      @Override public EntityManifest find(long tenant, String name) { return m; }
     };
     return res;                                     // em stays null: the gate must fire first
   }
@@ -99,7 +99,7 @@ class EntityScopeBindingUnitTest {
   void the_list_shows_a_bound_user_only_its_scopes_and_an_unbound_one_everything() {
     EntityReadResource res = new EntityReadResource();
     res.registry = new EntityRegistry() {
-      @Override public List<EntityManifest> all() {
+      @Override public List<EntityManifest> all(long tenant) {
         return List.of(entity("customer", List.of("clients")), entity("stock", List.of("stock")));
       }
     };

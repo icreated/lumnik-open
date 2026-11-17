@@ -66,7 +66,7 @@ class SearchResourceIT {
     }
 
     private String applyEntity(long tenant, String name) throws Exception {
-        String yaml = SearchIndexItSupport.entity(adminDs, name, "t_" + name, List.of(), "code", "label");
+        String yaml = SearchIndexItSupport.entity(adminDs, tenant, name, "t_" + name, List.of(), "code", "label");
         given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(tenant))
             .contentType("application/yaml").body(yaml)
             .post("/api/entities/apply").then().statusCode(200);
@@ -165,7 +165,7 @@ class SearchResourceIT {
         String table = "t_" + entity;
         String index = unique("idx-invalidated");
         given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(tenant)).contentType("application/yaml")
-            .body(SearchIndexItSupport.entity(adminDs, entity, table, List.of(), "code", "label", "city"))
+            .body(SearchIndexItSupport.entity(adminDs, tenant, entity, table, List.of(), "code", "label", "city"))
             .post("/api/entities/apply").then().statusCode(200);
         applyIndexOver(tenant, index, entity, "code", "label", "city");
         gateServing(hitOf(index, entity, Map.of("code", "A1", "city", "Lyon")));
@@ -202,7 +202,7 @@ class SearchResourceIT {
         String table = "t_" + entity;
         String index = unique("idx-narrowed");
         given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(tenant)).contentType("application/yaml")
-            .body(SearchIndexItSupport.entity(adminDs, entity, table, List.of(), "code", "label", "city"))
+            .body(SearchIndexItSupport.entity(adminDs, tenant, entity, table, List.of(), "code", "label", "city"))
             .post("/api/entities/apply").then().statusCode(200);
         applyIndexOver(tenant, index, entity, "code", "label");
         gateServing(hitOf(index, entity, Map.of("code", "A1")));
@@ -234,7 +234,7 @@ class SearchResourceIT {
         String table = "t_" + entity;
         String index = unique("idx-redeclared");
         given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(tenant)).contentType("application/yaml")
-            .body(SearchIndexItSupport.entity(adminDs, entity, table, List.of(), "code", "label", "city"))
+            .body(SearchIndexItSupport.entity(adminDs, tenant, entity, table, List.of(), "code", "label", "city"))
             .post("/api/entities/apply").then().statusCode(200);
         applyIndexOver(tenant, index, entity, "code", "label", "city");
         gateServing(hitOf(index, entity, Map.of("code", "A1", "city", "Lyon")));
@@ -425,7 +425,7 @@ class SearchResourceIT {
         String labelled = unique("labelled");
         String other = unique("otherent");
         given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(14)).contentType("application/yaml; charset=UTF-8")
-            .body(SearchIndexItSupport.entity(adminDs, labelled, "t_" + labelled, List.of(), "code", "label")
+            .body(SearchIndexItSupport.entity(adminDs, 14, labelled, "t_" + labelled, List.of(), "code", "label")
                 + "columns:\n  code:\n    label: Référence\n")
             .post("/api/entities/apply").then().statusCode(200);
         applyEntity(14, other);

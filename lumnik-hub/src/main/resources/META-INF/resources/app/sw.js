@@ -5,7 +5,7 @@
 // shell-file change. The browser only re-installs when sw.js itself changes bytes —
 // an unchanged sw.js means returning visitors keep the OLD cached shell forever
 // (cache-first). The version bump IS the deploy signal; activate() purges old caches.
-const CACHE = 'lumnik-shell-v29';
+const CACHE = 'lumnik-shell-v31';
 
 const SHELL = [
   './',
@@ -26,6 +26,7 @@ const SHELL = [
   './icon-alert-512.png',
   './icon-contract-192.png',
   './icon-contract-512.png',
+  './src/boot.mjs',
   './src/html.mjs',
   './src/api.mjs',
   './src/appRegistry.mjs',
@@ -36,6 +37,7 @@ const SHELL = [
   './src/pager.mjs',
   './src/layout.mjs',
   './src/links.mjs',
+  './src/map.mjs',
   './src/media.mjs',
   './src/search.mjs',
   './src/tabs.mjs',
@@ -51,6 +53,7 @@ const SHELL = [
   './src/components/filterbar.mjs',
   './src/components/inbox.mjs',
   './src/components/login.mjs',
+  './src/components/map.mjs',
   './src/components/pagenav.mjs',
   './src/components/refusal.mjs',
   './src/components/search.mjs',

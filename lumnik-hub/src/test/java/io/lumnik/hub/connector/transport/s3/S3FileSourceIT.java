@@ -5,6 +5,7 @@ import io.lumnik.hub.connector.transport.AfterProcessAction;
 import io.lumnik.hub.connector.transport.FileDescriptor;
 import io.lumnik.hub.connector.transport.FileSource;
 import io.lumnik.hub.testsupport.MinioTestImage;
+import io.lumnik.hub.testsupport.TestOutbound;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.Container;
 import org.testcontainers.containers.GenericContainer;
@@ -98,7 +99,7 @@ class S3FileSourceIT {
             case "AWS_S3_SECRET_KEY" -> SECRET;
             default -> null;
         };
-        var factory = new S3FileSourceFactory(SecretRefs.environmentOnly(env));
+        var factory = new S3FileSourceFactory(SecretRefs.of(env), TestOutbound.ADDRESSES);
         var source = factory.build(Map.of(
             "region", "us-east-1",
             "endpoint", endpoint,
@@ -199,7 +200,7 @@ class S3FileSourceIT {
             case "AWS_S3_SECRET_KEY" -> secret;
             default -> null;
         };
-        return new S3FileSourceFactory(SecretRefs.environmentOnly(env)).build(Map.of(
+        return new S3FileSourceFactory(SecretRefs.of(env), TestOutbound.ADDRESSES).build(Map.of(
             "region", "us-east-1",
             "endpoint", endpoint,
             "bucket", BUCKET,
@@ -235,7 +236,7 @@ class S3FileSourceIT {
             case "AWS_S3_SECRET_KEY" -> SECRET;
             default -> null;
         };
-        var factory = new S3FileSourceFactory(SecretRefs.environmentOnly(env));
+        var factory = new S3FileSourceFactory(SecretRefs.of(env), TestOutbound.ADDRESSES);
         var source = (S3FileSource) factory.build(Map.of(
             "region", "us-east-1",
             "endpoint", endpoint,

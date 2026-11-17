@@ -218,8 +218,8 @@ public class WorkflowManifestParser {
      *
      * <p>The schema alone is not enough, and that is not a detail: {@code connector} holds twelve
      * HUB-INTERNAL tables beside the ingested ones ({@code connector_credential}, {@code schema_card},
-     * {@code saved_view}, …) and {@code lumnik_readonly} is granted SELECT on all of them, so
-     * watching one made the data-truth report hand its column's values back in the apply response.
+     * {@code saved_view}, …). They are never data, whatever the grants say: watching one would make the data-truth
+     * report hand its column's values back in the apply response.
      * The prefixes are the hub's own conventions for "a table ingestion created" — the same
      * blast-radius bound {@code DynamicTableRegistry.isHubDynamicTable} draws for purge, and the
      * reason this is an allowlist rather than a list of internal tables to keep up to date.

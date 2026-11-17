@@ -47,7 +47,9 @@ var (
 )
 
 // givenRunForSeed generates the run scenario, writes the manifest to a temp file,
-// and writes the adversarial source to the per-seed path the manifest points at.
+// and writes the adversarial source to the per-seed path the manifest points at: in
+// tenant 1's folder of the hub's local root, LUMNIK_CSV_LOCAL_ROOT (#2001). Unset, no
+// source is written — the auth lane never ingests, and the run lane refuses below.
 func (s *scenarioState) givenRunForSeed(seed int64) error {
 	s.runScen = generator.GenerateRun(seed)
 	// s.scen is the generic carrier the check calls below read; CaseID must be
@@ -65,7 +67,11 @@ func (s *scenarioState) givenRunForSeed(seed int64) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	s.sourcePath = s.runScen.SourcePath
+	root := os.Getenv("LUMNIK_CSV_LOCAL_ROOT")
+	if root == "" {
+		return nil
+	}
+	s.sourcePath = filepath.Join(root, otkTenant, s.runScen.SourcePath)
 	if err := os.MkdirAll(filepath.Dir(s.sourcePath), 0o755); err != nil {
 		return err
 	}
@@ -99,6 +105,10 @@ func (s *scenarioState) whenApplyAndRun() error {
 		return nil
 	}
 	s.beforeDB, s.dbLive = db, true
+	if s.sourcePath == "" {
+		return fmt.Errorf("run-lane precondition: set LUMNIK_CSV_LOCAL_ROOT to the hub's lumnik.csv.local-root; " +
+			"the source is written in its tenant-1 folder")
+	}
 
 	before, err := snapshotConnectors()
 	if err != nil {

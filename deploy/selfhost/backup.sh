@@ -7,6 +7,7 @@
 # The ~15s Keycloak stop only blocks NEW logins; already-issued tokens keep working.
 # NOT covered here: .env (the master key!) — back it up separately and off-machine.
 set -euo pipefail
+umask 077  # #1998: a backup is every tenant's data and Keycloak's password hashes and signing keys
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
@@ -30,6 +31,7 @@ done
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 DIR="backups/$STAMP"
 mkdir -p "$DIR"
+chmod -R go= backups   # snapshots taken before #1998 were written under the caller's umask
 
 echo "==> pg_dump (hot) -> $DIR/lumnik.dump"
 "${COMPOSE[@]}" exec -T postgres sh -c 'pg_dump -U "${POSTGRES_USER:-lumnik}" -Fc "${POSTGRES_DB:-lumnik}"' > "$DIR/lumnik.dump"
@@ -43,7 +45,7 @@ if [[ "$SKIP_KC" -eq 0 ]]; then
   trap '"${COMPOSE[@]}" start keycloak >/dev/null 2>&1 || true' EXIT
   "${COMPOSE[@]}" stop keycloak
   "${COMPOSE[@]}" cp keycloak:/opt/keycloak/data "$DIR/keycloak-data"
-  # data/import is the repo's own realm-import bind mount (infra/keycloak, in git) —
+  # data/import holds the repo's own realm file, bind-mounted (infra/keycloak/lumnik-realm.json, in git) —
   # reproducible, read-only in the container, and it breaks restore's write-back. Exclude it.
   rm -rf "$DIR/keycloak-data/import"
   "${COMPOSE[@]}" start keycloak

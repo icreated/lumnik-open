@@ -9,6 +9,7 @@ import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.testsupport.MinioTestImage;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
+import io.lumnik.hub.testsupport.TestSecrets;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -40,6 +41,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @QuarkusTest
 class CsvS3ConnectorIT {
+
+    @Inject TestSecrets testSecrets;
 
     static GenericContainer<?> minio;
     static String endpoint;
@@ -83,17 +86,18 @@ class CsvS3ConnectorIT {
                 b -> b.bucket(BUCKET).key("data/customers.csv"),
                 RequestBody.fromString("row_id,email\n1,a@x\n2,b@x\n", StandardCharsets.UTF_8));
         }
-
-        // Expose credentials via system properties so S3FileSourceFactory resolves them.
-        System.setProperty("__INLINE_S3_ACCESS", ACCESS);
-        System.setProperty("__INLINE_S3_SECRET", SECRET);
     }
 
     @AfterAll
     static void stop() {
-        System.clearProperty("__INLINE_S3_ACCESS");
-        System.clearProperty("__INLINE_S3_SECRET");
         if (minio != null) minio.stop();
+    }
+
+    /** The connector's secrets, in tenant 1's lm secret registry: the only place a `*_env` reference resolves (#2000). */
+    @BeforeEach
+    void holdTheSecrets() {
+        testSecrets.put(1L, "__INLINE_S3_ACCESS", ACCESS);
+        testSecrets.put(1L, "__INLINE_S3_SECRET", SECRET);
     }
 
     private long scalar(String sql) {

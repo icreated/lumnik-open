@@ -11,7 +11,8 @@ export function urlKey(search) {
 }
 
 // {protocol,origin,hostname} → https façade: same-origin path-proxied Keycloak;
-// else plain LAN spike mode: hostname on the fixed Keycloak port.
+// else plain LAN spike mode: hostname on the fixed Keycloak port. The PWA's CSP allows exactly these two
+// (PwaContentSecurityPolicy, #1994; its test holds the port to this file).
 export function kcBase(loc) {
   return loc.protocol === 'https:'
     ? `${loc.origin}/realms/lumnik`

@@ -3,6 +3,10 @@ package io.lumnik.hub.connector.rest.reliability;
 import io.lumnik.hub.connector.exceptions.TransientFailureException;
 import io.lumnik.hub.connector.rest.RestResponse;
 import java.io.IOException;
+import java.time.DateTimeException;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
 import java.util.Optional;
 import java.util.Random;
 
@@ -51,7 +55,7 @@ public class RetryExecutor {
                 }
                 if (!policy.retryOn().contains(r.status())) return r;
                 if (attempt == policy.maxAttempts()) return r;
-                sleepFor(computeDelay(attempt, retryAfterMillis(r)));
+                sleepFor(computeDelay(attempt, retryAfterMillis(r.header("Retry-After"), Instant.now())));
             } catch (IOException | InterruptedException ex) {
                 lastEx = ex;
                 if (!policy.retriesNetworkFailure(ex) || attempt == policy.maxAttempts()) throw ex;
@@ -64,13 +68,23 @@ public class RetryExecutor {
         throw new IllegalStateException("unreachable");
     }
 
-    private long retryAfterMillis(RestResponse r) {
-        Optional<String> ra = r.header("Retry-After");
-        if (ra.isEmpty()) return -1L;
+    /**
+     * The wait a {@code Retry-After} header asks, in milliseconds: a number of seconds, or an HTTP date (RFC 9110
+     * §10.2.3) read against {@code now} — a date already past is an immediate retry. {@code -1} when the header is
+     * absent or reads as neither, which leaves the backoff to decide.
+     */
+    static long retryAfterMillis(Optional<String> header, Instant now) {
+        if (header.isEmpty()) return -1L;
+        String value = header.get().trim();
         try {
-            return Long.parseLong(ra.get().trim()) * 1000L;
-        } catch (NumberFormatException e) {
-            return -1L;
+            return Long.parseLong(value) * 1000L;
+        } catch (NumberFormatException notSeconds) {
+            try {
+                Instant at = Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(value));
+                return Math.max(0L, Duration.between(now, at).toMillis());
+            } catch (DateTimeException notADate) {
+                return -1L;
+            }
         }
     }
 

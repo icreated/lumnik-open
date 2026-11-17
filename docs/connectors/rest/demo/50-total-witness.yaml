@@ -31,7 +31,7 @@ spec:
   auth:
     kind: basic
     username: demo-user
-    password_env: ACME_BASIC_PW
+    password_env: ACME_BASIC_PW   # lm secret scope ACME_BASIC_PW billing
 
   endpoints:
     - id: incomplete

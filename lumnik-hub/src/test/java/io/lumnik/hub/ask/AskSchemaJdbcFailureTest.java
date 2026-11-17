@@ -48,7 +48,7 @@ class AskSchemaJdbcFailureTest {
         EntitySchemaBuilder builder = new EntitySchemaBuilder();
         builder.adminDs = refusing();
 
-        assertThatThrownBy(() -> builder.resolve("sales"))
+        assertThatThrownBy(() -> builder.resolve(1L, "sales"))
             .hasMessage("EntitySchemaBuilder.resolve failed (SQLSTATE 42501)")
             .hasCause(DRIVER);
     }
@@ -73,7 +73,7 @@ class AskSchemaJdbcFailureTest {
         builder.adminDs = ds;
         builder.parser = parser;
 
-        assertThatThrownBy(() -> builder.resolve("sales"))
+        assertThatThrownBy(() -> builder.resolve(1L, "sales"))
             .hasMessage("EntitySchemaBuilder.resolve: stored manifest customer does not parse")
             .hasCause(invalid);
     }

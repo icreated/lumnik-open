@@ -5,8 +5,8 @@
 # Switch this same connector to `20-watermark.yaml` to pick up changes too.
 #
 # The source tables are created by data/demo-source.sql in the hub's own PostgreSQL, so the
-# page can be replayed with nothing but the self-host stack. LUMNIK_READONLY_DB_PASSWORD is
-# already exported where the hub runs; a real base names its own variable.
+# page can be replayed with nothing but the self-host stack. LUMNIK_READONLY_DB_PASSWORD is an
+# lm secret, set from the stack's .env (see the page); a real base names its own.
 apiVersion: connectors.lumnik.io/v1
 kind: Connector
 metadata:
@@ -18,7 +18,7 @@ spec:
   connection:
     url: jdbc:postgresql://postgres:5432/lumnik
     user: lumnik_readonly
-    password_env: LUMNIK_READONLY_DB_PASSWORD
+    password_env: LUMNIK_READONLY_DB_PASSWORD   # lm secret scope LUMNIK_READONLY_DB_PASSWORD billing
 
   defaults:
     schema: demo

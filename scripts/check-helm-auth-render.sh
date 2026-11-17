@@ -40,6 +40,10 @@ render --set auth.mode=dev-bypass --set auth.iUnderstandNoAuth=yes >/dev/null \
 acked="$(render --set auth.mode=dev-bypass --set auth.iUnderstandNoAuth=true)" || true
 grep -q 'QUARKUS_PROFILE: "k8sdev"' <<<"$acked" \
   && ok "dev-bypass with the acknowledgement renders" || nope "dev-bypass with the acknowledgement renders"
+grep -q 'LUMNIK_SECURITY_I_UNDERSTAND_NO_AUTH: "true"' <<<"$acked" \
+  && ok "dev-bypass hands the hub its acknowledgement (#1995)" || nope "dev-bypass hands the hub its acknowledgement (#1995)"
+grep -q 'QUARKUS_PROFILE: "prod"' <<<"$defaults" && ! grep -q 'LUMNIK_SECURITY_I_UNDERSTAND_NO_AUTH' <<<"$defaults" \
+  && ok "oidc hands the hub no acknowledgement" || nope "oidc hands the hub no acknowledgement"
 acked_string="$(render --set auth.mode=dev-bypass --set-string auth.iUnderstandNoAuth=true)" || true
 grep -q 'QUARKUS_PROFILE: "k8sdev"' <<<"$acked_string" \
   && ok "the acknowledgement may be a string" || nope "the acknowledgement may be a string"

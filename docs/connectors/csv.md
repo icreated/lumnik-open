@@ -17,14 +17,19 @@
 --8<-- "docs/connectors/csv/10-local-simple.yaml"
 ```
 
-The **hub** reads the manifest's `path:`, on its own disk. On the self-host stack, copy the sample
-file into the hub's container, then set `path: /tmp/customers.csv` in your copy of the manifest:
+The **hub** reads the manifest's `path:`, on its own disk, in your tenant's folder of the one folder
+its operator names ([below](#local-the-hubs-disk-not-yours)). On the self-host stack, name a folder
+in `.env`, recreate the hub with `up.sh` (add `--build` if the stack runs from source; a plain
+restart keeps the old environment), and copy the sample file into the folder of tenant `1`:
 
 ```bash
-docker compose -f docker-compose.selfhost.yml cp docs/connectors/csv/data/customers.csv hub:/tmp/customers.csv
+echo 'LUMNIK_CSV_LOCAL_ROOT=/tmp/drop' >> .env && deploy/selfhost/up.sh
+docker compose -f docker-compose.selfhost.yml exec hub mkdir -p /tmp/drop/1
+docker compose -f docker-compose.selfhost.yml cp docs/connectors/csv/data/customers.csv hub:/tmp/drop/1/customers.csv
 ```
 
-A hub in dev mode reads the repository path as it is. From the repository root:
+The manifest's `path: customers.csv` is relative to that folder: use it as is. A hub in dev mode
+needs the same variable. From the repository root:
 
 ```
 $ lm validate -f docs/connectors/csv/10-local-simple.yaml
@@ -92,20 +97,43 @@ The manifest's `transport:` block picks one:
 ```yaml
 transport:
   kind: local
-  path: /imports/*.csv        # glob OK
+  path: imports/*.csv         # relative to the tenant's folder; glob OK
 ```
 
-- **The path is on the hub's filesystem.** The self-host stack mounts nothing: mount a volume,
+- **The hub reads one folder, `LUMNIK_CSV_LOCAL_ROOT`.** Its operator sets it: in `.env` on the
+  self-host stack, in `hub.extraEnv` on Helm. Unset, a local connector reads nothing — its run fails:
+  `the local transport is off on this hub: an operator sets lumnik.csv.local-root (env
+  LUMNIK_CSV_LOCAL_ROOT) to the directory it may read`.
+- **A connector reads its tenant's folder of it: `<root>/<tenant id>`.** Tenant `1` reads
+  `/tmp/drop/1/`, never `/tmp/drop/2/`.
+- **`path` is relative to that folder.** `imports/*.csv` reads `/tmp/drop/1/imports/*.csv` for
+  tenant `1`. An absolute path is refused by `lm validate` and `lm apply`, and by a run of a
+  connector stored before: `a local path is relative to its tenant's folder of the root
+  (lumnik.csv.local-root/<tenant id>): write orders/*.csv, not a path from /`.
+- **A path that leaves the folder fails the run**: `a local path must lie inside its tenant's
+  folder of the root: lumnik.csv.local-root/<tenant id>`. `..` and symbolic links are followed
+  before the check, so neither leaves the folder. A file in it that links outside is not listed.
+- **The folder is on the hub's filesystem.** The self-host stack mounts nothing: mount a volume,
   use `sftp`/`s3`, or upload one file with [`lm csv ingest`](csv-quick-look.md).
 - **Glob**: `*` and `?`, in the **final filename segment** only. `**` does not reach into
   subfolders.
-- **A glob in a folder name fails the run**: `/imports/*/x.csv` gives
-  `Failed to resolve path pattern: /imports/*/x.csv`. So does a glob whose folder does not exist.
+- **A glob in a folder name fails the run**: `imports/*/x.csv` gives
+  `Failed to resolve path pattern: /tmp/drop/1/imports/*/x.csv`. So does a glob whose folder does
+  not exist.
 - **No name is excluded implicitly** — use `*.csv` to keep `.tmp` files out.
 - **A path that matches nothing is not an error**: the run completes with `IN 0`. This holds for
   a glob in an existing folder, and for one file that does not exist.
 - **A path without `*` or `?` names one file**, and that file is the whole table — see
   [full refresh](#one-file-is-the-table-full-refresh).
+
+`path: ../2/*.csv`, from tenant `1`, on a hub whose folder is `/tmp/cap-drop`:
+
+```
+$ lm run get bdc787a3
+ID        CONNECTOR        ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
+bdc787a3  csv-local-other  default   Failed  0   0    0        0             2026-11-14 19:21  2026-11-14 19:21
+✖ run failed: a local path must lie inside its tenant's folder of the root: lumnik.csv.local-root/<tenant id>
+```
 
 **A drop folder, run by run.** A 1 200-row export `2026-09-01-orders.csv`, then two more files:
 
@@ -151,13 +179,16 @@ archive_path: /archive/       # default /archive/; required when after_process: 
 ```
 
 **Credentials are never inline.** `key_env` / `password_env` name a secret stored with
-[`lm secret`](../cli/lm-reference.md#data-runs-answers); an OS env var of that name is the fallback:
+[`lm secret`](../cli/lm-reference.md#data-runs-answers):
 
 ```
 $ lm secret set SFTP_ERP_PASSWORD
 Value for SFTP_ERP_PASSWORD:
 Created secret "SFTP_ERP_PASSWORD"
 ```
+
+A connector reads it only when it carries every scope of the secret:
+`lm secret scope SFTP_ERP_PASSWORD demo` ([secret scopes](../admin-console-guide.md#which-connectors-may-read-a-secret-its-scopes)).
 
 A manifest with neither credential is refused:
 
@@ -235,9 +266,11 @@ transport:
 
 - `billing/` + `.csv` reads `billing/2026-09-01.csv` and ignores `billing/2026-09-01.csv.tmp`.
 - Same rule as SFTP: an object is read when new or rewritten, oldest first; zero-byte objects are skipped.
-- `access_key_env` / `secret_key_env` are secret **names** (`lm secret set AWS_ACCESS_KEY_ID`).
+- `access_key_env` / `secret_key_env` are secret **names** (`lm secret set AWS_ACCESS_KEY_ID`),
+  each carrying the connector's scopes (`lm secret scope AWS_ACCESS_KEY_ID demo`).
+  The default names are `lm secret` entries too: the hub's own AWS credentials are never used.
   A key rotated with `lm secret set` is used from the next run on. On a hub with several
-  replicas, allow up to 5 minutes.
+  replicas, a connector without scopes may take up to 5 minutes to see it.
 
 **One export, archived after commit** — the manifest of the
 [S3 how-to](#ingest-a-headerless-export-under-an-s3-prefix-and-archive-it):
@@ -349,7 +382,7 @@ parser:
     ```
 
     - **Only the lines before the table are skipped.** Short lines are skipped until the first
-      full one. Here the three first lines count in `SKIPPED`, with no dead letter. The run log
+      full one. Here the three first lines count in `SKIPPED`, with no dead letter. The hub log
       says `3 leading short row(s) skipped`.
     - **A short line after that is still a dead letter.** Here the fifth line, `MRFA` with two
       values, goes to `lm dlq list`. The other rows land.
@@ -463,7 +496,7 @@ run that reads it to the end and succeeds removes the rows the file no longer ho
 ```yaml
 transport:
   kind: local
-  path: /imports/articles.csv    # one file: full refresh
+  path: imports/articles.csv     # one file: full refresh
 after_process: none
 refresh:
   max_removed: 30%               # the default — off, or 100%, lifts the guard
@@ -595,10 +628,6 @@ A removed row also leaves the entities fused from it, `lm ask`, and any Search i
 • 1 file(s) read but not archived — still in the source folder (after_process failed; see the hub log)
 ```
 
-On a `local` transport, only `after_process: none` is accepted.
-
-**A file is archived only after its rows are in the table** (sftp/s3).
-
 **A misspelled key is flagged**, and the manifest still applies. Inside `mapping`, a misspelt tier is [refused](transformers.md#how-a-mapping-reads).
 
 ```
@@ -619,7 +648,9 @@ $ lm validate -f typo.yaml
   [`map-columns`](transformers.md#map-columns-legacy-column-names-cust_nm).
 - **Two identical lines are one row.** `OUT` counts the lines; the table holds distinct rows.
 - **`target.indexes`** declares Postgres indexes — `{ columns: [...], unique: <bool> }`
-  (`unique` defaults to false); a malformed entry fails validation:
+  (`unique` defaults to false); a malformed entry fails validation. Each index starts with
+  `tenant_id`, so `unique` means unique within your tenant: the table is shared with the other
+  tenants that ingest under the same name.
 
     ```yaml
     target:
@@ -669,6 +700,8 @@ does not schedule, transform or set rows aside: [One file, one command](csv-quic
     $ lm secret set CSV_SFTP_PASSWORD
     Value for CSV_SFTP_PASSWORD:
     Created secret "CSV_SFTP_PASSWORD"
+    $ lm secret scope CSV_SFTP_PASSWORD demo
+    scopes: demo
     ```
 
 2. Apply the manifest — this one targets the docker-compose demo server:
@@ -701,14 +734,17 @@ add `endpoint:` — see `40-s3-prefix.yaml` in `docs/connectors/csv/`.
 | `SFTP host key refused for host:22 — the server presented SHA256:…` | `host_key_fingerprint` absent or wrong, with `strict_host_key: true` (the default) | confirm the presented fingerprint out of band (`ssh-keyscan -p 22 HOST \| ssh-keygen -lf -`), paste it into `host_key_fingerprint` |
 | `SFTP error (SSH_FX_PERMISSION_DENIED): Permission denied` | wrong password/key, or the user cannot read `path` | `lm secret list`, then `lm secret set <NAME>` (a private key is many lines — pipe it with `<NAME> -`); check the folder's rights |
 | `at least one of key_env, password_env is required when kind is sftp` | neither credential declared | `lm secret set <NAME>`, then `password_env: <NAME>` or `key_env: <NAME>` |
-| run `Failed`: `S3 credentials unavailable (access_key_env=…, secret_key_env=…)` | no secret, and no hub variable, holds one of those names | `lm secret set <NAME>` for each name the message gives |
+| run `Failed`: `S3 credentials unavailable (access_key_env=…, secret_key_env=…)` | no `lm secret` holds one of those names — the hub's own AWS variables are not read | `lm secret set <NAME>` for each name the message gives |
+| run `Failed`: `the local transport is off on this hub` | `LUMNIK_CSV_LOCAL_ROOT` is not set | the operator sets it to the folder the files land in, then recreates the hub: `deploy/selfhost/up.sh` (add `--build` for a stack run from source), or on Helm `helm upgrade` with it in `hub.extraEnv`. A plain restart keeps the old environment |
+| `lm apply` refused, or run `Failed`: `a local path is relative to its tenant's folder of the root` | `path` starts with `/` | write it relative to `<root>/<tenant id>`: `orders/*.csv`, not `/tmp/drop/1/orders/*.csv` |
+| run `Failed`: `a local path must lie inside its tenant's folder of the root` | `path` reaches out of `<root>/<tenant id>` through `..` or a link | move the files into the tenant's folder, and write `path` relative to it |
 | run `Failed`: `… (Service: S3, Status Code: 403, …)` | invalid S3 credentials, or a bucket policy that refuses the user | check the secrets named by `access_key_env` / `secret_key_env`, and the bucket's policy |
 | dead letters `Record has 2 values but 12 columns are declared`, one per line of a `key;value` block | an export that opens with a block before its table | `has_header: false`, `columns`, and `parser.short_rows: skip-leading` — see [Parser](#parser) |
 | `required field missing (required when has_header is false and lines is off)` | a headerless parser without names | `parser.columns: [a, b, …]` in file order |
 | `after_process: archive is not executed on local connector runs` | a relocation on a local transport | `after_process: none`, or an sftp/s3 transport |
 | `… is not read by connector runs` | `file_filter`, `pre_process`, `post_process` or `max_file_size` in a connector manifest | drop the key |
 | run `Failed`: `connector.t_… is already written by connector '…'` | another connector of the tenant already writes the table named after this one | apply it under another `metadata.name`, then `lm connector delete` the refused one — see [JDBC](jdbc.md#two-connectors-reading-a-table-of-the-same-name) |
-| run completes with `IN 0` | nothing new — or the local path matches nothing on the **hub's** disk | `lm connector get NAME` shows the path (`config.transport.path`); check it exists on the hub |
+| run completes with `IN 0` | nothing new — or the local path matches nothing on the **hub's** disk | `lm connector get NAME` shows the path (`config.transport.path`); check it exists under `<root>/<tenant id>` on the hub |
 | a file dropped in a local folder is never read | its name sorts before the last file read ([drop-folder contract](#local-the-hubs-disk-not-yours)) | name incoming files monotonically, or switch to sftp/s3 |
 | run `Failed`: `The cursor's file … is gone, but files sorting after it are waiting` | a file was archived before the run that read it completed | `lm endpoint reset-cursor <connector>/<endpoint>`; archive only after `Completed` |
 | `DEAD-LETTERS` > 0, reason `MalformedSource` | value count differs from the declared columns — trailing delimiter, unclosed quote, or a quote escaped by a backslash (`parser.escape`) | `lm dlq get ID` shows the raw values, file and line; fix the export or `parser:` |

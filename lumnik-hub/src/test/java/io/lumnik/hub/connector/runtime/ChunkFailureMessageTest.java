@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.runtime;
 
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.exceptions.SourceCallException;
 import io.lumnik.hub.connector.exceptions.SourceUnreachableException;
@@ -107,7 +108,7 @@ class ChunkFailureMessageTest {
   @Test
   void a_url_the_client_cannot_parse_is_stored_without_quoting_it() {
     Exception refused = assertThrows(IllegalArgumentException.class,
-        () -> new RestHttpClient().execute(RestRequest.get(SOURCE + " w")));
+        () -> new RestHttpClient(TestOutbound.ADDRESSES).execute(RestRequest.get(SOURCE + " w")));
 
     String msg = messageFor(refused);
 

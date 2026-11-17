@@ -17,7 +17,7 @@ spec:
   connection:
     url: jdbc:postgresql://postgres:5432/lumnik
     user: lumnik_readonly
-    password_env: LUMNIK_READONLY_DB_PASSWORD
+    password_env: LUMNIK_READONLY_DB_PASSWORD   # lm secret scope LUMNIK_READONLY_DB_PASSWORD billing
 
   source:
     tables:

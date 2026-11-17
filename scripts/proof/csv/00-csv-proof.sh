@@ -2,10 +2,10 @@
 # CSV proof — drive each docs/connectors/csv LOCAL manifest through the real lm binary and assert
 # the rows land in connector.t_<name>. Reuses the WOW lib (lm wrapper, counters, ro_sql).
 #
-# Prereqs: platform on :8080 (quarkus:dev with the CSV write path), hub Postgres :5433, scripts/wow/.env.
-# Note: the platform resolves relative file paths from its own cwd, so this suite rewrites each
-# manifest's `docs/connectors/csv/...` refs to ABSOLUTE ($REPO) into a temp copy before `lm apply`.
-# The committed manifests stay relative (they are docs); only the path is absolutized for the run.
+# Prereqs: platform on :8080 (quarkus:dev with the CSV write path), hub Postgres :5433, scripts/wow/.env,
+# and LUMNIK_CSV_LOCAL_ROOT exported here with the value the platform was started with. A local path is
+# relative to the tenant's folder of that root (#2001): this suite copies docs/connectors/csv/data/ into
+# <root>/<tenant id>/ and applies the committed manifests as they are.
 #
 # KNOWN BLOCKER: `lm connector run` currently returns HTTP 404 for any tenant-scoped connector on an
 # RLS-enforced hub — see finding `lm-connector-run-rls-404` (engine.exists() system-read is filtered
@@ -16,18 +16,14 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../wow/tests" && pwd)/lib.sh"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
-apply_abs() {  # apply a manifest with docs/ paths absolutized
-  local manifest="$1"
-  local tmp; tmp="$(mktemp /tmp/csv-proof-XXXX.yaml)"
-  sed "s|docs/connectors/csv/|${REPO}/docs/connectors/csv/|g" "$REPO/$manifest" > "$tmp"
-  lm apply -f "$tmp" >/dev/null 2>&1; local rc=$?
-  rm -f "$tmp"; return $rc
+apply_manifest() {  # apply a committed manifest as it is
+  lm apply -f "$REPO/$1" >/dev/null 2>&1
 }
 
 run_case() {  # run_case <manifest> <connector-name> <table> <expected-min-rows>
   local manifest="$1" name="$2" table="$3" minrows="$4"
   hdr "$name"
-  apply_abs "$manifest" && ok "applied $name" || { bad "apply $name"; return; }
+  apply_manifest "$manifest" && ok "applied $name" || { bad "apply $name"; return; }
   lm connector run "$name" >/dev/null 2>&1 && ok "triggered $name" || { bad "run $name"; return; }
   local n=0
   for i in $(seq 1 30); do
@@ -39,7 +35,7 @@ run_case() {  # run_case <manifest> <connector-name> <table> <expected-min-rows>
 }
 
 hdr "platform reachable?"
-curl -s -m 5 "${WOW_SERVER}/q/openapi" >/dev/null 2>&1 && ok "platform on ${WOW_SERVER}" \
+curl -sf -m 5 "${WOW_SERVER}/app/" >/dev/null 2>&1 && ok "platform on ${WOW_SERVER}" \
   || { bad "platform down — mvn quarkus:dev -pl lumnik-hub -am"; summary; exit 1; }
 
 # Clean slate: drop the demo hub tables, their registry rows, and the demo SchemaCard so each run is a
@@ -71,9 +67,14 @@ for t in t_csv_local_simple t_csv_local_glob t_csv_kotlin_hook; do
 done
 ok "demo artifacts cleared (tenant ${T})"
 
+hdr "sample files in the tenant's folder of the local root"
+[ -n "${LUMNIK_CSV_LOCAL_ROOT:-}" ] || { bad "export LUMNIK_CSV_LOCAL_ROOT (the platform's lumnik.csv.local-root)"; summary; exit 1; }
+mkdir -p "${LUMNIK_CSV_LOCAL_ROOT}/${T}" && cp "$REPO"/docs/connectors/csv/data/* "${LUMNIK_CSV_LOCAL_ROOT}/${T}/" \
+  && ok "copied docs/connectors/csv/data/ into ${LUMNIK_CSV_LOCAL_ROOT}/${T}/" || bad "copy into ${LUMNIK_CSV_LOCAL_ROOT}/${T}/"
+
 # --- Pre-flight the known RLS run-endpoint blocker ---------------------------------
 hdr "pre-flight: is the run endpoint usable? (finding lm-connector-run-rls-404)"
-apply_abs docs/connectors/csv/10-local-simple.yaml >/dev/null 2>&1
+apply_manifest docs/connectors/csv/10-local-simple.yaml >/dev/null 2>&1
 PROBE="$(lm connector run csv-local-simple 2>&1)"
 if echo "$PROBE" | grep -q "404"; then
   echo "  ⚠️  BLOCKED: 'lm connector run' → 404 (RLS system-read; finding lm-connector-run-rls-404)."

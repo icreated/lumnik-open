@@ -53,7 +53,7 @@ public class ParseNumberHook implements CellHook {
       BigDecimal n = v instanceof Number num ? new BigDecimal(num.toString()) : decimal(v.toString(), params);
       row.put(col, integer ? n.longValueExact() : n);
     } catch (NumberFormatException | ArithmeticException e) {
-      s.counters().cellErrors().incrementAndGet();
+      s.refuseCell();
       row.put(col, null);
     }
   }

@@ -7,7 +7,7 @@ Not every failure lands in the hub's log. Look here first:
 
 | Symptom | Look at |
 |---|---|
-| the hub won't start, or 500s everywhere | `curl -s http://localhost:8080/q/health`, then the **hub** log |
+| the hub won't start, or 500s everywhere | `./deploy/selfhost/health.sh`, then the **hub** log |
 | login fails, token rejected | the **keycloak** log |
 | a run failed, rows are missing | `lm run get` and `lm dlq` — [not the logs](#when-the-answer-is-not-in-the-logs) |
 | a webhook never arrived | `lm outputs list` |

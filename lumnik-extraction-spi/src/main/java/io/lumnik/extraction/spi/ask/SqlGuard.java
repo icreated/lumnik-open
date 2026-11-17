@@ -3,6 +3,7 @@ package io.lumnik.extraction.spi.ask;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Pure validator/normalizer for LLM-generated SQL.
@@ -33,10 +34,26 @@ public class SqlGuard {
     /**
      * Objects and functions. Denied QUOTED OR NOT — here the quotes name the very thing the entry
      * exists to deny, so exempting them would reopen the denylist rather than avoid an over-block.
+     *
+     * <p>{@code set_config} rewrites {@code app.current_tenant} inside the query, so RLS filters on the
+     * tenant the query chose; {@code ts_stat}, {@code ts_rewrite} and the {@link #XML_FAMILY} run SQL held in a string
+     * literal, which no guard reads (#1987). The boundary is the database, which revokes them from the
+     * readonly role ({@code infra/postgres/init/02-extensions.sql}); this list is the layer above it.
      */
     private static final Set<String> BANNED_OBJECTS = Set.of(
-        "pg_sleep", "pg_read", "pg_catalog", "information_schema",
-        "lo_import", "lo_export", "dblink");
+        "information_schema", "lo_import", "lo_export", "dblink", "set_config", "ts_stat", "ts_rewrite");
+
+    /** {@code query_to_xml}, {@code table_to_xmlschema}…: the same pattern {@code 02-extensions.sql} revokes. */
+    private static final Pattern XML_FAMILY = Pattern.compile("^(query|table|cursor|schema|database)_to_xml");
+
+    /**
+     * The server's own namespace: {@code pg_catalog} itself, and the catalog it resolves even under the
+     * empty {@code search_path} ({@code pg_class}, {@code pg_stat_activity}…), the sleeps, the file reads,
+     * the advisory locks that outlive the query on a pooled connection, the backend signals. A prefix,
+     * because the exact names left {@code pg_sleep_for} open beside {@code pg_sleep}. The cost: a
+     * business column whose name starts with {@code pg_} is refused too.
+     */
+    private static final String BANNED_PREFIX = "pg_";
 
     /** Beyond this many digits the bound is nonsense anyway, and {@code parseInt} would throw. */
     private static final int MAX_LIMIT_DIGITS = 9;
@@ -55,6 +72,7 @@ public class SqlGuard {
 
         requireSingleStatement(tokens);
         requireNoDollarQuoting(tokens);
+        requireOnlyPlainLiterals(tokens);
         requireSelectOrWith(tokens);
         requireNoBannedName(tokens);
         return bound(sql, tokens);
@@ -71,9 +89,7 @@ public class SqlGuard {
     /** A {@code ;} that is a real token — one inside a literal is data, not a second statement. */
     private static void requireSingleStatement(List<SqlLexer.Token> tokens) {
         for (SqlLexer.Token t : tokens) {
-            if (t.kind() == SqlLexer.Kind.OP && ";".equals(t.text())) {
-                throw new SqlRejectedException("multiple statements not allowed");
-            }
+            if (isOp(t, ";")) throw new SqlRejectedException("multiple statements not allowed");
         }
     }
 
@@ -93,17 +109,51 @@ public class SqlGuard {
      */
     private static void requireNoDollarQuoting(List<SqlLexer.Token> tokens) {
         for (SqlLexer.Token t : tokens) {
-            if (t.kind() == SqlLexer.Kind.OP && "$".equals(t.text())) {
-                throw new SqlRejectedException("dollar-quoted text is not allowed");
+            if (isOp(t, "$")) throw new SqlRejectedException("dollar-quoted text is not allowed");
+        }
+    }
+
+    /**
+     * The lexer knows one escape, the doubled delimiter (#1988). Before {@code E'\''} it closes the
+     * string after the backslash where the server does not, and the quote after it opens a lexer string
+     * over real code; {@code U&"c\006fnnector"} is the schema {@code connector} to the server and an
+     * unknown name to every guard. Same choice as {@link #requireNoDollarQuoting}: refuse the forms,
+     * with or without a space before the quote ({@code UESCAPE} only follows {@code U&}).
+     *
+     * <p>Every other string the lexer reads as the server does: the readonly transaction pins
+     * {@code standard_conforming_strings=on} ({@code TenantRlsScope}), so a backslash in a plain string is
+     * data to both, and {@code LIKE '50\%'} or {@code ~ '^\d+'} stay open. {@code B'…'}, {@code X'…'} and
+     * {@code N'…'} quote exactly like a plain string.
+     */
+    private static void requireOnlyPlainLiterals(List<SqlLexer.Token> tokens) {
+        for (int i = 0; i < tokens.size(); i++) {
+            SqlLexer.Token t = tokens.get(i);
+            if (isWord(t) && prefixesALiteral(tokens, i, t.text().toLowerCase(Locale.ROOT))) {
+                throw new SqlRejectedException("a literal form the guard does not read");
             }
         }
+    }
+
+    private static boolean prefixesALiteral(List<SqlLexer.Token> tokens, int at, String word) {
+        if (word.equals("e")) return isString(tokens, at + 1);
+        return word.equals("u") && at + 1 < tokens.size() && isOp(tokens.get(at + 1), "&")
+            && (isString(tokens, at + 2) || at + 2 < tokens.size() && tokens.get(at + 2).quoted());
+    }
+
+    private static boolean isString(List<SqlLexer.Token> tokens, int at) {
+        return at < tokens.size() && tokens.get(at).kind() == SqlLexer.Kind.STRING;
+    }
+
+    private static boolean isOp(SqlLexer.Token t, String op) {
+        return t.kind() == SqlLexer.Kind.OP && op.equals(t.text());
     }
 
     private static void requireNoBannedName(List<SqlLexer.Token> tokens) {
         for (SqlLexer.Token t : tokens) {
             if (t.kind() != SqlLexer.Kind.IDENT) continue;
             String name = t.text().toLowerCase(Locale.ROOT);
-            if (BANNED_OBJECTS.contains(name) || (!t.quoted() && BANNED_VERBS.contains(name))) {
+            if (BANNED_OBJECTS.contains(name) || name.startsWith(BANNED_PREFIX) || XML_FAMILY.matcher(name).find()
+                    || (!t.quoted() && BANNED_VERBS.contains(name))) {
                 throw new SqlRejectedException("banned token in SQL");
             }
         }

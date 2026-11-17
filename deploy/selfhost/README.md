@@ -13,6 +13,8 @@ host with Docker. It runs anywhere Docker runs: a laptop, or a VM on any cloud (
     grants access only if your GitHub account was added to the package.
 - `--build` compiles the hub from source inside Docker instead: no image access and no local
   Maven/JDK needed, only Docker. The first build takes a few minutes.
+- On an ARM Linux server (Raspberry Pi, AWS Graviton), use `--build`: the image is `linux/amd64`
+  only. A Mac with Apple silicon runs it through Docker Desktop's emulation.
 - **For the natural-language layer (RAG chat, semantic search, analytic "ask"):** an
   [Ollama](https://ollama.com) running on the host, with the three models pulled. Without it,
   *structured* ingestion, canonical fusion, and the REST API still work — but the embedding model
@@ -66,7 +68,7 @@ host with Docker. It runs anywhere Docker runs: a laptop, or a VM on any cloud (
 On the first run, `up.sh` creates `.env` with strong random secrets (`openssl rand`). When the hub is
 healthy it prints the URLs:
 
-- Hub — `http://localhost:8080` (health: `/q/health` — unauthenticated; the `/api/platform/*` API needs a token)
+- Hub — `http://localhost:8080` (health: `./deploy/selfhost/health.sh`, which asks the hub's unpublished management port; the `/api/platform/*` API needs a token)
 - Keycloak — `http://localhost:8180/realms/lumnik`
 
 Then point `lm` at the hub (server `http://localhost:8080`, OIDC `http://localhost:8180/realms/lumnik`).

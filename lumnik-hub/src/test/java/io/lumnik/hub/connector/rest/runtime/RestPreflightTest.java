@@ -1,5 +1,7 @@
 package io.lumnik.hub.connector.rest.runtime;
 
+import io.lumnik.hub.testsupport.TestOutbound;
+import io.lumnik.hub.connector.rest.ResponseTooLargeException;
 import io.lumnik.hub.connector.domain.Connector;
 import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
@@ -55,7 +57,7 @@ class RestPreflightTest {
 
     RestPreflightTest() {
         preflight.pagination = new PaginationFactory();
-        preflight.secrets = SecretRefs.environmentOnly(name -> null);
+        preflight.secrets = SecretRefs.of(name -> null);
     }
 
     private static ConnectorEndpoint endpoint(String name, String method, String path,
@@ -127,11 +129,11 @@ class RestPreflightTest {
         assertThat(req.headers()).containsEntry("X-Api-Version", "2024-10");
     }
 
-    /** A header's {@code value_env} resolves the way the run resolves it: lm secret first, then the environment. */
+    /** A header's {@code value_env} resolves the way the run resolves it: through lm secret. */
     @Test
     void resolvesAHeaderReferenceThroughTheSecretRegistry() {
         preflight.secrets = new SecretRefs(
-            name -> "CLIENT_ID".equals(name) ? Optional.of("from-registry") : Optional.empty(), name -> "from-env");
+            name -> "CLIENT_ID".equals(name) ? Optional.of("from-registry") : Optional.empty());
         Connector c = connector(Map.of(
             "base_url", "http://erp.invalid",
             "headers", List.of(Map.of("name", "X-Client-Id", "value_env", "CLIENT_ID"))));
@@ -145,7 +147,7 @@ class RestPreflightTest {
     @Test
     void anUnresolvedHeaderReferenceIsTheVerdict() {
         preflight.authReg = noAuth();
-        preflight.http = new RestHttpClient() {
+        preflight.http = new RestHttpClient(TestOutbound.ADDRESSES) {
             @Override public RestResponse execute(RestRequest req) { throw new AssertionError("nothing may be sent"); }
         };
         Connector c = connector(Map.of(
@@ -198,7 +200,7 @@ class RestPreflightTest {
     @Test
     void anInterruptedRequestIsRaised_notReportedAsARefusal() {
         preflight.authReg = noAuth();
-        preflight.http = new RestHttpClient() {
+        preflight.http = new RestHttpClient(TestOutbound.ADDRESSES) {
             @Override public RestResponse execute(RestRequest req) throws Exception {
                 throw new InterruptedException("cancelled");
             }
@@ -277,7 +279,7 @@ class RestPreflightTest {
     @MethodSource("quotingExceptions")
     void anUnreachableSourceIsReportedByItsKind_neverByTheMessage(Exception thrown, String expected) {
         preflight.authReg = noAuth();
-        preflight.http = new RestHttpClient() {
+        preflight.http = new RestHttpClient(TestOutbound.ADDRESSES) {
             @Override public RestResponse execute(RestRequest req) throws Exception { throw thrown; }
         };
 
@@ -308,13 +310,44 @@ class RestPreflightTest {
     @Test
     void aRealJdkRefusalOfTheUrlIsReportedByItsKind() {
         preflight.authReg = noAuth();
-        preflight.http = new RestHttpClient();
+        preflight.http = new RestHttpClient(TestOutbound.ADDRESSES);
 
         RestPreflight.Verdict refused = preflight.check(
             connector(Map.of("base_url", "https://user:pw@api.example")),
             endpoint("partners", "GET", "/p/SECRET?k=v w", Map.of("pagination", Map.of("kind", "link-header"))));
 
         assertThat(refused.detail()).isEqualTo("invalid URL (IllegalArgumentException)");
+    }
+
+    /** #2002: a refused address is the hub's decision, said in its own words, not "other". */
+    @Test
+    void aRefusedAddressIsNamed() {
+        preflight.authReg = noAuth();
+        preflight.http = new RestHttpClient(TestOutbound.ADDRESSES);
+
+        RestPreflight.Verdict refused = preflight.check(
+            connector(Map.of("base_url", "http://169.254.169.254")),
+            endpoint("meta", "GET", "/latest/meta-data/", Map.of("pagination", Map.of("kind", "link-header"))));
+
+        assertThat(refused.ok()).isFalse();
+        assertThat(refused.detail()).contains("never connects to");
+    }
+
+    /** #2002: a body past the cap is named as the run names it, not as "other". */
+    @Test
+    void aBodyPastTheCapIsNamed() {
+        preflight.authReg = noAuth();
+        preflight.http = new RestHttpClient(TestOutbound.ADDRESSES) {
+            @Override public RestResponse execute(RestRequest req) {
+                throw new ResponseTooLargeException("the response is larger than 64 MiB, the most the hub reads");
+            }
+        };
+
+        RestPreflight.Verdict refused = preflight.check(
+            connector(Map.of("base_url", "https://api.example")),
+            endpoint("big", "GET", "/export", Map.of("pagination", Map.of("kind", "link-header"))));
+
+        assertThat(refused.detail()).contains("larger than 64 MiB");
     }
 
     /**
@@ -324,7 +357,7 @@ class RestPreflightTest {
     @Test
     void theReportedUrlKeepsItsHostAndPathButNeverItsCredential() {
         preflight.authReg = noAuth();
-        preflight.http = new RestHttpClient() {
+        preflight.http = new RestHttpClient(TestOutbound.ADDRESSES) {
             @Override public RestResponse execute(RestRequest req) throws Exception {
                 throw new ConnectException("Connection refused");
             }
@@ -383,7 +416,7 @@ class RestPreflightTest {
     @Test
     void anOAuth2TokenEchoedInARefusalNeverReachesTheSample() {
         OAuth2Tokens tokens = new OAuth2Tokens();
-        RestHttpClient echoing = new RestHttpClient() {
+        RestHttpClient echoing = new RestHttpClient(TestOutbound.ADDRESSES) {
             int issued;
             @Override public RestResponse execute(RestRequest r) {
                 if (r.url().endsWith("/oauth/token")) {
@@ -394,7 +427,7 @@ class RestPreflightTest {
             }
         };
         OAuth2AuthProviderFactory oauth2 =
-            new OAuth2AuthProviderFactory(SecretRefs.environmentOnly(n -> "s3cret"), tokens, echoing);
+            new OAuth2AuthProviderFactory(SecretRefs.of(n -> "s3cret"), tokens, echoing);
         preflight.authReg = new AuthProviderRegistry() {
             @Override public AuthProvider build(AuthSpec spec) { return oauth2.build(spec); }
         };
@@ -459,7 +492,7 @@ class RestPreflightTest {
 
     private RestPreflight.Verdict answeringWith(Map<String, List<String>> headers, ConnectorEndpoint ep) {
         preflight.authReg = noAuth();
-        preflight.http = new RestHttpClient() {
+        preflight.http = new RestHttpClient(TestOutbound.ADDRESSES) {
             @Override public RestResponse execute(RestRequest req) { return RestResponse.of(200, headers, "[{\"id\":1}]"); }
         };
         return preflight.check(connector(Map.of("base_url", "http://erp.invalid")), ep);
@@ -475,7 +508,7 @@ class RestPreflightTest {
             }
         };
         preflight.authReg = noAuth();
-        preflight.http = new RestHttpClient() {
+        preflight.http = new RestHttpClient(TestOutbound.ADDRESSES) {
             @Override public RestResponse execute(RestRequest req) { return RestResponse.of(status, Map.of(), body); }
         };
         return preflight.check(connector(Map.of("base_url", "http://erp.invalid")), ep);

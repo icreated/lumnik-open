@@ -96,4 +96,14 @@ class ScopeGrantsTest {
     CurrentRolesHolder.set(Set.of("lm_user"));
     assertThat(ScopeGrants.grantedForLog()).isEqualTo("(unscoped)");
   }
+
+  /** The list form of nameProblem, the one every door with a list of scopes asks: the first malformed name, or none. */
+  @Test
+  void namesProblemNamesTheFirstMalformedScope() {
+    assertThat(ScopeGrants.namesProblem(List.of("ventes", "Achats", "1rh")))
+        .contains(ScopeGrants.nameProblem("Achats").orElseThrow());
+    assertThat(ScopeGrants.namesProblem(List.of("ventes", "achats"))).isEmpty();
+    assertThat(ScopeGrants.namesProblem(List.of())).isEmpty();
+    assertThat(ScopeGrants.namesProblem(null)).isEmpty();
+  }
 }

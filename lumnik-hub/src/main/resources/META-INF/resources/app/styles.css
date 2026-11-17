@@ -332,3 +332,16 @@ button.more {
   display: block; margin: 14px auto; background: #262238; color: var(--ink); border: 0;
   border-radius: 12px; padding: 11px 22px; font-size: 15px; cursor: pointer;
 }
+
+/* #2057 — a view on a map. The background is neutral unless the operator named a tile server. */
+.mode-switch { display: inline-flex; gap: 0; margin: 0 0 10px; border: 1px solid var(--edge); border-radius: 10px; overflow: hidden; }
+.mode-switch button { all: unset; cursor: pointer; padding: 6px 16px; font-size: 14px; color: var(--dim); }
+.mode-switch button.on { background: var(--card); color: var(--ink); }
+.mode-switch button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* isolation: Leaflet's panes carry z-index 400+, which must stay inside the map, under the fixed tab bar. */
+.map-view { position: relative; isolation: isolate; z-index: 0; height: 52vh; min-height: 260px;
+  border: 1px solid var(--edge); border-radius: 14px; background: var(--card); overflow: hidden; }
+.map-view.leaflet-container { background: var(--card); font: inherit; }
+.map-note { font-size: 13px; color: var(--lumen); padding: 2px 4px 8px; }
+.map-unplaced { all: unset; cursor: pointer; display: block; margin: 8px 4px; font-size: 13px; color: var(--accent); }
+.map-unplaced:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

@@ -7,7 +7,8 @@ How to wire what leaves the hub: a webhook to n8n or Teams, a mail, a pull. Why 
 | Command | Roles needed |
 |---|---|
 | `lm integration`, `lm outputs` | `lm_integrator` **and** `lm_admin` |
-| `lm notify` | `lm_admin` |
+| `lm notify add`, `list`, `rm` | `lm_admin` |
+| `lm notify deliveries`, `replay` | `lm_integrator` **and** `lm_admin` |
 | `lm inbox` | `lm_user` |
 
 ```
@@ -49,9 +50,10 @@ lm integration test <ID>          # fires a real POST at the target, result inli
 - `--events` takes exact types or a prefix ending in `.*` (default `decision.*`). The
   [registry below](#the-event-registry) is the vocabulary. `decision.*` reaches `decision.` plus
   something. A `*` anywhere else, like `decision.cold-room-*`, is refused: it would never match.
-- The signing secret rides **stdin, never argv** — it is stored encrypted and never
-  returned by `list`/`describe`.
-- `test` fires a sample event (`org.created`) at the target and prints the result:
+- The signing secret goes in through **stdin, never as an argument**. It is stored encrypted and
+  never returned by `list`/`describe`.
+- `test` fires a sample event (`org.created`) at the target and prints the receiver's status, never
+  its body:
 
     ```
     $ lm integration test 1000
@@ -61,7 +63,12 @@ lm integration test <ID>          # fires a real POST at the target, result inli
     ```
 
     A decision cannot be tested this way: make a process fire instead.
+- The target is an `http` or `https` URL. The hub never posts to the cloud metadata address, and
+  posts to `localhost` only where the operator allows it:
+  [Where the hub connects](security/outbound-addresses.md).
 - Forwarding starts **at registration** — nothing is delivered retroactively.
+- `lm integration rm <ID>` removes the target. Its delivery history is kept; retries in flight
+  give up.
 - Without `--secret-stdin` the hub refuses the registration (`400`) and stores nothing.
 - `list` and `describe` show the target's **scheme and host only**: a webhook URL's path
   and query are often its credential. `-o json` / `-o yaml` print the hub's body as it is,

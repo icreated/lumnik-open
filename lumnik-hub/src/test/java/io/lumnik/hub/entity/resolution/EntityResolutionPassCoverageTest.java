@@ -54,7 +54,7 @@ class EntityResolutionPassCoverageTest {
 
   @Test
   void incrementalCoversAnEntityOnlyAfterItsOwnSuccessAndRethrowsTheFirstFailure() {
-    doReturn(List.of(alpha, beta)).when(registry).all();
+    doReturn(List.of(alpha, beta)).when(registry).all(T);
     doReturn(PassSummary.EMPTY).when(pass).resolveEntityIncremental(T, alpha, run, null);
     doThrow(new IllegalStateException("boom")).when(pass).resolveEntityIncremental(T, beta, run, null);
 
@@ -66,7 +66,7 @@ class EntityResolutionPassCoverageTest {
 
   @Test
   void aFailingEntityDoesNotStopItsSiblings() {
-    doReturn(List.of(beta, alpha)).when(registry).all();          // the failing one comes FIRST
+    doReturn(List.of(beta, alpha)).when(registry).all(T);          // the failing one comes FIRST
     doThrow(new IllegalStateException("boom")).when(pass).resolveEntityIncremental(T, beta, run, null);
     doReturn(PassSummary.EMPTY).when(pass).resolveEntityIncremental(T, alpha, run, null);
 
@@ -79,7 +79,7 @@ class EntityResolutionPassCoverageTest {
   void aManifestWithoutResolutionIsNeitherRunNorCovered() {
     EntityManifest matchOnly = mock(EntityManifest.class);
     when(matchOnly.resolution()).thenReturn(null);
-    doReturn(List.of(matchOnly)).when(registry).all();
+    doReturn(List.of(matchOnly)).when(registry).all(T);
 
     pass.runIncremental(T, run);
 
@@ -91,7 +91,7 @@ class EntityResolutionPassCoverageTest {
   @Test
   void aSourceTheRunDidNotWriteIsNeverReadYetItsEntityIsCovered() throws SQLException {
     AgroalDataSource ds = unreadable();
-    doReturn(List.of(beta)).when(registry).all();
+    doReturn(List.of(beta)).when(registry).all(T);
 
     pass.runIncremental(T, run, Set.of("connector.t_cov748_alpha"));
 
@@ -102,7 +102,7 @@ class EntityResolutionPassCoverageTest {
   @Test
   void aSourceTheRunWroteIsRead() throws SQLException {
     AgroalDataSource ds = unreadable();
-    doReturn(List.of(beta)).when(registry).all();
+    doReturn(List.of(beta)).when(registry).all(T);
 
     assertThatThrownBy(() -> pass.runIncremental(T, run, Set.of("connector.t_cov748_beta")))
         .hasMessageContaining("t_cov748_beta");
@@ -114,7 +114,7 @@ class EntityResolutionPassCoverageTest {
   @Test
   void unknownTablesReadEverySource() throws SQLException {
     AgroalDataSource ds = unreadable();
-    doReturn(List.of(beta)).when(registry).all();
+    doReturn(List.of(beta)).when(registry).all(T);
 
     assertThatThrownBy(() -> pass.runIncremental(T, run)).hasMessageContaining("t_cov748_beta");
 
@@ -131,7 +131,7 @@ class EntityResolutionPassCoverageTest {
 
   @Test
   void replaySnapshotsBeforeTheScanAndCoversExactlyTheSnapshot() {
-    doReturn(alpha).when(registry).findReloadingIfMissing("Alpha");
+    doReturn(alpha).when(registry).findReloadingIfMissing(T, "Alpha");
     List<UUID> snapshot = List.of(UUID.randomUUID(), UUID.randomUUID());
     when(coverage.finishedUncoveredRuns(T, "alpha")).thenReturn(snapshot);
     doReturn(PassSummary.EMPTY).when(pass).resolveEntityReplay(T, alpha);
@@ -146,7 +146,7 @@ class EntityResolutionPassCoverageTest {
 
   @Test
   void aFailedReplayCoversNothing() {
-    doReturn(alpha).when(registry).findReloadingIfMissing("Alpha");
+    doReturn(alpha).when(registry).findReloadingIfMissing(T, "Alpha");
     when(coverage.finishedUncoveredRuns(T, "alpha")).thenReturn(List.of(UUID.randomUUID()));
     doThrow(new IllegalStateException("boom")).when(pass).resolveEntityReplay(T, alpha);
 

@@ -3,6 +3,7 @@ package io.lumnik.hub.entity;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
@@ -145,9 +146,12 @@ class EntityLatestRunIT {
         + " VALUES ('" + run + "', 1, '" + String.join("', '", values) + "')";
   }
 
+  /** Applied as tenant 1, which records every table the manifest reads, as its writers would (#2023). */
   private void apply(String yaml) {
-    assertThat(compiler.apply(new EntityManifestParser().parse(yaml), yaml, null))
-        .isInstanceOf(ScopeGuardedUpsert.Applied.class);
+    EntityManifest m = new EntityManifestParser().parse(yaml);
+    m.sources().forEach(s -> RegisteredTables.register(adminDs, 1L, s.table()));
+    m.joins().forEach(j -> RegisteredTables.register(adminDs, 1L, j.table()));
+    assertThat(compiler.apply(m, yaml, null, 1L)).isInstanceOf(ScopeGuardedUpsert.Applied.class);
   }
 
   /** {@code cols} and the row's ledger, joined by {@code |}. */

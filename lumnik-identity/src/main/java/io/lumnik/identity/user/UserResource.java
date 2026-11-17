@@ -1,6 +1,7 @@
 package io.lumnik.identity.user;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.common.security.TenantWide;
 import io.lumnik.identity.IdentityErrors;
 import io.lumnik.identity.KnownKeysOnly;
 import io.lumnik.identity.Require;
@@ -20,6 +21,7 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 import java.util.List;
 
 @TenantInPath
+@TenantWide
 @Path("/api/tenants/{tenantId}/users")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)

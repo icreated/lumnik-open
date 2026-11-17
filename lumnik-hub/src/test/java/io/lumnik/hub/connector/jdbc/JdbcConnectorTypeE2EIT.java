@@ -3,6 +3,7 @@ package io.lumnik.hub.connector.jdbc;
 import io.lumnik.hub.connector.api.types.TriggerMode;
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,7 +27,7 @@ class JdbcConnectorTypeE2EIT {
   void setup() throws Exception {
     JdbcDialectRegistry dialectRegistry = JdbcDialectRegistry.of(List.of(new PostgresDialect()));
 
-    HikariPoolRegistry poolRegistry = new HikariPoolRegistry();
+    HikariPoolRegistry poolRegistry = new HikariPoolRegistry(TestOutbound.ADDRESSES);
 
     type = new JdbcConnectorType();
     Field dr = JdbcConnectorType.class.getDeclaredField("dialectRegistry");

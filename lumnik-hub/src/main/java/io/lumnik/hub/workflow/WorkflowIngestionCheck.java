@@ -71,7 +71,7 @@ public class WorkflowIngestionCheck {
 
     /** Package-private: the IT drives a run's end directly, without a connector. */
     void checkAfter(ConnectorRunCompleted ev) {
-        for (WorkflowGraph g : registry.checkedOnIngestion(ev.tenantId(), t -> touched(t, ev.tablesWritten()))) {
+        for (WorkflowGraph g : registry.checkedOnIngestion(ev.tenantId(), t -> touched(ev.tenantId(), t, ev.tablesWritten()))) {
             try {
                 checkOne(ev, g);
             } catch (RuntimeException e) {
@@ -89,11 +89,11 @@ public class WorkflowIngestionCheck {
      * and an entity it does not hold leaves any write a suspect — the memory makes a needless check cost a
      * query, never a second event. Package-private for the IT.
      */
-    boolean touched(String table, Set<String> written) {
+    boolean touched(long tenantId, String table, Set<String> written) {
         if (written == null) return true;
         String entity = EntityViewCompiler.entityNameFromView(table);
         if (entity == null) return written.contains(table);
-        EntityManifest m = entities.find(entity);
+        EntityManifest m = entities.find(tenantId, entity);
         if (m == null) return !written.isEmpty();
         return Stream.concat(
                 Stream.ofNullable(m.sources()).flatMap(List::stream).filter(Objects::nonNull).map(EntityManifest.Source::table),

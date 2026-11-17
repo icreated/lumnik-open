@@ -8,4 +8,4 @@ spec:
       path: /items
       method: GET
       pagination: { kind: spring-hateoas }
-      target: { kind: hybrid, table: x_items, unique_key: "$.id" }
+      target: { kind: hybrid, table: ext.x_items, unique_key: "$.id" }

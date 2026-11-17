@@ -1,9 +1,12 @@
 package io.lumnik.hub.connector.csv;
 
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
+import io.lumnik.hub.connector.transport.LocalRoot;
+import io.lumnik.hub.connector.transport.LocalRoots;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.*;
 
@@ -43,11 +46,12 @@ class CsvValidateConfigTest {
         .isInstanceOf(ConfigValidationException.class);
   }
 
+  /** #2001: no tenant here, so no local file is looked at — not the whole root, not another tenant's folder. */
   @Test
-  void local_nonglob_missing_file_still_fails() {
-    assertThatThrownBy(() -> type.validateConfig(Map.of(
-        "transport", Map.of("kind", "local", "path", "/no/such/file-xyz.csv"))))
-        .isInstanceOf(ConfigValidationException.class)
-        .hasMessageContaining("not found");
+  void a_local_path_is_not_looked_at_without_a_tenant() {
+    type.localRoots = new LocalRoots(LocalRoot.of(Optional.empty()));
+    assertThatCode(() -> type.validateConfig(Map.of(
+        "transport", Map.of("kind", "local", "path", "no/such/file-xyz.csv"))))
+        .doesNotThrowAnyException();
   }
 }

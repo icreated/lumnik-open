@@ -5,6 +5,7 @@ import com.zaxxer.hikari.pool.HikariPool.PoolInitializationException;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
 import io.lumnik.hub.connector.exceptions.SourceUnreachableException;
 import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.jdbc.postgresql.PostgresDialect;
 import io.lumnik.jdbc.spi.JdbcDialect;
 import org.junit.jupiter.api.Test;
@@ -37,7 +38,7 @@ class JdbcConnectorTypeUnreachableTest {
     private static JdbcConnectorType typeWhosePool(RuntimeException onAcquire, SQLException onConnect) {
         JdbcConnectorType type = new JdbcConnectorType();
         type.dialectRegistry = JdbcDialectRegistry.of(List.of(new PostgresDialect()));
-        type.poolRegistry = new HikariPoolRegistry() {
+        type.poolRegistry = new HikariPoolRegistry(TestOutbound.ADDRESSES) {
             @Override
             public HikariDataSource acquire(String url, String user, String password, long tenantId, JdbcDialect dialect) {
                 if (onAcquire != null) throw onAcquire;

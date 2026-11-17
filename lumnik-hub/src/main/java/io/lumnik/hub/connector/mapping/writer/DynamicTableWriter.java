@@ -10,6 +10,7 @@ import io.lumnik.hub.connector.exceptions.ConnectorException;
 import io.lumnik.hub.connector.mapping.spec.MappingTarget;
 import io.lumnik.hub.entity.EntityManifest;
 import io.lumnik.hub.entity.EntityViewCompiler;
+import io.lumnik.hub.entity.NewWriterScopes;
 import io.lumnik.hub.event.RowEventGate;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -159,6 +160,7 @@ public class DynamicTableWriter {
       return Jdbc.transaction(adminDs, "DynamicTableWriter.createSchema", c -> {
         firstWriteLock(c, spec.schema(), spec.name());
         refuseSecondWriter(c, spec, tenantId, connectorId);
+        NewWriterScopes.requireNewWriterWithinReaders(c, tenantId, spec.schema(), spec.name(), connectorId);
 
         Map<String, String> inferred = inferrer.infer(rows, sourceTypeHints);
         createTable(c, spec, inferred);
@@ -171,6 +173,9 @@ public class DynamicTableWriter {
         // Never widen here (#1600): enableRLS holds the table, and a widening may rebuild entity views, whose locks
         // come first. write() runs evolveSchema right after this commits; it widens in a transaction of its own.
         Map<String, String> reconciled = applyDrift(c, spec, rows, actual, sourceTypeHints, null);
+        // #2023: the table may be another tenant's already, with columns of its own. This tenant's schema — what its
+        // card lists, what its Entities may name — is the columns its own data brings, typed as the table holds them.
+        reconciled.keySet().retainAll(columnsOf(rows));
 
         registry.register(c, tenantId, mappingId, spec.schema(), spec.name(), reconciled, connectorId);
         return reconciled;
@@ -293,15 +298,42 @@ public class DynamicTableWriter {
                                          List<EntityManifest> rebuilt) throws SQLException {
     Set<String> newCols = detectNewColumns(rows, base);
     // rebuilt == null: never widen here (createSchema); otherwise the entities a widening rebuilt are added to it.
-    Set<String> tooNarrow = rebuilt != null ? widenings(rows, base) : Set.of();
-    if (newCols.isEmpty() && tooNarrow.isEmpty()) return base;
+    if (newCols.isEmpty() && (rebuilt == null || widenings(rows, base).isEmpty())) return base;
 
     Map<String, String> updated = new LinkedHashMap<>(base);
+    // The physical schema decides (#1600, #2023): the table is shared, and another tenant may have widened a column or
+    // made one already — then only this tenant's registry is behind, and no DDL is due.
+    Map<String, String> actual = driftDetector.actualSchema(c, spec.schema(), spec.name());
 
+    if (!newCols.isEmpty()) {
+      Map<String, String> inferred = inferrer.infer(rows, sourceTypeHints);
+      Set<String> added = new LinkedHashSet<>();
+      for (String col : newCols) {
+        String made = actual == null ? null : actual.get(col);   // made by another tenant: its type is the table's
+        if (made == null) {
+          alterAddColumn(c, spec, col, inferred.getOrDefault(col, "TEXT"));
+          added.add(col);
+        }
+        updated.put(col, made != null ? made : inferred.getOrDefault(col, "TEXT"));
+      }
+      if (!added.isEmpty()) {
+        // ADD COLUMN IF NOT EXISTS does nothing when another tenant's writer added it meanwhile: its type is the table's.
+        actual = driftDetector.actualSchema(c, spec.schema(), spec.name());
+        for (String col : added) if (actual != null && actual.containsKey(col)) updated.put(col, actual.get(col));
+        // In the order they were ADDED, which is now the chunk's own order and therefore the
+        // table's — the sort this line used to carry existed only to make an unordered set
+        // deterministic, and it read as a different order from the one `\d` shows.
+        LOG.infof("%s.%s: %d column(s) added mid-run, typed from this chunk: %s",
+            spec.schema(), spec.name(), added.size(),
+            added.stream().map(col -> col + " " + updated.get(col)).collect(Collectors.joining(", ")));
+        // Index DDL only has something to do when a column appeared; widening one changes no index.
+        createIndexes(c, spec);
+      }
+    }
+
+    // After the new columns: one another tenant made whole-number is judged against this chunk too (#2023).
+    Set<String> tooNarrow = rebuilt != null ? widenings(rows, updated) : Set.of();
     if (!tooNarrow.isEmpty()) {
-      // The physical type decides (#1600): the table is shared, and another tenant may have widened it already —
-      // then only this tenant's registry is behind, and no DDL is due.
-      Map<String, String> actual = driftDetector.actualSchema(c, spec.schema(), spec.name());
       Set<String> narrow = new LinkedHashSet<>();
       for (String col : tooNarrow) {
         String physical = actual == null ? null : actual.get(col);
@@ -316,24 +348,14 @@ public class DynamicTableWriter {
       }
     }
 
-    if (!newCols.isEmpty()) {
-      Map<String, String> inferred = inferrer.infer(rows, sourceTypeHints);
-      for (String col : newCols) {
-        String pgType = inferred.getOrDefault(col, "TEXT");
-        alterAddColumn(c, spec, col, pgType);
-        updated.put(col, pgType);
-      }
-      // In the order they were ADDED, which is now the chunk's own order and therefore the
-      // table's — the sort this line used to carry existed only to make an unordered set
-      // deterministic, and it read as a different order from the one `\d` shows.
-      LOG.infof("%s.%s: %d column(s) added mid-run, typed from this chunk: %s",
-          spec.schema(), spec.name(), newCols.size(),
-          newCols.stream().map(col -> col + " " + updated.get(col)).collect(Collectors.joining(", ")));
-      // Index DDL only has something to do when a column appeared; widening one changes no index.
-      createIndexes(c, spec);
-    }
-
     return updated;
+  }
+
+  /** The columns the chunk's rows carry. */
+  private static Set<String> columnsOf(List<Map<String, Object>> rows) {
+    Set<String> cols = new LinkedHashSet<>();
+    for (var r : rows) cols.addAll(r.keySet());
+    return cols;
   }
 
   /**
@@ -347,12 +369,8 @@ public class DynamicTableWriter {
    * takes (caught in review).
    */
   private Set<String> detectNewColumns(List<Map<String, Object>> rows, Map<String, String> registered) {
-    Set<String> newCols = new LinkedHashSet<>();
-    for (var r : rows) {
-      for (String k : r.keySet()) {
-        if (!registered.containsKey(k)) newCols.add(k);
-      }
-    }
+    Set<String> newCols = columnsOf(rows);
+    newCols.removeAll(registered.keySet());
     return newCols;
   }
 
@@ -444,7 +462,7 @@ public class DynamicTableWriter {
    * {@code marksSeen}, so it is not one of {@link #SYSTEM_COLUMNS}: every other table, and every
    * page that shows one, keeps the seven.
    */
-  static final String SEEN_RUN = "_seen_run";
+  public static final String SEEN_RUN = "_seen_run";
   private static final String TENANT_ID = "tenant_id";
 
   /** The system columns every table starts with, in table order; {@code tenant_id} follows them (and {@link #SEEN_RUN}). */
@@ -545,6 +563,10 @@ public class DynamicTableWriter {
     return t.toString();
   }
 
+  /**
+   * The indexes a connector declares, each led by {@code tenant_id} (#1990): a {@code t_*} table holds every tenant's
+   * rows (V96 explains, and rebuilds the older ones under the same declared name).
+   */
   private void createIndexes(Connection c, MappingTarget.Table spec) throws SQLException {
     if (spec.indexes() == null || spec.indexes().isEmpty()) return;
     for (var idx : spec.indexes()) {
@@ -552,10 +574,9 @@ public class DynamicTableWriter {
       if (idx.unique()) s.append("UNIQUE ");
       String idxName = spec.name() + "_idx_" + String.join("_", idx.columns());
       s.append("INDEX IF NOT EXISTS ").append(quoteIdent(idxName))
-       .append(" ON ").append(fqn(spec)).append(" (");
-      for (int i = 0; i < idx.columns().size(); i++) {
-        if (i > 0) s.append(',');
-        s.append(quoteIdent(idx.columns().get(i)));
+       .append(" ON ").append(fqn(spec)).append(" (").append(quoteIdent(TENANT_ID));
+      for (String column : idx.columns()) {
+        if (!column.equals(TENANT_ID)) s.append(", ").append(quoteIdent(column));
       }
       s.append(')');
       exec(c, s.toString());
@@ -585,7 +606,7 @@ public class DynamicTableWriter {
     // One guarded block per grant: each stands or falls on its own, so a missing lumnik_app never
     // costs the table its lumnik_readonly grant.
     exec(c, RlsDdl.guarded(RlsDdl.grantAppDml(schema, table)));
-    exec(c, RlsDdl.guarded(RlsDdl.grantReadonlySelect(schema, table)));
+    exec(c, RlsDdl.readonlySelectGrant(schema, table));
     exec(c, RlsDdl.guarded(RlsDdl.grantSequenceUsage(schema, table + "_id_seq")));
   }
 

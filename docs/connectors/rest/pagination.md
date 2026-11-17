@@ -122,7 +122,6 @@ pagination:
 - A path reads one value. A slice such as `$.data[-1:].id` is fine: it is empty on an empty page.
   A path that reads several values (`$..endCursor` across nested connections) is refused, never
   one of them picked.
-- `total_path` and `total_pages_path` read a number, or its digits sent as text (`"1234"`).
 
 **`page`** — page numbers:
 
@@ -205,6 +204,7 @@ needed: [the example below](#a-full-example-link-header).
 `total_path` is accepted by every strategy. It checks the run's row count against what the API
 declares: [The declared total](../rest.md#the-declared-total-a-witness-on-the-count). When the API
 sends that count in a response header (`X-Total-Count`), name it with `total_header` instead.
+`total_path` and `total_pages_path` read a number, or its digits sent as text (`"1234"`).
 
 !!! warning "Page size is a knob on `page` and `offset` only"
     `cursor`, `body-link` and `link-header` send **no size parameter**: the server's default

@@ -28,10 +28,18 @@ to back up `.env`. The snapshot lands at the repo root:
 | `backups/<UTC-stamp>/lumnik.dump` | always |
 | `backups/<UTC-stamp>/keycloak-data.tgz` | unless you passed `--no-keycloak` |
 
+`backups/` is readable by its owner only (files `600`, folders `700`), whatever your umask, and
+each run tightens the snapshots an older version left open. One file holds every tenant's data,
+the other Keycloak's password hashes and signing keys. Keep it that way when you copy them off
+the machine. If another account ships `backups/` (an rsync user, a group), run the backup as
+that account: it can no longer read files that `sudo ./deploy/selfhost/backup.sh` wrote.
+
 **Not covered — back these up separately, off-machine:**
 
-- `.env` — it holds `LUMNIK_SECRET_MASTER_KEY`; without it, secrets stored in the hub are
-  unrecoverable. Copy it once; it changes only when you rotate keys.
+- `.env` — it holds the two keys, `LUMNIK_SECRET_MASTER_KEY` and `LUMNIK_CRYPTO_SECRET_KEY`.
+  Without them, secrets stored in the hub are unrecoverable
+  ([the master key](../security/rls.md#secrets-at-rest-the-master-key)). Copy it again each time
+  you change a password in it.
 - Host-level config (reverse proxy, cron entries).
 
 The dump grows with the [unpurged mirror](sizing.md#storage-the-sizing-question-this-page-does-not-answer);

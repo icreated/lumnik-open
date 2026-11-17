@@ -1,5 +1,6 @@
 package io.lumnik.hub.ask;
 
+import io.lumnik.hub.testsupport.TestLocalPaths;
 import io.lumnik.testkit.auth.TestIdentity;
 
 import io.agroal.api.AgroalDataSource;
@@ -222,7 +223,7 @@ class SchemaCardAutoRefreshIT {
               after_process: none
               target:
                 table_prefix: t_
-            """.formatted(table, scope, csv.toAbsolutePath());
+            """.formatted(table, scope, TestLocalPaths.relative(csv));
         return given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
             .contentType("application/yaml").body(manifest)
             .when().post("/api/platform/connectors/apply")

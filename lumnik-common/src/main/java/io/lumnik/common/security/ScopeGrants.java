@@ -43,6 +43,12 @@ public final class ScopeGrants {
         return Optional.empty();
     }
 
+    /** {@link #nameProblem} of the first malformed name in {@code names}; empty when all are well formed, or none. */
+    public static Optional<String> namesProblem(Collection<String> names) {
+        if (names == null) return Optional.empty();
+        return names.stream().map(ScopeGrants::nameProblem).flatMap(Optional::stream).findFirst();
+    }
+
     /**
      * The single source of the refusal a bound user gets outside their grants — served as
      * {@code 403 {"error":"scope not granted"}} by every scoped door (chat, search, views,

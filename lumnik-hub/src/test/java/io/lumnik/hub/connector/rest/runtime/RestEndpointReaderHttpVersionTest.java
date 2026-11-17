@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.runtime;
 
+import io.lumnik.hub.testsupport.TestOutbound;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -20,8 +21,9 @@ class RestEndpointReaderHttpVersionTest {
 
     /** Hands back a marked client for each version it is asked to speak. */
     private static final class Recording extends RestHttpClient {
+        Recording() { super(TestOutbound.ADDRESSES); }
         final List<String> asked = new ArrayList<>();
-        final RestHttpClient speaking = new RestHttpClient();
+        final RestHttpClient speaking = new RestHttpClient(TestOutbound.ADDRESSES);
 
         @Override public RestHttpClient speaking(String httpVersion) {
             asked.add(httpVersion);
@@ -34,7 +36,7 @@ class RestEndpointReaderHttpVersionTest {
     };
 
     private static RestConnection connect(Map<String, Object> cfg, RestHttpClient http) {
-        return RestEndpointReader.connect(cfg, new AuthSpec.Owner(1L, UUID.randomUUID()), NONE, http, SecretRefs.environmentOnly(k -> null));
+        return RestEndpointReader.connect(cfg, new AuthSpec.Owner(1L, UUID.randomUUID()), NONE, http, SecretRefs.of(k -> null));
     }
 
     @Test
@@ -59,7 +61,7 @@ class RestEndpointReaderHttpVersionTest {
 
     @Test
     void a_stored_version_nobody_can_speak_fails_the_run_by_name() {
-        assertThatThrownBy(() -> connect(Map.of("base_url", "https://x", "http_version", "3"), new RestHttpClient()))
+        assertThatThrownBy(() -> connect(Map.of("base_url", "https://x", "http_version", "3"), new RestHttpClient(TestOutbound.ADDRESSES)))
             .isInstanceOf(AuthConfigException.class)
             .hasMessage("http_version must be 1.1 or 2");
     }

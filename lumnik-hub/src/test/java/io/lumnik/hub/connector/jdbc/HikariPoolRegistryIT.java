@@ -1,6 +1,7 @@
 package io.lumnik.hub.connector.jdbc;
 
 import com.zaxxer.hikari.HikariDataSource;
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -31,7 +32,7 @@ class HikariPoolRegistryIT {
       .withUsername("src_user")
       .withPassword("src_pwd");
 
-  private final HikariPoolRegistry registry = new HikariPoolRegistry();
+  private final HikariPoolRegistry registry = new HikariPoolRegistry(TestOutbound.ADDRESSES);
 
   @AfterEach
   void evictAll() { registry.evictAll(); }

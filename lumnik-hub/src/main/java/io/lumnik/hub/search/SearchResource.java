@@ -102,7 +102,8 @@ public class SearchResource {
             }
             if (!ScopeGrants.allows(scope)) return ApiErrors.scopeNotGranted();
         }
-        Set<String> allowed = allowedFor(registry.all(), ScopeGrants.granted(), scope);
+        long tenant = RequireTenant.current();
+        Set<String> allowed = allowedFor(registry.all(tenant), ScopeGrants.granted(), scope);
         String auditKey;
         if (entityParam != null) {
             // Deliberately not ResolutionGate.requireResolvable: that gate is for
@@ -110,7 +111,7 @@ public class SearchResource {
             // policy) and answers 404 for an unknown name. Here an unknown name and an
             // out-of-scope one get the SAME 403 — search must never let an unauthorized `?entity=`
             // distinguish "doesn't exist" from "exists but you can't see it".
-            EntityManifest m = registry.find(entityParam);
+            EntityManifest m = registry.find(tenant, entityParam);
             if (m == null || !allowed.contains(m.name())) return ApiErrors.scopeNotGranted();
             allowed = Set.of(m.name());
             auditKey = m.name();
@@ -118,7 +119,6 @@ public class SearchResource {
             auditKey = "*"; // no single entity named — a cross-entity query
         }
 
-        long tenant = RequireTenant.current();
         // An invalid declaration (#1187), or one withheld until rebuilt (#1219), takes no part in Search: its
         // documents and facets still carry a column it no longer declares. Left out after the ?entity= check, so
         // naming its entity is an empty answer the registry explains, never the 403 of an entity the caller
@@ -143,7 +143,7 @@ public class SearchResource {
         body.put("hits", result.hits().stream()
             .map(h -> hitBody(h, presentations.get(h.searchIndex()))).toList());
         Map<String, Map<String, String>> labels = fieldLabels(
-            result.hits().stream().map(IndexedSearchHit::entity).distinct().toList(), registry::find);
+            result.hits().stream().map(IndexedSearchHit::entity).distinct().toList(), e -> registry.find(tenant, e));
         if (!labels.isEmpty()) body.put("fieldLabels", labels); // #1055: absent when no entity names a column
         body.put("facets", facetsBody(result.facets()));
         body.put("nextCursor", result.nextCursor());

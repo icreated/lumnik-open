@@ -4,8 +4,10 @@ import io.agroal.api.AgroalDataSource;
 import io.agroal.api.configuration.AgroalDataSourceConfiguration;
 import io.agroal.api.AgroalDataSourceMetrics;
 import io.agroal.api.AgroalPoolInterceptor;
+import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.lumnik.hub.tenant.TenantContextFilter;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
@@ -78,6 +80,8 @@ class EntityReadAuditTest {
     tenantId = 9100L + System.nanoTime() % 1000;
     try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
       st.execute("DROP VIEW IF EXISTS connector.\"v_auditprobeentity\"");
+      // Each case is another tenant, and an Entity's name is the tenant's that applied it (#2050).
+      st.execute("DELETE FROM connector.entity_manifest WHERE name = 'auditprobeentity'");
       st.execute("DROP TABLE IF EXISTS connector.t_audit_probe");
       st.execute("CREATE TABLE connector.t_audit_probe "
           + "(tenant_id bigint NOT NULL, \"code\" text, \"label\" text)");
@@ -87,6 +91,7 @@ class EntityReadAuditTest {
       st.execute("GRANT SELECT ON connector.t_audit_probe TO lumnik_app");
       st.execute("INSERT INTO connector.t_audit_probe VALUES (" + tenantId + ",'P-1','Probe One')");
     }
+    RegisteredTables.register(adminDs, tenantId, "t_audit_probe");
     given().config(YamlBody.CONFIG).header("X-Tenant-ID", String.valueOf(tenantId)).header("X-User-ID", "1")
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
@@ -96,6 +101,7 @@ class EntityReadAuditTest {
   void clearThreadLocals() {
     TenantContextFilter.CURRENT_TENANT.remove();
     TenantContextFilter.CURRENT_USER.remove();
+    CurrentTenantHolder.clear();
   }
 
   @Test
@@ -145,6 +151,7 @@ class EntityReadAuditTest {
     Response r = inTx(() -> {
       TenantContextFilter.CURRENT_TENANT.set(tenantId);
       TenantContextFilter.CURRENT_USER.set(555L);
+      CurrentTenantHolder.set(tenantId);   // the tenant the door reads (#2050)
       return res.read("auditprobeentity", emptyUriInfo(), 100, 0, false);
     });
 

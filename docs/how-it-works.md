@@ -91,7 +91,7 @@ manual.
 | glob | `*` and `?` only, in the **final filename segment** — no `**` recursion | CSV `local` and `sftp` `transport.path` (S3 selects by `prefix` + `suffix`) — [CSV & files](connectors/csv.md) |
 | date patterns | `dd/MM/yyyy` — capital `MM` is month, lowercase `mm` is minutes; add `H`/`h`/`m`/`s` only when the value carries a time | `parse-date` — [Transformers](connectors/transformers.md) |
 | regex | Java syntax; each hook says whether the pattern must match the whole value | `regex-extract` / `regex-replace` / `filter-where` — [Transformers](connectors/transformers.md) |
-| `{{secret:NAME}}` / `{{env:NAME}}` | `secret:` reads the `lm secret` registry, then the hub's environment. `env:` reads the environment only. An unresolved name fails the run before anything is sent | SOAP body/header templates — [SOAP](connectors/soap.md) |
+| `{{secret:NAME}}` / `{{env:NAME}}` | both read the `lm secret` registry. An unresolved name fails the run before anything is sent | SOAP body/header templates — [SOAP](connectors/soap.md) |
 | `${now}` | the moment of ingestion | `enrich-context` — [Transformers](connectors/transformers.md) |
 | Kotlin `.kts` | the escape hatch: runs with all of the hub's rights. The operator puts scripts in the hub's hooks directory; a manifest only names them | a `csv-file` connector's `spec.mapping`, a REST/GraphQL/SOAP endpoint's own `mapping` — [Kotlin hooks](connectors/kotlin-hooks.md) |
 

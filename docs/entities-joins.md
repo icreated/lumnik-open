@@ -32,10 +32,13 @@ The entity declares the category table as a lookup:
 --8<-- "docs/apps/demo/entities/30-product-with-category.yaml"
 ```
 
-Land and apply (the manifests read `/tmp/acme-catalogue/` on the hub's disk):
+Land and apply. The manifests read `acme-catalogue/` in your tenant's folder of the hub's
+[local root](connectors/csv.md#local-the-hubs-disk-not-yours): `/tmp/drop/1/` on the self-host stack, once
+`LUMNIK_CSV_LOCAL_ROOT=/tmp/drop` is set in `.env` and `deploy/selfhost/up.sh` run again (with `--build` if the stack runs from source):
 
 ```bash
-docker compose -f docker-compose.selfhost.yml cp docs/apps/demo/data/. hub:/tmp/acme-catalogue
+docker compose -f docker-compose.selfhost.yml exec hub mkdir -p /tmp/drop/1/acme-catalogue
+docker compose -f docker-compose.selfhost.yml cp docs/apps/demo/data/. hub:/tmp/drop/1/acme-catalogue
 lm apply -f docs/apps/demo/sources/40-products.yaml
 lm apply -f docs/apps/demo/sources/50-product-categories.yaml
 lm connector run products && lm connector run product-categories

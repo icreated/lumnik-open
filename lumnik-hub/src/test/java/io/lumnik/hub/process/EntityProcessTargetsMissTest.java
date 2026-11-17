@@ -22,8 +22,8 @@ class EntityProcessTargetsMissTest {
 
     EntityProcessTargetsMissTest() {
         targets.entities = new EntityRegistry() {
-            @Override public EntityManifest find(String name) { return null; }
-            @Override public EntityManifest findReloadingIfMissing(String name) {
+            @Override public EntityManifest find(long tenant, String name) { return null; }
+            @Override public EntityManifest findReloadingIfMissing(long tenant, String name) {
                 reloads.incrementAndGet();
                 return null;
             }

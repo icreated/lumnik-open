@@ -63,8 +63,8 @@ class EntityResolveResourceIT {
           + "\"CUSTOMER_ID\" text, \"EMAIL_COL\" text)");
       st.execute("DELETE FROM core.entity_identity WHERE entity_type = 'resresolveit'");
     }
-    registry.put(new EntityManifestParser().parse(RESOLUTION_MANIFEST));
-    registry.put(new EntityManifestParser().parse(MATCH_MANIFEST));
+    registry.put(new EntityManifestParser().parse(RESOLUTION_MANIFEST), null);
+    registry.put(new EntityManifestParser().parse(MATCH_MANIFEST), null);
   }
 
   @Test

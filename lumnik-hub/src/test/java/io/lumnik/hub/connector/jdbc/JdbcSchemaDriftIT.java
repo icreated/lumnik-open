@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.jdbc;
 
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -42,7 +43,7 @@ class JdbcSchemaDriftIT {
 
   @Test
   void new_column_added_on_source_is_picked_up_by_reader() throws Exception {
-    HikariPoolRegistry registry = new HikariPoolRegistry();
+    HikariPoolRegistry registry = new HikariPoolRegistry(TestOutbound.ADDRESSES);
     JdbcChunkReader r = new JdbcChunkReader(
         PG.getJdbcUrl(), "u", "p", "postgres",
         "public", "t", "updated", List.of("id"),

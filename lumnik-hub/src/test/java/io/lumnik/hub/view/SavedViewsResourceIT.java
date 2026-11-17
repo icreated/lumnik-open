@@ -41,7 +41,7 @@ class SavedViewsResourceIT {
 
   @Test
   void deleteRemovesItAndTheSecondDeleteIs404() {
-    store.upsert("it-507-delete-desk", "clients", "To delete", YAML, null);
+    store.upsert(1L, "it-507-delete-desk", "clients", "To delete", YAML, null);
 
     given().header("X-Tenant-Id", "1").when().delete("/api/views/it-507-delete-desk")
     .then().statusCode(204);

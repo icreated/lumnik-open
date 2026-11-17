@@ -94,7 +94,7 @@ class EntityResolutionRunHookTablesIT {
           cascade:
             - id: label
               exact: { fields: [label] }
-        """.formatted(entity, unwritten, shared, unwritten, shared)));
+        """.formatted(entity, unwritten, shared, unwritten, shared)), null);
 
     try {
       runBothAndAwait(n, entity, shared);
@@ -156,7 +156,7 @@ class EntityResolutionRunHookTablesIT {
           cascade:
             - id: label
               exact: { fields: [label] }
-        """.formatted(entity, table, table)));
+        """.formatted(entity, table, table)), null);
     UUID connector = csvConnector("res904-r-" + n, table, "row_id,label\n1,alpha-" + n + "\n2,beta-" + n + "\n");
     AtomicBoolean reaped = new AtomicBoolean();
     QuarkusMock.installMockForType(new RunTableStats() {

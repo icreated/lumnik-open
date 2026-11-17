@@ -41,8 +41,8 @@ class SearchScopeWiringIT {
     void stub() {
         List<EntityManifest> all = List.of(entity("Client", "clients"), entity("Article", "stock"),
             entity("Livraison", "stock", "clients"));
-        Mockito.when(registry.all()).thenReturn(all);
-        all.forEach(m -> Mockito.when(registry.find(m.name())).thenReturn(m));
+        Mockito.when(registry.all(Mockito.anyLong())).thenReturn(all);
+        all.forEach(m -> Mockito.when(registry.find(Mockito.anyLong(), Mockito.eq(m.name()))).thenReturn(m));
         Mockito.when(gate.search(Mockito.any())).thenReturn(new SearchOutcome.Hits(IndexedSearchResult.empty()));
     }
 

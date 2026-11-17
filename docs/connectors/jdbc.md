@@ -37,6 +37,14 @@ docker compose -f docker-compose.selfhost.yml exec -T postgres psql -U lumnik -d
     --8<-- "docs/connectors/jdbc/data/demo-source.sql"
     ```
 
+The manifest names its password `LUMNIK_READONLY_DB_PASSWORD`. The stack keeps it in `.env`. Put
+it in `lm secret` once:
+
+```bash
+grep '^LUMNIK_READONLY_DB_PASSWORD=' .env | cut -d= -f2- | lm secret set LUMNIK_READONLY_DB_PASSWORD -
+lm secret scope LUMNIK_READONLY_DB_PASSWORD billing   # the scope of this page's connectors
+```
+
 Then, from the repository root:
 
 ```
@@ -73,13 +81,14 @@ What landed in `connector.t_invoices` — every source column:
 - **`jdbc-generic` is a 1:1 dump.** There is no column filter; `rename:` is the only per-column
   knob. To read fewer columns or rows, [read a view](#reading-a-view).
 - **There is no `mapping` block.** Transformers and Kotlin scripts run on a
-  [csv-file](csv.md) connector. A `mapping:` here is refused:
+  [csv-file](csv.md) connector, or on a
+  [REST endpoint](rest.md#run-hooks-over-the-promoted-columns). A `mapping:` here is refused:
   `spec.mapping — jdbc-generic has no mapping block — rows land as the source holds them, so nothing declared here would run`.
 - **`invoice_id` reads `1001`, `total` reads `1250.00`**, as the source holds them — see
   [Column types](#column-types).
-- **The password never sits in the manifest.** `password_env` names a variable in the
-  environment where the **hub** runs (the self-host stack exports the one used here), or an
-  `lm secret` entry.
+- **The password never sits in the manifest.** `password_env` names an `lm secret` entry of your
+  tenant. The one used here is the hub's own read-only password: it was put there before the first
+  run, above.
 
 ## Two modes — `full` and `watermark`
 
@@ -191,16 +200,17 @@ Resolved at run time, first match wins:
 |---|---|---|
 | 1 | **Attached credential** | Stored encrypted, created by [`lm source jdbc add`](#guided-flow-lm-source-jdbc) as `<source-name>--credential`. `lm apply` never sets one. |
 | 2 | `password` in the manifest | Plain text, dev and test only. It **wins over** `password_env`; `lm validate` warns. |
-| 3 | `password_env` | The name of a variable in the **hub's** environment, else of an [`lm secret`](../cli/lm-reference.md#data-runs-answers) entry. Neither at run time fails the run, naming it. |
+| 3 | `password_env` | The name of an [`lm secret`](../cli/lm-reference.md#data-runs-answers) entry of your tenant. None at run time fails the run, naming it. |
 
 - `password_env` is **required by validation** even when `password` is present.
-- Set it with `lm secret set ACME_DB_PASSWORD`: no hub restart. A variable of the same name in
-  the hub's environment wins.
+- Set it with `lm secret set ACME_DB_PASSWORD`: no hub restart.
+- The connector reads it only when it carries all the secret's scopes: `lm secret scope ACME_DB_PASSWORD billing`.
+- The hub's environment is not read: it holds the hub's own passwords.
 - The attached credential is encrypted under `LUMNIK_CRYPTO_SECRET_KEY` — see
   [Security → Secrets at rest](../security/rls.md#secrets-at-rest-the-master-key).
 
-The quickstart connector re-applied with `password_env: ACME_DB_PASSWORD`, a name neither the
-hub's environment nor `lm secret` holds:
+The quickstart connector re-applied with `password_env: ACME_DB_PASSWORD`, a name `lm secret`
+does not hold:
 
 ```
 $ lm connector run demo-invoices
@@ -208,7 +218,7 @@ run scheduled: 3570bbf6-29f5-4b1c-99a9-5e6e0aec810e
 $ lm run get 3570bbf6
 ID        CONNECTOR      ENDPOINT  STATUS  IN  OUT  SKIPPED  DEAD-LETTERS  STARTED           ENDED
 3570bbf6  demo-invoices  invoices  Failed  0   0    0        0             2026-10-19 07:24  2026-10-19 07:24
-✖ run failed: password_env 'ACME_DB_PASSWORD' is neither in the server environment nor in lm secret
+✖ run failed: password_env 'ACME_DB_PASSWORD' is not in lm secret
 ```
 
 ## Source — one entry per table
@@ -243,9 +253,9 @@ The first run read `warehouses` (2 rows) and `price_list` (3); the second found 
 | `name` | yes | The source table. Also names the hub table, `connector.t_<name>`, unless `target` does |
 | `target` | no | Names the hub table `connector.t_<target>` instead |
 | `schema` | yes (here or in `defaults`) | The source schema |
-| `mode` | yes | `full` or `watermark` |
+| `mode` | yes (here or in `defaults`) | `full` or `watermark` |
 | `watermark_column` | when `mode: watermark` | The column that moves on every change |
-| `pk_columns` | yes | The paging key and the hub table's key: one row per key. It must be unique **together** |
+| `pk_columns` | yes (here or in `defaults`) | The paging key and the hub table's key: one row per key. It must be unique **together** |
 | `indexes` | no | Postgres indexes to create on the hub table |
 | `rename` | no | Source column name → hub column name |
 
@@ -290,8 +300,6 @@ The first run read `warehouses` (2 rows) and `price_list` (3); the second found 
 - The merge is **per key, not deep**: a table's `rename:` replaces the one in `defaults:`.
 - `mode`, `watermark_column` and `schema` are the usual ones — see
   [the watermark manifest](#the-watermark-manifest).
-
-There is no `chunk_size` setting: `lm validate` refuses one.
 
 ## The hub table
 
@@ -535,6 +543,8 @@ indexes:
 ```
 
 Each entry is `{ columns: [non-empty strings], unique?: bool }`; a malformed entry fails validation.
+Each index starts with `tenant_id`, so `unique` means unique within your tenant: the table is
+shared with the other tenants that ingest under the same name.
 
 ## Resume, restart, reset
 
@@ -761,7 +771,7 @@ Error: validation failed: 1 error(s)
 
 | Symptom | Cause | Gesture |
 |---|---|---|
-| `password_env '...' is neither in the server environment nor in lm secret` | neither the hub's environment nor the tenant's `lm secret` holds that name | `lm secret set <NAME>`, export it where the hub runs, or attach a credential through the guided flow |
+| `password_env '...' is not in lm secret` | the tenant's `lm secret` does not hold that name | `lm secret set <NAME>`, or attach a credential through the guided flow |
 | `lm validate`: `required field missing` at `spec.source.tables[i].schema` | no `schema` on the table nor in `defaults` | add `schema:` — see [Per-table keys](#per-table-keys) |
 | `source column 'id' collides with a hub system column` | the source has a column named like one of the seven | add `rename: { id: source_id }` on that table |
 | run `Failed`: `connector.t_… is already written by connector '…'` | another connector of the tenant already writes that hub table | add `target: <name>` on that table — see [Two connectors reading a table of the same name](#two-connectors-reading-a-table-of-the-same-name) |

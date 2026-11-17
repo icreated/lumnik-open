@@ -5,6 +5,7 @@ import io.lumnik.hub.export.destination.FileDestinationCollisionException;
 import io.lumnik.hub.export.destination.FileDestinationException;
 import io.lumnik.hub.export.destination.PublishedArtifact;
 import io.lumnik.hub.testsupport.MinioTestImage;
+import io.lumnik.hub.testsupport.TestOutbound;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -37,7 +38,6 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CyclicBarrier;
@@ -107,7 +107,7 @@ class S3FileDestinationIT {
             case "AWS_S3_SECRET_KEY" -> secret;
             default -> null;
         };
-        return new S3FileDestinationFactory(SecretRefs.environmentOnly(env), PART);
+        return new S3FileDestinationFactory(SecretRefs.of(env), TestOutbound.ADDRESSES, PART);
     }
 
     static Map<String, Object> cfg(String bucket, String prefix, String filename) {
@@ -439,12 +439,12 @@ class S3FileDestinationIT {
     @Test
     void custom_endpoint_resolves_credentials_through_secret_refs() throws Exception {
         Map<String, String> registry = Map.of("PARTNER_KEY", ACCESS, "PARTNER_SECRET", SECRET);
-        var refs = new SecretRefs(name -> Optional.ofNullable(registry.get(name)), name -> null);
+        var refs = SecretRefs.of(registry::get);
         var cfg = new HashMap<>(cfg("secret-refs.csv"));
         cfg.put("access_key_env", "PARTNER_KEY");
         cfg.put("secret_key_env", "PARTNER_SECRET");
 
-        try (var destination = new S3FileDestinationFactory(refs).build(cfg)) {
+        try (var destination = new S3FileDestinationFactory(refs, TestOutbound.ADDRESSES).build(cfg)) {
             destination.open().write('s');
             destination.commit();
         }

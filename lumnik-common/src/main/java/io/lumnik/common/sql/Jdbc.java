@@ -103,6 +103,12 @@ public final class Jdbc {
         queryOne(c, label, "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", ps -> ps.setString(1, key), rs -> true);
     }
 
+    /** {@link #advisoryXactLock}, shared: its holders exclude only the exclusive one, never each other. */
+    public static void advisoryXactLockShared(Connection c, String label, String key) {
+        queryOne(c, label, "SELECT pg_advisory_xact_lock_shared(hashtextextended(?, 0))", ps -> ps.setString(1, key),
+            rs -> true);
+    }
+
     /** {@link #queryOne(DataSource, String, String, Binder, RowMapper)} on a connection the caller holds. */
     public static <T> Optional<T> queryOne(Connection c, String label, String sql,
                                            Binder binder, RowMapper<T> mapper) {

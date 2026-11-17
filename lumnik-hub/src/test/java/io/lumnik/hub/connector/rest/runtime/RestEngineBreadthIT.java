@@ -5,6 +5,7 @@ import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.api.types.RunStatus;
 import io.lumnik.hub.connector.api.types.RunTrigger;
 import io.lumnik.hub.connector.runtime.ConnectorEngine;
+import io.lumnik.hub.testsupport.TestSecrets;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.persistence.EntityManager;
@@ -26,6 +27,8 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 @QuarkusTest
 class RestEngineBreadthIT {
+
+    @Inject TestSecrets testSecrets;
 
     @Inject ConnectorEngine engine;
     @Inject EntityManager em;
@@ -149,141 +152,125 @@ class RestEngineBreadthIT {
     /** page pagination (has_more) + HTTP Basic auth header. */
     @Test
     void page_basic() {
-        System.setProperty("C2_BASIC_PW", "p");
-        try {
-            String path = "/v1/page";
-            String table = "ext.c2_page_" + Math.abs(System.nanoTime());
-            stubFor(get(urlPathEqualTo(path)).withQueryParam("page", equalTo("1"))
-                .willReturn(okJson("{\"has_more\":true,\"data\":[{\"id\":\"a\",\"name\":\"X\"},{\"id\":\"b\",\"name\":\"Y\"}]}")));
-            stubFor(get(urlPathEqualTo(path)).withQueryParam("page", equalTo("2"))
-                .willReturn(okJson("{\"has_more\":false,\"data\":[{\"id\":\"c\",\"name\":\"Z\"}]}")));
+        testSecrets.put(1L, "C2_BASIC_PW", "p");
+        String path = "/v1/page";
+        String table = "ext.c2_page_" + Math.abs(System.nanoTime());
+        stubFor(get(urlPathEqualTo(path)).withQueryParam("page", equalTo("1"))
+            .willReturn(okJson("{\"has_more\":true,\"data\":[{\"id\":\"a\",\"name\":\"X\"},{\"id\":\"b\",\"name\":\"Y\"}]}")));
+        stubFor(get(urlPathEqualTo(path)).withQueryParam("page", equalTo("2"))
+            .willReturn(okJson("{\"has_more\":false,\"data\":[{\"id\":\"c\",\"name\":\"Z\"}]}")));
 
-            UUID id = seed(
-                "{\"kind\":\"rest-generic\",\"base_url\":\"http://localhost:" + wm.port()
-                    + "\",\"auth\":{\"kind\":\"basic\",\"username\":\"u\",\"password_env\":\"C2_BASIC_PW\"},"
-                    + "\"default_rate_limit\":\"100/s\"}",
-                path,
-                "{\"pagination\":{\"kind\":\"page\",\"page_param\":\"page\",\"size_param\":\"size\",\"size\":2,"
-                    + "\"start_page\":1,\"has_more_path\":\"$.has_more\",\"response_path\":\"$.data\"},"
-                    + "\"incremental\":{\"mode\":\"full\"},"
-                    + "\"target\":{\"kind\":\"hybrid\",\"table\":\"" + table + "\",\"unique_key\":\"$.id\","
-                    + "\"promote\":[{\"name\":\"name\",\"path\":\"$.name\",\"type\":\"text\"}]}}");
+        UUID id = seed(
+            "{\"kind\":\"rest-generic\",\"base_url\":\"http://localhost:" + wm.port()
+                + "\",\"auth\":{\"kind\":\"basic\",\"username\":\"u\",\"password_env\":\"C2_BASIC_PW\"},"
+                + "\"default_rate_limit\":\"100/s\"}",
+            path,
+            "{\"pagination\":{\"kind\":\"page\",\"page_param\":\"page\",\"size_param\":\"size\",\"size\":2,"
+                + "\"start_page\":1,\"has_more_path\":\"$.has_more\",\"response_path\":\"$.data\"},"
+                + "\"incremental\":{\"mode\":\"full\"},"
+                + "\"target\":{\"kind\":\"hybrid\",\"table\":\"" + table + "\",\"unique_key\":\"$.id\","
+                + "\"promote\":[{\"name\":\"name\",\"path\":\"$.name\",\"type\":\"text\"}]}}");
 
-            RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(id, new RunTrigger.Manual(1L)));
-            assertInstanceOf(RunStatus.Completed.class, s);
-            assertEquals(3L, count(table));
-            String expected = "Basic " + Base64.getEncoder()
-                .encodeToString("u:p".getBytes(StandardCharsets.UTF_8));
-            verify(getRequestedFor(urlPathEqualTo(path)).withHeader("Authorization", equalTo(expected)));
-        } finally {
-            System.clearProperty("C2_BASIC_PW");
-        }
+        RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(id, new RunTrigger.Manual(1L)));
+        assertInstanceOf(RunStatus.Completed.class, s);
+        assertEquals(3L, count(table));
+        String expected = "Basic " + Base64.getEncoder()
+            .encodeToString("u:p".getBytes(StandardCharsets.UTF_8));
+        verify(getRequestedFor(urlPathEqualTo(path)).withHeader("Authorization", equalTo(expected)));
     }
 
     /** #1751: a Spring Security form login — the CSRF token read from the login page, the session cookie kept. */
     @Test
     void none_behind_a_form_login() {
-        System.setProperty("C2_SESSION_PW", "clinic-pw");
-        try {
-            String table = "ext.c2_session_" + Math.abs(System.nanoTime());
-            stubFor(get(urlPathEqualTo("/login")).willReturn(aResponse().withStatus(200)
-                .withHeader("Set-Cookie", "JSESSIONID=anon-1; Path=/; HttpOnly")
-                .withBody("<form method=\"post\"><input type=\"hidden\" name=\"_csrf\" value=\"t0k3n-c5rf\"/></form>")));
-            stubFor(post(urlPathEqualTo("/login")).withHeader("Cookie", equalTo("JSESSIONID=anon-1"))
-                .withRequestBody(equalTo("username=lumnik&password=clinic-pw&_csrf=t0k3n-c5rf"))
-                .willReturn(aResponse().withStatus(302).withHeader("Location", "/")
-                    .withHeader("Set-Cookie", "JSESSIONID=s1-a1b2c3d4; Path=/; HttpOnly")));
-            stubFor(get(urlPathEqualTo("/vets")).withHeader("Cookie", equalTo("JSESSIONID=s1-a1b2c3d4"))
-                .willReturn(okJson("{\"vetList\":[{\"id\":1,\"name\":\"Carter\"},{\"id\":3,\"name\":\"Douglas\"}]}")));
+        testSecrets.put(1L, "C2_SESSION_PW", "clinic-pw");
+        String table = "ext.c2_session_" + Math.abs(System.nanoTime());
+        stubFor(get(urlPathEqualTo("/login")).willReturn(aResponse().withStatus(200)
+            .withHeader("Set-Cookie", "JSESSIONID=anon-1; Path=/; HttpOnly")
+            .withBody("<form method=\"post\"><input type=\"hidden\" name=\"_csrf\" value=\"t0k3n-c5rf\"/></form>")));
+        stubFor(post(urlPathEqualTo("/login")).withHeader("Cookie", equalTo("JSESSIONID=anon-1"))
+            .withRequestBody(equalTo("username=lumnik&password=clinic-pw&_csrf=t0k3n-c5rf"))
+            .willReturn(aResponse().withStatus(302).withHeader("Location", "/")
+                .withHeader("Set-Cookie", "JSESSIONID=s1-a1b2c3d4; Path=/; HttpOnly")));
+        stubFor(get(urlPathEqualTo("/vets")).withHeader("Cookie", equalTo("JSESSIONID=s1-a1b2c3d4"))
+            .willReturn(okJson("{\"vetList\":[{\"id\":1,\"name\":\"Carter\"},{\"id\":3,\"name\":\"Douglas\"}]}")));
 
-            String base = "http://localhost:" + wm.port();
-            UUID id = seed(
-                "{\"kind\":\"rest-generic\",\"base_url\":\"" + base + "\",\"auth\":{\"kind\":\"session\","
-                    + "\"login_url\":\"" + base + "/login\",\"username\":\"lumnik\",\"password_env\":\"C2_SESSION_PW\","
-                    + "\"csrf_field\":\"_csrf\"},\"default_rate_limit\":\"100/s\"}",
-                "/vets",
-                "{\"pagination\":{\"kind\":\"none\",\"response_path\":\"$.vetList\"},"
-                    + "\"incremental\":{\"mode\":\"full\"},"
-                    + "\"target\":{\"kind\":\"hybrid\",\"table\":\"" + table + "\",\"unique_key\":\"$.id\","
-                    + "\"promote\":[{\"name\":\"name\",\"path\":\"$.name\",\"type\":\"text\"}]}}");
+        String base = "http://localhost:" + wm.port();
+        UUID id = seed(
+            "{\"kind\":\"rest-generic\",\"base_url\":\"" + base + "\",\"auth\":{\"kind\":\"session\","
+                + "\"login_url\":\"" + base + "/login\",\"username\":\"lumnik\",\"password_env\":\"C2_SESSION_PW\","
+                + "\"csrf_field\":\"_csrf\"},\"default_rate_limit\":\"100/s\"}",
+            "/vets",
+            "{\"pagination\":{\"kind\":\"none\",\"response_path\":\"$.vetList\"},"
+                + "\"incremental\":{\"mode\":\"full\"},"
+                + "\"target\":{\"kind\":\"hybrid\",\"table\":\"" + table + "\",\"unique_key\":\"$.id\","
+                + "\"promote\":[{\"name\":\"name\",\"path\":\"$.name\",\"type\":\"text\"}]}}");
 
-            RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(id, new RunTrigger.Manual(1L)));
-            assertInstanceOf(RunStatus.Completed.class, s);
-            assertEquals(2L, count(table));
-            verify(1, postRequestedFor(urlPathEqualTo("/login")));
-        } finally {
-            System.clearProperty("C2_SESSION_PW");
-        }
+        RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(id, new RunTrigger.Manual(1L)));
+        assertInstanceOf(RunStatus.Completed.class, s);
+        assertEquals(2L, count(table));
+        verify(1, postRequestedFor(urlPathEqualTo("/login")));
     }
 
     /** Link rel="next" header pagination (absolute URL) + X-API-Key header. */
     @Test
     void link_header_apikey() {
-        System.setProperty("C2_APIKEY", "k-123");
-        try {
-            String path = "/v1/lh";
-            String table = "ext.c2_lh_" + Math.abs(System.nanoTime());
-            String nextUrl = "http://localhost:" + wm.port() + path + "?cursor=p2";
-            stubFor(get(urlPathEqualTo(path)).withQueryParam("cursor", absent())
-                .willReturn(okJson("{\"data\":[{\"id\":\"a\",\"name\":\"X\"},{\"id\":\"b\",\"name\":\"Y\"}]}")
-                    .withHeader("Link", "<" + nextUrl + ">; rel=\"next\"")));
-            stubFor(get(urlPathEqualTo(path)).withQueryParam("cursor", equalTo("p2"))
-                .willReturn(okJson("{\"data\":[{\"id\":\"c\",\"name\":\"Z\"}]}")));
+        testSecrets.put(1L, "C2_APIKEY", "k-123");
+        String path = "/v1/lh";
+        String table = "ext.c2_lh_" + Math.abs(System.nanoTime());
+        String nextUrl = "http://localhost:" + wm.port() + path + "?cursor=p2";
+        stubFor(get(urlPathEqualTo(path)).withQueryParam("cursor", absent())
+            .willReturn(okJson("{\"data\":[{\"id\":\"a\",\"name\":\"X\"},{\"id\":\"b\",\"name\":\"Y\"}]}")
+                .withHeader("Link", "<" + nextUrl + ">; rel=\"next\"")));
+        stubFor(get(urlPathEqualTo(path)).withQueryParam("cursor", equalTo("p2"))
+            .willReturn(okJson("{\"data\":[{\"id\":\"c\",\"name\":\"Z\"}]}")));
 
-            UUID id = seed(
-                "{\"kind\":\"rest-generic\",\"base_url\":\"http://localhost:" + wm.port()
-                    + "\",\"auth\":{\"kind\":\"api-key\",\"in\":\"header\",\"name\":\"X-API-Key\",\"value_env\":\"C2_APIKEY\"},"
-                    + "\"default_rate_limit\":\"100/s\"}",
-                path,
-                "{\"pagination\":{\"kind\":\"link-header\",\"response_path\":\"$.data\"},"
-                    + "\"incremental\":{\"mode\":\"full\"},"
-                    + "\"target\":{\"kind\":\"hybrid\",\"table\":\"" + table + "\",\"unique_key\":\"$.id\","
-                    + "\"promote\":[{\"name\":\"name\",\"path\":\"$.name\",\"type\":\"text\"}]}}");
+        UUID id = seed(
+            "{\"kind\":\"rest-generic\",\"base_url\":\"http://localhost:" + wm.port()
+                + "\",\"auth\":{\"kind\":\"api-key\",\"in\":\"header\",\"name\":\"X-API-Key\",\"value_env\":\"C2_APIKEY\"},"
+                + "\"default_rate_limit\":\"100/s\"}",
+            path,
+            "{\"pagination\":{\"kind\":\"link-header\",\"response_path\":\"$.data\"},"
+                + "\"incremental\":{\"mode\":\"full\"},"
+                + "\"target\":{\"kind\":\"hybrid\",\"table\":\"" + table + "\",\"unique_key\":\"$.id\","
+                + "\"promote\":[{\"name\":\"name\",\"path\":\"$.name\",\"type\":\"text\"}]}}");
 
-            RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(id, new RunTrigger.Manual(1L)));
-            assertInstanceOf(RunStatus.Completed.class, s);
-            assertEquals(3L, count(table));
-            verify(getRequestedFor(urlPathEqualTo(path)).withHeader("X-API-Key", equalTo("k-123")));
-        } finally {
-            System.clearProperty("C2_APIKEY");
-        }
+        RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(id, new RunTrigger.Manual(1L)));
+        assertInstanceOf(RunStatus.Completed.class, s);
+        assertEquals(3L, count(table));
+        verify(getRequestedFor(urlPathEqualTo(path)).withHeader("X-API-Key", equalTo("k-123")));
     }
 
     /** GraphQL-relay edges/pageInfo pagination + HTTP Basic auth. */
     @Test
     void relay_basic() {
-        System.setProperty("C2_BASIC_PW", "p");
-        try {
-            String path = "/v1/relay";
-            String table = "ext.c2_relay_" + Math.abs(System.nanoTime());
-            stubFor(get(urlPathEqualTo(path)).withQueryParam("after", absent())
-                .willReturn(okJson("{\"data\":{\"edges\":[{\"node\":{\"id\":\"a\",\"name\":\"X\"}},"
-                    + "{\"node\":{\"id\":\"b\",\"name\":\"Y\"}}],"
-                    + "\"pageInfo\":{\"hasNextPage\":true,\"endCursor\":\"c1\"}}}")));
-            stubFor(get(urlPathEqualTo(path)).withQueryParam("after", equalTo("c1"))
-                .willReturn(okJson("{\"data\":{\"edges\":[{\"node\":{\"id\":\"c\",\"name\":\"Z\"}}],"
-                    + "\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":\"c2\"}}}")));
+        testSecrets.put(1L, "C2_BASIC_PW", "p");
+        String path = "/v1/relay";
+        String table = "ext.c2_relay_" + Math.abs(System.nanoTime());
+        stubFor(get(urlPathEqualTo(path)).withQueryParam("after", absent())
+            .willReturn(okJson("{\"data\":{\"edges\":[{\"node\":{\"id\":\"a\",\"name\":\"X\"}},"
+                + "{\"node\":{\"id\":\"b\",\"name\":\"Y\"}}],"
+                + "\"pageInfo\":{\"hasNextPage\":true,\"endCursor\":\"c1\"}}}")));
+        stubFor(get(urlPathEqualTo(path)).withQueryParam("after", equalTo("c1"))
+            .willReturn(okJson("{\"data\":{\"edges\":[{\"node\":{\"id\":\"c\",\"name\":\"Z\"}}],"
+                + "\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":\"c2\"}}}")));
 
-            UUID id = seed(
-                "{\"kind\":\"rest-generic\",\"base_url\":\"http://localhost:" + wm.port()
-                    + "\",\"auth\":{\"kind\":\"basic\",\"username\":\"u\",\"password_env\":\"C2_BASIC_PW\"},"
-                    + "\"default_rate_limit\":\"100/s\"}",
-                path,
-                "{\"pagination\":{\"kind\":\"relay\",\"cursor_param\":\"after\","
-                    + "\"cursor_path\":\"$.data.pageInfo.endCursor\",\"has_more_path\":\"$.data.pageInfo.hasNextPage\","
-                    + "\"cursor_binding\":\"query\",\"response_path\":\"$.data.edges[*].node\"},"
-                    + "\"incremental\":{\"mode\":\"full\"},"
-                    + "\"target\":{\"kind\":\"hybrid\",\"table\":\"" + table + "\",\"unique_key\":\"$.id\","
-                    + "\"promote\":[{\"name\":\"name\",\"path\":\"$.name\",\"type\":\"text\"}]}}");
+        UUID id = seed(
+            "{\"kind\":\"rest-generic\",\"base_url\":\"http://localhost:" + wm.port()
+                + "\",\"auth\":{\"kind\":\"basic\",\"username\":\"u\",\"password_env\":\"C2_BASIC_PW\"},"
+                + "\"default_rate_limit\":\"100/s\"}",
+            path,
+            "{\"pagination\":{\"kind\":\"relay\",\"cursor_param\":\"after\","
+                + "\"cursor_path\":\"$.data.pageInfo.endCursor\",\"has_more_path\":\"$.data.pageInfo.hasNextPage\","
+                + "\"cursor_binding\":\"query\",\"response_path\":\"$.data.edges[*].node\"},"
+                + "\"incremental\":{\"mode\":\"full\"},"
+                + "\"target\":{\"kind\":\"hybrid\",\"table\":\"" + table + "\",\"unique_key\":\"$.id\","
+                + "\"promote\":[{\"name\":\"name\",\"path\":\"$.name\",\"type\":\"text\"}]}}");
 
-            RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(id, new RunTrigger.Manual(1L)));
-            assertInstanceOf(RunStatus.Completed.class, s);
-            assertEquals(3L, count(table));
-            String expected = "Basic " + Base64.getEncoder()
-                .encodeToString("u:p".getBytes(StandardCharsets.UTF_8));
-            verify(getRequestedFor(urlPathEqualTo(path)).withHeader("Authorization", equalTo(expected)));
-        } finally {
-            System.clearProperty("C2_BASIC_PW");
-        }
+        RunStatus s = TenantContext.callAsSystem(() -> engine.runSync(id, new RunTrigger.Manual(1L)));
+        assertInstanceOf(RunStatus.Completed.class, s);
+        assertEquals(3L, count(table));
+        String expected = "Basic " + Base64.getEncoder()
+            .encodeToString("u:p".getBytes(StandardCharsets.UTF_8));
+        verify(getRequestedFor(urlPathEqualTo(path)).withHeader("Authorization", equalTo(expected)));
     }
 }

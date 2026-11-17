@@ -11,7 +11,7 @@ metadata:
 spec:
   transport:
     kind: local
-    path: docs/connectors/csv/data/payroll-fixed.txt
+    path: payroll-fixed.txt
   parser:
     lines: true
   after_process: none

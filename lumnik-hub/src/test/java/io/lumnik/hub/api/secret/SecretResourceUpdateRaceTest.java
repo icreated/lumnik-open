@@ -3,7 +3,6 @@ package io.lumnik.hub.api.secret;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.tenant.CurrentTenantHolder;
-import io.lumnik.hub.secret.PgcryptoSecretResolver;
 import io.lumnik.hub.secret.Secret;
 import io.lumnik.hub.secret.SecretEvents;
 import io.lumnik.hub.secret.SecretRepository;
@@ -30,7 +29,7 @@ import static org.mockito.Mockito.when;
  * {@code UPDATE ... WHERE ... AND deleted_at IS NULL}. In the window between those two
  * statements, a concurrent {@code DELETE /api/platform/secrets/{name}} can delete the same row:
  * the {@code UPDATE} then matches zero rows, but nothing downstream checked
- * that — {@code resolver.invalidate()}, {@code events.emitUpdated()} and
+ * that — {@code events.emitUpdated()} and
  * {@code recordAudit("UPDATE", ...)} all ran unconditionally, writing an audit row (and firing an
  * event) for a write that never touched a row.
  *
@@ -47,13 +46,12 @@ class SecretResourceUpdateRaceTest {
     }
 
     @Test
-    void update_does_not_invalidate_emit_or_audit_when_zero_rows_are_affected() {
+    void update_does_not_emit_or_audit_when_zero_rows_are_affected() {
         CurrentTenantHolder.set(1L);
 
         SecretResource resource = new SecretResource();
         resource.repo = mock(SecretRepository.class);
         resource.em = mock(EntityManager.class);
-        resource.resolver = mock(PgcryptoSecretResolver.class);
         resource.events = mock(SecretEvents.class);
         resource.mapper = new ObjectMapper();
         resource.adminDs = mock(AgroalDataSource.class);
@@ -76,7 +74,6 @@ class SecretResourceUpdateRaceTest {
         assertEquals(404, response.getStatus(),
             "zero rows changed means the secret was gone by the time the UPDATE ran — that must "
             + "surface as a 404, not a silent no-op 204");
-        verifyNoInteractions(resource.resolver);
         verifyNoInteractions(resource.events);
         verifyNoInteractions(resource.adminDs);
     }

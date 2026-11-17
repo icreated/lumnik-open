@@ -22,7 +22,7 @@
         "required_when" : {
           "when" : "kind is local or sftp"
         },
-        "recommendations" : [ "Set path: /imports/*.csv (local) or a remote glob (sftp)" ]
+        "recommendations" : [ "Set path: imports/*.csv (local, relative to the tenant's folder of the hub's local root) or a remote glob (sftp)" ]
       }, {
         "name" : "host",
         "type" : "STRING",
@@ -132,26 +132,26 @@
         "type" : "STRING",
         "importance" : "MEDIUM",
         "required" : false,
-        "doc" : "Env var for SSH private key (SFTP)"
+        "doc" : "lm secret name of the SSH private key (SFTP)"
       }, {
         "name" : "password_env",
         "type" : "STRING",
         "importance" : "MEDIUM",
         "required" : false,
-        "doc" : "Env var for SSH password (SFTP)"
+        "doc" : "lm secret name of the SSH password (SFTP)"
       }, {
         "name" : "access_key_env",
         "type" : "STRING",
         "importance" : "MEDIUM",
         "required" : false,
-        "doc" : "Env var for AWS access key (S3)",
+        "doc" : "lm secret name of the AWS access key (S3)",
         "default" : "AWS_ACCESS_KEY_ID"
       }, {
         "name" : "secret_key_env",
         "type" : "STRING",
         "importance" : "MEDIUM",
         "required" : false,
-        "doc" : "Env var for AWS secret key (S3)",
+        "doc" : "lm secret name of the AWS secret key (S3)",
         "default" : "AWS_SECRET_ACCESS_KEY"
       } ],
       "at_least_one_of" : [ {
@@ -321,14 +321,14 @@
             "type" : "LIST",
             "importance" : "HIGH",
             "required" : true,
-            "doc" : "Columns of the index, in order",
+            "doc" : "Columns of the index, in order, after tenant_id",
             "recommendations" : [ "e.g. columns: [email] or [bpartner_id, dateordered]" ]
           }, {
             "name" : "unique",
             "type" : "BOOLEAN",
             "importance" : "LOW",
             "required" : false,
-            "doc" : "Unique index (default false)",
+            "doc" : "Unique within the tenant (default false)",
             "default" : false
           } ]
         }

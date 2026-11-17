@@ -2,7 +2,6 @@ package io.lumnik.hub.connector.mapping.hooks.dataset;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import io.lumnik.hub.connector.mapping.MappingState;
-import io.lumnik.hub.connector.mapping.MappingValidationException;
 import io.lumnik.hub.connector.mapping.ScalarParams;
 import io.lumnik.hub.connector.mapping.hooks.ColumnEffect;
 import io.lumnik.hub.connector.mapping.hooks.DatasetHook;
@@ -27,12 +26,6 @@ public class SortByHook implements DatasetHook {
 
   @Override
   public List<Map<String, Object>> apply(List<Map<String, Object>> rows, JsonNode params, MappingState state) {
-    int maxRows = params.path("max-rows").asInt(100_000);
-    if (rows.size() > maxRows) {
-      throw new MappingValidationException(
-          "sort-by max-rows exceeded: " + rows.size() + " > " + maxRows
-              + " (input must be pre-sorted or increase max-rows)");
-    }
     List<String> columns = parseColumns(params);
     if (columns.isEmpty()) return rows;
 
@@ -62,7 +55,7 @@ public class SortByHook implements DatasetHook {
 
   @Override
   public Set<String> params() {
-    return Set.of("columns", "max-rows");
+    return Set.of("columns");
   }
 
   @Override

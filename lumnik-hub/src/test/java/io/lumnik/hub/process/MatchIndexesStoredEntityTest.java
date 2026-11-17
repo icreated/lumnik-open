@@ -23,19 +23,19 @@ class MatchIndexesStoredEntityTest {
     @Test
     void aDefinitionThatCannotBeParsedIsTheUnreadableOnesException() {
         MatchIndexes indexes = over(new EntityRegistry() {
-            @Override public Optional<Stored> stored(String name) { return Optional.of(new Stored("kind: Entity\nname: [x", java.util.List.of())); }
+            @Override public Optional<Stored> stored(long tenant, String name) { return Optional.of(new Stored("kind: Entity\nname: [x", java.util.List.of(), null)); }
         });
 
-        assertThatThrownBy(() -> indexes.storedEntity("connector.v_foo")).isInstanceOf(UnreadableEntityException.class);
+        assertThatThrownBy(() -> indexes.storedEntity(1L, "connector.v_foo")).isInstanceOf(UnreadableEntityException.class);
     }
 
     @Test
     void aFailureToReachTheRowStaysTheServersOwn() {
         MatchIndexes indexes = over(new EntityRegistry() {
-            @Override public Optional<Stored> stored(String name) { throw new IllegalStateException("pool exhausted"); }
+            @Override public Optional<Stored> stored(long tenant, String name) { throw new IllegalStateException("pool exhausted"); }
         });
 
-        assertThatThrownBy(() -> indexes.storedEntity("connector.v_foo"))
+        assertThatThrownBy(() -> indexes.storedEntity(1L, "connector.v_foo"))
             .isInstanceOf(IllegalStateException.class)
             .isNotInstanceOf(UnreadableEntityException.class);
     }
@@ -43,7 +43,7 @@ class MatchIndexesStoredEntityTest {
     @Test
     void noEntityUnderThatViewIsEmpty() {
         assertThat(over(new EntityRegistry() {
-            @Override public Optional<Stored> stored(String name) { return Optional.empty(); }
-        }).storedEntity("connector.v_foo")).isEmpty();
+            @Override public Optional<Stored> stored(long tenant, String name) { return Optional.empty(); }
+        }).storedEntity(1L, "connector.v_foo")).isEmpty();
     }
 }

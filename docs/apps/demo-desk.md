@@ -19,17 +19,21 @@ disagreement and every undeclared status below was **counted by hand**.
 | `data/acme-orders.csv` | 12 | the orders, with `status` spelled `En cours`, `encours`, `fini`, `TERMINE ` (trailing space), `BROUILLON`, `Terminé`, `EN LITIGE` and, once, nothing |
 | `data/acme-orders-day2.csv` | 13 | the same export the next morning, with one new order in dispute — what makes a process fire |
 | `data/acme-orders-day3.csv` | 14 | the third morning: one more, in dispute **and** above 1 000 € — what makes two processes fire on one row |
+| `data/acme-deliveries.csv` | 4 | the carrier's deliveries, each with the date it was promised for — what a due date watches |
 
 The customers are the same ACME partners the [REST](../connectors/rest.md) and
 [Kafka](../connectors/kafka.md) demos serve; a partner has the same name and city on every page.
 
 ## Landing the sources
 
-The manifests read the files from `/tmp/acme-desk/` **on the hub's filesystem**. The self-host
-stack mounts nothing, so copy them into the container first — no restart needed:
+The manifests read `acme-desk/` in your tenant's folder of the hub's local root, **on the hub's
+filesystem**. The self-host stack mounts nothing, so copy the files into the container first. With
+`LUMNIK_CSV_LOCAL_ROOT=/tmp/drop` in `.env` ([CSV & files](../connectors/csv.md#quickstart-one-local-file-three-commands-and-a-look-at-the-ledger)),
+tenant `1` reads `/tmp/drop/1/`:
 
 ```bash
-docker compose -f docker-compose.selfhost.yml cp docs/apps/demo/data/. hub:/tmp/acme-desk
+docker compose -f docker-compose.selfhost.yml exec hub mkdir -p /tmp/drop/1/acme-desk
+docker compose -f docker-compose.selfhost.yml cp docs/apps/demo/data/. hub:/tmp/drop/1/acme-desk
 for n in 10-erp 20-crm 30-orders; do lm apply -f docs/apps/demo/sources/$n.yaml; done
 for n in erp crm orders; do lm connector run acme-desk-$n; done
 ```
@@ -78,7 +82,7 @@ see [Entities](../entities.md). Everything on the four pages is applied on top o
 Two pages need the next mornings' exports. Load one over the day-1 file, then re-run the source:
 
 ```bash
-docker compose -f docker-compose.selfhost.yml cp docs/apps/demo/data/acme-orders-day2.csv hub:/tmp/acme-desk/acme-orders.csv   # or -day3
+docker compose -f docker-compose.selfhost.yml cp docs/apps/demo/data/acme-orders-day2.csv hub:/tmp/drop/1/acme-desk/acme-orders.csv   # or -day3
 lm connector run acme-desk-orders
 ```
 
@@ -90,14 +94,18 @@ next run removes the newer orders, and `lm run get <id>` says so (from day 3:
 
 | Folder | Files | The page |
 |---|---|---|
-| `entities/` | `10-customer` fuses the ERP and the CRM; `20-crm-first` flips the priority; `40-customer-crm-city` prefers the CRM for the city; `50-order-stage` and `55-order-due` read the extra sources below; `60`–`65` must each be refused; `66-partner-by-amount` applies, and is what `processes/63` is refused on | [Entities](../entities.md) |
-| `sources/` | `10-erp`, `20-crm`, `30-orders` land the desk; `55`–`56-stage-*` (`conflicts: false`) and `70`–`72-due-*` (dates and numbers) land the extra examples, same `docker cp` | [Entities](../entities.md), [Dates and numbers](../entities-types.md) |
-| `views/` | `10-customers` over the fused entity, `20-orders` straight over the raw order book; `60`–`62` must be refused | [Views](views.md) |
-| `processes/` | `10-litige` emits a decision when an order lands in dispute, `20-grosse-commande` when it is above 1 000 €; `60`–`64` must each be refused | [Processes](processes.md) |
-| `workflows/` | `10-order-lifecycle` declares what the status column means, with a dormancy threshold; `60`–`68` must be refused | [Workflows](workflows.md) |
+| `entities/` | `10-customer` fuses the ERP and the CRM; `20-crm-first` flips the priority; `30-product-with-category` joins a lookup table; `40-customer-crm-city` prefers the CRM for the city; `50-order-stage` and `55-order-due` read the extra sources below; `60`–`65` must each be refused; `66-partner-by-amount` applies, and is what `processes/63` is refused on | [Entities](../entities.md), [Joins](../entities-joins.md) |
+| `sources/` | `10-erp`, `20-crm`, `30-orders` land the desk, `80-deliveries` its deliveries; `40-products` and `50-product-categories` land the join example; `55`–`56-stage-*` (`conflicts: false`) and `70`–`72-due-*` (dates and numbers) land the extra examples, same `docker cp` | [Entities](../entities.md), [Joins](../entities-joins.md), [Dates and numbers](../entities-types.md), [Workflows](workflows.md) |
+| `views/` | `10-customers` over the fused entity, `20-orders` straight over the raw order book; `40-customers-links` adds cells that open the orders view or the ERP; `60`–`62` must be refused | [Views](views.md) |
+| `processes/` | `10-litige` emits a decision when an order lands in dispute, `20-grosse-commande` when it is above 1 000 €; `30-lyon-customer` listens on the fused entity; `40-rest-over-limit` on a REST connector's table; `60`–`64` must each be refused | [Processes](processes.md) |
+| `workflows/` | `10-order-lifecycle` declares what the status column means, with a dormancy threshold; `20-delivery-lifecycle` watches a due date; `40-rest-review` watches a REST connector's table; `60`–`68` must be refused | [Workflows](workflows.md) |
+| `apps/` | `20-desk` makes the desk a business app, the default one | [The PWA](pwa.md) |
 
 The `6x` files are **not** broken files to fix: each one is meant to be refused, with the
 message its page shows.
+
+Two files belong to no page. `views/30-categories-links` reads a catalogue the desk does not
+have. `apps/10-lumilait` is the template `lm ui` offers for a new app.
 
 ## What the fusion must give
 
@@ -137,20 +145,32 @@ For `workflows/10-order-lifecycle.yaml`, which declares `BROUILLON`, `EN_COURS` 
 The desk is small enough to rebuild in a minute:
 
 ```bash
-lm view rm acme-customers; lm view rm acme-orders
-lm process rm litige-ouvert; lm process rm grosse-commande
-lm workflow rm acme-order-lifecycle
-lm entity delete AcmeCustomer --force; lm entity delete AcmeCustomerCrmFirst --force
-lm entity delete AcmeCustomerCrmCity --force
-for n in erp crm orders; do lm connector delete acme-desk-$n --force; done
+for n in acme-customers acme-orders acme-customers-linked; do lm view rm $n; done
+for n in litige-ouvert grosse-commande lyon-customer; do lm process rm $n; done
+for n in acme-order-lifecycle acme-delivery-lifecycle; do lm workflow rm $n; done
+for n in AcmeCustomer AcmeCustomerCrmFirst AcmeCustomerCrmCity; do lm entity delete $n --force; done
+for n in erp crm orders deliveries; do lm connector delete acme-desk-$n --force; done
+```
+
+The extra examples, if you applied them:
+
+```bash
+lm process rm lab-over-limit-c; lm workflow rm lab-result-review
+for n in ProductWithCategory OrderStage OrderDue PartnerByAmount; do lm entity delete $n --force; done
+for n in products product-categories stage-orders stage-deliveries due-erp due-partner; do
+  lm connector delete $n --force
+done
 ```
 
 - `--force` skips the `delete` confirmation both commands ask for.
-- An entity delete drops its view **for every tenant**. A connector delete drops its table, its
-  run history and its RAG chunks.
+- An entity delete drops its view **for every tenant**, and every search index over it.
+- A connector delete drops its table, its run history and its RAG chunks. Its stored credential
+  goes too when no other connector uses it.
 - Entities go before connectors: a connector whose table feeds an entity is refused with a `409`
   naming the entity.
 - An `rm` of something you never applied answers `404`; the next command still runs.
+- The `desk` app stays: the default app is not removed
+  ([The PWA](pwa.md#declare-a-business-app)).
 
 !!! note "One scope for the whole desk"
     Every source connector carries `scopes: [desk]`, and so does the entity. That is what lets a

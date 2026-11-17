@@ -1,9 +1,11 @@
 package io.lumnik.hub.connector.mapping.writer;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.tenant.TenantContext;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.PromotedColumn;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.SqlType;
+import io.lumnik.hub.testsupport.LockWaits;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -20,6 +22,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import static io.lumnik.hub.testsupport.EventItSupport.runInTxAsSystem;
@@ -73,10 +76,7 @@ class HybridJsonbWriterIT {
     @Test
     void aTableCreatedBeforeTheIndexGetsItOnItsNextWrite() throws Exception {
         String bare = "test_rh_old_" + System.nanoTime();
-        try (Connection c = adminDs.getConnection(); var st = c.createStatement()) {
-            st.execute("CREATE SCHEMA IF NOT EXISTS ext");
-            st.execute(HybridJsonbWriter.createTableSql("ext." + bare, List.of()));
-        }
+        oldHybridTable(bare);
         Assertions.assertThat(rowHashIndexDef(bare)).as("an old table has no such index").isNull();
 
         writeOne("ext." + bare);
@@ -84,12 +84,359 @@ class HybridJsonbWriterIT {
         Assertions.assertThat(rowHashIndexDef(bare)).contains("(tenant_id, row_hash)");
     }
 
+    /** #2010: the hub creates a hybrid table and records it as its own in one transaction. */
+    @Test
+    void aNewTableIsRecordedAsTheHubsOwn() {
+        String bare = "test_owned_" + System.nanoTime();
+        writeOne("ext." + bare);
+
+        Assertions.assertThat(owned(bare)).isTrue();
+    }
+
+    /**
+     * #2010: the columns and the key are a shape any DDL can copy. A table the hub did not record is refused, whatever
+     * it looks like, before any DDL touches it.
+     */
+    @Test
+    void aTableWithTheHybridShapeTheHubDidNotRecordIsRefused() {
+        String bare = "test_lookalike_" + System.nanoTime();
+        Jdbc.update(adminDs, "create", HybridJsonbWriter.createTableSql("ext." + bare, List.of()), ps -> {});
+        try {
+            Assertions.assertThatThrownBy(() -> writeOne(new HybridJsonbSpec("ext." + bare, "$.id", List.of(
+                    new PromotedColumn("grabbed", "$.x", SqlType.TEXT, Optional.empty()))), Map.of("id", "r_1", "x", "v")))
+                .hasStackTraceContaining("ext." + bare + " is not a table this hub's writer made");
+            Assertions.assertThat(Jdbc.query(adminDs, "columns", "SELECT column_name FROM information_schema.columns "
+                    + "WHERE table_schema = 'ext' AND table_name = ?", ps -> ps.setString(1, bare), rs -> rs.getString(1)))
+                .as("no column was added").doesNotContain("grabbed");
+            Assertions.assertThat(rowSecurity(bare)).as("no RLS was switched on").isFalse();
+        } finally {
+            Jdbc.update(adminDs, "drop", "DROP TABLE IF EXISTS ext." + bare, ps -> {});
+        }
+    }
+
+    /** #2010: a table of the hub's that lost its isolation gets it back on the first write this process makes to it. */
+    @Test
+    void anOwnedTableThatLostItsIsolationGetsItBackOnItsFirstWrite() {
+        String bare = "test_heal_" + System.nanoTime();
+        writeOne("ext." + bare);
+        Jdbc.update(adminDs, "unpolice", "DROP POLICY tenant_isolation ON ext." + bare, ps -> {});
+        Jdbc.update(adminDs, "unsecure", "ALTER TABLE ext." + bare + " DISABLE ROW LEVEL SECURITY", ps -> {});
+        writer.clearSchemaCache();
+
+        writeOne("ext." + bare);
+
+        Assertions.assertThat(rowSecurity(bare)).isTrue();
+        Assertions.assertThat(policies(bare)).containsExactly("tenant_isolation");
+    }
+
+    /** #2010: a second permissive policy widens what RLS shows; the hub does not write through one it did not make. */
+    @Test
+    void anOwnedTableWithAnotherPermissivePolicyIsRefused() {
+        String bare = "test_open_policy_" + System.nanoTime();
+        writeOne("ext." + bare);
+        Jdbc.update(adminDs, "open", "CREATE POLICY see_all ON ext." + bare + " USING (true)", ps -> {});
+        writer.clearSchemaCache();
+
+        Assertions.assertThatThrownBy(() -> writeOne("ext." + bare))
+            .hasStackTraceContaining("ext." + bare + " carries the policy see_all");
+    }
+
+    /** #2010: a tenant_isolation that lets every row through is not the hub's; the first write puts the hub's back. */
+    @Test
+    void aTenantIsolationThatLetsEveryRowThroughIsReplaced() {
+        String bare = "test_open_isolation_" + System.nanoTime();
+        writeOne("ext." + bare);
+        Jdbc.update(adminDs, "open", "ALTER POLICY tenant_isolation ON ext." + bare + " USING (true)", ps -> {});
+        writer.clearSchemaCache();
+
+        writeOne("ext." + bare);
+
+        Assertions.assertThat(policyQual(bare)).isEqualTo(policyQual(freshTable()));
+    }
+
+    /**
+     * #2010: the check compares the policy as Postgres renders it. A healthy table keeps the one it has: replacing it
+     * would take the table's ACCESS EXCLUSIVE lock, readers included, at every restart.
+     */
+    @Test
+    void aHealthyTableKeepsItsPolicy() {
+        String bare = freshTable();
+        long before = policyOid(bare);
+        writer.clearSchemaCache();
+
+        writeOne("ext." + bare);
+
+        assertEquals(before, policyOid(bare));
+    }
+
+    /**
+     * #2010: a healthy table is left as it is. Even a grant it already has rewrites its catalog row, which invalidates
+     * every session's cached plans on it, at every restart.
+     */
+    @Test
+    void aHealthyTableIsLeftAsItIs() {
+        String bare = freshTable();
+        String before = catalogRowVersion(bare);
+        writer.clearSchemaCache();
+
+        writeOne("ext." + bare);
+
+        assertEquals(before, catalogRowVersion(bare));
+    }
+
+    /**
+     * Postgres names a table by its first 63 characters, and its serial sequence by fewer: from 57 on, the sequence is
+     * not {@code <table>_id_seq}. Both a new long table and one recorded before #2010 (by V98, under the name Postgres
+     * kept) are the hub's.
+     */
+    @Test
+    void aLongNamedTableIsMadeAndAdopted() {
+        String fresh = ("test_long_new_" + System.nanoTime() + "_").repeat(3);
+        writeOne("ext." + fresh);
+        writer.clearSchemaCache();
+        writeOne("ext." + fresh);
+
+        String old = ("test_long_old_" + System.nanoTime() + "_").repeat(3);
+        Jdbc.update(adminDs, "create", HybridJsonbWriter.createTableSql("ext." + old, List.of()), ps -> {});
+        Jdbc.update(adminDs, "record", "INSERT INTO connector.hybrid_table (table_schema, table_name) "
+            + "SELECT 'ext', relname FROM pg_class WHERE oid = to_regclass(?)", ps -> ps.setString(1, "ext." + old));
+        writeOne("ext." + old);
+    }
+
+    /**
+     * #2010: once this process has checked a table, a write takes the shared lock only and never waits for the writes in
+     * flight, whose shared lock {@code inFlight} stands for: long names included (Postgres keeps a table's and a
+     * column's first 63 characters, and the columns are read under those names), and after a write that failed on its
+     * data.
+     */
+    @Test
+    void aCheckedTableIsWrittenWithoutWaitingForTheWritesInFlight() throws Exception {
+        String bare = ("test_warm_" + System.nanoTime() + "_").repeat(3);
+        HybridJsonbSpec spec = new HybridJsonbSpec("ext." + bare, "$.id", List.of(
+            new PromotedColumn("amount", "$.amount", SqlType.BIGINT, Optional.empty()),
+            new PromotedColumn("amount_" + "x".repeat(70), "$.amount", SqlType.BIGINT, Optional.empty())));
+        writeOne(spec, Map.of("id", "a", "amount", 1));
+        writeOne(spec, Map.of("id", "b", "amount", 2));
+        Assertions.assertThatThrownBy(() -> writeOne(spec, Map.of("amount", 3)))
+            .hasStackTraceContaining("every item needs a key");
+
+        try (Connection inFlight = adminDs.getConnection()) {
+            DynamicTableWriter.writeLock(inFlight, "ext", bare);
+            try {
+                CompletableFuture.runAsync(() -> writeOne(spec, Map.of("id", "c", "amount", 4))).get(10, TimeUnit.SECONDS);
+            } finally {
+                DynamicTableWriter.releaseWriteLock(inFlight, "ext", bare);
+            }
+        }
+    }
+
+    /**
+     * #2010: a table dropped behind this process's back (by another replica's connector delete) fails one write, which
+     * forgets it: the next write checks it again and makes it.
+     */
+    @Test
+    void aWriteThatFailsForgetsItsTable() {
+        String bare = freshTable();
+        Jdbc.update(adminDs, "drop", "DROP TABLE ext." + bare, ps -> {});
+        Jdbc.update(adminDs, "forget", "DELETE FROM connector.hybrid_table WHERE table_schema = 'ext' AND table_name = ?",
+            ps -> ps.setString(1, bare));
+
+        Assertions.assertThatThrownBy(() -> writeOne("ext." + bare));
+        writeOne("ext." + bare);
+
+        Assertions.assertThat(owned(bare)).isTrue();
+    }
+
+    /** A new table of the hub's, written once. */
+    private String freshTable() {
+        String bare = "test_fresh_" + System.nanoTime();
+        writeOne("ext." + bare);
+        return bare;
+    }
+
+    private String catalogRowVersion(String bare) {
+        return Jdbc.queryOne(adminDs, "xmin", "SELECT xmin::text FROM pg_class WHERE oid = to_regclass(?)",
+            ps -> ps.setString(1, "ext." + bare), rs -> rs.getString(1)).orElseThrow();
+    }
+
+    /**
+     * #2010: the table, its isolation, its grants and its record land together or not at all. Here the hub dies between
+     * them: the record's insert waits on a lock, and its session is ended. The table goes with it, and the next write
+     * makes it whole.
+     */
+    @Test
+    void aCreationInterruptedBeforeItsRecordLeavesNoTable() throws Exception {
+        String bare = "test_atomic_" + System.nanoTime();
+        try (Connection other = adminDs.getConnection()) {
+            other.setAutoCommit(false);
+            try (var st = other.createStatement()) {
+                st.execute("LOCK TABLE connector.hybrid_table IN EXCLUSIVE MODE");
+            }
+            CompletableFuture<Void> write = CompletableFuture.runAsync(() -> writeOne("ext." + bare));
+            int waiting = LockWaits.awaitBlockedBy(adminDs, other);
+            Jdbc.queryOne(adminDs, "kill", "SELECT pg_terminate_backend(?)", ps -> ps.setInt(1, waiting),
+                rs -> rs.getBoolean(1));
+            Assertions.assertThatThrownBy(() -> write.get(30, TimeUnit.SECONDS)).isInstanceOf(ExecutionException.class);
+            other.rollback();
+        }
+        Assertions.assertThat(Jdbc.queryOne(adminDs, "exists", "SELECT to_regclass(?) IS NOT NULL",
+            ps -> ps.setString(1, "ext." + bare), rs -> rs.getBoolean(1))).contains(false);
+        Assertions.assertThat(owned(bare)).isFalse();
+
+        writeOne("ext." + bare);
+        Assertions.assertThat(rowSecurity(bare)).isTrue();
+        Assertions.assertThat(owned(bare)).isTrue();
+    }
+
+    /** #2010: two first writes of one new table, as two replicas make them: one creates it, the other finds it whole. */
+    @Test
+    void twoFirstWritesOfOneNewTableBothLand() throws Exception {
+        for (int round = 0; round < 5; round++) {
+            String table = "ext.test_twin_" + System.nanoTime();
+            writeAtOnce(table, table);
+            assertEquals(2L, ((Number) em.createNativeQuery("SELECT count(*) FROM " + table).getSingleResult()).longValue());
+        }
+    }
+
+    /** #2010: two new tables of one schema, made at once: both grant on the schema, whose catalog row they share. */
+    @Test
+    void twoNewTablesOfOneSchemaMadeAtOnceBothLand() throws Exception {
+        for (int round = 0; round < 5; round++) {
+            String first = "ext.test_pair_a_" + System.nanoTime();
+            String second = "ext.test_pair_b_" + System.nanoTime();
+            writeAtOnce(first, second);
+            assertTrue(owned(first.substring(4)) && owned(second.substring(4)));
+        }
+    }
+
+    /** A first write into each table, both at once, as two replicas make them. */
+    private void writeAtOnce(String first, String second) throws Exception {
+        CompletableFuture<Void> a = CompletableFuture.runAsync(() -> writeAsSystem(new HybridJsonbSpec(first, "$.id",
+            List.of()), Map.of("id", "a"), null, UUID.randomUUID(), UUID.randomUUID()));
+        CompletableFuture<Void> b = CompletableFuture.runAsync(() -> writeAsSystem(new HybridJsonbSpec(second, "$.id",
+            List.of()), Map.of("id", "b"), null, UUID.randomUUID(), UUID.randomUUID()));
+        CompletableFuture.allOf(a, b).get(30, TimeUnit.SECONDS);
+    }
+
+    /** A hybrid table made before #2010, recorded as V98 records it. */
+    private void oldHybridTable(String bare) {
+        Jdbc.update(adminDs, "create", HybridJsonbWriter.createTableSql("ext." + bare, List.of()), ps -> {});
+        Jdbc.update(adminDs, "record", "INSERT INTO connector.hybrid_table (table_schema, table_name) VALUES ('ext', ?)",
+            ps -> ps.setString(1, bare));
+    }
+
+    private boolean owned(String bare) {
+        return Jdbc.exists(adminDs, "owned", "SELECT 1 FROM connector.hybrid_table WHERE table_schema = 'ext' "
+            + "AND table_name = ?", ps -> ps.setString(1, bare));
+    }
+
+    private boolean rowSecurity(String bare) {
+        return Jdbc.queryOne(adminDs, "rls", "SELECT relrowsecurity FROM pg_class WHERE oid = to_regclass(?)",
+            ps -> ps.setString(1, "ext." + bare), rs -> rs.getBoolean(1)).orElseThrow();
+    }
+
+    private List<String> policies(String bare) {
+        return Jdbc.query(adminDs, "policies", "SELECT polname FROM pg_policy WHERE polrelid = to_regclass(?)",
+            ps -> ps.setString(1, "ext." + bare), rs -> rs.getString(1));
+    }
+
+    private String policyQual(String bare) {
+        return Jdbc.queryOne(adminDs, "qual", "SELECT pg_get_expr(polqual, polrelid) FROM pg_policy "
+            + "WHERE polname = 'tenant_isolation' AND polrelid = to_regclass(?)", ps -> ps.setString(1, "ext." + bare),
+            rs -> rs.getString(1)).orElseThrow();
+    }
+
+    private long policyOid(String bare) {
+        return Jdbc.queryOne(adminDs, "oid", "SELECT oid FROM pg_policy WHERE polname = 'tenant_isolation' "
+            + "AND polrelid = to_regclass(?)", ps -> ps.setString(1, "ext." + bare), rs -> rs.getLong(1)).orElseThrow();
+    }
+
+    /**
+     * #1989: under {@code connector} sit the hub's own tables (connector.connector, the t_* of DynamicTableWriter, the
+     * entity views), and a target may name one. The writer refuses a table it did not make before any DDL touches it:
+     * no promoted column, no row_hash, no index — and says why, by name.
+     */
+    @Test
+    void anExistingTableThatIsNotAHybridOneIsRefusedBeforeAnyDdl() throws Exception {
+        String bare = "test_foreign_" + System.nanoTime();
+        try (Connection c = adminDs.getConnection(); var st = c.createStatement()) {
+            st.execute("CREATE TABLE connector." + bare + " (id BIGINT, tenant_id BIGINT, name TEXT)");
+        }
+        HybridJsonbSpec spec = new HybridJsonbSpec("connector." + bare, "$.id",
+            List.of(new PromotedColumn("grabbed", "$.x", SqlType.TEXT, Optional.empty())));
+
+        try {
+            Assertions.assertThatThrownBy(() -> writeOne(spec, Map.of("id", "r_1", "x", "v")))
+                .hasStackTraceContaining("connector." + bare + " is not a table this hub's writer made");
+
+            Assertions.assertThat(Jdbc.query(adminDs, "columns", "SELECT column_name FROM information_schema.columns "
+                    + "WHERE table_schema = 'connector' AND table_name = ? ORDER BY ordinal_position",
+                    ps -> ps.setString(1, bare), rs -> rs.getString(1)))
+                .as("no column was added").containsExactly("id", "tenant_id", "name");
+            Assertions.assertThat(Jdbc.queryOne(adminDs, "indexes",
+                    "SELECT count(*) FROM pg_indexes WHERE schemaname = 'connector' AND tablename = ?",
+                    ps -> ps.setString(1, bare), rs -> rs.getLong(1)))
+                .as("no index was made").contains(0L);
+        } finally {
+            Jdbc.update(adminDs, "drop", "DROP TABLE IF EXISTS connector." + bare, ps -> {});
+        }
+    }
+
+    /**
+     * The columns alone do not make a hybrid table: a connector's t_* table may carry a source column named external_id
+     * or data, and declare a unique INDEX over (tenant_id, external_id). The writer's key is the table CONSTRAINT it
+     * creates, which a connector never declares.
+     */
+    @Test
+    void aTableWithTheHybridColumnsButNotItsKeyIsRefusedBeforeAnyDdl() {
+        String bare = "t_lookalike_" + System.nanoTime();
+        Jdbc.update(adminDs, "create", "CREATE TABLE connector." + bare + " (id BIGINT, tenant_id BIGINT, external_id TEXT,"
+            + " data JSONB, connector_id UUID, endpoint_id UUID)", ps -> {});
+        try {
+            Jdbc.update(adminDs, "index", "CREATE UNIQUE INDEX " + bare + "_k ON connector." + bare
+                + " (tenant_id, external_id)", ps -> {});
+            Assertions.assertThatThrownBy(() -> writeOne(new HybridJsonbSpec("connector." + bare, "$.id", List.of(
+                    new PromotedColumn("grabbed", "$.x", SqlType.TEXT, Optional.empty()))), Map.of("id", "r_1", "x", "v")))
+                .hasStackTraceContaining("connector." + bare + " is not a table this hub's writer made");
+            Assertions.assertThat(Jdbc.query(adminDs, "columns", "SELECT column_name FROM information_schema.columns "
+                    + "WHERE table_schema = 'connector' AND table_name = ?", ps -> ps.setString(1, bare), rs -> rs.getString(1)))
+                .as("no column was added").doesNotContain("grabbed", "row_hash");
+        } finally {
+            Jdbc.update(adminDs, "drop", "DROP TABLE IF EXISTS connector." + bare, ps -> {});
+        }
+    }
+
+    /**
+     * #2048: an entity reads {@code connector} tables, and its scope checks ask the registry who writes them. A writer
+     * whose registration fails would write rows no check sees, so there the write stops before any row. The writer
+     * here has no connector row: the registry's foreign key refuses it.
+     */
+    @Test
+    void aConnectorTableWhoseWriterCannotBeRegisteredGetsNoRow() {
+        String bare = "test_unreg_" + System.nanoTime();
+        try {
+            Assertions.assertThatThrownBy(() -> writeOne("connector." + bare))
+                .hasStackTraceContaining("its writer could not be recorded, so no row is written");
+            // The table is made, and committed, before its writer is recorded: it is there, empty.
+            Assertions.assertThat(Jdbc.queryOne(adminDs, "rows", "SELECT count(*) FROM connector." + bare,
+                    ps -> {}, rs -> rs.getLong(1)))
+                .as("no row was written").contains(0L);
+        } finally {
+            Jdbc.update(adminDs, "drop", "DROP TABLE IF EXISTS connector." + bare, ps -> {});
+            Jdbc.update(adminDs, "forget", "DELETE FROM connector.hybrid_table WHERE table_schema = 'connector' "
+                + "AND table_name = ?", ps -> ps.setString(1, bare));
+        }
+    }
+
     private void writeOne(String table) {
-        HybridJsonbSpec spec = new HybridJsonbSpec(table, "$.id", List.of());
+        writeOne(new HybridJsonbSpec(table, "$.id", List.of()), Map.of("id", "r_1"));
+    }
+
+    private void writeOne(HybridJsonbSpec spec, Map<String, Object> item) {
         TenantContext.runAsSystem(() -> {
             try {
                 utx.begin();
-                writer.write(spec, List.of(Map.of("id", "r_1")), 1L, UUID.randomUUID(), UUID.randomUUID());
+                writer.write(spec, List.of(item), 1L, UUID.randomUUID(), UUID.randomUUID());
                 utx.commit();
             } catch (Exception e) {
                 try { utx.rollback(); } catch (Exception ignored) { /* no transaction left to roll back */ }

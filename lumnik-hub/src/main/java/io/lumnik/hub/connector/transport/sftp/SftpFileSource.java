@@ -4,6 +4,7 @@ import io.lumnik.hub.connector.transport.AfterProcessAction;
 import io.lumnik.hub.connector.transport.FileDescriptor;
 import io.lumnik.hub.connector.transport.FileSource;
 import io.lumnik.hub.connector.transport.SeekableSource;
+import io.lumnik.hub.outbound.OutboundAddress;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.common.SftpConstants;
 import org.apache.sshd.sftp.common.SftpException;
@@ -22,6 +23,7 @@ import java.util.stream.Stream;
 
 public class SftpFileSource implements FileSource, SeekableSource {
 
+    private final OutboundAddress addresses;
     private final String host;
     private final int port;
     private final String user;
@@ -36,8 +38,9 @@ public class SftpFileSource implements FileSource, SeekableSource {
     /** Test-only password override. */
     private String passwordOverride;
 
-    public SftpFileSource(String host, int port, String user, SftpAuthMethod auth,
+    public SftpFileSource(OutboundAddress addresses, String host, int port, String user, SftpAuthMethod auth,
                           String pathGlob, boolean strictHostKey, String hostKeyFingerprint) {
+        this.addresses = addresses;
         this.host = host;
         this.port = port;
         this.user = user;
@@ -123,7 +126,7 @@ public class SftpFileSource implements FileSource, SeekableSource {
         SftpAuthMethod effectiveAuth = passwordOverride != null
             ? new SftpAuthMethod.Password(passwordOverride)
             : auth;
-        connection = SftpConnectionFactory.connect(host, port, user, effectiveAuth, strictHostKey, hostKeyFingerprint);
+        connection = SftpConnectionFactory.connect(addresses, host, port, user, effectiveAuth, strictHostKey, hostKeyFingerprint);
         sftp = connection.sftp();
     }
 

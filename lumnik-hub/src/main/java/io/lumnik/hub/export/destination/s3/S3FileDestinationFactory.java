@@ -7,6 +7,7 @@ import io.lumnik.hub.export.destination.FileDestination;
 import io.lumnik.hub.export.destination.FileDestinationCollisionException;
 import io.lumnik.hub.export.destination.FileDestinationException;
 import io.lumnik.hub.export.destination.FileDestinationFactory;
+import io.lumnik.hub.outbound.OutboundAddress;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import software.amazon.awssdk.awscore.exception.AwsServiceException;
@@ -30,16 +31,18 @@ import static io.lumnik.hub.export.destination.FileDestinationFactory.required;
 public class S3FileDestinationFactory implements FileDestinationFactory {
 
     private final SecretRefs secrets;
+    private final OutboundAddress addresses;
     private final int partSize;
 
     @Inject
-    public S3FileDestinationFactory(SecretRefs secrets) {
-        this(secrets, S3UploadStream.DEFAULT_PART_SIZE);
+    public S3FileDestinationFactory(SecretRefs secrets, OutboundAddress addresses) {
+        this(secrets, addresses, S3UploadStream.DEFAULT_PART_SIZE);
     }
 
     /** Test seam: the ITs lower the part size to S3's 5 MiB minimum. */
-    S3FileDestinationFactory(SecretRefs secrets, int partSize) {
+    S3FileDestinationFactory(SecretRefs secrets, OutboundAddress addresses, int partSize) {
         this.secrets = secrets;
+        this.addresses = addresses;
         this.partSize = partSize;
     }
 
@@ -53,7 +56,7 @@ public class S3FileDestinationFactory implements FileDestinationFactory {
         String bucket = required(cfg, "S3", "bucket");
         String key = resolveKey((String) cfg.getOrDefault("prefix", ""), required(cfg, "S3", "filename"));
 
-        S3Client s3 = S3Clients.build(cfg, secrets);
+        S3Client s3 = S3Clients.build(cfg, secrets, addresses);
         try {
             precheck(s3, bucket, key);
         } catch (RuntimeException e) {

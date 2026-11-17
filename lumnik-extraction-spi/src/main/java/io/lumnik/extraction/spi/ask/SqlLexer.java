@@ -55,10 +55,14 @@ public final class SqlLexer {
         return out;
     }
 
-    /** {@code -- … EOL}. Stops AT the newline, which the loop then skips as whitespace. */
+    /**
+     * {@code -- … EOL}. Stops AT the line end, which the loop then skips as whitespace. A carriage return ends it as
+     * well as a newline, because it does on the server (scan.l: {@code non_newline [^\n\r]}): stopping at {@code \n}
+     * only hid whatever followed a lone CR from every guard while the server ran it.
+     */
     private static int skipLineComment(String sql, int i, int n) {
         i += 2;
-        while (i < n && sql.charAt(i) != '\n') i++;
+        while (i < n && sql.charAt(i) != '\n' && sql.charAt(i) != '\r') i++;
         return i;
     }
 

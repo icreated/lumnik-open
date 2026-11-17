@@ -16,19 +16,19 @@ auth                 optional  [NESTED, MEDIUM]
     Username (basic, session)
     required when kind is basic or session
   password_env         optional  [STRING, HIGH]
-    Password source: lm secret name, else env var (basic, session)
+    Password source: lm secret name (basic, session)
     required when kind is basic or session
   name                 optional  [STRING, HIGH]
     Header/query parameter name for API key
     required when kind = api-key
   value_env            optional  [STRING, HIGH]
-    API key value source: lm secret name, else env var
+    API key value source: lm secret name
     required when kind = api-key
   in                   optional  [STRING, MEDIUM]
     Where to place the API key (header|query)
     default: header
   token_env            optional  [STRING, HIGH]
-    Bearer token source: lm secret name, else env var (bearer)
+    Bearer token source: lm secret name (bearer)
   token_value          optional  [STRING, LOW]
     Literal bearer token (dev only — prefer token_env)
   scheme               optional  [STRING, LOW]
@@ -45,7 +45,7 @@ auth                 optional  [NESTED, MEDIUM]
     required when kind = oauth2
     read only when kind = oauth2
   client_secret_env    optional  [STRING, HIGH]
-    OAuth2 client secret source: lm secret name, else env var
+    OAuth2 client secret source: lm secret name
     required when kind = oauth2
     read only when kind = oauth2
   scope                optional  [STRING, MEDIUM]

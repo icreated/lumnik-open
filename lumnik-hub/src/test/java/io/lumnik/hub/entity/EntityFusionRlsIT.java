@@ -1,5 +1,6 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
@@ -63,7 +64,7 @@ class EntityFusionRlsIT {
       st.execute("INSERT INTO connector.t_rlsfuse_erp VALUES (1,'C-1','Alice-T1'), (2,'C-1','Zoe-T2')");
       st.execute("INSERT INTO connector.t_rlsfuse_csv VALUES (1,'C-1','alice@t1'), (2,'C-1','zoe@t2')");
     }
-    given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
+    given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
   }

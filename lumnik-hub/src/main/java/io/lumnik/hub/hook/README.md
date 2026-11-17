@@ -268,20 +268,29 @@ audience rather than linking here.
 ## Admin endpoints
 
 ```
-GET    /api/platform/hooks                       → list all hooks and callouts        (HookResource)
-GET    /api/platform/hooks/{id}                   → detail for a specific hook
+GET    /api/platform/hooks                       → the caller's tenant's hooks and the callouts (HookResource)
+GET    /api/platform/hooks/{id}                   → detail for one of them
 POST   /api/platform/hooks/{hookId}/toggle        → enable/disable a hook for a tenant
-GET    /api/platform/hooks/overrides?tenantId=N   → per-tenant script overrides        (HookOverrideResource)
+GET    /api/platform/hooks/overrides?tenantId=N   → the tenant's overrides: {hookId, tenantId, enabled} (HookOverrideResource)
 GET    /api/platform/hooks/overrides/{hookId}?tenantId=N → one override
-POST   /api/platform/hooks/overrides              → upsert {hookId, tenantId, script} (400 without tenantId/hookId)
-DELETE /api/platform/hooks/overrides/{hookId}?tenantId=N → remove a tenant's script override
+POST   /api/platform/hooks/overrides              → always 400: an override carries no code (#2011)
+DELETE /api/platform/hooks/overrides/{hookId}?tenantId=N → remove a tenant's override (the hook's manifest default again)
+GET    /api/platform/admin/hooks                  → the caller's tenant's hooks, one line each (HookAdminResource)
 ```
 
-All seven sit under `/api/platform/*`, so **both** roles are required, not one:
+**An override carries no code (#2011).** It stored a Kotlin script the hub ran in its own JVM for the tenant — the
+hub's environment, its disk, every tenant's data. The hub runs the operator's scripts only (a module's, or the hooks
+directory's); a tenant switches a hook on or off. V94 cleared the scripts stored before.
+
+**Tenant-wide (#1992).** All three resources are `@TenantWide`: a caller bound to a `scope:*` role gets the uniform
+`403 {"error":"scope not granted"}`. The lists show the caller's tenant only: a binding for other tenants is not listed,
+and `tenants`/`scope` read `["*"]`/`global` or the caller's own id (`HookBinding.tenantsAsSeenBy`).
+
+All eight sit under `/api/platform/*`, so **both** roles are required, not one:
 `PlatformApiAuthFilter` (`PlatformApiAuthFilter.java:42-45`) gates the whole `/api/platform/*`
 prefix on `lm_integrator` first — a caller without it gets `403 "missing role lm_integrator"`
 before the request ever reaches the resource — and only then does `HookResource`/
-`HookOverrideResource`'s own `@RequiresPermission("lm_admin")` apply. In dev-bypass mode
+`HookOverrideResource`/`HookAdminResource`'s own `@RequiresPermission("lm_admin")` apply. In dev-bypass mode
 (`%dev`/`%test` profiles, `lumnik.security.dev-bypass=true`) all roles are granted
 automatically, which is why this double gate is easy to miss in local testing.
 
@@ -322,6 +331,6 @@ given()
     .body("code", equalTo("my_error_code"));
 ```
 
-See `HookManifestScannerIT`, `HookRegistryTest`, `HookOverrideStoreTest`,
-`HookScriptOverrideIT`, `HookToggleIT` and `override/HookOverrideResourceIT` in the sibling
+See `HookManifestScannerIT`, `HookRegistryTest`, `HookOverrideStoreTest`, `HookBindingTenancyTest`,
+`HookToggleIT`, `override/HookOverrideResourceIT` and `auth/HookDoorsTenantWideIT` in the sibling
 test tree for real, running examples of each piece above.

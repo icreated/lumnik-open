@@ -2,11 +2,12 @@ package io.lumnik.hub.entity;
 
 import io.lumnik.common.security.RequiresPermission;
 import io.lumnik.common.security.ScopeGrants;
-import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.hub.api.DeploymentWide;
 import io.lumnik.hub.ask.SchemaCardRefresher;
 import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.search.SearchIndexStore;
+import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.hub.tenant.TenantContextFilter;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.DELETE;
@@ -25,6 +26,7 @@ import java.util.Map;
  * path (the same reason {@code EntityApplyResource} is its own door). Its collaborators are apply's
  * — the compiler, the registry, the card refresher — not the read resource's.
  */
+@DeploymentWide
 @Path("/api/entities")
 @Produces(MediaType.APPLICATION_JSON)
 @RequiresPermission("lm_admin")
@@ -55,20 +57,23 @@ public class EntityWriteResource {
   @DELETE
   @Path("/{name}")
   public Response delete(@PathParam("name") String name) {
-    // entity_manifest is global; a second hub instance's map may be cold. findReloadingIfMissing
+    // entity names are hub-wide; a second hub instance's map may be cold. findReloadingIfMissing
     // re-reads the DB once before we decide the entity does not exist, so a valid delete is never a
     // false 404.
-    EntityManifest m = registry.findReloadingIfMissing(name);
+    long tenant = RequireTenant.current();
+    EntityManifest m = registry.findReloadingIfMissing(tenant, name);
     if (m == null) return ApiErrors.notFound("entity " + name + " not found");
     if (!ScopeGrants.allowsAll(m.scopes())) return ApiErrors.scopeNotGranted();
     Long actor = TenantContextFilter.currentUser();
-    compiler.delete(m.name(), c -> searchIndexStore.purgeAllForEntity(c, m.name(), actor));
+    if (!compiler.delete(tenant, m.name(), c -> searchIndexStore.purgeAllForEntity(c, m.name(), actor))) {
+      return ApiErrors.notFound("entity " + name + " not found");
+    }
     registry.remove(m.name());
     // The SearchIndexes it took are audited by the purge itself, each in the tenant that owned it.
     audit.record("Entity", m.name(), "DELETE", Map.of("scopes", m.scopes()));
     // Best-effort, like apply: the view + manifest row are already gone, so a card-refresh failure
     // must not fail the delete. Every card, in any tenant, that still lists the view loses it (#1538).
-    cardRefresher.afterEntityChanged(m.name(), CurrentTenantHolder.get(), m.scopes());
+    cardRefresher.afterEntityChanged(m.name(), tenant, m.scopes());
     return Response.status(204).build();
   }
 }

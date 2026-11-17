@@ -5,18 +5,20 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.extraction.spi.ExtractionSink;
+import io.lumnik.hub.sql.SqlIdentifiers;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 
+import java.sql.Array;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -44,51 +46,52 @@ public class DynamicTableRegistry {
    * never make it drop a core/identity/platform table (blast-radius bound). */
   static final String DYNAMIC_SCHEMA = "connector";
   static final String DYNAMIC_PREFIX = "t_";
-  /** The hybrid writer's schema — entirely hub-owned (created only by HybridJsonbWriter),
-   *  so every registered ext.* row is droppable with its connector (C4/P18 PR1). */
+  /** The hybrid writer's schema (V98 creates it); a table in it is the hub's only when recorded ({@link #ownsHybridTable}). */
   static final String HYBRID_SCHEMA = "ext";
   /** {@code mapping_id} marker {@link HybridJsonbWriter} registers its targets under — the one
-   *  field that tells the two row writers apart in this table (the schema does not: a hybrid spec
-   *  with no schema registers under {@code public}, and a mapping may target any schema). */
+   *  field that tells the two row writers apart in this table (the schema does not: a hybrid target
+   *  may sit under {@code connector}, as DynamicTableWriter's {@code t_*} do, #1627). */
   static final String HYBRID_MAPPING_PREFIX = "hybrid:";
 
   /** The column a hybrid table stamps with the time a row last changed (#903), where the others have {@code _ingested_at}. */
   public static final String HYBRID_WRITTEN_AT_COLUMN = "indexed_at";
   public static final String DYNAMIC_WRITTEN_AT_COLUMN = "_ingested_at";
 
-  /** The columns every table {@link HybridJsonbWriter#createTable} makes carries, with their types. */
-  private static final Map<String, String> HYBRID_SIGNATURE = Map.of(
-      "tenant_id", "bigint", "external_id", "text", "row_hash", "text", "data", "jsonb",
-      "connector_id", "uuid", "endpoint_id", "uuid");
-
-  static boolean isHubDynamicTable(String schema, String name) {
-    if (name == null) return false;
-    return (DYNAMIC_SCHEMA.equals(schema) && name.startsWith(DYNAMIC_PREFIX))
-        || HYBRID_SCHEMA.equals(schema);
+  public static boolean isHubDynamicTable(String schema, String name) {
+    return name != null && DYNAMIC_SCHEMA.equals(schema) && name.startsWith(DYNAMIC_PREFIX);
   }
 
   /**
-   * May purge take this registered table? A {@code connector.t_*} or {@code ext.*} one, or a hybrid
-   * target under {@code connector} — the only schema an Entity fuses (#1627): its registry row carries
-   * the writer's marker for exactly this table, and the table has the writer's columns, so a row
-   * pointing a marker at one of the hub's own tables still cannot have it dropped.
+   * Whether the hybrid writer made {@code schema.table} (#2010): it records each table in the transaction that creates
+   * it, and V98 recorded the ones made before. A shape is not enough, any DDL can copy it. The writer asks before
+   * touching an existing table, the endpoint purge before deleting from one, the connector delete before dropping one.
    */
-  private static boolean droppable(Connection c, String schema, String table, String mappingId) throws SQLException {
-    return isHubDynamicTable(schema, table)
-        || (DYNAMIC_SCHEMA.equals(schema) && (HYBRID_MAPPING_PREFIX + schema + "." + table).equals(mappingId)
-            && hasHybridSignature(c, quoteIdent(schema) + "." + quoteIdent(table)));
+  public static boolean ownsHybridTable(Connection c, String schema, String table) {
+    return Jdbc.exists(c, "DynamicTableRegistry.ownsHybridTable", "SELECT 1 FROM connector.hybrid_table "
+        + "WHERE table_schema = ? AND table_name = ?", ledgerKey(schema, table));
   }
 
-  private static boolean hasHybridSignature(Connection c, String rel) throws SQLException {
-    Map<String, String> columns = new HashMap<>();
-    try (PreparedStatement ps = c.prepareStatement("SELECT attname, format_type(atttypid, atttypmod) "
-        + "FROM pg_catalog.pg_attribute WHERE attrelid = to_regclass(?) AND attnum > 0 AND NOT attisdropped")) {
-      ps.setString(1, rel);
-      try (ResultSet rs = ps.executeQuery()) {
-        while (rs.next()) columns.put(rs.getString(1), rs.getString(2));
-      }
-    }
-    return columns.entrySet().containsAll(HYBRID_SIGNATURE.entrySet());
+  /** Records {@code schema.table} as the hybrid writer's, in the transaction that creates it. */
+  static void recordHybridTable(Connection c, String schema, String table) {
+    Jdbc.update(c, "DynamicTableRegistry.recordHybridTable", "INSERT INTO connector.hybrid_table "
+        + "(table_schema, table_name) VALUES (?, ?) ON CONFLICT DO NOTHING", ledgerKey(schema, table));
+  }
+
+  /** The record goes with its table: a table made later under that name is not the hub's until it makes it. */
+  private static void forgetHybridTable(Connection c, String schema, String table) {
+    Jdbc.update(c, "DynamicTableRegistry.forgetHybridTable", "DELETE FROM connector.hybrid_table "
+        + "WHERE table_schema = ? AND table_name = ?", ledgerKey(schema, table));
+  }
+
+  /**
+   * The record's key: the table under the name Postgres keeps ({@link SqlIdentifiers#keptName}), as V98 recorded it from
+   * the catalog. A longer target names the same table.
+   */
+  private static Jdbc.Binder ledgerKey(String schema, String table) {
+    return ps -> {
+      ps.setString(1, schema);
+      ps.setString(2, SqlIdentifiers.keptName(table));
+    };
   }
 
   @Inject
@@ -187,6 +190,46 @@ public class DynamicTableRegistry {
   }
 
   /**
+   * #2023: what the registry says of a hub table's columns, read for {@code tenantId}: whether it records the table,
+   * and the columns it registered.
+   */
+  public record Columns(boolean tenantIngests, Set<String> mine) {}
+
+  public static Columns columns(Connection c, long tenantId, String schema, String table) {
+    List<List<String>> rows = Jdbc.query(c, "DynamicTableRegistry.columns",
+        "SELECT ARRAY(SELECT jsonb_object_keys(schema_inferred)) FROM connector.dynamic_table "
+            + "WHERE tenant_id = ? AND table_schema = ? AND table_name = ?",
+        ps -> { ps.setLong(1, tenantId); ps.setString(2, schema); ps.setString(3, table); },
+        rs -> Arrays.asList((String[]) rs.getArray(1).getArray()));
+    Set<String> mine = new HashSet<>();
+    rows.forEach(mine::addAll);
+    return new Columns(!rows.isEmpty(), mine);
+  }
+
+  /**
+   * The scopes of each connector of the tenant registered as writing {@code schema.table}, one list per writer (#2048):
+   * empty for a scopeless writer or one deleted since. No writer registered, an empty list. The writers' rows are read
+   * {@code FOR SHARE}: a re-tag holds its connector's row {@code FOR UPDATE} until its commit, so an entity applied
+   * meanwhile is judged on the scopes the re-tag decided.
+   */
+  public static List<List<String>> writerTags(Connection c, long tenantId, String schema, String table) {
+    Jdbc.query(c, "DynamicTableRegistry.writerTags lock",
+        "SELECT c.id FROM connector.connector c WHERE c.id IN (SELECT dt.connector_id FROM connector.dynamic_table dt "
+            + "WHERE dt.tenant_id = ? AND dt.table_schema = ? AND dt.table_name = ?) FOR SHARE",
+        ps -> { ps.setLong(1, tenantId); ps.setString(2, schema); ps.setString(3, table); },
+        rs -> rs.getObject(1));
+    return Jdbc.query(c, "DynamicTableRegistry.writerTags",
+        "SELECT c.tags FROM connector.dynamic_table dt "
+            + "LEFT JOIN connector.connector c ON c.id = dt.connector_id AND c.tenant_id = dt.tenant_id "
+            + "WHERE dt.tenant_id = ? AND dt.table_schema = ? AND dt.table_name = ?",
+        ps -> { ps.setLong(1, tenantId); ps.setString(2, schema); ps.setString(3, table); },
+        rs -> {
+          Array tags = rs.getArray(1);
+          return tags == null ? List.<String>of() : Arrays.asList((String[]) tags.getArray());
+        });
+  }
+
+  /**
    * The name of another connector of the tenant already writing {@code schema.table}, or null (#1199).
    * Read on the connection holding {@link DynamicTableWriter#firstWriteLock}, so two first writes
    * cannot both find the table free.
@@ -275,33 +318,36 @@ public class DynamicTableRegistry {
    * the SELECT-then-DELETE race where a row registered concurrently (READ COMMITTED)
    * could be deleted without its table being dropped. DROP quotes the stored identifiers
    * the same way the writer created them (DDL cannot be parameterised) and uses IF EXISTS
-   * (idempotent). Only the tables {@link #droppable} names are
+   * (idempotent). Only a {@code connector.t_*} table or one the hybrid writer recorded ({@link #ownsHybridTable}) is
    * dropped — a corrupted/foreign registry row is skipped (logged), bounding blast
    * radius. Any error propagates so the caller can abort the delete rather than half-clean.
    */
   public void purgeForConnector(UUID connectorId) {
     // One transaction: any failure rolls back, an Error included (#1649). Left open, the pool's reset would COMMIT
     // the registry delete without the drops, every table left behind with no row naming it.
-    List<String[]> dropped = Jdbc.transaction(adminDs, "DynamicTableRegistry.purgeForConnector", c -> {
+    List<Dropped> dropped = Jdbc.transaction(adminDs, "DynamicTableRegistry.purgeForConnector", c -> {
       List<String[]> tables = new ArrayList<>();
       try (PreparedStatement del = c.prepareStatement(
           "DELETE FROM connector.dynamic_table WHERE connector_id = ? "
-          + "RETURNING table_schema, table_name, tenant_id, mapping_id")) {
+          + "RETURNING table_schema, table_name, tenant_id")) {
         del.setObject(1, connectorId);
         try (ResultSet rs = del.executeQuery()) {
-          while (rs.next()) tables.add(new String[]{rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4)});
+          while (rs.next()) tables.add(new String[]{rs.getString(1), rs.getString(2), rs.getString(3)});
         }
       }
-      List<String[]> drops = new ArrayList<>();
+      List<Dropped> drops = new ArrayList<>();
       for (String[] t : tables) {
-        if (!droppable(c, t[0], t[1], t[3])) {
+        // Read before the drop takes the record with the table.
+        boolean hybrid = ownsHybridTable(c, t[0], t[1]);
+        if (!hybrid && !isHubDynamicTable(t[0], t[1])) {
           LOG.warnf("purgeForConnector(%s): skipping unexpected registry table %s.%s "
-              + "(neither %s.%s*, %s.* nor a hybrid target under %s); not dropping it", connectorId, t[0], t[1],
-              DYNAMIC_SCHEMA, DYNAMIC_PREFIX, HYBRID_SCHEMA, DYNAMIC_SCHEMA);
+              + "(neither %s.%s* nor a hybrid table the hub recorded); not dropping it", connectorId, t[0], t[1],
+              DYNAMIC_SCHEMA, DYNAMIC_PREFIX);
           continue;
         }
-        if (dropIfLastWriter(c, connectorId, t[0], t[1])) drops.add(t);
-        forgetWatermark(c, Long.parseLong(t[2]), t[0], t[1]);
+        long tenantId = Long.parseLong(t[2]);
+        if (dropIfLastWriter(c, connectorId, t[0], t[1])) drops.add(new Dropped(t[0], t[1], tenantId, hybrid));
+        forgetWatermark(c, tenantId, t[0], t[1]);
       }
       return drops;
     });
@@ -309,26 +355,29 @@ public class DynamicTableRegistry {
     // so it is already durable here: this post-drop cleanup is not part of the caller's
     // transaction and cannot un-drop anything (the delete's atomicity is partial by design).
     //
-    // Hybrid tables (ext.*, or connector.* under the writer's marker) carry two things that must
+    // Hybrid tables (the ones the hub recorded) carry two things that must
     // not outlive the table: HybridJsonbWriter's in-memory schema cache — or a re-ingest under the same name skips CREATE TABLE and fails
     // with "relation … does not exist" — and the one-shot corpus descriptor keyed
     // oneshot:<schema.table> (no connector_id on the sink seam, so no fk cascade reaches it).
     // forget() runs FIRST, before the corpus clear's try/catch, so a corpus-clear failure can
     // never skip the cache invalidation. connector.t_* tables need neither (DynamicTableWriter
     // keeps no in-memory cache).
-    for (String[] t : dropped) {
-      if (!HYBRID_SCHEMA.equals(t[0]) && (t[3] == null || !t[3].startsWith(HYBRID_MAPPING_PREFIX))) continue;
-      hybridWriter.forget(t[0] + "." + t[1]);
+    for (Dropped t : dropped) {
+      if (!t.hybrid()) continue;
+      hybridWriter.forget(t.schema() + "." + t.table());
       for (ExtractionSink sink : sinks) {
         try {
-          sink.clear(Long.parseLong(t[2]), "oneshot:" + t[0] + "." + t[1]);
+          sink.clear(t.tenantId(), "oneshot:" + t.schema() + "." + t.table());
         } catch (RuntimeException e) {
           LOG.warnf(e, "purgeForConnector(%s): descriptor clear failed for %s.%s",
-              connectorId, t[0], t[1]);
+              connectorId, t.schema(), t.table());
         }
       }
     }
   }
+
+  /** A table {@link #purgeForConnector} dropped, and whether the hybrid writer had made it. */
+  private record Dropped(String schema, String table, long tenantId, boolean hybrid) {}
 
   /**
    * What {@link #purgeForConnector} would take, read without taking it (#1218): {@code "schema.table"
@@ -337,14 +386,14 @@ public class DynamicTableRegistry {
   public Map<String, Long> rowsGoingWith(UUID connectorId) {
     return Jdbc.transaction(adminDs, "DynamicTableRegistry.rowsGoingWith", c -> {
       Map<String, Long> rows = new LinkedHashMap<>();
-      try (PreparedStatement ps = c.prepareStatement("SELECT table_schema, table_name, mapping_id FROM connector.dynamic_table "
+      try (PreparedStatement ps = c.prepareStatement("SELECT table_schema, table_name FROM connector.dynamic_table "
           + "WHERE connector_id = ? ORDER BY table_schema, table_name")) {
         ps.setObject(1, connectorId);
         try (ResultSet rs = ps.executeQuery()) {
           while (rs.next()) {
             String schema = rs.getString(1);
             String table = rs.getString(2);
-            if (droppable(c, schema, table, rs.getString(3))) rows.put(schema + "." + table, rowsGoing(c, connectorId, schema, table));
+            if (isHubDynamicTable(schema, table) || ownsHybridTable(c, schema, table)) rows.put(schema + "." + table, rowsGoing(c, connectorId, schema, table));
           }
         }
       }
@@ -392,6 +441,7 @@ public class DynamicTableRegistry {
       try (Statement st = c.createStatement()) {
         st.execute("DROP TABLE IF EXISTS " + rel);
       }
+      forgetHybridTable(c, schema, table);   // #2010
     } else if (plan.mine() != null) {
       try (PreparedStatement del = c.prepareStatement("DELETE FROM " + rel + " WHERE " + plan.mine())) {
         del.setObject(1, connectorId);

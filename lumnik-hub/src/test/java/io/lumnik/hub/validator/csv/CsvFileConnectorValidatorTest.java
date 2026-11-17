@@ -3,8 +3,10 @@ package io.lumnik.hub.validator.csv;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.hub.connector.transport.LocalRoot;
 import io.lumnik.hub.validator.ConnectorValidationService;
 import io.lumnik.hub.testsupport.ValidationWarnings;
+import io.lumnik.hub.validator.ValidationError;
 import io.lumnik.hub.validator.ValidationResult;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -45,6 +47,35 @@ class CsvFileConnectorValidatorTest {
     }
 
     /**
+     * #2001: a local path is relative to its tenant's folder; an absolute one is refused at apply, as the run refuses
+     * it — by its form, with the run's words; one that is not a path at all too. A relative one passes.
+     */
+    @Test void anAbsoluteLocalPath_isRefusedAtApply_asTheRunRefusesIt() throws Exception {
+        ObjectNode doc = (ObjectNode) load("csv-local-valid.yaml");
+        ObjectNode transport = (ObjectNode) doc.path("spec").path("transport");
+
+        transport.put("path", "/etc/hostname");
+        ValidationResult abs = service.validate(doc);
+        assertEquals(List.of("spec.transport.path"),
+            abs.errors().stream().map(ValidationError::path).toList(), () -> "got: " + abs.errors());
+        assertEquals(LocalRoot.ABSOLUTE, abs.errors().get(0).message());
+
+        transport.put("path", "orders\u0000/*.csv");
+        ValidationResult nul = service.validate(doc);
+        assertTrue(nul.errors().stream().anyMatch(e -> e.message().equals(LocalRoot.UNPARSABLE)), () -> "got: " + nul.errors());
+
+        transport.put("path", "imports/*.csv");
+        ValidationResult rel = service.validate(doc);
+        assertTrue(rel.isValid(), () -> "a relative path must validate, got: " + rel.errors());
+    }
+
+    /** #2001 is about the hub's disk: a remote path is the remote server's, absolute as documented. */
+    @Test void anAbsoluteSftpPath_isStillAccepted() throws Exception {
+        ValidationResult r = service.validate(load("csv-sftp-valid.yaml"));
+        assertTrue(r.isValid(), () -> "an absolute sftp path must validate, got: " + r.errors());
+    }
+
+    /**
      * Both blocks a csv manifest could only ever write to say nothing. One assertion covers both
      * because the refusal names its own path: a regression on either comes back as
      * {@code spec.parser} or {@code spec.target}, not as an anonymous red (#543).
@@ -59,7 +90,7 @@ class CsvFileConnectorValidatorTest {
     @ValueSource(strings = {"30%", "100%", "off", "0%"})
     void refresh_onOneLocalFile_isAccepted(String maxRemoved) throws Exception {
         ObjectNode doc = (ObjectNode) load("csv-local-valid.yaml");
-        ((ObjectNode) doc.path("spec").path("transport")).put("path", "/imports/ref.csv");
+        ((ObjectNode) doc.path("spec").path("transport")).put("path", "imports/ref.csv");
         ((ObjectNode) doc.path("spec")).putObject("refresh").put("max_removed", maxRemoved);
         ValidationResult r = service.validate(doc);
         assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
@@ -68,7 +99,7 @@ class CsvFileConnectorValidatorTest {
 
     @Test void refresh_withAMalformedMaxRemoved_isRefusedNamingTheForms() throws Exception {
         ObjectNode doc = (ObjectNode) load("csv-local-valid.yaml");
-        ((ObjectNode) doc.path("spec").path("transport")).put("path", "/imports/ref.csv");
+        ((ObjectNode) doc.path("spec").path("transport")).put("path", "imports/ref.csv");
         ((ObjectNode) doc.path("spec")).putObject("refresh").put("max_removed", "150%");
         ValidationResult r = service.validate(doc);
         assertTrue(r.errors().stream().anyMatch(e -> e.path().equals("spec.refresh.max_removed")
@@ -592,6 +623,34 @@ class CsvFileConnectorValidatorTest {
             () -> "expected " + path + " refused, got: " + r.errors());
     }
 
+    /** #1969: a column name YAML reads as a number is still a column name — a missing one is refused like any other. */
+    @ParameterizedTest(name = "{1}")
+    @CsvSource(delimiter = '|', quoteCharacter = '`', value = {
+        "{\"cell\":[{\"parse-date\":{\"column\":2024,\"formats\":[\"yyyy\"]}}]}                  | spec.mapping.cell[0].parse-date.column           | 2024",
+        "{\"cell\":[{\"upper\":{\"columns\":[\"code\",2024]}}]}                                     | spec.mapping.cell[0].upper.columns[1]            | 2024",
+        "{\"row\":[{\"coalesce\":{\"column\":\"c\",\"from\":[2023,2024]}}]}                       | spec.mapping.row[0].coalesce.from                | 2023",
+        "{\"cell\":[{\"parse-coordinates\":{\"lat\":2024,\"lon\":\"amount\"}}]}                   | spec.mapping.cell[0].parse-coordinates.lat       | 2024",
+        "{\"cell\":[{\"to-uuid\":{\"column\":\"id\",\"generate-from\":2024}}]}                     | spec.mapping.cell[0].to-uuid.generate-from       | 2024",
+        "{\"row\":[{\"map-columns\":{\"drop\":[2024]}}]}                                              | spec.mapping.row[0].map-columns.drop[0]          | 2024"})
+    void aColumnNamedByANumberThatDoesNotExist_isRefused(String mapping, String path, String column) throws Exception {
+        ValidationResult r = service.validate(headerless(mapping));
+        assertTrue(r.errors().stream().anyMatch(e -> e.path().equals(path) && e.message().contains("'" + column + "'")),
+            () -> "expected " + path + " refused, got: " + r.errors());
+    }
+
+    /** #1969: a year-named header read by a number, and a column a hook adds under a number, validate clean. */
+    @Test void columnsNamedByANumberThatExist_validateClean() throws Exception {
+        ObjectNode doc = headerless("{\"cell\":[{\"upper\":{\"columns\":[2023]}},"
+            + "{\"parse-coordinates\":{\"lat\":\"code\",\"lon\":\"amount\",\"reason\":2025}},"
+            + "{\"lower\":{\"columns\":[2025]}},"
+            + "{\"to-uuid\":{\"column\":\"id\",\"generate-from\":2023}}],"
+            + "\"row\":[{\"map-columns\":{\"drop\":[2022]}}]}");
+        ((ObjectNode) doc.path("spec")).set("parser",
+            mapper.readTree("{\"has_header\":false,\"delimiter\":\",\",\"columns\":[\"code\",\"amount\",\"2022\",\"2023\"]}"));
+        ValidationResult r = service.validate(doc);
+        assertTrue(r.isValid(), () -> "expected valid, got: " + r.errors());
+    }
+
     /** #1500: the same mappings with the right names validate clean — a renamed column is read under its new name. */
     @ParameterizedTest
     @ValueSource(strings = {
@@ -905,7 +964,7 @@ class CsvFileConnectorValidatorTest {
         JsonNode manifest = mapper.readTree("""
             {"apiVersion":"connectors.lumnik.io/v1","kind":"Connector",
              "metadata":{"name":"empty-columns","connector_type":"csv-file","scopes":["test"]},
-             "spec":{"transport":{"kind":"local","path":"/export/*.csv"},
+             "spec":{"transport":{"kind":"local","path":"export/*.csv"},
                      "parser":{"has_header":false,"columns":null},
                      "after_process":"none"}}""");
 
@@ -924,7 +983,7 @@ class CsvFileConnectorValidatorTest {
         JsonNode manifest = mapper.readTree("""
             {"apiVersion":"connectors.lumnik.io/v1","kind":"Connector",
              "metadata":{"name":"empty-oneshot","connector_type":"csv-file","scopes":["test"]},
-             "spec":{"transport":{"kind":"local","path":"/export/*.csv","pre_process":null},
+             "spec":{"transport":{"kind":"local","path":"export/*.csv","pre_process":null},
                      "after_process":"none"}}""");
 
         ValidationResult r = service.validate(manifest);
@@ -937,7 +996,7 @@ class CsvFileConnectorValidatorTest {
         JsonNode manifest = mapper.readTree("""
             {"apiVersion":"connectors.lumnik.io/v1","kind":"Connector",
              "metadata":{"name":"empty-unique","connector_type":"csv-file","scopes":["test"]},
-             "spec":{"transport":{"kind":"local","path":"/export/*.csv"},
+             "spec":{"transport":{"kind":"local","path":"export/*.csv"},
                      "target":{"indexes":[{"columns":["email"],"unique":null}]},
                      "after_process":"none"}}""");
 

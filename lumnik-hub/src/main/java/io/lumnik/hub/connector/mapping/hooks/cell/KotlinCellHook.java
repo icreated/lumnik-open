@@ -94,7 +94,7 @@ public class KotlinCellHook implements CellHook {
     Map<String, Object> bindings = new HashMap<>();
     bindings.put("cells", row);
     bindings.put(CONTEXT, context);
-    bindings.put("unreadable", (Runnable) () -> state.counters().cellErrors().incrementAndGet());
+    bindings.put("unreadable", (Runnable) state::refuseCell);
 
     String reference = params.path("script").asText();
     KtsScriptRunner.Compiled script;

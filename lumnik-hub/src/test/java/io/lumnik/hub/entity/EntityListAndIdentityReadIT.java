@@ -40,8 +40,8 @@ class EntityListAndIdentityReadIT {
   private String fixture(long tenant) throws Exception {
     String n = String.valueOf(System.nanoTime());
     String products = "t_lir_p_" + n, lookup = "t_lir_c_" + n, entity = "ListIdentityRead" + n;
-    createTable(adminDs, products, "pid text, cid text, pname text");
-    createTable(adminDs, lookup, "cid text, cname text");
+    createTable(adminDs, tenant, products, "pid text, cid text, pname text");
+    createTable(adminDs, tenant, lookup, "cid text, cname text");
     yaml(tenant).body(resolutionJoinEntityYaml(entity, products, lookup, "category_label"))
         .post("/api/entities/apply").then().statusCode(200);
     exec(adminDs, "INSERT INTO connector." + products + " (tenant_id, pid, cid, pname) VALUES ("

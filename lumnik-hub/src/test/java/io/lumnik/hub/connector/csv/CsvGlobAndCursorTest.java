@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.csv;
 
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
+import io.lumnik.hub.connector.transport.LocalRoot;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -17,7 +18,7 @@ class CsvGlobAndCursorTest {
   @Test
   void glob_enumerates_files_in_lexical_order() throws Exception {
     Path dir = Path.of(getClass().getResource("/csv/glob-test").toURI());
-    List<Path> files = CsvGlobResolver.resolve(dir.toString() + "/*.csv");
+    List<Path> files = CsvGlobResolver.resolve(LocalRoot.at(dir), dir.toString() + "/*.csv");
     assertThat(files).hasSize(2);
     assertThat(files.get(0).getFileName().toString()).isEqualTo("glob-a.csv");
     assertThat(files.get(1).getFileName().toString()).isEqualTo("glob-b.csv");
@@ -26,7 +27,7 @@ class CsvGlobAndCursorTest {
   @Test
   void glob_with_single_file_returns_one() throws Exception {
     Path file = Path.of(getClass().getResource("/csv/customers-simple.csv").toURI());
-    List<Path> files = CsvGlobResolver.resolve(file.toString());
+    List<Path> files = CsvGlobResolver.resolve(LocalRoot.at(file.getParent()), file.toString());
     assertThat(files).hasSize(1);
   }
 
@@ -46,7 +47,7 @@ class CsvGlobAndCursorTest {
     String glob = dir + "/*.csv";
 
     // chunk of 2: b.csv is mid-file, the cursor persists at (b.csv, 2 events)
-    var r1 = new CsvFileConnectorType.CsvGlobCursorReader(glob, overrides)
+    var r1 = GlobReaders.of(glob, overrides)
         .read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
     assertThat(r1).isInstanceOf(ReadResult.HasMore.class);
     var c1 = ((ReadResult.HasMore<?>) r1).nextCursor();
@@ -54,7 +55,7 @@ class CsvGlobAndCursorTest {
     // a.csv arrives later but sorts BEFORE the cursor file
     Files.writeString(dir.resolve("a.csv"), "id,name\n9,never-read\n");
 
-    var r2 = new CsvFileConnectorType.CsvGlobCursorReader(glob, overrides).read(500, c1, ReaderTestContexts.newRun());
+    var r2 = GlobReaders.of(glob, overrides).read(500, c1, ReaderTestContexts.newRun());
     assertThat(r2).isInstanceOf(ReadResult.EndOfStream.class);
     List<?> rows = ((ReadResult.EndOfStream<?>) r2).records();
     List<Object> names = rows.stream().map(r -> (Object) ((Map<?, ?>) r).get("name")).toList();

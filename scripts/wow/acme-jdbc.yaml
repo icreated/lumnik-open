@@ -14,7 +14,7 @@ spec:
   connection:
     url: ${WOW_SRC_URL}
     user: adempiere
-    password_env: WOW_SRC_PASSWORD
+    password_env: WOW_SRC_PASSWORD   # lm secret scope WOW_SRC_PASSWORD atelier
   defaults:
     schema: adempiere
   source:

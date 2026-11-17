@@ -2,6 +2,7 @@ package io.lumnik.hub.search.mark;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.entity.EntityViewCompiler;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -89,6 +90,7 @@ class SearchProjectionBooleanMatchKeyParityIT {
                 + " USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::bigint)");
             st.execute("GRANT SELECT ON connector." + table + " TO lumnik_app");
         }
+        RegisteredTables.register(adminDs, tenant, table);
 
         String manifest = "kind: Entity\n"
             + "name: " + entityName + "\n"

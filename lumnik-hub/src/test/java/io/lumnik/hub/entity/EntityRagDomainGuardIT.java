@@ -1,5 +1,6 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
@@ -65,6 +66,7 @@ class EntityRagDomainGuardIT {
       st.execute("INSERT INTO connector.t_dg_src VALUES (7,'C-1','GOLD')");
       st.execute("DELETE FROM connector.entity_manifest WHERE name = 'dgcustomer'");
     }
+    RegisteredTables.register(adminDs, 7L, "t_dg_src");
     given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(7))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);

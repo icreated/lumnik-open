@@ -19,6 +19,7 @@ import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.hasKey;
+import static org.hamcrest.Matchers.not;
 
 /** The platform-family replay: addressed by delivery, tenant from context, never leaking another
  *  tenant's rows. The send targets an unroutable host on purpose — what is under test is the
@@ -210,6 +211,18 @@ class PlatformDeliveryReplayIT {
         assertThat(newestSucceeded("replay.probe.live"))
             .as("a replay that got a 200 back must not be recorded as a failure")
             .isTrue();
+    }
+
+    /** #2002: the replay answers the receiver's status, never its body, like the test door. */
+    @Test
+    void a_replay_answers_the_status_never_the_body() {
+        wm.stubFor(post("/live").willReturn(aResponse().withStatus(500).withBody("INTERNAL ANSWER")));
+        given().headers(TestIdentity.tenantAndUser(1))
+            .when().post("/api/platform/deliveries/" + idOf("replay.probe.live") + "/replay")
+            .then().statusCode(200)
+            .body("httpStatus", equalTo(500))
+            .body("error", equalTo("HTTP 500"))
+            .body("$", not(hasKey("responseBody")));
     }
 
     /** The correlation contract from #570: a replay must carry the SAME outbox event id as the

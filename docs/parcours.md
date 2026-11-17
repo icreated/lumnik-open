@@ -92,7 +92,7 @@ Read the [Home page](index.md): what lumnik is (a read-only defrost of legacy sy
 <div class="lm-kicker">30 min</div>
 <div class="lm-title">Deploy the hub</div>
 
-Decide what the hub carries — [The two editions](editions.md), [Choosing what your hub offers](choosing-what-your-hub-offers.md). Then follow [Deploy lumnik](deploy.md): `./deploy/selfhost/up.sh --build`. Your passwords are in the `.env` it writes, at the root of the clone.
+Decide what the hub carries — [The two editions](editions.md), [Choosing what your hub offers](choosing-what-your-hub-offers.md). Then follow [Deploy lumnik](deploy.md): `./deploy/selfhost/up.sh`. On an ARM Linux server, `./deploy/selfhost/up.sh --build`: the image is `linux/amd64` only. Your passwords are in the `.env` it writes, at the root of the clone.
 
 <p class="lm-check" markdown="span">**You know it worked when:** the script ends like this:</p>
 
@@ -100,8 +100,9 @@ Decide what the hub carries — [The two editions](editions.md), [Choosing what 
 ==> hub is healthy
   hubadmin: per-install password set (HUBADMIN_PASSWORD in .env)
   integrator: per-install password set (INTEGRATOR_PASSWORD in .env)
+  tenant_id and user_id: admin-only
 
-  Hub:       http://localhost:8080   (health: /q/health)
+  Hub:       http://localhost:8080   (health: ./deploy/selfhost/health.sh)
   Keycloak:  http://localhost:8180/realms/lumnik
   Next:      point lm at the hub — server http://localhost:8080, OIDC http://localhost:8180/realms/lumnik
 ```

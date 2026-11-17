@@ -1,5 +1,6 @@
 package io.lumnik.hub.validator.rest;
 
+import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec;
 import io.lumnik.hub.validator.common.PromoteEntries;
 import io.lumnik.hub.connector.rest.soap.SoapRequestBuilder;
 import io.lumnik.hub.validator.ConfigDef;
@@ -210,8 +211,8 @@ public final class EndpointsBlockValidator {
             .optional("kind", Type.STRING, Importance.LOW,
                 "Target kind (hybrid persists a hub table + RAG document)", "hybrid")
             .requireCustom("table", Type.STRING, Importance.HIGH,
-                "Hub table name (under ext.*) this endpoint writes to",
-                ConfigDefValidators.plainQualifiedIdentifier())
+                "Hub table this endpoint writes to: ext.<name>, or connector.<name> for an Entity to fuse",
+                v -> HybridJsonbSpec.targetProblem(v.asText()))
             .requireStringOrNested("unique_key", Importance.HIGH,
                 "JSONPath to the natural key used for upsert, e.g. $.id — or { path, transform } to transform it",
                 uniqueKeyDef())

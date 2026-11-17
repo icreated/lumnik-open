@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.ask.EntitySchemaBuilder;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
+import io.lumnik.hub.testsupport.SharedEntities;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
@@ -51,10 +52,11 @@ class EntityJoinResolutionIT {
   private Fx fixture(long tenant) throws Exception {
     String n = String.valueOf(System.nanoTime());
     String products = "t_jr_p_" + n, lookup = "t_jr_c_" + n, entity = "JoinResolution" + n;
-    createTable(adminDs, products, "pid text, cid text, pname text");
-    createTable(adminDs, lookup, "cid text, cname text");
+    createTable(adminDs, tenant, products, "pid text, cid text, pname text");
+    createTable(adminDs, tenant, lookup, "cid text, cname text");
     yaml(tenant).body(resolutionJoinEntityYaml(entity, products, lookup, JOINED))
         .post("/api/entities/apply").then().statusCode(200);
+    SharedEntities.share(entity);
     for (String[] r : new String[][] {{"P1", "C1"}, {"P2", "C1"}, {"P3", "C9"}, {"P4", "C2"}, {"P5", "C1"}}) {
       exec(adminDs, "INSERT INTO connector." + products + " (tenant_id, pid, cid, pname) VALUES ("
           + tenant + ", '" + r[0] + "', '" + r[1] + "', 'n" + r[0] + "')");
@@ -148,6 +150,6 @@ class EntityJoinResolutionIT {
   @Test
   void ask_advertises_the_joined_column_of_a_resolved_entity() throws Exception {
     fixture(850_104);
-    assertThat(String.valueOf(schemas.resolve("lk"))).contains(JOINED);
+    assertThat(String.valueOf(schemas.resolve(1L, "lk"))).contains(JOINED);
   }
 }

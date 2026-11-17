@@ -18,4 +18,4 @@ The files of the WOW demo: one Customer fused from a Siebel CRM over SOAP and a 
 | `commandes.csv` | Orders with dirty statuses, `EN LITIGE` undeclared. |
 | `commandes-connector.yaml` | `csv-file` connector over `commandes.csv`. |
 | `commande-workflow.yaml` | `kind: Workflow`: the declared order lifecycle. |
-| `docker-compose.wow.yml` | Overlay for the self-host stack: mounts this folder at `/demo`. |
+| `docker-compose.wow.yml` | Overlay for the self-host stack: mounts this folder at `<root>/1/demo`, in tenant `1`'s folder of the local root. |

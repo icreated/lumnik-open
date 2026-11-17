@@ -30,7 +30,7 @@ class SqlPromptTest {
     }
 
     /** The prompt on one line: the rules wrap, their words are what is pinned. */
-    private static String flat(String prompt) {
+    static String flat(String prompt) {
         return prompt.replaceAll("\\s+", " ");
     }
 
@@ -56,8 +56,8 @@ class SqlPromptTest {
     @Test
     void the_asker_decides_the_rule_not_the_models_paraphrase() {
         // the retry asks about the rewritten question; a containment the asker wrote keeps its rule through it
-        assertThat(AskToSqlAgent.sqlPrompt(CARD, "Quels documents parlent de Badu ?", true, false)).contains("Text containment");
-        assertThat(AskToSqlAgent.sqlPrompt(CARD, CONTAINS, false, false)).doesNotContain("Text containment");
+        assertThat(AskToSqlAgent.sqlPrompt(CARD, "Quels documents parlent de Badu ?", CONTAINS)).contains("Text containment");
+        assertThat(AskToSqlAgent.sqlPrompt(CARD, CONTAINS, CATEGORY)).doesNotContain("Text containment");
     }
 
     @Test
@@ -87,8 +87,8 @@ class SqlPromptTest {
     /** Switching the rule on adds exactly one block of text and moves nothing else. */
     @Test
     void the_rule_is_the_only_difference_between_the_two_prompts() {
-        String with = AskToSqlAgent.sqlPrompt(CARD, CATEGORY, true, false);
-        String without = AskToSqlAgent.sqlPrompt(CARD, CATEGORY, false, false);
+        String with = AskToSqlAgent.sqlPrompt(CARD, CATEGORY, CONTAINS);
+        String without = AskToSqlAgent.sqlPrompt(CARD, CATEGORY);
         int from = with.indexOf("- Text containment");
         int to = with.indexOf("- If the question cannot be answered");
         assertThat(from).isPositive();

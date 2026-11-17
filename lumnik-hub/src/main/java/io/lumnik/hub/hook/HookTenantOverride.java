@@ -24,7 +24,6 @@ public class HookTenantOverride {
     @Column(name = "enabled", nullable = false) private boolean enabled;
     @Column(name = "updated_at", nullable = false) private OffsetDateTime updatedAt = OffsetDateTime.now();
     @Column(name = "updated_by", nullable = false) private Long updatedBy = 0L;
-    @Column(name = "script_content") private String scriptContent;
 
     public HookTenantOverride(Long tenantId, String hookId, boolean enabled) {
         this.tenantId = tenantId; this.hookId = hookId; this.enabled = enabled;

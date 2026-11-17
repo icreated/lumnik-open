@@ -29,14 +29,25 @@ Generated queries run as `lumnik_readonly`: `SELECT` only, one statement, `LIMIT
 
 ## Before you expose the hub
 
-!!! danger "Two doors that answer without a login"
-    - **`/q/metrics`, `/q/openapi`, `/q/swagger-ui`** need no token, and `/q/metrics` names your
-      connectors. The [TLS proxy](../deploy.md#one-https-origin-the-tls-proxy) forwards them. On a
-      public address, block `/q/*` at your proxy or firewall.
+!!! danger "A door that answers without a login"
+    - **Health, metrics and the OpenAPI spec** answer without a token, on the hub's management
+      port, 9000. Nothing routes it: keep it so. Do not publish 9000, and do not give it a Service
+      or a route ([observability](../operations/observability.md)).
     - **A Helm install set to `auth.mode=dev-bypass`** (cloud edition): the hub checks no token,
       every caller is superadmin and picks any tenant. The chart defaults to `oidc` and renders
       dev-bypass only with `auth.iUnderstandNoAuth=true` as well. Never expose such a hub. The
       self-host stack (`up.sh`) always requires a login.
+    - **A hub you start yourself** (`docker run` of the image, whatever its profile) refuses to
+      start on a default this repository publishes. Only development mode keeps them, and the
+      test harness's `otkauth` profile keeps its database passwords. That covers dev-bypass without
+      `LUMNIK_SECURITY_I_UNDERSTAND_NO_AUTH=true`, the development `LUMNIK_CRYPTO_SECRET_KEY`, and a
+      database password left at its development value. `up.sh` and the Helm chart set all of them.
+
+**Response headers.** Every answer of the hub carries `X-Content-Type-Options: nosniff` and
+`Referrer-Policy: same-origin`. The PWA (`/app/`) also has a Content-Security-Policy: it runs only
+the hub's own scripts and cannot be framed by another site. It connects to the hub, and to
+Keycloak on port 8180 of the same host. HSTS is the [TLS proxy](../deploy.md#one-https-origin-the-tls-proxy)'s,
+on request.
 
 ## The trust boundaries
 
@@ -321,8 +332,9 @@ Collect these for your risk register.
 
 **Capacity & recovery**
 
-- Rate limiting is in-memory: N replicas means up to N× the configured limit. SCIM is not
-  rate-limited; its bearer is 256 bits of randomness.
+- Rate limiting is in-memory: N replicas means up to N× the configured limit.
+- The limits count authenticated calls only. A burst of bad tokens gets `401`, never `429`.
+  Throttle failed logins at your proxy (Caddy `rate_limit`, your gateway's policy).
 - A dump at your cron interval, no point-in-time recovery: the RPO is that interval.
 - Changing the hub's public origin re-keys every JIT identity: pick it once, early.
   [Keep the same public address](byo-idp.md#keep-the-same-public-address)

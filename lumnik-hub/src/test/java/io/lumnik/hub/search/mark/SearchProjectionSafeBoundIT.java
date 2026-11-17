@@ -60,7 +60,7 @@ class SearchProjectionSafeBoundIT {
         long tenant = 730_401;
         String match = "AsOfMatch" + System.nanoTime();
         String table = "t_asof_match_" + System.nanoTime();
-        createMatchSourceTable(adminDs, table);
+        createMatchSourceTable(adminDs, tenant, table);
         yaml(tenant).body(entityManifest(match, table, List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
 

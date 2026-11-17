@@ -62,6 +62,7 @@ public class MappingState {
   /** Per cell-hook declaration ({@code cell[<index>]}), the values it carries to the following rows (#1452). */
   private final Map<String, Map<String, Object>> carry = new LinkedHashMap<>();
   private int cellHook = -1;
+  private String cellRefusal;
 
   public AggregatorState aggregator(String key) {
     return aggregators.computeIfAbsent(key, k -> new AggregatorState());
@@ -95,9 +96,32 @@ public class MappingState {
     return dropped;
   }
 
-  /** Called by the engine before each cell hook: whose carried values {@link #carry()} answers (#1452). */
+  /**
+   * A cell hook that could not deliver its cell and knows why (#1968): counts the cell error and keeps the reason for
+   * the dead letter. The reason speaks about structure ({@code not degrees}), never about the value.
+   */
+  public void refuseCell(String reason) {
+    counters.cellErrors().incrementAndGet();
+    if (cellRefusal == null) cellRefusal = reason;   // a hook that refuses twice in one call: the first reason stays
+  }
+
+  /** A cell hook that could not deliver its cell and has one cause only, which its name already says (#1971). */
+  public void refuseCell() {
+    refuseCell(null);
+  }
+
+  /** The reason the running cell hook gave for refusing its cell, or {@code null}: it gave none, or refused nothing. */
+  public String cellRefusal() {
+    return cellRefusal;
+  }
+
+  /**
+   * Called by the engine before each cell hook: whose carried values {@link #carry()} answers (#1452). A reason never
+   * outlives its hook (#1968).
+   */
   public void atCellHook(int index) {
     this.cellHook = index;
+    this.cellRefusal = null;
   }
 
   /**

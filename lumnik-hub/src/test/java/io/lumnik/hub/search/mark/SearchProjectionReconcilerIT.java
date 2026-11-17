@@ -90,7 +90,7 @@ class SearchProjectionReconcilerIT {
         long tenant = 701_601;
         String entityName = "SearchRecon701A" + System.nanoTime();
         String table = "t_search_recon_701a_" + System.nanoTime();
-        createMatchSourceTable(adminDs, table);
+        createMatchSourceTable(adminDs, tenant, table);
 
         yaml(tenant).body(entityManifest(entityName, table, List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
@@ -124,7 +124,7 @@ class SearchProjectionReconcilerIT {
         long tenant = 701_602;
         String entityName = "SearchRecon701B" + System.nanoTime();
         String table = "t_search_recon_701b_" + System.nanoTime();
-        createMatchSourceTable(adminDs, table);
+        createMatchSourceTable(adminDs, tenant, table);
 
         yaml(tenant).body(entityManifest(entityName, table, List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
@@ -161,7 +161,7 @@ class SearchProjectionReconcilerIT {
         long tenant = 701_603;
         String entityName = "SearchRecon701C" + System.nanoTime();
         String table = "t_search_recon_701c_" + System.nanoTime();
-        createMatchSourceTable(adminDs, table);
+        createMatchSourceTable(adminDs, tenant, table);
 
         yaml(tenant).body(entityManifest(entityName, table, List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
@@ -192,7 +192,7 @@ class SearchProjectionReconcilerIT {
         long tenant = 701_604;
         String entityName = "SearchRecon701D" + System.nanoTime();
         String table = "t_search_recon_701d_" + System.nanoTime();
-        createMatchSourceTable(adminDs, table);
+        createMatchSourceTable(adminDs, tenant, table);
 
         yaml(tenant).body(entityManifest(entityName, table, List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
@@ -229,8 +229,8 @@ class SearchProjectionReconcilerIT {
         long tenant = 847_501;
         String n = String.valueOf(System.nanoTime());
         String products = "t_recon_lk_p_" + n, lookup = "t_recon_lk_c_" + n;
-        createTable(adminDs, products, "pid text, cid text, pname text");
-        createTable(adminDs, lookup, "cid text, cname text");
+        createTable(adminDs, tenant, products, "pid text, cid text, pname text");
+        createTable(adminDs, tenant, lookup, "cid text, cname text");
         String entity = "ReconLookup" + n;
         yaml(tenant).body(joinEntityYaml(entity, products, lookup, "category_name"))
             .post("/api/entities/apply").then().statusCode(200);
@@ -257,8 +257,8 @@ class SearchProjectionReconcilerIT {
         long tenant = 850_601;
         String n = String.valueOf(System.nanoTime());
         String products = "t_rr_p_" + n, lookup = "t_rr_c_" + n, entity = "ResSweep" + n;
-        createTable(adminDs, products, "pid text, cid text, pname text");
-        createTable(adminDs, lookup, "cid text, cname text");
+        createTable(adminDs, tenant, products, "pid text, cid text, pname text");
+        createTable(adminDs, tenant, lookup, "cid text, cname text");
         yaml(tenant).body(resolutionJoinEntityYaml(entity, products, lookup, "category_name"))
             .post("/api/entities/apply").then().statusCode(200);
         String index = unique("res-sweep");

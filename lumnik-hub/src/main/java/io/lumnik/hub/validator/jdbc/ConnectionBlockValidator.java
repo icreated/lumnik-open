@@ -16,7 +16,7 @@ public final class ConnectionBlockValidator {
                 ConfigDefValidators.matchesRegex("^jdbc:[a-z0-9]+:.*$", "jdbc:<dialect>:..."))
             .require("user", Type.STRING, Importance.HIGH, "DB user")
             .require("password_env", Type.STRING, Importance.HIGH,
-                "Name of the DB password: a hub environment variable, else an lm secret")
+                "lm secret name of the DB password")
             .optional("dialect", Type.STRING, Importance.LOW,
                 "JDBC dialect (inferred from url scheme if absent)", null)
             .optionalCustom("zone", Type.STRING, Importance.LOW,

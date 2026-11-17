@@ -6,8 +6,11 @@ import io.lumnik.jdbc.spi.FkDescriptor;
 import io.lumnik.jdbc.spi.JdbcDialect;
 import io.lumnik.jdbc.spi.KeyComparison;
 import jakarta.enterprise.context.ApplicationScoped;
+import org.postgresql.Driver;
+import org.postgresql.PGProperty;
 
 import java.sql.*;
+import java.time.Duration;
 import java.util.*;
 import java.util.stream.IntStream;
 
@@ -34,6 +37,49 @@ public class PostgresDialect implements JdbcDialect {
 
   @Override
   public String driverClass() { return "org.postgresql.Driver"; }
+
+  /**
+   * Read by pgjdbc itself ({@link Driver#parseURL}), so the hosts judged are the ones it connects to: several in a
+   * failover URL, {@code localhost} when the URL names none. A {@code socketFactory} of the URL's choice could connect
+   * anywhere the hosts do not say, and a {@code service} is resolved from the hub's own files: both are refused.
+   */
+  @Override
+  public List<String> connectHosts(String url) {
+    // A service is read from the hub's own pg_service.conf — its host, its settings: the hub's files, not the URL
+    // (#2000). Read off the URL itself: the driver resolves it while parsing and drops the name.
+    if (url != null && url.indexOf('?') >= 0
+        && Arrays.stream(url.substring(url.indexOf('?') + 1).split("&"))
+            .anyMatch(pair -> pair.split("=", 2)[0].equals(PGProperty.SERVICE.getName()))) {
+      throw new IllegalArgumentException("it names a service, which the hub's own files would resolve");
+    }
+    Properties read;
+    try {
+      // A password in the defaults: without one, the parser reads the hub's ~/.pgpass, only to find the hosts.
+      Properties defaults = new Properties();
+      defaults.setProperty(PGProperty.PASSWORD.getName(), "");
+      read = Driver.parseURL(url, defaults);
+    } catch (RuntimeException driversOwn) {   // its message may quote the URL: a reason of ours instead
+      throw new IllegalArgumentException("the driver does not read it");
+    }
+    if (read == null) throw new IllegalArgumentException("the driver does not read it");
+    if (read.getProperty(PGProperty.SOCKET_FACTORY.getName()) != null) {
+      throw new IllegalArgumentException("it names its own socketFactory");
+    }
+
+    String hosts = read.getProperty(PGProperty.PG_HOST.getName());
+    if (hosts == null || hosts.isBlank()) throw new IllegalArgumentException("it names no host");
+    return List.of(hosts.split(","));
+  }
+
+  /** pgjdbc's own properties, in seconds: {@code connectTimeout}, {@code loginTimeout}, {@code socketTimeout}. */
+  @Override
+  public Map<String, String> timeoutProperties(Duration connect, Optional<Duration> read) {
+    Map<String, String> p = new HashMap<>();
+    p.put(PGProperty.CONNECT_TIMEOUT.getName(), String.valueOf(connect.toSeconds()));
+    p.put(PGProperty.LOGIN_TIMEOUT.getName(), String.valueOf(connect.toSeconds()));
+    read.ifPresent(r -> p.put(PGProperty.SOCKET_TIMEOUT.getName(), String.valueOf(r.toSeconds())));
+    return p;
+  }
 
   @Override
   public List<String> defaultSkipPatterns() {

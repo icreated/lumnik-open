@@ -31,6 +31,7 @@ make otk
 | `LUMNIK_TOKEN` | No | `dev-token` | Bearer token for the functional lanes when the hub is in **dev-mode**. Ignored under real-auth (the harness mints its own JWT). |
 | `OTK_DB_DSN` | No | — | PostgreSQL DSN for the non-owner app role. Enables the schema-diff, API/DB-divergence, and run-conservation checks. Without it those families are **DORMANT** (logged, not failed). |
 | `OTK_DB_ADMIN_DSN` | No | `OTK_DB_DSN` | DSN for the BYPASSRLS admin role (teardown of dynamic tables). |
+| `LUMNIK_CSV_LOCAL_ROOT` | For the **run lane** (with `OTK_DB_DSN`) | — | The hub's local root, the same value the hub boots with. The run lane writes each source in `<root>/1/otk/run/<seed>/`; unset, the run lane fails its precondition. |
 | `OTK_OIDC_ISSUER` | For the **auth lane** | — | When set, the harness runs in **real-auth** mode: it mints a valid integrator JWT for the functional lanes and adversarial tokens for the auth lane. The hub must boot on the `%otkauth` profile trusting the matching public key. Without it the auth lane is **DORMANT**. |
 | `OTK_OIDC_AUDIENCE` | No | `lumnik-backend` | The `aud` the minted tokens carry (must match `%otkauth`). |
 | `OTK_KEY_FILE` | With `OTK_OIDC_ISSUER` | — | Path to the **shared** private-key PEM (written by `cmd/otkkey`) so the harness signs with the exact key the hub verifies. Absent → an ephemeral key is generated **and a warning is logged** (it will not match an external hub). |
@@ -210,6 +211,7 @@ The battery hub boots on the `%otkauth` profile (dev-bypass off, keyless OIDC tr
 cd lm/
 mkdir -p /tmp/otk
 export OTK_KEY_FILE=/tmp/otk/otkkey.pem
+export LUMNIK_CSV_LOCAL_ROOT=/tmp/otk/drop   # read by the hub and by the run lane
 export OTK_OIDC_ISSUER="https://otk.local/issuer"
 export OTK_OIDC_AUDIENCE="lumnik-backend"
 PUB=$(go run -tags otk ./test/otk/cmd/otkkey)   # writes the private key to OTK_KEY_FILE

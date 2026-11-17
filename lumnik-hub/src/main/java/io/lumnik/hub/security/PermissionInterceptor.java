@@ -27,18 +27,26 @@ public class PermissionInterceptor {
     Object check(InvocationContext ctx) throws Exception {
         if (devBypass) return ctx.proceed();
 
-        RequiresPermission ann = ctx.getMethod().getAnnotation(RequiresPermission.class);
-        if (ann == null) ann = ctx.getTarget().getClass().getAnnotation(RequiresPermission.class);
+        RequiresPermission ann = gateOf(ctx);
         if (ann == null || ann.value().length == 0) return ctx.proceed();
 
         Set<String> userRoles = TenantContextFilter.currentRoles();
-        boolean allowed = Arrays.stream(ann.value()).anyMatch(userRoles::contains);
-
-        if (!allowed) {
+        if (!allows(ann, userRoles)) {
             LOG.warnf("Access denied: required=%s, actual=%s, method=%s",
                 Arrays.toString(ann.value()), userRoles, ctx.getMethod().getName());
             throw new ForbiddenException("Insufficient permissions");
         }
         return ctx.proceed();
+    }
+
+    /** The gate of the door {@code ctx} calls: its method's, else its class's. */
+    public static RequiresPermission gateOf(InvocationContext ctx) {
+        RequiresPermission ann = ctx.getMethod().getAnnotation(RequiresPermission.class);
+        return ann != null ? ann : ctx.getTarget().getClass().getAnnotation(RequiresPermission.class);
+    }
+
+    /** Whether {@code roles} pass {@code gate}: no gate, or an empty one, is everyone's; otherwise any one of its roles. */
+    public static boolean allows(RequiresPermission gate, Set<String> roles) {
+        return gate == null || gate.value().length == 0 || Arrays.stream(gate.value()).anyMatch(roles::contains);
     }
 }

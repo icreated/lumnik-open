@@ -2,6 +2,7 @@ package io.lumnik.hub.api.run;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
+import io.lumnik.hub.connector.runtime.ConnectorRunDispatcher;
 import io.lumnik.hub.event.consumer.SchedulerPausedProfile;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -17,11 +18,12 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,6 +41,8 @@ import static org.hamcrest.Matchers.equalTo;
 class RunCancelQueuedIT {
 
     private static final long TENANT = 1L;
+    /** The longest a test waits for the cancel's answer: the door's bounded wait, and slack for a loaded suite. */
+    private static final Duration ANSWER = ConnectorRunDispatcher.QUEUED_CANCEL_ROW_WAIT.plusSeconds(25);
 
     @Inject @DataSource("admin") AgroalDataSource adminDs;
     @Inject MeterRegistry registry;
@@ -119,44 +123,35 @@ class RunCancelQueuedIT {
 
         try (Connection holder = adminDs.getConnection()) {
             holder.setAutoCommit(false);
-            int holderPid;
-            try (PreparedStatement pid = holder.prepareStatement("SELECT pg_backend_pid()");
-                 ResultSet rs = pid.executeQuery()) {
-                rs.next();
-                holderPid = rs.getInt(1);
-            }
-            try (PreparedStatement lock = holder.prepareStatement(
-                    "SELECT id FROM connector.connector_run WHERE id = ? FOR UPDATE")) {
-                lock.setObject(1, run);
-                try (ResultSet locked = lock.executeQuery()) {
-                    assertThat(locked.next()).as("the dispatcher's row lock found the queued run").isTrue();
+            CompletableFuture<Response> cancel = null;
+            try {
+                lockRow(holder, "connector.connector_run", run);
+                cancel = sendCancel(run);
+                awaitQueuedBehind(holder, cancel);
+                try (PreparedStatement start = holder.prepareStatement(
+                        "UPDATE connector.connector_run SET status = 'Running', started_at = now() WHERE id = ?")) {
+                    start.setObject(1, run);
+                    start.executeUpdate();
+                }
+                holder.commit();
+
+                answer(cancel).then().statusCode(409).body("error", equalTo("run " + run + " is not in flight on this hub"));
+            } finally {
+                try {
+                    holder.rollback();
+                } finally {
+                    settle(cancel);
                 }
             }
-            CompletableFuture<Response> cancel = CompletableFuture.supplyAsync(() ->
-                given().headers(TestIdentity.tenantAndUser(TENANT))
-                    .when().post("/api/platform/runs/" + run + "/cancel"));
-
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-            while (waitersOn(holderPid) < 1) {
-                assertThat(System.nanoTime()).as("the cancel never reached the row lock").isLessThan(deadline);
-                Thread.sleep(50);
-            }
-            try (PreparedStatement start = holder.prepareStatement(
-                    "UPDATE connector.connector_run SET status = 'Running', started_at = now() WHERE id = ?")) {
-                start.setObject(1, run);
-                start.executeUpdate();
-            }
-            holder.commit();
-
-            var response = cancel.get(30, TimeUnit.SECONDS);
-            assertThat(response.statusCode()).isEqualTo(409);
-            assertThat(response.jsonPath().getString("error")).isEqualTo("run " + run + " is not in flight on this hub");
         }
         assertThat(status(run)).isEqualTo("Running");
     }
 
-    /** Backends queued behind the lock {@code holderPid} holds: keyed to the lock itself, not to query text. */
-    /** A dispatcher that holds the row for longer than the cancel will wait: 409 "being started", the row untouched. */
+    /**
+     * A dispatcher that holds the row for longer than the cancel will wait: 409 "being started", the row untouched.
+     * The holder keeps the row until the cancel has answered (#2024): the door's own bounded wait decides, no clock of
+     * the test's. An unbounded door never answers, and the RED is the bounded {@link #answer}.
+     */
     @Test
     void a_cancel_that_cannot_get_the_row_in_time_is_told_the_run_is_being_started() throws Exception {
         seedEndpoint(TENANT);
@@ -164,30 +159,30 @@ class RunCancelQueuedIT {
 
         try (Connection holder = adminDs.getConnection()) {
             holder.setAutoCommit(false);
-            try (PreparedStatement lock = holder.prepareStatement("SELECT id FROM connector.connector_run WHERE id = ? FOR UPDATE")) {
-                lock.setObject(1, run);
-                try (ResultSet locked = lock.executeQuery()) {
-                    assertThat(locked.next()).isTrue();
-                }
-            }
-            // Released from outside after 7 s: longer than the 5 s the cancel waits, so a correct door has answered by
-            // then; an unbounded one is freed by this and answers 202, so the RED is a finite assertion failure.
-            ScheduledExecutorService releaser = Executors.newSingleThreadScheduledExecutor();
-            releaser.schedule(() -> { try { holder.rollback(); } catch (SQLException ignored) { } }, 7, TimeUnit.SECONDS);
+            CompletableFuture<Response> cancel = null;
             try {
-                given().headers(TestIdentity.tenantAndUser(TENANT))
-                    .when().post("/api/platform/runs/" + run + "/cancel")
-                    .then().statusCode(409).body("error", containsString("being started"));
+                lockRow(holder, "connector.connector_run", run);
+                cancel = sendCancel(run);
+                awaitQueuedBehind(holder, cancel);
+
+                answer(cancel).then().statusCode(409).body("error", containsString("being started"));
             } finally {
-                releaser.shutdown();
-                releaser.awaitTermination(15, TimeUnit.SECONDS);
+                try {
+                    holder.rollback();
+                } finally {
+                    settle(cancel);
+                }
             }
         }
 
         assertThat(status(run)).isEqualTo("Queued");
     }
 
-    /** The five-second bound is for the dispatcher's row only: an endpoint row busy for longer is waited out, not reported as "being started". */
+    /**
+     * The door's bounded wait is for the dispatcher's row only: an endpoint row busy for longer is waited out, not
+     * reported as "being started". The hold is counted from a moment the cancel is already seen waiting (#2024), so it
+     * outlasts that bound on the endpoint row whatever the load.
+     */
     @Test
     void a_busy_endpoint_row_delays_the_cancel_but_does_not_turn_it_into_a_being_started_409() throws Exception {
         seedEndpoint(TENANT);
@@ -195,29 +190,81 @@ class RunCancelQueuedIT {
 
         try (Connection holder = adminDs.getConnection()) {
             holder.setAutoCommit(false);
-            try (PreparedStatement lock = holder.prepareStatement("SELECT id FROM connector.connector_endpoint WHERE id = ? FOR UPDATE")) {
-                lock.setObject(1, endpointId);
-                try (ResultSet locked = lock.executeQuery()) {
-                    assertThat(locked.next()).isTrue();
-                }
-            }
-            ScheduledExecutorService releaser = Executors.newSingleThreadScheduledExecutor();
-            releaser.schedule(() -> { try { holder.rollback(); } catch (SQLException ignored) { } }, 7, TimeUnit.SECONDS);
+            CompletableFuture<Response> cancel = null;
             try {
-                given().headers(TestIdentity.tenantAndUser(TENANT))
-                    .when().post("/api/platform/runs/" + run + "/cancel")
-                    .then().statusCode(202).body("status", equalTo("cancelled"));
+                lockRow(holder, "connector.connector_endpoint", endpointId);
+                cancel = sendCancel(run);
+                awaitQueuedBehind(holder, cancel);
+
+                Thread.sleep(ConnectorRunDispatcher.QUEUED_CANCEL_ROW_WAIT.plusSeconds(2).toMillis());
+                assertThat(waitersOn(holder)).as("the cancel gave up on the endpoint row instead of waiting it out")
+                    .isEqualTo(1);
+                holder.rollback();
+
+                answer(cancel).then().statusCode(202).body("status", equalTo("cancelled"));
             } finally {
-                releaser.shutdown();
-                releaser.awaitTermination(15, TimeUnit.SECONDS);
+                try {
+                    holder.rollback();
+                } finally {
+                    settle(cancel);
+                }
             }
         }
 
         assertThat(status(run)).isEqualTo("Cancelled");
     }
 
-    private long waitersOn(int holderPid) {
-        return Jdbc.queryOne(adminDs, "waiters", "SELECT count(*) FROM pg_stat_activity WHERE ? = ANY(pg_blocking_pids(pid))",
-            ps -> ps.setInt(1, holderPid), rs -> rs.getLong(1)).orElse(0L);
+    /** {@code SELECT … FOR UPDATE} on one row of {@code table}, held by {@code conn}'s open transaction. */
+    private static void lockRow(Connection conn, String table, UUID id) throws SQLException {
+        try (PreparedStatement lock = conn.prepareStatement("SELECT id FROM " + table + " WHERE id = ? FOR UPDATE")) {
+            lock.setObject(1, id);
+            try (ResultSet locked = lock.executeQuery()) {
+                assertThat(locked.next()).as("the holder's row lock found its row in " + table).isTrue();
+            }
+        }
+    }
+
+    private static CompletableFuture<Response> sendCancel(UUID run) {
+        return CompletableFuture.supplyAsync(() ->
+            given().headers(TestIdentity.tenantAndUser(TENANT)).when().post("/api/platform/runs/" + run + "/cancel"));
+    }
+
+    /** Until the cancel is queued behind {@code holder}'s lock; it must not answer before getting there. */
+    private static void awaitQueuedBehind(Connection holder, CompletableFuture<Response> cancel) throws InterruptedException {
+        long deadline = System.nanoTime() + ANSWER.toNanos();
+        while (waitersOn(holder) < 1) {
+            if (cancel.isDone()) {   // join() rethrows a request that failed, with its own cause
+                throw new AssertionError("the cancel answered before it reached the row lock: " + cancel.join().statusCode());
+            }
+            assertThat(System.nanoTime()).as("the cancel never reached the row lock").isLessThan(deadline);
+            Thread.sleep(50);
+        }
+    }
+
+    /** The cancel's answer, within the door's bounded wait and slack for a loaded suite. */
+    private static Response answer(CompletableFuture<Response> cancel) throws Exception {
+        return cancel.get(ANSWER.toMillis(), TimeUnit.MILLISECONDS);
+    }
+
+    /** After a failure, lets a cancel still in flight end before the clean-up deletes its rows; the test reports it. */
+    private static void settle(CompletableFuture<Response> cancel) {
+        if (cancel == null) return;
+        try {
+            cancel.get(ANSWER.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (ExecutionException | TimeoutException ignored) {
+            // the test's own assertion already says what went wrong
+        }
+    }
+
+    /**
+     * Backends queued behind a lock {@code holder} holds, asked on the holder itself. {@code pg_locks}, not
+     * {@code pg_stat_activity}: inside the holder's open transaction the latter is a snapshot taken at its first read,
+     * blind to a backend that connects later.
+     */
+    private static long waitersOn(Connection holder) {
+        return Jdbc.queryOne(holder, "waiters", "SELECT count(DISTINCT pid) FROM pg_locks "
+            + "WHERE NOT granted AND pg_backend_pid() = ANY(pg_blocking_pids(pid))", ps -> {}, rs -> rs.getLong(1)).orElse(0L);
     }
 }

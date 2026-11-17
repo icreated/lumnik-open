@@ -6,8 +6,12 @@ import io.lumnik.common.security.ScopeGrants;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.ApplyDoorSupport;
 import io.lumnik.hub.api.ApplyScopeBoundary;
+import io.lumnik.hub.api.DeploymentWide;
+import io.lumnik.hub.api.ScopeGuardedUpsert;
 import io.lumnik.hub.audit.AuditRecorder;
 import io.lumnik.hub.manifest.ModuleManifestRegistry;
+import io.lumnik.hub.tenant.ManifestOwner;
+import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.hub.validator.ValidationError;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -32,6 +36,7 @@ import java.util.Set;
  * manifest DECLARES, the scope of the row the name would overwrite, and the scope of the row that
  * loses the default flag when this one takes it.
  */
+@DeploymentWide
 @Path("/api/apps/apply")
 @Produces(MediaType.APPLICATION_JSON)
 @RequiresPermission("lm_integrator")
@@ -58,6 +63,7 @@ public class AppApplyResource {
     @POST
     @Consumes({"application/yaml", "text/yaml", MediaType.APPLICATION_JSON})
     public Response apply(String body) {
+        long tenant = RequireTenant.current();
         JsonNode root = ApiErrors.orBadRequest(() -> parser.readTree(body));
         AppManifest manifest = ApiErrors.orBadRequest(() -> parser.parse(root));
 
@@ -91,27 +97,29 @@ public class AppApplyResource {
         // statement itself, and the NameHeldOutOfScope refusal further down is that second answer.
         // Belt AND braces on purpose: the ordered check is what a reader (and
         // ScopeBoundaryInventoryTest) finds here, the predicate is what survives a race.
-        ApplyScopeBoundary.refuseUnlessCallerHoldsScope(store.findScope(name));
+        ApplyScopeBoundary.refuseUnlessCallerHoldsScope(store.findScope(tenant, name));
 
-        // At most one default is the partial unique index's job; at LEAST one is this door's.
+        // At most one default per owner is the partial unique index's job; at LEAST one is this door's, for the
+        // shared default only: a tenant's own default can go, its tenant falls back on the shared one.
         // `default:` is an ordinary field, so re-applying the current default with `default: false`
         // would leave an absent ?m= resolving to nothing — the very gap #571 exists to close,
         // reopened from the other side. Promoting a replacement is always a single call (it
         // demotes this one automatically); demoting without one never is.
         //
-        // ORDERED, like the two scope checks around it, and porous the same way: findDefaultName
+        // ORDERED, like the two scope checks around it, and porous the same way: findOwnDefaultName
         // reads on its own autocommit connection, and this name is not the default at THAT instant
         // — but a concurrent apply can promote it before the conflict arm runs, which would then
         // clear the flag it just took. The store re-asks the same question inside the insert
         // statement itself, and the LastDefaultWouldBeRemoved refusal further down is that second
         // answer, speaking these very words. Belt AND braces on purpose: the ordered check is what
         // a reader finds in the door, the predicate is what survives a race.
-        if (!manifest.isDefault() && store.findDefaultName().filter(name::equals).isPresent()) {
+        if (!manifest.isDefault() && ManifestOwner.fromTheHub(tenant)
+            && store.findOwnDefaultName(tenant).filter(name::equals).isPresent()) {
             return ApiErrors.badRequest(LAST_DEFAULT_REFUSAL);
         }
 
         // …and the DEFAULT FLAG is a third address this apply writes to, unique to kind:App — no
-        // other manifest kind has a deployment-global singleton. Taking the flag demotes whoever
+        // other manifest kind has a singleton per owner. Taking the flag demotes whoever
         // holds it, so a caller bound to one scope could silently rewrite a row in a scope they
         // cannot even READ. Same question, same frozen words as the two checks above.
         //
@@ -127,9 +135,9 @@ public class AppApplyResource {
         // Belt AND braces on purpose: the ordered check is what a reader (and
         // ScopeBoundaryInventoryTest) finds here, the predicate is what survives a race.
         if (manifest.isDefault()) {
-            Optional<String> holder = store.findDefaultName().filter(d -> !d.equals(name));
+            Optional<String> holder = store.findOwnDefaultName(tenant).filter(d -> !d.equals(name));
             if (holder.isPresent()) {
-                ApplyScopeBoundary.refuseUnlessCallerHoldsScope(store.findScope(holder.get()));
+                ApplyScopeBoundary.refuseUnlessCallerHoldsScope(store.findScope(tenant, holder.get()));
             }
         }
 
@@ -139,7 +147,7 @@ public class AppApplyResource {
         // granted().orElse(null) — empty Optional means unscoped, i.e. every scope, the same
         // expression AppRegistryResource.list() reads its filter from.
         AppRegistrationStore.Upserted outcome =
-            store.upsert(stored, body, ScopeGrants.granted().orElse(null));
+            store.upsert(tenant, stored, body, ScopeGrants.granted().orElse(null));
         // A sealed outcome, so the demoted name cannot be read without naming every refusal too.
         // They THROW rather than returning, the ApplyScopeBoundary idiom: these arms are refusals
         // and a refusal that can be dropped on the floor is not one.
@@ -160,6 +168,8 @@ public class AppApplyResource {
                 throw new WebApplicationException(ApiErrors.scopeNotGranted());
             case AppRegistrationStore.Upserted.NameHeldOutOfScope ignored ->
                 throw new WebApplicationException(ApiErrors.scopeNotGranted());
+            case AppRegistrationStore.Upserted.NameTaken ignored ->
+                throw new WebApplicationException(ApiErrors.conflict(ScopeGuardedUpsert.NAME_TAKEN));
             case AppRegistrationStore.Upserted.LastDefaultWouldBeRemoved ignored ->
                 throw new WebApplicationException(ApiErrors.badRequest(LAST_DEFAULT_REFUSAL));
         };

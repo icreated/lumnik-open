@@ -1,6 +1,7 @@
 package io.lumnik.hub.auth;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.hub.connector.transport.TestDirFileSourceFactory;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
@@ -235,7 +236,7 @@ class ConnectorDataDoorsScopeIT {
     as().multiPart("file", csv).multiPart("name", n).multiPart("scope", "magasin")
         .post("/api/platform/sources/csv/ingest").then().statusCode(200);
 
-    refused(as("catalogue").multiPart("transport", "{\"kind\":\"local\",\"path\":\"" + csv.getAbsolutePath() + "\"}")
+    refused(as("catalogue").multiPart("transport", "{\"kind\":\"" + TestDirFileSourceFactory.KIND + "\",\"path\":\"" + csv.getAbsolutePath() + "\"}")
         .multiPart("name", n).multiPart("scope", "catalogue").post("/api/platform/sources/csv/ingest"));
     assertThat(tagsOf(n)).isEqualTo("magasin");
   }

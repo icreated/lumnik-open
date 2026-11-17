@@ -50,7 +50,7 @@ class HookCatalogTest {
           + "|collect, dedup, into, sep",
       "ROW|map-columns|{\"renmae\": {\"a\": \"b\"}}|renmae|drop, rename",
       "ROW|split-row|{\"by\": \"c\", \"separator\": \";\"}|separator|by, escape, explode, position, sep",
-      "DATASET|sort-by|{\"columns\": [\"a\"], \"max_rows\": 10}|max_rows|columns, max-rows",
+      "DATASET|sort-by|{\"columns\": [\"a\"], \"max_rows\": 10}|max_rows|columns",
       "DATASET|filter-where|{\"column\": \"c\", \"equal\": \"x\"}|equal|column, equals, in, regex"})
   void a_key_the_hook_does_not_read_is_refused_by_name(Tier tier, String hook, String params, String key,
                                                       String accepted) throws Exception {
@@ -117,7 +117,7 @@ class HookCatalogTest {
         Map.entry("dataset/filter-where", Set.of("column", "equals", "regex", "in")),
         Map.entry("dataset/require-headers", Set.of("columns", "any-of")),
         Map.entry("dataset/skip-empty-rows", Set.of()),
-        Map.entry("dataset/sort-by", Set.of("columns", "max-rows")),
+        Map.entry("dataset/sort-by", Set.of("columns")),
         Map.entry("dataset/test-add-marker", Set.of()),
         // row
         Map.entry("row/aggregator", Set.of("emit-on-change", "keep-first", "merge")),
@@ -140,6 +140,7 @@ class HookCatalogTest {
         Map.entry("cell/parse-date", Set.of("column", "formats", "zone", "century-from")),
         Map.entry("cell/parse-email", Set.of("column", "lower")),
         Map.entry("cell/parse-boolean", Set.of("column", "true", "false")),
+        Map.entry("cell/parse-coordinates", Set.of("lat", "lon", "within", "swapped", "reason")),
         Map.entry("cell/parse-number", Set.of("column", "integer", "decimal-separator", "negatives-in-parens")),
         Map.entry("cell/parse-phone", Set.of("column", "default-region")),
         Map.entry("cell/regex-extract", Set.of("column", "pattern", "groups", "required")),
@@ -234,6 +235,7 @@ class HookCatalogTest {
       "CELL|parse-date|{\"column\":\"c\"}|[read column:c] unknown=false",
       "CELL|parse-email|{\"column\":\"c\"}|[read column:c] unknown=false",
       "CELL|parse-boolean|{\"column\":\"c\"}|[read column:c] unknown=false",
+      "CELL|parse-coordinates|{\"lat\":\"la\",\"lon\":\"lo\",\"reason\":\"why\"}|[read lat:la, read lon:lo, add why] unknown=false",
       "CELL|parse-number|{\"column\":\"c\"}|[read column:c] unknown=false",
       "CELL|parse-phone|{\"column\":\"c\"}|[read column:c] unknown=false",
       "CELL|regex-replace|{\"column\":\"c\"}|[read column:c] unknown=false",

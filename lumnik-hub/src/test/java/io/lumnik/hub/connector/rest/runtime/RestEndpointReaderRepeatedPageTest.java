@@ -42,7 +42,7 @@ class RestEndpointReaderRepeatedPageTest {
 
     private RestEndpointReader reader(PaginationFactory pag) {
         return new RestEndpointReader(endpoint, new RestEndpointReaderChunkingTest.PassThroughAuth(), pag,
-            new RateLimiterRegistry(), http, new ObjectMapper(), SecretRefs.environmentOnly(name -> null));
+            new RateLimiterRegistry(), http, new ObjectMapper(), SecretRefs.of(name -> null));
     }
 
     private static ConnectorContext ctx() {

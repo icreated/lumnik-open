@@ -74,7 +74,7 @@ class CsvCheckpointFallbackMatrixTest {
   @Test
   void fast_path_cursor_carries_the_checkpoint_payload(@TempDir Path tmp) throws Exception {
     Path file = sixRows(tmp);
-    var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), DEFAULTS);
+    var reader = GlobReaders.of(file.toString(), DEFAULTS);
     var r = reader.read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
     var node = ((ReadResult.HasMore<?>) r).nextCursor().value();
     assertThat(node.get("type").asText()).isEqualTo("CsvFile");
@@ -90,7 +90,7 @@ class CsvCheckpointFallbackMatrixTest {
   @Test
   void legacy_two_field_cursor_takes_the_fallback_and_loses_no_rows(@TempDir Path tmp) throws Exception {
     Path file = sixRows(tmp);
-    var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), DEFAULTS);
+    var reader = GlobReaders.of(file.toString(), DEFAULTS);
     // Strip the cursor down to what a pre-lot-5b build would have written.
     List<Map<String, Object>> all = runWithCursorMutation(reader, 2, c -> editNode(c, n ->
         n.retain("type", "file", "rowsProcessed")));
@@ -113,7 +113,7 @@ class CsvCheckpointFallbackMatrixTest {
   @Test
   void mutated_version_token_falls_back_and_loses_no_rows(@TempDir Path tmp) throws Exception {
     Path file = sixRows(tmp);
-    var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), DEFAULTS);
+    var reader = GlobReaders.of(file.toString(), DEFAULTS);
     List<Map<String, Object>> all = runWithCursorMutation(reader, 2, c -> editNode(c, n ->
         ((ObjectNode) n.get("version")).put("size", n.get("version").get("size").asLong() + 1)));
     assertThat(ids(all)).containsExactly("1", "2", "3", "4", "5", "6");
@@ -122,7 +122,7 @@ class CsvCheckpointFallbackMatrixTest {
   @Test
   void forged_anchor_beyond_eof_is_rejected_as_incomplete_never_resumed(@TempDir Path tmp) throws Exception {
     Path file = sixRows(tmp);
-    var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), DEFAULTS);
+    var reader = GlobReaders.of(file.toString(), DEFAULTS);
     // Version token intact, anchor absurd: hasCheckpoint() must refuse it (anchor < size),
     // otherwise a "resume" onto an empty stream would report the file done — silent data loss.
     List<Map<String, Object>> all = runWithCursorMutation(reader, 2, c -> editNode(c, n ->
@@ -136,21 +136,21 @@ class CsvCheckpointFallbackMatrixTest {
     var overrides = new CsvFileConnectorType.ParserOverrides(',',
         Charset.forName("GB18030"), true, true,
         List.of("", "NULL", "null", "#N/A"), null);
-    var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), overrides);
+    var reader = GlobReaders.of(file.toString(), overrides);
     var r = reader.read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
     var node = ((ReadResult.HasMore<?>) r).nextCursor().value();
     assertThat(node.has("anchorByte"))
         .as("unverified charset: the cursor must stay legacy-shaped (allowlist, not blocklist)")
         .isFalse();
     List<Map<String, Object>> all = runWithCursorMutation(
-        new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), overrides), 2, c -> c);
+        GlobReaders.of(file.toString(), overrides), 2, c -> c);
     assertThat(ids(all)).containsExactly("1", "2", "3", "4", "5", "6");
   }
 
   @Test
   void truncated_file_fails_the_version_token_and_falls_back(@TempDir Path tmp) throws Exception {
     Path file = sixRows(tmp);
-    var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), DEFAULTS);
+    var reader = GlobReaders.of(file.toString(), DEFAULTS);
     var r1 = reader.read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
     List<Map<String, Object>> all = new ArrayList<>(((ReadResult.HasMore<Map<String, Object>>) r1).records());
     ConnectorCursor c1 = ((ReadResult.HasMore<Map<String, Object>>) r1).nextCursor();

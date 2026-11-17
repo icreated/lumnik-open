@@ -8,10 +8,11 @@ Which restart is safe, and what each one costs: the [on-call runbook](../operati
 
 | Symptom | First move |
 |---|---|
-| The hub won't start, or 500s everywhere | `curl -s http://localhost:8080/q/health` (no `lm` command reads it), then [the hub logs](logs.md) |
+| The hub won't start, or 500s everywhere | `./deploy/selfhost/health.sh` (no `lm` command reads it), then [the hub logs](logs.md) |
 | `required variable LUMNIK_SECRET_MASTER_KEY is missing a value` when the stack starts | the key is missing from `.env` — on a fresh install, generate one with `openssl rand -base64 32`; on an existing one, restore it from your backup ([the master key](../security/rls.md#secrets-at-rest-the-master-key)) |
 | `lumnik.secret.master-key is too short (< 16 chars)` at boot | the key is shorter than 16 characters — same fix |
 | First boot seems stuck | migrations run at first boot — give it a minute, watch `./deploy/selfhost/logs.sh hub` |
+| `lumnik refuses to start on a published default`, then one line per setting | a hub started by hand is missing its own values. Set each variable the lines name (`openssl rand -base64 32` for a key). A database password must also be the role's password in PostgreSQL. dev-bypass also needs `LUMNIK_SECURITY_I_UNDERSTAND_NO_AUTH=true`, for local use only |
 | `up.sh` refuses to start, naming missing tools | its preflight — the message shows the exact install line; run it, re-run `up.sh` ([Windows walkthrough, step 3](../deploy-windows.md#step-3-get-lumnik-in-ubuntu-5-min)) |
 | `!! could not obtain a Keycloak admin token (check KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD in .env)` at the end of `up.sh` — then logins fail | either Keycloak was still starting: re-run `up.sh`; or `KEYCLOAK_ADMIN_PASSWORD` in `.env` no longer matches the console's: set the same value in both. Still failing: `./deploy/selfhost/logs.sh keycloak` |
 | Anything on a Windows PC | the dedicated page: [Deploy on Windows → Troubleshooting](../deploy-windows.md#troubleshooting-windows-edition) |
@@ -36,6 +37,7 @@ Which restart is safe, and what each one costs: the [on-call runbook](../operati
 | `access refused (403): scope not granted` (raw HTTP: `403 {"error":"scope not granted"}`) | the business-scope boundary: your user holds scope roles and this resource is outside them. It covers every read surface (PWA lists, chat, views), so several going quiet at once points here. [Scopes](../rag/scopes.md#binding-users-to-scopes-opt-in) |
 | The chat says "I can't answer that…" or "I won't run this…" | a [guard](../transparency/ask-honesty.md) refused rather than guess; the message says what to do next |
 | "The query returned no rows. That can mean…" | an empty result — check the SQL shown before concluding there are none |
+| "The query returned 0 or no value. That may be…" | a count of 0, or a total with no value: the same check |
 | `Error: API error 409: no schema discovered for scope '…' — apply an entity or run discovery first` | nothing was applied to the scope yet, or its last connector was deleted or moved — apply an entity (the message says so), then ask again |
 | The ask answers *"I have no data declared for this scope yet…"* although you ingested into that scope | the scope's schema card declares no tables — see below |
 | `429` on chat, search, or view-generate — not a connector run | the hub's own inbound limit — [Rate limits](../operations/rate-limits.md#troubleshooting). A vendor throttling a connector is the `429` under [Ingestion](#ingestion) |
@@ -70,7 +72,8 @@ The ask is Pro only; `lm source schema` and `rediscover` exist on both editions.
 | `429 Too Many Requests` from a REST vendor | lower `default_rate_limit` — [REST troubleshooting](../connectors/rest.md#troubleshooting) |
 | SFTP auth, host-key, or S3 `403` errors | [CSV & files troubleshooting](../connectors/csv.md#troubleshooting) |
 | `Bearer token unavailable (env=…)` — REST connectors only | the secret was never set — `lm secret set`, [quickstart table](../quickstart/installer.md#troubleshooting) |
-| jdbc run fails: `password_env '<NAME>' is neither in the server environment nor in lm secret` | `lm secret set <NAME>`, or set it in the **hub's** environment — [JDBC troubleshooting](../connectors/jdbc.md#troubleshooting) |
+| jdbc run fails: `password_env '<NAME>' is not in lm secret` | `lm secret set <NAME>` — [JDBC troubleshooting](../connectors/jdbc.md#troubleshooting) |
+| run fails: `secret <NAME> does not serve scope <scope>` | the secret has no scope, or one the connector or export lacks: `lm secret scope <NAME> <scopes>` — [secret scopes](../admin-console-guide.md#which-connectors-may-read-a-secret-its-scopes) |
 | A cursor seems stuck in the past | `lm endpoint reset-cursor <connector>/<endpoint>` — next run is a full refresh |
 
 ## Outputs and apps

@@ -4,13 +4,11 @@
 
 ## The moment this page is about
 
-A commande slips into *EN LITIGE* in the 02:00 batch. The row lands, a declared rule turns it
+An order slips into *EN LITIGE* in the 02:00 batch. The row lands, a declared rule turns it
 into a **decision** seconds later, and your webhook pings the team's phone at 02:01 — before the
 client calls at 9:04.
 
 ## The chain, end to end
-
-The chain in one picture:
 
 ```mermaid
 flowchart LR

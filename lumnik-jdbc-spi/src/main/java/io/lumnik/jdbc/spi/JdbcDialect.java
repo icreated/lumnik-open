@@ -5,7 +5,9 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -31,6 +33,21 @@ public interface JdbcDialect {
 
   /** The JDBC driver class this provider owns; the pool loads it explicitly. */
   String driverClass();
+
+  /**
+   * The hosts {@code url} connects to, as this provider's driver reads it (#2002): the hub judges each one before a
+   * pool opens. A URL whose hosts the provider cannot tell — an alias resolved elsewhere, a parameter that picks its
+   * own socket — is an {@link IllegalArgumentException} that says so and never quotes the URL. No default, like
+   * {@link #keyComparison}: a provider that inherited one would let its URLs past unjudged.
+   */
+  List<String> connectHosts(String url);
+
+  /**
+   * The driver properties that bound a connection (#2002): {@code connect} for opening it and logging in, always;
+   * {@code read} for each read, when present. The hub's doors ask for one; a run does not, its query may rightly run
+   * long. No default: the names and units are the driver's.
+   */
+  Map<String, String> timeoutProperties(Duration connect, Optional<Duration> read);
 
   /** Quote an identifier for safe SQL composition. */
   String quoteIdentifier(String identifier);

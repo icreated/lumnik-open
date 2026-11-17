@@ -50,7 +50,7 @@ class SearchProjectionKeyStreamIT {
         long tenant = 895_001;
         String table = "t_key_stream_" + System.nanoTime();
         String index = "key-stream-" + System.nanoTime();
-        createMatchSourceTable(adminDs, table);
+        createMatchSourceTable(adminDs, tenant, table);
         for (String code : List.of("c1", "c2", "c3", "c4", "c5", "c1")) insertRow(adminDs, table, tenant, code, "n");
 
         List<KeyQuery> keyQueries = new ArrayList<>();
@@ -78,7 +78,7 @@ class SearchProjectionKeyStreamIT {
         long tenant = 895_002;
         String table = "t_key_stream_rb_" + System.nanoTime();
         String index = "key-stream-rb-" + System.nanoTime();
-        createMatchSourceTable(adminDs, table);
+        createMatchSourceTable(adminDs, tenant, table);
         for (String code : List.of("c1", "c2", "c3", "c4", "c5")) insertRow(adminDs, table, tenant, code, "n");
         List<List<String>> slices = new ArrayList<>();
         SearchProjectionRunHook hook = advanceFailsOnce(adminDs, null, recordingSlices(slices), new RuntimeException("advance failed", new SQLException("advance failed")));

@@ -55,11 +55,11 @@ class BadRequestExceptionMapperIT {
   void a_wrong_typed_json_field_is_answered_by_quarkus_not_by_this_mapper() {
     given().header(TestIdentity.TENANT_HEADER, "999960")
         .contentType(ContentType.JSON)
-        .body("{\"hookId\": \"x\", \"tenantId\": \"abc\"}")
-    .when().post("/api/platform/hooks/overrides")
+        .body("{\"enabled\": \"abc\"}")
+    .when().post("/api/platform/hooks/x/toggle")   // a door that binds a JSON body (the overrides one no longer does, #2011)
     .then().statusCode(400)
         .body("error", nullValue())
-        .body("attributeName", equalTo("tenantId"));
+        .body("attributeName", equalTo("enabled"));
   }
 
   /**
@@ -74,8 +74,8 @@ class BadRequestExceptionMapperIT {
   void a_malformed_body_is_still_answered_bodylessly_a_named_residue() {
     given().header(TestIdentity.TENANT_HEADER, "999960")
         .contentType(ContentType.JSON)
-        .body("{\"hookId\": \"x\", \"tenantId\": ")
-    .when().post("/api/platform/hooks/overrides")
+        .body("{\"enabled\": ")
+    .when().post("/api/platform/hooks/x/toggle")
     .then().statusCode(400)
         .body(emptyOrNullString());
   }

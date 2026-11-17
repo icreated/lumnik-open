@@ -30,6 +30,8 @@ Providers add up: several live in one image, and each connector picks its own.
 | `aliases()` | Other accepted spellings (PostgreSQL: `postgresql`). Unique too. |
 | `acceptsUrl(url)` | Whether this provider recognises the JDBC scheme. Used to infer a missing `dialect:`. |
 | `driverClass()` | The driver the pool loads. A provider installed without its driver fails with `JDBC driver 'X' of dialect 'Y' is not on the classpath`. |
+| `connectHosts(url)` | The hosts the URL connects to, as your driver reads it. The hub judges each one before a pool opens ([Where the hub connects](../../security/outbound-addresses.md)). Use the driver's own parser when it has one. A URL whose hosts you cannot tell (an alias resolved elsewhere, a parameter that picks its own socket) throws `IllegalArgumentException` saying why, never quoting the URL. No default. |
+| `timeoutProperties(connect, read)` | The driver properties that bound opening a connection and logging in, always, and each read when `read` is present. The hub asks for a read bound on its doors (test, discovery) only. No default: the names and units are your driver's. |
 | `quoteIdentifier(id)` | Quote one identifier. The query builder never concatenates a raw name. |
 | `keyComparison(columns, comparison)` | The `>` (cursor) or `<=` (run ceiling) comparison over the quoted key columns, **and the bind plan**. No default. |
 | `limitClause(n)` | The row limit appended after `ORDER BY` (`LIMIT 100`, `FETCH FIRST 100 ROWS ONLY`, …). No default. |
@@ -41,7 +43,8 @@ Providers add up: several live in one image, and each connector picks its own.
 | introspection | `listTables`, `listViews` (no default: a provider that cannot list views throws `SQLException` saying so, never an empty list), `tableExists`, `listColumns`, `listPrimaryKey`, `listForeignKeys`, `estimateRowCount`, `inferWatermarkColumn`. |
 
 `keyComparison` and `limitClause` have no default so that a provider cannot compile while emitting
-SQL its database rejects, or reads differently.
+SQL its database rejects, or reads differently. `connectHosts` and `timeoutProperties` have none either: an inherited
+answer would let your URLs past unjudged, or set properties your driver does not read.
 
 ### The bind plan
 

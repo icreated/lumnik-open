@@ -56,6 +56,13 @@
             <artifactId>jakarta.enterprise.cdi-api</artifactId>
             <scope>provided</scope>
         </dependency>
+        <!-- JAX-RS API (annotations only: @NameBinding, for @TenantWide) — provided scope, like the CDI API above;
+             the hub's filter enforces the marker on the hub's and lumnik-identity's doors alike. -->
+        <dependency>
+            <groupId>jakarta.ws.rs</groupId>
+            <artifactId>jakarta.ws.rs-api</artifactId>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

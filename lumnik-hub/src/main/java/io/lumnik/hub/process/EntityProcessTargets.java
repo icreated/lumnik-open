@@ -42,7 +42,7 @@ public class EntityProcessTargets {
      * @param sourceTable schema-qualified, as the event names it ({@code connector.t_orders})
      */
     public List<Target> observing(long tenantId, String sourceTable) {
-        return targets(tenantId, view -> fusing(view, sourceTable));
+        return targets(tenantId, view -> fusing(tenantId, view, sourceTable));
     }
 
     /**
@@ -51,7 +51,7 @@ public class EntityProcessTargets {
      * @param lookupTable schema-qualified, as the event names it ({@code connector.t_instruments})
      */
     public List<Target> joining(long tenantId, String lookupTable) {
-        return targets(tenantId, view -> joined(view, lookupTable));
+        return targets(tenantId, view -> joined(tenantId, view, lookupTable));
     }
 
     /** The tenant's enabled processes whose Entity {@code matching} answers for: the servable ones are targets. */
@@ -80,8 +80,8 @@ public class EntityProcessTargets {
      */
     public boolean anyObserving(long tenantId, String sourceTable) {
         for (String view : store.enabledEntityViews(tenantId)) {
-            EntityManifest m = fusing(view, sourceTable);
-            if (m == null) m = joined(view, sourceTable);   // a lookup of the Entity: its changes fan out (#1834)
+            EntityManifest m = fusing(tenantId, view, sourceTable);
+            if (m == null) m = joined(tenantId, view, sourceTable);   // a lookup of the Entity: its changes fan out (#1834)
             if (m != null && servable(m)) return true;
         }
         return false;
@@ -102,29 +102,34 @@ public class EntityProcessTargets {
      * at once; one applied on another node is in it within the registry's refresh (#1836), and seen here after at most
      * that long more.
      */
-    private EntityManifest entityOf(String view) {
+    private EntityManifest entityOf(long tenantId, String view) {
         String name = EntityViewCompiler.entityNameFromView(view);
         if (name == null) return null;
-        EntityManifest known = entities.find(name);
+        EntityManifest known = entities.find(tenantId, name);
         if (known != null) return known;
-        Long until = missingUntil.get(name);
+        String key = tenantId + ":" + name;   // what one tenant misses another may read (#2050)
+        Long until = missingUntil.get(key);
         if (until != null && nowMillis.getAsLong() < until) return null;
-        EntityManifest m = entities.findReloadingIfMissing(name);
-        if (m == null) missingUntil.put(name, nowMillis.getAsLong() + MISS_MILLIS);
-        else missingUntil.remove(name);
+        EntityManifest m = entities.findReloadingIfMissing(tenantId, name);
+        if (m == null) {
+            long now = nowMillis.getAsLong();
+            missingUntil.values().removeIf(t -> t <= now);   // keyed by tenant too: bounded by what is still missed
+            missingUntil.put(key, now + MISS_MILLIS);
+        }
+        else missingUntil.remove(key);
         return m;
     }
 
     /** The Entity behind {@code view} when it fuses {@code sourceTable}; null otherwise. */
-    private EntityManifest fusing(String view, String sourceTable) {
-        EntityManifest m = entityOf(view);
+    private EntityManifest fusing(long tenantId, String view, String sourceTable) {
+        EntityManifest m = entityOf(tenantId, view);
         boolean fuses = m != null && m.sources() != null && m.sources().stream().anyMatch(s -> sourceTable.equals(s.fqn()));
         return fuses ? m : null;
     }
 
     /** The Entity behind {@code view} when one of its {@code joins:} reads {@code lookupTable}; null otherwise. */
-    private EntityManifest joined(String view, String lookupTable) {
-        EntityManifest m = entityOf(view);
+    private EntityManifest joined(long tenantId, String view, String lookupTable) {
+        EntityManifest m = entityOf(tenantId, view);
         boolean joins = m != null && m.joins() != null
             && m.joins().stream().anyMatch(j -> lookupTable.equals(EntityViewCompiler.SCHEMA + "." + j.table()));
         return joins ? m : null;

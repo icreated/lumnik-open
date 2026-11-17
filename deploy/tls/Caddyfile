@@ -14,12 +14,29 @@
 }
 
 {$LUMNIK_TLS_HOST} {
-	# Keycloak, same-origin under /realms + its static assets
+	# HSTS (#1994), only when LUMNIK_TLS_HSTS=true: a public domain with a public certificate. On a LAN name with
+	# Caddy's internal CA, a lost caddy_data volume would lock every device that saw it out for a year, and on
+	# localhost it would pin https on every port of the machine. No includeSubDomains: the domain may hold other hosts.
+	@hsts expression `{env.LUMNIK_TLS_HSTS} == "true"`
+	header @hsts Strict-Transport-Security "max-age=31536000"
+
+	# Keycloak, same-origin under /realms + its static assets. Its own Strict-Transport-Security (a year, with
+	# includeSubDomains) is dropped: this façade alone decides HSTS for the origin.
 	handle /realms/* {
-		reverse_proxy keycloak:8180
+		reverse_proxy keycloak:8180 {
+			header_down -Strict-Transport-Security
+		}
 	}
 	handle /resources/* {
-		reverse_proxy keycloak:8180
+		reverse_proxy keycloak:8180 {
+			header_down -Strict-Transport-Security
+		}
+	}
+
+	# The hub serves nothing under /q on its public port (#1993: health, metrics and the spec are on its management
+	# port, which this façade never reaches); refused here as well, in case a build serves one again.
+	handle /q/* {
+		respond 404
 	}
 
 	# everything else is the hub (API + the /app/ PWA)

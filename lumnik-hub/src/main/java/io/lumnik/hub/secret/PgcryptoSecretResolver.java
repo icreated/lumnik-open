@@ -3,51 +3,55 @@ package io.lumnik.hub.secret;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.tenant.CurrentTenantHolder;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import com.github.benmanes.caffeine.cache.Expiry;
-import jakarta.transaction.Synchronization;
-import jakarta.transaction.TransactionSynchronizationRegistry;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.jboss.logging.Logger;
 
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
+import java.sql.Types;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
 
 /**
  * Default {@link SecretResolver} that decrypts secrets stored in {@code platform.secret}
- * using PostgreSQL pgcrypto ({@code pgp_sym_decrypt}) and caches results for 5 minutes
- * via Caffeine to avoid repeated DB round-trips.
+ * using PostgreSQL pgcrypto ({@code pgp_sym_decrypt}).
  *
- * <p><b>A miss is cached too.</b> Every {@code *_env} key in every manifest resolves through here
- * now, and a connector run rebuilds its reader once per CHUNK — so on the deployment the docs
- * recommend (secrets exported into the hub's environment, nothing in the registry) a name this
- * registry does not hold used to cost one connection acquisition and one zero-row query per chunk,
- * per key, forever. That is what {@code Optional} in the cache value is for: absent means "never
- * asked", {@code Optional.empty()} means "asked, and nothing holds it".
+ * <p><b>Each read compares the row's ciphertext with the one decrypted last; only a new one is decrypted</b>
+ * (#2020). {@code pgp_sym_encrypt} salts every write, so a set or a rotation always writes new bytes, and the same
+ * bytes, under the one master key, always decrypt to the same value: the ciphertext is the row's exact version,
+ * whichever code wrote it. A read is one indexed lookup, which returns the ciphertext, whether the secret serves the
+ * reader, and the decrypted value only when the ciphertext is not the one this replica holds. So a write on any hub
+ * replica reaches every reader of every replica at its next read: a rotation, a narrowed scope, a deletion, a secret
+ * set after a read found nothing. There is no signal to miss and nothing to flush; nothing is remembered of a miss or
+ * a refusal. A reader reads most secrets once per chunk, a SOAP body once per request, an S3 transport or an export
+ * destination once per run, an SFTP transport when it opens a session; a value it already holds stays in use until it
+ * reads again.
  *
- * <p>Remembering a miss is only safe because every write flushes — <b>in the JVM that served the
- * write</b>. {@code SecretResource} calls {@link #invalidate()} on set, update and delete, so on
- * that instance {@code lm secret set NAME} is visible on the next read. This cache is per-instance
- * and there is no cross-node invalidation, so a second hub replica ({@code hub.replicas} in the
- * Helm values) that had already asked for the name keeps answering from its own copy until the
- * entry expires. That is why a miss expires far sooner than a hit: a stale VALUE was always
- * possible after a rotation, but "this name exists now" used to be visible everywhere at once, and
- * remembering misses is what took that away. {@link #MISS_TTL} is the bound put back on it.
+ * <p>What was decrypted is kept per tenant and name, at most {@link #KEPT_TTL} after its decrypt: whether the secret
+ * serves the reader is asked on every read, so every reader of a secret shares it. The bound is this cache's: a
+ * reader keeps the value it was handed for as long as it uses it (a JDBC pool, a transport, a run).
+ *
+ * <p><b>A read is audited once per value, per reader's scopes and per {@link #KEPT_TTL}</b>
+ * ({@code platform.secret.read}): a run reads under {@code TenantScope}, whose tenant the outbox records under, and
+ * one event per secret per chunk would drown the trail. A rotated value is a new one, so its first read is recorded. The
+ * mark is set once the outbox reports the event written: a read it did not write leaves the next one to record. Two
+ * reads at once may both be recorded; a read recorded twice is harmless, one lost is not. The mark is local, and an
+ * event written in the caller's transaction is lost with it if that transaction rolls back, the mark kept.
+ *
+ * <p><b>A reader reads a secret only when it carries every scope of the secret</b> ({@link SecretAudience},
+ * #2015); a scopeless reader reads every secret, a scopeless secret serves the scopeless readers only. A name
+ * the reader cannot use is refused by name ({@link SecretNotServedException}), not answered as a miss:
+ * {@code lm secret list} shows it, and "not set" would send the admin looking for the wrong thing.
  *
  * <p>Uses the {@code admin} datasource (BYPASSRLS) so that reads work even when RLS
  * is active. Filtering is always explicit via {@code WHERE tenant_id = ?}.
  */
 @ApplicationScoped
 public class PgcryptoSecretResolver implements SecretResolver {
-
-    private static final Logger LOG = Logger.getLogger(PgcryptoSecretResolver.class);
 
     @Inject
     @DataSource("admin")
@@ -56,40 +60,48 @@ public class PgcryptoSecretResolver implements SecretResolver {
     @Inject
     SecretEvents events;
 
-    @Inject
-    TransactionSynchronizationRegistry transactions;
-
     @ConfigProperty(name = "lumnik.secret.master-key")
     String masterKey;
 
-    /** How long a resolved value is reused. Unchanged: this is what the cache has always done. */
-    static final Duration HIT_TTL = Duration.ofMinutes(5);
+    /** How long a decrypted value is kept, and a read's audit mark. */
+    static final Duration KEPT_TTL = Duration.ofMinutes(5);
+
+    /** Room for every secret a hub reads in rotation: evicted, a value is decrypted and its read recorded again. */
+    private static final int KEPT_MAX = 10_000;
+
+    /** A record, not a joined string: no name, whatever it holds, can spell another secret's key. */
+    record Key(long tenantId, String name) {}
+
+    /** One reader's reads of a secret: what an audit mark is kept for. */
+    private record Reader(long tenantId, List<String> audience, String name) {}
+
+    /** What was decrypted, and the ciphertext it came from. */
+    private record Kept(byte[] ciphertext, String value) {}
+
+    /** One read: the row's ciphertext, whether it serves the reader, its value if it was decrypted. */
+    private record Row(byte[] ciphertext, boolean served, String decrypted) {}
+
+    private final Cache<Key, Kept> kept = Caffeine.newBuilder()
+        .expireAfterWrite(KEPT_TTL)
+        .maximumSize(KEPT_MAX)
+        .build();
+
+    /** The ciphertext each reader's read was last recorded for, within {@link #KEPT_TTL}. */
+    private final Cache<Reader, byte[]> audited = Caffeine.newBuilder()
+        .expireAfterWrite(KEPT_TTL)
+        .maximumSize(KEPT_MAX)
+        .build();
 
     /**
-     * How long "nothing holds this name" is reused. Short on purpose — it only has to outlive a
-     * chunk loop, not a work session. At five minutes a replica that had not served the write would
-     * refuse a connector run for five minutes after {@code lm secret set}, which is the very
-     * complaint this whole change answers.
+     * The row's ciphertext, whether it serves the reader, and its value decrypted only when it serves and its ciphertext
+     * is not the one held (the first parameter, NULL when none is). ScopeGrants' rule, the reader as the holder: a
+     * scopeless reader is served by every secret, a scoped one by a secret with scopes, all of which it carries; a
+     * secret that does not serve the reader is never decrypted.
      */
-    static final Duration MISS_TTL = Duration.ofSeconds(30);
-
-    /** A miss expires far sooner than a hit — see the class javadoc for why. */
-    static final class SecretTtl implements Expiry<String, Optional<String>> {
-        @Override public long expireAfterCreate(String key, Optional<String> value, long now) {
-            return (value.isPresent() ? HIT_TTL : MISS_TTL).toNanos();
-        }
-        @Override public long expireAfterUpdate(String key, Optional<String> value, long now, long current) {
-            return expireAfterCreate(key, value, now);
-        }
-        @Override public long expireAfterRead(String key, Optional<String> value, long now, long current) {
-            return current;   // reading does not extend either life
-        }
-    }
-
-    private final Cache<String, Optional<String>> cache = Caffeine.newBuilder()
-        .expireAfter(new SecretTtl())
-        .maximumSize(1000)
-        .build();
+    private static final String READ_SQL = "SELECT value_encrypted, served, CASE WHEN served "
+        + "AND value_encrypted IS DISTINCT FROM ? THEN pgp_sym_decrypt(value_encrypted, ?, 'cipher-algo=aes256') END "
+        + "FROM (SELECT value_encrypted, (? OR (scopes <> '{}' AND scopes <@ ?)) AS served "
+        + "FROM platform.secret WHERE tenant_id = ? AND name = ? AND deleted_at IS NULL) s";
 
     @Override
     public Optional<String> resolve(String name) {
@@ -100,56 +112,37 @@ public class PgcryptoSecretResolver implements SecretResolver {
                 "Set a tenant via CurrentTenantHolder.set(tenantId) or TenantContext.callAs(...).");
         }
 
-        String cacheKey = tenantId + ":" + name;
-        Optional<String> cached = cache.getIfPresent(cacheKey);
-        if (cached != null) return cached;   // null = never asked; empty = asked, held by nothing
-
-        try (Connection c = adminDs.getConnection();
-             PreparedStatement ps = c.prepareStatement(
-                 "SELECT pgp_sym_decrypt(value_encrypted, ?, 'cipher-algo=aes256') " +
-                 "FROM platform.secret " +
-                 "WHERE tenant_id = ? AND name = ? AND deleted_at IS NULL")) {
-            ps.setString(1, masterKey);
-            ps.setLong(2, tenantId);
-            ps.setString(3, name);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (!rs.next()) {
-                    cache.put(cacheKey, Optional.empty());
-                    return Optional.empty();   // no secret was read, so there is nothing to audit
-                }
-                Optional<String> value = Optional.of(rs.getString(1));
-                cache.put(cacheKey, value);
-                events.emitRead(tenantId, name, null);  // SOC 2 audit trail — only on DB read, not cache hit
-                return value;
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("SecretResolver failed for name=" + name + " tenant=" + tenantId, e);
+        List<String> audience = SecretAudience.current();
+        Key key = new Key(tenantId, name);
+        Kept held = kept.getIfPresent(key);
+        // Named in the label: a wrong master key or a damaged row says which secret of which tenant.
+        Optional<Row> read = Jdbc.queryOne(adminDs, "SecretResolver.resolve " + name + " (tenant " + tenantId + ")",
+            READ_SQL, ps -> {
+                ps.setObject(1, held == null ? null : held.ciphertext(), Types.BINARY);
+                ps.setString(2, masterKey);
+                ps.setBoolean(3, audience.isEmpty());
+                ps.setArray(4, ps.getConnection().createArrayOf("text", audience.toArray()));
+                ps.setLong(5, tenantId);
+                ps.setString(6, name);
+            }, rs -> new Row(rs.getBytes(1), rs.getBoolean(2), rs.getString(3)));
+        if (read.isEmpty()) {
+            kept.invalidate(key);
+            return Optional.empty();   // no secret was read, so there is nothing to audit
         }
-    }
-
-    /**
-     * Flush every entry, hit and miss alike — now, and again once the caller's transaction commits.
-     *
-     * <p>Flushing once is not enough, and only became not enough when misses started being cached.
-     * {@code SecretResource} calls this from INSIDE its {@code @Transactional} write, before commit,
-     * and this resolver reads on its own {@code admin} connection, which cannot see an uncommitted
-     * row. A {@code resolve()} landing in that window therefore reads "held by nothing" — and would
-     * then answer that for the full five minutes to a connector whose secret had in fact just been
-     * written. Before misses were remembered the same race healed itself on the next read.
-     *
-     * <p>Registering the second flush here rather than at the three call sites keeps the guarantee
-     * with the cache that needs it: any future writer gets it by calling {@code invalidate()}.
-     * Both flushes are local to this instance — {@link #MISS_TTL} is what bounds the others.
-     */
-    public void invalidate() {
-        cache.invalidateAll();
-        // getTransactionKey() != null is how CsvIngestService and HybridJsonbWriter ask the same
-        // question; it answers for STATUS_UNKNOWN too, which a status comparison does not.
-        if (transactions.getTransactionKey() == null) return;
-        transactions.registerInterposedSynchronization(new Synchronization() {
-            @Override public void beforeCompletion() { /* the flush belongs after the commit */ }
-            // Rolled back too: this JVM may have cached a miss that another node's write filled in.
-            @Override public void afterCompletion(int status) { cache.invalidateAll(); }
-        });
+        Row row = read.get();
+        if (!row.served()) throw new SecretNotServedException(name, audience);
+        String value;
+        if (row.decrypted() != null) {
+            value = row.decrypted();
+            kept.put(key, new Kept(row.ciphertext(), value));
+        } else {
+            value = held.value();   // the ciphertext held: not decrypted again
+        }
+        // SOC 2 audit trail, once the admin connection is back: publish takes one of its own.
+        Reader reader = new Reader(tenantId, audience, name);
+        if (!Arrays.equals(audited.getIfPresent(reader), row.ciphertext()) && events.emitRead(tenantId, name, null)) {
+            audited.put(reader, row.ciphertext());   // marked once written: an unwritten read leaves the next to record
+        }
+        return Optional.of(value);
     }
 }

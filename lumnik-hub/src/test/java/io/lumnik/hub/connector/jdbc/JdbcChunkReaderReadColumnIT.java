@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.jdbc;
 
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -40,7 +41,7 @@ class JdbcChunkReaderReadColumnIT {
   }
 
   private static ReadResult<Map<String, Object>> readAll(PostgresDialect dialect) {
-    HikariPoolRegistry registry = new HikariPoolRegistry();
+    HikariPoolRegistry registry = new HikariPoolRegistry(TestOutbound.ADDRESSES);
     try {
       JdbcChunkReader reader = new JdbcChunkReader(PG.getJdbcUrl(), "u", "p", "postgres", "public", "t", null,
           List.of("id"), JdbcChunkReader.Mode.FULL, dialect, registry, ZoneOffset.UTC);

@@ -28,10 +28,10 @@ class SearchProjectionLookupTargetsIT {
         long tenant = 847_101;
         String n = String.valueOf(System.nanoTime());
         String p1 = "t_lk_p1_" + n, p2 = "t_lk_p2_" + n, p3 = "t_lk_p3_" + n, cat = "t_lk_c_" + n;
-        createTable(adminDs, p1, "pid text, cid text, pname text");
-        createTable(adminDs, p2, "pid text, cid text, pname text");
-        createTable(adminDs, p3, "pid text, pname text");                 // maps no category column
-        createTable(adminDs, cat, "cid text, cname text");
+        createTable(adminDs, tenant, p1, "pid text, cid text, pname text");
+        createTable(adminDs, tenant, p2, "pid text, cid text, pname text");
+        createTable(adminDs, tenant, p3, "pid text, pname text");                 // maps no category column
+        createTable(adminDs, tenant, cat, "cid text, cname text");
         String entity = "LkTargets" + n;
         yaml(tenant).body("kind: Entity\nname: " + entity + "\nmatch: [product_id]\nscopes: [lk]\nsources:\n"
             + "  - table: " + p1 + "\n    map: { pid: product_id, cid: category_id, pname: product_name }\n"
@@ -66,8 +66,8 @@ class SearchProjectionLookupTargetsIT {
         long tenant = 847_102;
         String n = String.valueOf(System.nanoTime());
         String twice = "t_lk_twice_" + n, cat = "t_lk_c2_" + n;
-        createTable(adminDs, twice, "pid text, cid text, cid2 text, pname text");
-        createTable(adminDs, cat, "cid text, cname text");
+        createTable(adminDs, tenant, twice, "pid text, cid text, cid2 text, pname text");
+        createTable(adminDs, tenant, cat, "cid text, cname text");
         String entity = "LkTwice" + n;
         yaml(tenant).body("kind: Entity\nname: " + entity + "\nmatch: [product_id]\nscopes: [lk]\nsources:\n"
             + "  - table: " + twice + "\n    map: { pid: product_id, cid: category_id, pname: product_name }\n"

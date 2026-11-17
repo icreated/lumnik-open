@@ -1,5 +1,8 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.common.sql.Jdbc;
+import io.lumnik.hub.tenant.DeploymentTenancy;
+import io.lumnik.hub.testsupport.SharedEntities;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
@@ -8,6 +11,7 @@ import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
 import jakarta.inject.Inject;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -31,6 +35,15 @@ class EntityReadIT {
   @Inject
   @DataSource("admin")
   AgroalDataSource adminDs;
+
+  @Inject EntityRegistry registry;
+
+  /** The Entity is shared (#2050): left behind, it would refuse another IT's apply of its name as a tenant. */
+  @AfterEach
+  void releaseTheName() {
+    Jdbc.update(adminDs, "test.release", "DELETE FROM connector.entity_manifest WHERE name = 'customer'", ps -> {});
+    registry.remove("customer");
+  }
 
   static final String MANIFEST = """
       kind: Entity
@@ -60,8 +73,9 @@ class EntityReadIT {
       st.execute("INSERT INTO connector.t_cust_src VALUES "
           + "(1,'r1','Alice','GOLD',5000),(1,'r2','Bob','SILVER',1000),(2,'r9','Zoe','GOLD',9000)");
     }
+    SharedEntities.share("Customer");   // what another IT left under this name (#2050)
     given().config(YamlBody.CONFIG)
-        .headers(TestIdentity.tenantAndUser(1))
+        .headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
   }

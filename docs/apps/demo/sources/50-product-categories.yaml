@@ -13,7 +13,7 @@ metadata:
 spec:
   transport:
     kind: local
-    path: /tmp/acme-catalogue/m_product_category.csv
+    path: acme-catalogue/m_product_category.csv
   parser:
     has_header: true
   after_process: none

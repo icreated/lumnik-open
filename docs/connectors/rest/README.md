@@ -21,6 +21,9 @@ python3 docs/connectors/rest/demo/selftest.py     # walks every dialect to its l
 lm secret set ACME_BASIC_PW       # demo-pass
 lm secret set ACME_BEARER_TOKEN   # demo-token
 lm secret set ACME_API_KEY        # demo-key
+lm secret scope ACME_BASIC_PW billing      # every demo connector carries scopes: [billing]
+lm secret scope ACME_BEARER_TOKEN billing
+lm secret scope ACME_API_KEY billing
 
 lm apply -f docs/connectors/rest/demo/10-quickstart.yaml
 lm connector run acme-partners

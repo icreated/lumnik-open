@@ -1,9 +1,13 @@
 package io.lumnik.hub.connector.rls;
 
 import io.quarkus.test.common.QuarkusTestResourceLifecycleManager;
+import org.eclipse.microprofile.config.ConfigProvider;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 
 import java.sql.Connection;
@@ -27,6 +31,9 @@ public class RlsEnforcedPgResource implements QuarkusTestResourceLifecycleManage
   /** The container's superuser, for a test that must act as the DBA (signal another backend). */
   public static final String SUPERUSER = "postgres";
   public static final String SUPERUSER_PASSWORD = "postgres";
+
+  /** The superuser bootstrap every install runs after creating the roles (initdb, selfhost up.sh, the helm Job). */
+  public static final Path EXTENSIONS_SQL = Path.of("../infra/postgres/init/02-extensions.sql");
 
   private GenericContainer<?> pg;
 
@@ -55,20 +62,15 @@ public class RlsEnforcedPgResource implements QuarkusTestResourceLifecycleManage
       st.execute("CREATE ROLE lumnik_app WITH LOGIN PASSWORD 'app'");
       st.execute("CREATE ROLE lumnik_readonly WITH LOGIN PASSWORD 'ro'");
       st.execute("ALTER ROLE lumnik_readonly SET default_transaction_read_only = on");
-      st.execute("GRANT CREATE, CONNECT, TEMP ON DATABASE lumnik TO lumnik_admin");
       st.execute("GRANT CONNECT ON DATABASE lumnik TO lumnik_app, lumnik_readonly");
       st.execute("ALTER DEFAULT PRIVILEGES FOR ROLE lumnik_admin "
           + "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO lumnik_app");
       st.execute("ALTER DEFAULT PRIVILEGES FOR ROLE lumnik_admin "
           + "GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO lumnik_app");
-      // from-scratch gaps (memory dev-hub-from-scratch-boot): superuser-only extension
-      st.execute("CREATE EXTENSION IF NOT EXISTS vector");
-      // latent schema-USAGE gap: pre-create app schemas owned by the migration user + grant USAGE
-      for (String schema : new String[]{"core", "connector", "identity", "rag", "platform"}) {
-        st.execute("CREATE SCHEMA IF NOT EXISTS " + schema + " AUTHORIZATION lumnik_admin");
-        st.execute("GRANT USAGE ON SCHEMA " + schema + " TO lumnik_app, lumnik_readonly");
-      }
-    } catch (SQLException e) {
+      // The shipped file itself, not a copy: database grants, the vector extension, the app schemas with their
+      // USAGE grants, and the readonly role's REVOKEs (#1987) that ReadonlyHardening checks before every Ask.
+      st.execute(Files.readString(EXTENSIONS_SQL));
+    } catch (SQLException | IOException e) {
       throw new RuntimeException("RLS harness init failed", e);
     }
 
@@ -82,6 +84,15 @@ public class RlsEnforcedPgResource implements QuarkusTestResourceLifecycleManage
         "quarkus.datasource.\"readonly\".jdbc.url", url,
         "quarkus.datasource.\"readonly\".username", "lumnik_readonly",
         "quarkus.datasource.\"readonly\".password", "ro");
+  }
+
+  /** One statement as the database superuser, from a test running on this harness (re-grant, signal a backend…). */
+  public static void asSuperuser(String sql) throws SQLException {
+    String url = ConfigProvider.getConfig().getValue("quarkus.datasource.\"admin\".jdbc.url", String.class);
+    try (Connection c = DriverManager.getConnection(url, SUPERUSER, SUPERUSER_PASSWORD);
+         Statement st = c.createStatement()) {
+      st.execute(sql);
+    }
   }
 
   @Override

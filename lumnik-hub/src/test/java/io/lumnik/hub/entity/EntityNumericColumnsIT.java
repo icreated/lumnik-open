@@ -8,6 +8,7 @@ import io.lumnik.hub.ask.AskToSqlAgent;
 import io.lumnik.hub.ask.EntitySchemaBuilder;
 import io.lumnik.hub.ask.ReadonlyTransactionsProfile;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.llm.spi.Analytic;
 import io.lumnik.llm.spi.ChatPort;
@@ -91,6 +92,8 @@ class EntityNumericColumnsIT {
       st.execute("INSERT INTO connector.t_nu_erp VALUES (1, 100, 20.0000, 5, NULL)");
       st.execute("DELETE FROM connector.entity_manifest WHERE name = 'nuorder'");
     }
+    RegisteredTables.register(adminDs, 1L, "t_nu_erp");
+    RegisteredTables.register(adminDs, 1L, "t_nu_csv");
     given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
@@ -148,14 +151,14 @@ class EntityNumericColumnsIT {
 
   @Test
   void theCardTellsAskAndViewsTheRealTypes() {
-    Map<String, String> card = entityCards.resolve("nu").get(0).columns().stream()
+    Map<String, String> card = entityCards.resolve(1L, "nu").get(0).columns().stream()
         .collect(Collectors.toMap(SchemaCard.Column::name, SchemaCard.Column::pgType));
     assertThat(card).containsEntry("order_no", "numeric").containsEntry("qty", "bigint").containsEntry("loose", "text");
   }
 
   @Test
   void aViewOverTheEntityOrdersAndComparesNumbers_andWritesThemAsStrings() {
-    cards.save(1L, "registry", new SchemaCard("nu", entityCards.resolve("nu")));
+    cards.save(1L, "registry", new SchemaCard("nu", entityCards.resolve(1L, "nu")));
     String view = """
         apiVersion: apps.lumnik.io/v1
         kind: View
@@ -182,7 +185,7 @@ class EntityNumericColumnsIT {
 
   @Test
   void aViewDetailFindsARecordByItsNumberKey() {
-    cards.save(1L, "registry", new SchemaCard("nu", entityCards.resolve("nu")));
+    cards.save(1L, "registry", new SchemaCard("nu", entityCards.resolve(1L, "nu")));
     given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml")
         .queryParam("key", "12").body("""
             apiVersion: apps.lumnik.io/v1
@@ -214,7 +217,7 @@ class EntityNumericColumnsIT {
    */
   @Test
   void askCountingOnADisputedNumberNamesTheDispute() {
-    cards.save(1L, "nu", new SchemaCard("nu", entityCards.resolve("nu")));
+    cards.save(1L, "nu", new SchemaCard("nu", entityCards.resolve(1L, "nu")));
     Mockito.when(chatPort.chat(Mockito.anyString()))
         .thenReturn("SELECT COUNT(*) FROM connector.v_nuorder WHERE amount = 999.50")
         .thenReturn("1.");
@@ -229,7 +232,7 @@ class EntityNumericColumnsIT {
 
   @Test
   void askExcludingAValueASourceHoldsSaysSo() {
-    cards.save(1L, "nu", new SchemaCard("nu", entityCards.resolve("nu")));
+    cards.save(1L, "nu", new SchemaCard("nu", entityCards.resolve(1L, "nu")));
     Mockito.when(chatPort.chat(Mockito.anyString()))
         .thenReturn("SELECT order_no FROM connector.v_nuorder WHERE amount = 998");
     AskResult r = agent.ask(1L, "nu", "which order is 998?");
@@ -259,6 +262,7 @@ class EntityNumericColumnsIT {
       st.execute("INSERT INTO connector.t_nu_retyped VALUES (1, '7', '1500')");
       st.execute("DELETE FROM connector.entity_manifest WHERE name = 'nuretyped'");
     }
+    RegisteredTables.register(adminDs, 1L, "t_nu_retyped");
     String manifest = "kind: Entity\nname: NuRetyped\nmatch: [no]\nsources:\n  - table: t_nu_retyped\n    map: { no: no, amount: amount }\n";
     given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1)).contentType("application/yaml")
         .body(manifest).post("/api/entities/apply").then().statusCode(200);

@@ -8,7 +8,6 @@ import io.lumnik.hub.connector.rest.pagination.JsonPathExtractor;
 import io.lumnik.hub.connector.rest.pagination.PaginationStrategy;
 import io.lumnik.hub.connector.rest.pagination.PaginationSupport;
 
-import io.lumnik.hub.connector.api.helpers.EnvSecrets;
 
 import java.util.HashMap;
 import java.util.List;
@@ -28,8 +27,6 @@ import java.util.function.UnaryOperator;
  */
 public class SoapPaginationStrategy implements PaginationStrategy {
 
-    private static final UnaryOperator<String> ENV = EnvSecrets::lookup;
-
     private final UnaryOperator<String> secrets;
     private final int pageSize;
     private final String lastPagePath;   // optional: TRUE => stop
@@ -40,10 +37,10 @@ public class SoapPaginationStrategy implements PaginationStrategy {
     private String baseUrl, path, soapAction, headerTemplate, bodyTemplate;
     private long offset;
 
-    /** {@code {{secret:}}} from the environment only — no registry behind it (unit tests). */
-    public SoapPaginationStrategy(Map<String, String> c) { this(c, ENV); }
+    /** No secret behind it: a {@code {{secret:}}} or {@code {{env:}}} placeholder is refused (unit tests). */
+    public SoapPaginationStrategy(Map<String, String> c) { this(c, name -> null); }
 
-    /** @param secrets what {@code {{secret:NAME}}} resolves through; {@code {{env:}}} stays {@link EnvSecrets}. */
+    /** @param secrets what {@code {{secret:NAME}}} and {@code {{env:NAME}}} resolve through: the tenant's registry. */
     public SoapPaginationStrategy(Map<String, String> c, UnaryOperator<String> secrets) {
         this.secrets = secrets;
         this.pageSize = parsePositive(c.get("page_size"));
@@ -87,7 +84,7 @@ public class SoapPaginationStrategy implements PaginationStrategy {
 
     private RestRequest render(long cursor) {
         return SoapRequestBuilder.render(baseUrl, path, soapAction, headerTemplate, bodyTemplate,
-            String.valueOf(pageSize), String.valueOf(cursor), String.valueOf(cursor / pageSize + 1), secrets, ENV);
+            String.valueOf(pageSize), String.valueOf(cursor), String.valueOf(cursor / pageSize + 1), secrets);
     }
 
     /** Stop signals, in priority order. A null/missing flag is treated as "stop" (never loops forever).

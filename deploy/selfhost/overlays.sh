@@ -9,7 +9,7 @@
 #
 # Reads SEARCH / SEARCH_CLUSTER (the caller's flags). Appends every recorded overlay to COMPOSE, in recorded order;
 # a recorded Search provider sets SEARCH or SEARCH_CLUSTER and BUILD, unless the caller passed a provider flag.
-# When the TLS façade is kept and neither the shell nor .env sets LUMNIK_TLS_HOST / LUMNIK_TLS_BIND, exports the
+# When the TLS façade is kept and neither the shell nor .env sets LUMNIK_TLS_HOST / LUMNIK_TLS_BIND / LUMNIK_TLS_HSTS, exports the
 # values the running stack was started with: a forgotten LUMNIK_TLS_BIND=127.0.0.1 must not silently widen the
 # façade to every interface. Exits 2 when a recorded file is gone or the façade's address cannot be found.
 keep_running_overlays() {
@@ -70,5 +70,20 @@ keep_running_overlays() {
       bind="$(docker inspect --format '{{range (index .HostConfig.PortBindings "443/tcp")}}{{.HostIp}}{{end}}' "${caddy%%$'\n'*}")"
       if [[ -n "$bind" && "$bind" != 0.0.0.0 ]]; then export LUMNIK_TLS_BIND="$bind"; fi
     fi
+  fi
+  # HSTS (#1994), likewise: a re-run without the variable must not switch it off. Exactly true or false — a typo
+  # would turn a security header off in silence.
+  if [[ -z "${LUMNIK_TLS_HSTS:-}" ]] && ! grep -q '^LUMNIK_TLS_HSTS=.' .env; then
+    project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$hub")"
+    caddy="$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter label=com.docker.compose.service=caddy)"
+    if [[ -n "$caddy" ]] && docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${caddy%%$'\n'*}" \
+        | grep -qx 'LUMNIK_TLS_HSTS=true'; then
+      export LUMNIK_TLS_HSTS=true
+    fi
+  fi
+  hsts="${LUMNIK_TLS_HSTS:-$(sed -n 's/^LUMNIK_TLS_HSTS=//p' .env | tail -1)}"
+  if [[ -n "$hsts" && "$hsts" != true && "$hsts" != false ]]; then
+    echo "!! LUMNIK_TLS_HSTS must be exactly true or false, not '$hsts'." >&2
+    exit 2
   fi
 }

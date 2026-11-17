@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/output"
 	"github.com/spf13/cobra"
 )
@@ -20,6 +21,7 @@ func newSecretCmd() *cobra.Command {
 		newSecretSetCmd(),
 		newSecretListCmd(),
 		newSecretDescribeCmd(),
+		newSecretScopeCmd(),
 		newSecretRmCmd(),
 	)
 	return cmd
@@ -86,9 +88,10 @@ func newSecretListCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "(no secrets)")
 				return nil
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-30s %s\n", "NAME", "ROTATED_AT", "DESCRIPTION")
+			fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-30s %-20s %s\n", "NAME", "ROTATED_AT", "SCOPES", "DESCRIPTION")
 			for _, s := range secrets {
-				fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-30s %s\n", s.Name, orDash(s.RotatedAt), s.Description)
+				fmt.Fprintf(cmd.OutOrStdout(), "%-30s %-30s %-20s %s\n", s.Name, orDash(s.RotatedAt),
+					orDash(strings.Join(s.Scopes, ",")), s.Description)
 			}
 			return nil
 		},
@@ -117,6 +120,34 @@ func newSecretDescribeCmd() *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "created_at:  %s   by %s\n", orDash(s.CreatedAt), orDashInt(s.CreatedBy))
 			fmt.Fprintf(cmd.OutOrStdout(), "updated_at:  %s   by %s\n", orDash(s.UpdatedAt), orDashInt(s.UpdatedBy))
 			fmt.Fprintf(cmd.OutOrStdout(), "rotated_at:  %s\n", orDash(s.RotatedAt))
+			fmt.Fprintf(cmd.OutOrStdout(), "scopes:      %s\n", orDash(strings.Join(s.Scopes, ",")))
+			return nil
+		},
+	}
+}
+
+// newSecretScopeCmd sets the scopes a secret serves (#2015): a connector or an export reads it
+// only when it carries every one of the secret's scopes, and a scopeless secret serves only the
+// scopeless ones. The value is left as it is, so scoping a secret never means typing it again.
+func newSecretScopeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "scope <NAME> <SCOPES>",
+		Short: "Replace the scopes a secret serves (comma-separated; \"\" for none)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := ClientFromCmd(cmd)
+			if err != nil {
+				return err
+			}
+			out, err := c.SecretScope(args[0], client.SplitScopes(args[1]))
+			if err != nil {
+				return err
+			}
+			if len(out) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "scopes: (none)")
+				return nil
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), "scopes:", strings.Join(out, ","))
 			return nil
 		},
 	}

@@ -27,7 +27,7 @@ class ScopesValidationServiceTest {
 
     private static final String CSV_SPEC = """
         spec:
-          transport: { kind: local, path: /imports/*.csv }
+          transport: { kind: local, path: imports/*.csv }
           parser: { has_header: true }
           after_process: none
           target: {}

@@ -60,7 +60,7 @@ sequenceDiagram
 | `name`, `email` | no | profile fields, used at first-login creation only |
 
 - The subject side of the key is `sub` by default; `OIDC_SUBJECT_CLAIM` names another claim
-  (see Entra below). The shipped compose file and Helm chart do not pass this variable to the hub.
+  (see Entra below). Set it in `.env`; on Helm, through `hub.extraEnv`.
 - Malformed claims are **rejected, never repaired**: a non-integer `tenant_id`, an oversized
   issuer or subject each fail with their own 401 ([troubleshooting](#troubleshooting)). A bad
   *profile* claim never blocks a login: a long name is clamped, an invalid email dropped.
@@ -82,7 +82,7 @@ The shipped realm is the working reference; copy its mapper shapes onto your cli
 | Step | Configuration |
 |---|---|
 | **1. Realm roles** | create `lm_user`, `lm_integrator`, `lm_admin`, and `scope:<tag>` roles if you restrict users by scope. Assign them to users or groups; the hub matches names flat |
-| **2. `tenant_id` mapper** | *User Attribute* mapper: attribute `tenant_id`, claim `tenant_id`, JSON type **long**, on the access token |
+| **2. `tenant_id` mapper** | *User Attribute* mapper: attribute `tenant_id`, claim `tenant_id`, JSON type **long**, on the access token. Declare `tenant_id` admin-only: a user who can edit it chooses their tenant ([how](identity-admin.md#add-a-user)) |
 | **3. `groups` mapper** | *User Realm Role* mapper: claim name `groups`, multivalued, on the access token |
 | **4. Audience mapper** | *Audience* mapper adding `lumnik-backend` to the access token, on **every** client that calls the hub |
 | **5. `lm` client** | OIDC client with device flow; point the CLI at it: `lm config set-context … --oidc-issuer https://idp.example.com/realms/corp --oidc-client-id <client>` |
@@ -167,6 +167,7 @@ that they start fresh.
 | `401 {"error":"missing or invalid tenant_id claim"}` | No `tenant_id` on the access token, or a non-integer value | Add or fix the `tenant_id` mapper (JSON type long, access token) |
 | 401 with no lumnik error body | Rejected by the OIDC layer: wrong or missing `aud`, or `iss` ≠ the configured issuer | Add the audience mapper; check `issuerUrl`/`tokenIssuer` match the token's `iss` |
 | `401 {"error":"missing subject/issuer claim"}` | No `user_id` claim *and* no subject claim | Check `OIDC_SUBJECT_CLAIM` names a claim the IdP emits |
+| `401 {"error":"invalid user_id claim"}` | The token carries a `user_id` that is not a whole number | Emit lumnik's numeric user id, or drop the claim so JIT resolves the user (Pro) |
 | `401 {"error":"no external identity resolution in this edition (user_id claim required)"}` | No `user_id` claim on a lumnik Open build | Run lumnik Pro, or emit `user_id` |
 | `401 {"error":"subject/issuer claim too long"}` | `iss` or subject exceeds 255 characters; never truncated, that would change the identity | Use a shorter stable claim (Entra `oid`) |
 | `404 {"error":"no user record on this hub for user_id N"}` on `lm scope` | The IdP emits a `user_id` that names no hub row | Point it at an existing row, or drop it so JIT resolves the user (Pro) |

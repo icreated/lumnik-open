@@ -1,6 +1,8 @@
 package io.lumnik.hub.export.run;
 
 import io.lumnik.hub.export.destination.FileDestinationException;
+import io.lumnik.hub.outbound.OutboundRefusedException;
+import io.lumnik.hub.outbound.OutboundUnresolvedException;
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.awscore.exception.AwsErrorDetails;
 import software.amazon.awssdk.services.s3.model.S3Exception;
@@ -66,5 +68,23 @@ class ExportFailureTextTest {
     SQLException sql = new SQLException("invalid input syntax for type bigint: \"" + SECRET + "\"", "22P02");
     String text = ExportFailureText.of(new RuntimeException("snapshot failed", sql));
     assertThat(text).doesNotContain(SECRET).contains("SQLSTATE 22P02").startsWith("snapshot failed");
+  }
+
+  /**
+   * #2002: a destination the address rule refuses keeps the hub's sentence, and is the export's definition to fix,
+   * not a transport that failed.
+   */
+  @Test
+  void an_address_refusal_is_said_as_written_and_is_the_definitions() {
+    var refused = new OutboundRefusedException("the host resolves to a link-local address, which the hub never connects to");
+    assertThat(ExportFailureText.of(refused)).isEqualTo(refused.getMessage());
+    assertThat(ExportRunner.classify(refused, ExportFailureCode.PUBLICATION)).isEqualTo(ExportFailureCode.DEFINITION);
+  }
+
+  /** #2002: an S3 endpoint that does not resolve keeps the hub's sentence too. */
+  @Test
+  void an_unresolved_address_is_said_as_written() {
+    var unresolved = new OutboundUnresolvedException();
+    assertThat(ExportFailureText.of(unresolved)).isEqualTo(unresolved.getMessage());
   }
 }

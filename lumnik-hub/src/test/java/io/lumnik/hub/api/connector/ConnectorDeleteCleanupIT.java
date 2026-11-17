@@ -217,9 +217,9 @@ class ConnectorDeleteCleanupIT {
         // C4/P18 PR1 registered hybrid ext.* tables in the registry; connector delete must
         // drop them like connector.t_* — same erasure gesture, same symmetry (the one-shot
         // CSV path never registers, so it is naturally out of reach of this purge).
-        execSql("CREATE SCHEMA IF NOT EXISTS ext");
         execSql("DROP TABLE IF EXISTS ext.purge_probe");
         execSql("CREATE TABLE ext.purge_probe (id bigint)");
+        record("purge_probe");
         UUID id = persistBareConnector("extpurge");
         registry.register(1L, "hybrid:ext.purge_probe", "ext", "purge_probe", Map.of("id", "bigint"), id);
 
@@ -234,21 +234,46 @@ class ConnectorDeleteCleanupIT {
 
     @Test
     void purge_keeps_the_rows_another_connector_upserted_into_a_shared_ext_table() throws Exception {
-        execSql("CREATE SCHEMA IF NOT EXISTS ext");
         execSql("DROP TABLE IF EXISTS ext.shared_probe");
         execSql("CREATE TABLE ext.shared_probe (tenant_id bigint NOT NULL, connector_id uuid NOT NULL, v text)");
+        record("shared_probe");
         UUID mine = persistBareConnector("extmine");
         UUID theirs = persistBareConnector(2L, "exttheirs");
         registry.register(1L, "hybrid:ext.shared_probe", "ext", "shared_probe", Map.of("v", "text"), mine);
         registry.register(2L, "hybrid:ext.shared_probe", "ext", "shared_probe", Map.of("v", "text"), theirs);
         execSql("INSERT INTO ext.shared_probe VALUES (1, '" + mine + "', 'a'), (2, '" + theirs + "', 'b')");
+        try {
+            registry.purgeForConnector(mine);
 
-        registry.purgeForConnector(mine);
+            assertThat(scalar("SELECT count(*) FROM ext.shared_probe WHERE connector_id = '" + theirs + "'"))
+                .as("the other connector's row survives").isEqualTo(1L);
+            assertThat(scalar("SELECT count(*) FROM ext.shared_probe")).as("this connector's row goes").isEqualTo(1L);
+        } finally {
+            execSql("DROP TABLE IF EXISTS ext.shared_probe");
+            execSql("DELETE FROM connector.hybrid_table WHERE table_schema = 'ext' AND table_name = 'shared_probe'");
+        }
+    }
 
-        assertThat(scalar("SELECT count(*) FROM ext.shared_probe WHERE connector_id = '" + theirs + "'"))
-            .as("the other connector's row survives").isEqualTo(1L);
-        assertThat(scalar("SELECT count(*) FROM ext.shared_probe")).as("this connector's row goes").isEqualTo(1L);
-        execSql("DROP TABLE IF EXISTS ext.shared_probe");
+    /** #2010: under ext too, a table is the hub's only when it recorded it; a registry row naming one is not enough. */
+    @Test
+    void purge_keeps_an_ext_table_the_hub_did_not_record() throws Exception {
+        execSql("DROP TABLE IF EXISTS ext.unrecorded_probe");
+        execSql("CREATE TABLE ext.unrecorded_probe (id bigint)");
+        UUID id = persistBareConnector("extunrecorded");
+        registry.register(1L, "hybrid:ext.unrecorded_probe", "ext", "unrecorded_probe", Map.of("id", "bigint"), id);
+
+        assertThat(registry.rowsGoingWith(id)).as("the dry run does not count it").isEmpty();
+        registry.purgeForConnector(id);
+
+        assertThat(scalar("SELECT count(*) FROM information_schema.tables "
+            + "WHERE table_schema='ext' AND table_name='unrecorded_probe'")).isEqualTo(1L);
+        execSql("DROP TABLE IF EXISTS ext.unrecorded_probe");
+    }
+
+    /** A table under ext as the hybrid writer records it when it makes it (#2010). */
+    private void record(String table) throws Exception {
+        execSql("INSERT INTO connector.hybrid_table (table_schema, table_name) VALUES ('ext', '" + table + "') "
+            + "ON CONFLICT DO NOTHING");
     }
 
     @Test
@@ -283,6 +308,8 @@ class ConnectorDeleteCleanupIT {
         assertThat(registry.rowsGoingWith(id)).containsExactly(Map.entry("connector.hyb1627", 2L));
         registry.purgeForConnector(id);
         assertThat(tables("hyb1627")).as("the hybrid table goes with its connector").isZero();
+        assertThat(scalar("SELECT count(*) FROM connector.hybrid_table WHERE table_schema = 'connector' "
+            + "AND table_name = 'hyb1627'")).as("and the hub's record of it (#2010)").isZero();
 
         UUID again = persistBareConnector("hyb1627");
         writeHybrid(spec, again, "c");
@@ -317,6 +344,7 @@ class ConnectorDeleteCleanupIT {
         "a lookalike with data as text | hybrid:connector.fake1627 | tenant_id bigint, external_id text, row_hash text, data text, connector_id uuid, endpoint_id uuid",
         "the full shape under another mapping | m-fake1627 | tenant_id bigint, external_id text, row_hash text, data jsonb, connector_id uuid, endpoint_id uuid",
         "the full shape under a marker naming another table | hybrid:connector.other1627 | tenant_id bigint, external_id text, row_hash text, data jsonb, connector_id uuid, endpoint_id uuid",
+        "the full shape under its own marker, which the hub did not record (#2010) | hybrid:connector.fake1627 | tenant_id bigint, external_id text, row_hash text, data jsonb, connector_id uuid, endpoint_id uuid",
     })
     void purge_keeps_a_connector_table_that_is_not_the_hybrid_writers(String why, String mappingId, String columns)
             throws Exception {

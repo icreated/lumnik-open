@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest;
 
+import io.lumnik.hub.testsupport.TestOutbound;
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
@@ -49,7 +50,7 @@ class RestHttpClientVersionIT {
 
     @BeforeEach void clear() { wm.resetRequests(); }
 
-    private static RestHttpClient client() { return new RestHttpClient().trusting(pem); }
+    private static RestHttpClient client() { return new RestHttpClient(TestOutbound.ADDRESSES).trusting(pem); }
 
     private static RestRequest soap() {
         return RestRequest.post("https://localhost:" + wm.httpsPort() + "/OrderService.svc", "<Envelope/>");
@@ -77,7 +78,7 @@ class RestHttpClientVersionIT {
 
     @Test
     void the_version_survives_trusting_a_ca_in_either_order() throws Exception {
-        new RestHttpClient().speaking("1.1").trusting(pem).execute(soap());
+        new RestHttpClient(TestOutbound.ADDRESSES).speaking("1.1").trusting(pem).execute(soap());
 
         assertEquals(List.of("HTTP/1.1"), protocols());
     }

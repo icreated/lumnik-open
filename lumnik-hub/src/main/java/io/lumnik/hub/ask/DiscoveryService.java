@@ -44,7 +44,7 @@ public class DiscoveryService implements DiscoveryPort {
     public DiscoveryResult rediscover(long tenantId, String scope) {
         Set<String> seenFqn = new HashSet<>();
         Collected hub = hubTables(tenantId, scope, seenFqn);
-        Collected views = entityViewTables(scope, seenFqn);
+        Collected views = entityViewTables(tenantId, scope, seenFqn);
 
         List<SchemaCard.Table> tables = new ArrayList<>(hub.tables());
         tables.addAll(views.tables());
@@ -99,10 +99,10 @@ public class DiscoveryService implements DiscoveryPort {
     }
 
     /** The fused entity views, skipping any whose name a hub table already claimed. */
-    private Collected entityViewTables(String scope, Set<String> seenFqn) {
+    private Collected entityViewTables(long tenantId, String scope, Set<String> seenFqn) {
         int columnCount = 0;
         List<SchemaCard.Table> tables = new ArrayList<>();
-        for (SchemaCard.Table t : entityViews.resolve(scope)) {
+        for (SchemaCard.Table t : entityViews.resolve(tenantId, scope)) {
             if (!seenFqn.add(t.name())) continue;
             tables.add(t);
             columnCount += t.columns().size();

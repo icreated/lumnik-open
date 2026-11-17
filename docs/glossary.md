@@ -42,8 +42,9 @@ carried the row again. The hub never retries a dead letter on its own.
 **Raw table (`t_*`)** — the table a `csv-file`, `jdbc-generic` or `kafka` connector creates
 in schema `connector`, one per endpoint. Everything else builds on it.
 
-- A `rest-generic` connector (GraphQL and SOAP too) writes to the table each endpoint names,
-  usually `ext.<name>`. The WOW's `connector.cust_siebel` is one.
+- A `rest-generic` connector (GraphQL and SOAP too) writes to the table each endpoint names:
+  `ext.<name>`, or `connector.<name>` for an Entity to fuse it. The WOW's `connector.cust_siebel`
+  is one. Any other schema is refused.
 - A one-shot `lm csv ingest` lands in `ext.<name>`.
 
 **Transformer** — a repair applied at ingestion: broken accents, legacy date formats. You

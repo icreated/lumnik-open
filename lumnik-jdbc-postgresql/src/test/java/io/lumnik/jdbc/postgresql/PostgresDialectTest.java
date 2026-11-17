@@ -2,11 +2,18 @@ package io.lumnik.jdbc.postgresql;
 
 import io.lumnik.jdbc.spi.ColumnDescriptor;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.lang.reflect.Proxy;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.ResultSetMetaData;
 import java.sql.Types;
+import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -110,5 +117,64 @@ class PostgresDialectTest {
           case "getColumnTypeName" -> typeName;
           default -> throw new UnsupportedOperationException(method.getName());
         });
+  }
+
+  /** #2002: the hosts a URL connects to, as pgjdbc itself reads them — the hub judges each. */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "jdbc:postgresql://erp-db:5432/erp | erp-db",
+      "jdbc:postgresql://a:5432,b:5433/erp?targetServerType=primary | a,b",
+      "jdbc:postgresql://[::1]:5432/erp | [::1]",
+      "jdbc:postgresql:erp | localhost",
+      "jdbc:postgresql:// | localhost",
+  })
+  void connect_hosts_are_the_drivers_own_reading(String url, String hosts) {
+    assertEquals(List.of(hosts.split(",")), d.connectHosts(url));
+  }
+
+  /** A socket factory of the URL's choice could connect anywhere the hosts do not say. */
+  @Test
+  void a_url_that_names_its_own_socket_factory_is_refused() {
+    IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+        () -> d.connectHosts("jdbc:postgresql://erp-db/erp?socketFactory=x.Y&socketFactoryArg=/tmp/s"));
+    assertTrue(e.getMessage().contains("socketFactory"), e.getMessage());
+  }
+
+  /** What pgjdbc does not read (userinfo, a single slash) or reads as no host is refused, never guessed. */
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "jdbc:postgresql://u:p@erp-db/erp", "jdbc:postgresql:/erp", "jdbc:postgresql:///erp"})
+  void a_url_the_driver_reads_no_host_in_is_refused(String url) {
+    IllegalArgumentException e = assertThrows(IllegalArgumentException.class, () -> d.connectHosts(url));
+    assertFalse(e.getMessage().contains("erp"), e.getMessage());   // the reason, never the URL
+  }
+
+  /** #2002: a connect and a login always bounded, the reads only when asked. */
+  @Test
+  void timeouts_are_the_drivers_properties_in_seconds() {
+    assertEquals(Map.of("connectTimeout", "10", "loginTimeout", "10"),
+        d.timeoutProperties(Duration.ofSeconds(10), Optional.empty()));
+    assertEquals(Map.of("connectTimeout", "10", "loginTimeout", "10", "socketTimeout", "30"),
+        d.timeoutProperties(Duration.ofSeconds(10), Optional.of(Duration.ofSeconds(30))));
+  }
+
+  /**
+   * #2000, #2002: a {@code service} is resolved from the hub's own pg_service.conf — its host, its settings. Refused
+   * even when the hub has one that would answer: the URL, not the hub's files, says where a connector connects.
+   */
+  @Test
+  void a_service_the_hubs_own_file_would_resolve_is_refused() throws Exception {
+    Path file = Files.createTempFile("pg_service", ".conf");
+    Files.writeString(file, "[hub_db]\nhost=10.0.0.5\nport=5432\ndbname=hub\n");
+    String before = System.getProperty("org.postgresql.pgservicefile");
+    System.setProperty("org.postgresql.pgservicefile", file.toString());
+    try {
+      IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+          () -> d.connectHosts("jdbc:postgresql://?service=hub_db"));
+      assertTrue(e.getMessage().contains("service"), e.getMessage());
+    } finally {
+      if (before == null) System.clearProperty("org.postgresql.pgservicefile"); else System.setProperty("org.postgresql.pgservicefile", before);
+      Files.deleteIfExists(file);
+    }
   }
 }

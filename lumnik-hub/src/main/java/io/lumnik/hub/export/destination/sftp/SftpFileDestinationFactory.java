@@ -6,6 +6,7 @@ import io.lumnik.hub.connector.transport.sftp.SftpConnection;
 import io.lumnik.hub.connector.transport.sftp.SftpConnectionFactory;
 import io.lumnik.hub.export.destination.FileDestination;
 import io.lumnik.hub.export.destination.FileDestinationFactory;
+import io.lumnik.hub.outbound.OutboundAddress;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -28,10 +29,12 @@ import static io.lumnik.hub.export.destination.FileDestinationFactory.required;
 public class SftpFileDestinationFactory implements FileDestinationFactory {
 
     private final SecretRefs secrets;
+    private final OutboundAddress addresses;
 
     @Inject
-    public SftpFileDestinationFactory(SecretRefs secrets) {
+    public SftpFileDestinationFactory(SecretRefs secrets, OutboundAddress addresses) {
         this.secrets = secrets;
+        this.addresses = addresses;
     }
 
     @Override
@@ -50,7 +53,7 @@ public class SftpFileDestinationFactory implements FileDestinationFactory {
         SftpAuthMethod auth = SftpAuthMethod.fromConfig(cfg, secrets);
 
         SftpConnection connection =
-            SftpConnectionFactory.connect(host, port, user, auth, true, hostKeyFingerprint);
+            SftpConnectionFactory.connect(addresses, host, port, user, auth, true, hostKeyFingerprint);
         return new SftpFileDestination(connection, finalPath);
     }
 }

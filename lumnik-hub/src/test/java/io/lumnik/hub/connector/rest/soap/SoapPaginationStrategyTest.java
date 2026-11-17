@@ -139,20 +139,22 @@ class SoapPaginationStrategyTest {
     }
 
     @Test
-    void env_placeholder_falls_back_to_system_property_for_dev_injection() throws Exception {
-        // EnvSecrets.lookup() tries System.getenv first, then System.getProperty —
-        // allows injecting secrets via -Dname=value in dev/test without setting OS env vars.
-        // Highly specific key — extremely unlikely to exist as a real OS env var in CI.
-        String key = "LUMNIK_SOAP_TEST_ENV_FALLBACK";
-        System.setProperty(key, "tok123");
+    void env_placeholder_resolves_through_the_registry_not_the_hubs_environment() throws Exception {
+        // #2000: {{env:NAME}} keeps its syntax, but NAME is a tenant secret. A JVM property of the same name
+        // is not read, nor any OS variable.
+        String key = "LUMNIK_SOAP_TEST_2000";
+        System.setProperty(key, "from-a-jvm-property");
         try {
-            SoapPaginationStrategy s = new SoapPaginationStrategy(Map.of(
-                "kind", "soap", "page_size", "10", "response_path", "$.Body.Out.Items"));
             EndpointConfig ec = new EndpointConfig("http://h", "POST", "/svc", Map.of(
-                "body", "<In><Token>{{env:" + key + "}}</Token><Num>{{cursor}}</Num></In>",
+                "body", "<In><Token>{{env:" + key + "}}</Token><Path>{{env:PATH}}</Path></In>",
                 "soap_action", "A"));
-            RestRequest r = s.first(ec, null);
-            assertThat(r.body()).contains("<Token>tok123</Token>");
+            Map<String, String> soap = Map.of("kind", "soap", "page_size", "10", "response_path", "$.Body.Out.Items");
+
+            RestRequest r = new SoapPaginationStrategy(soap, n -> Map.of(key, "tok123", "PATH", "p").get(n)).first(ec, null);
+            assertThat(r.body()).contains("<Token>tok123</Token>").contains("<Path>p</Path>");
+
+            assertThatThrownBy(() -> new SoapPaginationStrategy(soap, n -> null).first(ec, null))
+                .hasMessageContaining("unresolved secret/env placeholder: " + key);
         } finally {
             System.clearProperty(key);
         }

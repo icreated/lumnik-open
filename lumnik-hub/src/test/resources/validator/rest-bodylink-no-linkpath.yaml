@@ -11,4 +11,4 @@ spec:
         kind: body-link
         response_path: "$.results"
         # link_path intentionally omitted — must error
-      target: { kind: hybrid, table: x_items, unique_key: "$.id" }
+      target: { kind: hybrid, table: ext.x_items, unique_key: "$.id" }

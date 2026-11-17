@@ -7,6 +7,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.AskResult;
 import io.lumnik.extraction.spi.ask.Disputed;
 import io.lumnik.extraction.spi.ask.SchemaCard;
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.lumnik.llm.spi.Analytic;
 import io.lumnik.llm.spi.ChatPort;
 import io.quarkus.agroal.DataSource;
@@ -55,10 +56,10 @@ class DisputedRowsSnapshotIT {
              "CREATE TABLE connector.t_dspsnap_crm (customer text, town text)",
              "INSERT INTO connector.t_dspsnap_erp VALUES ('P-1000','Lyon','GOLD'), ('P-1008','Lyon','GOLD')",
              "INSERT INTO connector.t_dspsnap_crm VALUES ('P-1000','Lyon'), ('P-1008','Villeurbanne')");
-        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
+        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT))
             .contentType("application/yaml").body(MANIFEST)
             .post("/api/entities/apply").then().statusCode(200);
-        store.save(7L, "dspsnap", new SchemaCard("dspsnap", schemas.resolve("dspsnap")));
+        store.save(7L, "dspsnap", new SchemaCard("dspsnap", schemas.resolve(1L, "dspsnap")));
     }
 
     @AfterEach

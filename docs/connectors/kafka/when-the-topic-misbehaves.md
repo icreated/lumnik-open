@@ -35,7 +35,7 @@ Resolution: open
 ```
 
 - `IN 1000 = OUT 857 + SKIPPED 143`, and the table holds 857 rows.
-- Each entry names `topic:partition:offset` and keeps the raw value.
+- Each entry names `topic:partition:offset` and keeps the raw value, cut after 8 192 characters.
 - A bad message is set aside once, and never read again.
 - A long run of them stops the run early, `Partial`. The next run continues after them.
 - The producer sent a fixed message? Once a run has read it, close the old entry:

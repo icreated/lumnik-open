@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.runtime;
 
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.hub.connector.runtime.OwnedRunScope;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.connector.api.types.ConnectorContext;
@@ -57,6 +58,7 @@ class RestEndpointReaderDeclaredTotalTest {
      * early while the run still reports success.
      */
     static final class OffsetHttp extends RestHttpClient {
+        OffsetHttp() { super(TestOutbound.ADDRESSES); }
         private int served;
         /** How many rows the source actually holds. */
         int rows = 20;
@@ -99,7 +101,7 @@ class RestEndpointReaderDeclaredTotalTest {
 
     private RestEndpointReader reader() {
         return new RestEndpointReader(endpoint, new RestEndpointReaderChunkingTest.PassThroughAuth(),
-            new PaginationFactory(), new RateLimiterRegistry(), http, mapper, SecretRefs.environmentOnly(name -> null));
+            new PaginationFactory(), new RateLimiterRegistry(), http, mapper, SecretRefs.of(name -> null));
     }
 
     private ConnectorContext ctx(Map<String, Object> config) {
@@ -237,7 +239,7 @@ class RestEndpointReaderDeclaredTotalTest {
         // #1796: the reader checks the total whatever the strategy, so a page-numbered list declaring one is read again too.
         List<Integer> pages = new ArrayList<>();
         int[] served = {0};
-        RestHttpClient pageHttp = new RestHttpClient() {
+        RestHttpClient pageHttp = new RestHttpClient(TestOutbound.ADDRESSES) {
             @Override public RestResponse execute(RestRequest req) {
                 int page = Integer.parseInt(req.queryParams().get("page"));
                 pages.add(page);
@@ -254,7 +256,7 @@ class RestEndpointReaderDeclaredTotalTest {
         cfg.put("pagination", Map.of("kind", "page", "page_param", "page", "size_param", "size", "size", 4,
             "total_path", "$.total", "response_path", "$.items"));
         RestEndpointReader reader = new RestEndpointReader(endpoint, new RestEndpointReaderChunkingTest.PassThroughAuth(),
-            new PaginationFactory(), new RateLimiterRegistry(), pageHttp, mapper, SecretRefs.environmentOnly(name -> null));
+            new PaginationFactory(), new RateLimiterRegistry(), pageHttp, mapper, SecretRefs.of(name -> null));
 
         drain(100, cfg, reader);
 

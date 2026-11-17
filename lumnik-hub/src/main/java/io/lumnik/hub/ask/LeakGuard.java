@@ -15,8 +15,8 @@ import java.util.Set;
  * Refuses a generated query that reads a SCHEMA-QUALIFIED table not declared in the scope's
  * {@link SchemaCard} — the table-level twin of {@link DomainGuard} (value) and
  * {@link UndocumentedColumnGuard} (column). This is the scope boundary on the generated SQL:
- * {@code lumnik_readonly} can read every connector table and RLS only filters by tenant, so without this
- * a chat bound to one scope could read another's table within the same tenant.
+ * {@code lumnik_readonly} reads every scope's dynamic tables and entity views, and RLS only filters by tenant, so
+ * without this a chat bound to one scope could read another's table within the same tenant.
  *
  * <p><b>High-confidence + fail-open.</b> Inspects every {@code schema.table} reference whose schema is one
  * the card declares — position-independent (FROM, JOIN, comma-join, ONLY/LATERAL, subquery, SELECT-list),

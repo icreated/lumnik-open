@@ -44,10 +44,21 @@ For an external IdP, see [Bring your own IdP](byo-idp.md) and [SCIM](scim.md).
 
 ### Add a user
 
-1. **Users → Add user**: username, email, **Create**.
-2. **Credentials** tab: set a password, or let your IdP federation handle it.
-3. **Attributes** tab: `tenant_id` = the tenant's numeric id.
-4. **Role mapping** tab → **Assign role** → `lm_user`, plus any `scope:*` role.
+1. **Users → Add user**: username, email, first and last name, and **Tenant id** = the tenant's
+   numeric id. **Create**.
+2. **Credentials** tab: set a password, or let your IdP federation handle it. A new install's
+   realm asks for 12 characters at least, different from the username and the email. An older
+   install keeps its own rule until you change it ([upgrade note](../operations/upgrade.md#the-bundled-keycloak-realm-is-stricter)).
+3. **Role mapping** tab → **Assign role** → `lm_user`, plus any `scope:*` role.
+
+**Tenant id** and **Hub user id** are admin-only fields: the user never sees them on their account
+page, and cannot change them.
+
+!!! warning "Never set *Unmanaged attributes* to Enabled"
+    *Realm settings → General → Unmanaged attributes* stays **Disabled**, or **Admin can edit**.
+    Set to **Enabled**, it lets every user add attributes from their account page, and an
+    attribute named `tenant_id` would move them to another tenant. Need an extra attribute? Declare it under
+    *Realm settings → User profile*, editable by the admin only.
 
 !!! note "Edition"
     - **lumnik Pro**: nothing else to do. The first login creates the hub row (JIT provisioning).
@@ -56,7 +67,7 @@ For an external IdP, see [Bring your own IdP](byo-idp.md) and [SCIM](scim.md).
       Complete the mapping yourself:
         1. Create the hub row: `POST /api/tenants/{tid}/users`, as an `lm_admin` of that tenant.
         2. Note the `id` it returns.
-        3. Add it as the account's `user_id` attribute.
+        3. Enter it in the account's **Hub user id** field.
 
 `POST /api/tenants/{tid}/users` creates a **hub row, not a login**: nobody can authenticate as
 it until a Keycloak account points at it.
@@ -112,13 +123,17 @@ curl -s -X POST https://your-hub.example.com/api/tenants \
 `$TOKEN` is a `hubadmin` token: mint it as in [Test the API](../recipes/test-the-api.md#mint-a-token),
 with `username=hubadmin` and `HUBADMIN_PASSWORD`.
 
+Your first tenant besides `default` makes the hub multi-tenant: from then on, entities, views, apps and
+`lm rag reindex` are written by `lm_superadmin` only. Give it to the integrator who serves a tenant, beside their
+roles ([Roles & permissions](role-management.md#on-a-hub-with-several-tenants)).
+
 **2. Create its first administrator**: a Keycloak account as in [Add a user](#add-a-user), with
 `tenant_id` = the id returned above and the roles `lm_user` + `lm_admin`.
 
 | Edition | Then |
 |---|---|
 | lumnik Pro | Leave `user_id` unset. The first login creates the hub row in the new tenant. |
-| lumnik Open | The account needs a hub row in the new tenant, and `POST /api/tenants/{tid}/users` answers `403` (empty body) to any token whose `tenant_id` is not `{tid}`, `hubadmin` included. |
+| lumnik Open | The account needs a hub row in the new tenant, and `POST /api/tenants/{tid}/users` answers `403` (empty body) to any token whose `tenant_id` is not `{tid}`, `hubadmin` included. A token holding any `scope:*` role gets `403 {"error":"scope not granted"}` first, whatever `{tid}`. |
 
 On lumnik Open, that call passes only for a token holding `lm_superadmin` and `lm_admin` plus
 an `acting_as_tenant: <tid>` claim ([impersonation](../admin-console-guide.md#act-on-behalf-of-a-tenant-impersonation)).

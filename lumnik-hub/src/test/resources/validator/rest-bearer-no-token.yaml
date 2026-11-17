@@ -22,5 +22,5 @@ spec:
         response_path: $.data
       target:
         kind: hybrid
-        table: stripe_customers
+        table: ext.stripe_customers
         unique_key: $.id

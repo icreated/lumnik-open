@@ -1,6 +1,7 @@
 package io.lumnik.identity.role;
 
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.common.security.TenantWide;
 import io.lumnik.identity.IdentityErrors;
 import io.lumnik.identity.Require;
 import io.lumnik.identity.TenantInPath;
@@ -18,6 +19,7 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 import java.util.List;
 
 @TenantInPath
+@TenantWide
 @Path("/api/tenants/{tenantId}/roles")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)

@@ -16,9 +16,14 @@ public final class ScalarParams {
 
   private ScalarParams() {}
 
+  /** Whether {@link #text} reads {@code value}: text, a number or a boolean — a header {@code 2024} is a number in YAML. */
+  public static boolean isText(JsonNode value) {
+    return value != null && (value.isTextual() || value.isNumber() || value.isBoolean());
+  }
+
   /** The value's text form, or a {@link MappingValidationException} naming {@code owner} and {@code key}. */
   public static String text(String owner, String key, JsonNode value) {
-    if (!value.isTextual() && !value.isNumber() && !value.isBoolean()) {
+    if (!isText(value)) {
       throw new MappingValidationException(owner + ": '" + key + "' must be text, a number or a boolean (got "
           + MappingValidationException.typeName(value) + ")");
     }
@@ -89,8 +94,9 @@ public final class ScalarParams {
     String word = optionalText(owner, key, value, absent);
     if (word != null && !allowed.contains(word)) {
       List<String> quoted = allowed.stream().map(w -> "\"" + w + "\"").toList();
-      throw new MappingValidationException(owner + ": '" + key + "' must be "
-          + String.join(", ", quoted.subList(0, quoted.size() - 1)) + " or " + quoted.get(quoted.size() - 1));
+      String last = quoted.get(quoted.size() - 1);
+      throw new MappingValidationException(owner + ": '" + key + "' must be " + (quoted.size() == 1 ? last
+          : String.join(", ", quoted.subList(0, quoted.size() - 1)) + " or " + last));
     }
     return word;
   }

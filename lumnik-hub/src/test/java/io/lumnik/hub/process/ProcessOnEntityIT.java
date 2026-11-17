@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -97,7 +98,7 @@ class ProcessOnEntityIT {
                    + "VALUES (" + tenant + ", '" + t.replace("t_", "").replace('_', '-') + "', 'connector', '" + t + "', '{}'::jsonb)");
             }
         }
-        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
+        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT))
             .contentType("application/yaml").body(ENTITY)
             .post("/api/entities/apply").then().statusCode(200);
         for (int tenant : new int[] {1, 2}) {

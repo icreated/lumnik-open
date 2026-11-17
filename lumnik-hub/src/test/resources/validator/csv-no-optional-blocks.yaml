@@ -9,5 +9,5 @@ metadata:
 spec:
   transport:
     kind: local
-    path: /imports/*.csv
+    path: imports/*.csv
   after_process: none

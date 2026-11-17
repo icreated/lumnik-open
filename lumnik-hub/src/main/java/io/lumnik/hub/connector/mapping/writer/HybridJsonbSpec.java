@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.mapping.writer;
 
+import io.lumnik.hub.entity.EntityViewCompiler;
 import io.lumnik.hub.sql.SqlIdentifiers;
 
 import java.util.ArrayList;
@@ -41,6 +42,39 @@ public record HybridJsonbSpec(String table, String uniqueKeyPath, List<PromotedC
      */
     public static final Set<String> RESERVED_COLUMNS = TableColumn.namesOf(LEADING_COLUMNS, TRAILING_COLUMNS);
 
+    /**
+     * The schemas a hybrid target may take (#1989): {@code ext}, and {@code connector} where an Entity fuses it (#1627).
+     * The writer runs its DDL on the target as {@code lumnik_admin}; any other schema would hand it the platform's own
+     * tables ({@code identity}, {@code platform}, {@code core}, {@code rag}, {@code pg_catalog}).
+     */
+    private static final Set<String> TARGET_SCHEMAS =
+        Set.of(DynamicTableRegistry.HYBRID_SCHEMA, DynamicTableRegistry.DYNAMIC_SCHEMA);
+
+    /**
+     * Why {@code table} cannot be a hybrid target, or empty: a plain {@code schema.table} pair under one of
+     * {@link #TARGET_SCHEMAS}, and not an entity view's name ({@link EntityViewCompiler#VIEW_PREFIX}): a hybrid table
+     * taking one first breaks the Entity that later needs it. {@code connector.t_*} is not reserved: a hybrid target
+     * under connector is named {@code t_<name>} on purpose, for a Workflow to watch and an Entity to fuse (#1820). The record's own
+     * rule, and the validator's ({@code spec.endpoints[i].target.table}), and the purge door's.
+     */
+    public static Optional<String> targetProblem(String table) {
+        int dot = table == null ? -1 : table.indexOf('.');
+        boolean allowed = dot > 0 && SqlIdentifiers.isPlainQualifiedIdentifier(table)
+            && TARGET_SCHEMAS.contains(table.substring(0, dot))
+            && !table.startsWith(EntityViewCompiler.VIEW_PREFIX);
+        return allowed ? Optional.empty() : Optional.of("must be ext.<name> or connector.<name>, a connector name not"
+            + " starting with v_ (letters, digits, underscore; not starting with a digit)");
+    }
+
+    /**
+     * Carries the DDL-injection and schema guard ({@link #targetProblem}): {@code table} goes verbatim into
+     * admin-datasource DDL, so no caller, the parser or another, builds a spec around anything else.
+     */
+    public HybridJsonbSpec {
+        Optional<String> problem = targetProblem(table);
+        if (problem.isPresent()) throw new IllegalArgumentException("target.table " + problem.get() + ": " + table);
+    }
+
     public HybridJsonbSpec(String table, String uniqueKeyPath, List<PromotedColumn> promote) {
         this(table, uniqueKeyPath, promote, Optional.empty());
     }
@@ -48,18 +82,12 @@ public record HybridJsonbSpec(String table, String uniqueKeyPath, List<PromotedC
     /**
      * The one parser of the endpoint {@code target} block — every reader consumes THIS,
      * never a private re-parse (a third inline copy once silently dropped {@code transform}).
-     * Carries the DDL-injection guard: {@code table} goes verbatim into admin-datasource DDL,
-     * so this factory must not trust its caller either.
+     * The table is checked by the record itself, whatever builds it.
      */
     @SuppressWarnings("unchecked")
     public static HybridJsonbSpec fromTargetConfig(Map<String, Object> t) {
         if (t == null) throw new IllegalArgumentException("endpoint config missing 'target'");
-        String table = (String) t.get("table");
-        if (!SqlIdentifiers.isPlainQualifiedIdentifier(table)) {
-            throw new IllegalArgumentException(
-                "target.table must be a plain identifier or schema.table pair (letters, digits, underscore; "
-                    + "not starting with a digit): " + table);
-        }
+        String table = t.get("table") instanceof String s ? s : null;   // anything else is refused as no name
         // A path, or { path, transform } (#1630): Spring Data REST names an item only by its self link.
         Object rawKey = t.get("unique_key");
         Map<String, Object> keyObject = rawKey instanceof Map<?, ?> m ? (Map<String, Object>) m : Map.of();

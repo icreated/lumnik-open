@@ -1,7 +1,8 @@
 # 20-local-glob-incremental.yaml — glob pattern picks up multiple files; incremental cursor
 # avoids re-processing rows that were already ingested in a previous run.
 #
-# Apply and run:
+# Copy data/customers.csv and data/customers-2.csv into your tenant's folder of the hub's
+# local root first (docs/connectors/csv.md, quickstart). Then apply and run:
 #   lm apply -f docs/connectors/csv/20-local-glob-incremental.yaml
 #   lm connector run csv-local-glob
 #
@@ -24,7 +25,7 @@ metadata:
 spec:
   transport:
     kind: local
-    path: docs/connectors/csv/data/*.csv   # glob — matches customers.csv AND customers-2.csv
+    path: customers*.csv                   # glob — matches customers.csv AND customers-2.csv
                                            # files are processed in lexicographic order
 
   parser:

@@ -189,7 +189,7 @@ lm connector apply -f c.yaml
 | `lm outputs list` | what was sent out and whether it arrived, failures first (`--limit N`) |
 | `lm outputs replay ID` | re-send one failed delivery as a new attempt |
 | `lm data tables` / `lm data row HASH` | dynamic tables with your row count (`unknown` when it could not be counted); the raw row behind a citation, a timestamp as its UTC instant |
-| `lm secret set/list/describe/rm` | encrypted secrets; values never returned. `set NAME` prompts without echo, `set NAME -` reads stdin, `set NAME VALUE` warns (shell history). `--description`, `rm --force`. `rm` does not check references: a connector naming the secret fails at its next run |
+| `lm secret set/list/describe/scope/rm` | encrypted secrets; values never returned. `set NAME` prompts without echo, `set NAME -` reads stdin, `set NAME VALUE` warns (shell history). `--description`, `rm --force`. `scope NAME SCOPES` replaces the scopes a secret serves (comma-separated, `""` for none): a connector or an export reads it only when it carries all of them. `rm` does not check references: a connector naming the secret fails at its next run |
 
 The two tables you will read most:
 
@@ -240,7 +240,7 @@ b4176d39  orders     884f487d  MalformedSource  1         /tmp/exports/orders.cs
 |---|---|
 | `lm ask [--scope S] [--lang XX] [--previous "question"] "question"` | analytic text-to-SQL over the fused hub: the answer, a `data as of` line, any [disputed rows](../transparency/ask-rules.md#disputed-rows-a-disclosure-not-a-veto), the rows the query returned and **the SQL that ran** ([the guards](../transparency/ask-honesty.md)). `--lang` sets the answer language (default: from `LC_ALL`, `LC_MESSAGES` or `LANG`). Without `--scope`, asks your default scope. `--previous` names the question this one continues: "Et SUP-004 ?" is answered as the full question, shown on an `understood as` line. `-o json\|yaml` for a script |
 | `lm chat` | interactive REPL chat — in-REPL commands: `:corpus NAME` (or `all`), `:scope TAG` (or `default`), `:topK N` (default 10; the hub takes 1 to 50), `:clear`, `:help`, `:exit` |
-| `lm scopes` / `lm scope` / `lm scope set TAG` | list scopes (a scope-bound user sees only granted ones); show/set your default (`404 no user record on this hub…`: see [Tenants, users & scopes](../security/identity-admin.md)) |
+| `lm scopes` / `lm scope` / `lm scope set TAG` | list scopes (a scope-bound user sees only granted ones); show/set your default; `lm scope set ""` clears it (`404 no user record on this hub…`: see [Tenants, users & scopes](../security/identity-admin.md)) |
 | `lm rag search/status/reindex` | semantic search (`--top-k N`, 1 to 50, default 5); corpus status; re-index of the platform corpus (manifests, API, hooks) |
 
 ### The rows under the answer

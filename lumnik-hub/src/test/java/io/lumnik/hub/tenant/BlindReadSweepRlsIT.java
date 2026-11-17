@@ -1,10 +1,14 @@
 package io.lumnik.hub.tenant;
 
+import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.lumnik.testkit.auth.TestIdentity;
+import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
 import io.restassured.RestAssured;
+import jakarta.inject.Inject;
 import org.junit.jupiter.api.Test;
 
 import static org.hamcrest.CoreMatchers.containsString;
@@ -34,6 +38,8 @@ import static org.hamcrest.Matchers.greaterThan;
 @QuarkusTest
 @TestProfile(RlsEnforcedProfile.class)
 class BlindReadSweepRlsIT {
+
+  @Inject @DataSource("admin") AgroalDataSource adminDs;
 
   /** {@code IntegrationResource.list} and {@code .one} — {@code core.webhook_endpoint}. */
   @Test
@@ -171,24 +177,30 @@ class BlindReadSweepRlsIT {
    * draft of THIS test asserted a tenant-1 identity writing and reading tenant 11's override,
    * pinning the hole in as if it were the feature.
    *
-   * <p>An override stores a Kotlin script the hub executes, and {@code lm_admin} is a tenant-level
-   * role whose interceptor reads no tenant at all. So the parameter is bound to the caller, and
-   * what this test pins is the refusal.
+   * <p>An override stored a Kotlin script the hub executed (it carries none since #2011), and {@code lm_admin} is a
+   * tenant-level role whose interceptor reads no tenant at all. So the parameter is bound to the caller, and what this
+   * test pins is the refusal.
    */
   @Test
   void a_hook_override_is_visible_to_its_own_tenant() {
+    // An override is a toggle since #2011 (it carries no code). No hook is registered in a test application, so the
+    // toggle door (which checks the registry) cannot write one: the row is seeded, and the door's READ is what's pinned.
     String hookId = "rls-it-hook-" + System.nanoTime();
-    RestAssured.given().headers(TestIdentity.tenantOnly(1)).contentType("application/json")
-        .body("{\"hookId\":\"" + hookId + "\",\"tenantId\":1,\"script\":\"// rls it\"}")
-        .post("/api/platform/hooks/overrides").then().statusCode(204);
+    Jdbc.update(adminDs, "BlindReadSweepRlsIT.seedOverride",
+        "INSERT INTO core.hook_tenant_override (tenant_id, hook_id, enabled) VALUES (1, ?, false)", ps -> ps.setString(1, hookId));
+    try {
+      RestAssured.given().headers(TestIdentity.tenantOnly(1))
+          .get("/api/platform/hooks/overrides?tenantId=1")
+          .then().statusCode(200).body(containsString(hookId));
 
-    RestAssured.given().headers(TestIdentity.tenantOnly(1))
-        .get("/api/platform/hooks/overrides?tenantId=1")
-        .then().statusCode(200).body(containsString(hookId));
-
-    RestAssured.given().headers(TestIdentity.tenantOnly(1))
-        .get("/api/platform/hooks/overrides/" + hookId + "?tenantId=1")
-        .then().statusCode(200).body("hookId", is(hookId));
+      RestAssured.given().headers(TestIdentity.tenantOnly(1))
+          .get("/api/platform/hooks/overrides/" + hookId + "?tenantId=1")
+          .then().statusCode(200).body("hookId", is(hookId));
+    } finally {
+      // removed the way it was seeded: a failing read above is the report, not this cleanup
+      Jdbc.update(adminDs, "BlindReadSweepRlsIT.dropOverride",
+          "DELETE FROM core.hook_tenant_override WHERE tenant_id = 1 AND hook_id = ?", ps -> ps.setString(1, hookId));
+    }
   }
 
   /**
@@ -204,9 +216,10 @@ class BlindReadSweepRlsIT {
         .get("/api/platform/hooks/overrides?tenantId=11")
         .then().statusCode(403);
 
+    // The write that would have installed a script into tenant 11's hub: refused to everyone since #2011.
     RestAssured.given().headers(TestIdentity.tenantOnly(1)).contentType("application/json")
         .body("{\"hookId\":\"rls-it-foreign\",\"tenantId\":11,\"script\":\"// not yours\"}")
-        .post("/api/platform/hooks/overrides").then().statusCode(403);
+        .post("/api/platform/hooks/overrides").then().statusCode(400);
 
     RestAssured.given().headers(TestIdentity.tenantOnly(1)).contentType("application/json")
         .body("{\"enabled\":false}")

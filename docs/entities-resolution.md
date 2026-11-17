@@ -30,11 +30,14 @@ email at all.
 --8<-- "docs/entities-resolution/crm-contacts.csv"
 ```
 
-The manifests read the files from `/tmp/acme-resolution/` on the hub's filesystem; no `lm`
-command places a file there. Copy them in, then land both sources:
+The manifests read the files from `acme-resolution/` in your tenant's folder of the hub's
+[local root](connectors/csv.md#local-the-hubs-disk-not-yours), on the hub's filesystem: `/tmp/drop/1/`
+on the self-host stack, once `LUMNIK_CSV_LOCAL_ROOT=/tmp/drop` is set in `.env` and
+`deploy/selfhost/up.sh` run again (with `--build` if the stack runs from source). No `lm` command places a file there. Copy them in, then land both sources:
 
 ```bash
-docker compose -f docker-compose.selfhost.yml cp docs/entities-resolution/. hub:/tmp/acme-resolution
+docker compose -f docker-compose.selfhost.yml exec hub mkdir -p /tmp/drop/1/acme-resolution
+docker compose -f docker-compose.selfhost.yml cp docs/entities-resolution/. hub:/tmp/drop/1/acme-resolution
 lm apply -f docs/entities-resolution/10-erp.yaml
 lm apply -f docs/entities-resolution/20-crm.yaml
 lm connector run res-erp

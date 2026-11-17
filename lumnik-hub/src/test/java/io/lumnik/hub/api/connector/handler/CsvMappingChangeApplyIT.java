@@ -36,7 +36,7 @@ class CsvMappingChangeApplyIT {
         tenant: 1
         scopes: [crm]
       spec:
-        transport: { kind: local, path: /export/deliveries.csv }
+        transport: { kind: local, path: export/deliveries.csv }
         after_process: none
       """;
 

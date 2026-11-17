@@ -96,7 +96,7 @@ class DisputedProbeBenchmark {
         }
         given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
             .contentType("application/yaml").body(MANIFEST).post("/api/entities/apply").then().statusCode(200);
-        store.save(1L, "probebench", new SchemaCard("probebench", schemas.resolve("probebench")));
+        store.save(1L, "probebench", new SchemaCard("probebench", schemas.resolve(1L, "probebench")));
     }
 
     /** {@code block}: whether the ask reports a disputed record — a model-written LIMIT reports no counted one (#874). */
@@ -124,7 +124,7 @@ class DisputedProbeBenchmark {
         List<DisputedRows.Filter> filters = new ArrayList<>(List.of(new DisputedRows.Filter(column, List.of(value))));
         if (otherColumn != null) filters.add(new DisputedRows.Filter(otherColumn, List.of(otherValue)));
         var plan = new DisputedRows.Plan(VIEW, "probebench", filters, DisputedRows.Counted.IF_ANY_ROW);
-        EntityManifest manifest = registry.find("probebench");
+        EntityManifest manifest = registry.findHubwide("probebench");
         List<String> others = otherColumn == null ? List.of() : List.of(otherColumn);
         long t0 = System.nanoTime();
         List<List<String>> viaView = run(DisputedRows.probe(plan, filters.get(0), List.of("code"), true));
@@ -150,7 +150,7 @@ class DisputedProbeBenchmark {
     private void printPlan(String column, String value) throws Exception {
         var filter = new DisputedRows.Filter(column, List.of(value));
         var plan = new DisputedRows.Plan(VIEW, "probebench", List.of(filter), DisputedRows.Counted.IF_ANY_ROW);
-        EntityManifest bench = registry.find("probebench");
+        EntityManifest bench = registry.findHubwide("probebench");
         var probe = DisputedRows.probe(plan, filter, List.of("code"), true,
             compiler.probeRelation(bench, sources(bench), column, List.of()));
         try (Connection c = adminDs.getConnection();

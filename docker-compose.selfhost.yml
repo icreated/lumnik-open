@@ -47,7 +47,8 @@ services:
       # when this runs on a VM/remote host. Override the host part for remote access.
       - "127.0.0.1:8180:8180"
     volumes:
-      - ./infra/keycloak:/opt/keycloak/data/import:ro
+      # One realm file: the directory also holds the Helm stand-in's realm, which declares `lumnik` too.
+      - ./infra/keycloak/lumnik-realm.json:/opt/keycloak/data/import/lumnik-realm.json:ro
       # Persist the dev-mode H2 store so runtime admin/realm changes survive
       # recreates (start-dev re-imports only when the realm is absent).
       - selfhost_kc:/opt/keycloak/data
@@ -63,9 +64,10 @@ services:
     # discovery on first request, and restart makes the stack self-heal a race.
     restart: unless-stopped
     healthcheck:
-      # /q/health/live is the unauthenticated Quarkus liveness probe (smallrye-health).
+      # /q/health/live is the unauthenticated Quarkus liveness probe (smallrye-health), on the management
+      # port 9000 (#1993), which this file does not publish: only this check, inside the container, reads it.
       # /api/platform/health requires a Bearer token in prod so cannot be used here.
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/q/health/live || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/q/health/live || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -107,14 +109,19 @@ services:
       LUMNIK_EVENTS_RETENTION_DAYS: ${LUMNIK_EVENTS_RETENTION_DAYS:-30}
       LUMNIK_AUDIT_RETENTION_DAYS: ${LUMNIK_AUDIT_RETENTION_DAYS:-365}
       LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS: ${LUMNIK_WEBHOOKS_DELIVERY_RETENTION_DAYS:-90}
-      # Rate limits per bucket, requests per minute (docs/operations/rate-limits.md); 0 disables a bucket.
-      # Empty is the same as unset: the bucket falls back to LUMNIK_RATELIMIT_DEFAULT_RPM.
+      # Rate limits, in requests per minute (docs/operations/rate-limits.md). Set them in .env; 0 turns one off.
+      # Each user has their own budget; SCIM has one per tenant. A line without a number uses
+      # LUMNIK_RATELIMIT_DEFAULT_RPM.
       LUMNIK_RATELIMIT_DEFAULT_RPM: ${LUMNIK_RATELIMIT_DEFAULT_RPM:-60}
       LUMNIK_RATELIMIT_VIEW_GENERATE_RPM: ${LUMNIK_RATELIMIT_VIEW_GENERATE_RPM:-10}
       LUMNIK_RATELIMIT_SEARCH_RPM: ${LUMNIK_RATELIMIT_SEARCH_RPM:-}
       LUMNIK_RATELIMIT_USER_CHAT_RPM: ${LUMNIK_RATELIMIT_USER_CHAT_RPM:-}
       LUMNIK_RATELIMIT_PLATFORM_CHAT_RPM: ${LUMNIK_RATELIMIT_PLATFORM_CHAT_RPM:-}
       LUMNIK_RATELIMIT_PLATFORM_SEARCH_RPM: ${LUMNIK_RATELIMIT_PLATFORM_SEARCH_RPM:-}
+      LUMNIK_RATELIMIT_SOURCE_PROBE_RPM: ${LUMNIK_RATELIMIT_SOURCE_PROBE_RPM:-}
+      LUMNIK_RATELIMIT_SCIM_RPM: ${LUMNIK_RATELIMIT_SCIM_RPM:-600}
+      # Each tenant's total over all its users: the per-user limit times this number. 0 removes the total.
+      LUMNIK_RATELIMIT_TENANT_FACTOR: ${LUMNIK_RATELIMIT_TENANT_FACTOR:-5}
       # Workflow dormancy sweep cadence (docs/operations/observability.md).
       LUMNIK_WORKFLOW_SWEEP_EVERY: ${LUMNIK_WORKFLOW_SWEEP_EVERY:-15m}
       # Durable run queue (#952): off unless set. Turn it on only once every hub replica runs a release that can read
@@ -122,9 +129,25 @@ services:
       LUMNIK_RUN_QUEUE_ENABLED: ${LUMNIK_RUN_QUEUE_ENABLED:-false}
       LUMNIK_RUN_QUEUE_MAX_AGE: ${LUMNIK_RUN_QUEUE_MAX_AGE:-1h}
       LUMNIK_RUN_QUEUE_POLL_INTERVAL: ${LUMNIK_RUN_QUEUE_POLL_INTERVAL:-5s}
+      # The one folder of the hub's container a csv-file connector's local transport reads, each tenant in its own
+      # <folder>/<tenant id> (docs/connectors/csv.md). Empty: the local transport reads nothing.
+      LUMNIK_CSV_LOCAL_ROOT: ${LUMNIK_CSV_LOCAL_ROOT:-}
+      # How many endpoint runs one hub drives at once (docs/operations/upgrade.md).
+      LUMNIK_CONNECTOR_MAX_CONCURRENT_SCHEDULED_RUNS: ${LUMNIK_CONNECTOR_MAX_CONCURRENT_SCHEDULED_RUNS:-4}
+      # Your own IdP (docs/security/byo-idp.md, docs/security/offboarding.md): the claim that identifies a user,
+      # and a UserInfo check on every request.
+      OIDC_SUBJECT_CLAIM: ${OIDC_SUBJECT_CLAIM:-sub}
+      LUMNIK_AUTH_VERIFY_WITH_IDP: ${LUMNIK_AUTH_VERIFY_WITH_IDP:-false}
       # The AI family (chat, ask, embeddings): `false` switches it off — still installed, nothing calls a model.
       # Exactly `true` or `false`; anything else stops the hub at startup. A change takes a restart.
       LUMNIK_AI_ENABLED: ${LUMNIK_AI_ENABLED:-true}
+      # #1991: auto counts the tenants; multi gives entities, views and apps to lm_superadmin from the start.
+      LUMNIK_TENANCY: ${LUMNIK_TENANCY:-auto}
+      # #2057: the map's tile server. Unset = no third party, the map draws a neutral grid. Set in .env, e.g.
+      # LUMNIK_MAP_TILES=https://tile.openstreetmap.org/{z}/{x}/{y}.png — every browser receives it, and the
+      # server sees the areas viewed. No value here, as for the SMTP host: unset in .env stays unset in the hub.
+      LUMNIK_MAP_TILES:
+      LUMNIK_MAP_ATTRIBUTION:
       # Email delivery — mock stays on until BOTH are set (see .env.example):
       # The host has no default: unset in .env, it stays unset in the hub, which boots mocked
       # and quiet. Never set it to the empty string: SmallRye (Quarkus 3.33) refuses a

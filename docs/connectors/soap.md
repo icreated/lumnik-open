@@ -26,6 +26,7 @@ and the error channel that is not the HTTP status.
     ```bash
     python3 docs/connectors/rest/demo/acme-api.py
     lm secret set ACME_BASIC_PW        # demo-pass
+    lm secret scope ACME_BASIC_PW billing   # the demo connectors' scope
     ```
 
     The manifests point at `http://host.docker.internal:8099`, because the hub runs in a
@@ -118,8 +119,8 @@ Five placeholders are resolved on every request — in `body:` **and** `header:`
 | `{{page_size}}` | `pagination.page_size`, verbatim |
 | `{{cursor}}` | the row offset of the page being fetched |
 | `{{page}}` | the page number of the page being fetched, from 1 |
-| `{{secret:NAME}}` | the `lm secret` registry, then the hub's process environment — see below |
-| `{{env:NAME}}` | the hub's process environment only |
+| `{{secret:NAME}}` | the `lm secret` registry — see below |
+| `{{env:NAME}}` | the same: an older name for `{{secret:NAME}}` |
 
 - An **unresolved placeholder fails the run before any request is sent**. The error names the
   placeholder, never a value.
@@ -128,8 +129,8 @@ Five placeholders are resolved on every request — in `body:` **and** `header:`
 
 ### A credential inside the envelope
 
-`{{secret:NAME}}` reads the `lm secret` registry first, then the hub's environment, like
-`password_env`. `{{env:NAME}}` reads the hub's environment only.
+`{{secret:NAME}}` reads the `lm secret` registry, like `password_env`. `{{env:NAME}}` reads it
+too: the hub's environment is not read.
 
 A session token inside the envelope goes in `header:`:
 
@@ -152,6 +153,7 @@ Store it, and the next run sends it; the manifest does not change:
 
 ```bash
 lm secret set ACME_SESSION_TOKEN        # demo-session-42
+lm secret scope ACME_SESSION_TOKEN billing
 ```
 
 ## Where the QueryPage loop stops
@@ -366,7 +368,7 @@ run per endpoint, as the [stop-signals connector](#where-the-querypage-loop-stop
 
 | Symptom | Cause | Gesture |
 |---|---|---|
-| Run fails instantly with `unresolved secret/env placeholder` | `secret:` — the name is neither in `lm secret` nor in the hub's environment; `env:` — it is not in the hub's environment | `lm secret set NAME` for `secret:`; the hub's environment for `env:` |
+| Run fails instantly with `unresolved secret/env placeholder` | the name is not in `lm secret` | `lm secret set NAME` |
 | Run fails on HTTP 500 with no retry | a `<soap:Fault>` is never retried | read the `faultstring` in `lm run get`; fix the request or the permission it needs |
 | `I/O error (IOException)` on a service that should answer a Fault, five POSTs per run in its log | the service resets its HTTP/2 stream after the answer | set `http_version: "1.1"` in the connector |
 | Run failed on `pagination.response_path reads nothing on the first page` | `response_path` does not match the answer | write the path **without** namespace prefixes; `lm source rest test` shows the same message as its verdict |

@@ -4,6 +4,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.EntitySchemaBuilder;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -77,8 +78,9 @@ class ViewOverAChangedEntityIT {
             + " GRANT SELECT ON connector.t_vce_customer TO lumnik_readonly; EXCEPTION WHEN OTHERS THEN NULL; END $$",
         "INSERT INTO connector.t_vce_customer VALUES (1, 'C-1', 'GOLD'), (1, 'C-2', 'SILVER')",
         "DELETE FROM connector.entity_manifest WHERE name = 'vcecustomer'");
+    RegisteredTables.register(adminDs, 1L, "t_vce_customer");
     applyEntity(ENTITY).statusCode(200);
-    SchemaCard before = new SchemaCard("vce", entityCards.resolve("vce"));
+    SchemaCard before = new SchemaCard("vce", entityCards.resolve(1L, "vce"));
     cards.save(1L, "registry", before);
     post("/api/views/render").statusCode(200).body("rows[0].segment", equalTo("GOLD"));
 

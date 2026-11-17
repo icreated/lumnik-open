@@ -186,7 +186,8 @@ class HookRefusalInventoryTest {
     // per-hook options each needs to actually run. None of these names the bystander column.
     JsonNode node = JSON.readTree("{\"column\":\"c\",\"columns\":[\"c\"],\"length\":8,\"to\":\"d\","
         + "\"pattern\":\"(.*)\",\"groups\":{\"1\":\"g\"},\"replacement\":\"x\",\"table\":{\"k\":\"v\"},"
-        + "\"formats\":[\"yyyy-MM-dd\"],\"mask-char\":\"*\",\"on-invalid\":\"keep\"}");
+        + "\"formats\":[\"yyyy-MM-dd\"],\"mask-char\":\"*\",\"on-invalid\":\"keep\","
+        + "\"lat\":\"c\",\"lon\":\"e\",\"reason\":\"g\"}");   // parse-coordinates: a pair, c and e (#1966)
 
     // kotlin runs an arbitrary classpath script; generic params cannot make it execute, so it
     // cannot be swept for a mutation invariant here. Named, not silently skipped.

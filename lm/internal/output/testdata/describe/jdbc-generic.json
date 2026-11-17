@@ -23,7 +23,7 @@
         "type" : "STRING",
         "importance" : "HIGH",
         "required" : true,
-        "doc" : "Name of the DB password: a hub environment variable, else an lm secret"
+        "doc" : "lm secret name of the DB password"
       }, {
         "name" : "dialect",
         "type" : "STRING",
@@ -91,14 +91,14 @@
             "type" : "LIST",
             "importance" : "HIGH",
             "required" : true,
-            "doc" : "Columns of the index, in order",
+            "doc" : "Columns of the index, in order, after tenant_id",
             "recommendations" : [ "e.g. columns: [email] or [bpartner_id, dateordered]" ]
           }, {
             "name" : "unique",
             "type" : "BOOLEAN",
             "importance" : "LOW",
             "required" : false,
-            "doc" : "Unique index (default false)",
+            "doc" : "Unique within the tenant (default false)",
             "default" : false
           } ]
         }
@@ -128,7 +128,7 @@
         "importance" : "HIGH",
         "required" : true,
         "doc" : "List of tables to ingest (at least one)",
-        "recommendations" : [ "Add a table: { name: 'invoices', mode: 'full', pk_columns: ['id'] }" ],
+        "recommendations" : [ "Add a table: { name: 'invoices', schema: 'public', mode: 'full', pk_columns: ['id'] }" ],
         "items" : {
           "fields" : [ {
             "name" : "name",
@@ -141,7 +141,7 @@
             "type" : "STRING",
             "importance" : "MEDIUM",
             "required" : false,
-            "doc" : "Names the hub table connector.t_<target> in place of the source table's name (#1199)"
+            "doc" : "Names the hub table connector.t_<target> in place of the source table's name"
           }, {
             "name" : "mode",
             "type" : "STRING",
@@ -187,14 +187,14 @@
                 "type" : "LIST",
                 "importance" : "HIGH",
                 "required" : true,
-                "doc" : "Columns of the index, in order",
+                "doc" : "Columns of the index, in order, after tenant_id",
                 "recommendations" : [ "e.g. columns: [email] or [bpartner_id, dateordered]" ]
               }, {
                 "name" : "unique",
                 "type" : "BOOLEAN",
                 "importance" : "LOW",
                 "required" : false,
-                "doc" : "Unique index (default false)",
+                "doc" : "Unique within the tenant (default false)",
                 "default" : false
               } ]
             }

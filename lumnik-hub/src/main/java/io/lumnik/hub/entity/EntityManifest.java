@@ -19,18 +19,31 @@ import java.util.Map;
  * @param joins      the #846 relational lookups: they enrich the fused rows and never fuse or add one.
  * @param zone       the business's time zone (#1881), where a date meets a time: a date is its midnight there, a time
  *                   falls on the day it has there. Null: UTC, as every entity applied before it.
+ * @param points     the #1974 points: two canonical columns read as one WGS84 point, which the chat may measure.
  */
 public record EntityManifest(String kind, String name, String label,
     List<String> match, List<Source> sources, List<String> scopes,
     String description, Map<String, ColumnMeta> columns, Resolution resolution,
-    List<Join> joins, String zone) {
+    List<Join> joins, String zone, List<Point> points) {
 
   /** Null-safe collections (a manifest with no scopes is simply not discoverable; no columns = no extra grounding). */
   public EntityManifest {
     scopes = scopes == null ? List.of() : scopes;
     columns = columns == null ? Map.of() : columns;
     joins = joins == null ? List.of() : joins;
+    points = points == null ? List.of() : points;
   }
+
+  /** The pre-#1974 shape: no points. */
+  public EntityManifest(String kind, String name, String label,
+      List<String> match, List<Source> sources, List<String> scopes,
+      String description, Map<String, ColumnMeta> columns, Resolution resolution,
+      List<Join> joins, String zone) {
+    this(kind, name, label, match, sources, scopes, description, columns, resolution, joins, zone, List.of());
+  }
+
+  /** A point (#1974): its name, then the canonical columns of its latitude and its longitude, in that order. */
+  public record Point(String name, String lat, String lon) {}
 
   /** The pre-#1881 shape: no zone, so UTC. */
   public EntityManifest(String kind, String name, String label,

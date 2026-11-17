@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.jdbc;
 
 import io.lumnik.hub.connector.api.types.ConnectorCursor;
 import io.lumnik.hub.connector.api.types.ReadResult;
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.jdbc.postgresql.PostgresDialect;
 import org.junit.jupiter.api.*;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -42,7 +43,7 @@ class JdbcChunkReaderFullModeIT {
 
   @Test
   void full_mode_re_reads_all_rows_each_run() {
-    HikariPoolRegistry registry = new HikariPoolRegistry();
+    HikariPoolRegistry registry = new HikariPoolRegistry(TestOutbound.ADDRESSES);
     JdbcChunkReader r = new JdbcChunkReader(PG.getJdbcUrl(), "u", "p", "postgres",
         "public", "ref", null, List.of("id"),
         JdbcChunkReader.Mode.FULL, new PostgresDialect(), registry, ZoneOffset.UTC);

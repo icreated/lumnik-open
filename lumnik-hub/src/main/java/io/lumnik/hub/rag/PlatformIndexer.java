@@ -2,6 +2,7 @@ package io.lumnik.hub.rag;
 
 import io.lumnik.extraction.spi.ExtractedChunk;
 import io.lumnik.extraction.spi.ExtractionSink;
+import io.lumnik.hub.hook.HookBinding;
 import io.lumnik.hub.hook.HookRegistry;
 import io.lumnik.hub.manifest.ModuleManifest;
 import io.lumnik.hub.manifest.ModuleManifestRegistry;
@@ -150,7 +151,8 @@ public class PlatformIndexer {
 
     private List<ExtractedChunk> chunksFromHooks() {
         List<ExtractedChunk> result = new ArrayList<>();
-        for (var h : hookRegistry.allBindings()) {
+        // The platform corpus is every tenant's: only a hook that runs for every tenant is described there (#1992).
+        for (var h : hookRegistry.allBindings().stream().filter(HookBinding::isGlobal).toList()) {
             String moduleId = h.module() != null ? h.module() : "platform";
             String lifecycle = h.events() != null && !h.events().isEmpty()
                 ? h.events().stream().map(Enum::name).collect(Collectors.joining(","))

@@ -2,9 +2,11 @@ package io.lumnik.hub.view;
 
 import io.lumnik.common.security.CurrentRolesHolder;
 import io.lumnik.common.security.RequiresPermission;
+import io.lumnik.common.tenant.CurrentTenantHolder;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.core.Response;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -20,26 +22,32 @@ class SavedViewsBindingUnitTest {
   static final class FakeStore extends SavedViewStore {
     Set<String> lastListScopes = Set.of("SENTINEL");
     String deletedName;
-    @Override public List<Summary> list(Set<String> scopes) {
+    @Override public List<Summary> list(long tenant, Set<String> scopes) {
       lastListScopes = scopes;
       return List.of(new Summary("clients-desk", "clients", "Clients"));
     }
-    @Override public Optional<Row> find(String name) {
+    @Override public Optional<Row> find(long tenant, String name) {
       return "clients-desk".equals(name)
           ? Optional.of(new Row("clients-desk", "clients", "Clients", "yaml-here"))
           : Optional.empty();
     }
-    @Override public Optional<String> findScope(String name) {
-      return find(name).map(Row::scope);
+    @Override public Optional<String> findScope(long tenant, String name) {
+      return find(tenant, name).map(Row::scope);
     }
-    @Override public boolean delete(String name) {
+    @Override public boolean delete(long tenant, String name) {
       deletedName = name;
       return true;
     }
   }
 
+  @BeforeEach
+  void tenant() { CurrentTenantHolder.set(1L); }
+
   @AfterEach
-  void clear() { CurrentRolesHolder.clear(); }
+  void clear() {
+    CurrentRolesHolder.clear();
+    CurrentTenantHolder.clear();
+  }
 
   private static SavedViewsResource res(FakeStore store) {
     SavedViewsResource r = new SavedViewsResource();

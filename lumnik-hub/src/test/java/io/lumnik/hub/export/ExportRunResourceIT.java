@@ -7,6 +7,7 @@ import io.lumnik.hub.connector.transport.sftp.SftpTestHelper;
 import io.lumnik.hub.export.run.ArtifactName;
 import io.lumnik.hub.connector.transport.sftp.SftpTestImage;
 import io.lumnik.hub.testsupport.EntitySourceTableFixture;
+import io.lumnik.hub.testsupport.TestSecrets;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
@@ -48,6 +49,8 @@ import static org.hamcrest.Matchers.notNullValue;
 @TestProfile(NoBypassOidcProfile.class)
 class ExportRunResourceIT {
 
+    @Inject TestSecrets testSecrets;
+
     private static final String ENTITY = "ExportRunResourceEntity680";
     private static final String TABLE = "t_exportrunresource680_erp";
     private static final String USER = "lumi";
@@ -69,21 +72,29 @@ class ExportRunResourceIT {
         sftp.start();
         port = sftp.getMappedPort(22);
         fingerprint = SftpTestHelper.readHostKeyFingerprint("localhost", port, USER, PASS);
-        System.setProperty(PASS_ENV, PASS);
     }
 
     @AfterAll
     static void stopSftp() {
-        System.clearProperty(PASS_ENV);
         if (sftp != null) sftp.stop();
+    }
+
+    /**
+     * The export's secret, in tenant 1's lm secret registry: the only place a `*_env` reference resolves (#2000) — and
+     * in the export's scope, which a secret must carry to serve it (#2015).
+     */
+    @BeforeEach
+    void holdTheSecrets() {
+        testSecrets.put(1L, PASS_ENV, PASS, List.of("sales"));
     }
 
     private static String integratorSales() {
         return NoBypassOidcProfile.token(Set.of("lm_integrator", "scope:sales"), null);
     }
 
-    private static String adminSales() {
-        return NoBypassOidcProfile.token(Set.of("lm_admin", "scope:sales"), null);
+    /** Tenant-wide: a bound one publishes only tables a connector of its scope writes (#2048). */
+    private static String admin() {
+        return NoBypassOidcProfile.token(Set.of("lm_admin"), null);
     }
 
     private static String integratorMagasin() {
@@ -97,7 +108,7 @@ class ExportRunResourceIT {
     @BeforeEach
     void seedEntity() throws Exception {
         EntitySourceTableFixture.create(adminDs, TABLE, "v_exportrunresourceentity680", "cust_id", "cust_name");
-        given().config(YamlBody.CONFIG).header("Authorization", "Bearer " + adminSales())
+        given().config(YamlBody.CONFIG).header("Authorization", "Bearer " + admin())
             .contentType("application/yaml").body("""
                 kind: Entity
                 name: %s
@@ -188,6 +199,24 @@ class ExportRunResourceIT {
             .then().statusCode(200)
             .body("size()", equalTo(1))
             .body("[0].id", equalTo(runId));
+    }
+
+    /**
+     * #2015: a sales integrator writes an export naming a secret of the tenant's that serves no scope. The run fails
+     * before the destination is built, so the password never reaches the host the manifest names.
+     */
+    @Test
+    void aSecretOutsideTheExportsScopeFailsTheRunByName() throws Exception {
+        testSecrets.put(1L, PASS_ENV, PASS);
+        String name = applyExport("resource-unscoped-secret.csv");
+
+        Response failed = awaitTerminal(name, start(name));
+
+        assertThat((String) failed.path("status")).isEqualTo("Failed");
+        assertThat((String) failed.path("failureCode")).as("a definition to fix, not a transport that failed")
+            .isEqualTo("definition");
+        assertThat((String) failed.path("failureReason"))
+            .contains(PASS_ENV).contains("does not serve scope sales").contains("lm secret scope");
     }
 
     @Test

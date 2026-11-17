@@ -56,6 +56,11 @@ public class ManagedIndex {
             return base + suffix;
         }
 
+        /** The key of the lock the nodes take on this index's build ({@link IndexBuilds}). */
+        public String buildLockKey() {
+            return schema + "." + name();
+        }
+
         public String qualifiedTable() {
             return schema + "." + quoteIdent(table);
         }
@@ -82,7 +87,7 @@ public class ManagedIndex {
     /** One pass: builds the index, or drops an invalid one (the next pass builds it). Quiet when the table is not there yet. */
     public void ensure(Spec spec) throws SQLException {
         String name = spec.name();
-        String lockKey = spec.schema() + "." + name;
+        String lockKey = spec.buildLockKey();
         if (state(spec) == State.VALID) return;   // the steady state: nothing to lock for
         try (Connection c = ds.getConnection()) {
             c.setAutoCommit(true);

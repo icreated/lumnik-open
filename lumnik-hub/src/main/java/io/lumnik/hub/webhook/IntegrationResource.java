@@ -6,7 +6,8 @@ import io.lumnik.identity.Require;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lumnik.hub.api.ApiErrors;
-import io.lumnik.hub.api.TenantWide;
+import io.lumnik.hub.connector.rest.Urls;
+import io.lumnik.common.security.TenantWide;
 import io.lumnik.hub.event.EventPatterns;
 import io.lumnik.hub.event.EventRegistry;
 import io.lumnik.common.security.RequiresPermission;
@@ -61,6 +62,7 @@ public class IntegrationResource {
     public Response create(@PathParam("tid") Long tid, IntegrationCreate in) {
         requireTenant(tid);
         requireNameFree(tid, in.name(), null);
+        requireHttpTarget(in.targetUrl());
         WebhookEndpoint e = new WebhookEndpoint();
         e.setTenantId(tid);
         e.setName(in.name());
@@ -86,7 +88,10 @@ public class IntegrationResource {
         WebhookEndpoint e = Require.owned(repo, id, tid, "Integration");
         requireNameFree(tid, in.name(), e.getId());
         if (in.name()       != null) e.setName(in.name());
-        if (in.targetUrl()  != null) e.setTargetUrl(in.targetUrl());
+        if (in.targetUrl()  != null) {
+            requireHttpTarget(in.targetUrl());
+            e.setTargetUrl(in.targetUrl());
+        }
         if (in.platform()   != null) e.setPlatform(in.platform());
         if (in.authMode()   != null) e.setAuthMode(in.authMode());
         if (in.eventTypes() != null) {
@@ -136,6 +141,16 @@ public class IntegrationResource {
             "an integration named " + name + " already exists (id " + holder.getId() + ")"));
     }
 
+    /**
+     * An absolute http(s) URL, said here rather than at the first delivery (#2002). Where it may point is judged at
+     * each delivery, on the address its host resolves to then. The refusal names the reason, never the URL.
+     */
+    private static void requireHttpTarget(String targetUrl) {
+        Urls.whyNotHttp(targetUrl).ifPresent(why -> {
+            throw new BadRequestException(ApiErrors.badRequest("targetUrl " + why));
+        });
+    }
+
     /** A pattern that could never match is refused here, not stored; EventPatterns owns the contract. */
     private static void requireAcceptedPatterns(List<String> patterns) {
         if (patterns == null) return;
@@ -161,8 +176,12 @@ public class IntegrationResource {
 
     public record TestRequest(String eventType) {}
 
-    public record TestResponse(boolean ok, Integer httpStatus, String responseBody,
-                               String error, int durationMs) {}
+    /** The receiver's status, never its body (#2002): see {@code DeliveryResult.httpFailure}. */
+    public record TestResponse(boolean ok, Integer httpStatus, String error, int durationMs) {
+        static TestResponse of(WebhookDeliveryService.DeliveryResult r) {
+            return new TestResponse(r.ok(), r.httpStatus(), r.error(), r.durationMs());
+        }
+    }
 
     @POST @Path("/{id}/test")
     public TestResponse test(@PathParam("tid") Long tid, @PathParam("id") Long id,
@@ -189,8 +208,7 @@ public class IntegrationResource {
         catch (Exception ex) { throw new InternalServerErrorException(ex); }
 
         // No outbox row backs a synthetic test event, so no X-Lumnik-Event-Id header is sent.
-        var r = deliveryService.deliver(e, body.eventType(), null, payload);
-        return new TestResponse(r.ok(), r.httpStatus(), r.responseBody(), r.error(), r.durationMs());
+        return TestResponse.of(deliveryService.deliver(e, body.eventType(), null, payload));
     }
 
     private static Object sampleValueFor(String type) {
@@ -240,8 +258,7 @@ public class IntegrationResource {
             return new Found(e, d);
         });
 
-        var r = replayService.replay(f.endpoint(), f.delivery());
-        return new TestResponse(r.ok(), r.httpStatus(), r.responseBody(), r.error(), r.durationMs());
+        return TestResponse.of(replayService.replay(f.endpoint(), f.delivery()));
     }
 
     // ── Private helpers ─────────────────────────────────────────────────────

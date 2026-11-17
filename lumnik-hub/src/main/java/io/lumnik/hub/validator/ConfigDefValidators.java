@@ -58,21 +58,8 @@ public final class ConfigDefValidators {
     }
 
     /**
-     * validator == runtime: {@code RestEndpointWriter.parseHybridSpec} refuses a {@code target.table}
-     * that is not a plain identifier or {@code schema.table} pair before handing it to
-     * {@code HybridJsonbWriter}'s DDL on the BYPASSRLS admin datasource — mirror that refusal here so
-     * {@code lm apply} never accepts a manifest that would only fail mid-run.
-     */
-    public static Function<JsonNode, Optional<String>> plainQualifiedIdentifier() {
-        return v -> SqlIdentifiers.isPlainQualifiedIdentifier(v.asText())
-            ? Optional.empty()
-            : Optional.of("must be a plain identifier or schema.table pair "
-                + "(letters, digits, underscore; not starting with a digit)");
-    }
-
-    /**
-     * The same rule unqualified: the value becomes ONE identifier, so a {@code schema.table} pair is
-     * wrong here — {@code "t_" + name} would compose {@code t_orders.items}.
+     * {@link SqlIdentifiers#isPlainIdentifier}, unqualified: the value becomes ONE identifier, so a
+     * {@code schema.table} pair is wrong here — {@code "t_" + name} would compose {@code t_orders.items}.
      *
      * @param becomes what the value is concatenated into, named in the refusal so the reader learns
      *                why the rule exists rather than only that it exists

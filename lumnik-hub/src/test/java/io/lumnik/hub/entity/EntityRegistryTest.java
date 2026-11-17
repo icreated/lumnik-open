@@ -16,19 +16,19 @@ class EntityRegistryTest {
     EntityManifest m = new EntityManifest("Entity", "Customer", List.of("id"),
         List.of(new EntityManifest.Source("t_cust_src",
             new LinkedHashMap<>(Map.of("ROW_ID", "id")))));
-    r.put(m);
-    assertThat(r.find("customer")).isSameAs(m);
-    assertThat(r.find("CUSTOMER")).isSameAs(m);
-    assertThat(r.find("unknown")).isNull();
-    assertThat(r.find(null)).isNull();
+    r.put(m, null);
+    assertThat(r.findHubwide("customer")).isSameAs(m);
+    assertThat(r.findHubwide("CUSTOMER")).isSameAs(m);
+    assertThat(r.findHubwide("unknown")).isNull();
+    assertThat(r.findHubwide(null)).isNull();
   }
 
   @Test
   void all_returns_every_manifest_sorted_by_name() {
     EntityRegistry r = new EntityRegistry();
-    r.put(new EntityManifest("Entity", "Zeta", List.of("id"), List.of()));
-    r.put(new EntityManifest("Entity", "Alpha", List.of("id"), List.of()));
-    assertThat(r.all())
+    r.put(new EntityManifest("Entity", "Zeta", List.of("id"), List.of()), null);
+    r.put(new EntityManifest("Entity", "Alpha", List.of("id"), List.of()), null);
+    assertThat(r.allHubwide())
         .extracting(EntityManifest::name)
         .containsExactly("Alpha", "Zeta");
   }

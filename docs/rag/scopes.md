@@ -21,7 +21,7 @@ metadata:
 
 - Every table and chunk the connector ingests carries its scopes. A tenant's scopes are those of
   its connectors and its [fused entities](../entities.md).
-- `metadata.scopes` is the only place: `metadata.tags` or `target.tags` is refused at validate,
+- `metadata.scopes` is the only place: `metadata.tags` or `spec.target.tags` is refused at validate,
   with the line to paste instead.
 - A connector that declares none is valid but not askable in any scope; validation warns.
 - A scope **name** is lowercase, starts with a letter, then letters, digits, `_` or `-`, at most
@@ -145,8 +145,6 @@ The same scope name runs the whole ladder:
 - a `kind: Process` watches a scope's raw ingest table;
 - a [`kind: Workflow`](../apps/workflows.md) declares a lifecycle in a scope, and the chat tells it
   only to users who may read that scope.
-
-One scope name, end to end.
 
 ## See also
 

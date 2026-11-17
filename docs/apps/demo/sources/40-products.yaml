@@ -13,7 +13,7 @@ metadata:
 spec:
   transport:
     kind: local
-    path: /tmp/acme-catalogue/m_product.csv   # on the HUB's filesystem — see entities.md for the docker cp
+    path: acme-catalogue/m_product.csv   # in your tenant's folder of the hub's local root — see entities-joins.md
   parser:
     has_header: true
   after_process: none

@@ -46,13 +46,13 @@ class ViewApplyContractUnitTest {
     Set<String> callerScopes;
     /** Who already owns the name apply is about to write — empty means it is free. */
     String storedScope;
-    @Override public ScopeGuardedUpsert upsert(String name, String scope, String title, String yaml,
+    @Override public ScopeGuardedUpsert upsert(long tenant, String name, String scope, String title, String yaml,
                                                Set<String> callerScopes) {
       this.name = name; this.scope = scope; this.title = title; this.yaml = yaml;
       this.callerScopes = callerScopes;
       return new ScopeGuardedUpsert.Applied();
     }
-    @Override public Optional<String> findScope(String name) { return Optional.ofNullable(storedScope); }
+    @Override public Optional<String> findScope(long tenant, String name) { return Optional.ofNullable(storedScope); }
   }
 
   private final SchemaCardStore emptyCards = new SchemaCardStore() {

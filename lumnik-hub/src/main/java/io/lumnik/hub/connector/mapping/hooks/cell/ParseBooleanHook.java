@@ -51,7 +51,7 @@ public class ParseBooleanHook implements CellHook {
     String word = v.toString().strip().toLowerCase(Locale.ROOT);
     Words w = cached(params);
     Boolean flag = w.yes().contains(word) ? Boolean.TRUE : w.no().contains(word) ? Boolean.FALSE : null;
-    if (flag == null) s.counters().cellErrors().incrementAndGet();
+    if (flag == null) s.refuseCell();
     row.put(col, flag);
   }
 

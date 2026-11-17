@@ -179,20 +179,16 @@ fi
 docker exec -i "$pg_cid" psql -q -v ON_ERROR_STOP=1 -U "$pg_super" -d lumnik \
   < infra/postgres/init/02-extensions.sql \
   && echo "    grants/schemas/extensions aligned (02-extensions.sql, idempotent)" \
-  || echo "  !! grants alignment failed — ingestion may hit 'permission denied'; inspect: docker exec -it $pg_cid psql -U $pg_super lumnik" >&2
+  || echo "  !! grants alignment failed — ingestion may hit 'permission denied', and Ask stays closed until the readonly role is hardened (docs/security/rls.md#what-the-read-only-role-cannot-call); inspect: docker exec -it $pg_cid psql -U $pg_super lumnik" >&2
 
-# Neither hubadmin nor integrator ships in the realm WITH a credential — C1 posture
-# (2026-07-25), extended 2026-08-11 to integrator (RealmAudienceContractTest): a known
-# password must never survive an install, and infra/keycloak/*.json is on the
-# open-edition allowlist so a static one would become world-readable at the flip. Set
-# each one per install from .env via the Keycloak admin API. Failure is fail-closed
-# (the user simply cannot log in) — warn, don't abort a healthy stack.
-#   $1 = space-separated candidate usernames (aliases for the same logical account —
-#        e.g. the pre-rename 'gardenadmin' — the loop heals older realm imports)
-#   $2 = .env key holding the password to set
-set_realm_user_password() {
-  local candidates="$1" pw_key="$2"
-  local admin_user admin_pw pw tok uid name
+# The realm's user profile on an older install (#1997): declare_admin_only_attributes.
+# shellcheck source=deploy/selfhost/realm.sh
+source deploy/selfhost/realm.sh
+
+# kc_admin_token [attempts] — a master-realm admin access token for the Keycloak admin API, or nothing (the caller
+# warns). Five attempts by default, five seconds apart.
+kc_admin_token() {
+  local attempts="${1:-5}" admin_user admin_pw tok attempt
   # `|| [ $? -eq 1 ]` on every .env lookup: KEYCLOAK_ADMIN is a documented-optional key
   # that a fresh .env (copied from .env.example) legitimately lacks — under
   # `set -euo pipefail` an unguarded no-match grep kills the whole script before the
@@ -201,15 +197,10 @@ set_realm_user_password() {
   # e.g. unreadable .env) still fails fast instead of masquerading as "missing".
   admin_user="$(grep '^KEYCLOAK_ADMIN=' .env | cut -d= -f2-)" || [ $? -eq 1 ]; admin_user="${admin_user:-admin}"
   admin_pw="$(grep '^KEYCLOAK_ADMIN_PASSWORD=' .env | cut -d= -f2-)" || [ $? -eq 1 ]
-  pw="$(grep "^${pw_key}=" .env | cut -d= -f2-)" || [ $? -eq 1 ]
-  if [[ -z "$pw" ]]; then
-    echo "  !! $pw_key missing in .env — $candidates stays locked (no password)"; return 0
-  fi
   # Password rides stdin (--data-urlencode password@-), never argv — no `ps` leak.
   # Retried: the hub can be healthy while Keycloak is still finishing its first
   # realm import (seen on slow first boots) — give it up to ~25s before warning.
-  local attempt
-  for attempt in 1 2 3 4 5; do
+  for attempt in $(seq 1 "$attempts"); do
     # --max-time bounds each attempt: a hung connect must not turn the ~25s retry
     # budget into an unbounded stall.
     tok="$(printf '%s' "$admin_pw" | curl -fsS --connect-timeout 3 --max-time 10 -X POST "http://localhost:8180/realms/master/protocol/openid-connect/token" \
@@ -217,10 +208,42 @@ set_realm_user_password() {
         --data-urlencode "username=$admin_user" --data-urlencode password@- 2>/dev/null \
       | python3 -c 'import sys,json;print(json.load(sys.stdin).get("access_token",""))' 2>/dev/null)" || true
     [[ -n "${tok:-}" ]] && break
-    [[ "$attempt" -lt 5 ]] && sleep 5
+    [[ "$attempt" -lt "$attempts" ]] && sleep 5
   done
-  if [[ -z "${tok:-}" ]]; then
-    echo "  !! could not obtain a Keycloak admin token (check KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD in .env) — $candidates stays locked (no password)"; return 0
+  printf '%s' "${tok:-}"
+}
+
+# with_kc_token <what stays undone> <command> [args…] — runs the command with a fresh admin token as its first argument
+# (an admin-cli token lives 60 s, and each step makes several calls), or warns that the step stays undone. Only the
+# first step waits for Keycloak; the next ones try once.
+with_kc_token() {
+  local undone="$1" tok
+  shift
+  tok="$(kc_admin_token "${KC_TOKEN_ATTEMPTS:-5}")"
+  KC_TOKEN_ATTEMPTS=1
+  if [[ -z "$tok" ]]; then
+    echo "  !! could not obtain a Keycloak admin token (check KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD in .env) — $undone"
+    return 0
+  fi
+  "$1" "$tok" "${@:2}"
+}
+
+# Neither hubadmin nor integrator ships in the realm WITH a credential — C1 posture
+# (2026-07-25), extended 2026-08-11 to integrator (RealmAudienceContractTest): a known
+# password must never survive an install, and infra/keycloak/*.json is on the
+# open-edition allowlist so a static one would become world-readable at the flip. Set
+# each one per install from .env via the Keycloak admin API. Failure is fail-closed
+# (the user simply cannot log in) — warn, don't abort a healthy stack.
+#   $1 = a Keycloak admin access token (kc_admin_token)
+#   $2 = space-separated candidate usernames (aliases for the same logical account —
+#        e.g. the pre-rename 'gardenadmin' — the loop heals older realm imports)
+#   $3 = .env key holding the password to set
+set_realm_user_password() {
+  local tok="$1" candidates="$2" pw_key="$3"
+  local pw uid name
+  pw="$(grep "^${pw_key}=" .env | cut -d= -f2-)" || [ $? -eq 1 ]
+  if [[ -z "$pw" ]]; then
+    echo "  !! $pw_key missing in .env — $candidates stays locked (no password)"; return 0
   fi
   # Realms imported before the rename still carry the legacy 'gardenadmin' user (a realm
   # import is one-shot) — heal it under whichever name this install has.
@@ -239,7 +262,7 @@ set_realm_user_password() {
     | curl -fsS --connect-timeout 3 --max-time 10 -X PUT "http://localhost:8180/admin/realms/lumnik/users/$uid/reset-password" \
         -H "Authorization: Bearer $tok" -H "Content-Type: application/json" -d @- \
     && echo "  $name: per-install password set ($pw_key in .env)" \
-    || echo "  !! $name password set failed — stays locked (no password)"
+    || echo "  !! $name password set failed — stays locked (no password). If Keycloak refused it, mind the realm's password policy (a new install asks for 12 characters at least, not the username nor the email: $pw_key in .env)"
 }
 
 # 3) wait for the hub to be healthy (Flyway runs at boot)
@@ -249,10 +272,12 @@ for _ in $(seq 1 60); do
   status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$hub_cid" 2>/dev/null || echo none)"
   if [[ "$status" == "healthy" ]]; then
     echo "==> hub is healthy"
-    set_realm_user_password "hubadmin gardenadmin" HUBADMIN_PASSWORD
-    set_realm_user_password "integrator" INTEGRATOR_PASSWORD
+    with_kc_token "hubadmin stays locked (no password)" set_realm_user_password "hubadmin gardenadmin" HUBADMIN_PASSWORD
+    with_kc_token "integrator stays locked (no password)" set_realm_user_password "integrator" INTEGRATOR_PASSWORD
+    with_kc_token "tenant_id unchecked (docs/operations/upgrade.md#the-bundled-keycloak-realm-is-stricter)" \
+      declare_admin_only_attributes http://localhost:8180
     echo ""
-    echo "  Hub:       http://localhost:8080   (health: /q/health)"
+    echo "  Hub:       http://localhost:8080   (health: ./deploy/selfhost/health.sh)"
     echo "  Keycloak:  http://localhost:8180/realms/lumnik"
     echo "  Next:      point lm at the hub — server http://localhost:8080, OIDC http://localhost:8180/realms/lumnik"
     exit 0

@@ -80,7 +80,7 @@ type RunScenario struct {
 	Field        string
 	ManifestYAML string // benign-but-valid csv-file manifest
 	SourceCSV    string // adversarial source rows
-	SourcePath   string // where the source must be written (baked into the manifest)
+	SourcePath   string // where the source must be written, relative to the tenant's folder of the hub's local root (baked into the manifest)
 	Feature      string // human-readable Gherkin
 }
 
@@ -89,7 +89,7 @@ type RunScenario struct {
 // baseline pointing at a per-seed local path.
 func GenerateRun(seed int64) RunScenario {
 	sc := GenerateSource(seed)
-	path := fmt.Sprintf("/tmp/otk/run/%d/in.csv", seed)
+	path := fmt.Sprintf("otk/run/%d/in.csv", seed) // a local path is relative to <root>/<tenant id> (#2001)
 	m := baseline(seed)
 	m.name = fmt.Sprintf("otk-run-%d", seed)
 	m.path = path

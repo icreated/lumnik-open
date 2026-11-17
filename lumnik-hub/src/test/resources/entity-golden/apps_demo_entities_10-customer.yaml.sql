@@ -8,4 +8,4 @@ SELECT 1::int AS _ord, 't_acme_desk_crm'::text AS _src, "customer"::text AS "cod
 ;;
 GRANT SELECT ON connector."v_acmecustomer" TO lumnik_app
 ;;
-DO $lumnik_view$ BEGIN GRANT SELECT ON connector."v_acmecustomer" TO lumnik_readonly; EXCEPTION WHEN OTHERS THEN NULL; END $lumnik_view$
+DO $lumnik_view$ BEGIN GRANT SELECT ON connector."v_acmecustomer" TO lumnik_readonly; EXCEPTION WHEN undefined_object THEN NULL; END $lumnik_view$

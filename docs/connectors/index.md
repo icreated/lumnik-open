@@ -116,6 +116,7 @@ A change in the source appears at the next run that reads it.
 `lm describe connector-type <kind>` lists every key with its meaning. Under a key come the rules
 `lm validate` applies to it:
 
+- `default: …` — the value used when the key is absent.
 - `required when …` — another key's value makes this one mandatory.
 - `read only when …` — under any other value, the key is ignored, and `lm validate` says so.
 - `→ …` — the hint a refusal gives.
@@ -135,7 +136,7 @@ transport            REQUIRED  [NESTED, HIGH]
   path                 optional  [STRING, HIGH]
     File path (local) or glob path (sftp)
     required when kind is local or sftp
-    → Set path: /imports/*.csv (local) or a remote glob (sftp)
+    → Set path: imports/*.csv (local, relative to the tenant's folder of the hub's local root) or a remote glob (sftp)
   host                 optional  [STRING, HIGH]
     SFTP host
     required when kind = sftp
@@ -144,8 +145,10 @@ transport            REQUIRED  [NESTED, HIGH]
     required when kind = sftp
   port                 optional  [INT, LOW]
     SFTP port
+    default: 22
   strict_host_key      optional  [BOOLEAN, LOW]
     Verify the SFTP host key against host_key_fingerprint
+    default: true
   host_key_fingerprint optional  [STRING, MEDIUM]
     SFTP host key fingerprint (SHA256:… as ssh-keygen -lf prints it)
     required when kind is sftp and strict_host_key is not off

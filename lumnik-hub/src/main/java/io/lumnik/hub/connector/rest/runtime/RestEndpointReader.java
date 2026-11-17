@@ -171,7 +171,7 @@ public class RestEndpointReader implements ItemReader<Map<String, Object>> {
     private final RateLimiterRegistry rateRegistry;
     private final RestHttpClient http;
     private final ObjectMapper mapper;
-    /** What a header's {@code value_env} resolves to — the auth fields' rule: lm secret, then environment. */
+    /** What a header's {@code value_env} resolves to — the auth fields' rule: the tenant's lm secret only (#2000). */
     private final SecretRefs secrets;
 
     public RestEndpointReader(ConnectorEndpoint endpoint,

@@ -1,9 +1,12 @@
 package io.lumnik.hub.search.contract;
 
+import io.lumnik.hub.connector.rls.RlsEnforcedPgResource;
 import io.quarkus.test.common.QuarkusTestResourceLifecycleManager;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.time.Duration;
 
 import java.sql.Connection;
@@ -54,23 +57,18 @@ public class SearchProviderContractRlsPgResource implements QuarkusTestResourceL
       st.execute("CREATE ROLE lumnik_app WITH LOGIN PASSWORD 'app'");
       st.execute("CREATE ROLE lumnik_readonly WITH LOGIN PASSWORD 'ro'");
       st.execute("ALTER ROLE lumnik_readonly SET default_transaction_read_only = on");
-      st.execute("GRANT CREATE, CONNECT, TEMP ON DATABASE lumnik TO lumnik_admin");
       st.execute("GRANT CONNECT ON DATABASE lumnik TO lumnik_app, lumnik_readonly");
       st.execute("ALTER DEFAULT PRIVILEGES FOR ROLE lumnik_admin "
           + "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO lumnik_app");
       st.execute("ALTER DEFAULT PRIVILEGES FOR ROLE lumnik_admin "
           + "GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO lumnik_app");
-      // from-scratch gaps (memory dev-hub-from-scratch-boot): superuser-only extension.
-      st.execute("CREATE EXTENSION IF NOT EXISTS vector");
-      // latent schema-USAGE gap (memory: schema-usage-grant-gap) — pre-create app schemas owned by
-      // the migration user + grant USAGE, "search_pg" included from the start since this list is
-      // written fresh for this suite (#705's module didn't exist when the shared allowlist was
-      // last updated).
-      for (String schema : new String[]{"core", "connector", "identity", "rag", "platform", "search_pg"}) {
-        st.execute("CREATE SCHEMA IF NOT EXISTS " + schema + " AUTHORIZATION lumnik_admin");
-        st.execute("GRANT USAGE ON SCHEMA " + schema + " TO lumnik_app, lumnik_readonly");
-      }
-    } catch (SQLException e) {
+      // The shipped superuser bootstrap (database grants, vector, the app schemas, the readonly role's
+      // REVOKEs of #1987), so this suite's lumnik_readonly is the production one; then search_pg, which
+      // only this suite needs.
+      st.execute(Files.readString(RlsEnforcedPgResource.EXTENSIONS_SQL));
+      st.execute("CREATE SCHEMA IF NOT EXISTS search_pg AUTHORIZATION lumnik_admin");
+      st.execute("GRANT USAGE ON SCHEMA search_pg TO lumnik_app, lumnik_readonly");
+    } catch (SQLException | IOException e) {
       throw new RuntimeException("RLS harness init failed", e);
     }
 

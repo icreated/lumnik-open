@@ -2,6 +2,7 @@ package io.lumnik.hub.search;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.security.CurrentRolesHolder;
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -52,7 +53,8 @@ class SearchIndexTenantPurgeIT {
 
     @BeforeEach
     void applyEntity() throws Exception {
-        yaml().headers(TestIdentity.tenantAndUser(1))
+        // From the hub's own tenant: every tenant reads it, and each one declares its own SearchIndex over it (#2050).
+        yaml().headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT))
             .body(entity(adminDs, ENTITY, TABLE, List.of("sales"), "code", "name"))
             .post("/api/entities/apply")
             .then().statusCode(200);

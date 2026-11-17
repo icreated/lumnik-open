@@ -13,6 +13,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 
+import static io.lumnik.hub.tenant.DeploymentTenancy.HUBADMIN_TENANT;
 import static io.lumnik.hub.testsupport.AppManifestYaml.manifest;
 import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -54,6 +55,13 @@ class AppApplyResourceIT {
             .contentType("application/yaml");
     }
 
+    /** The shared default is the hub's: written from the hub's own tenant (#2050). */
+    private static RequestSpecification postFromTheHub() {
+        return given().config(YamlBody.CONFIG)
+            .header("X-Tenant-ID", String.valueOf(HUBADMIN_TENANT)).header("X-User-ID", "1")
+            .contentType("application/yaml");
+    }
+
     /** The newest audit_outbox row for this app name, or null — {@code changes} as raw jsonb text. */
     private String latestAuditChanges(String name) throws Exception {
         try (Connection c = adminDs.getConnection();
@@ -77,7 +85,7 @@ class AppApplyResourceIT {
             .body("scope", equalTo("salon"))
             .body("default", equalTo(false));
 
-        AppRegistrationStore.Row row = store.find("salon-printemps").orElseThrow();
+        AppRegistrationStore.Row row = store.find(1L, null, "salon-printemps").orElseThrow();
         assertThat(row.title()).isEqualTo("salon-printemps");
         assertThat(row.icon()).isEqualTo("event");
         assertThat(row.accentColor()).isEqualTo("#4fd1a5");
@@ -94,7 +102,7 @@ class AppApplyResourceIT {
             .body("tabs", contains("fiches", "inbox"))
             .body("$", not(hasKey("warnings")));
 
-        assertThat(store.find("tabs-round-trip").orElseThrow().tabs()).containsExactly("fiches", "inbox");
+        assertThat(store.find(1L, null, "tabs-round-trip").orElseThrow().tabs()).containsExactly("fiches", "inbox");
         given().header("X-Tenant-ID", "1").when().get("/api/apps/tabs-round-trip")
             .then().statusCode(200).body("tabs", contains("fiches", "inbox"));
     }
@@ -103,12 +111,12 @@ class AppApplyResourceIT {
     void anAppWithoutTabsInheritsAndReApplyingWithoutThemClearsThem() {
         post().body(manifest("tabs-inherit", "salon", "  tabs: [fiches]\n"))
             .when().post("/api/apps/apply").then().statusCode(200);
-        assertThat(store.find("tabs-inherit").orElseThrow().tabs()).containsExactly("fiches");
+        assertThat(store.find(1L, null, "tabs-inherit").orElseThrow().tabs()).containsExactly("fiches");
 
         post().body(manifest("tabs-inherit", "salon", ""))
             .when().post("/api/apps/apply")
             .then().statusCode(200).body("$", not(hasKey("tabs")));
-        assertThat(store.find("tabs-inherit").orElseThrow().tabs()).isNull();
+        assertThat(store.find(1L, null, "tabs-inherit").orElseThrow().tabs()).isNull();
         given().header("X-Tenant-ID", "1").when().get("/api/apps/tabs-inherit")
             .then().statusCode(200).body("$", hasKey("tabs")).body("tabs", nullValue());
         given().header("X-Tenant-ID", "1").when().get("/api/apps/clients")
@@ -125,7 +133,7 @@ class AppApplyResourceIT {
             .body("warnings[0].path", equalTo("spec.tabs[1]"))
             .body("warnings[0].severity", equalTo("WARNING"))
             .body("warnings[0].message", containsString("holodeck"));
-        assertThat(store.find("tabs-portable").orElseThrow().tabs()).containsExactly("fiches", "holodeck");
+        assertThat(store.find(1L, null, "tabs-portable").orElseThrow().tabs()).containsExactly("fiches", "holodeck");
     }
 
     @Test
@@ -133,7 +141,7 @@ class AppApplyResourceIT {
         post().body(manifest("tabs-empty", "salon", "  tabs: []\n"))
             .when().post("/api/apps/apply")
             .then().statusCode(400).body("error", containsString("omit the key"));
-        assertThat(store.find("tabs-empty")).isEmpty();
+        assertThat(store.find(1L, null, "tabs-empty")).isEmpty();
     }
 
     @Test
@@ -219,16 +227,16 @@ class AppApplyResourceIT {
         // between classes, so this test RESTORES what it moves — in a finally, not on the happy
         // path. AppRegistrationSeedIT and AppRegistryResourceIT both assert that clients is the
         // default; a failure here must not turn into a red over there tomorrow.
-        String previous = store.findDefaultName().orElseThrow();
+        String previous = store.findOwnDefaultName(HUBADMIN_TENANT).orElseThrow();
         try {
-            post().body(manifest("crise", "crise", "  default: true\n"))
+            postFromTheHub().body(manifest("crise", "crise", "  default: true\n"))
                 .when().post("/api/apps/apply")
                 .then().statusCode(200)
                 .body("default", equalTo(true))
                 .body("demotedDefault", equalTo(previous));
 
-            assertThat(store.findDefaultName()).contains("crise");
-            assertThat(store.find(previous).orElseThrow().isDefault()).isFalse();
+            assertThat(store.findOwnDefaultName(HUBADMIN_TENANT)).contains("crise");
+            assertThat(store.find(HUBADMIN_TENANT, null, previous).orElseThrow().isDefault()).isFalse();
 
             // Audit P4: the upsert goes through raw JDBC, outside every Hibernate listener, so
             // this row is the ONLY record of who moved the deployment's landing app — and of the
@@ -240,12 +248,12 @@ class AppApplyResourceIT {
                 .contains("\"scope\": \"crise\"")
                 .contains("manifest_sha256");
         } finally {
-            AppRegistrationStore.Row row = store.find(previous).orElseThrow();
+            AppRegistrationStore.Row row = store.find(HUBADMIN_TENANT, null, previous).orElseThrow();
             // The restore carries the row's ACTUAL theme, not the parser's defaults. Those two
             // happen to be equal today (V48 seeds --accent/--bg verbatim) — and AppRegistrationSeedIT
             // asserts the seeded values, so a themeless restore would quietly rewrite the row it is
             // restoring and turn any future move in either default into a red over there.
-            post().body("""
+            postFromTheHub().body("""
                 kind: App
                 metadata:
                   name: %s
@@ -261,7 +269,7 @@ class AppApplyResourceIT {
                     row.accentColor(), row.backgroundColor()))
                 .when().post("/api/apps/apply").then().statusCode(200);
         }
-        assertThat(store.findDefaultName()).contains(previous);
+        assertThat(store.findOwnDefaultName(HUBADMIN_TENANT)).contains(previous);
     }
 
     @Test
@@ -281,9 +289,9 @@ class AppApplyResourceIT {
     void refusesToRemoveTheLastDefaultWithoutAReplacement() {
         // Reads the CURRENT default rather than assuming clients, for the same order-independence
         // reason as above — and because the refusal is about "the last one", not about that name.
-        AppRegistrationStore.Row current = store.find(store.findDefaultName().orElseThrow()).orElseThrow();
+        AppRegistrationStore.Row current = store.find(HUBADMIN_TENANT, null, store.findOwnDefaultName(HUBADMIN_TENANT).orElseThrow()).orElseThrow();
 
-        post().body("""
+        postFromTheHub().body("""
             kind: App
             metadata:
               name: %s
@@ -297,7 +305,7 @@ class AppApplyResourceIT {
             .then().statusCode(400)
             .body("error", containsString("cannot remove the last default app"));
 
-        assertThat(store.findDefaultName())
+        assertThat(store.findOwnDefaultName(HUBADMIN_TENANT))
             .as("an absent ?m= must still resolve to something after the refusal")
             .contains(current.name());
     }

@@ -8,6 +8,10 @@ entry for the E2E suite — they must not rot.
 
 ## Quick start
 
+A local `path:` is relative to the tenant's folder of the hub's local root,
+`<root>/<tenant id>`. Copy the `data/` file a manifest names there first — on the self-host
+stack, tenant `1`: [CSV & files, quickstart](../csv.md#quickstart-one-local-file-three-commands-and-a-look-at-the-ledger).
+
 ```bash
 # apply (register) a connector, then run it once
 lm apply -f docs/connectors/csv/10-local-simple.yaml
@@ -23,13 +27,14 @@ lm connector run csv-local-simple
 | `10-local-simple.yaml` | Minimal config: one local file, full load on every run, no cursor. |
 | `20-local-glob-incremental.yaml` | Glob path matches multiple files; fixed 500-row commit windows; the hub cursor tracks `(file, rowsProcessed)` so re-runs skip already-ingested rows. |
 | `50-kotlin-row-hook.yaml` | Kotlin escape hatch: a `spec.mapping.cell` hook (`normalize-date.kts`) rewrites the legacy `DD/MM/YYYY` date to ISO `YYYY-MM-DD` at ingest time. |
-| `30-sftp-key.yaml` | Remote pull over SFTP (creds via env var named by `password_env`). |
+| `30-sftp-key.yaml` | Remote pull over SFTP (creds via the `lm secret` entry named by `password_env`). |
 | `40-s3-prefix.yaml` | Every `.csv` under an S3 / MinIO prefix (creds via `access_key_env` / `secret_key_env`). |
 | `45-s3-headerless-archive.yaml` | A headerless, tab-separated export under an S3 prefix (`parser.columns`), archived to another bucket after commit. |
 | `60-s3-every-transformer.yaml` | One S3 export run through most `spec.mapping` transformers, in one manifest. |
 | `70-fill-down.yaml`, `71-fill-down-reset.yaml` | `fill-down` on a bank statement, then with `reset-when` on an order export — [Transformers](../transformers.md#fill-down-a-value-written-once-for-the-rows-that-follow). |
 | `72-on-error-dlq.yaml` | An invoice whose amount cannot be read (`n/a`) goes to the dead letters; a blank amount is `validate-row`'s — [Transformers](../transformers.md#an-unreadable-amount-is-a-wrong-row-on-error-dlq). |
 | `73-lines-fixed-width.yaml` | A fixed-width payroll file read with `lines: true`, cut by position — [CSV & files](../csv.md#parser). |
+| `74-parse-coordinates.yaml` | Delivery sites whose GPS points were typed by several tools: `parse-coordinates` reads each pair, exchanges a swapped one and says why it emptied another — [Transformers](../transformers.md#parse-coordinates-gps-points-typed-by-several-tools). |
 
 > **Remote cursor:** remote connectors (`sftp`, `s3`) track a per-file watermark — each run ingests
 > only files newer than the last processed one; replays are idempotent via `_row_hash` dedup.

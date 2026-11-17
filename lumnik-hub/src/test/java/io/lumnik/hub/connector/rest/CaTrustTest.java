@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest;
 
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.hub.connector.rest.auth.AuthConfigException;
 import io.lumnik.hub.connector.secret.SecretRefs;
 import org.junit.jupiter.api.Test;
@@ -14,10 +15,10 @@ import static org.junit.jupiter.api.Assertions.*;
 /** {@code spec.tls.ca_secret}: the connector-level trust in an internal CA (#1609). */
 class CaTrustTest {
     private static final Map<String, Object> TLS = Map.of("ca_secret", "CORP_CA");
-    private final RestHttpClient base = new RestHttpClient();
+    private final RestHttpClient base = new RestHttpClient(TestOutbound.ADDRESSES);
 
     private static SecretRefs holding(Map<String, String> secrets) {
-        return SecretRefs.environmentOnly(secrets::get);
+        return SecretRefs.of(secrets::get);
     }
 
     @Test

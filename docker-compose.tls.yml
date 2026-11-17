@@ -22,6 +22,8 @@ services:
       - "${LUMNIK_TLS_BIND:-0.0.0.0}:80:80"   # ACME HTTP-01 + https redirect
     environment:
       LUMNIK_TLS_HOST: ${LUMNIK_TLS_HOST:?set LUMNIK_TLS_HOST (public domain, or a LAN IP for local testing)}
+      # HSTS for the origin (#1994): "true" on a public domain only — see deploy/tls/README.md.
+      LUMNIK_TLS_HSTS: ${LUMNIK_TLS_HSTS:-false}
     volumes:
       - ./deploy/tls/Caddyfile:/etc/caddy/Caddyfile:ro
       - tls_caddy_data:/data

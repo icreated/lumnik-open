@@ -10,9 +10,9 @@
 # to advance to page=2, and so on until has_more is false.
 #
 # Auth: basic — the platform sends `Authorization: Basic base64(username:password)`.
-# The password is NEVER inline: `password_env` names a credential reference resolved at
-# run time as: DB secret store → OS env var → JVM system property (dev/test).
-# Use `lm secret set REST_DEMO_BASIC_PW` (encrypted at rest, resolved first).
+# The password is NEVER inline: `password_env` names an `lm secret` entry of your tenant,
+# resolved at run time. Use `lm secret set REST_DEMO_BASIC_PW`, then
+# `lm secret scope REST_DEMO_BASIC_PW demo`: a connector reads a secret only when it carries all its scopes.
 #
 # Pagination: page — numbered pages with a has_more sentinel.
 

@@ -31,7 +31,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * {@code adminDs.getConnection()} sites, all correct today, held by discipline alone.
  *
  * <p>This test is the discipline made mechanical. It reads PRODUCTION SOURCE: every file that
- * injects {@code @DataSource("admin")}, and every SQL string in it. Adjacent string literals
+ * injects {@code @DataSource("admin")} (or {@code "tenancy"}, the same role, #1991), and every
+ * SQL string in it. Adjacent string literals
  * joined by {@code +} are recombined into one statement first — a statement built by
  * concatenation must be judged whole, or a fragment like
  * {@code "SELECT card FROM connector.schema_card "} reads as unscoped when its next line is
@@ -213,7 +214,7 @@ class AdminDatasourceTenantGuardTest {
 
   @Test
   void every_admin_datasource_statement_naming_a_tenanted_table_names_the_tenant() throws IOException {
-    Path root = reactorRoot();
+    Path root = SourceTree.reactorRoot();
     TreeSet<String> tenanted = tenantedTables(root);
     assertThat(tenanted).as("no RLS tables found in any migration — the guard is reading nothing")
         .hasSizeGreaterThan(20);
@@ -230,7 +231,7 @@ class AdminDatasourceTenantGuardTest {
         String file = p.getFileName().toString().replace(".java", "");
         presentFiles.add(file);
         String src = SourceTree.code(Files.readString(p));
-        if (!src.contains("@DataSource(\"admin\")")) continue;
+        if (!src.contains("@DataSource(\"admin\")") && !src.contains("@DataSource(\"tenancy\")")) continue;
 
         Matcher run = LITERAL_RUN.matcher(src);
         while (run.find()) {
@@ -330,13 +331,5 @@ class AdminDatasourceTenantGuardTest {
       }
     }
     return out;
-  }
-
-  /** The reactor root, found the way SourceTree finds sources: from cwd, then each ancestor. */
-  private static Path reactorRoot() {
-    for (Path dir = Path.of("").toAbsolutePath(); dir != null; dir = dir.getParent()) {
-      if (Files.isDirectory(dir.resolve("lumnik-hub/src/main"))) return dir;
-    }
-    throw new IllegalStateException("cannot locate the reactor root from " + Path.of("").toAbsolutePath());
   }
 }

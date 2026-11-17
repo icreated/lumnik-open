@@ -85,11 +85,11 @@ public class FixMojibakeHook implements CellHook {
     for (String col : CleanHook.columnList(params, row)) {
       Object v = row.get(col);
       if (!(v instanceof String str)) continue;
-      row.put(col, transform(str, s));
+      row.put(col, transform(col, str, s));
     }
   }
 
-  private String transform(String input, MappingState s) {
+  private String transform(String col, String input, MappingState s) {
     // No mojibake here — nothing was asked of this value.
     if (!MOJIBAKE.matcher(input).find()) return input;
 
@@ -101,18 +101,18 @@ public class FixMojibakeHook implements CellHook {
     for (int i = 0; i < input.length(); i++) {
       char c = input.charAt(i);
       Byte b = c <= 0xFF ? Byte.valueOf((byte) c) : CP1252_BYTE.get(c);
-      if (b == null) return decline(input, s);
+      if (b == null) return decline(input, s, "not Windows-1252 text in " + col);
       bytes[i] = b;
     }
 
     String recovered = new String(bytes, StandardCharsets.UTF_8);
     // The bytes looked like mojibake but do not form valid UTF-8 after all.
-    if (recovered.indexOf('�') >= 0) return decline(input, s);
+    if (recovered.indexOf('�') >= 0) return decline(input, s, "not valid UTF-8 once repaired in " + col);
     return recovered;
   }
 
-  private String decline(String input, MappingState s) {
-    s.counters().cellErrors().incrementAndGet();
+  private String decline(String input, MappingState s, String reason) {
+    s.refuseCell(reason);
     return input;
   }
 

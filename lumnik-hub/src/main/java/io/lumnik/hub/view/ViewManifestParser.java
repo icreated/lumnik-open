@@ -26,7 +26,8 @@ public class ViewManifestParser {
 
     private static final Set<String> ROOT_KEYS = Set.of("apiVersion", "kind", METADATA, "spec");
     private static final Set<String> METADATA_KEYS = Set.of("name");
-    private static final Set<String> SPEC_KEYS = Set.of("scope", "table", "title", "columns", "links");
+    private static final Set<String> SPEC_KEYS = Set.of("scope", "table", "title", "columns", "links", "map");
+    private static final Set<String> MAP_KEYS = Set.of("point");
     private static final Set<String> LINK_KEYS = Set.of("column", "targetView", "filters", "url");
     static final int MAX_LINKS = 16;
     static final int MAX_LINK_FILTERS = 8;
@@ -38,6 +39,7 @@ public class ViewManifestParser {
         .group(METADATA, "metadata", METADATA_KEYS)
         .group("spec", "spec", SPEC_KEYS)
         .group("spec.links[]", "spec.links[]", LINK_KEYS)
+        .group("spec.map", "spec.map", MAP_KEYS)
         .build();
 
     /**
@@ -98,7 +100,19 @@ public class ViewManifestParser {
 
         String tag = ManifestKeys.scopeTag(scope);
 
-        return new ViewManifest(name, tag, table, title, columns, parseLinks(spec.path("links"), columns));
+        return new ViewManifest(name, tag, table, title, columns, parseLinks(spec.path("links"), columns),
+            parseMap(spec.path("map")));
+    }
+
+    // ── spec.map (#2057) ─────────────────────────────────────────────────────────────────────────
+
+    private static String parseMap(JsonNode node) {
+        if (node.isMissingNode() || node.isNull()) return null;
+        if (!node.isObject()) throw new IllegalArgumentException("spec.map must be a mapping (point: <name>)");
+        String point = ManifestKeys.strictRequiredText(node, "point", "spec.map.point").strip();
+        if (!FILTER_COLUMN.matcher(point).matches())
+            throw new IllegalArgumentException("spec.map.point: '" + point + "' is not a point name");
+        return point;
     }
 
     // ── spec.links (#1050) ───────────────────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.text.Text;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
+import io.lumnik.hub.entity.NewWriterScopes;
 import io.lumnik.hub.connector.mapping.MappingValidationException;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.PromotedColumn;
 import io.lumnik.hub.connector.mapping.writer.HybridJsonbSpec.SqlType;
@@ -35,6 +36,7 @@ import java.util.function.IntConsumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static io.lumnik.hub.sql.SqlIdentifiers.keptName;
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteIdent;
 import static io.lumnik.hub.sql.SqlIdentifiers.quoteTable;
 import static java.util.stream.Collectors.joining;
@@ -75,10 +77,11 @@ public class HybridJsonbWriter {
     @Inject
     RowEventGate gate;
 
-    /** In-memory cache of known columns per table — cleared on drift or by tests. */
+    /** undefined_table, undefined_column: the SQLSTATEs of a write into a table that is no longer what was checked. */
+    private static final Set<String> TABLE_GONE = Set.of("42P01", "42703");
+
+    /** The columns of each table this process has made or checked (#2010) — forgotten on a drop, or by tests. */
     private final Map<String, Set<String>> schemaCache = new ConcurrentHashMap<>();
-    /** The tables whose row-hash index this process has ensured (#1873). */
-    private final Set<String> rowHashIndexed = ConcurrentHashMap.newKeySet();
 
     /** Once-per-boot registration marker per (table, tenant) — the registry upsert is idempotent,
      *  this only spares one round-trip per batch. Cleared with the schema cache. */
@@ -125,22 +128,29 @@ public class HybridJsonbWriter {
         // Pre-compile JsonPath expressions once per write call to avoid recompilation per row
         JsonPath uniqueKey = JsonPath.compile(spec.uniqueKeyPath());
         List<JsonPath> colPaths = paths(spec);
-        String[] target = schemaAndTable(spec);
+        String[] target = schemaAndTable(spec.table());
         String entity = target[0] + "." + target[1];
         // Asked once per write, as the dynamic writer does: no subscription, no events, today's write (#1816).
         boolean emitting = gate.enabled(tenantId, entity);
         try (Connection c = adminDs.getConnection()) {
-            DynamicTableWriter.writeLock(c, target[0], target[1]);
+            boolean[] locked = {false};
             long unreadable;
             try {
-                unreadable = writeLocked(c, spec, items, cells, systemContexts, tenantId, connectorId, endpointId,
-                    uniqueKey, colPaths, emitting ? entity : null);
+                boolean schemaChanged = ensureTable(c, spec, locked);
+                unreadable = writeLocked(c, spec, schemaChanged, items, cells, systemContexts, tenantId, connectorId,
+                    endpointId, uniqueKey, colPaths, emitting ? entity : null);
             } catch (SQLException | RuntimeException | Error failure) {
+                // A missing table or column: another replica dropped it. The next write checks it again; a failure on
+                // the data keeps the table checked, and the writes after it never wait.
+                String state = Jdbc.sqlStateOf(failure);
+                if (state != null && TABLE_GONE.contains(state)) forget(spec.table());
                 // A failed Jdbc.transaction may end the session: the release then throws, and must not mask it.
-                try {
-                    DynamicTableWriter.releaseWriteLock(c, target[0], target[1]);
-                } catch (SQLException releaseFailure) {
-                    failure.addSuppressed(releaseFailure);
+                if (locked[0]) {
+                    try {
+                        DynamicTableWriter.releaseWriteLock(c, target[0], target[1]);
+                    } catch (SQLException releaseFailure) {
+                        failure.addSuppressed(releaseFailure);
+                    }
                 }
                 throw failure;
             }
@@ -239,13 +249,15 @@ public class HybridJsonbWriter {
         }
     }
 
-    /** @param eventEntity the entity of the staged events, {@code null} when no subscription asked for them */
-    private long writeLocked(Connection c, HybridJsonbSpec spec, List<Map<String, Object>> items,
+    /**
+     * @param schemaChanged whether {@link #ensureTable} made the table or changed its columns
+     * @param eventEntity the entity of the staged events, {@code null} when no subscription asked for them
+     */
+    private long writeLocked(Connection c, HybridJsonbSpec spec, boolean schemaChanged, List<Map<String, Object>> items,
                              List<Map<String, Object>> cells,
                              List<Map<String, Object>> systemContexts, long tenantId, UUID connectorId,
                              UUID endpointId, JsonPath uniqueKey, List<JsonPath> colPaths, String eventEntity)
         throws SQLException {
-        boolean schemaChanged = ensureTable(c, spec);
         if (schemaChanged) registered.removeIf(k -> k.startsWith(spec.table() + "|" + tenantId + "|"));
         registerIfNeeded(spec, tenantId, connectorId, c);
         if (eventEntity != null) {
@@ -354,14 +366,13 @@ public class HybridJsonbWriter {
         return systemContexts == null ? null : (String) systemContexts.get(r).get("_row_hash");
     }
 
-    /** {@code [schema, table]} of the target, as it is registered — {@code public} when the spec names none. */
-    private static String[] schemaAndTable(HybridJsonbSpec spec) {
-        String[] parts = spec.table().split("\\.", 2);
-        return parts.length == 2 ? parts : new String[] {"public", parts[0]};
+    /** {@code [schema, table]} of a target, which the record holds to {@code schema.table} (#1989). */
+    private static String[] schemaAndTable(String table) {
+        return table.split("\\.", 2);
     }
 
     /**
-     * Register the ext.* table in {@code connector.dynamic_table} so scope discovery sees it —
+     * Register the hybrid table in {@code connector.dynamic_table} so scope discovery sees it —
      * the missing link that kept every hybrid scope un-answerable (HybridTargetSchemaCardIT).
      * Key {@code hybrid:<table>}: unique per endpoint target, so two endpoints of one mapping
      * write two tables and get two registry rows. For connector runs the card appears when the completed RUN
@@ -377,8 +388,8 @@ public class HybridJsonbWriter {
     private void registerIfNeeded(HybridJsonbSpec spec, long tenantId, UUID connectorId, Connection c) {
         // per connector (#1186): a second connector writing the same table registers it too
         String key = spec.table() + "|" + tenantId + "|" + connectorId;
-        if (!registered.add(key)) return;
-        String[] parts = schemaAndTable(spec);
+        if (registered.contains(key)) return;
+        String[] parts = schemaAndTable(spec.table());
         String schema = parts[0];
         String table  = parts[1];
         // Business columns ONLY — every entry here becomes a queryable column on the scope's
@@ -388,13 +399,35 @@ public class HybridJsonbWriter {
         cols.put("external_id", "TEXT");
         for (PromotedColumn col : spec.promote()) cols.put(col.name(), col.type().ddl);
         cols.put("data", "JSONB");
-        try {
-            String mapping = DynamicTableRegistry.HYBRID_MAPPING_PREFIX + spec.table();
-            if (c == null) registry.register(tenantId, mapping, schema, table, cols, connectorId);
-            else registry.register(c, tenantId, mapping, schema, table, cols, connectorId);
-        } catch (RuntimeException e) {
-            // Registration must never fail a data write. The known case: the one-shot CSV path
-            // writes rows INSIDE the transaction that creates its connector row, so the registry
+        String mapping = DynamicTableRegistry.HYBRID_MAPPING_PREFIX + spec.table();
+        // #2048: judged and recorded at once, before any row, on every path, the retry after commit included. The
+        // writer's row stays FOR SHARE until the registration commits, so a re-tag either waits for it or is seen by
+        // it. A refusal, or a check that could not complete, stops the write; so does a failed registration of a
+        // connector table, whose writers the entity checks read from the registry. Only an ext table's registration
+        // may fail quietly, back to its savepoint, and be retried.
+        Jdbc.TxFunction<RuntimeException> judgeAndRegister = tx -> {
+            NewWriterScopes.requireNewWriterWithinReaders(tx, tenantId, schema, table, connectorId);
+            Savepoint before = tx.setSavepoint();
+            try {
+                registry.register(tx, tenantId, mapping, schema, table, cols, connectorId);
+                return null;
+            } catch (RuntimeException failed) {
+                tx.rollback(before);
+                return failed;
+            }
+        };
+        RuntimeException e = c == null
+            ? Jdbc.transaction(adminDs, "HybridJsonbWriter.registerIfNeeded", judgeAndRegister)
+            : Jdbc.transaction(c, "HybridJsonbWriter.registerIfNeeded", judgeAndRegister);
+        if (e == null) {
+            registered.add(key);
+        } else if (DynamicTableRegistry.DYNAMIC_SCHEMA.equals(schema)) {
+            throw new ConnectorException(spec.table() + ": its writer could not be recorded, so no row is written "
+                + "(the entities reading it learn their writers from that record): "
+                + Jdbc.failureText("HybridJsonbWriter.registerIfNeeded", e), e);
+        } else {
+            // An ext table's registration never fails a data write: no entity reads it. The known case:
+            // the one-shot CSV path writes rows INSIDE the transaction that creates its connector row, so the registry
             // FK (dynamic_table_connector_fk, admin DS, outside that tx) cannot see it yet. It
             // used to stay unregistered — "benign" for discovery (a one-shot is un-askable by
             // design), but the DELETE purge walks the registry, so the unregistered table
@@ -413,7 +446,7 @@ public class HybridJsonbWriter {
                 });
             }
             Logger.getLogger(HybridJsonbWriter.class)
-                .infof("ext table %s not registered for discovery (will retry on next write): %s",
+                .infof("hybrid table %s not registered for discovery (will retry on next write): %s",
                        spec.table(), e.getMessage());
         }
     }
@@ -422,7 +455,8 @@ public class HybridJsonbWriter {
 
     /** The {@code CREATE TABLE}: the reserved columns ({@link HybridJsonbSpec#RESERVED_COLUMNS}) with the promoted ones between. */
     static String createTableSql(String qfqTable, List<PromotedColumn> promote) {
-        StringBuilder sb = new StringBuilder("CREATE TABLE IF NOT EXISTS ").append(qfqTable).append(" (");
+        // No IF NOT EXISTS (#2010): a table that appeared since the check fails the creation, never gets recorded.
+        StringBuilder sb = new StringBuilder("CREATE TABLE ").append(qfqTable).append(" (");
         for (TableColumn col : HybridJsonbSpec.LEADING_COLUMNS) sb.append(col.sql()).append(", ");
         for (PromotedColumn col : promote) {
             sb.append(qi(col.name())).append(' ').append(col.type().ddl).append(", ");
@@ -431,43 +465,121 @@ public class HybridJsonbWriter {
         return sb.append("UNIQUE (tenant_id, external_id))").toString();
     }
 
-    /** @return true when the table was created or any column was added — the caller then
-     *  refreshes the registry entry so the schema card follows the drift (DynamicTableWriter
-     *  re-registers on evolve; same contract here). */
-    private boolean ensureTable(Connection c, HybridJsonbSpec spec) throws SQLException {
-        // Invariant: schemaCache entries are always fully populated after createTable;
-        // IF NOT EXISTS guards in createTable/addColumn make this safe under concurrent callers.
-        Set<String> known = schemaCache.computeIfAbsent(spec.table(), t -> loadColumns(c, t));
-        if (known.isEmpty()) {
-            createTable(c, spec);
-            schemaCache.put(spec.table(), loadColumns(c, spec.table()));
-            rowHashIndexed.add(spec.table());   // createTable made the index
-            return true;
+    /**
+     * Makes the table ready for this write, and returns holding its shared write lock ({@code locked} turns true once it
+     * is taken): whether the table was made or its columns changed, so the registry entry follows them, as
+     * DynamicTableWriter re-registers on evolve.
+     *
+     * <p>A table this process has made or checked, with every promoted column, takes the shared lock only: writers
+     * never wait on each other. Otherwise (#2010), in ONE transaction under the exclusive first-write lock: a missing
+     * table is made whole (table, isolation, grants) and recorded as the hub's; an existing one is the hub's or is
+     * refused, then repaired and given its new columns. A failure rolls everything back, so no replica ever sees a
+     * table without its isolation, and the next write tries again. The cost: that transaction waits for the writes in
+     * flight on the table, once per process and table, and again on each new column.
+     */
+    private boolean ensureTable(Connection c, HybridJsonbSpec spec, boolean[] locked) throws SQLException {
+        String[] target = schemaAndTable(spec.table());
+        Set<String> known = schemaCache.get(spec.table());
+        // The catalog keeps a long column name's first 63 bytes, and so does the cache that read it.
+        if (known != null && spec.promote().stream().allMatch(col -> known.contains(keptName(col.name())))) {
+            DynamicTableWriter.writeLock(c, target[0], target[1]);
+            locked[0] = true;
+            return false;
         }
+        boolean changed = Jdbc.transaction(c, "HybridJsonbWriter.ensureTable " + spec.table(), tx -> {
+            DynamicTableWriter.firstWriteLock(tx, target[0], target[1]);
+            boolean made = !UnseenRowSweeper.exists(tx, fqn(spec.table()));
+            if (made) {
+                createTable(tx, spec);
+                DynamicTableRegistry.recordHybridTable(tx, target[0], target[1]);
+            }
+            boolean added = !made && adopt(tx, spec, target[0], target[1]);
+            // Taken before the commit lets the exclusive lock go, and held by the session after it: no connector delete
+            // drops the table between this check and the write.
+            DynamicTableWriter.writeLock(tx, target[0], target[1]);
+            locked[0] = true;
+            return made || added;
+        });
+        // Read under the shared lock: a column changes under the exclusive one only.
+        schemaCache.put(spec.table(), loadColumns(c, spec.table()));
+        return changed;
+    }
+
+    /**
+     * The policy {@link RlsDdl#tenantIsolationPolicy} creates, as this server's {@code pg_get_expr} renders it: a {@code
+     * tenant_isolation} with any other content is replaced (#2010). Read once per process from a temporary table, so a
+     * server that renders it otherwise does not see every healthy table as wrong.
+     */
+    private volatile String tenantIsolationQual;
+
+    private String tenantIsolationQual(Connection c) throws SQLException {
+        if (tenantIsolationQual == null) {
+            try (Statement s = c.createStatement()) {
+                s.execute("CREATE TEMP TABLE lumnik_policy_probe (tenant_id BIGINT) ON COMMIT DROP");
+                s.execute(RlsDdl.tenantIsolationPolicy(null, "lumnik_policy_probe"));
+            }
+            tenantIsolationQual = Jdbc.queryOne(c, "HybridJsonbWriter.tenantIsolationQual", "SELECT pg_get_expr(polqual, "
+                + "polrelid) FROM pg_policy WHERE polrelid = 'pg_temp.lumnik_policy_probe'::regclass", ps -> {},
+                rs -> rs.getString(1)).orElseThrow();
+        }
+        return tenantIsolationQual;
+    }
+
+    /**
+     * Whether a table's RLS is on, its {@code tenant_isolation} is the hub's (for every command, every role, no
+     * {@code WITH CHECK}), and the first other permissive policy, OR-ed with it: each tenant would see what that one
+     * lets through.
+     */
+    private static final String ISOLATION_SQL = "SELECT t.relrowsecurity, EXISTS (SELECT 1 FROM pg_policy p "
+        + "WHERE p.polrelid = t.oid AND p.polname = 'tenant_isolation' AND p.polpermissive AND p.polcmd = '*' "
+        + "AND p.polroles = '{0}' AND p.polwithcheck IS NULL AND pg_get_expr(p.polqual, p.polrelid) = ?), "
+        + "(SELECT min(p.polname) FROM pg_policy p WHERE p.polrelid = t.oid AND p.polpermissive "
+        + "AND p.polname <> 'tenant_isolation') FROM pg_class t WHERE t.oid = to_regclass(?)";
+
+    private record Isolation(boolean rowSecurity, boolean policed, String widenedBy) {}
+
+    /**
+     * An existing table: the hub's own ({@link DynamicTableRegistry#ownsHybridTable}), or refused before any DDL touches
+     * it (#1989): under {@code connector} sit the hub's own tables, and a target may name one. A policy the hub did not
+     * make is refused. Then repaired: RLS and the hub's {@code tenant_isolation} only where missing (each takes the
+     * table's ACCESS EXCLUSIVE lock, readers included), the grants, the columns the spec adds and the ones an old table
+     * lacks, the row-hash index.
+     *
+     * @return whether a column was added
+     */
+    private boolean adopt(Connection c, HybridJsonbSpec spec, String schema, String table) throws SQLException {
+        String rel = fqn(spec.table());
+        if (!DynamicTableRegistry.ownsHybridTable(c, schema, table)) {
+            throw HybridTargetRefusedException.notMadeByTheHub(spec.table());
+        }
+        String reference = tenantIsolationQual(c);
+        Isolation isolation = Jdbc.queryOne(c, "HybridJsonbWriter.isolation", ISOLATION_SQL, ps -> {
+            ps.setString(1, reference);
+            ps.setString(2, rel);
+        }, rs -> new Isolation(rs.getBoolean(1), rs.getBoolean(2), rs.getString(3))).orElseThrow();
+        if (isolation.widenedBy() != null) throw HybridTargetRefusedException.widenedBy(spec.table(), isolation.widenedBy());
+        Set<String> known = loadColumns(c, spec.table());
         boolean changed = false;
-        // Drift: add any promoted columns not yet in the table
-        for (PromotedColumn col : spec.promote()) {
-            if (!known.contains(col.name())) {
-                addColumn(c, spec.table(), col);
-                known.add(col.name());
+        try (Statement s = c.createStatement()) {
+            if (!isolation.rowSecurity()) s.execute(RlsDdl.enableRowLevelSecurity(schema, table));
+            if (!isolation.policed()) {
+                s.execute("DROP POLICY IF EXISTS tenant_isolation ON " + rel);
+                s.execute(RlsDdl.tenantIsolationPolicy(schema, table));
+            }
+            grant(s, schema, table);
+            for (PromotedColumn col : spec.promote()) {
+                if (known.contains(keptName(col.name()))) continue;
+                s.execute("ALTER TABLE " + rel + " ADD COLUMN IF NOT EXISTS " + qi(col.name()) + " " + col.type().ddl);
                 changed = true;
             }
-        }
-        // Retrofit: tables created before C4/P18 PR1 lack row_hash
-        if (!known.contains(ROW_HASH)) {
-            try (Statement st = c.createStatement()) {
-                st.execute("ALTER TABLE " + fqn(spec.table()) + " ADD COLUMN IF NOT EXISTS " + ROW_HASH + " TEXT");
+            // Retrofit: tables created before C4/P18 PR1 lack row_hash; before #1873, its index.
+            if (!known.contains(ROW_HASH)) {
+                s.execute("ALTER TABLE " + rel + " ADD COLUMN IF NOT EXISTS " + ROW_HASH + " TEXT");
+                changed = true;
             }
-            known.add(ROW_HASH);
-            changed = true;
-        }
-        // Retrofit (#1873): a table created before the index existed. Once per table and process; IF NOT EXISTS
-        // makes a restart's second attempt a no-op.
-        if (!rowHashIndexed.contains(spec.table())) {
-            try (Statement st = c.createStatement()) {
-                st.execute(rowHashIndexSql(fqn(spec.table()), bareName(spec.table())));
+            if (!UnseenRowSweeper.exists(c, qi(schema) + "." + qi(indexName(table, "row_hash")))) {
+                s.execute(rowHashIndexSql(rel, table));
             }
-            rowHashIndexed.add(spec.table());   // after the DDL: a failed one is tried again by the next write
         }
         return changed;
     }
@@ -478,76 +590,41 @@ public class HybridJsonbWriter {
             + " ON " + qfqTable + " (tenant_id, " + ROW_HASH + ")";
     }
 
-    private static String bareName(String table) {
-        return table.substring(table.indexOf('.') + 1);
-    }
-
+    /**
+     * The table's columns, from the catalog by its relation: {@code information_schema} would look a long name up whole,
+     * where Postgres keeps its first 63 characters, and hides a column the role has no privilege on.
+     */
     private Set<String> loadColumns(Connection c, String fqTable) {
-        String[] parts = fqTable.split("\\.", 2);
-        String schema = parts.length == 2 ? parts[0] : "public";
-        String table  = parts.length == 2 ? parts[1] : parts[0];
-        Set<String> cols = new HashSet<>();
-        try (PreparedStatement ps = c.prepareStatement(
-            "SELECT column_name FROM information_schema.columns WHERE table_schema = ? AND table_name = ?")) {
-            ps.setString(1, schema);
-            ps.setString(2, table);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) cols.add(rs.getString(1));
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("loadColumns failed for " + fqTable, e);
-        }
-        return cols;
+        return Set.copyOf(Jdbc.query(c, "HybridJsonbWriter.loadColumns", "SELECT attname FROM pg_catalog.pg_attribute "
+            + "WHERE attrelid = to_regclass(?) AND attnum > 0 AND NOT attisdropped", ps -> ps.setString(1, fqn(fqTable)),
+            rs -> rs.getString(1)));
     }
 
-    /** Package-visible so the emitted DDL can be pinned without a live datasource. */
+    /**
+     * The new table's DDL, run inside {@link #ensureTable}'s transaction: the table, its indexes, the tenant isolation
+     * the connector.t_* tables get ({@link RlsDdl}), its grants. Its schema exists: V98 creates {@code ext} and grants
+     * its USAGE. Package-visible so the emitted DDL can be pinned without a live datasource.
+     */
     void createTable(Connection c, HybridJsonbSpec spec) throws SQLException {
-        String[] parts = spec.table().split("\\.", 2);
-        String schemaName = parts.length == 2 ? parts[0] : null;
-        String tableName  = parts.length == 2 ? parts[1] : parts[0];
+        String[] parts = schemaAndTable(spec.table());
+        String schemaName = parts[0];
+        String tableName  = parts[1];
         String qfqTable   = fqn(spec.table());
         try (Statement s = c.createStatement()) {
-            if (schemaName != null) {
-                s.execute("CREATE SCHEMA IF NOT EXISTS " + qi(schemaName));
-                // Schema USAGE grant: the ext.* schema is created here by the admin (owner) datasource
-                // and is NOT covered by any migration's USAGE grant — the connector schema is granted
-                // via V9, ext is not (auto-memory schema-usage-grant-gap). Without USAGE the non-owner
-                // lumnik_app cannot reference any object inside ext at all ("permission denied for
-                // schema ext") on an RLS-enforced hub. No-op when owner = same user (test mode).
-                // Routed through RlsDdl.guarded (not hand-rolled here) so this DO block shares RlsDdl's
-                // single dollar-quote tag and gets the same DDL-injection protection as every other
-                // grant, instead of carrying its own bare-$$ copy of that logic.
-                // One grant, one block: EXCEPTION WHEN OTHERS aborts its block, so a pair sharing
-                // one would let a missing lumnik_app silently cost lumnik_readonly its USAGE — and
-                // without USAGE on the schema, ask-to-SQL cannot reach the table whatever its own
-                // grants say.
-                s.execute(RlsDdl.guarded(RlsDdl.grantSchemaUsageApp(schemaName)));
-                s.execute(RlsDdl.guarded(RlsDdl.grantSchemaUsageReadonly(schemaName)));
-            }
-
             s.execute(createTableSql(qfqTable, spec.promote()));
-
             String idxName = indexName(tableName, "data_gin");
             s.execute("CREATE INDEX IF NOT EXISTS " + qi(idxName) +
                       " ON " + qfqTable + " USING GIN (data jsonb_path_ops)");
             s.execute(rowHashIndexSql(qfqTable, tableName));
-            // Tenant isolation: the same policy the connector.t_* tables get, from RlsDdl.
             s.execute(RlsDdl.enableRowLevelSecurity(schemaName, tableName));
             s.execute(RlsDdl.tenantIsolationPolicy(schemaName, tableName));
-            // One grant per guarded block, the DynamicTableWriter shape. Grouped, the readonly
-            // SELECT sat second behind the app's DML: a failing first statement aborted the block
-            // and took it with it, swallowed, leaving a table the schema card advertises as
-            // askable and the ask role cannot read.
-            s.execute(RlsDdl.guarded(RlsDdl.grantAppDml(schemaName, tableName)));
-            s.execute(RlsDdl.guarded(RlsDdl.grantReadonlySelect(schemaName, tableName)));
-            s.execute(RlsDdl.guarded(RlsDdl.grantSequenceUsage(schemaName, tableName + "_id_seq")));
+            grant(s, schemaName, tableName);
         }
     }
 
-    private void addColumn(Connection c, String table, PromotedColumn col) throws SQLException {
-        try (Statement s = c.createStatement()) {
-            s.execute("ALTER TABLE " + fqn(table) + " ADD COLUMN IF NOT EXISTS " + qi(col.name()) + " " + col.type().ddl);
-        }
+    /** The grants a table lacks ({@link RlsDdl#hybridGrants}); any failure but a missing role rolls the DDL back. */
+    private static void grant(Statement s, String schema, String table) throws SQLException {
+        for (String sql : RlsDdl.hybridGrants(schema, table)) s.execute(sql);
     }
 
     // ── SQL building ─────────────────────────────────────────────────────────
@@ -895,10 +972,9 @@ public class HybridJsonbWriter {
     }
 
     /**
-     * Forget one table's cached schema + registration marker — called when the table is dropped
-     * (connector delete / purge) so a re-ingest under the same name re-reads an empty
-     * information_schema and recreates the table, instead of trusting a stale cache, skipping
-     * {@code CREATE TABLE}, and inserting into a relation that no longer exists.
+     * Forget one table's cached columns + registration marker — called when the table is dropped (connector delete /
+     * purge), so the next write takes {@link #ensureTable}'s checked path and makes the table again, instead of inserting
+     * into a relation that no longer exists. A write that fails on a missing table or column forgets it too.
      */
     public void forget(String table) {
         if (table == null) return;
@@ -908,8 +984,8 @@ public class HybridJsonbWriter {
     }
 
     /**
-     * Test-only hook: drops the in-memory schema cache so the next write re-reads from information_schema.
-     * Do NOT call at runtime.
+     * Test-only hook: drops the in-memory schema cache, so the next write of each table takes {@link #ensureTable}'s
+     * checked path, as a restarted process does. Do NOT call at runtime.
      */
     void clearSchemaCache() {
         schemaCache.clear();

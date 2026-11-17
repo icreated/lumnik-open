@@ -10,6 +10,7 @@ import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
 import io.lumnik.hub.connector.transport.sftp.SftpTestHelper;
 import io.lumnik.hub.connector.transport.sftp.SftpTestImage;
+import io.lumnik.hub.testsupport.TestSecrets;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -35,6 +36,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @QuarkusTest
 class CsvSftpRunScopeIT {
 
+    @Inject TestSecrets testSecrets;
+
     private static final int ROWS = 1600;   // chunk size 500 => 4 chunks
 
     @Inject ConnectorEngine engine;
@@ -56,13 +59,17 @@ class CsvSftpRunScopeIT {
         try (var helper = new SftpTestHelper(sftp.getHost(), sftp.getMappedPort(22), USER, PASS)) {
             helper.put("upload/scope/big.csv", csv.toString());
         }
-        System.setProperty("SCOPE_SFTP_PASSWORD", PASS);
     }
 
     @AfterAll
     static void stop() {
-        System.clearProperty("SCOPE_SFTP_PASSWORD");
         if (sftp != null) sftp.stop();
+    }
+
+    /** The connector's secrets, in tenant 1's lm secret registry: the only place a `*_env` reference resolves (#2000). */
+    @BeforeEach
+    void holdTheSecrets() {
+        testSecrets.put(1L, "SCOPE_SFTP_PASSWORD", PASS);
     }
 
     @BeforeEach

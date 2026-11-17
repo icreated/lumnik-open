@@ -37,7 +37,7 @@ import java.util.Set;
  * cannot take over a declaration held over an entity outside the caller's grants) → the new entity
  * exists → <b>the caller holds every scope of it</b> → its canonical columns cover the fields →
  * guarded upsert → audit. Both scope checks run before the field cross-check on purpose: the entity
- * registry is deployment-global, and the cross-check's message names the entity's columns, which a
+ * registry holds entity names hub-wide, and the cross-check's message names the entity's columns, which a
  * caller outside its scopes must not be able to probe (the {@code ExportApplyResource} reasoning).
  */
 @Path("/api/search-indexes/apply")
@@ -80,7 +80,7 @@ public class SearchIndexApplyResource {
         // The STORED definition, not EntityRegistry's cache: another instance may have re-applied the
         // entity into other scopes, or without a column, and a cache hit would still say otherwise.
         // The write below is bound to exactly this version.
-        Optional<EntityRegistry.Stored> stored = entities.stored(manifest.entity());
+        Optional<EntityRegistry.Stored> stored = entities.stored(tenant, manifest.entity());
         if (stored.isEmpty()) {
             return ApiErrors.badRequest("spec.entity: entity '" + manifest.entity() + "' not found");
         }

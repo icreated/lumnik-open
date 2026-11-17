@@ -5,6 +5,7 @@ import io.lumnik.extraction.spi.ask.SchemaCard;
 import io.lumnik.hub.ask.EntitySchemaBuilder;
 import io.lumnik.hub.ask.ReadonlyTransactionsProfile;
 import io.lumnik.hub.ask.SchemaCardStore;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -78,6 +79,7 @@ class EntityPlanCacheInvalidatorIT {
             + " GRANT SELECT ON connector.t_pc_order TO lumnik_readonly; EXCEPTION WHEN OTHERS THEN NULL; END $$",
         "INSERT INTO connector.t_pc_order VALUES (1, '7', '1500'), (1, '12', '999.5'), (1, '100', '20')",
         "DELETE FROM connector.entity_manifest WHERE name = 'pcorder'");
+    RegisteredTables.register(adminDs, 1L, "t_pc_order");
     apply(MANIFEST).statusCode(200);
   }
 
@@ -87,7 +89,7 @@ class EntityPlanCacheInvalidatorIT {
   }
 
   private void readBothPools(String expectedFirst) {
-    cards.save(1L, "registry", new SchemaCard("pc", entityCards.resolve("pc")));
+    cards.save(1L, "registry", new SchemaCard("pc", entityCards.resolve(1L, "pc")));
     for (int i = 0; i < 12; i++) {   // past pgjdbc's prepareThreshold on the connections these reads take
       given().headers(TestIdentity.tenantAndUser(1)).get("/api/entities/pcorder")          // the default pool
           .then().statusCode(200).body("[0].no", equalTo(expectedFirst));

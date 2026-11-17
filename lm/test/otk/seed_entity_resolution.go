@@ -51,7 +51,7 @@ EXCEPTION WHEN OTHERS THEN NULL; END $$;
 DO $$ BEGIN
   GRANT SELECT ON connector.%[1]s TO lumnik_readonly;
 EXCEPTION WHEN OTHERS THEN NULL; END $$;
-`, table)
+`, table) + registerTableSQL(table, `{"src_id":"TEXT","email":"TEXT"}`)
 }
 
 // seedEntityResolutionManifest declares one exact cascade rule on email over TWO physical

@@ -133,7 +133,7 @@ class EncodingGuessTest {
         List.of("", "NULL", "null", "#N/A"), null);
     var scope = new OwnedRunScope("test");
 
-    new CsvFileConnectorType.CsvGlobCursorReader(f.toString(), undeclared)
+    GlobReaders.of(f.toString(), undeclared)
         .read(500, ConnectorCursor.empty(), ReaderTestContexts.of(scope));
 
     assertThat(RunNotes.of(scope).sentences()).singleElement().asString().contains(f.toString(), "parser.encoding");

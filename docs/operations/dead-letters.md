@@ -27,7 +27,8 @@ curl -s -H "Authorization: Bearer $TOKEN" \
   "$HUB/api/platform/events/dead-letters?open=true&consumer=process"
 ```
 
-The door needs the integrator role, like the rest of `/api/platform`.
+The door needs the integrator role, like the rest of `/api/platform`. The letters are the whole
+tenant's, so an account holding any `scope:*` role is refused: `403 {"error":"scope not granted"}`.
 
 ## Redo one
 

@@ -1,6 +1,7 @@
 package io.lumnik.hub.health;
 
 import io.lumnik.extraction.spi.search.SearchAvailability;
+import io.lumnik.hub.ask.ReadonlyHardening;
 import io.lumnik.hub.manifest.ModuleManifest;
 import io.lumnik.hub.manifest.ModuleManifestRegistryFixture;
 import io.lumnik.hub.manifest.ModuleStatus;
@@ -33,8 +34,27 @@ class PlatformHealthMappingTest {
     }
 
     @Test
+    void analytic_ask_says_absent_switched_off_or_not_hardened_before_ok() {
+        var rag = new ModuleStatus(m("rag", null), null);
+        assertThat(PlatformHealthResource.ask(null, List::of))
+            .isEqualTo(new PlatformHealthResource.AskHealth("not_installed", null));
+        assertThat(PlatformHealthResource.ask(new ModuleStatus(m("rag", null), "disabled:lumnik.ai.enabled"), List::of))
+            .isEqualTo(new PlatformHealthResource.AskHealth("inactive", "disabled:lumnik.ai.enabled"));
+        assertThat(PlatformHealthResource.ask(rag, List::of)).isEqualTo(new PlatformHealthResource.AskHealth("ok", null));
+        assertThat(PlatformHealthResource.ask(rag, () -> List.of("set_config(text,text,boolean)")))
+            .as("the reason names the state; the privileges stay in the log")
+            .isEqualTo(new PlatformHealthResource.AskHealth("inactive", "readonly-role-not-hardened"));
+        assertThat(PlatformHealthResource.ask(rag, () -> ReadonlyHardening.CHECK_FAILED))
+            .as("a check that could not run is not a privilege to revoke")
+            .isEqualTo(new PlatformHealthResource.AskHealth("inactive", "readonly-role-check-failed"));
+    }
+
+    @Test
     void the_door_lists_every_installed_module_including_the_inactive_one() {
         var door = new PlatformHealthResource();
+        door.hardening = new ReadonlyHardening() {
+            @Override public List<String> stillOpen() { return List.of(); } // no database here
+        };
         door.registry = ModuleManifestRegistryFixture.of(
             List.of(m("core", null), m("rag", List.of("llm"))), x -> true); // llm is not carried
         door.searchGate = new SearchGate() {

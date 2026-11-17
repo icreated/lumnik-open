@@ -39,6 +39,17 @@ class SqlLexerTest {
     assertThat(t).extracting(Token::text).containsExactly("a", ",", "d");
   }
 
+  /**
+   * The server ends a line comment at a carriage return too (scan.l: {@code non_newline [^\n\r]}). Measured on
+   * PostgreSQL 16: {@code select 1 as a --x<CR>, 2 as b} answers both columns. A lexer stopping at {@code \n} only
+   * hid the code after the CR from every guard.
+   */
+  @Test
+  void a_line_comment_ends_at_a_carriage_return_as_the_server_reads_it() {
+    var t = SqlLexer.tokenize("a --x\r, b");
+    assertThat(t).extracting(Token::text).containsExactly("a", ",", "b");
+  }
+
   @Test
   void distinguishes_cast_dot_and_comparison_operators() {
     var t = SqlLexer.tokenize("a::b.c <> d != e");

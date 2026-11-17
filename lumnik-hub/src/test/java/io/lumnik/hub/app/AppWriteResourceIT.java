@@ -11,6 +11,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 
+import static io.lumnik.hub.tenant.DeploymentTenancy.HUBADMIN_TENANT;
 import static io.lumnik.hub.testsupport.AppManifestYaml.manifest;
 import static io.restassured.RestAssured.given;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -56,7 +57,7 @@ class AppWriteResourceIT {
             .when().delete("/api/apps/salon-a-supprimer")
             .then().statusCode(204);
 
-        assertThat(store.find("salon-a-supprimer")).isEmpty();
+        assertThat(store.find(1L, null, "salon-a-supprimer")).isEmpty();
         assertThat(latestAuditChanges("salon-a-supprimer"))
             .as("who removed which scope's screen")
             .isNotNull();
@@ -71,14 +72,14 @@ class AppWriteResourceIT {
 
     @Test
     void refusesToDeleteTheLastDefault() {
-        String current = store.findDefaultName().orElseThrow();
+        String current = store.findOwnDefaultName(HUBADMIN_TENANT).orElseThrow();
 
-        given().header("X-Tenant-ID", "1").header("X-User-ID", "1")
+        given().header("X-Tenant-ID", String.valueOf(HUBADMIN_TENANT)).header("X-User-ID", "1")
             .when().delete("/api/apps/" + current)
             .then().statusCode(400)
             .body("error", containsString("cannot remove the last default app"));
 
-        assertThat(store.findDefaultName())
+        assertThat(store.findOwnDefaultName(HUBADMIN_TENANT))
             .as("an absent ?m= must still resolve to something after the refusal")
             .contains(current);
     }

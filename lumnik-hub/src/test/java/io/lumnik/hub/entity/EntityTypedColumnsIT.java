@@ -11,6 +11,7 @@ import io.lumnik.hub.export.EntitySnapshotStreamer;
 import io.lumnik.hub.export.ExportManifest;
 import io.lumnik.hub.export.SnapshotShape;
 import io.lumnik.hub.sql.TenantRlsScope;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.llm.spi.Analytic;
 import io.lumnik.llm.spi.ChatPort;
@@ -124,6 +125,8 @@ class EntityTypedColumnsIT {
       st.execute("INSERT INTO connector.t_ty_csv VALUES (1,'SO-4', NULL, '2026-07-08', NULL, NULL)");
       st.execute("DELETE FROM connector.entity_manifest WHERE name = 'tyorder'");
     }
+    RegisteredTables.register(adminDs, 1L, "t_ty_erp");
+    RegisteredTables.register(adminDs, 1L, "t_ty_csv");
     given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
@@ -191,7 +194,7 @@ class EntityTypedColumnsIT {
 
   @Test
   void theCardTellsAskAndViewsTheRealTypes() {
-    Map<String, String> card = entityCards.resolve("ty").get(0).columns().stream()
+    Map<String, String> card = entityCards.resolve(1L, "ty").get(0).columns().stream()
         .collect(Collectors.toMap(SchemaCard.Column::name, SchemaCard.Column::pgType));
     assertThat(card).containsEntry("at", "timestamp with time zone")
         .containsEntry("due", "timestamp with time zone")
@@ -202,7 +205,7 @@ class EntityTypedColumnsIT {
 
   @Test
   void aViewOverTheEntityFiltersADateAsADate() {
-    cards.save(1L, "registry", new SchemaCard("ty", entityCards.resolve("ty")));
+    cards.save(1L, "registry", new SchemaCard("ty", entityCards.resolve(1L, "ty")));
     String view = """
         apiVersion: apps.lumnik.io/v1
         kind: View
@@ -252,7 +255,7 @@ class EntityTypedColumnsIT {
    */
   @Test
   void askSeesADateAndReadsItsLiteralInUtc() {
-    cards.save(1L, "ty", new SchemaCard("ty", entityCards.resolve("ty")));
+    cards.save(1L, "ty", new SchemaCard("ty", entityCards.resolve(1L, "ty")));
     Mockito.when(chatPort.chat(Mockito.anyString()))
         .thenReturn("SELECT order_no FROM connector.v_tyorder WHERE due = '2026-07-01'")
         .thenReturn("SO-1.");
@@ -276,6 +279,7 @@ class EntityTypedColumnsIT {
       st.execute("INSERT INTO connector.t_ty_cal VALUES (1, 'SO-1', '2026-07-31')");
       st.execute("DELETE FROM connector.entity_manifest WHERE name = 'tyordercal'");
     }
+    RegisteredTables.register(adminDs, 1L, "t_ty_cal");
     given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1)).contentType("application/yaml")
         .body("""
             kind: Entity
@@ -311,7 +315,7 @@ class EntityTypedColumnsIT {
       try (Connection c = readonlyDs.getConnection()) {
         TenantRlsScope.applyTo(c, 1L);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        streamer.stream(c, registry.find("TyOrder"), shape, List.of("due"), ExportManifest.Format.DEFAULT, out);
+        streamer.stream(c, registry.findHubwide("TyOrder"), shape, List.of("due"), ExportManifest.Format.DEFAULT, out);
         return out.toString(StandardCharsets.UTF_8);
       }
     });
@@ -321,7 +325,7 @@ class EntityTypedColumnsIT {
   /** A view's record detail over the entity shows a date's ledger in UTC, as every read (#1325). */
   @Test
   void aViewDetailShowsADatesLedgerInUtc() {
-    cards.save(1L, "registry", new SchemaCard("ty", entityCards.resolve("ty")));
+    cards.save(1L, "registry", new SchemaCard("ty", entityCards.resolve(1L, "ty")));
     given().config(YamlBody.CONFIG).header("X-Tenant-Id", "1").contentType("application/yaml")
         .queryParam("key", "SO-2").body("""
             apiVersion: apps.lumnik.io/v1
@@ -381,7 +385,7 @@ class EntityTypedColumnsIT {
    */
   @Test
   void askNamesTheRecordADateFilterExcluded() {
-    cards.save(1L, "ty", new SchemaCard("ty", entityCards.resolve("ty")));
+    cards.save(1L, "ty", new SchemaCard("ty", entityCards.resolve(1L, "ty")));
     Mockito.when(chatPort.chat(Mockito.anyString()))
         .thenReturn("SELECT order_no FROM connector.v_tyorder WHERE due = '2026-07-04'")
         .thenReturn("Aucune.");
@@ -445,6 +449,7 @@ class EntityTypedColumnsIT {
       st.execute("INSERT INTO connector.t_ty_calendar VALUES (1, '2026-07-01', 'Day A'), (1, '2026-07-08', 'Day B')");
       st.execute("DELETE FROM connector.entity_manifest WHERE name = 'tycaljoin'");
     }
+    RegisteredTables.register(adminDs, 1L, "t_ty_calendar");
     given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1)).contentType("application/yaml")
         .body("""
             kind: Entity

@@ -51,3 +51,23 @@ func TestSeedEntityManifest_UsesRealSchema(t *testing.T) {
 		t.Fatalf("seed manifest must declare scopes: [otk] (the view lane needs the card)")
 	}
 }
+
+// An Entity names only the columns its tenant's writers recorded (#2023): a table the
+// harness makes by hand must be recorded for tenant 1, as the writer records one it
+// made, or the hub answers the apply with "source relation ... does not exist".
+func TestSeedSQL_RegistersEachTableForTenant1(t *testing.T) {
+	for name, sql := range map[string]string{
+		"entity read":       seedEntitySQL,
+		"entity resolution": seedEntityResolutionSQL,
+	} {
+		if !strings.Contains(sql, "INSERT INTO connector.dynamic_table") {
+			t.Fatalf("%s seed must record its tables in connector.dynamic_table", name)
+		}
+	}
+	for _, table := range []string{"t_otk_customers", "t_otk_res_source", "t_otk_res_source_b"} {
+		want := "VALUES (1, 'otk:" + table + "', 'connector', '" + table + "'"
+		if !strings.Contains(seedEntitySQL+seedEntityResolutionSQL, want) {
+			t.Fatalf("%s must be recorded for tenant 1: want %q", table, want)
+		}
+	}
+}

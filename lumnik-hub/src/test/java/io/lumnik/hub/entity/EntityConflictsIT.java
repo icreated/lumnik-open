@@ -1,27 +1,27 @@
 package io.lumnik.hub.entity;
 
 import io.lumnik.hub.testsupport.EntitySourceTableFixture;
+import io.lumnik.hub.testsupport.RegisteredTables;
+import io.lumnik.hub.testsupport.SharedEntities;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
-import io.lumnik.hub.connector.rls.RlsEnforcedPgResource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.ConfigProvider;
 import org.hamcrest.Matchers;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.Statement;
 import java.util.List;
 import java.util.UUID;
 
+import static io.lumnik.hub.connector.rls.RlsEnforcedPgResource.asSuperuser;
 import static io.lumnik.hub.search.mark.SearchProjectionMarkItSupport.insertIdentity;
 import static io.restassured.RestAssured.given;
 import static org.hamcrest.Matchers.equalTo;
@@ -83,9 +83,12 @@ class EntityConflictsIT {
       st.execute("INSERT INTO connector.t_confl_erp VALUES (2,'C-900','Bob')");
       st.execute("INSERT INTO connector.t_confl_csv VALUES (2,'C-900','Robert','b@x.fr')");
     }
+    RegisteredTables.register(adminDs, 1L, "t_confl_erp");
+    RegisteredTables.register(adminDs, 1L, "t_confl_csv");
     given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
+    SharedEntities.share("ConflictProbe");
   }
 
   /**
@@ -206,9 +209,11 @@ class EntityConflictsIT {
       st.execute("INSERT INTO connector.t_confl_broken VALUES (1,'K-1','a')");
       st.execute("INSERT INTO connector.t_confl_broken VALUES (1,'K-1','b')");
     }
+    RegisteredTables.register(adminDs, 1L, "t_confl_broken");
     given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(BROKEN_FIRST_MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
+    SharedEntities.share("BrokenFirst");
 
     try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
       st.execute("DROP VIEW IF EXISTS connector.\"v_brokenfirst\"");
@@ -235,6 +240,7 @@ class EntityConflictsIT {
     given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(BROKEN_FIRST_MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
+    SharedEntities.share("BrokenFirst");
     try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
       st.execute("REVOKE SELECT ON connector.t_confl_broken FROM lumnik_app");
     }
@@ -257,7 +263,7 @@ class EntityConflictsIT {
       st.execute("CREATE VIEW connector.\"v_defectprobe\" AS SELECT '{}'::jsonb AS _conflicts");
       st.execute("GRANT SELECT ON connector.\"v_defectprobe\" TO lumnik_app");
     }
-    registry.put(new EntityManifest("Entity", "DefectProbe", null, null, List.of(), List.of(), null, null, null));
+    registry.put(new EntityManifest("Entity", "DefectProbe", null, null, List.of(), List.of(), null, null, null), null);
 
     given().headers(TestIdentity.tenantAndUser(1))
         .when().get("/api/entities/conflicts")
@@ -284,7 +290,7 @@ class EntityConflictsIT {
       st.execute("CREATE VIEW connector.\"v_commitbomb\" AS SELECT 'k'::text AS code, connector.f_commit_bomb() AS _conflicts");
       st.execute("GRANT SELECT ON connector.\"v_commitbomb\" TO lumnik_app");
     }
-    registry.put(new EntityManifest("Entity", "CommitBomb", null, List.of("code"), List.of(), List.of(), null, null, null));
+    registry.put(new EntityManifest("Entity", "CommitBomb", null, List.of("code"), List.of(), List.of(), null, null, null), null);
 
     given().headers(TestIdentity.tenantAndUser(1))
         .when().get("/api/entities/conflicts?limit=1000")
@@ -307,15 +313,6 @@ class EntityConflictsIT {
           .then().statusCode(500);
     } finally {
       asSuperuser("GRANT SELECT ON information_schema.views TO PUBLIC");
-    }
-  }
-
-  private static void asSuperuser(String sql) throws Exception {
-    String url = ConfigProvider.getConfig().getValue("quarkus.datasource.\"admin\".jdbc.url", String.class);
-    try (Connection c = DriverManager.getConnection(url, RlsEnforcedPgResource.SUPERUSER,
-             RlsEnforcedPgResource.SUPERUSER_PASSWORD);
-         Statement st = c.createStatement()) {
-      st.execute(sql);
     }
   }
 
@@ -347,6 +344,7 @@ class EntityConflictsIT {
     given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
         .contentType("application/yaml").body(RESOLVED_MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
+    SharedEntities.share("ResolvedProbe");
   }
 
   /**

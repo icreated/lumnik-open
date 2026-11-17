@@ -1,6 +1,6 @@
 package io.lumnik.hub.connector.mapping.hooks;
 
-import io.lumnik.hub.json.JsonNodes;
+import io.lumnik.hub.connector.mapping.ScalarParams;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
@@ -67,7 +67,8 @@ public record ColumnEffect(List<Step> steps, boolean unknownAfter) {
 
     /** Reads the column {@code value} names, when it names one; a malformed value is the hook's own refusal. */
     public Builder reads(String path, JsonNode value) {
-      if (JsonNodes.nonBlank(value)) steps.add(new Read(path, value.asText()));
+      String column = name(value);
+      if (column != null) steps.add(new Read(path, column));
       return this;
     }
 
@@ -86,9 +87,11 @@ public record ColumnEffect(List<Step> steps, boolean unknownAfter) {
 
     /** Reads the first present column of the list {@code value}, at {@code key}. */
     public Builder readsAnyOf(String key, JsonNode list) {
+      if (!list.isArray()) return this;   // readsEach's rule: not a list is the hook's own refusal (#1621)
       List<String> columns = new ArrayList<>();
       for (JsonNode c : list) {
-        if (JsonNodes.nonBlank(c)) columns.add(c.asText());
+        String column = name(c);
+        if (column != null) columns.add(column);
       }
       if (!columns.isEmpty()) steps.add(new AnyOf(key, List.copyOf(columns)));
       return this;
@@ -101,13 +104,21 @@ public record ColumnEffect(List<Step> steps, boolean unknownAfter) {
 
     /** Adds the column {@code value} names, when it names one. */
     public Builder adds(JsonNode value) {
-      if (JsonNodes.nonBlank(value)) steps.add(new Add(value.asText()));
+      String column = name(value);
+      if (column != null) steps.add(new Add(column));
       return this;
     }
 
     public Builder adds(String column) {
       steps.add(new Add(column));
       return this;
+    }
+
+    /** The column {@code value} names, read as the hooks read it (#1969), or {@code null} when it names none. */
+    private static String name(JsonNode value) {
+      if (!ScalarParams.isText(value)) return null;
+      String column = value.asText();
+      return column.isBlank() ? null : column;
     }
 
     public ColumnEffect build() {

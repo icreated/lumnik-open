@@ -5,6 +5,7 @@ import io.lumnik.extraction.spi.search.ProjectionFieldMode;
 import io.lumnik.hub.auth.NoBypassOidcProfile;
 import io.lumnik.hub.connector.event.ConnectorRunCompleted;
 import io.lumnik.hub.search.projection.SearchProjectionWorker;
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.lumnik.hub.testsupport.EntitySourceTableFixture;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.search.contract.CanonicalEntityDef;
@@ -132,6 +133,12 @@ public final class RestHubSearchContractDriver implements HubSearchContractDrive
         return NoBypassOidcProfile.token(Set.of("lm_integrator", "lm_admin"), null, tenant.tenantId());
     }
 
+    /** The hub's own tenant, which applies the Entities every tenant of the contract reads (#2050): a shared Entity. */
+    static String hubToken() {
+        return NoBypassOidcProfile.token(Set.of("lm_integrator", "lm_admin", "lm_superadmin"), null,
+            DeploymentTenancy.HUBADMIN_TENANT);
+    }
+
     static Header bearer(String jwt) {
         return new Header("Authorization", "Bearer " + jwt);
     }
@@ -246,7 +253,7 @@ public final class RestHubSearchContractDriver implements HubSearchContractDrive
 
         RestAssured.given()
             .config(YamlBody.CONFIG)
-            .header(bearer(integratorToken(tenant)))
+            .header(bearer(hubToken()))
             .contentType("application/yaml")
             .body(manifest)
             .post("/api/entities/apply")
@@ -482,7 +489,7 @@ public final class RestHubSearchContractDriver implements HubSearchContractDrive
             + resolutionBlock(entity);
         RestAssured.given()
             .config(YamlBody.CONFIG)
-            .header(bearer(integratorToken(tenant)))
+            .header(bearer(hubToken()))
             .contentType("application/yaml")
             .body(manifest)
             .post("/api/entities/apply")
@@ -535,7 +542,7 @@ public final class RestHubSearchContractDriver implements HubSearchContractDrive
             + resolutionBlock(entity);
         RestAssured.given()
             .config(YamlBody.CONFIG)
-            .header(bearer(integratorToken(tenant)))
+            .header(bearer(hubToken()))
             .contentType("application/yaml")
             .body(manifest)
             .post("/api/entities/apply")

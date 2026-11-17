@@ -36,6 +36,9 @@ import io.lumnik.hub.connector.transport.hook.HookSpec;
 import io.lumnik.hub.connector.transport.metrics.FileSourceMetrics;
 import io.lumnik.extraction.spi.ExtractedChunk;
 import io.lumnik.extraction.spi.ExtractionSink;
+import io.lumnik.hub.outbound.OutboundRefusedException;
+import io.lumnik.hub.secret.SecretAudience;
+import io.lumnik.hub.secret.SecretNotServedException;
 import io.lumnik.llm.spi.Analytic;
 import io.lumnik.llm.spi.ChatPort;
 import io.quarkus.narayana.jta.QuarkusTransaction;
@@ -174,33 +177,22 @@ public class CsvIngestService {
         Map<String, Object> transportCfg = form.resolveTransport();
         String kind = (String) transportCfg.getOrDefault("kind", LOCAL);
 
-        // Local upload path: a file was uploaded directly — use the fast local pipeline.
-        // If an explicit path is provided in the transport map (or any non-upload config such as
-        // max_file_size), route through executeViaFileSource so all transport options are honoured.
-        // "Implicit" is judged on the FORM, not on the resolved map: resolveTransport() derives a
-        // {kind, path} map from an upload, and judging by map size sent every HTTP upload down the
-        // FileSource pipeline — which then named the table after RESTEasy's multipart temp file.
-        boolean implicitUpload = form.transport == null
-            && Text.blank(form.transportJson);
-        if (LOCAL.equals(kind) && implicitUpload) {
-            // No explicit transport — the request IS the uploaded file.
-            File file = form.resolveFile();
-            if (file == null) {
-                throw new IllegalArgumentException("local transport requires a file upload");
+        // #2001: a local ingest IS the uploaded file. A `path` named a file on the hub's own disk, and `after_process` /
+        // `archive_path` what to do with it after: read, delete or move anything the process could reach. Nothing but
+        // the kind is the caller's to say — another key would be accepted, then ignored.
+        if (LOCAL.equals(kind)) {
+            List<String> refused = transportCfg.keySet().stream().filter(k -> !"kind".equals(k)).sorted().toList();
+            if (!refused.isEmpty()) {
+                throw new IllegalArgumentException("a local ingest is the uploaded file: its transport takes no "
+                    + String.join(", ", refused) + " — send the file as the `file` part, or name a remote transport "
+                    + "(sftp, s3). To read a folder of the hub, declare a csv-file connector manifest.");
             }
-            return QuarkusTransaction.joiningExisting().call(() -> executeLocalFile(form, tenantId, file));
-        }
-        if (LOCAL.equals(kind) && !transportCfg.containsKey("path")) {
-            // Explicit local transport but no path — fall back to uploaded file.
             File file = form.resolveFile();
-            if (file == null) {
-                throw new IllegalArgumentException("local transport requires either 'path' or a file upload");
-            }
+            if (file == null) throw new IllegalArgumentException("local transport requires a file upload");
             return QuarkusTransaction.joiningExisting().call(() -> executeLocalFile(form, tenantId, file));
         }
 
-        // Remote path (SFTP, S3) or local transport with explicit path/options:
-        // iterate files via FileSource, buffer each to a temp file, reuse local pipeline.
+        // Remote path (SFTP, S3): iterate files via FileSource, buffer each to a temp file, reuse local pipeline.
         return executeViaFileSource(form, tenantId, transportCfg);
     }
 
@@ -521,6 +513,12 @@ public class CsvIngestService {
      */
     private CsvIngestResult executeViaFileSource(CsvIngestForm form, long tenantId,
                                                   Map<String, Object> transportCfg) {
+        // The connector's tags are the scopes its transport's secrets must serve (#2015) — for the whole ingest, as a run
+        // holds them for its whole endpoint, so a transport reading a secret after it is built meets the same rule.
+        return SecretAudience.get(connectorTags(form), () -> ingestViaFileSource(form, tenantId, transportCfg));
+    }
+
+    private CsvIngestResult ingestViaFileSource(CsvIngestForm form, long tenantId, Map<String, Object> transportCfg) {
         RemotePlan plan = parsePlan(form, transportCfg);
 
         try (FileSource source = buildSource(transportCfg, plan.kind())) {
@@ -726,6 +724,9 @@ public class CsvIngestService {
     private FileSource buildSource(Map<String, Object> transportCfg, String kind) {
         try {
             return fileSourceRegistry.build(transportCfg);
+        } catch (SecretNotServedException | OutboundRefusedException e) {
+            // a configuration problem the door answers 400 by name, not a transport that failed (#2015, #2002)
+            throw e;
         } catch (RuntimeException e) {
             throw new RuntimeException("FileSource " + kind + " failed: " + e.getMessage(), e);
         }

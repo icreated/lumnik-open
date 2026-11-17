@@ -28,7 +28,7 @@ services:
     ports:
       - "8180:8180"
     volumes:
-      - ./infra/keycloak:/opt/keycloak/data/import
+      - ./infra/keycloak/lumnik-realm.json:/opt/keycloak/data/import/lumnik-realm.json:ro
     depends_on:
       postgres:
         condition: service_healthy

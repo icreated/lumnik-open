@@ -69,7 +69,9 @@ public final class NormalizerAllowlist {
       // Falls back to null on a word it does not know, as parse-number does (#1760).
       "parse-boolean",
       // Carries a value from one row to the next (#1452): what it writes depends on the rows before, not on the value.
-      "fill-down");
+      "fill-down",
+      // Reads two columns as one point (#1966): a normalizer takes one value, and a coordinate is no identity key.
+      "parse-coordinates");
 
   public static boolean isAdmitted(String hookId) {
     return ADMITTED.containsKey(hookId);

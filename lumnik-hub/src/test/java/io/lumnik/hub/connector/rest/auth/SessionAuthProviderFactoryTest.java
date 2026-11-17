@@ -94,7 +94,7 @@ class SessionAuthProviderFactoryTest {
     }
 
     private AuthProvider provider(Map<String, String> cfg, String password) {
-        SecretRefs secrets = SecretRefs.environmentOnly(n -> "APP_PASSWORD".equals(n) ? password : null);
+        SecretRefs secrets = SecretRefs.of(n -> "APP_PASSWORD".equals(n) ? password : null);
         return new SessionAuthProviderFactory(secrets, sessions)
             .build(new AuthSpec("session", cfg, List.of(), new AuthSpec.Owner(7L, connector)));
     }

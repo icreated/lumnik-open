@@ -98,7 +98,8 @@ class DisputedRowsPlanTest {
         "SELECT COUNT(*) FROM connector.v_dspcustomer WHERE city = 1",
         "SELECT COUNT(*) FROM connector.v_dspcustomer WHERE city IN ('Lyon',)",
         "SELECT COUNT(*) FROM connector.v_dspcustomer WHERE city IN ('Lyon' 'Nice')",
-        "SELECT COUNT(*) FROM connector.v_dspcustomer WHERE city IN (1)"
+        "SELECT COUNT(*) FROM connector.v_dspcustomer WHERE city IN (1)",
+        "SELECT COUNT(*) FROM connector.v_dspcustomer AS \"V\" WHERE v.city = 'Lyon'"
     })
     void anything_else_makes_no_plan(String sql) {
         assertThat(plan(sql)).isEmpty();

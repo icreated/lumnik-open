@@ -1,5 +1,8 @@
 package io.lumnik.hub.entity;
 
+import io.lumnik.hub.tenant.DeploymentTenancy;
+import io.lumnik.hub.testsupport.RegisteredTables;
+import io.lumnik.hub.testsupport.SharedEntities;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.agroal.api.AgroalDataSource;
@@ -78,9 +81,12 @@ class EntityRagChatIT {
       st.execute("INSERT INTO connector.t_chat_csv VALUES (7,'C-2','Lyon')");
       st.execute("DELETE FROM connector.entity_manifest WHERE name = 'chatcustomer'");
     }
+    RegisteredTables.register(adminDs, 7L, "t_chat_erp");
+    RegisteredTables.register(adminDs, 7L, "t_chat_csv");
     given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(7))
         .contentType("application/yaml").body(MANIFEST)
         .post("/api/entities/apply").then().statusCode(200);
+    SharedEntities.share("ChatCustomer");
   }
 
   /** Another tenant holding the shared entity: it never applied it, its card still lists the view. */
@@ -120,8 +126,8 @@ class EntityRagChatIT {
   }
 
   /**
-   * An entity is shared by every tenant, and a re-apply into another scope moves it for all of them:
-   * no card, in the scope it left or in another tenant, keeps listing it.
+   * A shared entity is read by every tenant (#2050), and a re-apply into another scope, from the hub's
+   * own tenant, moves it for all of them: no card, in the scope it left or in another tenant, keeps listing it.
    */
   @Test
   void a_re_apply_into_another_scope_takes_the_view_off_every_card_it_left() {
@@ -129,9 +135,10 @@ class EntityRagChatIT {
 
     reapply(MANIFEST.replace("scopes: [clients]", "scopes: [ventes]"));
 
-    assertThat(tablesOf(7L, "clients")).doesNotContain("connector.v_chatcustomer");
-    assertThat(tablesOf(7L, "ventes")).contains("connector.v_chatcustomer");
-    afterTheRequest(() -> assertThat(tablesOf(OTHER_TENANT, "clients")).doesNotContain("connector.v_chatcustomer"));
+    afterTheRequest(() -> {
+      assertThat(tablesOf(7L, "clients")).doesNotContain("connector.v_chatcustomer");
+      assertThat(tablesOf(OTHER_TENANT, "clients")).doesNotContain("connector.v_chatcustomer");
+    });
   }
 
   /** A column the re-apply dropped leaves every tenant's card, not only the applying tenant's. */
@@ -149,11 +156,13 @@ class EntityRagChatIT {
   void a_delete_takes_the_view_off_the_card_of_another_tenant() {
     holdTheEntityInAnotherTenant();
 
-    given().headers(TestIdentity.tenantAndUser(7))
+    given().headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT))
         .delete("/api/entities/chatcustomer").then().statusCode(204);
 
-    assertThat(tablesOf(7L, "clients")).doesNotContain("connector.v_chatcustomer");
-    afterTheRequest(() -> assertThat(tablesOf(OTHER_TENANT, "clients")).doesNotContain("connector.v_chatcustomer"));
+    afterTheRequest(() -> {
+      assertThat(tablesOf(7L, "clients")).doesNotContain("connector.v_chatcustomer");
+      assertThat(tablesOf(OTHER_TENANT, "clients")).doesNotContain("connector.v_chatcustomer");
+    });
   }
 
   private void holdTheEntityInAnotherTenant() {
@@ -166,8 +175,9 @@ class EntityRagChatIT {
     await().atMost(Duration.ofSeconds(10)).untilAsserted(assertion::run);
   }
 
+  /** From the hub's own tenant: the entity is shared, so the hub changes it. */
   private static void reapply(String manifest) {
-    given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(7))
+    given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT))
         .contentType("application/yaml").body(manifest)
         .post("/api/entities/apply").then().statusCode(200);
   }

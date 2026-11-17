@@ -3,8 +3,11 @@ package io.lumnik.hub.entity;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.sql.Jdbc;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.lumnik.hub.testsupport.EntitySourceTableFixture;
+import io.lumnik.hub.testsupport.SharedEntities;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -12,6 +15,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import io.quarkus.test.junit.TestProfile;
 import io.restassured.response.ValidatableResponse;
 import jakarta.inject.Inject;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -40,6 +44,15 @@ class EntityJoinIT {
   @Inject
   @DataSource("admin")
   AgroalDataSource adminDs;
+
+  @Inject EntityRegistry registry;
+
+  /** The Entity is shared (#2050): left behind, it would refuse another IT's apply of its name as a tenant. */
+  @AfterEach
+  void releaseTheName() {
+    Jdbc.update(adminDs, "test.release", "DELETE FROM connector.entity_manifest WHERE name = 'productwithcategory'", ps -> {});
+    registry.remove("productwithcategory");
+  }
 
   /** The manifest the docs show, applied verbatim — the page cannot drift from the code. */
   static final String MANIFEST = readDocExample();
@@ -73,7 +86,10 @@ class EntityJoinIT {
   }
 
   private ValidatableResponse apply(String yaml) {
-    return given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
+    // From the hub's own tenant: both tenants read it, and the rows stay apart by RLS (#2050). What another IT left
+    // under this name is shared first, so the hub may change it.
+    SharedEntities.shareApplied(yaml);
+    return given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT))
         .contentType("application/yaml").body(yaml).post("/api/entities/apply").then();
   }
 

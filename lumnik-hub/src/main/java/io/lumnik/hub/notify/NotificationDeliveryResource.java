@@ -1,7 +1,7 @@
 package io.lumnik.hub.notify;
 
 import io.lumnik.common.security.RequiresPermission;
-import io.lumnik.hub.api.TenantWide;
+import io.lumnik.common.security.TenantWide;
 import io.lumnik.hub.tenant.RequireTenant;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;

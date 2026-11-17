@@ -19,7 +19,7 @@ import (
 // tenant_id + ENABLE ROW LEVEL SECURITY + the tenant_isolation policy + grants —
 // without the policy the cross-tenant-read variant would see tenant-1 rows and
 // report a false RLS breach. Rows exist for tenant 1 only: cross-tenant expects 0.
-const seedEntitySQL = `
+var seedEntitySQL = `
 CREATE TABLE IF NOT EXISTS connector.t_otk_customers (
   tenant_id bigint NOT NULL, id text, name text);
 ALTER TABLE connector.t_otk_customers ENABLE ROW LEVEL SECURITY;
@@ -44,7 +44,18 @@ INSERT INTO connector.t_otk_customers (tenant_id, id, name)
 INSERT INTO connector.t_otk_customers (tenant_id, id, name)
   SELECT 1, 'C-2', 'OTK Two'
   WHERE NOT EXISTS (SELECT 1 FROM connector.t_otk_customers WHERE tenant_id = 1 AND id = 'C-2');
-`
+` + registerTableSQL("t_otk_customers", `{"id":"TEXT","name":"TEXT"}`)
+
+// registerTableSQL records a table the harness made by hand for tenant 1, as the writer
+// records a table it made: an Entity names only the columns its tenant's writers
+// recorded (#2023). Idempotent, like the rest of the seed.
+func registerTableSQL(table, columns string) string {
+	return fmt.Sprintf(`
+INSERT INTO connector.dynamic_table (tenant_id, mapping_id, table_schema, table_name, schema_inferred)
+  VALUES (1, 'otk:%[1]s', 'connector', '%[1]s', '%[2]s'::jsonb)
+  ON CONFLICT (tenant_id, mapping_id, connector_id) DO UPDATE SET schema_inferred = EXCLUDED.schema_inferred;
+`, table, columns)
+}
 
 // seedEntityManifest is the valid manifest the read variants target
 // (readTarget "otk_customer" in the generator catalog). Applying it through the

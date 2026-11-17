@@ -10,6 +10,7 @@ import io.lumnik.hub.search.projection.SearchProjectionLockKey;
 import io.lumnik.hub.search.projection.SearchProjectionState;
 import io.lumnik.hub.search.projection.SearchProjectionStateStore;
 import io.lumnik.hub.search.projection.SearchProjectionWorker;
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.extraction.spi.search.ProjectionSink;
 import io.lumnik.extraction.spi.search.SearchAvailability;
@@ -78,7 +79,9 @@ class SearchOperationsResourceIT {
         freeEntities(adminDs, ENTITY);
         // Deployment-global, applied once regardless of which tenant later declares a SearchIndex
         // over it.
-        yaml(1).body(entity(adminDs, ENTITY, TABLE)).post("/api/entities/apply").then().statusCode(200);
+        // From the hub's own tenant: both tenants of this class declare a SearchIndex over it (#2050).
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(entity(adminDs, ENTITY, TABLE)).post("/api/entities/apply")
+            .then().statusCode(200);
     }
 
     /** Always undoes any {@code SearchGate}/{@code SearchProjectionWorker}/{@code

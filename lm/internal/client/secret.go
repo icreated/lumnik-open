@@ -15,6 +15,9 @@ type SecretMeta struct {
 	UpdatedAt   string `json:"updatedAt,omitempty"`
 	UpdatedBy   *int64 `json:"updatedBy,omitempty"`
 	RotatedAt   string `json:"rotatedAt,omitempty"`
+	// Scopes: a connector or an export reads the secret only when it carries every one of
+	// them; none serves the scopeless ones only (#2015).
+	Scopes []string `json:"scopes"` // no omitempty: [] is "none yet"; a hub that predates them sends none, printed as null
 }
 
 // SecretCreate creates a new secret via POST /api/platform/secrets; the value
@@ -54,6 +57,16 @@ func (c *Client) SecretDescribe(name string) (*SecretMeta, error) {
 		return nil, err
 	}
 	return &out, nil
+}
+
+// SecretScope replaces the scopes a secret serves via PUT /api/platform/secrets/{name}/scopes,
+// leaving its value as it is; an empty list makes it scopeless. Returns the stored list.
+func (c *Client) SecretScope(name string, scopes []string) ([]string, error) {
+	var out []string
+	if err := c.PUT("/api/platform/secrets/"+url.PathEscape(name)+"/scopes", scopes, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // SecretDelete removes a secret via DELETE /api/platform/secrets/{name}.

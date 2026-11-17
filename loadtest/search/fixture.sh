@@ -22,7 +22,7 @@ apiVersion: connectors.lumnik.io/v1
 kind: Connector
 metadata: {name: sz_$1, connector_type: csv-file}
 spec:
-  transport: {kind: local, path: "/sizing-data/live/*.csv"}
+  transport: {kind: local, path: "live/*.csv"}   # relative to tenant 1's folder of the root, /sizing-data/1
   parser: {has_header: true}
   after_process: none
 YAML

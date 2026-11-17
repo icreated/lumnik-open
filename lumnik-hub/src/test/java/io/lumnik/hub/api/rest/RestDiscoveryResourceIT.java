@@ -25,7 +25,8 @@ import static org.hamcrest.Matchers.*;
  * <p>These assertions used to read {@code anyOf(is(200), is(500))} — a shape that passes whatever
  * the door does, which is how {@code lm source rest probe} stayed broken end to end in three
  * stacked layers without a single red test. The upstream is the hub itself: its {@code /q/openapi}
- * is a real spec, its {@code /q/health} a real JSON body, and any other path a real 404. Nothing is
+ * is a real spec, its {@code /q/health} (on its management port, #1993) a real JSON body, and any other path a real
+ * 404. Nothing is
  * mocked and nothing leaves the machine.
  *
  * <p>The address comes from {@link TestHTTPResource}, never hardcoded: {@code http.test-port=0}
@@ -41,6 +42,9 @@ class RestDiscoveryResourceIT {
 
     @TestHTTPResource("/")
     URL hubRoot;
+
+    @TestHTTPResource(value = "/", management = true)
+    URL managementRoot;
 
     /**
      * The injected root's own protocol and authority, never rebuilt from host + ":" + port: an
@@ -69,6 +73,11 @@ class RestDiscoveryResourceIT {
             connectors.persist(c);
             return c.getId().toString();
         });
+    }
+
+    /** Its connection points at the hub's management port, where /q/health answers JSON (#1993). */
+    private String restConnectorPointingAtTheHubsHealth() {
+        return restConnector(Map.of("base_url", managementRoot.getProtocol() + "://" + managementRoot.getAuthority()));
     }
 
     /** Its connection points back at the hub, so a probe has a live source. */
@@ -123,6 +132,26 @@ class RestDiscoveryResourceIT {
         .when().post("/api/platform/sources/rest/from-openapi")
         .then().statusCode(502)
             .body("error", containsString("no-such-spec"));
+    }
+
+    /** #2002: a spec is fetched over http(s) only; the parser read any scheme with a host, file:// included. */
+    @Test
+    void from_openapi_refuses_a_url_that_is_not_http() {
+        for (String url : List.of("ftp://example.com/spec.yaml", "file://localhost/etc/passwd")) {
+            json(Map.of("url", url, "name", "nope"))
+            .when().post("/api/platform/sources/rest/from-openapi")
+            .then().statusCode(400)
+                .body("error", containsString("http or https"));
+        }
+    }
+
+    /** #2002: the cloud metadata address is never fetched, whatever the operator allows. */
+    @Test
+    void from_openapi_refuses_a_link_local_address() {
+        json(Map.of("url", "http://169.254.169.254/latest/meta-data/", "name", "nope"))
+        .when().post("/api/platform/sources/rest/from-openapi")
+        .then().statusCode(400)
+            .body("error", containsString("never connects to"));
     }
 
     // ── probe ───────────────────────────────────────────────────────────────────
@@ -181,7 +210,7 @@ class RestDiscoveryResourceIT {
      */
     @Test
     void probe_drafts_an_endpoint_fragment_from_a_live_body() {
-        json(Map.of("connectorId", restConnectorPointingAtTheHub(), "endpointPath", "/q/health"))
+        json(Map.of("connectorId", restConnectorPointingAtTheHubsHealth(), "endpointPath", "/q/health"))
         .when().post("/api/platform/sources/rest/probe")
         .then().statusCode(200)
             .body(containsString("path: /q/health"))

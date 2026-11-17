@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.connector.rls.RlsEnforcedProfile;
 import io.lumnik.hub.testsupport.LogProbe;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -117,10 +118,11 @@ class WorkflowDueOrderIT {
         sql("ALTER TABLE " + EVENTS + " FORCE ROW LEVEL SECURITY");
         sql("CREATE POLICY tenant_isolation ON " + EVENTS
             + " USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::bigint)");
-        sql("GRANT SELECT ON " + EVENTS + " TO lumnik_app");
+        sql("GRANT SELECT ON " + EVENTS + " TO lumnik_app, lumnik_readonly");
         sql("DELETE FROM core.workflow_due_alert WHERE workflow_name = '" + WF + "'");
         sql("DELETE FROM core.event_outbox WHERE event_type = 'decision.overdue." + WF + "'");
         sql("DELETE FROM core.workflow_manifest WHERE name = '" + WF + "'");
+        RegisteredTables.register(adminDs, 1L, "t_dueorder_events");
         given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
             .contentType("application/yaml").body(ENTITY).post("/api/entities/apply").then().statusCode(200);
     }
@@ -135,7 +137,7 @@ class WorkflowDueOrderIT {
         sql("DROP TABLE IF EXISTS " + odd);
         sql("CREATE TABLE " + odd + " (id bigserial PRIMARY KEY, tenant_id bigint NOT NULL, \"line FROM here\" text, "
             + "stage text, due_on date, seen text, _ingested_at timestamptz NOT NULL DEFAULT now())");
-        sql("GRANT SELECT ON " + odd + " TO lumnik_app");
+        sql("GRANT SELECT ON " + odd + " TO lumnik_app, lumnik_readonly");
         sql("INSERT INTO " + odd + " (tenant_id, \"line FROM here\", stage, due_on, seen) VALUES "
             + "(1, 'L-8', 'CONFIRMED', '" + TODAY.minusDays(2) + "', '2026-10-19T08:00:00Z')");
         for (String order : new String[] {"", ", order: seen"}) {
@@ -158,7 +160,7 @@ class WorkflowDueOrderIT {
         sql("DROP TABLE IF EXISTS " + table);
         sql("CREATE TABLE " + table + " (id bigserial PRIMARY KEY, tenant_id bigint NOT NULL, line text, stage text, "
             + "due_on date, seen text, dock text, _ingested_at timestamptz NOT NULL DEFAULT now())");
-        sql("GRANT SELECT ON " + table + " TO lumnik_app");
+        sql("GRANT SELECT ON " + table + " TO lumnik_app, lumnik_readonly");
         sql("INSERT INTO " + table + " (tenant_id, line, stage, due_on, seen, dock) VALUES "
             + "(1, 'L-7', 'CONFIRMED', '" + TODAY.minusDays(2) + "', '2026-10-19T08:00:00Z', 'dock 4')");
         String yaml = workflow(table)

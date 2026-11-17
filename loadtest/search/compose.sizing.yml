@@ -17,8 +17,10 @@ services:
       LUMNIK_RATELIMIT_SEARCH_RPM: "0"
       # The self-host compose does not pass this secret, and a hub built from this tree refuses to boot without it.
       LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET: ${LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET:?set by stack.sh}
+      # The local transport reads <root>/<tenant id> only: the data is mounted in tenant 1's folder.
+      LUMNIK_CSV_LOCAL_ROOT: /sizing-data
     volumes:
-      - ${SZ_DATA_DIR:?set by stack.sh}:/sizing-data:ro
+      - ${SZ_DATA_DIR:?set by stack.sh}:/sizing-data/1:ro
 volumes:
   selfhost_pg:
   selfhost_kc:

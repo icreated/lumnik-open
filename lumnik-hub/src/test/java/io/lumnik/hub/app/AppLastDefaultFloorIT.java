@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Set;
 
+import static io.lumnik.hub.tenant.DeploymentTenancy.HUBADMIN_TENANT;
 import static io.lumnik.hub.testsupport.AppManifestYaml.manifest;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -38,7 +39,7 @@ class AppLastDefaultFloorIT {
     /** The current default's row — read, never assumed: every @QuarkusTest in the module shares one
      *  database and JUnit guarantees no order between classes. */
     private AppRegistrationStore.Row currentDefault() {
-        return store.find(store.findDefaultName().orElseThrow()).orElseThrow();
+        return store.find(HUBADMIN_TENANT, null, store.findOwnDefaultName(HUBADMIN_TENANT).orElseThrow()).orElseThrow();
     }
 
     private static AppManifest app(String name, String title, boolean isDefault) {
@@ -48,14 +49,14 @@ class AppLastDefaultFloorIT {
     /** Puts the flag on {@code name}, as an unscoped integrator legitimately would — which demotes
      *  whoever held it, hence the restore every caller owes in a finally. */
     private AppRegistrationStore.Row givenItHoldsTheDefault(String name) {
-        store.upsert(app(name, "Plancher", true), manifest(name, SCOPE, "  default: true\n"), null);
-        return store.find(name).orElseThrow();
+        store.upsert(HUBADMIN_TENANT, app(name, "Plancher", true), manifest(name, SCOPE, "  default: true\n"), null);
+        return store.find(HUBADMIN_TENANT, null, name).orElseThrow();
     }
 
     /** Hands the flag back to the app that held it before this class ran, from its own ROW so the
      *  theme AppRegistrationSeedIT pins travels back intact. */
     private void restore(AppRegistrationStore.Row previous) {
-        store.upsert(
+        store.upsert(HUBADMIN_TENANT, 
             new AppManifest(previous.name(), previous.scope(), previous.title(), previous.icon(),
                 previous.accentColor(), previous.backgroundColor(), true, previous.tabs()),
             manifest(previous.name(), previous.scope(), "  default: true\n"),
@@ -69,7 +70,7 @@ class AppLastDefaultFloorIT {
             AppRegistrationStore.Row before = givenItHoldsTheDefault("vitrine-plancher");
             assertThat(before.isDefault()).as("the fixture the assertion depends on").isTrue();
 
-            AppRegistrationStore.Upserted outcome = store.upsert(
+            AppRegistrationStore.Upserted outcome = store.upsert(HUBADMIN_TENANT, 
                 app("vitrine-plancher", "Démis", false),
                 manifest("vitrine-plancher", SCOPE, ""),
                 Set.of(SCOPE));
@@ -79,32 +80,32 @@ class AppLastDefaultFloorIT {
                     + "ordered findDefaultName check")
                 .isInstanceOf(AppRegistrationStore.Upserted.LastDefaultWouldBeRemoved.class);
 
-            assertThat(store.find("vitrine-plancher").orElseThrow())
+            assertThat(store.find(HUBADMIN_TENANT, null, "vitrine-plancher").orElseThrow())
                 .as("refused AND untouched — the flag must not have been cleared on the way out")
                 .isEqualTo(before);
-            assertThat(store.findDefaultName())
+            assertThat(store.findOwnDefaultName(HUBADMIN_TENANT))
                 .as("an absent ?m= must still resolve to something after the refusal")
                 .contains("vitrine-plancher");
         } finally {
             restore(previous);
         }
-        assertThat(store.findDefaultName()).contains(previous.name());
+        assertThat(store.findOwnDefaultName(HUBADMIN_TENANT)).contains(previous.name());
     }
 
     @Test
     void anAppThatIsNotTheDefaultIsStillReAppliedWithDefaultFalse() {
         // The control. Without it the guard is only proven to FIRE, not to fire only when it
         // should — refusing every `default: false` would pass the test above just as well.
-        store.upsert(app("relais-plancher", "Relais", false),
+        store.upsert(HUBADMIN_TENANT, app("relais-plancher", "Relais", false),
             manifest("relais-plancher", SCOPE, ""), null);
 
-        AppRegistrationStore.Upserted outcome = store.upsert(
+        AppRegistrationStore.Upserted outcome = store.upsert(HUBADMIN_TENANT, 
             app("relais-plancher", "Retouché", false),
             manifest("relais-plancher", SCOPE, ""),
             Set.of(SCOPE));
 
         assertThat(outcome).isInstanceOf(AppRegistrationStore.Upserted.Applied.class);
-        assertThat(store.find("relais-plancher").orElseThrow().title()).isEqualTo("Retouché");
+        assertThat(store.find(HUBADMIN_TENANT, null, "relais-plancher").orElseThrow().title()).isEqualTo("Retouché");
     }
 
     @Test
@@ -115,13 +116,13 @@ class AppLastDefaultFloorIT {
         try {
             givenItHoldsTheDefault("enseigne-plancher");
 
-            AppRegistrationStore.Upserted outcome = store.upsert(
+            AppRegistrationStore.Upserted outcome = store.upsert(HUBADMIN_TENANT, 
                 app("enseigne-plancher", "Retouché", true),
                 manifest("enseigne-plancher", SCOPE, "  default: true\n"),
                 Set.of(SCOPE));
 
             assertThat(outcome).isInstanceOf(AppRegistrationStore.Upserted.Applied.class);
-            AppRegistrationStore.Row after = store.find("enseigne-plancher").orElseThrow();
+            AppRegistrationStore.Row after = store.find(HUBADMIN_TENANT, null, "enseigne-plancher").orElseThrow();
             assertThat(after.title()).isEqualTo("Retouché");
             assertThat(after.isDefault()).isTrue();
         } finally {

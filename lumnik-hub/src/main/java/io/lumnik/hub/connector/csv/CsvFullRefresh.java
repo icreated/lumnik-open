@@ -118,8 +118,12 @@ public final class CsvFullRefresh {
   static final String CHANGED_WHILE_READ = "the file changed while this run was reading it, so the run met "
       + "parts of two versions — nothing was removed. The next run reads it again in full.";
 
-  /** The run-scope key of a run's {@link Pass} over one file. */
-  record PassKey(String path) {}
+  /**
+   * The run-scope key of a run's {@link Pass} over its one file. No path in it: the reader holds the absolute path the
+   * manifest's relative one names (#2001), the end of the stream holds the manifest's, and a key built from either
+   * would miss the other — a full refresh has one file per run, so the key needs none.
+   */
+  record PassKey() {}
 
   /**
    * How the run's read of the file went: whether it started at the first row, how many rows it met,

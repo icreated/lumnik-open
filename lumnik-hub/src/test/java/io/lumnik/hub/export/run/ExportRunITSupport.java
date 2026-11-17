@@ -11,8 +11,10 @@ import io.lumnik.hub.export.SnapshotShape;
 import io.lumnik.hub.export.SnapshotStats;
 import io.lumnik.hub.scheduler.TenantScope;
 import io.lumnik.hub.sql.TenantRlsScope;
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.lumnik.hub.testsupport.EntitySourceTableFixture;
 import io.lumnik.hub.testsupport.StallProbe;
+import io.lumnik.hub.testsupport.TestSecrets;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -25,6 +27,7 @@ import java.sql.Connection;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -50,6 +53,14 @@ abstract class ExportRunITSupport {
     @Inject EntitySnapshotStreamer streamer;
     @Inject @DataSource("admin") AgroalDataSource adminDs;
     @Inject @DataSource("readonly") AgroalDataSource readonlyDs;
+    @Inject TestSecrets testSecrets;
+
+    /** The destination's credentials, by name: lm secret entries, where its `*_env` keys resolve (#2000). */
+    abstract Map<String, String> secrets();
+
+    /** Puts {@link #secrets()} in {@link #TENANT}'s registry before each test, serving the exports' scope (#2015). */
+    @BeforeEach
+    void holdTheSecrets() { secrets().forEach((name, value) -> testSecrets.put(TENANT, name, value, List.of("sales"))); }
 
     /** The entity's name; its source table and view are derived from it. */
     abstract String entity();
@@ -99,7 +110,7 @@ abstract class ExportRunITSupport {
     }
 
     void applyEntity(String scope) {
-        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(1))
+        given().config(YamlBody.CONFIG).headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT))
             .contentType("application/yaml").body(entityYaml(scope))
             .post("/api/entities/apply")
             .then().statusCode(200);
@@ -195,7 +206,7 @@ abstract class ExportRunITSupport {
 
     Local local() {
         return TenantScope.get(TENANT, () -> QuarkusTransaction.requiringNew().call(() -> {
-            EntityManifest e = registry.findReloadingIfMissing(entity());
+            EntityManifest e = registry.findReloadingIfMissingHubwide(entity());
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             try (Connection c = readonlyDs.getConnection()) {
                 TenantRlsScope.applyTo(c, TENANT);

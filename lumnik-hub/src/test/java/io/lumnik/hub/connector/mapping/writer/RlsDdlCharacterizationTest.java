@@ -61,7 +61,7 @@ class RlsDdlCharacterizationTest {
             "DO $lumnik_rls$ BEGIN   GRANT INSERT, SELECT, UPDATE, DELETE ON \"connector\".\"t_orders\" TO lumnik_app; "
             + "EXCEPTION WHEN OTHERS THEN NULL; END $lumnik_rls$",
             "DO $lumnik_rls$ BEGIN   GRANT SELECT ON \"connector\".\"t_orders\" TO lumnik_readonly; "
-            + "EXCEPTION WHEN OTHERS THEN NULL; END $lumnik_rls$",
+            + "EXCEPTION WHEN undefined_object THEN NULL; END $lumnik_rls$",
             "DO $lumnik_rls$ BEGIN   GRANT USAGE, SELECT ON SEQUENCE \"connector\".\"t_orders_id_seq\" TO lumnik_app; "
             + "EXCEPTION WHEN OTHERS THEN NULL; END $lumnik_rls$");
     }
@@ -92,20 +92,31 @@ class RlsDdlCharacterizationTest {
 
     /**
      * The hybrid writer emits the same policy for its {@code ext.*} tables, grants the same set as
-     * {@link DynamicTableWriter} — including sequence usage — and now, like it, gives each grant
-     * its OWN guarded block.
+     * {@link DynamicTableWriter} — including sequence usage — and, like it, gives each grant
+     * its OWN guarded block. Its DDL is one transaction (#2010): only a missing role is swallowed,
+     * and each grant is made only where it is missing, the schema's USAGE included.
      */
     @Test
     void hybrid_jsonb_writer_emits_the_same_tenant_isolation_ddl() throws SQLException {
-        assertThat(hybridStatements()).containsSubsequence(
+        List<String> sql = hybridStatements();
+        assertThat(sql).containsSubsequence(
             "ALTER TABLE \"ext\".\"stripe_charges\" ENABLE ROW LEVEL SECURITY",
-            POLICY_ON_EXT_TABLE,
-            "DO $lumnik_rls$ BEGIN   GRANT INSERT, SELECT, UPDATE, DELETE ON \"ext\".\"stripe_charges\" TO lumnik_app; "
-            + "EXCEPTION WHEN OTHERS THEN NULL; END $lumnik_rls$",
-            "DO $lumnik_rls$ BEGIN   GRANT SELECT ON \"ext\".\"stripe_charges\" TO lumnik_readonly; "
-            + "EXCEPTION WHEN OTHERS THEN NULL; END $lumnik_rls$",
-            "DO $lumnik_rls$ BEGIN   GRANT USAGE, SELECT ON SEQUENCE \"ext\".\"stripe_charges_id_seq\" TO lumnik_app; "
-            + "EXCEPTION WHEN OTHERS THEN NULL; END $lumnik_rls$");
+            POLICY_ON_EXT_TABLE);
+        for (String grant : List.of(
+                "GRANT INSERT, SELECT, UPDATE, DELETE ON \"ext\".\"stripe_charges\" TO lumnik_app",
+                "GRANT SELECT ON \"ext\".\"stripe_charges\" TO lumnik_readonly",
+                "EXECUTE format('GRANT USAGE, SELECT ON SEQUENCE %s TO lumnik_app', "
+                    + "pg_get_serial_sequence('\"ext\".\"stripe_charges\"', 'id'))",
+                "GRANT USAGE ON SCHEMA \"ext\" TO lumnik_app",
+                "GRANT USAGE ON SCHEMA \"ext\" TO lumnik_readonly")) {
+            assertThat(sql).as(grant).anySatisfy(st -> assertThat(st)
+                .startsWith("DO $lumnik_rls$ BEGIN   IF NOT (")
+                .endsWith(") THEN " + grant + "; END IF; EXCEPTION WHEN undefined_object THEN NULL; END $lumnik_rls$"));
+        }
+        // One call naming several privileges answers whether ANY is held: each is asked on its own.
+        assertThat(sql).anySatisfy(st -> assertThat(st)
+            .contains("has_table_privilege('lumnik_app', '\"ext\".\"stripe_charges\"', 'INSERT') AND ")
+            .contains("has_table_privilege('lumnik_app', '\"ext\".\"stripe_charges\"', 'DELETE')"));
     }
 
     /**

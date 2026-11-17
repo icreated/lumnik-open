@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Set;
 
+import static io.lumnik.hub.tenant.DeploymentTenancy.HUBADMIN_TENANT;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -34,8 +35,8 @@ class SavedViewNameOverwriteScopeIT {
 
   /** Puts the name in {@link #OWNER}'s hands, as an unscoped integrator legitimately would. */
   private SavedViewStore.Row given(String name) {
-    store.upsert(name, OWNER, "Owned", YAML + "# owner", null);
-    return store.find(name).orElseThrow();
+    store.upsert(HUBADMIN_TENANT, name, OWNER, "Owned", YAML + "# owner", null);
+    return store.find(HUBADMIN_TENANT, name).orElseThrow();
   }
 
   @Test
@@ -43,14 +44,14 @@ class SavedViewNameOverwriteScopeIT {
     SavedViewStore.Row before = given("vue-nom-582");
 
     ScopeGuardedUpsert outcome =
-        store.upsert("vue-nom-582", INTRUDER, "Stolen", YAML + "# stolen", Set.of(INTRUDER));
+        store.upsert(HUBADMIN_TENANT, "vue-nom-582", INTRUDER, "Stolen", YAML + "# stolen", Set.of(INTRUDER));
 
     assertThat(outcome)
         .as("the conflict arm's own WHERE refuses, with no help from the resource's ordered "
             + "findScope check")
         .isInstanceOf(ScopeGuardedUpsert.NameHeldOutOfScope.class);
 
-    assertThat(store.find("vue-nom-582").orElseThrow())
+    assertThat(store.find(HUBADMIN_TENANT, "vue-nom-582").orElseThrow())
         .as("refused AND untouched — the row must not have been re-homed on the way out")
         .isEqualTo(before);
   }
@@ -61,11 +62,11 @@ class SavedViewNameOverwriteScopeIT {
     given("vue-relais-582");
 
     ScopeGuardedUpsert outcome =
-        store.upsert("vue-relais-582", INTRUDER, "Re-homed", YAML + "# rehomed", null);
+        store.upsert(HUBADMIN_TENANT, "vue-relais-582", INTRUDER, "Re-homed", YAML + "# rehomed", null);
 
     assertThat(outcome).isInstanceOf(ScopeGuardedUpsert.Applied.class);
 
-    SavedViewStore.Row after = store.find("vue-relais-582").orElseThrow();
+    SavedViewStore.Row after = store.find(HUBADMIN_TENANT, "vue-relais-582").orElseThrow();
     assertThat(after.scope()).isEqualTo(INTRUDER);
     assertThat(after.title()).isEqualTo("Re-homed");
   }
@@ -75,10 +76,10 @@ class SavedViewNameOverwriteScopeIT {
     // The third outcome of INSERT … ON CONFLICT: no conflict at all. Zero rows affected is read
     // as a refusal, so an ordinary insert must never be mistaken for one.
     ScopeGuardedUpsert outcome =
-        store.upsert("vue-neuve-582", INTRUDER, "Neuve", YAML + "# neuve", Set.of(INTRUDER));
+        store.upsert(HUBADMIN_TENANT, "vue-neuve-582", INTRUDER, "Neuve", YAML + "# neuve", Set.of(INTRUDER));
 
     assertThat(outcome).isInstanceOf(ScopeGuardedUpsert.Applied.class);
-    assertThat(store.find("vue-neuve-582").orElseThrow().scope()).isEqualTo(INTRUDER);
+    assertThat(store.find(HUBADMIN_TENANT, "vue-neuve-582").orElseThrow().scope()).isEqualTo(INTRUDER);
   }
 
   @Test
@@ -87,9 +88,9 @@ class SavedViewNameOverwriteScopeIT {
     // its own view. Without this, "refuse everything" would pass the three tests above.
     given("vue-sienne-582");
     ScopeGuardedUpsert promote =
-        store.upsert("vue-sienne-582", OWNER, "Updated", YAML + "# v2", Set.of(OWNER));
+        store.upsert(HUBADMIN_TENANT, "vue-sienne-582", OWNER, "Updated", YAML + "# v2", Set.of(OWNER));
 
     assertThat(promote).isInstanceOf(ScopeGuardedUpsert.Applied.class);
-    assertThat(store.find("vue-sienne-582").orElseThrow().title()).isEqualTo("Updated");
+    assertThat(store.find(HUBADMIN_TENANT, "vue-sienne-582").orElseThrow().title()).isEqualTo("Updated");
   }
 }

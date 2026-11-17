@@ -2,12 +2,20 @@ package io.lumnik.hub.connector.rest.discovery;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
+import com.github.tomakehurst.wiremock.WireMockServer;
+import com.github.tomakehurst.wiremock.client.WireMock;
+import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.exceptions.ConnectorException;
+import io.lumnik.hub.connector.rest.RestHttpClient;
+import io.lumnik.hub.outbound.OutboundAddress;
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.hub.validator.ConfigDefRunner;
 import io.lumnik.hub.validator.EnvelopeValidator;
 import io.lumnik.hub.validator.ValidationError;
 import io.lumnik.hub.validator.rest.EndpointsBlockValidator;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
@@ -22,6 +30,100 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class OpenApiImporterTest {
 
+    /** An importer that fetches through the hub's client, under {@code rule}. */
+    private static OpenApiImporter fetching(OutboundAddress rule) {
+        OpenApiImporter importer = new OpenApiImporter();
+        importer.http = new RestHttpClient(rule);
+        return importer;
+    }
+
+    private static OpenApiImporter fetching() {
+        return fetching(TestOutbound.ADDRESSES);
+    }
+
+    /**
+     * #2002: the spec is fetched by the hub's own client, then parsed as text. The parser fetched
+     * the URL itself before, past the address rule, and followed every remote {@code $ref} in it.
+     */
+    @Test void the_spec_is_fetched_once_and_no_remote_ref_in_it_is_followed() {
+        WireMockServer wm = new WireMockServer(0);
+        wm.start();
+        try {
+            String remote = "http://localhost:" + wm.port() + "/remote.yaml";
+            wm.stubFor(WireMock.get("/remote.yaml").willReturn(WireMock.ok("components: { schemas: { Thing: { type: object } } }")));
+            wm.stubFor(WireMock.get("/spec.yaml").willReturn(WireMock.ok("""
+                openapi: 3.0.0
+                info: { title: Demo, version: 1.0 }
+                servers: [{ url: https://api.demo.io }]
+                paths:
+                  /v1/things:
+                    get:
+                      responses:
+                        "200":
+                          content:
+                            application/json:
+                              schema: { $ref: '%s#/components/schemas/Thing' }
+                """.formatted(remote))));
+
+            String manifest = fetching().importFromUrl("http://localhost:" + wm.port() + "/spec.yaml", "demo", List.of());
+
+            assertTrue(manifest.contains("kind: Connector"), manifest);
+            wm.verify(1, WireMock.getRequestedFor(WireMock.urlEqualTo("/spec.yaml")));
+            wm.verify(0, WireMock.getRequestedFor(WireMock.urlEqualTo("/remote.yaml")));
+        } finally {
+            wm.stop();
+        }
+    }
+
+    /** A page that answers but holds no spec is named as such, like an unreachable one. */
+    @ParameterizedTest
+    @ValueSource(strings = {"<html><body>hello</body></html>", "{\"content\": [], \"totalPages\": 1}", "[]", ""})
+    void a_page_that_is_not_a_spec_is_refused_by_name(String page) {
+        WireMockServer wm = new WireMockServer(0);
+        wm.start();
+        try {
+            wm.stubFor(WireMock.get("/page").willReturn(WireMock.ok(page)));
+            var refused = assertThrows(ConnectorException.class,
+                () -> fetching().importFromUrl("http://localhost:" + wm.port() + "/page", "nope", List.of()));
+            assertTrue(refused.getMessage().contains("/page: not an OpenAPI spec, or one with no path"), refused.getMessage());
+        } finally {
+            wm.stop();
+        }
+    }
+
+    /**
+     * A Swagger 2.0 spec is drafted too: the parser's v2 extension converts it. #2002 moved the
+     * fetch into the hub; the conversion must survive it, and follow no remote {@code $ref} either.
+     */
+    @Test void a_swagger_2_spec_is_drafted_and_its_remote_ref_not_followed() {
+        WireMockServer wm = new WireMockServer(0);
+        wm.start();
+        try {
+            String remote = "http://localhost:" + wm.port() + "/remote.json";
+            wm.stubFor(WireMock.get("/remote.json").willReturn(WireMock.ok("{\"Thing\": {\"type\": \"object\"}}")));
+            wm.stubFor(WireMock.get("/swagger.json").willReturn(WireMock.ok("""
+                {"swagger": "2.0", "info": {"title": "Legacy", "version": "1"},
+                 "host": "erp.example.com", "basePath": "/api", "schemes": ["https"],
+                 "paths": {"/items": {"get": {"responses": {"200": {"description": "ok",
+                   "schema": {"$ref": "%s#/Thing"}}}}}}}
+                """.formatted(remote))));
+
+            String manifest = fetching().importFromUrl("http://localhost:" + wm.port() + "/swagger.json", "legacy", List.of());
+
+            assertTrue(manifest.contains("base_url: \"https://erp.example.com/api\""), manifest);
+            wm.verify(0, WireMock.getRequestedFor(WireMock.urlEqualTo("/remote.json")));
+        } finally {
+            wm.stop();
+        }
+    }
+
+    /** #2002: a spec URL whose host is refused is never fetched. */
+    @Test void a_spec_at_a_refused_address_is_not_fetched() {
+        var refused = assertThrows(ConfigValidationException.class,
+            () -> fetching(new OutboundAddress(false, true)).importFromUrl("http://169.254.169.254/spec", "nope", List.of()));
+        assertTrue(refused.getMessage().contains("never connects to"), refused.getMessage());
+    }
+
     /**
      * What a spec URL that is not a spec must do. Measured before it was written down: the parser
      * does not answer null for an unreachable or non-spec document — it raises a
@@ -34,7 +136,7 @@ class OpenApiImporterTest {
      */
     @Test void a_url_that_holds_no_spec_is_refused_by_name() {
         var refused = assertThrows(ConnectorException.class,
-            () -> new OpenApiImporter().importFromUrl("http://localhost:1/no-such-spec", "nope", List.of()));
+            () -> fetching().importFromUrl("http://localhost:1/no-such-spec", "nope", List.of()));
 
         assertTrue(refused.getMessage().contains("http://localhost:1/no-such-spec"), refused.getMessage());
     }
@@ -46,7 +148,7 @@ class OpenApiImporterTest {
      */
     @Test void a_refused_spec_url_is_shown_without_its_credentials() {
         var refused = assertThrows(ConnectorException.class,
-            () -> new OpenApiImporter().importFromUrl(
+            () -> fetching().importFromUrl(
                 "http://user:s3cr3t@localhost:1/no-such-spec?token=abc", "nope", List.of()));
 
         assertFalse(refused.getMessage().contains("s3cr3t"), refused.getMessage());

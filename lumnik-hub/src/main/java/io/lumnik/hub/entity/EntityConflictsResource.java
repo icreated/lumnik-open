@@ -8,6 +8,7 @@ import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.sql.TemporalText;
+import io.lumnik.hub.tenant.RequireTenant;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.narayana.jta.QuarkusTransactionException;
 import jakarta.inject.Inject;
@@ -71,9 +72,9 @@ public class EntityConflictsResource {
    */
   @GET
   public Response list(@QueryParam("limit") @DefaultValue("100") int limit, @QueryParam("entity") String entity) {
-    if (entity == null) return Response.ok(conflicts(registry.all(), limit)).build();
+    if (entity == null) return Response.ok(conflicts(registry.all(RequireTenant.current()), limit)).build();
     if (Text.blank(entity)) return ApiErrors.badRequest("entity must not be blank");
-    EntityManifest m = registry.find(entity);
+    EntityManifest m = registry.find(RequireTenant.current(), entity);
     if (m == null) return ApiErrors.notFound("entity " + entity + " not found");
     if (!ScopeGrants.allowsAny(m.scopes())) return ApiErrors.scopeNotGranted();
     return Response.ok(conflicts(List.of(m), limit)).build();

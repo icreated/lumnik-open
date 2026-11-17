@@ -1,6 +1,10 @@
 package io.lumnik.hub.api.connector;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.lumnik.hub.entity.NewWriterScopes;
+import io.lumnik.hub.tenant.ManifestOwner;
+import io.quarkus.agroal.DataSource;
+import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.text.Text;
 import io.lumnik.hub.api.ApiErrors;
 import io.lumnik.hub.api.connector.handler.CsvFileConnectorApplyHandler;
@@ -48,6 +52,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -60,6 +65,7 @@ public class ConnectorAdminResource {
   private static final Set<String> FLAT_CREATABLE = Set.of(CSV_FILE, "hello-world");
 
   @Inject ConnectorRepository repo;
+  @Inject @DataSource("admin") AgroalDataSource adminDs;
   @Inject ConnectorEndpointRepository endpoints;
   @Inject ConnectorCredentialRepository credentials;
   @Inject ConnectorEngine engine;
@@ -102,7 +108,7 @@ public class ConnectorAdminResource {
     long tenant = RequireTenant.current();
     Response bad = refuseOtherTenant(req.tenantId(), tenant);
     if (bad == null) bad = refuseUncreatableType(req.typeId());
-    if (bad == null) bad = refuseBadMapColumns(req.config());
+    if (bad == null) bad = refuseBadStoredConfig(req.config());
     if (bad == null) bad = refuseBadSchedule(req.schedule());
     if (bad == null) bad = refuseBadWindow(req.window());
     if (bad == null) bad = refuseBadTags(req.tags());
@@ -116,7 +122,7 @@ public class ConnectorAdminResource {
     c.setSchedule(req.schedule());
     c.setRunWindow(req.window());
     c.setEnabled(req.enabled());
-    c.setConfig(req.config());
+    c.setConfig(InlineCredentials.restored(req.config(), null));   // #2003: a marker stands for nothing here
     c.setTags(req.tags() != null ? req.tags() : List.of());
     repo.persist(c);
     repo.flush();
@@ -188,7 +194,7 @@ public class ConnectorAdminResource {
     if (req.tags() != null) ConnectorScope.refuseUnlessHolds(req.tags());
     Response bad = refuseOtherTenant(req.tenantId(), c.getTenantId());
     if (bad == null) bad = refuseTypeChange(req.typeId(), c.getTypeId());
-    if (bad == null) bad = refuseBadMapColumns(req.config());
+    if (bad == null) bad = refuseBadStoredConfig(req.config());
     if (bad == null) bad = refuseBadSchedule(req.schedule());
     if (bad == null) bad = refuseBadWindow(req.window());
     if (bad == null) bad = refuseBadTags(req.tags());
@@ -199,7 +205,7 @@ public class ConnectorAdminResource {
     c.setSchedule(req.schedule());
     c.setRunWindow(req.window());
     c.setEnabled(req.enabled());
-    c.setConfig(req.config());
+    c.setConfig(InlineCredentials.restored(req.config(), c.getConfig()));   // #2003: a value read back redacted is kept
     // Unlike window/schedule/config, tags double as the scope:<tag> read boundary
     // (ConnectorTagsResource's javadoc) — an empty list means UNSCOPED, tenant-wide visible, not a
     // harmless default. A full-replace null->List.of() here (this door's usual "absent means
@@ -208,6 +214,7 @@ public class ConnectorAdminResource {
     // existing grant alone"; only an explicit (even empty) array replaces it — the one field on
     // this door where the request's silence must NOT read as a value.
     if (req.tags() != null) {
+      NewWriterScopes.requireRetagWithinReaders(adminDs, c.getTenantId(), c.getId(), c.getName(), c.getTags(), req.tags());   // #2048
       cardRefresher.afterRetag(c.getTenantId(), c.getTags(), req.tags());
       c.setTags(req.tags());
     }
@@ -292,10 +299,21 @@ public class ConnectorAdminResource {
     String table = first.getKey();          // schema.table
     String view = first.getValue();         // schema.view
     String entity = EntityViewCompiler.entityNameFromView(view);
-    String detail = entity != null && entities.findReloadingIfMissing(entity) != null
-        ? "table " + table + " feeds entity " + entity
-            + " — remove the entity first (lm entity delete " + entity + ")"
-        : "table " + table + " has a dependent view " + view + " — drop it first";
+    Optional<EntityRegistry.Stored> stored = entity == null ? Optional.empty() : entities.storedHubwide(entity);
+    long tenant = RequireTenant.current();
+    String detail;
+    if (stored.isEmpty()) {
+      detail = "table " + table + " has a dependent view " + view + " — drop it first";
+    } else if (!ManifestOwner.reads(tenant, stored.get().owner())) {
+      // #2050: another tenant's Entity reads the table; its name is not this tenant's to read
+      detail = "table " + table + " feeds an entity of another tenant — the hub's operator removes it first, "
+          + "acting as that tenant";
+    } else if (!ManifestOwner.ownedBy(tenant, stored.get().owner())) {
+      detail = "table " + table + " feeds the shared entity " + entity
+          + " — the hub's operator removes it first, from the hub's own tenant";
+    } else {
+      detail = "table " + table + " feeds entity " + entity + " — remove the entity first (lm entity delete " + entity + ")";
+    }
     return ApiErrors.conflict(detail);
   }
 
@@ -307,13 +325,11 @@ public class ConnectorAdminResource {
    * evidenced run-killer this door lets through — a rename INTO a hub system column, which
    * {@code MapColumnsHook} would only catch at run time after the column is already lost — is
    * refused here at write time, reusing the exact rule the manifest door, the hook and the
-   * sibling endpoint door share.
+   * sibling endpoint door share. A local path whose form the run refuses (#2001) is refused with it:
+   * {@link StoredConfigRules} holds both rules, for this door's shape and the endpoint door's.
    */
-  private Response refuseBadMapColumns(Map<String, Object> config) {
-    if (config == null) return null;
-    return MapColumnsRules.firstStoredConfigViolation(json.valueToTree(config))
-        .map(v -> ApiErrors.badRequest("config '" + v.path() + "' " + v.reason()))
-        .orElse(null);
+  private Response refuseBadStoredConfig(Map<String, Object> config) {
+    return StoredConfigRules.connectorRefusal(json.valueToTree(config)).map(ApiErrors::badRequest).orElse(null);
   }
 
   /**
@@ -359,12 +375,7 @@ public class ConnectorAdminResource {
    * apply} accepts here cannot be refused by {@code lm connector scope set} one command later.
    */
   private Response refuseBadTags(List<String> tags) {
-    if (tags == null) return null;   // no tags is legal
-    for (String t : tags) {
-      var problem = ScopeGrants.nameProblem(t);
-      if (problem.isPresent()) return ApiErrors.badRequest(problem.get());
-    }
-    return null;
+    return ScopeGrants.namesProblem(tags).map(ApiErrors::badRequest).orElse(null);   // no tags is legal
   }
 
   @POST

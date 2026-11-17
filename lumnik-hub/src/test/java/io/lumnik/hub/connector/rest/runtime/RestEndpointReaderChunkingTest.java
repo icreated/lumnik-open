@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.runtime;
 
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.hub.connector.runtime.OwnedRunScope;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -66,6 +67,7 @@ class RestEndpointReaderChunkingTest {
 
     /** Serves the page named by the request's {@code p} query param — state on the wire, not in the fake. */
     static final class PagedHttp extends RestHttpClient {
+        PagedHttp() { super(TestOutbound.ADDRESSES); }
         final List<RestRequest> calls = new ArrayList<>();
         @Override public RestResponse execute(RestRequest req) {
             calls.add(req);
@@ -105,7 +107,7 @@ class RestEndpointReaderChunkingTest {
     /** Fresh reader per read, exactly like the engine builds one per chunk. */
     private RestEndpointReader reader() {
         return new RestEndpointReader(endpoint, new PassThroughAuth(), pagination,
-            new RateLimiterRegistry(), http, mapper, SecretRefs.environmentOnly(name -> null));
+            new RateLimiterRegistry(), http, mapper, SecretRefs.of(name -> null));
     }
 
     private ConnectorContext ctx(UUID runId, Map<String, Object> config) {

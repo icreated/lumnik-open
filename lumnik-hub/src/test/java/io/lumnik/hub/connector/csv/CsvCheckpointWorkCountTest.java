@@ -43,7 +43,7 @@ class CsvCheckpointWorkCountTest {
     }
     Files.writeString(file, sb.toString());
 
-    var reader = new CsvFileConnectorType.CsvGlobCursorReader(file.toString(), DEFAULTS);
+    var reader = GlobReaders.of(file.toString(), DEFAULTS);
 
     List<Map<String, Object>> all = new ArrayList<>();
     ConnectorCursor cursor = ConnectorCursor.empty();

@@ -36,18 +36,18 @@ class CsvCarryChunkingTest {
     Files.writeString(dir.resolve("b.csv"), "row_no,f\n1,b\n");
     String glob = dir.resolve("*.csv").toString();
 
-    var carrying = new CsvFileConnectorType.CsvGlobCursorReader(glob, overrides(), false, true);
+    var carrying = GlobReaders.of(glob, overrides(), false, true);
     ReadResult<Map<String, Object>> first = carrying.read(500, ConnectorCursor.empty(), ReaderTestContexts.newRun());
     assertThat(records(first)).extracting(r -> r.get("f")).containsOnly("a");
     assertThat(carrying.startsAFile()).isTrue();
 
-    var next = new CsvFileConnectorType.CsvGlobCursorReader(glob, overrides(), false, true);
+    var next = GlobReaders.of(glob, overrides(), false, true);
     ReadResult<Map<String, Object>> second =
         next.read(500, ((ReadResult.HasMore<Map<String, Object>>) first).nextCursor(), ReaderTestContexts.newRun());
     assertThat(records(second)).extracting(r -> r.get("f")).containsOnly("b");
     assertThat(next.startsAFile()).isTrue();
 
-    var plain = new CsvFileConnectorType.CsvGlobCursorReader(glob, overrides(), false, false);
+    var plain = GlobReaders.of(glob, overrides(), false, false);
     assertThat(records(plain.read(500, ConnectorCursor.empty(), ReaderTestContexts.newRun()))).hasSize(3);
   }
 
@@ -62,9 +62,9 @@ class CsvCarryChunkingTest {
     Files.writeString(dir.resolve("c.csv"), "row_no,f\n1,c\n");
     String glob = dir.resolve("*.csv").toString();
 
-    var first = new CsvFileConnectorType.CsvGlobCursorReader(glob, overrides(), false, true);
+    var first = GlobReaders.of(glob, overrides(), false, true);
     ReadResult<Map<String, Object>> r1 = first.read(500, ConnectorCursor.empty(), ReaderTestContexts.newRun());
-    var second = new CsvFileConnectorType.CsvGlobCursorReader(glob, overrides(), false, true);
+    var second = GlobReaders.of(glob, overrides(), false, true);
     ReadResult<Map<String, Object>> r2 =
         second.read(500, ((ReadResult.HasMore<Map<String, Object>>) r1).nextCursor(), ReaderTestContexts.newRun());
 
@@ -84,11 +84,11 @@ class CsvCarryChunkingTest {
     Files.writeString(a, "row_no,f\n1,a\n2,a\n3,a\n");
     String glob = dir.resolve("*.csv").toString();
     var parser = CsvFileConnectorType.buildParserOverrides(Map.of("has_header", true, "delimiter", ",", "encoding", encoding));
-    ReadResult<Map<String, Object>> first = new CsvFileConnectorType.CsvGlobCursorReader(glob, parser, false, true)
+    ReadResult<Map<String, Object>> first = GlobReaders.of(glob, parser, false, true)
         .read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
 
     Files.writeString(a, "row_no,f\n1,x\n2,x\n3,x\n4,x\n");
-    var resumed = new CsvFileConnectorType.CsvGlobCursorReader(glob, parser, false, true);
+    var resumed = GlobReaders.of(glob, parser, false, true);
     ConnectorCursor cursor = ((ReadResult.HasMore<Map<String, Object>>) first).nextCursor();
 
     assertThatThrownBy(() -> resumed.read(2, cursor, ReaderTestContexts.newRun()))
@@ -108,12 +108,12 @@ class CsvCarryChunkingTest {
     FileTime mtime = Files.getLastModifiedTime(a);
     String glob = dir.resolve("*.csv").toString();
     var parser = CsvFileConnectorType.buildParserOverrides(Map.of("has_header", true, "delimiter", ",", "encoding", encoding));
-    ReadResult<Map<String, Object>> first = new CsvFileConnectorType.CsvGlobCursorReader(glob, parser, false, true)
+    ReadResult<Map<String, Object>> first = GlobReaders.of(glob, parser, false, true)
         .read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
 
     Files.writeString(a, "row_no,f\n1,x\n2,x\n3,x\n");
     Files.setLastModifiedTime(a, mtime);
-    var resumed = new CsvFileConnectorType.CsvGlobCursorReader(glob, parser, false, true);
+    var resumed = GlobReaders.of(glob, parser, false, true);
     ConnectorCursor cursor = ((ReadResult.HasMore<Map<String, Object>>) first).nextCursor();
 
     assertThatThrownBy(() -> resumed.read(2, cursor, ReaderTestContexts.newRun()))
@@ -134,12 +134,12 @@ class CsvCarryChunkingTest {
     String glob = dir.resolve("*.csv").toString();
     var parser = CsvFileConnectorType.buildParserOverrides(Map.of("has_header", true, "delimiter", ",", "encoding", encoding));
     try (OwnedRunScope run = new OwnedRunScope("test")) {
-      ReadResult<Map<String, Object>> first = new CsvFileConnectorType.CsvGlobCursorReader(glob, parser, false, true)
+      ReadResult<Map<String, Object>> first = GlobReaders.of(glob, parser, false, true)
           .read(2, ConnectorCursor.empty(), ReaderTestContexts.of(run));
 
       Files.writeString(a, "row_no,f\n1,x\n2,x\n3,x\n");
       Files.setLastModifiedTime(a, mtime);
-      var next = new CsvFileConnectorType.CsvGlobCursorReader(glob, parser, false, true);
+      var next = GlobReaders.of(glob, parser, false, true);
       ConnectorCursor cursor = ((ReadResult.HasMore<Map<String, Object>>) first).nextCursor();
 
       assertThatThrownBy(() -> next.read(2, cursor, ReaderTestContexts.of(run)))
@@ -160,7 +160,7 @@ class CsvCarryChunkingTest {
       List<Object> read = new ArrayList<>();
       ConnectorCursor cursor = ConnectorCursor.empty();
       for (int chunk = 0; chunk < 3; chunk++) {
-        ReadResult<Map<String, Object>> r = new CsvFileConnectorType.CsvGlobCursorReader(glob, overrides(), false, true)
+        ReadResult<Map<String, Object>> r = GlobReaders.of(glob, overrides(), false, true)
             .read(2, cursor, ReaderTestContexts.of(run));
         records(r).forEach(row -> read.add(row.get("row_no")));
         cursor = ((ReadResult.HasMore<Map<String, Object>>) r).nextCursor();
@@ -177,9 +177,9 @@ class CsvCarryChunkingTest {
     Files.writeString(dir.resolve("a.csv"), "row_no,f\n1,a\n2,a\n3,a\n");
     String glob = dir.resolve("*.csv").toString();
     var parser = CsvFileConnectorType.buildParserOverrides(Map.of("has_header", true, "delimiter", ",", "encoding", encoding));
-    ReadResult<Map<String, Object>> first = new CsvFileConnectorType.CsvGlobCursorReader(glob, parser, false, true)
+    ReadResult<Map<String, Object>> first = GlobReaders.of(glob, parser, false, true)
         .read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
-    ReadResult<Map<String, Object>> second = new CsvFileConnectorType.CsvGlobCursorReader(glob, parser, false, true)
+    ReadResult<Map<String, Object>> second = GlobReaders.of(glob, parser, false, true)
         .read(2, ((ReadResult.HasMore<Map<String, Object>>) first).nextCursor(), ReaderTestContexts.newRun());
 
     assertThat(records(second)).extracting(r -> r.get("row_no")).containsExactly("3");
@@ -190,9 +190,9 @@ class CsvCarryChunkingTest {
   void a_chunk_resumed_mid_file_does_not_start_it(@TempDir Path dir) throws Exception {
     Files.writeString(dir.resolve("a.csv"), "row_no,f\n1,a\n2,a\n3,a\n");
     String glob = dir.resolve("*.csv").toString();
-    var r1 = new CsvFileConnectorType.CsvGlobCursorReader(glob, overrides(), false, true);
+    var r1 = GlobReaders.of(glob, overrides(), false, true);
     ReadResult<Map<String, Object>> first = r1.read(2, ConnectorCursor.empty(), ReaderTestContexts.newRun());
-    var r2 = new CsvFileConnectorType.CsvGlobCursorReader(glob, overrides(), false, true);
+    var r2 = GlobReaders.of(glob, overrides(), false, true);
     r2.read(2, ((ReadResult.HasMore<Map<String, Object>>) first).nextCursor(), ReaderTestContexts.newRun());
     assertThat(r1.startsAFile()).isTrue();
     assertThat(r2.startsAFile()).isFalse();

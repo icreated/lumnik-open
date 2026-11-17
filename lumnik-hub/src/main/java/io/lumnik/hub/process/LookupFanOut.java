@@ -192,7 +192,7 @@ public class LookupFanOut {
 
     /** @return true when the row is parked (waiting for its index), false when a page was done */
     private boolean step(Connection c, Work w, int size) throws SQLException {
-        EntityManifest entity = matchIndexes.storedEntity(w.process().onTable()).orElse(null);
+        EntityManifest entity = matchIndexes.storedEntityHubwide(w.process().onTable()).orElse(null);
         EntityViewCompiler.Sources catalog = entity == null ? null : fused.catalog(entity);
         LookupReach reach = entity == null ? null
             : LookupReach.of(entity, catalog).stream().filter(r -> r.target().equals(w.target())).findFirst().orElse(null);

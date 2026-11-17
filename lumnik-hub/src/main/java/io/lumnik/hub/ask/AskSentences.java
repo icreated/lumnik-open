@@ -84,6 +84,15 @@ final class AskSentences {
                 + "saisi votre question — vérifiez le SQL avant d'affirmer qu'il n'y en a pas.");
     }
 
+    /** #1982: a count of 0, or an aggregate over no row — the zero-row caveat for a query that returns one row. */
+    static String nothingCounted(String lang) {
+        return pick(lang,
+            "The query returned 0 or no value. That may be the true answer, or the query did not capture your "
+                + "question — verify the SQL before relying on it.",
+            "La requête a renvoyé 0 ou aucune valeur. C'est peut-être la vraie réponse, ou la requête n'a pas saisi "
+                + "votre question — vérifiez le SQL avant de vous y fier.");
+    }
+
     static String unbackedAnswer(String lang) {
         return pick(lang,
             "The phrased answer stated a figure these rows do not back, so it is withheld. "
@@ -137,6 +146,53 @@ final class AskSentences {
                 + "). The query may only read the tables this scope declares.",
             "Je n'exécuterai pas cette requête : « " + table + " » n'est pas une table de ce périmètre (déclarées : "
                 + declared + "). La requête ne peut pas lire de données hors du périmètre déclaré de ce métier.");
+    }
+
+    /** #2062: a hub table the query names in a way the hub cannot read through the scope's columns. */
+    static String unreadableRelation(String lang, String table) {
+        return pick(lang,
+            "I won't run this: the query names '" + table + "' in a way I cannot check against this scope's columns. "
+                + "Ask again, naming the columns you want.",
+            "Je n'exécuterai pas cette requête : elle nomme « " + table + " » d'une façon que je ne peux pas vérifier "
+                + "contre les colonnes de ce périmètre. Reformulez en nommant les colonnes voulues.");
+    }
+
+    /** #1974: a distance measured from something no point of this scope declares. */
+    static String notADeclaredPoint(String lang) {
+        return pick(lang,
+            "I won't run this: a distance is measured from a point this scope declares, latitude then longitude, "
+                + "or from coordinates typed in the question.",
+            "Je n'exécuterai pas cette requête : une distance se mesure depuis un point déclaré dans ce périmètre, "
+                + "latitude puis longitude, ou depuis des coordonnées écrites dans la question.");
+    }
+
+    /** #1977: a latitude or a longitude compared with a number the question does not contain. */
+    static String coordinateNotTyped(String lang) {
+        return pick(lang,
+            "I won't run this: the query compares a latitude or a longitude with a number your question does not "
+                + "contain. Type that number in the question (north of latitude 45.75), or ask for a distance from a "
+                + "row that has a point.",
+            "Je n'exécuterai pas cette requête : elle compare une latitude ou une longitude à un nombre absent de votre "
+                + "question. Écrivez ce nombre dans la question (au nord de la latitude 45.75), ou demandez une distance "
+                + "depuis une ligne qui a un point.");
+    }
+
+    /** #1977: a distance written by hand — a point's column inside a trigonometric function. */
+    static String distanceByHand(String lang) {
+        return pick(lang,
+            "I won't run this: the query computes a distance by hand. Ask for a distance from a row that has a point, "
+                + "or from coordinates typed in the question, and the hub measures it.",
+            "Je n'exécuterai pas cette requête : elle calcule une distance à la main. Demandez une distance depuis une "
+                + "ligne qui a un point, ou depuis des coordonnées écrites dans la question, et le hub la mesure.");
+    }
+
+    /** #1974: a centre the question did not type — a place name has no coordinates in the hub. */
+    static String centreNotTyped(String lang) {
+        return pick(lang,
+            "I can't measure from there: I know no coordinates for that place. Name a row that has a point, "
+                + "or type the coordinates, latitude first: 45.764, 4.8357.",
+            "Je ne peux pas mesurer depuis cet endroit : je ne connais pas ses coordonnées. Nommez une ligne qui a "
+                + "un point, ou écrivez les coordonnées, latitude d'abord : 45.764, 4.8357.");
     }
 
     static String undocumentedColumn(String lang, String column, List<String> declaredColumns) {

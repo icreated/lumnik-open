@@ -5,13 +5,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.extraction.spi.ask.SchemaCard;
+import io.lumnik.hub.connector.mapping.writer.DriftDetector;
 import io.quarkus.agroal.DataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.jboss.logging.Logger;
 
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * Level 1 of discovery: build a SchemaCard for a scope purely from the ingested-table
@@ -21,12 +20,13 @@ import java.util.stream.Collectors;
 @ApplicationScoped
 public class RegistrySchemaBuilder {
 
-    private static final Logger LOG = Logger.getLogger(RegistrySchemaBuilder.class);
     private static final ObjectMapper M = new ObjectMapper();
 
     @Inject
     @DataSource("admin")
     AgroalDataSource adminDs;
+
+    @Inject DriftDetector driftDetector;
 
     /** A resolved hub table + its source entity (for level-2 AD lookup). */
     public record HubTable(String schema, String name, Map<String,String> columns, String sourceEntity) {}
@@ -82,62 +82,41 @@ public class RegistrySchemaBuilder {
             String sourceEntity = tableName.startsWith("t_") ? tableName.substring(2) : tableName;
             return new PendingTable(rs.getString("table_schema"), tableName, types, sourceEntity);
         });
-        List<PendingTable> pending = new ArrayList<>();
-        Set<String> seenFqn = new HashSet<>();
+        // #2023: each registration holds the columns its own mapping brought, so a tenant's table is the UNION of its
+        // registrations' names. The table, not the registry, says their order and current type: another tenant's
+        // widening reaches this card too. It never adds a name: another tenant's column stays out.
+        Map<String, PendingTable> merged = new LinkedHashMap<>();
         for (PendingTable p : rows) {
-            if (!seenFqn.add(p.schema() + "." + p.table())) {
-                LOG.warnf("duplicate hub table %s.%s for scope %s — keeping first", p.schema(), p.table(), scope);
-                continue;
-            }
-            pending.add(p);
+            merged.merge(p.schema() + "." + p.table(), p, (a, b) -> {
+                Map<String, String> types = new LinkedHashMap<>(a.types());
+                b.types().forEach(types::putIfAbsent);
+                return new PendingTable(a.schema(), a.table(), types, a.sourceEntity());
+            });
         }
-        if (pending.isEmpty()) return List.of();
-
-        // jsonb canonicalises object keys by length then bytes, so each `types`' own iteration
-        // order is NOT the source's field order (#521). The physical table — created in that
-        // order by #496's fix — is; reorder against it, one query for every table in the scope.
-        Map<String, List<String>> physicalOrder = physicalColumnOrders(pending);
         List<HubTable> out = new ArrayList<>();
-        for (PendingTable p : pending) {
-            List<String> ordered = physicalOrder.getOrDefault(p.schema() + "." + p.table(), List.of());
-            out.add(new HubTable(p.schema(), p.table(), inSourceFieldOrder(ordered, p.types()), p.sourceEntity()));
+        for (PendingTable p : merged.values()) {
+            Map<String, String> physical = driftDetector.actualSchema(p.schema(), p.table());
+            out.add(new HubTable(p.schema(), p.table(), current(physical, p.types()), p.sourceEntity()));
         }
         return out;
     }
 
-    private record PendingTable(String schema, String table, Map<String,String> types, String sourceEntity) {}
-
-    /** Every table's physical column order, keyed by {@code schema.table} — one round trip. */
-    private Map<String, List<String>> physicalColumnOrders(List<PendingTable> tables) {
-        String inClause = tables.stream().map(t -> "(?,?)").collect(Collectors.joining(","));
-        String sql = "SELECT table_schema, table_name, column_name FROM information_schema.columns " +
-                     "WHERE (table_schema, table_name) IN (" + inClause + ") " +
-                     "ORDER BY table_schema, table_name, ordinal_position";
-        List<String[]> rows = Jdbc.query(adminDs, "RegistrySchemaBuilder.columnOrders", sql,
-            ps -> {
-                int i = 1;
-                for (PendingTable t : tables) { ps.setString(i++, t.schema()); ps.setString(i++, t.table()); }
-            },
-            rs -> new String[]{rs.getString("table_schema"), rs.getString("table_name"), rs.getString("column_name")});
-
-        Map<String, List<String>> byTable = new LinkedHashMap<>();
-        for (String[] r : rows) byTable.computeIfAbsent(r[0] + "." + r[1], k -> new ArrayList<>()).add(r[2]);
-        return byTable;
-    }
-
     /**
-     * {@code types} reordered against the physical table's column order
-     * ({@code information_schema.columns.ordinal_position}) — the physical truth, needing no
-     * storage of its own. Falls back to {@code types}' own order for a name the physical table
-     * doesn't (yet) carry, so a stale or synthetic registry row still yields every known column.
+     * The registered names, in the table's column order and with the table's current type; a name the table does not
+     * (yet) hold keeps its registered type, so a stale or synthetic registry row still yields every known column.
      */
-    private Map<String,String> inSourceFieldOrder(List<String> physicalOrder, Map<String,String> types) {
-        Map<String,String> cols = new LinkedHashMap<>();
-        for (String name : physicalOrder) {
-            String type = types.get(name);
-            if (type != null) cols.put(name, type);
+    private static Map<String, String> current(Map<String, String> physical, Map<String, String> registered) {
+        Map<String, String> cols = new LinkedHashMap<>();
+        if (physical != null) {
+            physical.forEach((name, type) -> {
+                if (registered.containsKey(name)) cols.put(name, type);
+            });
         }
-        types.forEach(cols::putIfAbsent);
+        registered.forEach(cols::putIfAbsent);
         return cols;
     }
+
+    private record PendingTable(String schema, String table, Map<String,String> types, String sourceEntity) {}
+
+
 }

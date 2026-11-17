@@ -2,7 +2,7 @@ package io.lumnik.hub.api.event;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.common.sql.Jdbc;
-import io.lumnik.hub.api.TenantWide;
+import io.lumnik.common.security.TenantWide;
 import io.lumnik.hub.event.EventOutboxRow;
 import io.lumnik.hub.event.EventOutboxRow.Position;
 import io.lumnik.hub.tenant.RequireTenant;

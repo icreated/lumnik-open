@@ -23,16 +23,16 @@ public final class AuthBlockValidator {
                 "Username (basic, session)", null)
                 .requiredWhen("kind", BASIC, SESSION)
             .optional("password_env", Type.STRING, Importance.HIGH,
-                "Password source: lm secret name, else env var (basic, session)", null)
+                "Password source: lm secret name (basic, session)", null)
                 .requiredWhen("kind", BASIC, SESSION)
             .requireWhen("name", Type.STRING, Importance.HIGH,
                 "Header/query parameter name for API key", "kind", API_KEY)
             .requireWhen("value_env", Type.STRING, Importance.HIGH,
-                "API key value source: lm secret name, else env var", "kind", API_KEY)
+                "API key value source: lm secret name", "kind", API_KEY)
             .optional("in", Type.STRING, Importance.MEDIUM,
                 "Where to place the API key (header|query)", "header")
             .optional("token_env", Type.STRING, Importance.HIGH,
-                "Bearer token source: lm secret name, else env var (bearer)", null)
+                "Bearer token source: lm secret name (bearer)", null)
             // The secret itself, in a file the integrator is told to commit and review. Not the same hazard as jdbc's
             // `password` — BearerAuthProviderFactory reads token_env FIRST and only falls back to the literal when no
             // reference is named, so nothing is silently overridden — but it is the same secret in the same repository,
@@ -43,8 +43,7 @@ public final class AuthBlockValidator {
                 .warnWhenGiven("kind", "bearer",
                     "literal bearer token in the manifest — this is the secret itself, not a name, "
                         + "and a manifest is meant to be committed",
-                    "Remove it and name the secret: token_env: <NAME> "
-                        + "(`lm secret set <NAME> …`, else an env var set on the hub)",
+                    "Remove it and name the secret: token_env: <NAME> (`lm secret set <NAME> …`)",
                     "Keep it only in a manifest that is never committed — dev/test")
             // scheme is bearer's alone (#1640): one word before the token, as the header's grammar has it.
             .optional("scheme", Type.STRING, Importance.LOW,
@@ -66,7 +65,7 @@ public final class AuthBlockValidator {
                 "OAuth2 client id", "kind", OAUTH2)
                 .ignoredUnless("kind", OAUTH2)
             .requireWhen("client_secret_env", Type.STRING, Importance.HIGH,
-                "OAuth2 client secret source: lm secret name, else env var", "kind", OAUTH2)
+                "OAuth2 client secret source: lm secret name", "kind", OAUTH2)
                 .ignoredUnless("kind", OAUTH2)
             .optional("scope", Type.STRING, Importance.MEDIUM,
                 "OAuth2 scope, space-separated", null)

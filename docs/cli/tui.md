@@ -285,7 +285,7 @@ What the pages show when a feature is absent:
 | `Tab` | global, describe panel open | scroll the panel (`↑` `↓` `PgUp` `PgDn`) · `Tab` / `Esc` back to the list |
 | `:context` | global | switch to another configured hub, for this session (`Enter` switches, `Esc` leaves) |
 | `/` | `:sources` `:runs` `:dlq` `:endpoints` `:processes` `:views` `:apps` `:workflows` `:inbox` `:secrets` `:integrations` `:notify` `:exports` | filter to the rows holding a text (any column, case-insensitive); survives the live refresh, `Esc` clears it |
-| `s` | `:sources` `:runs` `:dlq` `:conflicts` `:ambiguous` `:scopes` | cycle the sort column |
+| `s` | `:sources` `:runs` `:dlq` `:conflicts` `:ambiguous` | cycle the sort column |
 | `c` | `:runs` | request cancellation of the selected `Running` run |
 | `e` / `R` (or `^R`) / `^P` / `Del` / `t` | `:sources` | edit YAML in `$EDITOR` · run now · pause/resume · delete · edit tags (then offers to re-stamp the indexed chunks) |
 | `Enter` | `:sources` | REST / JDBC → its `:endpoints`; others → its `:runs` |

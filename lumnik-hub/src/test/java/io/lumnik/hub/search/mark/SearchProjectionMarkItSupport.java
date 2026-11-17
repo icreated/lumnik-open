@@ -2,6 +2,7 @@ package io.lumnik.hub.search.mark;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.entity.EntityRegistry;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.restassured.specification.RequestSpecification;
@@ -91,8 +92,8 @@ public final class SearchProjectionMarkItSupport {
     /** A source table shaped like a real {@code t_*} table: {@code tenant_id} + {@code _ingested_at}
      *  plus {@code src_code}/{@code src_name}, matching {@link #entityManifest}'s {@code "code",
      *  "name"} canonical columns. */
-    static void createMatchSourceTable(AgroalDataSource adminDs, String table) throws Exception {
-        createTable(adminDs, table, "src_code text, src_name text");
+    static void createMatchSourceTable(AgroalDataSource adminDs, long tenant, String table) throws Exception {
+        createTable(adminDs, tenant, table, "src_code text, src_name text");
     }
 
     static void insertRow(AgroalDataSource adminDs, String table, long tenant, String code, String name)
@@ -124,6 +125,7 @@ public final class SearchProjectionMarkItSupport {
                 + " USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::bigint)");
             st.execute("GRANT SELECT ON connector." + table + " TO lumnik_app");
         }
+        RegisteredTables.register(adminDs, tenant, table);
 
         String manifest = "kind: Entity\n"
             + "name: " + entityName + "\n"
@@ -150,7 +152,7 @@ public final class SearchProjectionMarkItSupport {
         String entity = "AsOf" + label + System.nanoTime();
         String table = "t_asof_" + label.toLowerCase() + "_" + System.nanoTime();
         String index = unique("asof-" + label.toLowerCase());
-        createMatchSourceTable(adminDs, table);
+        createMatchSourceTable(adminDs, tenant, table);
         yaml(tenant).body(entityManifest(entity, table, List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
         yaml(tenant).body(searchIndex(index, entity, "name"))
@@ -233,6 +235,13 @@ public final class SearchProjectionMarkItSupport {
      *  is inert when no provider is installed (#896), as in this profile without {@code -Psearch}. */
     static void fireRun(SearchProjectionRunHook hook, long tenant) throws SQLException {
         hook.processTenant(tenant);
+    }
+
+    /** {@link #createTable(AgroalDataSource, String, String)}, recorded for {@code tenant}, the tenant that applies
+     *  an Entity over it (#2023). */
+    public static void createTable(AgroalDataSource adminDs, long tenant, String name, String cols) throws Exception {
+        createTable(adminDs, name, cols);
+        RegisteredTables.register(adminDs, tenant, name);
     }
 
     /** A table shaped like a real {@code t_*} table (#847): {@code tenant_id} + {@code _ingested_at} + {@code cols}. */

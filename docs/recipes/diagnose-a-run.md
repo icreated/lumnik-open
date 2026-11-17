@@ -1,7 +1,7 @@
 # Diagnosing a failed run
 
-> A run went wrong — read the ledger, not the logs, first: `lm run get` and `lm dlq` tell you
-> exactly which rows fell out and why before you go looking for a stack trace.
+> A run went wrong: read the ledger first, not the logs. `lm run get` and `lm dlq` say which
+> rows fell out, and why.
 
 A run reports a failure, or fewer rows arrived than you expected. Follow this walk:
 
@@ -105,7 +105,7 @@ Line 9 stopped after two values. The payload is the row as the source sent it: t
 | Reason | What it means | Where to look |
 |---|---|---|
 | `MalformedSource` | the source row itself is broken — encoding, truncated line | the file or export; a [transformer](../connectors/transformers.md) can often repair it at the door |
-| `MappingFailed` | a hook could not read a value, on a column declared [`on-error: dlq`](../connectors/transformers.md#an-unreadable-amount-is-a-wrong-row-on-error-dlq) | the value the message names, in the row `lm dlq get` shows |
+| `MappingFailed` | a hook could not read a value, on a column declared [`on-error: dlq`](../connectors/transformers.md#an-unreadable-amount-is-a-wrong-row-on-error-dlq) | the column the message names, in the row `lm dlq get` shows; several transformers add why, such as `3 parts for 2 names` |
 | `ValidationFailed` | the row broke a declared expectation | the manifest's declaration against the data |
 | `WriteFailed` | the database write failed | the target table — types, drift; the [hub logs](logs.md) have the SQL error |
 

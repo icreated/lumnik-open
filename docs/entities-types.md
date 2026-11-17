@@ -173,8 +173,12 @@ not reach the day in an `lm ask` question, which still starts at midnight UTC.
 
 ## The files
 
-All under `docs/apps/demo/`, landed like the [demo desk](apps/demo-desk.md#landing-the-sources)
-(`docker cp` the two CSVs into `/tmp/acme-desk/`):
+Land them like the [demo desk](apps/demo-desk.md#landing-the-sources): `docker cp` the two CSVs into
+`<root>/1/acme-desk/`, `/tmp/drop/1/acme-desk/` on the self-host stack. On that stack,
+`LUMNIK_CSV_LOCAL_ROOT=/tmp/drop` goes in `.env`, then `deploy/selfhost/up.sh` runs again (add
+`--build` for a stack run from source).
+
+All under `docs/apps/demo/`:
 
 | File | Role |
 |---|---|

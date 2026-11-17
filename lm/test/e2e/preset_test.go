@@ -46,7 +46,7 @@ spec:
       path: /items
       method: GET
       pagination: { kind: drf-page }
-      target: { kind: hybrid, table: e2e_drf_items, unique_key: "$.id", tags: [e2e] }
+      target: { kind: hybrid, table: ext.e2e_drf_items, unique_key: "$.id", tags: [e2e] }
 `
 	out := applyManifest(t, yaml)
 	// Assert the stable success shape: apply says it applied the connector. (A non-zero exit
@@ -67,7 +67,7 @@ spec:
       path: /items
       method: GET
       pagination: { kind: spring-page }
-      target: { kind: hybrid, table: e2e_spring_items, unique_key: "$.id", tags: [e2e] }
+      target: { kind: hybrid, table: ext.e2e_spring_items, unique_key: "$.id", tags: [e2e] }
 `
 	out := applyManifest(t, yaml)
 	if !strings.Contains(out, "Applied connector") {

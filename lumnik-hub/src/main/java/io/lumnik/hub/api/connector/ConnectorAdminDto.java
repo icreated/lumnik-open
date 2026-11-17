@@ -38,7 +38,7 @@ public record ConnectorAdminDto(
     Instant lastRunAt = lastRun != null ? lastRun.getStartedAt() : null;
     return new ConnectorAdminDto(
         c.getId(), c.getTenantId(), c.getName(), c.getTypeId(),
-        c.getSchedule(), c.getRunWindow(), c.isEnabled(), c.getConfig(),
+        c.getSchedule(), c.getRunWindow(), c.isEnabled(), InlineCredentials.redacted(c.getConfig()),   // #2003
         c.getTags() != null ? c.getTags() : List.of(),
         status, lastRunAt);
   }

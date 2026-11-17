@@ -2,6 +2,7 @@ package io.lumnik.hub.connector.jdbc;
 
 import io.lumnik.hub.connector.exceptions.ConfigValidationException;
 import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
+import io.lumnik.hub.testsupport.TestOutbound;
 import io.lumnik.jdbc.postgresql.PostgresDialect;
 import io.lumnik.jdbc.spi.ColumnDescriptor;
 import org.junit.jupiter.api.AfterEach;
@@ -43,7 +44,7 @@ class SchemaIntrospectorIT {
     // Build dialect registry manually — no CDI.
     dialectRegistry = JdbcDialectRegistry.of(List.of(new PostgresDialect()));
 
-    poolRegistry = new HikariPoolRegistry();
+    poolRegistry = new HikariPoolRegistry(TestOutbound.ADDRESSES);
 
     // Wire SchemaIntrospector's @Inject fields via reflection
     introspector = new SchemaIntrospector();

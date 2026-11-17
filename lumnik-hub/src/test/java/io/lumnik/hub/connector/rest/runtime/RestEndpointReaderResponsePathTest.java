@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.runtime;
 
+import io.lumnik.hub.testsupport.TestOutbound;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -33,6 +34,7 @@ class RestEndpointReaderResponsePathTest {
 
     /** Answers the queued bodies in order. */
     static final class QueuedHttp extends RestHttpClient {
+        QueuedHttp() { super(TestOutbound.ADDRESSES); }
         final Deque<String> bodies = new ArrayDeque<>();
 
         @Override public RestResponse execute(RestRequest req) {
@@ -53,7 +55,7 @@ class RestEndpointReaderResponsePathTest {
         http.bodies.addAll(List.of(bodies));
         RestEndpointReader reader = new RestEndpointReader(endpoint, new RestEndpointReaderChunkingTest.PassThroughAuth(),
             new PaginationFactory(), new RateLimiterRegistry(), http, new ObjectMapper(),
-            SecretRefs.environmentOnly(name -> null));
+            SecretRefs.of(name -> null));
         ConnectorContext ctx = new ConnectorContext(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1L, "erp",
             "rest-generic",
             Map.of("base_url", "https://erp.test", "default_rate_limit", "100000/s",

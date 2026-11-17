@@ -24,7 +24,6 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -60,9 +59,6 @@ abstract class ExportAcceptanceITSupport extends ExportRunITSupport {
     /** The relay every destination block of the subclass points at. */
     abstract GatedRelay relay();
 
-    /** Registry secret name → value, registered for both tenants before each test. */
-    abstract Map<String, String> secrets();
-
     /** Client→server bytes after which a held upload has already sent part of the artifact. */
     abstract long holdAfterBytes();
 
@@ -75,14 +71,17 @@ abstract class ExportAcceptanceITSupport extends ExportRunITSupport {
     /** Places an artifact lumnik did not write at {@code target}. */
     abstract void placeForeign(String target, byte[] bytes) throws Exception;
 
+    /** Both tenants, through the real door — instead of {@link ExportRunITSupport}'s direct seed. */
+    @Override
     @BeforeEach
-    void registerSecrets() {
+    void holdTheSecrets() {
         for (long tenant : new long[] {TENANT, OTHER_TENANT})
             secrets().forEach((name, value) -> registerSecret(tenant, name, value));
     }
 
     /** Through the real {@code lm secret set} door; a secret already there from an earlier test
-     *  is fine, its value is the same. */
+     *  is fine, its value is the same. Then {@code lm secret scope}: the exports here are in scope
+     *  sales, the one scope the secret must carry for them to read it (#2015). */
     static void registerSecret(long tenant, String name, String value) {
         int status = given().headers(TestIdentity.tenantAndUser(tenant))
             .contentType("application/json")
@@ -90,6 +89,9 @@ abstract class ExportAcceptanceITSupport extends ExportRunITSupport {
             .post("/api/platform/secrets")
             .statusCode();
         assertThat(status).as("register secret %s for tenant %d", name, tenant).isIn(201, 409);
+        given().headers(TestIdentity.tenantAndUser(tenant))
+            .contentType("application/json").body("[\"sales\"]")
+            .put("/api/platform/secrets/" + name + "/scopes").then().statusCode(200);
     }
 
     // ---------------------------------------------------------------- manifests & runs

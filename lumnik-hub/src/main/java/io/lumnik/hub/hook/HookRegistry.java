@@ -49,6 +49,14 @@ public class HookRegistry {
         return list.stream().filter(b -> b.matchesTenant(tenantId)).toList();
     }
 
+    /**
+     * The bindings that run for {@code tenantId}: what one tenant's admin may see and switch (#1992) — never a binding
+     * for other tenants only, nor its id.
+     */
+    public List<HookBinding> bindingsFor(long tenantId) {
+        return allBindings().stream().filter(b -> b.matchesTenant(tenantId)).toList();
+    }
+
     public Optional<CalloutBinding> findCallout(String entityClass, String field) {
         return Optional.ofNullable(calloutIndex.get(entityClass + "|" + field));
     }

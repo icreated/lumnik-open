@@ -1,6 +1,7 @@
 package io.lumnik.hub.event;
 
 import io.lumnik.hub.api.ApiErrors;
+import io.lumnik.common.security.TenantWide;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 import jakarta.ws.rs.DefaultValue;
@@ -18,6 +19,7 @@ import org.jboss.logging.Logger;
  * The dead letters of the tenant's outbox consumers (#1837): what a consumer failed on, and the door to redo it. Under
  * {@code /api/platform}, so integrator-only like the rest of it; the tenant is the caller's.
  */
+@TenantWide
 @Path("/api/platform/events/dead-letters")
 @Produces(MediaType.APPLICATION_JSON)
 public class EventDeadLetterResource {

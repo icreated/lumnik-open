@@ -57,7 +57,7 @@ public class CsvIngestForm {
      * <ol>
      *   <li>{@code transport} field (programmatic / test)</li>
      *   <li>{@code transportJson} field (multipart HTTP)</li>
-     *   <li>Implicit local transport derived from the uploaded file</li>
+     *   <li>{@code {kind: local}} when only a file was uploaded: the request is the file</li>
      * </ol>
      *
      * @throws IllegalArgumentException if neither transport block nor file is available
@@ -71,11 +71,8 @@ public class CsvIngestForm {
                 throw new RuntimeException("invalid transport JSON: " + e.getMessage(), e);
             }
         }
-        // Legacy / local-file path: derive an implicit local transport from the uploaded file.
-        File f = resolveFile();
-        if (f != null) {
-            return Map.of("kind", "local", "path", f.getAbsolutePath());
-        }
+        // No transport: the request is the uploaded file.
+        if (resolveFile() != null) return Map.of("kind", "local");
         throw new IllegalArgumentException("either file upload OR transport block required");
     }
 }

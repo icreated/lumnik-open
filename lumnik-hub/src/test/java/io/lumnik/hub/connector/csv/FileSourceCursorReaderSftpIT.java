@@ -12,6 +12,7 @@ import io.lumnik.hub.connector.transport.sftp.SftpFileSource;
 import io.lumnik.hub.connector.transport.sftp.SftpFileSourceFactory;
 import io.lumnik.hub.connector.transport.sftp.SftpTestHelper;
 import io.lumnik.hub.connector.transport.sftp.SftpTestImage;
+import io.lumnik.hub.testsupport.TestOutbound;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -78,7 +79,7 @@ class FileSourceCursorReaderSftpIT {
         Consumer<CountingFileSource> onBuild = s -> { };
 
         @Override public FileSource build(Map<String, Object> transportCfg) {
-            SftpFileSource real = (SftpFileSource) new SftpFileSourceFactory(SecretRefs.environmentOnly(n -> null))
+            SftpFileSource real = (SftpFileSource) new SftpFileSourceFactory(SecretRefs.of(n -> null), TestOutbound.ADDRESSES)
                 .build(transportCfg);
             real.setPasswordOverrideForTest(PASS);
             CountingFileSource counted = new CountingFileSource(real);

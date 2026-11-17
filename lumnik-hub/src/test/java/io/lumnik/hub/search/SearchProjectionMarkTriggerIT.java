@@ -1,6 +1,7 @@
 package io.lumnik.hub.search;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.lumnik.testkit.auth.TestIdentity;
 import io.quarkus.agroal.DataSource;
@@ -94,7 +95,7 @@ class SearchProjectionMarkTriggerIT {
     void aFreshApplyProducesExactlyOneAllMark() throws Exception {
         String entityName = ENTITY + "Fresh";
         String table = TABLE + "_fresh";
-        yaml(1).body(entity(adminDs, entityName, table, List.of("sales"), "code", "name", "city"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(entity(adminDs, entityName, table, List.of("sales"), "code", "name", "city"))
             .post("/api/entities/apply").then().statusCode(200);
 
         String name = unique("mark-fresh");
@@ -118,7 +119,7 @@ class SearchProjectionMarkTriggerIT {
     void aReapplyThatOnlyChangesLanguageCollapsesToOneAllMark() throws Exception {
         String entityName = ENTITY + "Relang";
         String table = TABLE + "_relang";
-        yaml(1).body(entity(adminDs, entityName, table, List.of("sales"), "code", "name", "city"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(entity(adminDs, entityName, table, List.of("sales"), "code", "name", "city"))
             .post("/api/entities/apply").then().statusCode(200);
 
         String name = unique("mark-relang");
@@ -139,7 +140,7 @@ class SearchProjectionMarkTriggerIT {
     void entityDeletePurgesEveryTenantsSearchIndexOverIt() throws Exception {
         String entityName = ENTITY + "Delete";
         String table = TABLE + "_delete";
-        yaml(1).body(entity(adminDs, entityName, table, List.of("sales"), "code", "name"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(entity(adminDs, entityName, table, List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
 
         String name1 = unique("mark-delete-t1");
@@ -149,7 +150,7 @@ class SearchProjectionMarkTriggerIT {
         yaml(2).body(searchIndex(name2, entityName, "name")).post("/api/search-indexes/apply")
             .then().statusCode(200).body("status", equalTo("valid"));
 
-        given().headers(TestIdentity.tenantAndUser(1)).delete("/api/entities/" + entityName)
+        given().headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT)).delete("/api/entities/" + entityName)
             .then().statusCode(204);
 
         assertThat(purgeRows(1, name1, entityName)).as("tenant 1's declaration purged").isEqualTo(1L);
@@ -173,7 +174,7 @@ class SearchProjectionMarkTriggerIT {
     void aFailedPurgeDuringEntityDeleteRollsBackTheEntityDeleteToo() throws Exception {
         String entityName = ENTITY + "DeleteAtomic";
         String table = TABLE + "_delete_atomic";
-        yaml(1).body(entity(adminDs, entityName, table, List.of("sales"), "code", "name"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(entity(adminDs, entityName, table, List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
 
         String name = unique("mark-delete-atomic");
@@ -195,7 +196,7 @@ class SearchProjectionMarkTriggerIT {
                 + "FOR EACH ROW EXECUTE FUNCTION core.search_index_purge_entity_poison_701()");
         }
         try {
-            int status = given().headers(TestIdentity.tenantAndUser(1)).delete("/api/entities/" + entityName)
+            int status = given().headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT)).delete("/api/entities/" + entityName)
                 .then().extract().statusCode();
             assertThat(status).as("the entity delete must fail, not report success").isGreaterThanOrEqualTo(500);
 
@@ -223,7 +224,7 @@ class SearchProjectionMarkTriggerIT {
             }
         }
         // Once the injection is gone, deleting the same entity goes through normally.
-        given().headers(TestIdentity.tenantAndUser(1)).delete("/api/entities/" + entityName)
+        given().headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT)).delete("/api/entities/" + entityName)
             .then().statusCode(204);
         assertThat(purgeRows(1, name, entityName)).isEqualTo(1L);
     }
@@ -232,10 +233,10 @@ class SearchProjectionMarkTriggerIT {
     void entityDeleteWithNoSearchIndexPurgesNothing() throws Exception {
         String entityName = ENTITY + "DeleteBare";
         String table = TABLE + "_delete_bare";
-        yaml(1).body(entity(adminDs, entityName, table, List.of("sales"), "code", "name"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(entity(adminDs, entityName, table, List.of("sales"), "code", "name"))
             .post("/api/entities/apply").then().statusCode(200);
 
-        given().headers(TestIdentity.tenantAndUser(1)).delete("/api/entities/" + entityName)
+        given().headers(TestIdentity.tenantAndUser(DeploymentTenancy.HUBADMIN_TENANT)).delete("/api/entities/" + entityName)
             .then().statusCode(204);
         // No SearchIndex ever existed over this entity — purgeAllForEntity is a no-op, and the delete
         // still succeeds (design doc: closing this hole must never refuse the entity delete).

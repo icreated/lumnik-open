@@ -51,7 +51,7 @@ public class CsvFileConnectorApplyHandler implements ConnectorApplyHandler {
         JsonNode spec = doc.path("spec");
 
         Object mappingBefore = connRepo.byAddressForUpdate(tenant, name).map(c -> mappingOf(c)).orElse(null);
-        Connector conn = ApplyUpsert.connector(connRepo, tenant, name, KIND_CSV_FILE, meta, spec,
+        Connector conn = ApplyUpsert.connector(adminDs, connRepo, tenant, name, KIND_CSV_FILE, meta, spec,
             c -> buildConnectorConfig(c, spec));
         defaultEndpoint(epRepo, conn);
 

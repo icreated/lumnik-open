@@ -1,5 +1,6 @@
 package io.lumnik.hub.connector.rest.runtime;
 
+import io.lumnik.hub.testsupport.TestOutbound;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -40,6 +41,7 @@ class RestEndpointReaderLookbackTest {
 
     /** An order API: rows by id, filtered on updated_since; {@link #afterPage} runs once a page is served. */
     static final class OrderApi extends RestHttpClient {
+        OrderApi() { super(TestOutbound.ADDRESSES); }
         final Map<String, String> updatedAt = new LinkedHashMap<>();
         final List<RestRequest> calls = new ArrayList<>();
         Consumer<Integer> afterPage = page -> {};
@@ -73,7 +75,7 @@ class RestEndpointReaderLookbackTest {
         ep.setMethod("GET");
         ep.setPath("/api/orders");
         return new RestEndpointReader(ep, none, new PaginationFactory(), new RateLimiterRegistry(), api, MAPPER,
-            SecretRefs.environmentOnly(name -> null));
+            SecretRefs.of(name -> null));
     }
 
     private static Map<String, Object> config(String lookback) {

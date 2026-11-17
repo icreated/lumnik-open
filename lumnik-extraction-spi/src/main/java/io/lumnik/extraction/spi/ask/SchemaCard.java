@@ -27,15 +27,27 @@ public record SchemaCard(String scope, List<Table> tables) {
         }
     }
 
-    public record Table(String name, String label, List<Column> columns, String description) {
+    /**
+     * The table's declared points (#1974): two numeric columns read as one WGS84 point. Empty on every table that
+     * declares none — and on a card stored before points existed, which Jackson reads with the field absent.
+     */
+    public record Table(String name, String label, List<Column> columns, String description, List<Point> points) {
         public Table {
             requireName(name, "table name");
+            points = points == null ? List.of() : List.copyOf(points);
+        }
+
+        public Table(String name, String label, List<Column> columns, String description) {
+            this(name, label, columns, description, List.of());
         }
 
         public Table(String name, String label, List<Column> columns) {
             this(name, label, columns, null);
         }
     }
+
+    /** A point an Entity declares (#1974): its name, then its latitude and longitude columns, in that order. */
+    public record Point(String name, String lat, String lon) {}
 
     /**
      * The one field of a card that every reader dereferences: {@code LeakGuard} and
@@ -80,7 +92,15 @@ public record SchemaCard(String scope, List<Table> tables) {
         if (present(t.description())) sb.append(" (").append(t.description()).append(')');
         sb.append('\n');
         for (Column c : t.columns()) appendColumn(sb, c);
+        for (Point p : t.points()) appendPoint(sb, p);
         sb.append('\n');
+    }
+
+    /** Only on a table with a point: a rule in the prompt is read by every question, this line by the ones about it. */
+    private static void appendPoint(StringBuilder sb, Point p) {
+        sb.append("  -- point ").append(quoted(p.name())).append(" = (").append(quoted(p.lat())).append(", ")
+            .append(quoted(p.lon())).append("), WGS84 degrees. Metres between two points, latitude first: ")
+            .append("connector.distance_m(lat1, lon1, lat2, lon2)\n");
     }
 
     private static void appendColumn(StringBuilder sb, Column c) {

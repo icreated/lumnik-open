@@ -23,6 +23,7 @@ the REST page uses, under its `POST /graphql` shape. Start it, and put its key i
 ```bash
 python3 docs/connectors/rest/demo/acme-api.py
 lm secret set ACME_API_KEY        # demo-key
+lm secret scope ACME_API_KEY billing   # the demo connectors' scope
 ```
 
 ```yaml
@@ -55,7 +56,7 @@ f26868f0  acme-graphql  partners  Completed  2400  2400  0        0             
 | `kind: graphql` | endpoint | no | An endpoint carrying a `query` is treated as GraphQL either way — the examples declare it for readability |
 | `query` | endpoint | yes | The query document; declare the cursor variable it expects (e.g. `$after`) |
 | `variables` | endpoint | no | Static variables sent with every request; the relay cursor is injected on top |
-| `pagination` | endpoint | yes | **Hard rule:** `kind: relay` with `cursor_binding: variable` — anything else is refused at apply |
+| `pagination` | endpoint | yes | **Hard rule:** `kind: relay` with `cursor_binding: variable`. `lm apply` refuses anything else, and shows the block to write |
 | `cursor_var` | pagination | yes | The variable that receives `endCursor` (e.g. `after`) |
 | `cursor_path`, `has_more_path`, `response_path` | pagination | yes | JSONPaths to `endCursor`, `hasNextPage` and the node list |
 | `target` | endpoint | yes | The same hybrid target as REST: `table`, `unique_key`, `promote` |
@@ -67,8 +68,6 @@ f26868f0  acme-graphql  partners  Completed  2400  2400  0        0             
 - There is no page-size field: page size is in the query itself (`first: 500` above).
 - `response_path` points at the nodes (`edges[*].node`): each node is one row, without the
   `edges` wrapper.
-- Any `pagination` other than `kind: relay` with `cursor_binding: variable` is refused by
-  `lm apply`, which shows the block to write.
 
 ## The two ways a GraphQL server says no on HTTP 200
 

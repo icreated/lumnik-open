@@ -21,5 +21,5 @@ spec:
         # has_more_path omitted → the cursor says when to stop: absent on an empty last page (#1611)
       target:
         kind: hybrid
-        table: x_items
+        table: ext.x_items
         unique_key: $.id

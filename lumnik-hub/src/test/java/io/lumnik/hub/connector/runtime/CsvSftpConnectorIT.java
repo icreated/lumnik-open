@@ -9,12 +9,14 @@ import io.lumnik.hub.connector.domain.ConnectorEndpoint;
 import io.lumnik.hub.connector.repository.ConnectorDeadLetterRepository;
 import io.lumnik.hub.connector.repository.ConnectorEndpointRepository;
 import io.lumnik.hub.connector.repository.ConnectorRepository;
+import io.lumnik.hub.testsupport.TestSecrets;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import jakarta.transaction.UserTransaction;
 import org.junit.jupiter.api.*;
 import io.lumnik.hub.connector.transport.sftp.SftpTestImage;
+import org.junit.jupiter.api.BeforeEach;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.MountableFile;
@@ -30,6 +32,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @QuarkusTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class CsvSftpConnectorIT {
+
+    @Inject TestSecrets testSecrets;
 
     @Inject ConnectorEngine engine;
     @Inject ConnectorRepository connectors;
@@ -54,7 +58,6 @@ class CsvSftpConnectorIT {
         sftp.start();
         sftp.copyFileToContainer(MountableFile.forClasspathResource("/csv/customers-simple.csv"),
             "/home/" + USER + "/upload/customers.csv");
-        System.setProperty("C1B_SFTP_PASSWORD", PASS);   // SftpFileSourceFactory: getProperty → getenv
 
         // Seed incremental test: first file for c1b_sftp_inc connector (customers-simple.csv = 3 rows).
         sftp.copyFileToContainer(MountableFile.forClasspathResource("/csv/customers-simple.csv"),
@@ -77,8 +80,13 @@ class CsvSftpConnectorIT {
 
     @AfterAll
     static void stop() {
-        System.clearProperty("C1B_SFTP_PASSWORD");
         if (sftp != null) sftp.stop();
+    }
+
+    /** The connector's secrets, in tenant 1's lm secret registry: the only place a `*_env` reference resolves (#2000). */
+    @BeforeEach
+    void holdTheSecrets() {
+        testSecrets.put(1L, "C1B_SFTP_PASSWORD", PASS);
     }
 
     private long scalar(String sql) {

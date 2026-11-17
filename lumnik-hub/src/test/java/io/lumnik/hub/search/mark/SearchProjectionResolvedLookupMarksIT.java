@@ -2,6 +2,7 @@ package io.lumnik.hub.search.mark;
 
 import io.agroal.api.AgroalDataSource;
 import io.lumnik.hub.entity.EntityRegistry;
+import io.lumnik.hub.tenant.DeploymentTenancy;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
@@ -57,7 +58,7 @@ class SearchProjectionResolvedLookupMarksIT {
         String products = "t_rm_p_" + n, lookup = "t_rm_c_" + n, entity = "ResMarks" + n;
         createTable(adminDs, products, "pid text, cid text, pname text");
         createTable(adminDs, lookup, "cid text, cname text");
-        yaml(tenant).body(resolutionJoinEntityYaml(entity, products, lookup, "category_name"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(resolutionJoinEntityYaml(entity, products, lookup, "category_name"))
             .post("/api/entities/apply").then().statusCode(200);
         String index = unique("res-marks");
         yaml(tenant).body(searchIndex(index, entity, "product_name")).post("/api/search-indexes/apply")
@@ -132,7 +133,7 @@ class SearchProjectionResolvedLookupMarksIT {
         String products = "t_rm_sc_p_" + n, lookup = "t_rm_sc_c_" + n, entity = "ResScale" + n;
         createTable(adminDs, products, "pid text, cid bigint, pname text");
         createTable(adminDs, lookup, "cid numeric(18,4), cname text");
-        yaml(tenant).body(resolutionJoinEntityYaml(entity, products, lookup, "category_name"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(resolutionJoinEntityYaml(entity, products, lookup, "category_name"))
             .post("/api/entities/apply").then().statusCode(200);
         String index = unique("res-scale");
         yaml(tenant).body(searchIndex(index, entity, "product_name")).post("/api/search-indexes/apply")
@@ -161,7 +162,7 @@ class SearchProjectionResolvedLookupMarksIT {
         createTable(adminDs, s1, "pid text, cid text, pname text");
         createTable(adminDs, s2, "pid text, cid text, pname text");
         createTable(adminDs, lookup, "cid text, cname text");
-        yaml(tenant).body(resolutionJoinTwoSourceEntityYaml(entity, s1, s2, lookup, "category_name"))
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(resolutionJoinTwoSourceEntityYaml(entity, s1, s2, lookup, "category_name"))
             .post("/api/entities/apply").then().statusCode(200);
         String index = unique("res-two-src");
         yaml(tenant).body(searchIndex(index, entity, "product_name")).post("/api/search-indexes/apply")
@@ -233,8 +234,7 @@ class SearchProjectionResolvedLookupMarksIT {
         String products = "t_rm_iso_p_" + n, lookup = "t_rm_iso_c_" + n, entity = "ResIso" + n;
         createTable(adminDs, products, "pid text, cid text, pname text");
         createTable(adminDs, lookup, "cid text, cname text");
-        yaml(t1).body(resolutionJoinEntityYaml(entity, products, lookup, "category_name")).post("/api/entities/apply").then().statusCode(200);
-        yaml(t2).body(resolutionJoinEntityYaml(entity, products, lookup, "category_name")).post("/api/entities/apply").then().statusCode(200);
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(resolutionJoinEntityYaml(entity, products, lookup, "category_name")).post("/api/entities/apply").then().statusCode(200);
         String i1 = unique("res-iso-1"), i2 = unique("res-iso-2");
         yaml(t1).body(searchIndex(i1, entity, "product_name")).post("/api/search-indexes/apply").then().statusCode(200);
         yaml(t2).body(searchIndex(i2, entity, "product_name")).post("/api/search-indexes/apply").then().statusCode(200);
@@ -267,7 +267,7 @@ class SearchProjectionResolvedLookupMarksIT {
         String products = "t_rm_pg_p_" + n, lookup = "t_rm_pg_c_" + n, entity = "ResPaging" + n;
         createTable(adminDs, products, "pid text, cid text, pname text");
         createTable(adminDs, lookup, "cid text, cname text");
-        yaml(tenant).body(resolutionJoinEntityYaml(entity, products, lookup, "category_name")).post("/api/entities/apply").then().statusCode(200);
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body(resolutionJoinEntityYaml(entity, products, lookup, "category_name")).post("/api/entities/apply").then().statusCode(200);
         String index = unique("res-paging");
         yaml(tenant).body(searchIndex(index, entity, "product_name")).post("/api/search-indexes/apply").then().statusCode(200);
         UUID[] entities = new UUID[5];
@@ -302,7 +302,7 @@ class SearchProjectionResolvedLookupMarksIT {
         String products = "t_rm_dt_" + n, lookup = "t_rm_cal_" + n, entity = "ResDay" + n;
         createTable(adminDs, products, "pid text, source timestamptz, pname text");
         createTable(adminDs, lookup, "day date, cname text");
-        yaml(tenant).body("kind: Entity\nname: " + entity + "\nscopes: [lk]\nsources:\n"
+        yaml(DeploymentTenancy.HUBADMIN_TENANT).body("kind: Entity\nname: " + entity + "\nscopes: [lk]\nsources:\n"
                 + "  - table: " + products + "\n    map: { pid: product_id, source: due, pname: product_name }\n"
                 + "resolution:\n  identity: { " + products + ": product_id }\n  cascade:\n"
                 + "    - id: by-name\n      exact: { fields: [product_name] }\n"

@@ -1,7 +1,7 @@
 package io.lumnik.hub.webhook;
 
 import io.lumnik.common.security.RequiresPermission;
-import io.lumnik.hub.api.TenantWide;
+import io.lumnik.common.security.TenantWide;
 import io.lumnik.hub.tenant.RequireTenant;
 import io.lumnik.identity.KnownKeysOnly;
 import io.quarkus.resteasy.reactive.jackson.CustomDeserialization;

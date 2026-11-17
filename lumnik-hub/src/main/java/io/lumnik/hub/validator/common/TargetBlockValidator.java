@@ -19,11 +19,11 @@ public final class TargetBlockValidator {
      */
     public static ConfigDef indexEntry() {
         return new ConfigDef()
-            .require("columns", Type.LIST, Importance.HIGH, "Columns of the index, in order")
+            .require("columns", Type.LIST, Importance.HIGH, "Columns of the index, in order, after tenant_id")
                 .nonEmpty()
                 .eachItemIs("a non-blank string", JsonNodes::nonBlank)
                 .hint("e.g. columns: [email] or [bpartner_id, dateordered]")
-            .optional("unique", Type.BOOLEAN, Importance.LOW, "Unique index (default false)", false);
+            .optional("unique", Type.BOOLEAN, Importance.LOW, "Unique within the tenant (default false)", false);
     }
 
     public static ConfigDef configDef() {

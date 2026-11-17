@@ -36,7 +36,7 @@ public final class ResolvableManifests {
    *  {@code loadFromDb()}, which needs a real admin datasource a unit test never wires. */
   public static EntityRegistry registryServing(EntityManifest m) {
     return new EntityRegistry() {
-      @Override public EntityManifest findReloadingIfMissing(String name) { return m; }
+      @Override public EntityManifest findReloadingIfMissing(long tenant, String name) { return m; }
     };
   }
 }

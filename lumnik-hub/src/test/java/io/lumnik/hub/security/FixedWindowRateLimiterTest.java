@@ -47,12 +47,24 @@ class FixedWindowRateLimiterTest {
 
     @Test
     void sustained_over_limit_burst_stays_rejected() {
-        // The counter saturates at rpm+1 — a burst must never wrap it back under the limit.
+        // A refusal does not count — a burst must never wrap the counter back under the limit.
         long t = 6_000_000_000L;
         assertTrue(limiter.tryAcquire("chat|7", 1, t).allowed());
         for (int i = 0; i < 10_000; i++) {
             assertFalse(limiter.tryAcquire("chat|7", 1, t).allowed());
         }
+    }
+
+    @Test
+    void a_released_slot_is_one_a_refused_burst_did_not_eat() {
+        // #1996: refusals leave the count alone, so a release after them gives back the granted slot itself.
+        long t = 6_000_000_000L;
+        assertTrue(limiter.tryAcquire("chat|8", 2, t).allowed());
+        assertTrue(limiter.tryAcquire("chat|8", 2, t).allowed());
+        for (int i = 0; i < 5; i++) assertFalse(limiter.tryAcquire("chat|8", 2, t).allowed());
+        limiter.release("chat|8", t);
+        assertTrue(limiter.tryAcquire("chat|8", 2, t).allowed());
+        assertFalse(limiter.tryAcquire("chat|8", 2, t).allowed());
     }
 
     @Test

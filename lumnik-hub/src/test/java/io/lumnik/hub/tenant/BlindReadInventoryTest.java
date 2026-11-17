@@ -79,7 +79,7 @@ class BlindReadInventoryTest {
       Map.entry("EntityConflictsResource.list",
           "opens its own transaction for each entity's read; one shared transaction let one entity's "
               + "failed statement abort every later entity's read (#929)"),
-      Map.entry("HookOverrideResource.upsert", "HookOverrideStore.setScript carries the transaction"),
+      Map.entry("HookOverrideResource.upsert", "refuses every request (#2011): it reads and writes nothing"),
       Map.entry("HookOverrideResource.delete", "HookOverrideStore.deleteOverride carries the transaction"),
       Map.entry("OrgResource.create",
           "opens its own transaction for the checks; the geocoder's HTTP call stays outside one"),

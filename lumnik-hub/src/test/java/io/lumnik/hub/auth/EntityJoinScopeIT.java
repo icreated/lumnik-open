@@ -1,6 +1,7 @@
 package io.lumnik.hub.auth;
 
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.hub.testsupport.RegisteredTables;
 import io.lumnik.hub.testsupport.YamlBody;
 import io.quarkus.agroal.DataSource;
 import io.quarkus.test.junit.QuarkusTest;
@@ -48,6 +49,8 @@ class EntityJoinScopeIT {
   @BeforeEach
   void seedAndApply() throws Exception {
     try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
+      st.execute("DELETE FROM connector.entity_manifest WHERE name = 'peek'");
+      st.execute("DROP VIEW IF EXISTS connector.\"v_peek\"");
       st.execute("DROP VIEW IF EXISTS connector.\"v_scopejoinproduct\"");
       st.execute("DROP TABLE IF EXISTS connector.t_scopejoin_p");
       st.execute("DROP TABLE IF EXISTS connector.t_scopejoin_c");
@@ -57,6 +60,8 @@ class EntityJoinScopeIT {
       st.execute("INSERT INTO connector.t_scopejoin_c (cid, name) VALUES ('C1', 'Pumps')");
       st.execute("INSERT INTO connector.t_scopejoin_p (pid, cid) VALUES ('P1', 'C1')");
     }
+    RegisteredTables.register(adminDs, 1L, "t_scopejoin_p");
+    RegisteredTables.register(adminDs, 1L, "t_scopejoin_c");
     given().config(YamlBody.CONFIG)
         .header("Authorization", "Bearer " + NoBypassOidcProfile.token(Set.of("lm_admin"), null))
         .contentType("application/yaml").body(MANIFEST)
@@ -69,6 +74,30 @@ class EntityJoinScopeIT {
         .get("/api/entities/scopejoinproduct")
         .then().statusCode(403)
         .body("error", equalTo("scope not granted"));
+  }
+
+  /**
+   * #2042: an admin bound to another scope reading this Entity's view is refused as if it were not applied —
+   * never told that it exists, nor its scopes.
+   */
+  @Test
+  void an_entity_out_of_the_callers_scopes_reads_as_not_applied() {
+    String peek = """
+        kind: Entity
+        name: Peek
+        scopes: [magasin]
+        match: [pid]
+        sources:
+          - table: v_scopejoinproduct
+            map: { product_id: pid }
+        """;
+    given().config(YamlBody.CONFIG)
+        .header("Authorization", "Bearer " + NoBypassOidcProfile.token(Set.of("lm_admin", "scope:magasin"), null))
+        .contentType("application/yaml").body(peek)
+        .post("/api/entities/apply")
+        .then().statusCode(409)
+        .body("error", equalTo("source table v_scopejoinproduct is entity scopejoinproduct's view, and no entity "
+            + "scopejoinproduct is applied: apply entity scopejoinproduct first, then this one"));
   }
 
   @Test

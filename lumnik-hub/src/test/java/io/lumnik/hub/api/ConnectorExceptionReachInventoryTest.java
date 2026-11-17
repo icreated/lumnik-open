@@ -86,6 +86,10 @@ class ConnectorExceptionReachInventoryTest {
       // RestEndpointReader raises it inside a run, only when the engine's run scope reports a cancel;
       // ChunkExecutor turns it into ChunkResult.Cancelled (#1444). A scope with no run never reports one
       "RunCancelledException", Verdict.NO_GLOBAL_MAPPER,
+      // RestHttpClient.execute raises it for a body past the cap (#2002): a run turns it into its
+      // failure text, and the doors that call the client name it themselves — the preflight's
+      // verdict, the probe's and from-openapi's 502 (their ConnectorException catch)
+      "ResponseTooLargeException", Verdict.NO_GLOBAL_MAPPER,
       // a complete-looking vestige: declared, never raised. Not dead weight this guard may remove on
       // its own, but weight a reader should be told about
       "MappingException", Verdict.NEVER_THROWN);
