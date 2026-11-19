@@ -113,8 +113,9 @@ transport:
 - **A path that leaves the folder fails the run**: `a local path must lie inside its tenant's
   folder of the root: lumnik.csv.local-root/<tenant id>`. `..` and symbolic links are followed
   before the check, so neither leaves the folder. A file in it that links outside is not listed.
-- **The folder is on the hub's filesystem.** The self-host stack mounts nothing: mount a volume,
-  use `sftp`/`s3`, or upload one file with [`lm csv ingest`](csv-quick-look.md).
+- **The folder is on the hub's filesystem.** On the self-host stack the hub can write in `/tmp`
+  only, a volume that `down.sh --volumes` deletes: copy the files under `/tmp`, as above, or mount a
+  volume of your own. Or use `sftp`/`s3`, or upload one file with [`lm csv ingest`](csv-quick-look.md).
 - **Glob**: `*` and `?`, in the **final filename segment** only. `**` does not reach into
   subfolders.
 - **A glob in a folder name fails the run**: `imports/*/x.csv` gives

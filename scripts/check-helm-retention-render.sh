@@ -15,7 +15,7 @@ cd "$(dirname "$0")/.."
 
 REQUIRED=(--set secrets.postgresSuperuserPassword=x --set secrets.masterKey=x --set secrets.cryptoKey=x
           --set secrets.entityResolutionHmacSecret=x --set secrets.appDbPassword=x
-          --set secrets.adminDbPassword=x --set secrets.readonlyDbPassword=x --set secrets.keycloakAdminPassword=x)
+          --set secrets.adminDbPassword=x --set secrets.readonlyDbPassword=x --set secrets.keycloakAdminPassword=x --set secrets.keycloakDbPassword=x)
 
 fail=0
 # check <name> <env var> <expected value, or "absent"> [helm args ...]

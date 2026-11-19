@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Back up the self-host stack into backups/<UTC-stamp>/:
 #   lumnik.dump        — hot pg_dump -Fc of the hub database (no downtime)
-#   keycloak-data.tgz  — cold copy of Keycloak's dev-file store (brief keycloak stop:
-#                        H2 holds a file lock while running, and the admin API cannot
-#                        export password hashes — a live export would lose credentials)
-# The ~15s Keycloak stop only blocks NEW logins; already-issued tokens keep working.
+#   keycloak.dump      — hot pg_dump -Fc of Keycloak's database: realms, users, password
+#                        hashes, signing keys (#1997: Keycloak keeps them in the stack's
+#                        PostgreSQL; no downtime either)
 # NOT covered here: .env (the master key!) — back it up separately and off-machine.
 set -euo pipefail
 umask 077  # #1998: a backup is every tenant's data and Keycloak's password hashes and signing keys
@@ -33,35 +32,14 @@ DIR="backups/$STAMP"
 mkdir -p "$DIR"
 chmod -R go= backups   # snapshots taken before #1998 were written under the caller's umask
 
-echo "==> pg_dump (hot) -> $DIR/lumnik.dump"
-"${COMPOSE[@]}" exec -T postgres sh -c 'pg_dump -U "${POSTGRES_USER:-lumnik}" -Fc "${POSTGRES_DB:-lumnik}"' > "$DIR/lumnik.dump"
-[[ -s "$DIR/lumnik.dump" ]] || { echo "!! pg_dump produced an empty file" >&2; exit 1; }
-
-if [[ "$SKIP_KC" -eq 0 ]]; then
-  echo "==> keycloak store (brief stop: new logins fail ~15s, issued tokens keep working)"
-  # Guarantee keycloak comes back even if the stop/copy fails mid-window (set -e
-  # would otherwise exit with auth down until someone notices). Armed BEFORE the
-  # stop so there is no unguarded window.
-  trap '"${COMPOSE[@]}" start keycloak >/dev/null 2>&1 || true' EXIT
-  "${COMPOSE[@]}" stop keycloak
-  "${COMPOSE[@]}" cp keycloak:/opt/keycloak/data "$DIR/keycloak-data"
-  # data/import holds the repo's own realm file, bind-mounted (infra/keycloak/lumnik-realm.json, in git) —
-  # reproducible, read-only in the container, and it breaks restore's write-back. Exclude it.
-  rm -rf "$DIR/keycloak-data/import"
-  "${COMPOSE[@]}" start keycloak
-  trap - EXIT
-  # Suppress macOS metadata at the SOURCE: a mac-made archive restored on a Linux
-  # host would extract AppleDouble entries as literal ._* files (GNU tar does not
-  # interpret them) and the re-stream would carry them into the store.
-  # bash 3.2 (macOS default): plain string, not an array — do not "modernize".
-  TAR_EXTRA=""
-  if tar --version 2>/dev/null | grep -q bsdtar; then
-    TAR_EXTRA="--no-xattrs --no-fflags --no-mac-metadata"
-  fi
-  # shellcheck disable=SC2086 — TAR_EXTRA is a space-separated flag list
-  tar -czf "$DIR/keycloak-data.tgz" $TAR_EXTRA -C "$DIR" keycloak-data
-  rm -rf "$DIR/keycloak-data"
-fi
+# dump_db <database>: a hot pg_dump -Fc into $DIR/<database>.dump
+dump_db() {
+  echo "==> pg_dump (hot) -> $DIR/$1.dump"
+  "${COMPOSE[@]}" exec -T postgres sh -c 'pg_dump -U "${POSTGRES_USER:-lumnik}" -Fc "$1"' _ "$1" > "$DIR/$1.dump"
+  [[ -s "$DIR/$1.dump" ]] || { rm -f "$DIR/$1.dump"; echo "!! pg_dump produced an empty file" >&2; exit 1; }
+}
+dump_db lumnik
+[[ "$SKIP_KC" -eq 1 ]] || dump_db keycloak
 
 # Retention: keep the newest $KEEP backup dirs (portable — no GNU head -n -N).
 COUNT="$(ls -1d backups/*/ 2>/dev/null | wc -l | tr -d ' ')"

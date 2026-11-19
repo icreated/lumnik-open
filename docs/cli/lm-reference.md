@@ -42,6 +42,7 @@ exit=1
 | `lm config use-context NAME` | switch context (the default for every later command; inside `lm ui`, `:context` switches the session only) |
 | `lm config view` | print `~/.lm/config.yaml` with each credential shown as `REDACTED` — safe to paste into a ticket; `--raw` prints the tokens in clear |
 | `lm login` | OIDC **device flow**: prints a URL + code, stores tokens in the context |
+| `lm token` | prints an access token of the context, renewed when it is about to expire — for `curl` and scripts: `curl -H "Authorization: Bearer $(lm token)" …`. A token lives 5 minutes on the bundled realm: call it again for each call; `--fresh` renews it first, for a run that holds one token |
 | `lm version` | binary version |
 
 First run? The [deploy page](../deploy.md) walks through standing up a hub and pointing `lm` at it.

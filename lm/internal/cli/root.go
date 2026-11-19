@@ -32,6 +32,7 @@ func buildRootCmd() *cobra.Command {
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newConfigCmd())
 	root.AddCommand(newLoginCmd())
+	root.AddCommand(newTokenCmd())
 	root.AddCommand(newRagCmd())
 	root.AddCommand(newAskCmd())
 	root.AddCommand(newChatCmd())

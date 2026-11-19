@@ -87,9 +87,24 @@ the entity-resolution fingerprint secret (`LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET`
 database-role passwords (`LUMNIK_APP_DB_PASSWORD`, `LUMNIK_ADMIN_DB_PASSWORD`, `LUMNIK_READONLY_DB_PASSWORD`),
 and the per-install passwords for the demo realm users (`HUBADMIN_PASSWORD`, `INTEGRATOR_PASSWORD`).
 **Back `.env` up** —
-losing `LUMNIK_SECRET_MASTER_KEY` makes secrets stored by the hub unrecoverable. To pin a specific image
-version instead of the latest `main` build, set `LUMNIK_VERSION` in `.env` (e.g. `LUMNIK_VERSION=1.0.0`
-once a `hub-v*` release is tagged).
+losing `LUMNIK_SECRET_MASTER_KEY` makes secrets stored by the hub unrecoverable.
+
+`up.sh` pulls the hub image tagged `main`: in the open edition, the latest release. To upgrade only
+when you choose, pin a release in `.env`, `LUMNIK_VERSION=<version>`, and check out the same tag:
+the compose file and the hub go together.
+
+To prove an image was built by the open edition's own workflow, from its repository, at its tag:
+
+```bash
+gh attestation verify oci://ghcr.io/icreated/lumnik:<version> -R icreated/lumnik-open
+```
+
+To see how it was built and what it holds:
+
+```bash
+docker buildx imagetools inspect ghcr.io/icreated/lumnik:<version> --format '{{ json .Provenance }}'
+docker buildx imagetools inspect ghcr.io/icreated/lumnik:<version> --format '{{ json .SBOM }}'
+```
 
 If `.env` is gone but the stack's volumes are still there, `up.sh` stops and writes nothing. The
 volumes keep the passwords of the `.env` that created them. Put that `.env` back from your backup, or
@@ -117,7 +132,7 @@ against the database volume and corrects `.env` if they differ. No action needed
 
 ## Backup & restore
 
-Nightly-able backup (hot pg_dump + Keycloak store) and restore, including onto a
+Nightly-able backup (hot pg_dump of the hub's database and Keycloak's) and restore, including onto a
 fresh machine: `backup.sh` / `restore.sh` here — full runbook at
 [docs/operations/backup-restore.md](../../docs/operations/backup-restore.md).
 Back up `.env` separately: it holds the master key.

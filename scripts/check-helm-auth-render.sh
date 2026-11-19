@@ -12,7 +12,7 @@ cd "$(dirname "$0")/.."
 
 REQUIRED=(--set secrets.postgresSuperuserPassword=x --set secrets.masterKey=x --set secrets.cryptoKey=x
           --set secrets.entityResolutionHmacSecret=x --set secrets.appDbPassword=x
-          --set secrets.adminDbPassword=x --set secrets.readonlyDbPassword=x --set secrets.keycloakAdminPassword=x)
+          --set secrets.adminDbPassword=x --set secrets.readonlyDbPassword=x --set secrets.keycloakAdminPassword=x --set secrets.keycloakDbPassword=x)
 
 render() { helm template t deploy/helm/lumnik "${REQUIRED[@]}" "$@" 2>&1; }
 

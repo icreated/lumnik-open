@@ -1,7 +1,8 @@
 # TLS façade — one https origin for the self-host stack
 
 Caddy in front of everything: the hub (API + the `/app/` PWA) at `/`, Keycloak
-path-proxied under `/realms/*` + `/resources/*`. One origin means no mixed content,
+path-proxied under `/realms/lumnik` and `/realms/lumnik/*`, + `/resources/*` (no other realm, `master`
+included). One origin means no mixed content,
 no CORS, and **one token issuer for every device**.
 
 > **Exposure:** unlike the base compose (loopback-only), this overlay binds 443/80 on

@@ -7,12 +7,15 @@ the runner uses the `grafana/k6` Docker image.
 ## Quickstart (against a running self-host stack)
 
 ```bash
-./loadtest/run.sh smoke.js                 # prove the harness: auth + routes, ~10 s
-MAX_VUS=25 ./loadtest/run.sh read-mix.js   # the sizing ramp, ~2.5 min
+lm login                                  # once: lm holds your session (lm 1.10.0 or later)
+./loadtest/run.sh smoke.js                # prove the harness: auth + routes, ~10 s
+MAX_VUS=25 ./loadtest/run.sh read-mix.js  # the sizing ramp, ~2.5 min
 ```
 
-`run.sh` mints the Bearer token as user `integrator`, with the password from the repo-root `.env`.
-For another stack, set `K6_USER` / `K6_PASSWORD` / `KC_URL` / `BASE_URL`.
+The shipped clients take no password: `run.sh` takes its token from `lm token --fresh`, renewed
+when the run starts, so the run gets its whole 5 minutes. `K6_TOKEN` passes one of your own. On a
+throwaway realm (the Search sizing stack, a kind cluster), `K6_USER` / `K6_PASSWORD` / `KC_URL` mint
+one by password on `lumnik-smoke`, a client only those realms carry. Set `BASE_URL` for another hub.
 
 ## What is measured — and what is not
 
@@ -129,10 +132,12 @@ trigger: decide on the contention you observe and on your latency and freshness 
 ## Caveats
 
 - **Localhost numbers size only localhost.** Size on the target hardware, over the users' network.
-- **Tokens from the bundled realm live 1 hour** (`accessTokenLifespan: 3600`): enough for every
-  scenario here except a long Search tier. The Search orchestrator renews its own token every
-  25 minutes (`SZ_TOKEN_REFRESH_S` lowers it); phase C's k6 load does not, so a catch-up over an
-  hour ends in 401s and the phase is reported failed. No token-refresh loop ships for other soak tests.
+- **Tokens from the bundled realm live 5 minutes** (`accessTokenLifespan: 300`), and `run.sh` mints
+  one per run: keep a run under 5 minutes (read-mix's default stages take under 3; a larger `STAGE`
+  ends in 401s). The Search sizing stack runs its own throwaway realm with one-hour tokens; its
+  orchestrator renews every 25 minutes (`SZ_TOKEN_REFRESH_S` lowers it), and phase C's k6 load does
+  not, so a catch-up over an hour ends in 401s and the phase is reported failed. No token-refresh
+  loop ships for other soak tests.
 - **Thresholds** (`P95_MS`, default 500 ms) are regression gates, not SLOs; tune them per environment.
 - **`ONLY=name,name`** narrows the mix explicitly; the default is always the full mix, so a missing
   endpoint goes red.

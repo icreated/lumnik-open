@@ -79,7 +79,7 @@ if [[ ! -f .env ]]; then
   [[ -f .env.example ]] || { echo "!! .env.example not found — run this from the lumnik repo (the template is at the root)" >&2; exit 1; }
   umask 077  # any file created below (.env.tmp holding the real secrets) is owner-only from the start
   cp .env.example .env
-  for key in POSTGRES_PASSWORD KEYCLOAK_ADMIN_PASSWORD LUMNIK_SECRET_MASTER_KEY LUMNIK_CRYPTO_SECRET_KEY LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET HUBADMIN_PASSWORD INTEGRATOR_PASSWORD LUMNIK_APP_DB_PASSWORD LUMNIK_ADMIN_DB_PASSWORD LUMNIK_READONLY_DB_PASSWORD; do
+  for key in POSTGRES_PASSWORD KEYCLOAK_ADMIN_PASSWORD LUMNIK_SECRET_MASTER_KEY LUMNIK_CRYPTO_SECRET_KEY LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET HUBADMIN_PASSWORD INTEGRATOR_PASSWORD LUMNIK_APP_DB_PASSWORD LUMNIK_ADMIN_DB_PASSWORD LUMNIK_READONLY_DB_PASSWORD KEYCLOAK_DB_PASSWORD; do
     secret="$(openssl rand -base64 32)"
     # fill the empty `KEY=` line; awk prints the secret literally (no shell/sed metachar issues)
     awk -v k="$key" -v v="$secret" 'BEGIN{FS=OFS="="} $1==k && $2=="" {print k"="v; next} {print}' .env > .env.tmp
@@ -94,7 +94,7 @@ else
   echo "==> using existing .env"
   # Older .env files predate the per-install hubadmin/integrator passwords (C1, extended
   # 2026-08-11 to integrator) and the entity-resolution HMAC secret — grow them in place.
-  for key in LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET HUBADMIN_PASSWORD INTEGRATOR_PASSWORD LUMNIK_APP_DB_PASSWORD LUMNIK_ADMIN_DB_PASSWORD LUMNIK_READONLY_DB_PASSWORD; do
+  for key in LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET HUBADMIN_PASSWORD INTEGRATOR_PASSWORD LUMNIK_APP_DB_PASSWORD LUMNIK_ADMIN_DB_PASSWORD LUMNIK_READONLY_DB_PASSWORD KEYCLOAK_DB_PASSWORD; do
     if ! grep -q "^${key}=..*" .env; then
       umask 077
       grep -q "^${key}=" .env || printf '%s=\n' "$key" >> .env
@@ -119,32 +119,25 @@ if [[ "$SEARCH_CLUSTER" -eq 1 ]]; then
   search_cluster_prepare
 fi
 
-# 2) start the stack
-if [[ "$BUILD" -eq 1 ]]; then
-  echo "==> building the hub image from source and starting the stack"
-  "${COMPOSE[@]}" up -d --build
-else
-  echo "==> pulling images and starting the stack"
+# 2) start the stack: PostgreSQL first, so Keycloak finds its database — and, on an install that kept Keycloak in an
+# H2 file, its realm moved there (#1997) — before it starts.
+if [[ "$BUILD" -eq 0 ]]; then
+  echo "==> pulling images"
   "${COMPOSE[@]}" pull || { echo "!! image pull failed — if the ghcr image is private run 'docker login ghcr.io', or use --build to compile from source" >&2; exit 1; }
-  "${COMPOSE[@]}" up -d
 fi
-
-# Align the live DB roles to .env on every run (P8): first boot's init script already
-# used these values (no-op re-set); an older install rotates from the historic
-# defaults the moment the keys land in .env. Idempotent — safe every run. Rotation
-# is the same gesture: new value in .env, re-run up.sh. SQL rides stdin (never argv);
-# values are openssl base64 (no quotes to escape).
-echo "==> aligning database role passwords to .env"
+echo "==> starting PostgreSQL"
+"${COMPOSE[@]}" up -d postgres
 pg_cid="$("${COMPOSE[@]}" ps -q postgres)"
 env_val() { grep "^$1=" .env | cut -d= -f2-; }
 # Superuser name: the VOLUME outranks the claim. The name is frozen into PGDATA at first
 # init; .env can be silent (older installs) or WRONG (a regenerated .env stamps 'lumnik'
 # over a pre-rename volume — deleting .env on a living stack did exactly that). So the
 # claimed name is verified against the running database, and discovery runs whenever the
-# claim is absent or false. pg_isready ignores auth, so it waits under any name.
+# claim is absent or false. pg_isready ignores auth, so it waits under any name. Over TCP: the server the image runs
+# its init scripts on listens on its socket only, and goes away once they are done.
 pg_super="$(env_val POSTGRES_USER)" || [ $? -eq 1 ]
 for _ in $(seq 1 30); do
-  docker exec "$pg_cid" pg_isready -U "${pg_super:-lumnik}" -d lumnik >/dev/null 2>&1 && break
+  docker exec "$pg_cid" pg_isready -h 127.0.0.1 -U "${pg_super:-lumnik}" -d lumnik >/dev/null 2>&1 && break
   sleep 2
 done
 super_works() { docker exec "$pg_cid" psql -U "$1" -d lumnik -tAc 'SELECT 1' >/dev/null 2>&1; }
@@ -164,6 +157,38 @@ if [[ -z "$pg_super" ]] || ! super_works "$pg_super"; then
   chmod 600 .env
   echo "    discovered bootstrap superuser '$pg_super' from the volume; recorded in .env"
 fi
+docker exec -e POSTGRES_USER="$pg_super" "$pg_cid" bash /docker-entrypoint-initdb.d/03-keycloak.sh \
+  || { echo "!! could not create Keycloak's database: Keycloak was not started; inspect: docker exec -it $pg_cid psql -U $pg_super lumnik" >&2; exit 1; }
+# shellcheck source=deploy/selfhost/volumes.sh
+source deploy/selfhost/volumes.sh
+# shellcheck source=deploy/selfhost/keycloak-h2.sh
+source deploy/selfhost/keycloak-h2.sh
+move_keycloak_off_h2
+if [[ "$BUILD" -eq 1 ]]; then
+  echo "==> building the hub image from source and starting the stack"
+  "${COMPOSE[@]}" up -d --build
+else
+  echo "==> starting the stack"
+  "${COMPOSE[@]}" up -d
+fi
+# The TLS façade reads deploy/tls/Caddyfile at start only, and `up -d` leaves a running Caddy as it is when the file
+# alone changed: reload it, without a cut (#1997).
+if [[ " ${COMPOSE[*]} " == *"docker-compose.tls.yml "* ]]; then
+  if reload_out="$("${COMPOSE[@]}" exec -T caddy caddy reload --config /etc/caddy/Caddyfile 2>&1)"; then
+    echo "    TLS façade: Caddyfile reloaded"
+  else
+    # Caddy keeps serving the file it had: say why, and never restart it on a file it refused.
+    echo "$reload_out" | tail -n 3 >&2
+    echo "  !! the TLS façade kept its previous Caddyfile: fix deploy/tls/Caddyfile, then re-run this script" >&2
+  fi
+fi
+
+# Align the live DB roles to .env on every run (P8): first boot's init script already
+# used these values (no-op re-set); an older install rotates from the historic
+# defaults the moment the keys land in .env. Idempotent — safe every run. Rotation
+# is the same gesture: new value in .env, re-run up.sh. SQL rides stdin (never argv);
+# values are openssl base64 (no quotes to escape).
+echo "==> aligning database role passwords to .env"
 {
   printf "ALTER ROLE lumnik_app PASSWORD '%s';\n"      "$(env_val LUMNIK_APP_DB_PASSWORD)"
   printf "ALTER ROLE lumnik_admin PASSWORD '%s';\n"    "$(env_val LUMNIK_ADMIN_DB_PASSWORD)"
@@ -181,7 +206,10 @@ docker exec -i "$pg_cid" psql -q -v ON_ERROR_STOP=1 -U "$pg_super" -d lumnik \
   && echo "    grants/schemas/extensions aligned (02-extensions.sql, idempotent)" \
   || echo "  !! grants alignment failed — ingestion may hit 'permission denied', and Ask stays closed until the readonly role is hardened (docs/security/rls.md#what-the-read-only-role-cannot-call); inspect: docker exec -it $pg_cid psql -U $pg_super lumnik" >&2
 
-# The realm's user profile on an older install (#1997): declare_admin_only_attributes.
+# The realm's user profile, token lifespan and password grants on an older install (#1997):
+# declare_admin_only_attributes, shorten_access_tokens, close_password_grants.
+# shellcheck source=deploy/selfhost/bearer.sh
+source deploy/selfhost/bearer.sh
 # shellcheck source=deploy/selfhost/realm.sh
 source deploy/selfhost/realm.sh
 
@@ -250,7 +278,7 @@ set_realm_user_password() {
   for name in $candidates; do
     # Non-fatal like the token call above — a lookup failure must keep the
     # warn-don't-abort contract (set -e would otherwise kill a healthy stack).
-    uid="$(curl -fsS --connect-timeout 3 --max-time 10 -H "Authorization: Bearer $tok" \
+    uid="$(curl -fsS --connect-timeout 3 --max-time 10 -H @<(bearer "$tok") \
         "http://localhost:8180/admin/realms/lumnik/users?username=$name&exact=true" 2>/dev/null \
       | python3 -c 'import sys,json;u=json.load(sys.stdin);print(u[0]["id"] if u else "")' 2>/dev/null)" || true
     [[ -n "$uid" ]] && break
@@ -260,7 +288,7 @@ set_realm_user_password() {
   fi
   PW="$pw" python3 -c 'import json,os;print(json.dumps({"type":"password","temporary":False,"value":os.environ["PW"]}))' \
     | curl -fsS --connect-timeout 3 --max-time 10 -X PUT "http://localhost:8180/admin/realms/lumnik/users/$uid/reset-password" \
-        -H "Authorization: Bearer $tok" -H "Content-Type: application/json" -d @- \
+        -H @<(bearer "$tok") -H "Content-Type: application/json" -d @- \
     && echo "  $name: per-install password set ($pw_key in .env)" \
     || echo "  !! $name password set failed — stays locked (no password). If Keycloak refused it, mind the realm's password policy (a new install asks for 12 characters at least, not the username nor the email: $pw_key in .env)"
 }
@@ -276,6 +304,10 @@ for _ in $(seq 1 60); do
     with_kc_token "integrator stays locked (no password)" set_realm_user_password "integrator" INTEGRATOR_PASSWORD
     with_kc_token "tenant_id unchecked (docs/operations/upgrade.md#the-bundled-keycloak-realm-is-stricter)" \
       declare_admin_only_attributes http://localhost:8180
+    with_kc_token "access tokens unchecked (docs/operations/upgrade.md#an-access-token-lives-5-minutes)" \
+      shorten_access_tokens http://localhost:8180
+    with_kc_token "password grants unchecked (docs/operations/upgrade.md#the-public-clients-take-no-password)" \
+      close_password_grants http://localhost:8180
     echo ""
     echo "  Hub:       http://localhost:8080   (health: ./deploy/selfhost/health.sh)"
     echo "  Keycloak:  http://localhost:8180/realms/lumnik"

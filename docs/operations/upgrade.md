@@ -162,6 +162,147 @@ serve, beside the roles they hold ([Make someone superadmin](../security/identit
 A view is checked against that tenant's data, so the bundled `hubadmin`, in its own tenant, is not the account for it.
 With your own IdP, create the role and grant it.
 
+### The TLS proxy serves the lumnik realm only { #the-tls-proxy-serves-the-lumnik-realm-only }
+
+The TLS proxy passed every Keycloak realm, `master` included: anyone reaching it could try the
+admin's password on `master`'s token endpoint. It now passes the `lumnik` realm only (`/realms/lumnik` and
+`/realms/lumnik/*`); any other realm answers `404`.
+
+- **Nothing changes for users, `lm` or the PWA:** they sign in on `lumnik`.
+- **The Keycloak admin console** stays on `http://localhost:8180`, or an SSH tunnel to it, as
+  before.
+
+**The gesture:** re-run `./deploy/selfhost/up.sh`. It reloads the proxy and says so:
+
+```text
+    TLS façade: Caddyfile reloaded
+```
+
+### Keycloak runs in production mode on PostgreSQL { #keycloak-runs-in-production-mode-on-postgresql }
+
+The self-host Keycloak ran in development mode, with its realms in a file of its own. It now runs
+in production mode, version 26.8.2, and keeps its realms in the stack's PostgreSQL, in a database
+named `keycloak`.
+
+- **`up.sh` moves your realm** at its first run: the `lumnik` realm, its users, their passwords
+  and their attributes. It says so:
+
+    ```text
+    ==> moving Keycloak's realm from its H2 file to PostgreSQL (the volume lumnik_selfhost_kc is kept)
+        realm lumnik moved, with its users and their passwords; every session ends: sign in again (lm login)
+    ```
+
+- **Every session ends.** Sign in again: `lm login`, and in the PWA.
+- **The `master` realm starts anew.** Its admin is `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD`
+  from `.env`. A change you made by hand in `master` is not moved.
+- **The old file stays**, in the volume `<folder>_selfhost_kc`. Nothing uses it any more. Once the
+  new Keycloak has served for a while, remove it: `docker volume rm lumnik_selfhost_kc`.
+- **If that file changes, `up.sh` moves it again**, over the realm in PostgreSQL: restoring an
+  older snapshot into the volume does that. What you changed in Keycloak since is lost.
+- **Keycloak hands out `http://localhost:8180` addresses only.** A port you opened to other
+  devices no longer signs them in: put the [TLS proxy](../deploy.md#one-https-origin-the-tls-proxy) in front.
+- **A backup now holds `keycloak.dump`.** `restore.sh` refuses a snapshot taken before this
+  release: [Backup & Restore](backup-restore.md#troubleshooting).
+- **If the move fails, Keycloak does not start**, and nothing else changed. The message says why
+  and how to see more.
+
+**The gesture:** re-run `./deploy/selfhost/up.sh`, then `lm login`.
+
+**Helm, with the bundled Keycloak (`auth.mode=oidc`):** Keycloak runs in production mode too, and
+keeps its realm in the release's PostgreSQL. Its first start imports the realm ConfigMap; from then
+on, restarting Keycloak no longer re-reads it. Users and changes made in the console stay.
+
+1. Refresh the two ConfigMaps from this release: the realm, and the PostgreSQL init scripts.
+
+    ```bash
+    kubectl create configmap lumnik-kc-realm --from-file=infra/keycloak/lumnik-realm.json \
+      --dry-run=client -o yaml | kubectl apply -f -
+    kubectl create configmap lumnik-pg-init --from-file=infra/postgres/init/ \
+      --dry-run=client -o yaml | kubectl apply -f -
+    ```
+
+2. Add a password for Keycloak's database role to your secrets: `secrets.keycloakDbPassword`
+   (`openssl rand -base64 32`), or the key `KEYCLOAK_DB_PASSWORD` of a sealed Secret.
+3. `helm upgrade`. Keycloak waits for its database:
+   `kubectl logs deploy/<release>-keycloak -c wait-for-database` says `waiting for the keycloak database`.
+4. Create that database. With the bundled PostgreSQL:
+
+    ```bash
+    kubectl exec <release>-postgres-0 -- bash /docker-entrypoint-initdb.d/03-keycloak.sh
+    ```
+
+    With your own PostgreSQL, run `infra/postgres/init/03-keycloak.sh` as its superuser, with
+    `KEYCLOAK_DB_PASSWORD` set to the same password.
+
+Keycloak then starts and imports the realm. Every session ends: sign in again. A password set
+since Keycloak's last restart, by `up.sh` or in the console, is not carried over: set it again.
+
+- **Set `keycloak.hostname`** to Keycloak's public origin, on a deployment others reach. Without
+  it, the links in Keycloak's emails follow the `Host` a request sends.
+- **A later change to the bundled realm comes with its own gesture.** Refreshing the realm
+  ConfigMap no longer changes a running realm.
+
+### The public clients take no password { #the-public-clients-take-no-password }
+
+`lm-cli` no longer takes a password, like `lumnik-spa` before it. Nobody who reaches the token
+endpoint can try passwords there.
+
+- **`lm login` is unchanged:** it uses the device flow.
+- **An `lm` context first signed in by password** keeps working until its session ends. Then
+  run `lm login`.
+- **A script or a `curl` that minted a token by password** now gets
+  `{"error":"unauthorized_client"}`. Use `lm token`: it prints the token of your `lm login`
+  session, renewed when it is about to expire.
+
+    ```bash
+    curl -H "Authorization: Bearer $(lm token)" http://localhost:8080/api/platform/health
+    ```
+
+- **Postman:** a *Bearer Token* set from `lm token`, as in
+  [Test the API](../recipes/test-the-api.md#the-same-thing-in-postman).
+- **Self-host:** `./deploy/selfhost/up.sh` closes the password grant on both clients of an
+  existing realm. It says so:
+
+    ```text
+      lm-cli: password grant now closed
+    ```
+
+- **Helm:** a running Keycloak keeps the realm it imported: refresh the realm ConfigMap and
+  restart Keycloak, as in [An access token lives 5 minutes](#an-access-token-lives-5-minutes).
+- **`lm token` comes with `lm` 1.10.0.** Update `lm` first.
+
+**The gesture:** update `lm`; re-run `up.sh` (self-host) or refresh the realm (Helm); then replace
+each password mint in your scripts with `lm token`.
+
+### An access token lives 5 minutes { #an-access-token-lives-5-minutes }
+
+The bundled realm's access tokens now live 5 minutes, not an hour. A role, a scope or an account
+you disable in Keycloak stops within 5 minutes, even when the hub checks tokens locally.
+
+- **The PWA and `lm` renew by themselves**, before a call. A phone that slept wakes into the app,
+  unless it slept longer than the sign-in session's idle time (30 minutes): then it asks to sign in.
+- **A token you pass yourself is never renewed:** `lm --token` or `LUMNIK_TOKEN` in a CI job, a
+  token minted for `curl` or Postman. It lasts 5 minutes: mint another on `401`, or let `lm login`
+  hold the session.
+- **Self-host:** `./deploy/selfhost/up.sh` brings an existing realm's tokens to 5 minutes, and
+  keeps a shorter value you chose. It says so:
+
+    ```text
+      access tokens: now 5 minutes (were 3600 s)
+    ```
+
+- **Helm:** a running Keycloak keeps the realm it imported at its last start. Refresh the realm
+  ConfigMap, then restart Keycloak:
+
+    ```bash
+    kubectl create configmap lumnik-kc-realm --from-file=infra/keycloak/lumnik-realm.json \
+      --dry-run=client -o yaml | kubectl apply -f -
+    kubectl rollout restart deployment/<release>-keycloak
+    ```
+
+**The gesture:** self-host, re-run `up.sh`; Helm, the two commands above. Then mint the tokens your
+scripts pin more often.
+
 ### The bundled Keycloak realm is stricter { #the-bundled-keycloak-realm-is-stricter }
 
 A user could rewrite their own `tenant_id` from their account page once *Unmanaged attributes* was
@@ -182,11 +323,11 @@ A user could rewrite their own `tenant_id` from their account page once *Unmanag
       without representation.
     - **Authentication → Policies → Password policy:** Minimum length **12**, Not username, Not
       email.
-    - **Clients → lumnik-spa → Capability config:** untick **Direct access grants**.
 
 What changes:
 
-- **The PWA's client takes no password.** Mint test tokens with `lm-cli`, as before.
+- **The PWA's client takes no password.** `up.sh` closes it, with `lm-cli`'s
+  ([The public clients take no password](#the-public-clients-take-no-password)).
 
 ### The hub checks the address it connects to { #the-hub-judges-the-address-it-connects-to }
 
@@ -483,6 +624,45 @@ the limit.
   ships `backups/`, let that account run the backup itself.
 
 **The gesture:** read your `.env` for those three settings, then re-run `up.sh`.
+
+### The Helm chart's pods run with fewer rights { #the-helm-charts-pods-run-with-fewer-rights }
+
+- **Every pod mounts no service-account token and runs under the runtime's seccomp profile.** Every
+  container drops its Linux capabilities and gains no right. Every pod but PostgreSQL runs as a
+  non-root user. PostgreSQL's start still prepares its data as root, with five capabilities, then
+  drops to its own user: your data is untouched.
+- **The hub and PostgreSQL cannot change their own files.** The hub writes in `/tmp` only, an
+  `emptyDir` of `hub.tmpSizeLimit` (8 GiB). Raise it if a connector reads a larger file.
+- **The bundled PostgreSQL answers the hub only**, and the search cluster answers the hub only.
+  Neither opens a connection out. A NetworkPolicy refuses any other traffic into the release's pods;
+  the hub and Keycloak stay reachable on their ports.
+- **Keycloak, PostgreSQL and the search cluster have a memory limit:** `keycloak.resources`,
+  `postgresql.resources`, `search.cluster.resources`.
+
+**The gesture:** `helm upgrade` as usual. Then list what of yours reaches the release's pods from
+another pod: it is now refused.
+
+- A backup job or pgAdmin on the bundled PostgreSQL.
+- OpenSearch Dashboards or a snapshot job on the search cluster.
+- A Prometheus scraping Keycloak. The hub's metrics stay open to the cluster.
+
+Add a NetworkPolicy that lets that pod in, or run the tool with `kubectl exec` in the target pod.
+
+### The self-host containers run with fewer rights { #the-self-host-containers-run-with-fewer-rights }
+
+- **The hub, Postgres, Keycloak, the TLS façade and Mailpit gain no right they did not start
+  with**, and each one drops its Linux capabilities. Postgres keeps the five its start needs. The
+  TLS façade keeps the right to listen on 80 and 443. The search cluster (`--search-cluster`) is
+  not hardened yet.
+- **The hub, Postgres, the TLS façade and Mailpit cannot change their own files.** The hub writes
+  in `/tmp` only. `/tmp` is now a volume, `selfhost_hub_tmp`: a downloaded CSV stays on disk.
+- **A file copied into the hub outside `/tmp` is refused:**
+  `Error response from daemon: container rootfs is marked read-only`.
+
+**The gesture:** re-run `up.sh`. A `LUMNIK_CSV_LOCAL_ROOT` on a volume you mount keeps working. One
+you filled with `docker compose cp` outside `/tmp` does not: put it under `/tmp`, as in the
+[CSV guide](../connectors/csv.md), copy the files again, then
+`lm endpoint reset-cursor <connector>/<endpoint>`.
 
 ### A REST header reference must resolve { #a-rest-header-reference-must-resolve }
 

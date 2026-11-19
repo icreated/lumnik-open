@@ -183,7 +183,7 @@ Which edition you run decides the rows marked *edition* below. [Editions](../edi
 | What stops tenant A reading tenant B? | PostgreSQL Row-Level Security on every tenanted table; the request role cannot bypass it. | [RLS](rls.md) |
 | Can we plug in our own IdP? | Any OIDC issuer. Tested with Keycloak only. *Edition:* first login needs JIT provisioning, absent from lumnik Open. | [BYO IdP](byo-idp.md) |
 | Is password guessing throttled? | The shipped realm has brute-force detection on. With your own IdP it is your IdP's policy. | [Users & scopes](identity-admin.md) |
-| Does a departure cut access, and how fast? | Archive the hub row: the next request is refused. Disable in the IdP alone: a live token keeps working until it expires (1 hour on the bundled realm). | [Offboarding](offboarding.md#the-clock) |
+| Does a departure cut access, and how fast? | Archive the hub row: the next request is refused. Disable in the IdP alone: a live token keeps working until it expires (5 minutes on the bundled realm). | [Offboarding](offboarding.md#the-clock) |
 | Are stored credentials encrypted? | pgcrypto AES-256 under two keys held in `.env`. No key rotation tooling. | [Secrets at rest](rls.md#secrets-at-rest-the-master-key) |
 | Is our ingested data encrypted at rest? | **No.** Mirror tables and the RAG corpus are plaintext columns. Disk and backup encryption are your layer. | [Data at rest](rls.md#data-at-rest-what-is-encrypted-and-what-is-not) |
 | Is traffic encrypted end to end? | TLS at the edge only. Plain HTTP behind it, on your internal network. | [Data in transit](rls.md#data-in-transit-where-tls-stops) |

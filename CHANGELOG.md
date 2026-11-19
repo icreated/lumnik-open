@@ -7,6 +7,43 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.13.0 — 2026-11-19
+
+A security release on the bundled Keycloak and the deploy scripts. No database migration. `lm` 1.10.0.
+Read **Before you upgrade** first: the upgrade guide (`docs/operations/upgrade.md`) has each gesture.
+
+### Before you upgrade
+- **Keycloak runs in production mode on PostgreSQL**, version 26.8.2, on the self-host stack and on
+  Helm. Self-host: `./deploy/selfhost/up.sh` moves your realm from Keycloak's own file, with its users
+  and their passwords, and keeps the old volume. Every session ends: sign in again (`lm login`).
+  Helm: follow the four steps of the upgrade guide. The chart's Keycloak now keeps what you set in its
+  console; set `keycloak.hostname` on a deployment others reach.
+- **A self-host backup now holds `keycloak.dump`.** `restore.sh` refuses a snapshot taken before this
+  release.
+- **The public clients take no password.** A script that minted a token by password gets
+  `unauthorized_client`: use `lm token` (`lm` 1.10.0).
+- **An access token lives 5 minutes.** The PWA and `lm` renew by themselves. A token you pass yourself
+  (`LUMNIK_TOKEN`, `curl`, Postman) lasts 5 minutes.
+- **The TLS proxy passes the `lumnik` realm only.** Any other realm answers `404` there. The Keycloak
+  admin console stays on `http://localhost:8180`.
+- **The self-host containers and the Helm pods run with fewer rights**: no Linux capability unless
+  needed, read-only roots. A file copied into the hub outside `/tmp` is refused. On Helm, a
+  NetworkPolicy refuses traffic into the release's pods that is not the hub's or Keycloak's: a tool
+  of yours reaching the database pod needs its own policy.
+
+### Added
+- **`lm` 1.10.0: `lm token`** prints the access token of your `lm login` session, renewed when it is
+  about to expire; `--fresh` renews it now. `curl -H "Authorization: Bearer $(lm token)" …`.
+- **The published image is signed.** Check it:
+  `gh attestation verify oci://ghcr.io/icreated/lumnik:<version> -R icreated/lumnik-open`.
+- **`keycloak.hostname`** (Helm) pins Keycloak's public origin, and the hub's expected issuer with it.
+
+### Fixed
+- **The PWA renews its session before a call**, not on a timer only. A phone that slept wakes into
+  the app. When Keycloak does not answer, it says so instead of asking to sign in again:
+  `Le service de connexion ne répond pas — réessaie dans un instant.`
+- **No deploy script puts a secret on a command line**, where `ps` would show it.
+
 ## v1.12.0 — 2026-11-18
 
 A security release. Several things that used to pass are now refused: read **Before you upgrade**

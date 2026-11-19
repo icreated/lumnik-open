@@ -7,7 +7,7 @@
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
   "bruteForceProtected": true,
-  "accessTokenLifespan": 3600,
+  "accessTokenLifespan": 300,
   "passwordPolicy": "length(12) and notUsername and notEmail",
   "eventsEnabled": true,
   "eventsExpiration": 2592000,
@@ -109,7 +109,7 @@
       "enabled": true,
       "publicClient": true,
       "standardFlowEnabled": true,
-      "directAccessGrantsEnabled": true,
+      "directAccessGrantsEnabled": false,
       "attributes": {
         "oauth2.device.authorization.grant.enabled": "true"
       },

@@ -50,7 +50,7 @@ Authorization: Bearer <access-token>
 ```
 
 Get one from your OIDC issuer: [Test the API — mint a token](../recipes/test-the-api.md#mint-a-token).
-A token lasts one hour on the bundled realm: mint another when a call answers `401`.
+A token lasts 5 minutes on the bundled realm: mint another when a call answers `401`.
 
 The **tenant comes from the token**, never from a header.
 

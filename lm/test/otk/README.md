@@ -242,11 +242,11 @@ make otk
 
 ## On-demand real-Keycloak E2E smoke
 
-A single end-to-end scenario against a live **selfhost** stack (real Keycloak), gated behind a build tag so it never runs in the fast CI:
+A single end-to-end scenario against a real Keycloak, gated behind a build tag so it never runs in the fast CI. It logs in by password, which the shipped clients refuse (#1997): run it against a throwaway realm that carries `lumnik-smoke` (`scripts/lib/smoke-client.sh` adds it), never a real install:
 
 ```bash
 OTK_E2E_TOKEN_URL=http://localhost:8180/realms/lumnik/protocol/openid-connect/token \
-OTK_E2E_CLIENT=lm-cli OTK_E2E_USER=integrator OTK_E2E_PASS=... \
+OTK_E2E_CLIENT=lumnik-smoke OTK_E2E_USER=integrator OTK_E2E_PASS=... \
 LUMNIK_URL=http://localhost:8080 \
 go test -tags otk_e2e -run TestOTKAuthE2E ./test/otk/ -v
 ```

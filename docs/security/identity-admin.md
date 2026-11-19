@@ -34,11 +34,9 @@ For an external IdP, see [Bring your own IdP](byo-idp.md) and [SCIM](scim.md).
   account page, never the admin console. On a remote host, use an SSH tunnel:
   [reach the hub from another machine](../deploy.md#reach-the-hub-from-another-machine).
 
-!!! warning "Helm (cloud edition): the bundled Keycloak keeps nothing"
-    With `auth.mode=oidc`, the chart's Keycloak re-imports its realm at every pod start. Users,
-    roles, attributes and *Enabled: off* set in the console **disappear at the next restart**.
-    On Helm, manage users in your own IdP (`auth.mode=oidc-external`,
-    [Bring your own IdP](byo-idp.md)).
+!!! note "Helm (cloud edition)"
+    With `auth.mode=oidc`, the chart's Keycloak keeps its realm in the release's PostgreSQL, as
+    the self-host stack does: what you set in the console stays across restarts.
 
 ## How to…
 
@@ -82,7 +80,8 @@ unscoped, tenant-wide.
 
 To revoke, remove that role from the same **Role mapping** tab.
 
-From their next token the user is **bound**:
+From their next token the user is **bound**, within 5 minutes on the bundled realm (a token lives
+5 minutes):
 
 - chat, search, views and entity reads answer only inside granted scopes; anything else is
   `403 {"error":"scope not granted"}`;

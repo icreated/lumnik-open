@@ -75,7 +75,7 @@ flowchart LR
     kc["keycloak :8180<br/>realm lumnik"]
     pg[("postgres<br/>internal")]
     caddy -->|"/*"| hub
-    caddy -->|"/realms/*"| kc
+    caddy -->|"/realms/lumnik/*"| kc
     hub --> pg
     hub -.->|"OIDC"| kc
   end
@@ -133,7 +133,7 @@ Re-run `up.sh` with the same flags at any time: your data and `.env` are kept.
 ## One HTTPS origin — the TLS proxy
 
 A phone installs the PWA only from one https address. The proxy gives it one: the hub at `/`,
-Keycloak under `/realms/*`. Layer it on after `up.sh`:
+Keycloak's `lumnik` realm under `/realms/lumnik` and `/realms/lumnik/*`. Layer it on after `up.sh`:
 
 ```bash
 LUMNIK_TLS_HOST=erp.example.com \

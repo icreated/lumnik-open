@@ -5,6 +5,8 @@
 // token/onAuthLost/fetchFn are all injected so plain `node --test` can drive every branch
 // with fakes — nothing here touches sessionStorage or fetch directly.
 
+export const NETWORK_DOWN = 'réseau indisponible — vérifie ta connexion';
+
 export function createApi({ token, onAuthLost, fetchFn }) {
   // Seconds the hub asked us to wait (Retry-After), or null: absent, no headers object (a fake), or an
   // HTTP-date, which this app never needs and must not turn into NaN.
@@ -39,12 +41,14 @@ export function createApi({ token, onAuthLost, fetchFn }) {
     try {
       return await fetchFn(path, init);
     } catch {
-      throw { kind: 'error', message: 'réseau indisponible — vérifie ta connexion' };
+      throw { kind: 'error', message: NETWORK_DOWN };
     }
   }
 
   async function json(path, { method = 'POST', json: jsonBody, yaml } = {}) {
-    const headers = { 'Accept': 'application/json', 'Authorization': 'Bearer ' + token() };
+    // #2036: the session hands out a token valid for this call, renewed first if it was about to expire; when it has
+    // none to give, its error is this call's, and nothing reaches the hub.
+    const headers = { 'Accept': 'application/json', 'Authorization': 'Bearer ' + await token() };
     let body;
     if (yaml !== undefined) { headers['Content-Type'] = 'application/yaml'; body = yaml; }
     if (jsonBody !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(jsonBody); }
@@ -54,7 +58,7 @@ export function createApi({ token, onAuthLost, fetchFn }) {
   }
 
   async function text(path, accept) {
-    const headers = { 'Accept': accept, 'Authorization': 'Bearer ' + token() };
+    const headers = { 'Accept': accept, 'Authorization': 'Bearer ' + await token() };
     const r = await doFetch(path, { headers });
     await handleResponse(r);
     return r.text();

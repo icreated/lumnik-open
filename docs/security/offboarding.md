@@ -22,7 +22,7 @@ whether the account still exists.
 | Gesture | Stops | A live access token |
 |---|---|---|
 | **Archive the hub row**: `DELETE /api/tenants/{tid}/users/{id}` as `lm_admin`, or SCIM `active: false` | **the very next request**, with or without a `user_id` claim | refused at once |
-| **Disable the account in the IdP** (Keycloak *Enabled: off*) | new logins and token refreshes | stays valid until it expires: **1 hour** on the bundled realm; the refresh chain dies 24 hours after login at the latest, about 30 minutes idle |
+| **Disable the account in the IdP** (Keycloak *Enabled: off*) | new logins and token refreshes | stays valid until it expires: **5 minutes** on the bundled realm; the refresh chain dies 24 hours after login at the latest, about 30 minutes idle |
 | **Disable the account in the IdP, with IdP verification on** | every request: the hub asks the IdP's UserInfo endpoint and fails authentication when it refuses | refused on the IdP's answer |
 
 Do both. Your own IdP's lifespans may differ.

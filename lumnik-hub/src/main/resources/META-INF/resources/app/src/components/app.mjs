@@ -3,7 +3,7 @@ import { urlKey, kcBase, redirectUri } from '../config.mjs';
 import {
   resolveCached, resolveFromRegistry, cacheRegistry, applyIdentity, applyTheme,
 } from '../appRegistry.mjs';
-import { createAuth } from '../auth.mjs';
+import { createAuth, nextRenewalDelay, unavailableScreen, IDP_DOWN } from '../auth.mjs';
 import { createApi } from '../api.mjs';
 import { createViews } from '../views.mjs';
 import { planTabs, applyProbes, landingTab, runBoots, has } from '../tabs.mjs';
@@ -15,6 +15,11 @@ import { TabBar } from './tabbar.mjs';
 // header comment: it must round-trip a tag the registry does not recognise, not rewrite it).
 const REDIRECT_KEY = urlKey(location.search);
 const EXPIRED_NOTE = 'Session expirée — reconnecte-toi.';
+// The two screens that offer a retry, and what each says (#2036: Keycloak down while online is not "offline").
+const UNAVAILABLE = {
+  offline: 'Hors ligne — tes données reviendront avec le réseau.',
+  unreachable: IDP_DOWN,
+};
 
 // The conductor (A-series wiring): boots the session, drives the login/tabs screen switch,
 // schedules silent renewal, and hosts the state Tasks 6–7 fill in (tab content, badge, chat
@@ -25,7 +30,7 @@ export function App() {
   // (or refusal) corrects it. index.html already painted the SAME guess into the document
   // head before this component ever mounted — this is the in-app half of that identity.
   const [metier, setMetier] = useState(() => resolveCached(location.search));
-  const [screen, setScreen] = useState('boot'); // 'boot' | 'login' | 'offline' | 'refused' | 'tabs'
+  const [screen, setScreen] = useState('boot'); // 'boot' | 'login' | 'offline' | 'unreachable' | 'refused' | 'tabs'
   const [note, setNote] = useState('');
   // The app's effective tabs (tabs.mjs: what the hub offers ∩ what the app declares), known once
   // phase 2 has answered; `tab` is the id on screen, the first of them to begin with.
@@ -52,6 +57,7 @@ export function App() {
       storage: sessionStorage,
       fetchFn: fetch,
       now: Date.now,
+      online: () => navigator.onLine,
       onExpired: () => { clearTimeout(renewTimerRef.current); setScreen('login'); setNote(EXPIRED_NOTE); },
     });
   }
@@ -60,7 +66,7 @@ export function App() {
   const apiRef = useRef(null);
   if (!apiRef.current) {
     apiRef.current = createApi({
-      token: () => auth.token(),
+      token: () => auth.fresh(), // #2036: renewed first when it is about to expire
       // a 401 mid-session leaves the exp-60s renewal timer pending — clear it, or it
       // fires later against an empty refresh_token (round-2 review catch)
       onAuthLost: () => { clearTimeout(renewTimerRef.current); auth.clear(); setScreen('login'); setNote(EXPIRED_NOTE); },
@@ -71,14 +77,14 @@ export function App() {
   // so it is built once inside the boot effect rather than eagerly here.
   const viewsRef = useRef(null);
 
-  function scheduleRenewal() {
+  // #2036: the timer renews ahead of expiry; a call renews too when its token is about to expire (auth.fresh), and
+  // the two share one request. After an outcome: renewed → a minute before the new expiry, Keycloak unreachable →
+  // a minute later, lost → nothing (onExpired has shown the login).
+  function scheduleRenewal(outcome = 'renewed') {
     clearTimeout(renewTimerRef.current);
-    const delay = auth.renewalDelay();
-    if (delay == null) return; // no live session to renew — the chain simply stops
-    renewTimerRef.current = setTimeout(async () => {
-      await auth.renew(); // failure clears the session and fires onExpired() itself
-      scheduleRenewal(); // success reschedules; a post-failure call is a safe no-op (delay == null)
-    }, delay);
+    const delay = nextRenewalDelay(outcome, { exp: auth.expiry(), now: Date.now() });
+    if (delay == null) return;
+    renewTimerRef.current = setTimeout(async () => scheduleRenewal(await auth.renewIfDue()), delay);
   }
 
   useEffect(() => {
@@ -96,7 +102,17 @@ export function App() {
           setNote(e.message);
         }
       }
-      const state = auth.bootState();
+      let state = auth.bootState();
+      if (state === 'renewable') {
+        // #2036: a phone that slept past its token's life still holds a refresh token: renew instead of logging out.
+        const outcome = await auth.renew();
+        if (outcome === 'lost') return; // onExpired has shown the login
+        if (outcome === 'unavailable') {
+          setScreen(unavailableScreen({ kind: 'error', reason: navigator.onLine ? 'idp' : 'network' }));
+          return;
+        }
+        state = 'live';
+      }
       if (state === 'live') {
         scheduleRenewal();
         // Phase 2: the authoritative registry. A failure here (network blip, CORS, a 5xx)
@@ -133,8 +149,8 @@ export function App() {
           const tabs = await applyProbes(plan.tabs, { api: apiRef.current, scope: resolved.entry.scope });
           plan = { tabs, landing: landingTab(tabs) };
         } catch (e) {
-          if (e && e.kind === 'auth') return; // onAuthLost already set screen to 'login'
-          setScreen('offline');
+          const next = unavailableScreen(e);
+          if (next) setScreen(next); // an auth error: onAuthLost already set screen to 'login'
           return;
         }
         setTabs(plan.tabs);
@@ -184,10 +200,13 @@ export function App() {
     </header>
     <main>
       ${screen === 'boot' ? html`<div class="center">…</div>` : null}
-      ${screen === 'offline' ? html`<div class="center">
+      ${UNAVAILABLE[screen] ? html`<div class="center">
         <span class="glyph">⚡</span>
-        <p>Hors ligne — tes données reviendront avec le réseau.</p>
+        <p>${UNAVAILABLE[screen]}</p>
         <button class="primary" onClick=${() => location.reload()}>Réessayer</button>
+        ${screen === 'unreachable'
+          ? html`<button onClick=${() => { auth.clear(); setNote(''); setScreen('login'); }}>Se reconnecter</button>`
+          : null}
       </div>` : null}
       ${screen === 'refused' ? html`<div class="center">
         <span class="glyph">🚫</span>

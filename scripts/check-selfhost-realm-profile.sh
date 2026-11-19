@@ -3,7 +3,7 @@
 # profile, up.sh declares tenant_id and user_id admin-only and turns an ENABLED unmanaged-attribute policy into
 # ADMIN_EDIT. Under ENABLED, a user rewrote their own tenant_id from the account page.
 #
-# Hermetic: `curl` is a stub on PATH. A GET of the profile answers $STUB_PROFILE (or fails with STUB_GET_FAIL);
+# Hermetic: `curl` is a stub on PATH; it refuses a call whose admin token is not in a `-H @<fd>` header file. A GET of the profile answers $STUB_PROFILE (or fails with STUB_GET_FAIL);
 # a PUT records its body in $TMP/put.json (or fails with STUB_PUT_FAIL). Run from the repo root.
 
 set -euo pipefail
@@ -15,6 +15,14 @@ trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/curl" <<'STUB'
 #!/bin/sh
+# The admin token comes as a header file (-H @<fd>), never on argv (#1998): no token there, no call.
+case "$*" in *Bearer*) echo "the token is on curl's argv: $*" >&2; exit 98 ;; esac
+auth=""; prev=""
+for a in "$@"; do
+  case "$prev:$a" in -H:@*) auth="$(cat "${a#@}")" ;; esac
+  prev="$a"
+done
+[ "$auth" = "Authorization: Bearer tok" ] || { echo "no bearer header from a file: '$auth'" >&2; exit 99; }
 case "$*" in
   *"-X PUT"*) [ -n "${STUB_PUT_FAIL:-}" ] && exit 22; cat > "$STUB_DIR/put.json" ;;
   *"/admin/realms/lumnik/users/profile"*) [ -n "${STUB_GET_FAIL:-}" ] && exit 22; printf '%s' "$STUB_PROFILE" ;;
@@ -31,6 +39,7 @@ check() {
   rm -f "$TMP/put.json"
   out="$(env PATH="$TMP/bin:$PATH" STUB_DIR="$TMP" "$@" bash -c '
     set -euo pipefail
+    source "'"$REPO"'/deploy/selfhost/bearer.sh"
     source "'"$REPO"'/deploy/selfhost/realm.sh"
     declare_admin_only_attributes tok http://kc.test
   ' 2>&1)" || rc=$?

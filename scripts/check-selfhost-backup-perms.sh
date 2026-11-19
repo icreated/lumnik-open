@@ -10,14 +10,11 @@ trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/tree/deploy" "$WORK/bin" "$WORK/tree/backups/20200101T000000Z"
 cp -R "$ROOT/deploy/selfhost" "$WORK/tree/deploy/"
 ( umask 022; printf 'old\n' > "$WORK/tree/backups/20200101T000000Z/lumnik.dump" )
-# The fake docker: `compose exec` prints a dump; `compose cp` writes the store with the container's modes, as the real
-# `docker cp` does (it ignores the umask); the rest succeeds silently.
+# The fake docker: `compose exec` prints a dump (the hub's database, then Keycloak's); the rest succeeds silently.
 cat > "$WORK/bin/docker" <<'SHIM'
 #!/usr/bin/env bash
 case " $* " in
   *" exec "*) printf 'PGDMP fake dump\n' ;;
-  *" cp "*) dest="${!#}"; mkdir -p "$dest/h2"; printf 'fake store\n' > "$dest/h2/keycloakdb.mv.db"
-            chmod 755 "$dest" "$dest/h2"; chmod 644 "$dest/h2/keycloakdb.mv.db" ;;
 esac
 SHIM
 chmod +x "$WORK/bin/docker"
@@ -37,5 +34,5 @@ expect 600 "$WORK/tree/backups/20200101T000000Z/lumnik.dump"
 set -- "$WORK/tree/backups/"2*
 new="${!#}"
 expect 600 "$new/lumnik.dump"
-expect 600 "$new/keycloak-data.tgz"
+expect 600 "$new/keycloak.dump"
 exit "$fail"

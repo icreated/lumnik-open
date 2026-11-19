@@ -122,7 +122,10 @@ jobs:
             echo "LUMNIK_SECRET_MASTER_KEY=$(openssl rand -base64 32)"
             echo "LUMNIK_CRYPTO_SECRET_KEY=$(openssl rand -base64 32)"
             echo "LUMNIK_ENTITY_RESOLUTION_HMAC_SECRET=$(openssl rand -base64 32)"
+            # The hub and the OTK run lane share the local root: the lane writes its source in tenant 1's folder (#2001).
+            echo "LUMNIK_CSV_LOCAL_ROOT=/tmp/otk/drop"
           } >> "$GITHUB_ENV"
+          mkdir -p /tmp/otk/drop
           {
             echo "OTK_OIDC_PUBLIC_KEY<<OTK_PEM_EOF"
             OTK_KEY_FILE=/tmp/otk/otkkey.pem go run -tags otk ./test/otk/cmd/otkkey

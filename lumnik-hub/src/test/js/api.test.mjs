@@ -187,3 +187,20 @@ test('a scope refusal keeps its kind and gains the status', async () => {
   const api = createApi({ token: () => 't', onAuthLost: noAuthLost(), fetchFn: fakeFetch(refused(403, { error: 'scope not granted' })) });
   await assert.rejects(() => api.json('/x', { method: 'GET' }), (e) => e.kind === 'scope' && e.status === 403);
 });
+
+// #2036: the token is asked for before each call: renewed first when it is about to expire.
+test('json(): waits for the token the session hands out, and sends that one', async () => {
+  const fetchFn = fakeFetch(okJson({ ok: true }));
+  const api = createApi({ token: async () => 'renewed-tok', onAuthLost: noAuthLost(), fetchFn });
+  await api.json('/api/x', { method: 'GET' });
+  assert.equal(fetchFn.calls[0].opts.headers.Authorization, 'Bearer renewed-tok');
+});
+
+test("json() and text(): no usable token is the session's error, and nothing is sent to the hub", async () => {
+  const fetchFn = fakeFetch(okJson({}));
+  const err = { kind: 'error', message: 'service de connexion injoignable — réessaie dans un instant' };
+  const api = createApi({ token: async () => { throw err; }, onAuthLost: noAuthLost(), fetchFn });
+  await assert.rejects(api.json('/api/x', { method: 'GET' }), e => e === err);
+  await assert.rejects(api.text('/api/x', 'text/plain'), e => e === err);
+  assert.equal(fetchFn.calls.length, 0);
+});

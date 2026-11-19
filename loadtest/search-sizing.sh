@@ -48,7 +48,7 @@ free_mb() { bash "$S/stack.sh" free-space-mb; }
 record_disk() { printf '{"free_mb":%s,"db_mb":%s}' "$(free_mb)" "$(bash "$S/stack.sh" db-size-mb)"; }
 
 k6_run() {  # <duration> <phase A|C> <summary-file-name> [container-name] — a foreground docker run; background it with &
-  K6_CONTAINER="${4:-}" K6_DATA_DIR="$PWD/$S" K6_OUT_DIR="$PWD/$OUT" BASE_URL="$SZ_BASE_URL" KC_URL="$SZ_KC_URL" K6_USER=integrator \
+  K6_TOKEN="" K6_CONTAINER="${4:-}" K6_DATA_DIR="$PWD/$S" K6_OUT_DIR="$PWD/$OUT" BASE_URL="$SZ_BASE_URL" KC_URL="$SZ_KC_URL" K6_USER=integrator \
   K6_PASSWORD="$(grep '^INTEGRATOR_PASSWORD=' "$S/.run/stack.env" | cut -d= -f2-)" \
   RATE="$RATE" DURATION="$1" PHASE="$2" SUMMARY_OUT="/out/$3" P95_MS=3600000 ./loadtest/run.sh search-mix.js
 }

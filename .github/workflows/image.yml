@@ -18,6 +18,10 @@ concurrency:
 permissions:
   contents: read
   packages: write
+  # #1998: sign the image's provenance with the workflow's identity (Sigstore), and store the attestation.
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 jobs:
   build-push:
@@ -68,7 +72,8 @@ jobs:
             org.opencontainers.image.title=lumnik
             org.opencontainers.image.description=lumnik Open edition hub (Apache-2.0). Self-host: ./deploy/selfhost/up.sh
 
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile
@@ -76,5 +81,16 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # Same as the monorepo's hub image: no provenance/SBOM attestation (it would also want id-token).
-          provenance: false
+          # #1998: how the image was built (provenance) and what it holds (SBOM), stored in the registry
+          # beside it: `docker buildx imagetools inspect <image> --format '{{ json .Provenance }}'`.
+          provenance: mode=max
+          sbom: true
+
+      # The attestations above are unsigned. This one is signed by this workflow's identity, so anyone can prove the
+      # image was built here, from this repository, at this tag:
+      #   gh attestation verify oci://ghcr.io/icreated/lumnik:<version> -R icreated/lumnik-open
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/lumnik
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

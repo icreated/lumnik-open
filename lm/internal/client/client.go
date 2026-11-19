@@ -319,16 +319,22 @@ func (c *Client) doOnCtx(ctx context.Context, hc *http.Client, timeout time.Dura
 	return nil
 }
 
-// authorize attaches the Authorization + tenant/user headers to a request. It is used by
-// do() and by every hand-built request method (apply, entity, validate, describe, csv, …),
-// so they all resolve the token the same way: the fresh `lm login` Access token (refreshed
-// if needed) when present, else the static ctx.Token — a stale/expired static token can
-// never shadow a valid login token.
-func (c *Client) authorize(req *http.Request) error {
-	// Serialize refresh+persist so two TUI goroutines never both POST a refresh.
+// Token is the access token a request would send now: the `lm login` session's, renewed (and the renewal kept) when
+// it is about to expire, else the static one. `lm token` prints it (#1997), so a script needs no password grant.
+//
+// fresh renews a still-valid session token first, so the one printed lives its whole lifespan: a run that holds it
+// for minutes (a load test) does not start on a token about to expire.
+func (c *Client) Token(fresh bool) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if fresh && !c.staticToken && c.ctx.Access != "" {
+		c.ctx.ExpiresAt = 0 // due now: tokenLocked renews it, and keeps the renewal
+	}
+	return c.tokenLocked()
+}
 
+// tokenLocked resolves the token; c.mu is held.
+func (c *Client) tokenLocked() (string, error) {
 	// An explicit --token pins the static path: no refresh, so nothing to persist and
 	// no auth-lost signal to raise — there is no session to have lost. Decided HERE,
 	// in the one function that resolves a credential, and then falling through to the
@@ -360,17 +366,34 @@ func (c *Client) authorize(req *http.Request) error {
 		tok, r, ok = reloadAndRetry(c.http, load, c.ctx, time.Now())
 		if !ok {
 			c.signalAuthLost()
-			return fmt.Errorf("auth: %w (run 'lm login')", err)
+			return "", fmt.Errorf("auth: %w (run 'lm login')", err)
 		}
 		// r is applied onto our OWN context below — runtime overrides preserved.
-	}
-	if tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	if r != nil {
 		// Reuse the fresh token on subsequent requests instead of refreshing every call.
 		c.ctx.Access, c.ctx.Refresh, c.ctx.ExpiresAt = r.Access, r.Refresh, r.ExpiresAt
 		c.persistRefresh(r)
+	}
+	return tok, nil
+}
+
+// authorize attaches the Authorization + tenant/user headers to a request. It is used by
+// do() and by every hand-built request method (apply, entity, validate, describe, csv, …),
+// so they all resolve the token the same way: the fresh `lm login` Access token (refreshed
+// if needed) when present, else the static ctx.Token — a stale/expired static token can
+// never shadow a valid login token.
+func (c *Client) authorize(req *http.Request) error {
+	// Serialize refresh+persist so two TUI goroutines never both POST a refresh.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	tok, err := c.tokenLocked()
+	if err != nil {
+		return err
+	}
+	if tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	// The dev-bypass identity never leaves for a remote https hub, whatever path built this client (#1610): the
 	// factories refuse such a context, and this is the one place the headers are set.

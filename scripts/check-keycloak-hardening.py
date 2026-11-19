@@ -2,8 +2,10 @@
 """The shipped Keycloak keeps its security settings (#1997).
 
 What it holds, on every shipped realm (infra/keycloak/*.json):
-- the PWA's public client `lumnik-spa` takes no password grant: the login page is the only way in;
-- an access token lives an hour at most (shorter tokens need the PWA's renewal reworked first, see the issue);
+- no client takes a password grant: the PWA's login page and lm's device flow (`lm token` for a script) are the
+  ways in; `lumnik-smoke`, the throwaway realms' password client, is never shipped;
+- an access token lives 5 minutes at most: a removed role, scope or account stops within 5 minutes even when the hub
+  validates tokens locally (the PWA renews before a call, #2036);
 - login and admin events are stored (admin events without representations), and a password policy is set;
 - `tenant_id` and `user_id` are declared attributes that only an admin may see or edit, and the unmanaged-attribute
   policy is never ENABLED: under ENABLED a user rewrites their own tenant_id from the account console.
@@ -22,7 +24,8 @@ import re
 import sys
 import tempfile
 
-MAX_ACCESS_TOKEN_SECONDS = 3600
+MAX_ACCESS_TOKEN_SECONDS = 300
+PUBLIC_CLIENTS = ("lumnik-spa", "lm-cli")
 MIN_PASSWORD_LENGTH = 12
 ADMIN_ONLY = ("tenant_id", "user_id")
 POLICY_COMPONENT = "org.keycloak.userprofile.UserProfileProvider"
@@ -33,13 +36,27 @@ SETS_ENABLED = re.compile(r"""unmanagedAttributePolicy['"]?\]?\s*[=:]\s*['"]?ENA
 
 def realm_problems(name, realm):
     out = []
-    spa = [c for c in realm.get("clients", []) if c.get("clientId") == "lumnik-spa"]
-    if not spa:
-        out.append(f"{name}: no lumnik-spa client")
-    elif spa[0].get("directAccessGrantsEnabled") is not False:
-        out.append(f"{name}: lumnik-spa takes the password grant (directAccessGrantsEnabled must be false)")
+    # No client takes a password: the PWA's login page, lm's device flow (lm token for scripts). lumnik-smoke, the
+    # throwaway realms' password client (scripts/lib/smoke-client.sh), is never shipped.
+    ids = [c.get("clientId") for c in realm.get("clients", [])]
+    for client_id in PUBLIC_CLIENTS:
+        if client_id not in ids:
+            out.append(f"{name}: no {client_id} client")
+    for c in realm.get("clients", []):
+        if c.get("clientId") == "lumnik-smoke":
+            out.append(f"{name}: ships lumnik-smoke, the throwaway realms' password client")
+        elif c.get("directAccessGrantsEnabled") is True:
+            out.append(f"{name}: {c.get('clientId')} takes the password grant (directAccessGrantsEnabled must be false)")
     if not 0 < (realm.get("accessTokenLifespan") or 0) <= MAX_ACCESS_TOKEN_SECONDS:
         out.append(f"{name}: accessTokenLifespan must be 1..{MAX_ACCESS_TOKEN_SECONDS}, not {realm.get('accessTokenLifespan')}")
+    for c in realm.get("clients", []):
+        # a client's own lifespan wins over the realm's
+        own = (c.get("attributes") or {}).get("access.token.lifespan")
+        if own in (None, ""):
+            continue  # the realm's lifespan
+        if not str(own).isdigit() or not 0 < int(own) <= MAX_ACCESS_TOKEN_SECONDS:
+            out.append(f"{name}: client {c.get('clientId')} sets access.token.lifespan {own!r}: "
+                       f"a number of seconds, 1..{MAX_ACCESS_TOKEN_SECONDS}")
     if realm.get("eventsEnabled") is not True or not (realm.get("eventsExpiration") or 0) > 0:
         out.append(f"{name}: login events must be stored, with an expiration (eventsEnabled, eventsExpiration)")
     if realm.get("adminEventsEnabled") is not True or realm.get("adminEventsDetailsEnabled") is not False:
@@ -89,8 +106,9 @@ def check(root):
 def good_realm():
     profile = {"attributes": [{"name": a, "permissions": {"view": ["admin"], "edit": ["admin"]}} for a in ADMIN_ONLY]}
     return {
-        "clients": [{"clientId": "lumnik-spa", "directAccessGrantsEnabled": False}],
-        "accessTokenLifespan": 3600,
+        "clients": [{"clientId": "lumnik-spa", "directAccessGrantsEnabled": False},
+                    {"clientId": "lm-cli", "directAccessGrantsEnabled": False}],
+        "accessTokenLifespan": 300,
         "eventsEnabled": True, "eventsExpiration": 2592000,
         "adminEventsEnabled": True, "adminEventsDetailsEnabled": False,
         "passwordPolicy": "length(12) and notUsername and notEmail",
@@ -112,7 +130,13 @@ def selftest():
     ok = not realm_problems("good", good_realm())
     breaks = {
         "password grant": lambda r: r["clients"][0].update(directAccessGrantsEnabled=True),
-        "day token": lambda r: r.update(accessTokenLifespan=86400),
+        "password grant on lm-cli": lambda r: r["clients"][1].update(directAccessGrantsEnabled=True),
+        "password grant on another client": lambda r: r["clients"].append({"clientId": "x", "directAccessGrantsEnabled": True}),
+        "lumnik-smoke shipped": lambda r: r["clients"].append({"clientId": "lumnik-smoke", "directAccessGrantsEnabled": False}),
+        "hour token": lambda r: r.update(accessTokenLifespan=3600),
+        "a client's own hour": lambda r: r["clients"][0].setdefault("attributes", {}).update({"access.token.lifespan": "3600"}),
+        "a client's lifespan that is not a number": lambda r: r["clients"][0].setdefault("attributes", {}).update(
+            {"access.token.lifespan": "300s"}),
         "no events": lambda r: r.update(eventsEnabled=False),
         "admin event details": lambda r: r.update(adminEventsDetailsEnabled=True),
         "short password": lambda r: r.update(passwordPolicy="length(8) and notUsername and notEmail"),

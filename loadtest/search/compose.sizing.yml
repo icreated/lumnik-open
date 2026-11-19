@@ -5,6 +5,8 @@ services:
   keycloak:
     ports: !override
       - "127.0.0.1:18180:8180"
+    environment:
+      KC_HOSTNAME: http://localhost:18180
   hub:
     build:
       args:
@@ -23,4 +25,3 @@ services:
       - ${SZ_DATA_DIR:?set by stack.sh}:/sizing-data/1:ro
 volumes:
   selfhost_pg:
-  selfhost_kc:

@@ -1,12 +1,12 @@
 # Test the API — URLs, auth, Postman
 
-> Mint a token against the bundled realm and paste it into `curl`, Postman, or Swagger UI —
+> Take a token from `lm token` and paste it into `curl`, Postman, or Swagger UI —
 > every door the hub serves, listed with the role it requires.
 
 Day-to-day work goes through `lm`; this page is for testing the HTTP API itself.
 URLs below are the self-host defaults. Behind the
 [TLS proxy](../deploy.md#one-https-origin-the-tls-proxy) everything lives on one
-https origin, with Keycloak under `/realms/*`.
+https origin, with Keycloak's `lumnik` realm under `/realms/lumnik`.
 
 ## The doors
 
@@ -30,17 +30,16 @@ uniform `403 {"error":"scope not granted"}` outside their granted scopes —
 
 ## Mint a token
 
-The bundled realm ships an `integrator` user (password: `INTEGRATOR_PASSWORD` in the
-`.env` that `up.sh` generated) and a public CLI client, `lm-cli`, that allows the
-password grant. From the repo root, in `curl`:
+`lm` holds your session: sign in once with `lm login` (it opens the device flow), then
+`lm token` prints an access token, renewed when it is about to expire. The bundled realm's
+clients take no password, so this is the way in for `curl`. It needs `lm` 1.10.0 or later, and a
+context pointing at your hub (once, as on the [deploy page](../deploy.md)):
 
 ```bash
-INTEGRATOR_PASSWORD=$(grep '^INTEGRATOR_PASSWORD=' .env | cut -d= -f2-)
-
-TOKEN=$(curl -s "http://localhost:8180/realms/lumnik/protocol/openid-connect/token" \
-  -d grant_type=password -d client_id=lm-cli \
-  -d username=integrator --data-urlencode password="$INTEGRATOR_PASSWORD" \
-  | jq -r .access_token)
+lm config set-context local --server http://localhost:8080 --oidc-issuer http://localhost:8180/realms/lumnik
+lm config use-context local
+lm login
+TOKEN=$(lm token)
 
 # First authenticated smoke test:
 curl -s http://localhost:8080/api/platform/health -H "Authorization: Bearer $TOKEN"
@@ -52,22 +51,15 @@ The reply lists every installed module (here a Pro hub with the AI switched off)
 {"platform":"ok","modules":{"core":{"status":"ok","version":"0.1.0"},"identity":{"status":"ok","version":"0.1.0"},"rag":{"status":"inactive","version":"0.1.0","reason":"disabled:lumnik.ai.enabled"},"llm":{"status":"inactive","version":"0.1.0","reason":"disabled:lumnik.ai.enabled"}},"search":{"status":"not_installed","affectsReadiness":false,"error":null}}
 ```
 
-Tokens from the bundled realm live **one hour** — mint
-again when a call starts answering `401`. Your own IdP may be stricter.
+Tokens from the bundled realm live **5 minutes**: run `lm token` again when a call answers
+`401`, or put it on each call, `-H "Authorization: Bearer $(lm token)"`. Your own IdP may be
+stricter.
 
 ## The same thing in Postman
 
-On the collection's **Authorization** tab, choose *OAuth 2.0* and fill:
-
-| Field | Value |
-|---|---|
-| Grant type | Password Credentials |
-| Access Token URL | `http://localhost:8180/realms/lumnik/protocol/openid-connect/token` |
-| Client ID | `lm-cli` |
-| Username / Password | `integrator` / the `INTEGRATOR_PASSWORD` from `.env` |
-
-*Get New Access Token* → every request in the collection inherits the Bearer, and
-Postman re-mints it when it expires.
+On the collection's **Authorization** tab, choose *Bearer Token* and set it to `{{token}}`. Put
+the output of `lm token` in a `token` variable of the collection: every request inherits it.
+When a request answers `401`, the token has expired: paste a new `lm token`.
 
 ## Import the whole API
 
@@ -82,7 +74,15 @@ Postman builds the collection, every endpoint pre-filled. Set the collection aut
 The try-it console (Swagger UI) runs only on a hub started in dev mode, at `/q/swagger-ui/`.
 
 !!! note "Testing as a business user, not an integrator"
-    Everything above authenticates as `integrator`. To see what a scope-bound user
-    sees (the `403 scope not granted` boundaries, the user chat door), mint the token
-    with that user's credentials instead. [Scopes](../rag/scopes.md#binding-users-to-scopes-opt-in)
-    explains the binding.
+    Everything above uses your own session. To see what a scope-bound user sees (the
+    `403 scope not granted` boundaries, the user chat door), give `lm` a second context and
+    sign in with that user's account:
+
+    ```bash
+    lm config set-context ventes --server http://localhost:8080 \
+      --oidc-issuer http://localhost:8180/realms/lumnik
+    lm login --context ventes
+    lm token --context ventes
+    ```
+
+    [Scopes](../rag/scopes.md#binding-users-to-scopes-opt-in) explains the binding.

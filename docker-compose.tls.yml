@@ -1,5 +1,5 @@
 # TLS overlay for the self-host stack: one https origin (Caddy) in front of the hub
-# AND Keycloak (path-proxied under /realms). What it buys:
+# AND Keycloak's lumnik realm (path-proxied under /realms/lumnik). What it buys:
 #   - secure context on every device: real PWA install prompt, crypto.subtle
 #   - ONE issuer for all clients (https://$LUMNIK_TLS_HOST/realms/lumnik) — the
 #     LAN-IP issuer gymnastics dissolve
@@ -13,6 +13,14 @@ services:
   caddy:
     image: caddy:2
     restart: unless-stopped
+    # The least it needs (#1998, as the self-host services): it binds 80 and 443, and writes /data, /config and /tmp only.
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    read_only: true
+    tmpfs:
+      - /config:size=16m
+      - /tmp:size=64m
     ports:
       # A façade exists to be reached by OTHER devices (phones on the LAN, the world
       # for a public domain) — so unlike the base compose's 127.0.0.1 posture it
@@ -25,7 +33,9 @@ services:
       # HSTS for the origin (#1994): "true" on a public domain only — see deploy/tls/README.md.
       LUMNIK_TLS_HSTS: ${LUMNIK_TLS_HSTS:-false}
     volumes:
-      - ./deploy/tls/Caddyfile:/etc/caddy/Caddyfile:ro
+      # The folder, not the file: a file mount stays on the file it found at start, so a `git pull` that replaces the
+      # Caddyfile would never reach Caddy, reload or not (#1997).
+      - ./deploy/tls:/etc/caddy:ro
       - tls_caddy_data:/data
     depends_on:
       - hub
@@ -38,6 +48,8 @@ services:
       KC_PROXY_HEADERS: xforwarded
       KC_HOSTNAME: https://${LUMNIK_TLS_HOST:?set LUMNIK_TLS_HOST (public domain, or a LAN IP for local testing)}
       KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"   # the hub still reaches it as keycloak:8180
+      # The admin console stays on the machine: its sign-in goes through the master realm, which the façade refuses.
+      KC_HOSTNAME_ADMIN: http://localhost:8180
 
   hub:
     environment:

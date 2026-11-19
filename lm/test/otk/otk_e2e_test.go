@@ -1,9 +1,10 @@
 //go:build otk_e2e
 
-// On-demand real-Keycloak E2E smoke. Run against a live selfhost stack:
+// On-demand real-Keycloak E2E smoke. Run against a throwaway realm that carries the lumnik-smoke client
+// (scripts/lib/smoke-client.sh); a real install has none:
 //
 //	OTK_E2E_TOKEN_URL=http://localhost:8180/realms/lumnik/protocol/openid-connect/token \
-//	OTK_E2E_CLIENT=lm-cli OTK_E2E_USER=integrator OTK_E2E_PASS=... \
+//	OTK_E2E_CLIENT=lumnik-smoke OTK_E2E_USER=integrator OTK_E2E_PASS=... \
 //	LUMNIK_URL=http://localhost:8080 \
 //	go test -tags otk_e2e -run TestOTKAuthE2E ./test/otk/ -v
 package otk

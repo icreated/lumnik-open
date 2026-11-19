@@ -1,6 +1,6 @@
 // Shared config for lumnik k6 scenarios.
 // Auth: pass K6_TOKEN (a Bearer token for an integrator user) — see ../run.sh,
-// which mints one via the lm-cli client's direct grant and handles the issuer
+// which takes one from `lm token` or mints one on a throwaway realm, and handles the issuer
 // pitfall (the token must be minted against the SAME issuer URL the hub trusts).
 
 export const BASE = __ENV.BASE_URL || 'http://localhost:8080';

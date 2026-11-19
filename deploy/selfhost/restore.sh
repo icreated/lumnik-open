@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Restore a backup.sh snapshot into the RUNNING self-host stack.
 #   usage: restore.sh backups/<UTC-stamp>
-# Stops the hub during the DB restore (no writes mid-restore), swaps the Keycloak
-# store if the snapshot has one. For a FRESH machine: run up.sh first (init scripts
+# Stops the hub during the DB restore (no writes mid-restore), and Keycloak while its
+# database is replaced, if the snapshot has one. For a FRESH machine: run up.sh first (init scripts
 # create roles/DB), then this script, and restore your saved .env BEFORE up.sh.
 set -euo pipefail
 
@@ -11,9 +11,20 @@ cd "$ROOT"
 COMPOSE=(docker compose -f docker-compose.selfhost.yml)
 
 DIR="${1:?usage: restore.sh backups/<UTC-stamp>}"
-[[ -f "$DIR/lumnik.dump" ]] || { echo "!! $DIR/lumnik.dump not found" >&2; exit 1; }
+[[ -s "$DIR/lumnik.dump" ]] || { echo "!! $DIR/lumnik.dump not found, or empty" >&2; exit 1; }
+[[ ! -e "$DIR/keycloak.dump" || -s "$DIR/keycloak.dump" ]] || { echo "!! $DIR/keycloak.dump is empty: this snapshot cannot restore Keycloak" >&2; exit 1; }
+# A snapshot taken before #1997 holds Keycloak's H2 store, which this stack no longer runs. Refused before anything
+# changes.
+if [[ -f "$DIR/keycloak-data.tgz" && ! -f "$DIR/keycloak.dump" ]]; then
+  {
+    echo "!! $DIR holds Keycloak's store from before it moved to PostgreSQL (keycloak-data.tgz)."
+    echo "   Restore it with the scripts of the release that took it, then come back to this one and run"
+    echo "   ./deploy/selfhost/up.sh: it moves the realm to PostgreSQL (docs/operations/backup-restore.md)."
+  } >&2
+  exit 1
+fi
 
-echo "!! This OVERWRITES the hub database (and Keycloak store, if present in the snapshot)"
+echo "!! This OVERWRITES the hub database (and Keycloak's, if present in the snapshot)"
 echo "   with $DIR. Press Enter to continue, Ctrl-C to abort."
 read -r
 
@@ -26,43 +37,24 @@ trap '"${COMPOSE[@]}" start keycloak hub >/dev/null 2>&1 || true' EXIT
 echo "==> stopping the hub"
 "${COMPOSE[@]}" stop hub
 
-echo "==> recreating the database (drop + create — avoids the partitioned-table"
-echo "    inherited-PK limitation of an in-place --clean, and truly removes"
-echo "    objects created after the snapshot)"
-"${COMPOSE[@]}" exec -T postgres sh -c 'DB="${POSTGRES_DB:-lumnik}"; U="${POSTGRES_USER:-lumnik}"; \
-  psql -U "$U" -d postgres -v ON_ERROR_STOP=1 \
-    -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '\''$DB'\'' AND pid <> pg_backend_pid();" \
-  && dropdb -U "$U" --if-exists "$DB" \
-  && createdb -U "$U" "$DB"'
+# restore_db <database> [owner]: drop + create, then pg_restore $DIR/<database>.dump into it. Drop + create avoids the
+# partitioned-table inherited-PK limitation of an in-place --clean, and truly removes objects created after the
+# snapshot; --force ends the sessions still connected.
+restore_db() {
+  "${COMPOSE[@]}" exec -T postgres sh -c 'U="${POSTGRES_USER:-lumnik}"; \
+    dropdb -U "$U" --if-exists --force "$1" && createdb -U "$U" ${2:+-O "$2"} "$1"' _ "$1" "${2:-}"
+  "${COMPOSE[@]}" exec -T postgres sh -c 'pg_restore -U "${POSTGRES_USER:-lumnik}" -d "$1"' _ "$1" < "$DIR/$1.dump"
+}
 
-echo "==> pg_restore into the fresh database"
-"${COMPOSE[@]}" exec -T postgres sh -c 'pg_restore -U "${POSTGRES_USER:-lumnik}" -d "${POSTGRES_DB:-lumnik}"' < "$DIR/lumnik.dump"
+echo "==> recreating the hub database from the snapshot"
+restore_db lumnik
 
-if [[ -f "$DIR/keycloak-data.tgz" ]]; then
-  echo "==> restoring keycloak store"
+if [[ -f "$DIR/keycloak.dump" ]]; then
+  echo "==> recreating Keycloak's database from the snapshot"
   "${COMPOSE[@]}" stop keycloak
-  TMP="$(mktemp -d)"
-  tar -xzf "$DIR/keycloak-data.tgz" -C "$TMP"
-  rm -rf "$TMP/keycloak-data/import"   # belt: older backups may still carry it
-  rm -f "$TMP/keycloak-data"/._* "$TMP/keycloak-data"/*/._* 2>/dev/null || true  # belt: AppleDouble relics in pre-fix snapshots
-  # MERGE-copy the store contents into /opt/keycloak/data (a bare source dir would
-  # NEST — data/h2/h2 — a silent no-op restore). Stream as a tar with ownership
-  # rewritten to the container's keycloak user (uid 1000, gid 0): docker cp
-  # preserves the tar's ownership, and host-uid-owned files leave the H2 store
-  # READ-ONLY for Keycloak — it boots and serves reads, but every login/write
-  # fails (H2 90097). Base flags verified portable: GNU tar 1.34 + bsdtar 3.5.3.
-  # bsdtar (macOS) needs two extra flags GNU tar doesn't have (exits 64 on them):
-  # --no-xattrs alone does NOT stop bsdtar smuggling com.apple.* metadata as
-  # AppleDouble "._*" entries, which land as real junk files in the store.
-  TAR_EXTRA=""
-  if tar --version 2>/dev/null | grep -q bsdtar; then
-    TAR_EXTRA="--no-fflags --no-mac-metadata"
-  fi
-  # shellcheck disable=SC2086 — TAR_EXTRA is a space-separated flag list
-  tar -cf - --owner=1000 --group=0 --no-xattrs --no-acls $TAR_EXTRA \
-      -C "$TMP/keycloak-data" . \
-    | docker cp - "$("${COMPOSE[@]}" ps -aq keycloak)":/opt/keycloak/data   # -a: keycloak is stopped here
-  rm -rf "$TMP"
+  restore_db keycloak keycloak
+  # A new database opens to every role: 03-keycloak.sh closes it again.
+  "${COMPOSE[@]}" exec -T postgres sh -c 'POSTGRES_USER="${POSTGRES_USER:-lumnik}" bash /docker-entrypoint-initdb.d/03-keycloak.sh'
   "${COMPOSE[@]}" start keycloak
 fi
 

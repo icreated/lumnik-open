@@ -4,12 +4,12 @@
 #   ./loadtest/run.sh smoke.js
 #   MAX_VUS=50 ./loadtest/run.sh read-mix.js
 #
-# Token: minted from the HOST via the lm-cli client's direct grant, so the
-# token's `iss` matches the issuer the hub trusts (minting it from inside the
+# Token: K6_TOKEN (a real install: "$(lm token)"), else minted from the HOST via the lumnik-smoke client's direct
+# grant on a throwaway realm, so the token's `iss` matches the issuer the hub trusts (minting it from inside the
 # k6 container via host.docker.internal would change the issuer and every
 # call would 401 — the TLS-façade scar, avoided by construction).
-# Access tokens from the bundled realm live 1 h (accessTokenLifespan: 3600) —
-# ample for any scenario here; re-run to mint a fresh one if a run ever outlives it.
+# Access tokens from the bundled realm live 5 minutes (accessTokenLifespan: 300), and k6 holds the one minted here
+# for the whole run: read-mix's default stages take under 3 minutes. A longer run (a larger STAGE) ends in 401s.
 set -euo pipefail
 
 SCRIPT="${1:?usage: run.sh <scenario.js> (smoke.js | read-mix.js)}"
@@ -20,20 +20,25 @@ KC_URL="${KC_URL:-http://localhost:8180}"
 BASE_URL="${BASE_URL:-http://localhost:8080}"
 K6_USER="${K6_USER:-integrator}"
 
-# Password: explicit env wins; else the selfhost .env at the repo root.
-if [ -z "${K6_PASSWORD:-}" ] && [ -f "$REPO_ROOT/.env" ]; then
-  # || [ $? -eq 1 ]: a .env without the key must fall through to the :? message
-  # below, not die silently at the grep (set -euo pipefail) — but a real grep
-  # error (rc 2, e.g. unreadable .env) still fails fast.
-  K6_PASSWORD="$(grep -E '^INTEGRATOR_PASSWORD=' "$REPO_ROOT/.env" | cut -d= -f2-)" || [ $? -eq 1 ]
-fi
-: "${K6_PASSWORD:?K6_PASSWORD not set and INTEGRATOR_PASSWORD not found in .env}"
+# Pull k6 first: a first pull must not eat into the 5 minutes the token lives.
+docker pull -q grafana/k6 >/dev/null
 
-echo "→ minting token for '$K6_USER' at $KC_URL (client lm-cli, direct grant)"
-K6_TOKEN="$(curl -sf "$KC_URL/realms/lumnik/protocol/openid-connect/token" \
-  -d grant_type=password -d client_id=lm-cli \
-  -d username="$K6_USER" --data-urlencode password="$K6_PASSWORD" \
-  | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')"
+# The token, taken after the pull so the run gets its whole lifespan (5 minutes on the bundled realm):
+# - K6_TOKEN, when you pass one;
+# - else K6_PASSWORD: the password grant on lumnik-smoke, a client only the throwaway realms carry (the Search sizing
+#   stack, a kind cluster);
+# - else `lm token --fresh`: your `lm login` session, renewed now (#1997: the shipped clients take no password).
+if [ -z "${K6_TOKEN:-}" ] && [ -n "${K6_PASSWORD:-}" ]; then
+  echo "→ minting token for '$K6_USER' at $KC_URL (client lumnik-smoke, direct grant)"
+  K6_TOKEN="$(printf '%s' "$K6_PASSWORD" | curl -sf "$KC_URL/realms/lumnik/protocol/openid-connect/token" \
+    -d grant_type=password -d client_id=lumnik-smoke \
+    -d username="$K6_USER" --data-urlencode password@- \
+    | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"])')" \
+    || { echo "no token from $KC_URL: only a throwaway realm has lumnik-smoke — on a real install, lm login, then re-run without K6_PASSWORD" >&2; exit 1; }
+elif [ -z "${K6_TOKEN:-}" ]; then
+  echo "→ token from lm (lm token --fresh)"
+  K6_TOKEN="$(lm token --fresh)" || { echo "no token: run 'lm login' first (or set K6_TOKEN)" >&2; exit 1; }
+fi
 
 # Inside the container, localhost is the container — rewrite to the host
 # (both spellings), and map host.docker.internal for Linux hosts too

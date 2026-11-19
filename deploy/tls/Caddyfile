@@ -11,6 +11,9 @@
 	# clients dialing a bare IP send no SNI (RFC 6066) — without this, Caddy finds
 	# no certificate and aborts every handshake with alert 80
 	default_sni {$LUMNIK_TLS_HOST}
+	# The internal CA is for your devices (deploy/tls/README.md), never for the container's own trust store: its root
+	# file system is read-only (#1998), an install there could only fail.
+	skip_install_trust
 }
 
 {$LUMNIK_TLS_HOST} {
@@ -20,9 +23,11 @@
 	@hsts expression `{env.LUMNIK_TLS_HSTS} == "true"`
 	header @hsts Strict-Transport-Security "max-age=31536000"
 
-	# Keycloak, same-origin under /realms + its static assets. Its own Strict-Transport-Security (a year, with
-	# includeSubDomains) is dropped: this façade alone decides HSTS for the origin.
-	handle /realms/* {
+	# Keycloak's lumnik realm, same-origin, + its static assets. Its own Strict-Transport-Security (a year, with
+	# includeSubDomains) is dropped: this façade alone decides HSTS for the origin. Two exact matchers, not
+	# /realms/lumnik*: that one would also pass a realm named lumnik-anything.
+	@lumnik_realm path /realms/lumnik /realms/lumnik/*
+	handle @lumnik_realm {
 		reverse_proxy keycloak:8180 {
 			header_down -Strict-Transport-Security
 		}
@@ -31,6 +36,11 @@
 		reverse_proxy keycloak:8180 {
 			header_down -Strict-Transport-Security
 		}
+	}
+	# Every other realm, master's sign-in and token endpoints included, stays off the façade (#1997): its brute-force
+	# protection is not lumnik's, and no device needs it. Its admin console stays on 127.0.0.1:8180 (KC_HOSTNAME_ADMIN).
+	handle /realms/* {
+		respond 404
 	}
 
 	# The hub serves nothing under /q on its public port (#1993: health, metrics and the spec are on its management
