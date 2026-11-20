@@ -59,6 +59,24 @@ class LeakGuardTest {
         "SELECT connector.t_secret.code FROM connector.v_customer", card())).isPresent();
   }
 
+  /** #2087: core is never a declared schema, yet lumnik_readonly reads core.entity_identity. */
+  @Test
+  void refuses_a_hub_schema_the_card_does_not_declare() {
+    var v = guard.check("SELECT entity_type, source_id FROM core.entity_identity", card());
+    assertThat(v).isPresent();
+    assertThat(v.get().table()).isEqualTo("core.entity_identity");
+  }
+
+  /** #2087: a card of ext tables only still refuses another scope's entity view. */
+  @Test
+  void a_card_of_ext_tables_only_refuses_a_connector_view() {
+    var extOnly = new SchemaCard("orders", List.of(
+        new SchemaCard.Table("ext.orders", "orders", List.of(
+            new SchemaCard.Column("id", "bigint", "id")))));
+    assertThat(guard.check("SELECT * FROM ext.orders", extOnly)).isEmpty();
+    assertThat(guard.check("SELECT * FROM connector.v_customer", extOnly)).isPresent();
+  }
+
   @Test
   void allows_the_declared_table() {
     assertThat(guard.check("SELECT code FROM connector.v_customer", card())).isEmpty();

@@ -111,3 +111,28 @@ func TestCheckIdentity(t *testing.T) {
 		}
 	}
 }
+
+// #2004: the config holds tokens. A file left readable by others is tightened, at load and at every save.
+func TestConfigFile_isTightenedToOwnerOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("current-context: local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil { // whatever the umask
+		t.Fatal(err)
+	}
+	cfg, err := LoadFromFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("after load: mode %o, want 600", fi.Mode().Perm())
+	}
+	_ = os.Chmod(path, 0o640)
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(path); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("after save: mode %o, want 600", fi.Mode().Perm())
+	}
+}

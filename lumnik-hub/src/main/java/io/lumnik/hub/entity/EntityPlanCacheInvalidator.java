@@ -37,6 +37,7 @@ public class EntityPlanCacheInvalidator {
 
   @Inject AgroalDataSource defaultDs;
   @Inject @DataSource("readonly") AgroalDataSource readonlyDs;
+  @Inject @DataSource("ask") AgroalDataSource askDs;
 
   /**
    * Called by {@link EntityViewCompiler#apply} once the view's DDL has committed — never on a refusal or a rollback.
@@ -71,6 +72,6 @@ public class EntityPlanCacheInvalidator {
 
   /** The pools whose connections may hold a prepared read of an entity view. */
   List<AgroalDataSource> readers() {
-    return List.of(defaultDs, readonlyDs);
+    return List.of(defaultDs, readonlyDs, askDs);
   }
 }

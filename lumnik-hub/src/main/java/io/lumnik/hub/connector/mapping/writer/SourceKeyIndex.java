@@ -211,11 +211,15 @@ public class SourceKeyIndex {
    * built names. A hub table's name is a plain identifier, so a character is a byte.
    */
   static String indexName(MappingTarget.Table spec, long tenantId) {
-    String suffix = "_key_" + tenantId;
-    String name = spec.name() + suffix;
+    return fitted(spec.name(), "_key_" + tenantId);
+  }
+
+  /** {@code base + suffix}, or, when longer than 63 bytes, {@code base} cut and followed by 12 hex digits of its hash. */
+  static String fitted(String base, String suffix) {
+    String name = base + suffix;
     if (name.length() <= MAX_IDENTIFIER) return name;
-    String hash = sha256Hex(spec.name()).substring(0, 12);
-    return spec.name().substring(0, MAX_IDENTIFIER - suffix.length() - hash.length() - 1) + "_" + hash + suffix;
+    String hash = sha256Hex(base).substring(0, 12);
+    return base.substring(0, MAX_IDENTIFIER - suffix.length() - hash.length() - 1) + "_" + hash + suffix;
   }
 
   private static String sha256Hex(String s) {

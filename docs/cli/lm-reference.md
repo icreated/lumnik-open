@@ -13,12 +13,13 @@ Flags:
   -h, --help             help for lm
   -o, --output string    Output format: table|json|yaml (default "table")
       --server string    Override the server URL
-      --token string     Override the auth token (sent as-is; the context's refresh is not run)
+      --token string     Override the auth token (sent as-is; the context's refresh is not run). Shows in ps and the shell history: prefer LUMNIK_TOKEN
   -v, --verbose          Verbose output (debug logs)
 ```
 
 - `--token` skips the context's stored session and its refresh, so a token from elsewhere works even
-  when the stored one has expired.
+  when the stored one has expired. A value on the command line shows in `ps` and the shell history:
+  prefer `LUMNIK_TOKEN`.
 - A value written on several lines (a memo, say) shows on one line in a table, the break written `\n`.
   `-o json` and `-o yaml` give it as it is.
 - Five commands use `-o` for an output **file** instead: `lm source rest from-openapi`, `lm view get`,
@@ -39,6 +40,7 @@ exit=1
 |---|---|
 | `lm config set-context NAME --server URL --oidc-issuer URL` | create/update a context (`--oidc-client-id` defaults to `lm-cli`, the bundled realm client) |
 | `lm config set-context NAME --server URL --tenant ID --user ID` | a context for a **dev-bypass** hub (`make k8s-up`): the ids are sent as `X-Tenant-ID` / `X-User-ID`; an OIDC hub ignores them |
+| `lm config set-context NAME --allow-insecure-http` | let this context send its token over plain `http://` to another machine. Without it, `lm` refuses: a token leaves in clear text only to `localhost`, a loopback address, `*.localhost` or `*.test`. Prefer https (the TLS proxy); `--allow-insecure-http=false` takes it back |
 | `lm config use-context NAME` | switch context (the default for every later command; inside `lm ui`, `:context` switches the session only) |
 | `lm config view` | print `~/.lm/config.yaml` with each credential shown as `REDACTED` — safe to paste into a ticket; `--raw` prints the tokens in clear |
 | `lm login` | OIDC **device flow**: prints a URL + code, stores tokens in the context |
@@ -51,15 +53,20 @@ First run? The [deploy page](../deploy.md) walks through standing up a hub and p
 
 | Setting | Where | Effect |
 |---|---|---|
-| `LUMNIK_URL` | env var | replaces the server of the context in use (current, or `--context`), per run; `--server` wins over it |
+| `LUMNIK_URL` | env var | replaces the server of the context in use (current, or `--context`), per run; `--server` wins over it. Another hub than the context's gets none of its stored tokens: `lm` says so on stderr. Add a context for that hub, or pass `--token` |
+| `LUMNIK_ALLOW_HTTP=1` | env var | the same as `allow-insecure-http`, for one run — for scripts |
 | `LUMNIK_TOKEN` | env var | the Bearer token, per run — for CI. Sent as is, ahead of a stored `lm login` session, never refreshed or saved; `--token` wins over it |
 | `ca-file: /path/to/root.crt` | `~/.lm/config.yaml`, by hand | trust an internal CA (the TLS proxy's LAN certificate) |
-| `insecure-skip-verify: true` | `~/.lm/config.yaml`, by hand | disable TLS verification; `ca-file` wins when both are set |
+| `insecure-skip-verify: true` | `~/.lm/config.yaml`, by hand | disable TLS verification; `ca-file` wins when both are set. It covers Keycloak too (`lm login`, the token renewal); `lm` warns once on stderr |
 | `tenant:` / `user:` | `~/.lm/config.yaml` | dev-bypass hubs only; a real hub ignores them |
 
 The env vars need an existing context: create it once with
-`lm config set-context ci --server … && lm config use-context ci`. `set-context` also takes
-`--token`, stored in the context as it is.
+`lm config set-context ci --server … && lm config use-context ci`. `set-context` also stores a token
+as it is: `--token-stdin` reads it from stdin (`lm config set-context ci --token-stdin < token.txt`),
+out of `ps` and the shell history.
+
+`~/.lm/config.yaml` holds your tokens. `lm` keeps it readable by you only (`600`): a wider file is
+tightened when `lm` reads it, and `lm` says so once.
 
 ## Manifests
 

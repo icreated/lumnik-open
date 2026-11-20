@@ -21,6 +21,7 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -91,6 +92,33 @@ class ReadonlyHardeningRlsIT {
         assertThatThrownBy(() -> asReadonly(
                 "SELECT ts_rewrite('a'::tsquery, 'SELECT to_tsquery(''b''), ''a''::tsquery FROM connector.t_hardening')::text"))
             .hasMessageContaining("permission denied for function ts_rewrite");
+    }
+
+    /** #2090: the server stops a model's query by itself, not only the client timer; the transaction keeps it. */
+    @Test
+    void the_server_holds_the_ask_timeout() {
+        var read = QuarkusTransaction.requiringNew().call(() -> {
+            try (Connection c = readonlyDs.getConnection()) {
+                TenantRlsScope.applyTo(c, 1L);
+                return AskToSqlAgent.select(c, "SELECT current_setting('statement_timeout') AS t");
+            }
+        });
+        assertThat(read).containsExactly(Map.of("t", AskToSqlAgent.TIMEOUT_S + "s"));
+    }
+
+    /** #2090: a wait, a message to another session and a large object are refused by the role, not by a name list. */
+    @Test
+    void the_sleep_the_notify_and_the_large_object_read_are_refused() {
+        assertThatThrownBy(() -> asReadonly("SELECT pg_sleep(0)::text"))
+            .hasMessageContaining("permission denied for function pg_sleep");
+        assertThatThrownBy(() -> asReadonly("SELECT pg_sleep_for('0 s')::text"))
+            .hasMessageContaining("permission denied for function pg_sleep_for");
+        assertThatThrownBy(() -> asReadonly("SELECT pg_notify('c', 'x')::text"))
+            .hasMessageContaining("permission denied for function pg_notify");
+        assertThatThrownBy(() -> asReadonly("SELECT lo_get(1)::text"))
+            .hasMessageContaining("permission denied for function lo_get");
+        assertThatThrownBy(() -> asReadonly("SELECT loread(lo_open(1, 262144), 10)::text"))
+            .hasMessageContaining("permission denied for function lo");
     }
 
     @Test

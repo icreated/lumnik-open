@@ -54,7 +54,9 @@ func (sw *Writer) Write(p []byte) (int, error) {
 			break
 		}
 		r, size := utf8.DecodeRune(data)
-		if DangerousRune(r) {
+		if r == utf8.RuneError && size == 1 {
+			out = append(out, fmt.Sprintf(`\x%02X`, data[0])...) // not UTF-8: never raw to the terminal (#2004)
+		} else if DangerousRune(r) {
 			out = append(out, fmt.Sprintf(`\u%04X`, r)...)
 		} else {
 			out = append(out, data[:size]...)

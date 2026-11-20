@@ -27,6 +27,7 @@ class JdbcDialectRegistryTest {
     public String driverClass() { throw new UnsupportedOperationException(); }
     public List<String> connectHosts(String url) { throw new UnsupportedOperationException(); }
     public Map<String, String> timeoutProperties(Duration connect, Optional<Duration> read) { throw new UnsupportedOperationException(); }
+    public Map<String, String> isolationProperties() { throw new UnsupportedOperationException(); }
     public String quoteIdentifier(String i) { throw new UnsupportedOperationException(); }
     public KeyComparison keyComparison(List<String> c, Comparison k) { throw new UnsupportedOperationException(); }
     public String limitClause(int l) { throw new UnsupportedOperationException(); }

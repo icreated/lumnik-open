@@ -107,7 +107,13 @@
         </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
+            <artifactId>apache-client</artifactId>
+        </dependency>
+        <!-- Tests seed their MinIO with it. -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
             <artifactId>url-connection-client</artifactId>
+            <scope>test</scope>
         </dependency>
 
         <!-- ── Security / OIDC ─────────────────────────────────────── -->

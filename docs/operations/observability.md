@@ -52,6 +52,22 @@ scrape_configs:
 
 No push gateway, no agent.
 
+On Helm, a NetworkPolicy keeps port 9000 closed to every pod. Name the pods that scrape it in
+`hub.managementFrom`, as NetworkPolicy peers. This example opens it to every pod of the
+`monitoring` namespace:
+
+```yaml
+hub:
+  managementFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+```
+
+A `podSelector` alone matches pods of the hub's namespace only. The probes and
+`kubectl port-forward` reach the port without it, on most network plugins. If yours also filters
+traffic from the node (Cilium's host firewall, for example), add your nodes' range as an `ipBlock`.
+
 ## Domain metrics
 
 Besides the JVM and HTTP meters, the hub emits:

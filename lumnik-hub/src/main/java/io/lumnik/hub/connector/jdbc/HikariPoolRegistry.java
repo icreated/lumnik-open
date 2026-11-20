@@ -158,18 +158,24 @@ public class HikariPoolRegistry {
    * A host that does not resolve is left to the driver ({@link OutboundAddress#requireAll}).
    */
   private void requireAllowedHosts(String url, JdbcDialect dialect) {
+    addresses.requireAll(connectHosts(url, dialect));
+  }
+
+  /**
+   * The hosts {@code dialect} reads in {@code url}, or {@link OutboundRefusedException} saying why it cannot tell —
+   * the same reading when a pool opens and when a manifest is validated (#2027).
+   */
+  public static List<String> connectHosts(String url, JdbcDialect dialect) {
     // A control character no parser here reads the way a driver might (Oracle Net trims them): refused outright.
     if (url.chars().anyMatch(Character::isISOControl)) throw new OutboundRefusedException(UNREADABLE + "it holds a control character");
-    List<String> hosts;
     try {
-      hosts = dialect.connectHosts(url);
+      return dialect.connectHosts(url);
     } catch (IllegalArgumentException unreadable) {
       // The provider's own reason, stored as written: only from a plain IllegalArgumentException, the SPI's contract.
       // A JDK subclass (NumberFormatException…) may quote a piece of the URL.
       throw new OutboundRefusedException(UNREADABLE + (unreadable.getClass() == IllegalArgumentException.class
           ? unreadable.getMessage() : "the driver does not read it"));
     }
-    addresses.requireAll(hosts);
   }
 
   private static final String UNREADABLE = "the hub cannot tell where this URL connects: ";
@@ -188,6 +194,7 @@ public class HikariPoolRegistry {
                                      Optional<Duration> read) {
     HikariConfig cfg = new HikariConfig();
     dialect.timeoutProperties(CONNECT_TIMEOUT, read).forEach(cfg::addDataSourceProperty);
+    dialect.isolationProperties().forEach(cfg::addDataSourceProperty);
     cfg.setJdbcUrl(url);
     cfg.setDriverClassName(dialect.driverClass());
     dialect.sessionInitSql().ifPresent(cfg::setConnectionInitSql);

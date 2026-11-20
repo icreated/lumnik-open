@@ -76,6 +76,31 @@ class EmptyTenantGucRlsIT {
         .isEmpty();
   }
 
+  /**
+   * #2089: every table with a {@code tenant_id} column that the app role can read or write filters by tenant —
+   * a partition included. A query naming a partition is checked against the partition's own RLS, not the parent's.
+   * The data tables ({@code connector.t_*}, {@code ext.*}) are left out: the writer makes them with their RLS, its own
+   * tests prove it, and other tests create such tables by hand, so the sweep would judge their fixtures.
+   */
+  @Test
+  void every_table_the_app_role_reaches_with_a_tenant_column_has_rls() throws SQLException {
+    List<String> open = new ArrayList<>();
+    try (Connection c = defaultDs.getConnection();
+         Statement st = c.createStatement();
+         var rs = st.executeQuery(
+             "SELECT n.nspname || '.' || c.relname FROM pg_class c "
+             + "JOIN pg_namespace n ON n.oid = c.relnamespace "
+             + "WHERE c.relkind IN ('r', 'p') AND NOT c.relrowsecurity "
+             + "AND n.nspname <> 'ext' AND NOT (n.nspname = 'connector' AND c.relname LIKE 't\\_%') "
+             + "AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname = 'tenant_id' "
+             + "            AND NOT a.attisdropped) "
+             + "AND has_table_privilege(current_user, c.oid, 'SELECT, INSERT, UPDATE, DELETE') "
+             + "ORDER BY 1")) {
+      while (rs.next()) open.add(rs.getString(1));
+    }
+    assertThat(open).as("a table the app role reaches with a tenant_id column and no row-level security").isEmpty();
+  }
+
   private List<String> rlsTables() throws SQLException {
     List<String> out = new ArrayList<>();
     try (Connection c = defaultDs.getConnection();

@@ -7,6 +7,47 @@ Releases 1.1–1.3 existed upstream and were never published here — absent, no
 This file lists only what ships in this repository. Closed modules (the RAG store, the langchain4j
 binding, the Kafka connector, SCIM) are not part of it, and changes to them do not appear here.
 
+## v1.14.0 — 2026-11-20
+
+A security release: Ask, the outbound connections and `lm` are stricter. Two database migrations,
+applied at start. `lm` 1.11.0.
+Read **Before you upgrade** first: the upgrade guide (`docs/operations/upgrade.md`) has each gesture.
+
+### Before you upgrade
+- **Run `infra/postgres/init/02-extensions.sql` again** if you run your own PostgreSQL, the dev compose
+  file, or Helm with the bundled database. It takes sleep, notify and large-object functions from the
+  read-only role. Until then Ask answers `503`, and the hub's log names what the role still holds. The self-host
+  stack, and Helm on an external database, do it at start.
+- **Helm: name your metrics scraper in `hub.managementFrom`.** Port 9000 now answers only the peers
+  listed there. The default is none: a Prometheus left out is refused.
+- **A JDBC URL takes only the listed parameters.** Certificate files, Kerberos and driver classes are
+  refused, by `lm validate`, `lm apply` and the run. Fix the URLs it names.
+- **An S3 source without `endpoint` goes to AWS.** The hub's `AWS_ENDPOINT_URL` and a profile's
+  `endpoint_url` no longer count: put `endpoint` in the manifest.
+- **S3 follows no proxy.** `https.proxyHost` and the proxy variables are ignored for S3.
+- **`lm` sends no token over plain http to another machine.** Use the TLS proxy, or
+  `--allow-insecure-http` on the context. `lm login` checks the issuer: behind the TLS proxy, use its
+  issuer.
+- **A declared `unique` index is unique within a tenant.** The migration rebuilds each one per tenant.
+  If one cannot be rebuilt, a WARNING at start names it.
+
+### Added
+- **Ask explains a question it cannot answer yet.** "Near", "the best", "recent", "big": it asks
+  which place, measure, period or threshold you mean, and offers questions it can answer.
+- **`lm config set-context <name> --token-stdin`** stores a token without putting it on the command line.
+
+### Fixed
+- **Ask is bounded on the server.** A query stops after 5 seconds. A result over 16 MB is refused:
+  `The result of this query is too large to read. Ask for fewer rows or shorter columns.`
+- **Ask checks every read in the hub's tables**, declared on the card or not.
+- **No connector reaches the hub's port 9000**, whatever the outbound settings say.
+- **The audit tables are closed to the request roles.**
+- **Two runs of one connector started together:** one runs, the others are refused. Before, none could run.
+- **The PWA:** a login answers only the tab that asked; a logout leaves nothing of the user; the page
+  is checked again on each load; the map draws with OpenStreetMap.
+- **`lm`:** its config file is readable by you only; hub text is shown as plain text; a CSV export
+  cannot carry a spreadsheet formula.
+
 ## v1.13.0 — 2026-11-19
 
 A security release on the bundled Keycloak and the deploy scripts. No database migration. `lm` 1.10.0.

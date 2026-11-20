@@ -31,6 +31,14 @@ type Context struct {
 	Access             string `yaml:"access,omitempty"`
 	Refresh            string `yaml:"refresh,omitempty"`
 	ExpiresAt          int64  `yaml:"expires-at,omitempty"`
+
+	// AllowInsecureHTTP lets this context send its credentials over plain http to a host that is not this
+	// machine (#2004): lm config set-context NAME --allow-insecure-http.
+	AllowInsecureHTTP bool `yaml:"allow-insecure-http,omitempty"`
+
+	// stored is the context's own server, kept by Resolve when LUMNIK_URL or --server overrides Server: the
+	// stored session belongs to it, and is not sent elsewhere (#2004).
+	stored string
 }
 
 type Config struct {
@@ -57,6 +65,7 @@ func LoadFromFile(path string) (*Config, error) {
 		}
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
+	ownerOnly(path)
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
@@ -76,7 +85,22 @@ func (c *Config) Save(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600) // WriteFile sets the mode only on a file it creates
+}
+
+// ownerOnly tightens the config to 0600: it holds tokens, and a file created by hand or by an older lm may be
+// readable by others (#2004). Best-effort: a file lm cannot chmod is one it does not own.
+func ownerOnly(path string) {
+	fi, err := os.Stat(path)
+	if err != nil || fi.Mode().Perm()&0o077 == 0 {
+		return
+	}
+	if os.Chmod(path, 0o600) == nil {
+		fmt.Fprintf(os.Stderr, "lm: %s was readable by others (%o); now owner-only (600)\n", path, fi.Mode().Perm())
+	}
 }
 
 // Resolve returns the Context matching the given name, or the current-context
@@ -92,6 +116,7 @@ func (c *Config) Resolve(name string) (Context, error) {
 	if !ok {
 		return Context{}, fmt.Errorf("context %q not found", name)
 	}
+	ctx.stored = ctx.Server
 	if v := os.Getenv("LUMNIK_URL"); v != "" {
 		ctx.Server = v
 	}
@@ -132,9 +157,85 @@ func RemoteHTTPS(server string) (string, bool) {
 		return "", false
 	}
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
-	if host == "localhost" || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".test") {
-		return host, false
+	// *.local counts as local here (a dev-bypass hub on the LAN), unlike onThisMachine's clear-text rule.
+	return host, !onThisMachine(host) && !strings.HasSuffix(host, ".local")
+}
+
+// StoredServer is the server written in the context, before LUMNIK_URL or --server (#2004).
+func (c Context) StoredServer() string { return c.stored }
+
+// Foreign reports whether the effective server is another origin than the context's own: its stored session
+// (token, access, refresh) is then not sent there (#2004). A context not built by Resolve is never foreign.
+func (c Context) Foreign() bool { return c.stored != "" && !SameOrigin(c.stored, c.Server) }
+
+// SameOrigin compares two URLs by scheme, host (case-insensitive) and effective port; path and trailing slash
+// are ignored (#2004).
+func SameOrigin(a, b string) bool {
+	oa, okA := origin(a)
+	ob, okB := origin(b)
+	return okA && okB && oa == ob
+}
+
+func origin(raw string) (string, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "", false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	port := u.Port()
+	if port == "" {
+		switch scheme {
+		case "https":
+			port = "443"
+		case "http":
+			port = "80"
+		}
+	}
+	return scheme + "://" + net.JoinHostPort(strings.TrimSuffix(strings.ToLower(u.Hostname()), "."), port), true
+}
+
+// onThisMachine reports whether host never leaves this machine: localhost, a loopback address, *.localhost,
+// *.test. Not *.local: mDNS resolves it on the LAN (#2004).
+func onThisMachine(host string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".test") {
+		return true
 	}
 	ip := net.ParseIP(host)
-	return host, ip == nil || !ip.IsLoopback()
+	return ip != nil && ip.IsLoopback()
 }
+
+// ClearText reports whether a credential sent to raw would cross the network unencrypted: plain http to a host
+// that is not this machine (#2004).
+func ClearText(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && strings.EqualFold(u.Scheme, "http") && !onThisMachine(u.Hostname())
+}
+
+// CheckClearText refuses to send what (a token, a refresh token) to target in clear text, unless the context
+// allows it (allow-insecure-http) or LUMNIK_ALLOW_HTTP=1 is set for this run (#2004).
+func CheckClearText(ctx Context, name, what, target string) error {
+	if !ClearText(target) || ctx.AllowInsecureHTTP || os.Getenv("LUMNIK_ALLOW_HTTP") == "1" {
+		return nil
+	}
+	if name == "" {
+		name = "NAME"
+	}
+	target = Origin(target)
+	return &ClearTextError{fmt.Sprintf("refusing to send %s to %s in clear text: use https (the TLS proxy), "+
+		"or allow this context: lm config set-context %s --allow-insecure-http", what, target, name)}
+}
+
+// Origin is raw's scheme://host[:port], for a message: no userinfo, path or query, which may carry credentials (#2004).
+func Origin(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "(an unreadable URL)"
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+// ClearTextError is CheckClearText's refusal: a caller tells it from a network failure with errors.As.
+type ClearTextError struct{ msg string }
+
+func (e *ClearTextError) Error() string { return e.msg }

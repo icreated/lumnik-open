@@ -229,13 +229,16 @@ draw a real map under them, name a tile server:
 
 - **The tile server sees the areas your users look at.** That is where your customers are. Choose it
   as you would choose any other processor of that data.
+- **The tile server also learns your hub's address**: the page's origin, never its path.
+  OpenStreetMap refuses a tile request without it.
 - **Every browser receives the URL.** A provider key written in it is public, never a secret.
 - `https://` only (`http://` for `localhost`), with `{z}`, `{x}` and `{y}` and no other placeholder.
   Anything else stops the hub at startup, naming `lumnik.map.tiles`.
 - The page allows images from that host only, and only once it is set.
 - OpenStreetMap's own servers are for light use. For real traffic, use a tile provider or your own
   server.
-- A browser that opened the PWA before the change may block the tiles for up to a day (#2059).
+- A browser sees a new tile server on its next load of the PWA. Once only, after upgrading from a
+  release before v1.14.0, a browser may block the tiles for up to a day: it kept the old page.
 
 ### Turn on email delivery
 
@@ -294,6 +297,45 @@ cp ean-check.kts deploy/selfhost/hooks/
 
 A script runs with all of the hub's rights. Install only scripts you have read. On Helm, the
 scripts come from a ConfigMap.
+
+### Read local files, or change what the hub fetches
+
+| Setting | What it does | Default |
+|---|---|---|
+| `LUMNIK_CSV_LOCAL_ROOT` | the folder a `local` csv transport reads ([CSV](connectors/csv.md)) | unset: none |
+| `LUMNIK_OUTBOUND_MAX_RESPONSE_MB` | the largest REST response the hub reads | `64` |
+| `LUMNIK_OUTBOUND_ALLOW_LOOPBACK` | `true` lets a source reach `localhost` | `false` |
+
+- **Self-host:** `LUMNIK_CSV_LOCAL_ROOT` goes in `.env`, then re-run `up.sh`. It is a path inside
+  the hub's container: a folder of the host needs a volume of your own ([CSV](connectors/csv.md)).
+  The stack does not pass the other two from `.env`. Write them, and the volume, in a compose file
+  of your own. In a container, `localhost` is the hub's own container: point a source at its host
+  name instead.
+
+    ```yaml
+    # hub-settings.yml
+    services:
+      hub:
+        environment:
+          LUMNIK_OUTBOUND_MAX_RESPONSE_MB: "128"
+        volumes:
+          - /srv/lumnik-drop:/tmp/drop:ro   # only for LUMNIK_CSV_LOCAL_ROOT=/tmp/drop
+    ```
+
+    From the repository root, list the files the running stack was started with (the TLS proxy
+    or Search add theirs). Start the hub with every one of them, in that order, and yours last.
+    `up.sh` keeps them all on later runs.
+
+    ```bash
+    docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' \
+      "$(docker compose -f docker-compose.selfhost.yml ps -q hub)"
+    docker compose -f docker-compose.selfhost.yml -f docker-compose.tls.yml -f hub-settings.yml up -d hub
+    ```
+
+- **Helm:** each one in `hub.extraEnv`. The chart mounts no folder for `LUMNIK_CSV_LOCAL_ROOT`
+  and has no value to add one: on Helm, read files over `s3` or `sftp` instead.
+
+What the hub refuses to reach: [Where the hub connects](security/outbound-addresses.md).
 
 ### Reach the hub from another machine
 

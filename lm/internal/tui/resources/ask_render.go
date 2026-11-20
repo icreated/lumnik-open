@@ -6,10 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/icreated/lumnik-open/lm/internal/client"
+	"github.com/icreated/lumnik-open/lm/internal/newfile"
 	"github.com/icreated/lumnik-open/lm/internal/output"
 )
 
@@ -44,12 +48,33 @@ func sqlBadge(answer string) (tag, label string) {
 func rowsToCSV(cols []string, rows [][]string) string {
 	var b bytes.Buffer
 	w := csv.NewWriter(&b)
-	_ = w.Write(cols)
+	_ = w.Write(asText(cols))
 	for _, r := range rows {
-		_ = w.Write(r)
+		_ = w.Write(asText(r))
 	}
 	w.Flush()
 	return b.String()
+}
+
+// asText keeps a spreadsheet from running a cell as a formula (#2004): a cell opening with = + - @ tab or CR gets a
+// leading ', unless it is a plain number (-5 stays a number).
+func asText(cells []string) []string {
+	out := make([]string, len(cells))
+	for i, c := range cells {
+		out[i] = c
+		if c != "" && strings.ContainsRune("=+-@\t\r", rune(c[0])) {
+			if _, err := strconv.ParseFloat(c, 64); err != nil {
+				out[i] = "'" + c
+			}
+		}
+	}
+	return out
+}
+
+// writeExport writes an export in dir, owner-only, and never through a file or link already there (#2004).
+func writeExport(dir string, at time.Time, content []byte) (string, error) {
+	name := fmt.Sprintf("lm-ask-%d.csv", at.Unix())
+	return name, newfile.WriteMode(filepath.Join(dir, name), content, 0o600)
 }
 
 // friendlyAskError converts an ask failure into a calm, on-screen explanation.

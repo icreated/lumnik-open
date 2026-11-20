@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Every fixed sentence the ask door serves in place of a phrased answer — abstentions, guard refusals,
@@ -131,6 +133,13 @@ final class AskSentences {
                 + "les lignes et le SQL ci-dessous font foi.");
     }
 
+    /** The result passed Ask's byte cap (#2090): no row is read, and none is shown. */
+    static String resultTooLarge(String lang) {
+        return pick(lang,
+            "The result of this query is too large to read. Ask for fewer rows or shorter columns.",
+            "Le résultat de cette requête est trop volumineux pour être lu. Demandez moins de lignes ou des colonnes plus courtes.");
+    }
+
     static String queryRefused(String lang, String rootMessage) {
         return pick(lang,
             "I couldn't run that query — the database refused it: " + rootMessage
@@ -193,6 +202,73 @@ final class AskSentences {
                 + "or type the coordinates, latitude first: 45.764, 4.8357.",
             "Je ne peux pas mesurer depuis cet endroit : je ne connais pas ses coordonnées. Nommez une ligne qui a "
                 + "un point, ou écrivez les coordonnées, latitude d'abord : 45.764, 4.8357.");
+    }
+
+    // --- #2096: an underspecified question — what was understood, what is missing, what to ask instead ---------------
+
+    static String clarifyRadius(String lang, String around, List<String> suggestions) {
+        return pick(lang,
+            "I understood that you are looking for what lies " + around + ". A radius is missing, and I know no "
+                + "coordinates for a place name.",
+            "J'ai compris que vous cherchez ce qui se trouve " + around + ". Il manque un rayon, et je ne connais pas "
+                + "de coordonnées pour un nom de lieu.") + offer(lang, suggestions, "");
+    }
+
+    static String byCity(String lang, String prefix, String column, String place) {
+        return pick(lang, prefix + " with " + column + " equal to " + place + "?",
+            prefix + " avec " + column + " égale à " + place + " ?");
+    }
+
+    static String byDistance(String lang, String prefix) {
+        return pick(lang, prefix + " within [radius] km of [latitude], [longitude]?",
+            prefix + " à moins de [rayon] km de [latitude], [longitude] ?");
+    }
+
+    static String clarifyMetric(String lang, String word, String stem, List<String> figures) {
+        return pick(lang,
+            "I understood that you want a ranking (“" + word + "”). The metric that ranks it is missing: I do not "
+                + "choose it for you.",
+            "J'ai compris que vous voulez un classement (« " + word + " »). Il manque l'indicateur qui le classe : "
+                + "je ne le choisis pas à votre place.")
+            + offer(lang, List.of(pick(lang, stem + ", by [metric]?", stem + ", par [indicateur] ?")),
+                labelled(lang, "declared figures", "indicateurs déclarés", figures));
+    }
+
+    static String clarifyPeriod(String lang, String word, String stem, List<String> dates) {
+        return pick(lang,
+            "I understood that you are looking for “" + word + "” rows. The period is missing: this scope does not "
+                + "declare what “" + word + "” means.",
+            "J'ai compris que vous cherchez des lignes « " + word + " ». Il manque la période : ce périmètre ne "
+                + "déclare pas ce que « " + word + " » veut dire.")
+            + offer(lang, List.of(pick(lang, stem + ", since [YYYY-MM-DD]?", stem + ", depuis le [AAAA-MM-JJ] ?")),
+                labelled(lang, "declared dates", "dates déclarées", dates));
+    }
+
+    static String clarifyThreshold(String lang, String word, String stem, boolean below, Optional<String> named,
+                                   List<String> figures) {
+        String en = below ? "below" : "above";
+        String fr = below ? "en dessous de" : "au-dessus de";
+        return pick(lang,
+            "I understood that you filter on “" + word + "”. The threshold is missing: this scope does not declare "
+                + "what “" + word + "” means.",
+            "J'ai compris que vous filtrez sur « " + word + " ». Il manque le seuil : ce périmètre ne déclare pas "
+                + "ce que « " + word + " » veut dire.")
+            + offer(lang, List.of(pick(lang, stem + ", with " + named.orElse("[column]") + " " + en + " [threshold]?",
+                    stem + ", avec " + named.orElse("[colonne]") + " " + fr + " [seuil] ?")),
+                named.isPresent() ? "" : labelled(lang, "declared figures", "indicateurs déclarés", figures));
+    }
+
+    /** " You can ask “a” or “b” (declared …)." — nothing when there is nothing grounded to offer. */
+    private static String offer(String lang, List<String> suggestions, String labelled) {
+        if (suggestions.isEmpty()) return "";
+        String joined = suggestions.stream().map(s -> pick(lang, "“" + s + "”", "« " + s + " »"))
+            .collect(Collectors.joining(pick(lang, " or ", " ou ")));
+        return pick(lang, " You can ask ", " Vous pouvez demander ") + joined
+            + (labelled.isEmpty() ? "" : " (" + labelled + ")") + ".";
+    }
+
+    private static String labelled(String lang, String en, String fr, List<String> names) {
+        return names.isEmpty() ? "" : pick(lang, en, fr) + pick(lang, ": ", " : ") + String.join(", ", names);
     }
 
     static String undocumentedColumn(String lang, String column, List<String> declaredColumns) {

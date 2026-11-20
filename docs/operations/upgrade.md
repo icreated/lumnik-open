@@ -68,6 +68,70 @@ then turn it on. Turning it off again:
 Some releases change what existing data means. Each section below says what you see after
 upgrading and what to do.
 
+### S3 connects without a proxy { #s3-connects-without-a-proxy }
+
+**Who is concerned:** a hub that reaches its S3 stores through a proxy, set with
+`-Dhttps.proxyHost` or `-Dhttp.proxyHost`.
+
+**What you see:** S3 sources and exports connect to the store directly. Where the network allows
+only the proxy, their runs fail with a connection timeout.
+
+**The gesture:** open the route from the hub to the store. The hub checks the store's address at
+every connection, so it cannot go through a proxy that picks the address itself.
+
+**Also concerned:** a hub with `lumnik.outbound.allow-private=false` (the Helm default) that
+reaches AWS S3 through a VPC endpoint with private DNS. The bucket's name resolves to a private
+address, and its runs fail: `the host resolves to a private address, which this hub refuses`.
+Reach S3 by its public address: drop the private DNS for S3, or route the hub to the public
+endpoint.
+
+`lumnik.outbound.allow-private=true` (Helm: `--set outbound.allowPrivate=true`) also works, but it
+is a decision for the whole hub. It opens the private networks to every address a tenant
+chooses: every connector, export and webhook, not S3 only.
+
+### S3 without `endpoint` goes to AWS { #s3-without-endpoint-goes-to-aws }
+
+**Who is concerned:** a hub that sends S3 sources to MinIO, or to another store, through
+`AWS_ENDPOINT_URL`, `AWS_ENDPOINT_URL_S3` or a profile's `endpoint_url`.
+
+**What you see:** an S3 source or export with no `endpoint:` goes to AWS. Its runs fail, because
+AWS does not know the key.
+
+**The gesture, before upgrading:** write the store's address in each S3 transport and export:
+
+```yaml
+transport:
+  kind: s3
+  endpoint: http://minio:9000
+```
+
+### A JDBC URL takes only the listed parameters { #a-jdbc-url-takes-only-the-listed-parameters }
+
+A JDBC URL now takes only the parameters listed in
+[Where the hub connects](../security/outbound-addresses.md#a-jdbc-url). Any other is refused by
+name. The source does not connect, and its runs fail:
+
+```
+the hub cannot tell where this URL connects: it sets sslcert, which the hub does not take
+```
+
+- **PostgreSQL:** `sslcert`, `sslkey`, `sslrootcert`, `sslfactory` and the Kerberos settings name
+  the hub's own files or tickets. `sslmode=verify-ca`, `verify-full` and `ssl=true` alone are
+  refused too: they read a CA from the hub's files.
+- **Oracle:** TCPS is refused for now: the driver would use the hub's own certificates. Connect
+  over TCP, or wait for certificates from `lm secret`. The SSL settings are refused too, even over
+  TCP: `ssl_server_dn_match`, `ssl_server_cert_dn`, and `SECURITY` in a descriptor. Remove them.
+  A wallet, a token or a proxy is refused, in the URL or in a descriptor. So is a
+  descriptor keyword outside the list, and a `?` inside a descriptor.
+- **The hub presents no client certificate any more.** A server that requires one refuses the
+  connection.
+- **`lm validate` and `lm apply` refuse such a URL** with the same reason.
+
+**The gesture:** remove the refused parameter. For an encrypted PostgreSQL connection, write
+`sslmode=require`. The traffic stays encrypted, but the hub no longer checks the server's
+certificate: someone on the network path could pose as the database. If you relied on
+`verify-full`, keep the source on a network you trust until the hub can take a CA of yours.
+
 ### A connector's inline credentials are no longer served back { #inline-credentials-are-no-longer-served-back }
 
 A manifest may write a credential in plain text instead of naming a secret: jdbc's `password`, a
@@ -106,6 +170,24 @@ nothing routes.
   ([Test the API](../recipes/test-the-api.md#import-the-whole-api)).
 - **Do not publish 9000**, and do not give it a Service or a route.
 
+### `lm` sends no token over plain http to another machine { #lm-sends-no-token-over-plain-http-to-another-machine }
+
+`lm` now refuses to send a token, a refresh token or a login over `http://` to a host that is not
+this machine. `localhost`, `127.0.0.1` and names under `.localhost` or `.test` are unchanged.
+
+```text
+Error: refusing to send your token to http://hub.example.com:8080 in clear text: use https (the TLS proxy), or allow this context: lm config set-context prod --allow-insecure-http
+```
+
+**The gesture:** put the hub behind https ([the TLS proxy](../deploy.md#one-https-origin-the-tls-proxy)), then
+point the context at it. On a network you trust, allow the context instead:
+`lm config set-context prod --allow-insecure-http`. `--allow-insecure-http=false` takes it back.
+`LUMNIK_ALLOW_HTTP=1` allows a single run.
+
+`lm login` now checks the issuer that Keycloak names. Behind the TLS proxy, a context on
+`http://localhost:8180/realms/lumnik` is refused there. Point it at the proxy's issuer:
+`lm config set-context <name> --oidc-issuer https://erp.example.com/realms/lumnik`.
+
 ### Two tenants on one table name see only their own columns { #two-tenants-on-one-table-name-see-only-their-own-columns }
 
 Two tenants that ingest the same source write one hub table. Now each one sees only the columns its own data brought.
@@ -113,10 +195,11 @@ Two tenants that ingest the same source write one hub table. Now each one sees o
 - **In Ask,** "show everything" shows your columns only. A column you did not bring is answered as a column that
   does not exist.
 - **In an entity,** naming another tenant's column is refused, as a column that does not exist.
-- **A few rare question shapes** are refused in Ask. Ask again, naming the columns you want.
+- **A few rare question shapes** are refused in Ask: `I won't run this: the query names '<table>' in a way I cannot
+  check against this scope's columns. Ask again, naming the columns you want.` Ask again,
+  naming the columns you want.
 - **Tables ingested before this release** may still show another tenant's columns to a tenant. The hub cannot tell
-  them apart from the tenant's own, so it leaves them.
-  [#2061](https://github.com/icreated/lumnik/issues/2061) adds a command to set a tenant's columns by hand.
+  them apart from the tenant's own, so it leaves them. No command sets a tenant's columns by hand yet.
 
 **The gesture:** none. To keep two tenants fully apart, give each connector its own target table
 ([Two tenants, one table name](../security/rls.md#two-tenants-one-table-name)).
@@ -336,8 +419,9 @@ What is refused, and the settings: [Where the hub connects](../security/outbound
 
 - **A source or a webhook on `localhost` or `127.0.0.1` fails.** Nothing is sent:
   `the host resolves to a loopback address, which this hub refuses (lumnik.outbound.allow-loopback)`.
-  - **The gesture, on a hub run next to its source:** set `LUMNIK_OUTBOUND_ALLOW_LOOPBACK=true`,
-    then recreate the hub.
+  - **The gesture, on a hub run next to its source:** set `LUMNIK_OUTBOUND_ALLOW_LOOPBACK=true` in
+    the hub's environment, then recreate the hub. The self-host stack does not pass it from `.env`:
+    [where to set it](../deploy.md#read-local-files-or-change-what-the-hub-fetches).
   - **In a container,** `localhost` is the container. Point the source at its host name instead.
 - **On Helm, private addresses are refused too.** A source inside the cluster, such as
   `kubernetes.default.svc`, needs the chart value `outbound.allowPrivate=true`.
@@ -402,10 +486,9 @@ An index declared under `indexes:` (csv-file, jdbc-generic) now starts with `ten
   shape.
 - **`unique` now means unique within a tenant.** No existing row can break the new index.
 - **A declared index the upgrade cannot rebuild is left as it was, and named.** That is one a
-  constraint holds, a foreign key references, the replica identity uses (dropping it would change
-  what logical replication sends), or one in a tablespace the hub's role may not create in. The
-  upgrade logs `V96 (#1990): <index> is held by …` for each. Rebuild it by hand with `tenant_id`
-  first. An index you built yourself in another shape is left as it is, without a warning.
+  constraint or a foreign key holds, or one your database administrator set up for replication or
+  on another disk. The upgrade log names each one in a warning that ends `rebuild it by hand with
+  tenant_id first`. Do so, with `tenant_id` as its first column. An index you built yourself in another shape is left as it is, without a warning.
 
 ### A REST target is a table under ext or connector { #a-rest-target-is-a-table-under-ext-or-connector }
 
@@ -438,8 +521,8 @@ an endpoint and deleting a connector touch only those tables too.
   `ext.orders carries the policy see_all, which the hub did not make and which widens what each tenant sees: drop it to write here again`.
 - **A table is created complete, or not at all.** If its creation fails, the run fails and leaves
   no table. The next run creates it again.
-- **The first run on a table after a restart waits** for the runs already writing into it. So does
-  a run that adds a promoted column. The other runs do not wait.
+- **The first run on a table after a restart may start late:** it waits for the runs already
+  writing into that table. So does a run that adds a promoted column. The other runs do not wait.
 - **With several hub replicas, stop the runs and the connector deletes while the upgrade applies.**
   An older replica does not keep the list: a table it creates then is refused afterwards.
 
@@ -447,8 +530,8 @@ an endpoint and deleting a connector touch only those tables too.
 - **For a refused access rule:** remove it as the database owner, then run again:
   `DROP POLICY see_all ON ext.orders;`
 - **For a table the hub made that is not on the list** (restored by hand, or created by an older
-  replica during the upgrade): add it as the database owner, then run again. Use the name
-  `\dt ext.*` shows: Postgres cuts names at 63 characters.
+  replica during the upgrade): add it as the database owner, then run again. No `lm` command does
+  this: it is one SQL line. Use the name `\dt ext.*` shows: Postgres cuts names at 63 characters.
   `INSERT INTO connector.hybrid_table (table_schema, table_name) VALUES ('ext', 'orders');`
 
 ### A hook override carries no code { #a-hook-override-carries-no-code }
@@ -460,15 +543,16 @@ does: the hub runs the operator's scripts only, and an override only switches a 
   `POST /api/platform/hooks/{hookId}/toggle`.
 - **The upgrade clears the scripts already stored.** Export them before upgrading. A hook's code is now its
   module's: the script declared in the module's manifest (`handler: { type: kotlin, script: … }`), built into the
-  hub. To run an exported one again, add it to a module of your own hub build and declare it there. The hooks
-  directory serves connector mapping scripts only, not lifecycle hooks.
+  hub. No command or setting brings an exported one back: it runs again only in a hub image you build yourself,
+  with the script in a module's manifest. The hooks directory serves connector mapping scripts only, not lifecycle
+  hooks.
 
     ```bash
     docker compose -f docker-compose.selfhost.yml exec -T postgres sh -c 'psql -U "${POSTGRES_USER:-lumnik}" -d "${POSTGRES_DB:-lumnik}" -c \
       "SELECT tenant_id, hook_id, script_content FROM core.hook_tenant_override WHERE script_content IS NOT NULL"'
     ```
 
-- **The hook doors refuse a caller bound to a `scope:*` role**, as the webhook and notification doors do, and list
+- **The hook endpoints refuse a caller bound to a `scope:*` role**, as the webhook and notification endpoints do, and list
   the caller's tenant's hooks only.
 
 ### A secret name resolves in `lm secret` only { #a-secret-name-resolves-in-lm-secret-only }
@@ -515,7 +599,7 @@ no longer read: it holds the hub's own passwords, and any tenant could name one.
     lm endpoint reset-cursor orders-drop/default
     ```
 
-- **`lm csv ingest ./file.csv` is unchanged.** Its door no longer reads a path of the hub's disk: a
+- **`lm csv ingest ./file.csv` is unchanged.** Its endpoint no longer reads a path of the hub's disk: a
   request naming one is a `400` (`a local ingest is the uploaded file`).
 
 ### A hub started by hand refuses the published defaults { #a-hub-started-by-hand-refuses-the-published-defaults }
@@ -592,11 +676,18 @@ works meanwhile.
 - **Until then, a question answers `503`:**
   `analytic ask is unavailable: the readonly database role is not hardened`. Ask opens by itself
   once the file has run, without a restart.
+- **From 1.14.0 the file also takes sleeps, notify and large objects** from the role. Run it again
+  where the hub does not: Ask answers `503` until then, and the hub's log names what the role still
+  holds: `Ask is closed: the readonly role still holds …`.
+- **A query of Ask stops after 5 seconds**, and a result over 16 MB is refused:
+  `The result of this query is too large to read. Ask for fewer rows or shorter columns.`
 - **A backup role that is not a superuser** needs `set_config` back for `pg_dump`:
   `GRANT EXECUTE ON FUNCTION pg_catalog.set_config(text,text,boolean) TO <backup role>;`
 - **A table you create by hand under `connector`** is no longer readable by Ask on its own. Grant it:
   `GRANT SELECT ON connector.<table> TO lumnik_readonly;`
-- **Ask refuses a name that starts with `pg_`.**
+- **Ask refuses a name that starts with `pg_`,** a string written `E'…'` or `U&'…'`, and a name written `U&"…"`. The model
+  rarely writes them; when it does, the question answers `I couldn't translate that into a safe
+  query.` Ask again in other words. A table or column named `pg_…` cannot be read by Ask: rename it.
 
 More: [What the read-only role cannot call](../security/rls.md#what-the-read-only-role-cannot-call).
 
@@ -644,7 +735,9 @@ another pod: it is now refused.
 
 - A backup job or pgAdmin on the bundled PostgreSQL.
 - OpenSearch Dashboards or a snapshot job on the search cluster.
-- A Prometheus scraping Keycloak. The hub's metrics stay open to the cluster.
+- A Prometheus scraping Keycloak.
+- A Prometheus scraping the hub's metrics: name it in `hub.managementFrom` instead
+  ([Scraping with Prometheus](observability.md#scraping-with-prometheus)).
 
 Add a NetworkPolicy that lets that pod in, or run the tool with `kubectl exec` in the target pod.
 

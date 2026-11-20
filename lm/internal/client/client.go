@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -96,6 +97,9 @@ type Client struct {
 	// staticToken pins ctx.Token as the bearer and takes the refresh path out of
 	// play entirely. Set only by PinStaticToken, i.e. only for an explicit --token.
 	staticToken bool
+	// withheld is set once tokenLocked has kept the context's stored session from a foreign server (#2004): the
+	// stderr line is said once, and a 401 repeats it.
+	withheld bool
 }
 
 // PinStaticToken makes this client send ctx.Token and never refresh — what an
@@ -156,12 +160,13 @@ func NewForContext(name string, ctx config.Context) *Client {
 	} else if tlsCfg != nil {
 		tr.TLSClientConfig = tlsCfg
 	}
+	WarnInsecure(name, ctx)
 	return &Client{
 		ctx:  ctx,
 		name: name,
-		http: &http.Client{Timeout: 30 * time.Second, Transport: tr},
+		http: &http.Client{Timeout: 30 * time.Second, Transport: tr, CheckRedirect: SameOriginRedirect},
 		// Same Transport, zero Timeout — see the stream field doc comment.
-		stream: &http.Client{Transport: tr},
+		stream: &http.Client{Transport: tr, CheckRedirect: SameOriginRedirect},
 	}
 }
 
@@ -311,7 +316,14 @@ func (c *Client) doOnCtx(ctx context.Context, hc *http.Client, timeout time.Dura
 		c.lostFired.Store(false) // a confirmed-good authenticated request resets the debounce
 	}
 	if resp.StatusCode >= 400 {
-		return &APIError{Status: resp.StatusCode, Body: string(data), RetryAfter: resp.Header.Get("Retry-After")}
+		apiErr := &APIError{Status: resp.StatusCode, Body: string(data), RetryAfter: resp.Header.Get("Retry-After")}
+		c.mu.Lock()
+		withheld := c.withheld
+		c.mu.Unlock()
+		if resp.StatusCode == 401 && withheld {
+			return fmt.Errorf("%w (%s)", apiErr, withheldMessage(c.name, c.ctx))
+		}
+		return apiErr
 	}
 	if out != nil && len(data) > 0 {
 		return json.Unmarshal(data, out)
@@ -341,8 +353,21 @@ func (c *Client) tokenLocked() (string, error) {
 	// shared tail: a second path would have to re-write the Authorization header and
 	// the tenant/user headers, and would silently miss whatever bearerToken grows next.
 	tok, r, err := c.ctx.Token, (*refreshed)(nil), error(nil)
+	if !c.staticToken && c.ctx.Foreign() {
+		// --server or LUMNIK_URL points at another hub than the context's: its stored session (token, access,
+		// refresh) is not sent there, not refreshed at its identity provider, and nothing is persisted (#2004).
+		if !c.withheld {
+			c.withheld = true
+			fmt.Fprintf(WarnOut, "lm: %s\n", withheldMessage(c.name, c.ctx))
+		}
+		return "", nil
+	}
 	if !c.staticToken {
 		tok, r, err = bearerToken(c.http, c.ctx.OidcTokenEndpoint, c.ctx, time.Now())
+	}
+	if ct := (*config.ClearTextError)(nil); errors.As(err, &ct) {
+		// Not a failed refresh but a refused one: no retry from disk, and the context's name in the gesture (#2004).
+		return "", config.CheckClearText(c.ctx, c.name, "your refresh token", c.ctx.OidcTokenEndpoint)
 	}
 	if err != nil {
 		// Refresh failed. A neighbor may have rotated a fresh token to disk — try it once.
@@ -393,6 +418,9 @@ func (c *Client) authorize(req *http.Request) error {
 		return err
 	}
 	if tok != "" {
+		if err := config.CheckClearText(c.ctx, c.name, "your token", req.URL.String()); err != nil {
+			return err
+		}
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	// The dev-bypass identity never leaves for a remote https hub, whatever path built this client (#1610): the

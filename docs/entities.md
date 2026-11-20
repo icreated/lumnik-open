@@ -878,6 +878,8 @@ no claim on another.
 | `404` on `lm entity get NAME` (or `GET /api/entities/{name}`) | no entity by that name has been applied (lookup is case-insensitive, so casing is not it) | check the name against what `apply` reported, or apply the manifest |
 | `Error: access refused (403): scope not granted` on a read | you hold none of the entity's `scopes` | ask an integrator to grant one of those `scope:` roles |
 | apply refused `409`: `source relation … does not exist` | a `sources[].table` does not exist yet — that source connector never ran | run the source connector, then re-apply |
+| apply refused `409`: `this name is already taken on this hub: choose another` | another tenant holds an entity of that name | choose another name ([who owns a manifest](security/role-management.md#on-a-hub-with-several-tenants)) |
+| apply or delete refused `403`: `deployment-wide: this hub serves several tenants, …` | on a hub with several tenants, only `lm_superadmin` writes entities | add `lm_superadmin` to your roles ([several tenants](security/role-management.md#on-a-hub-with-several-tenants)) |
 | `lm connector delete` refused `409`: `table … feeds entity …` | the interlock — the entity still fuses that table | `lm entity delete <name>` first |
 | a row you expected is missing from the fusion | its match column is `NULL` in that source — excluded by construction | give it a key at the source, or accept that it cannot be matched |
 | the wrong system's value shows | source order is the priority, per column | reorder `sources[]`; the other value is in `_conflicts` either way |

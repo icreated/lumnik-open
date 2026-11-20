@@ -1,5 +1,5 @@
 import { html, useState, useEffect, useRef } from '../html.mjs';
-import { splitRows, bounds, graticule, escapeText } from '../map.mjs';
+import { splitRows, bounds, graticule, escapeText, tileOptions } from '../map.mjs';
 import { Refusal } from './refusal.mjs';
 
 // A view on a map (#2057): draws what map.mjs decided, nothing more. Leaflet is loaded the first time a
@@ -33,7 +33,7 @@ export function MapView({ rows, columns, background, onOpen }) {
       map = L.map(el.current, { preferCanvas: true, attributionControl: Boolean(background) });
       if (background) {
         map.attributionControl.setPrefix('Leaflet'); // text only: no link, no flag the operator did not choose
-        L.tileLayer(background.tiles, { attribution: escapeText(background.attribution), maxZoom: 19 }).addTo(map);
+        L.tileLayer(background.tiles, tileOptions(background)).addTo(map);
       } else {
         for (const line of graticule()) L.polyline(line, { color: '#8a8aa0', opacity: 0.35, weight: 1, interactive: false }).addTo(map);
       }

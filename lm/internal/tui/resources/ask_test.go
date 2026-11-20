@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -217,5 +219,45 @@ func TestFriendlyAskError(t *testing.T) {
 	msg = friendlyAskError(errors.New("connection refused"), "atelier")
 	if !strings.Contains(msg, "reach") {
 		t.Errorf("network msg = %q, want 'reach'", msg)
+	}
+}
+
+// #2004: a cell a spreadsheet would run as a formula is written as text; a number stays a number.
+func TestRowsToCSV_neutralisesFormulas(t *testing.T) {
+	got := rowsToCSV([]string{"=title"}, [][]string{{"=HYPERLINK(\"x\")"}, {"+1+1"}, {"@SUM(A1)"}, {"-5"}, {"-2.5e3"}, {"+33 1 23"}, {"\tx"}, {"ok"}})
+	want := "'=title\n\"'=HYPERLINK(\"\"x\"\")\"\n'+1+1\n'@SUM(A1)\n-5\n-2.5e3\n'+33 1 23\n'\tx\nok\n"
+	if got != want {
+		t.Errorf("rowsToCSV = %q, want %q", got, want)
+	}
+}
+
+// #2004: the export is the owner's only, and never writes through a file or a link already there.
+func TestWriteExport_ownerOnlyAndNeverOverwrites(t *testing.T) {
+	dir := t.TempDir()
+	at := time.Unix(1_700_000_000, 0)
+	name, err := writeExport(dir, at, []byte("a\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(filepath.Join(dir, name)); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %o, want 600", fi.Mode().Perm())
+	}
+	target := filepath.Join(dir, "victim")
+	_ = os.WriteFile(target, []byte("keep"), 0o600)
+	_ = os.Remove(filepath.Join(dir, name))
+	_ = os.Symlink(target, filepath.Join(dir, name))
+	if _, err := writeExport(dir, at, []byte("evil")); err == nil {
+		t.Fatal("wrote through an existing link")
+	}
+	if b, _ := os.ReadFile(target); string(b) != "keep" {
+		t.Fatalf("link target changed: %q", b)
+	}
+}
+
+// #2004: a title from the hub is text, never tview markup.
+func TestManifestsTitleIsNotMarkup(t *testing.T) {
+	m := NewManifests(tview.NewApplication(), ManifestSource{Title: "[red]x"}, nil, nil)
+	if got := m.table.GetTitle(); !strings.Contains(got, "[red[]x") {
+		t.Errorf("title = %q, want the escaped markup", got)
 	}
 }

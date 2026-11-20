@@ -19,10 +19,12 @@ class EntityPlanCacheInvalidatorTest {
     EntityPlanCacheInvalidator invalidator = new EntityPlanCacheInvalidator();
     invalidator.defaultDs = mock(AgroalDataSource.class);
     invalidator.readonlyDs = mock(AgroalDataSource.class);
+    invalidator.askDs = mock(AgroalDataSource.class);
     doThrow(new IllegalStateException("pool closed")).when(invalidator.defaultDs).flush(AgroalDataSource.FlushMode.GRACEFUL);
 
     assertThatCode(() -> invalidator.afterEntityApplied("PcOrder")).doesNotThrowAnyException();
     verify(invalidator.readonlyDs).flush(AgroalDataSource.FlushMode.GRACEFUL);
+    verify(invalidator.askDs).flush(AgroalDataSource.FlushMode.GRACEFUL);
   }
 
   @Test
@@ -30,6 +32,7 @@ class EntityPlanCacheInvalidatorTest {
     EntityPlanCacheInvalidator invalidator = new EntityPlanCacheInvalidator();
     invalidator.defaultDs = mock(AgroalDataSource.class);
     invalidator.readonlyDs = mock(AgroalDataSource.class);
+    invalidator.askDs = mock(AgroalDataSource.class);
     doThrow(new IllegalStateException("a")).when(invalidator.defaultDs).flush(AgroalDataSource.FlushMode.GRACEFUL);
     doThrow(new IllegalStateException("b")).when(invalidator.readonlyDs).flush(AgroalDataSource.FlushMode.GRACEFUL);
 

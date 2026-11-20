@@ -4,13 +4,19 @@ This directory vendors three upstream ESM libraries, downloaded pre-built and
 served as-is (no bundler). Their license texts are reproduced verbatim below,
 as required by both licenses.
 
-**Version note:** the vendored files (`preact.mjs`, `hooks.mjs`, `htm.mjs`) are
-minified builds with no embedded version banner, and no `package.json`/lockfile
-travels with them to pin a version at rest. The versions recorded below rest on
-documentary evidence at vendoring time — the unpkg URLs each file was fetched
-from (see the "Source of the vendored build" line under each library) — not on
-a banner embedded in the file itself, so it is stated here rather than
-asserted as fact inside the shipped code.
+**Version and checksum.** The files carry no version banner. Each one was compared byte for byte with the
+upstream build named under its library on 2026-11-19 (#2004): identical, except one line of `hooks.mjs`,
+whose `from "preact"` reads `from "./preact.mjs"` (a page with no bundler resolves no bare name). The
+SHA-256 of each shipped file is below; `vendor.test.mjs` fails when a file changes without this table.
+Replacing a library: update its section, then its line here.
+
+| File | SHA-256 |
+|---|---|
+| `preact.mjs` | `9ba8bb591b0c9a72132ff65a76e69c5a4e49cf71721b47b659f3243658bde05b` |
+| `hooks.mjs` | `cc63ce46891a7a5b278ee938c7a9144e36a7d1a58f2935fd1052598eaa4cc4b5` |
+| `htm.mjs` | `ab33dd3f38059b9be4d5f5350128eefb2356639c4e0bbe9d9e8b3ba75847e9e4` |
+| `leaflet.mjs` | `39ee93464f11fe3847137e50c0dc8189f706c460e36989ea7871bf7d540f3306` |
+| `leaflet.css` | `a7837102824184820dfa198d1ebcd109ff6d0ff9a2672a074b9a1b4d147d04c6` |
 
 ---
 

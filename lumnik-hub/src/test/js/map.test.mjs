@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import {
-  mapState, splitRows, bounds, unplacedLabel, capLabel, graticule, escapeText, createMapReader,
+  mapState, splitRows, bounds, unplacedLabel, capLabel, graticule, escapeText, createMapReader, tileOptions,
 } from '../../main/resources/META-INF/resources/app/src/map.mjs';
 
 test('the switch is offered only for a map whose point is usable', () => {
@@ -103,4 +103,10 @@ test('Fiches resets its map reader when the tab is left, and hides it when the l
   assert.match(src, /useEffect\(\(\) => \(\) => \{[^\n]*mapReader\.current\.reset\(\);/);
   assert.match(src, /mapReader\.current\.hide\(\);/);
   assert.doesNotMatch(src, /onCount\(`\$\{result/, 'the map count is written by the reader only');
+});
+
+test('a tile server on another origin learns the page origin only, which OpenStreetMap requires (#2065)', () => {
+  assert.deepEqual(tileOptions({ tiles: 'https://t/{z}/{x}/{y}.png', attribution: '© <b>OSM</b>' }), {
+    attribution: '© &lt;b&gt;OSM&lt;/b&gt;', maxZoom: 19, referrerPolicy: 'strict-origin-when-cross-origin',
+  });
 });

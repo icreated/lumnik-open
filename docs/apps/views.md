@@ -475,6 +475,8 @@ export's own columns, unlabelled, filterable the same way.
 
 | Symptom | Cause | Gesture |
 |---|---|---|
+| apply refused `409`: `this name is already taken on this hub: choose another` | another tenant holds a view of that name | choose another name |
+| apply or delete refused `403`: `deployment-wide: this hub serves several tenants, …` | on a hub with several tenants, only `lm_superadmin` writes views | add `lm_superadmin` to your roles ([several tenants](../security/role-management.md#on-a-hub-with-several-tenants)) |
 | apply refused: `unknown key(s) in the manifest: …` | a misspelled field (`titel:`) | the message lists what `kind:View` honors — fix the spelling |
 | render or apply refused: column `is not in the '…' schema for table …` | `spec.columns` names a column the scope's card does not have | fix the column name, or add it to the scope's entity |
 | render refused: `column '…' is not in … — the entity changed since this view was written` | the entity lost that column, but the scope's card still lists it. In another tenant than the one that applied, this lasts until the card is rebuilt. If that rebuild failed (the hub log says so), it stays | drop the column from `spec.columns`, or put it back in the entity; `lm source rediscover --scope <tag>` refreshes the card |

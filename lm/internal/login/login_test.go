@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/icreated/lumnik-open/lm/internal/client"
 	"github.com/icreated/lumnik-open/lm/internal/config"
 	"github.com/icreated/lumnik-open/lm/internal/textsafe"
 )
@@ -73,5 +74,41 @@ func TestPrompt_honorsNoColor(t *testing.T) {
 	prompt(textsafe.NewWriter(&raw), "https://kc.test/device", "WXYZ-1234")
 	if strings.ContainsRune(raw.String(), 0x1B) {
 		t.Errorf("NO_COLOR=1 must reach the login page too, got:\n%q", raw.String())
+	}
+}
+
+// The device flow's token request leaves this machine over plain http only on an allowed context (#2004).
+func TestRun_clearTextIdentityProvider_refused(t *testing.T) {
+	t.Setenv("LUMNIK_ALLOW_HTTP", "")
+	cfg := &config.Config{Contexts: map[string]config.Context{
+		"lan": {Server: "https://hub", OidcDeviceEndpoint: "http://192.0.2.1/dev", OidcTokenEndpoint: "http://192.0.2.1/tok"},
+	}}
+	err := Run(context.Background(), http.DefaultClient, cfg, "/dev/null", "lan", &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "lm config set-context lan --allow-insecure-http") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// The login client follows a redirect on the same origin only (#2004).
+func TestHTTPClient_refusesCrossOriginRedirect(t *testing.T) {
+	if HTTPClient(config.Context{}).CheckRedirect == nil {
+		t.Fatal("no CheckRedirect on the login client")
+	}
+}
+
+// #2004 review: insecure-skip-verify is said before the first request to the identity provider, even on a failed login.
+func TestRun_insecureSkipVerify_warnsBeforeTheFirstRequest(t *testing.T) {
+	var warn bytes.Buffer
+	prev := client.WarnOut
+	client.WarnOut = &warn
+	t.Cleanup(func() { client.WarnOut = prev })
+	cfg := &config.Config{Contexts: map[string]config.Context{
+		"lab": {Server: "https://hub.test", OidcIssuer: "https://127.0.0.1:1/realms/x", InsecureSkipVerify: true},
+	}}
+	if err := Run(context.Background(), http.DefaultClient, cfg, "/dev/null", "lab", &bytes.Buffer{}); err == nil {
+		t.Fatal("login against nothing succeeded")
+	}
+	if !strings.Contains(warn.String(), "insecure-skip-verify is on for context 'lab'") {
+		t.Errorf("no warning before the failed login: %q", warn.String())
 	}
 }

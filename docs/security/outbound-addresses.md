@@ -10,10 +10,15 @@ checks where the name leads, not the name itself.
 |---|---|---|
 | The cloud metadata | `169.254.169.254`, and the AWS, Alibaba, Azure and Oracle Cloud equivalents | always |
 | Link-local, unspecified, multicast | `fe80::1`, `0.0.0.0`, `224.0.0.1` | always |
+| The hub's own management port | `http://hub:9000`, `http://localhost:9000` | always (REST, OpenAPI, webhook, S3) |
 | The hub's own machine | `localhost`, `127.0.0.1`, `::1` | unless `LUMNIK_OUTBOUND_ALLOW_LOOPBACK=true` |
 | Private networks | `10.x`, `172.16–31.x`, `192.168.x`, `100.64–127.x`, `fc00::/7`, and the other non-public ranges | when `LUMNIK_OUTBOUND_ALLOW_PRIVATE=false` |
 
 Another way of writing the same address is the same address: `::ffff:127.0.0.1` is `localhost` too.
+
+The management port serves health, metrics and the API spec without a token. The hub refuses it on any
+of its own addresses, whatever the settings below say. Its other ports follow the rules above.
+The port is `quarkus.management.port`, 9000 unless you moved it.
 
 ## The settings
 
@@ -56,11 +61,25 @@ Error: API error 400: 'url': the host resolves to a link-local address, which th
 Write the host in the URL. The hub reads it there, as the driver does.
 
 - **PostgreSQL:** `jdbc:postgresql://host:5432/db`, or a failover list `//a:5432,b:5432/db`.
-  - **Refused:** a URL with no host (`jdbc:postgresql:///db`), and a `service=` parameter, which
-    the hub's own files would resolve.
+  - **Refused:** a URL with no host (`jdbc:postgresql:///db`), and a `service=` parameter. Write
+    the host in the URL instead.
+  - **Accepted parameters:** `user`, `password`, `ssl`, `sslmode`, `targetServerType`,
+    `loadBalanceHosts`, `hostRecheckSeconds`, `ApplicationName`, `currentSchema`, `readOnly`, the
+    timeouts, `tcpKeepAlive`, `defaultRowFetchSize`, `prepareThreshold`, `stringtype`, `loggerLevel`. Any other is
+    refused by name.
+  - **`sslmode`:** `disable`, `allow`, `prefer` or `require`. The traffic is encrypted, but the
+    server's certificate is not checked. `verify-ca`, `verify-full` and `ssl=true` alone are refused
+    for now: the only CA the driver could read is a file on the hub.
+  - **The hub's own files are never offered.** The hub presents no client certificate, and never
+    uses its Kerberos tickets.
 - **Oracle:** `@//host:1521/SERVICE`, `@host:1521/SERVICE`, `@host:1521:SID`, a host list,
-  `tcps://`, or a `(DESCRIPTION=…)` descriptor.
-  - **Refused:** a TNS alias, an LDAP URL, `TNS_ADMIN`, and a proxy parameter.
+  `tcp://`, or a `(DESCRIPTION=…)` descriptor over TCP.
+  - **Refused:** TCPS (`tcps://`, `PROTOCOL=TCPS`) for now: the only certificates the driver could
+    use are the hub's. Also refused: a TNS alias, an LDAP URL, `TNS_ADMIN`, a proxy (`https_proxy`, `HTTPS_PROXY`), a
+    wallet (`wallet_location`, `MY_WALLET_DIRECTORY`) and a token (`TOKEN_AUTH`, `TOKEN_LOCATION`).
+  - **Accepted after `?`:** `connect_timeout`, `transport_connect_timeout`, `retry_count`,
+    `retry_delay`, `failover`, `load_balance`, `expire_time`, `sdu`, `oracle.net.CONNECT_TIMEOUT`, `oracle.jdbc.ReadTimeout`. Any other is
+    refused by name. A descriptor takes the same settings, and addresses and the service.
 
 ```
 $ echo -n "$ERP_PASSWORD" | lm source jdbc test --url jdbc:oracle:thin:@ERPPROD --user ro --password-stdin
@@ -79,6 +98,10 @@ Error: API error 400: the host resolves to a link-local address, which the hub n
   followed.
 - **No redirect is followed.**
 - **SFTP offers only the credential the transport declares**, never the hub's own SSH keys.
+- **S3 without `endpoint` reads from AWS.** The hub's own AWS settings never choose another
+  address.
+- **S3 is checked at every connection**, all run long, on the address it connects to. It uses no
+  proxy, even if the hub has one (`https_proxy`, `https.proxyHost`).
 - **A JDBC test, discovery or guided add gives up** on a server that never answers: within about
   12 s on PostgreSQL. A run's queries are not cut short.
 
@@ -87,14 +110,15 @@ Error: API error 400: the host resolves to a link-local address, which the hub n
 - **A name that changes its answer.** The hub looks the name up, then the client connects. Both
   use the same 30-second cache, so they agree. For REST, webhooks, JDBC and SFTP, the client
   connects right after each check: a name can slip through only if its answer changes at that
-  very moment. A hub that turns the cache off logs a warning at startup.
-- **Kafka and S3 are checked once, when the run starts.** Their client keeps looking the name up
-  for the whole run. A name that later leads elsewhere is not checked again.
+  very moment. Keep the JVM's address cache on: a hub started with `networkaddress.cache.ttl=0`
+  (or `-Dsun.net.inetaddr.ttl=0`) logs, at its first outbound check, `an address cache TTL of 0: the HTTP client
+  resolves a host again after the outbound rule judged it, …`.
+- **Kafka:** `allow-private=false` checks the broker addresses written in the manifest. It
+  cannot check the brokers the cluster names afterwards. See
+  [the broker addresses the hub checks](../connectors/kafka.md#the-broker-addresses-the-hub-checks).
 - **A name that does not resolve:**
   - for Kafka and S3, the run fails with `host not resolved` and is retried;
   - for the others, it fails as the client says (host not found), and is retried like any
     unreachable source. In a failover list, the client moves on to the next host.
-- **Kafka:** the hub checks the broker addresses you write. The cluster then names its other
-  brokers itself, and those are not checked.
 - **Oracle:** a listener that sends the connection on to another host is not checked.
 - **A JDBC URL that sets its own timeouts keeps them.**

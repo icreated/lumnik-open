@@ -29,7 +29,7 @@ Generated queries run as `lumnik_readonly`: `SELECT` only, one statement, `LIMIT
 
 ## Before you expose the hub
 
-!!! danger "A door that answers without a login"
+!!! danger "An endpoint that answers without a login"
     - **Health, metrics and the OpenAPI spec** answer without a token, on the hub's management
       port, 9000. Nothing routes it: keep it so. Do not publish 9000, and do not give it a Service
       or a route ([observability](../operations/observability.md)).
@@ -37,9 +37,9 @@ Generated queries run as `lumnik_readonly`: `SELECT` only, one statement, `LIMIT
       every caller is superadmin and picks any tenant. The chart defaults to `oidc` and renders
       dev-bypass only with `auth.iUnderstandNoAuth=true` as well. Never expose such a hub. The
       self-host stack (`up.sh`) always requires a login.
-    - **A hub you start yourself** (`docker run` of the image, whatever its profile) refuses to
-      start on a default this repository publishes. Only development mode keeps them, and the
-      test harness's `otkauth` profile keeps its database passwords. That covers dev-bypass without
+    - **A hub you start yourself** (`docker run` of the image) refuses to start on a default this
+      repository publishes. Only development mode (`mvn quarkus:dev`) and the automated test
+      harness accept them: never start a real hub with a test profile. That covers dev-bypass without
       `LUMNIK_SECURITY_I_UNDERSTAND_NO_AUTH=true`, the development `LUMNIK_CRYPTO_SECRET_KEY`, and a
       database password left at its development value. `up.sh` and the Helm chart set all of them.
 

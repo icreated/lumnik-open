@@ -164,7 +164,7 @@ public class DynamicTableWriter {
 
         Map<String, String> inferred = inferrer.infer(rows, sourceTypeHints);
         createTable(c, spec, inferred);
-        createIndexes(c, spec);
+        createIndexes(c, spec, tenantId);
         enableRLS(c, spec);
 
         Map<String, String> actual = driftDetector.actualSchema(c, spec.schema(), spec.name());
@@ -172,7 +172,7 @@ public class DynamicTableWriter {
         if (spec.marksSeen()) actual.keySet().remove(SEEN_RUN);   // elsewhere a column of that name is the source's
         // Never widen here (#1600): enableRLS holds the table, and a widening may rebuild entity views, whose locks
         // come first. write() runs evolveSchema right after this commits; it widens in a transaction of its own.
-        Map<String, String> reconciled = applyDrift(c, spec, rows, actual, sourceTypeHints, null);
+        Map<String, String> reconciled = applyDrift(c, spec, rows, actual, sourceTypeHints, null, tenantId);
         // #2023: the table may be another tenant's already, with columns of its own. This tenant's schema — what its
         // card lists, what its Entities may name — is the columns its own data brings, typed as the table holds them.
         reconciled.keySet().retainAll(columnsOf(rows));
@@ -254,7 +254,7 @@ public class DynamicTableWriter {
                                            Map<String, String> registered,
                                            Map<String, String> sourceTypeHints, Long tenantId,
                                            String mappingId, UUID connectorId) {
-    Map<String, String> updated = applyDrift(spec, rows, registered, sourceTypeHints);
+    Map<String, String> updated = applyDrift(spec, rows, registered, sourceTypeHints, tenantId);
     if (updated.equals(registered)) return registered;
 
     // Run all DDL BEFORE advancing the registry — mirrors the creation branch, where register()
@@ -265,15 +265,15 @@ public class DynamicTableWriter {
     return updated;
   }
 
-  /** {@link #applyDrift(Connection, MappingTarget.Table, List, Map, Map)} on its own connection —
+  /** {@link #applyDrift(Connection, MappingTarget.Table, List, Map, Map, List, long)} on its own connection —
    *  {@link #evolveSchema}'s unlocked call, where no wider transaction is already in hand. */
   private Map<String, String> applyDrift(MappingTarget.Table spec, List<Map<String, Object>> rows,
-                                         Map<String, String> base, Map<String, String> sourceTypeHints) {
+                                         Map<String, String> base, Map<String, String> sourceTypeHints, long tenantId) {
     List<EntityManifest> rebuilt = new ArrayList<>();
     Map<String, String> drifted;
     try {
       try (Connection c = adminDs.getConnection()) {
-        drifted = applyDrift(c, spec, rows, base, sourceTypeHints, rebuilt);
+        drifted = applyDrift(c, spec, rows, base, sourceTypeHints, rebuilt, tenantId);
       } catch (SQLException e) {
         throw new ConnectorException(Jdbc.failureText("DynamicTableWriter.applyDrift", e), e);
       }
@@ -295,7 +295,7 @@ public class DynamicTableWriter {
    */
   private Map<String, String> applyDrift(Connection c, MappingTarget.Table spec, List<Map<String, Object>> rows,
                                          Map<String, String> base, Map<String, String> sourceTypeHints,
-                                         List<EntityManifest> rebuilt) throws SQLException {
+                                         List<EntityManifest> rebuilt, long tenantId) throws SQLException {
     Set<String> newCols = detectNewColumns(rows, base);
     // rebuilt == null: never widen here (createSchema); otherwise the entities a widening rebuilt are added to it.
     if (newCols.isEmpty() && (rebuilt == null || widenings(rows, base).isEmpty())) return base;
@@ -327,7 +327,7 @@ public class DynamicTableWriter {
             spec.schema(), spec.name(), added.size(),
             added.stream().map(col -> col + " " + updated.get(col)).collect(Collectors.joining(", ")));
         // Index DDL only has something to do when a column appeared; widening one changes no index.
-        createIndexes(c, spec);
+        createIndexes(c, spec, tenantId);
       }
     }
 
@@ -564,23 +564,30 @@ public class DynamicTableWriter {
   }
 
   /**
-   * The indexes a connector declares, each led by {@code tenant_id} (#1990): a {@code t_*} table holds every tenant's
-   * rows (V96 explains, and rebuilds the older ones under the same declared name).
+   * The indexes a connector declares. A {@code t_*} table holds every tenant's rows: a plain index is shared and led
+   * by {@code tenant_id} (#1990, V96); a unique one is the declaring tenant's own, partial on its {@code tenant_id}
+   * and named for it (#2088, V100), so it never binds another tenant's rows.
    */
-  private void createIndexes(Connection c, MappingTarget.Table spec) throws SQLException {
+  private void createIndexes(Connection c, MappingTarget.Table spec, long tenantId) throws SQLException {
     if (spec.indexes() == null || spec.indexes().isEmpty()) return;
     for (var idx : spec.indexes()) {
-      StringBuilder s = new StringBuilder("CREATE ");
-      if (idx.unique()) s.append("UNIQUE ");
-      String idxName = spec.name() + "_idx_" + String.join("_", idx.columns());
-      s.append("INDEX IF NOT EXISTS ").append(quoteIdent(idxName))
-       .append(" ON ").append(fqn(spec)).append(" (").append(quoteIdent(TENANT_ID));
-      for (String column : idx.columns()) {
-        if (!column.equals(TENANT_ID)) s.append(", ").append(quoteIdent(column));
+      List<String> columns = idx.columns().stream().filter(col -> !col.equals(TENANT_ID)).toList();
+      String quoted = columns.stream().map(col -> quoteIdent(col)).collect(Collectors.joining(", "));
+      if (idx.unique()) {
+        exec(c, "CREATE UNIQUE INDEX IF NOT EXISTS " + quoteIdent(declaredIndexName(spec, columns, tenantId))
+            + " ON " + fqn(spec) + " (" + (quoted.isEmpty() ? quoteIdent(TENANT_ID) : quoted) + ")"
+            + " WHERE " + TENANT_ID + " = " + tenantId);
+      } else {
+        exec(c, "CREATE INDEX IF NOT EXISTS " + quoteIdent(spec.name() + "_idx_" + String.join("_", idx.columns()))
+            + " ON " + fqn(spec) + " (" + quoteIdent(TENANT_ID) + (quoted.isEmpty() ? "" : ", " + quoted) + ")");
       }
-      s.append(')');
-      exec(c, s.toString());
     }
+  }
+
+  /** {@code <table>_uidx_<columns>_<tenant>}, fitted to 63 bytes as V100 fits it: {@code _uidx_}, so it never takes the
+   *  name of a plain index ({@code _idx_}) on a column whose name ends with the tenant. */
+  static String declaredIndexName(MappingTarget.Table spec, List<String> columns, long tenantId) {
+    return SourceKeyIndex.fitted(spec.name() + "_uidx_" + String.join("_", columns), "_" + tenantId);
   }
 
   /**

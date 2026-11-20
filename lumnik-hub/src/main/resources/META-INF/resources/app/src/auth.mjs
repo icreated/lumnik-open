@@ -8,7 +8,13 @@
 
 import { NETWORK_DOWN } from './api.mjs';
 
-const KEYS = ['access_token', 'refresh_token', 'token_exp', 'id_token', 'pkce_verifier'];
+// What a login keeps until Keycloak sends the user back: answered once, then forgotten (#2004).
+const LOGIN_KEYS = ['pkce_verifier', 'oidc_state', 'oidc_nonce'];
+const KEYS = ['access_token', 'refresh_token', 'token_exp', 'id_token', ...LOGIN_KEYS];
+
+function random() {
+  return b64url(crypto.getRandomValues(new Uint8Array(32)));
+}
 
 function b64url(bytes) {
   let bin = '';
@@ -38,6 +44,16 @@ export const IDP_DOWN = 'Le service de connexion ne répond pas — réessaie da
 export function unavailableScreen(e) {
   if (e && e.kind === 'auth') return null;
   return e && e.reason === 'idp' ? 'unreachable' : 'offline';
+}
+
+function payload(jwt) {
+  if (!jwt) return null;
+  try {
+    let b64 = jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+    b64 += '='.repeat((4 - b64.length % 4) % 4);  // forgiving-base64 makes padding optional in browsers; belt for non-spec envs
+    return JSON.parse(atob(b64));
+  }
+  catch { return null; }
 }
 
 export function createAuth({
@@ -74,36 +90,39 @@ export function createAuth({
   }
 
   function claims() {
-    const t = token();
-    if (!t) return null;
-    try {
-      let b64 = t.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
-      b64 += '='.repeat((4 - b64.length % 4) % 4);  // forgiving-base64 makes padding optional in browsers; belt for non-spec envs
-      return JSON.parse(atob(b64));
-    }
-    catch { return null; }
+    return payload(token());
   }
 
-  async function loginUrl(verifier = b64url(crypto.getRandomValues(new Uint8Array(32)))) {
+  // state ties Keycloak's answer to the login this tab started; nonce ties the id_token to it (#2004).
+  async function loginUrl(verifier = random(), state = random(), nonce = random()) {
     storage.setItem('pkce_verifier', verifier);
+    storage.setItem('oidc_state', state);
+    storage.setItem('oidc_nonce', nonce);
     const challenge = b64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
     const q = new URLSearchParams({
-      client_id: clientId, response_type: 'code', scope: 'openid',
+      client_id: clientId, response_type: 'code', scope: 'openid', state, nonce,
       redirect_uri: redirect, code_challenge: challenge, code_challenge_method: 'S256',
     });
     return `${kc}/protocol/openid-connect/auth?${q}`;
   }
 
-  async function exchange(code) {
+  async function exchange(code, state) {
+    const verifier = storage.getItem('pkce_verifier');
+    const expected = storage.getItem('oidc_state');
+    const nonce = storage.getItem('oidc_nonce');
+    for (const key of LOGIN_KEYS) storage.removeItem(key);
+    if (!expected || state !== expected) throw new Error('cette connexion n’a pas été demandée par cette page — reconnecte-toi');
     const body = new URLSearchParams({
       grant_type: 'authorization_code', client_id: clientId, code,
-      redirect_uri: redirect, code_verifier: storage.getItem('pkce_verifier') || '',
+      redirect_uri: redirect, code_verifier: verifier || '',
     });
     const r = await fetchFn(`${kc}/protocol/openid-connect/token`, {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body,
     });
     if (!r.ok) throw new Error(`échange du code refusé (${r.status}): ${await r.text()}`);
-    storeTokens(await r.json());
+    const tok = await r.json();
+    if (payload(tok.id_token)?.nonce !== nonce) throw new Error('la réponse de connexion ne correspond pas à cette page — reconnecte-toi');
+    storeTokens(tok);
     // no history.replaceState here — stripping ?code from the URL is the component's job
     return claims();
   }

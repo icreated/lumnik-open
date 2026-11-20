@@ -1,7 +1,7 @@
 import { html, useState, useEffect, useRef } from '../html.mjs';
 import { urlKey, kcBase, redirectUri } from '../config.mjs';
 import {
-  resolveCached, resolveFromRegistry, cacheRegistry, applyIdentity, applyTheme,
+  resolveCached, resolveFromRegistry, cacheRegistry, forgetRegistry, applyIdentity, applyTheme,
 } from '../appRegistry.mjs';
 import { createAuth, nextRenewalDelay, unavailableScreen, IDP_DOWN } from '../auth.mjs';
 import { createApi } from '../api.mjs';
@@ -96,10 +96,11 @@ export function App() {
       const params = new URLSearchParams(location.search);
       if (params.has('code')) {
         try {
-          await auth.exchange(params.get('code'));
-          history.replaceState(null, '', redirectUri(location, REDIRECT_KEY)); // strip ?code
+          await auth.exchange(params.get('code'), params.get('state'));
         } catch (e) {
           setNote(e.message);
+        } finally {
+          history.replaceState(null, '', redirectUri(location, REDIRECT_KEY)); // strip ?code, used or refused: a reload never replays it (#2004)
         }
       }
       let state = auth.bootState();
@@ -176,6 +177,7 @@ export function App() {
 
   function onLogout() {
     if (!confirm('Se déconnecter ?')) return;
+    forgetRegistry(); // the next person at this screen does not see this user's apps (#2004)
     location.href = auth.logoutUrl();
   }
 

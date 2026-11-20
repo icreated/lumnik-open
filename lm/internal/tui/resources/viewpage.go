@@ -291,9 +291,9 @@ func (v *ViewPage) render(manifest []byte, filters []string, landed func()) {
 func (v *ViewPage) fill(res *client.ViewResult) {
 	v.result = res
 	v.list.Clear()
-	title := res.Title
+	title := tview.Escape(res.Title) // the hub's text, not markup (#2004)
 	if len(v.filters) > 0 {
-		title += " · " + strings.Join(v.filters, " · ")
+		title += " · " + tview.Escape(strings.Join(v.filters, " · "))
 	}
 	v.list.SetTitle(" " + title + " ").SetBorder(true)
 	for c, col := range res.Columns {

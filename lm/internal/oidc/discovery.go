@@ -11,6 +11,7 @@ import (
 // Discovery holds the endpoints lm login needs from an OIDC provider's
 // .well-known/openid-configuration document.
 type Discovery struct {
+	Issuer                      string `json:"issuer"`
 	DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint"`
 	TokenEndpoint               string `json:"token_endpoint"`
 }
@@ -36,6 +37,11 @@ func Discover(ctx context.Context, c *http.Client, issuer string) (*Discovery, e
 	var d Discovery
 	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
 		return nil, fmt.Errorf("parse OIDC discovery: %w", err)
+	}
+	// The document names its issuer: one that is not the configured issuer is someone else's endpoints (#2004).
+	if strings.TrimRight(d.Issuer, "/") != strings.TrimRight(issuer, "/") {
+		return nil, fmt.Errorf("OIDC discovery at %s names the issuer %q, not %s: check the context's oidc-issuer",
+			url, d.Issuer, issuer)
 	}
 	if d.DeviceAuthorizationEndpoint == "" {
 		return nil, fmt.Errorf("provider at %s advertises no device_authorization_endpoint — device flow unsupported", issuer)

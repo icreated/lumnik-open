@@ -23,6 +23,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.IntStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -37,6 +38,7 @@ class RowHashPerTenantRlsIT {
 
   private static final String V73 = "db/migration/connector/V73__row_hash_unique_per_tenant.sql";
   private static final String V96 = "db/migration/connector/V96__declared_indexes_per_tenant.sql";
+  private static final String V100 = "db/migration/connector/V100__declared_unique_indexes_partial.sql";
   private static final List<MappingTarget.Index> UNIQUE_CODE = List.of(new MappingTarget.Index(List.of("code"), true));
 
   @Inject DynamicTableWriter writer;
@@ -83,7 +85,61 @@ class RowHashPerTenantRlsIT {
     assertThat(rowsSeenBy(2L, table)).isEqualTo(2);
     assertThat(indexDefs(table)).as("every index of a shared table holds the tenant")
         .allSatisfy(def -> assertThat(def.contains("(tenant_id") || def.contains("WHERE")).as(def).isTrue())
-        .anySatisfy(def -> assertThat(def).contains("UNIQUE INDEX").contains("(tenant_id, code)"));
+        .anySatisfy(def -> assertThat(def).contains("UNIQUE INDEX").contains("WHERE (tenant_id = 1)"))
+        .anySatisfy(def -> assertThat(def).contains("UNIQUE INDEX").contains("WHERE (tenant_id = 2)"));
+  }
+
+  /**
+   * #2088: a unique index tenant 1 declares binds tenant 1's rows only. Tenant 2, which declares the same columns
+   * non-unique, holds two rows with one code, and gets its own index.
+   */
+  @Test
+  void a_declared_unique_index_binds_its_tenant_only() throws Exception {
+    String table = "t_declidx2088_" + System.nanoTime();
+    write(table, 1L, UNIQUE_CODE);
+    write(table, 2L, List.of(new MappingTarget.Index(List.of("code"), false)),
+        List.of(Map.of("code", "same"), Map.of("code", "same")));
+
+    assertThat(rowsSeenBy(2L, table)).isEqualTo(2);
+    assertThat(indexDefs(table))
+        .anySatisfy(def -> assertThat(def).contains("UNIQUE INDEX").contains("WHERE (tenant_id = 1)"))
+        .anySatisfy(def -> assertThat(def).doesNotContain("UNIQUE").contains("(tenant_id, code)"));
+  }
+
+  /**
+   * #2088: V100 rebuilds a shared unique declared index as one partial index per tenant the registry holds on the
+   * table, under the name createIndexes gives it — the long name too. A non-unique one is left shared.
+   */
+  @ParameterizedTest
+  @ValueSource(ints = {0, 60})
+  void a_shared_unique_declared_index_is_rebuilt_per_tenant(int nameLength) throws Exception {
+    String stem = "t_declidx2088_old_" + System.nanoTime();
+    String table = nameLength == 0 ? stem : (stem + "x".repeat(nameLength)).substring(0, nameLength);
+    try (Connection c = adminDs.getConnection(); Statement st = c.createStatement()) {
+      st.execute("CREATE TABLE connector." + table + " (id BIGSERIAL PRIMARY KEY, _row_hash TEXT NOT NULL, "
+          + "tenant_id BIGINT NOT NULL, code TEXT, name TEXT, UNIQUE (tenant_id, _row_hash))");
+      // what createIndexes built after #1990
+      st.execute("CREATE UNIQUE INDEX \"" + table + "_idx_code\" ON connector." + table + " (tenant_id, code)");
+      if (nameLength == 0) {   // a cut name holds one index
+        st.execute("CREATE INDEX \"" + table + "_idx_name\" ON connector." + table + " (tenant_id, name)");
+      }
+      for (long tenant : new long[] {1, 2}) {
+        st.execute("INSERT INTO connector.dynamic_table (tenant_id, mapping_id, table_schema, table_name, "
+            + "schema_inferred) VALUES (" + tenant + ", 'jdbc:" + table + "', 'connector', '" + table + "', '{}')");
+      }
+      replayTwice(st, V100);
+    }
+    MappingTarget.Table spec = new MappingTarget.Table("connector", table, true, MappingTarget.OnConflict.SKIP, List.of());
+    assertThat(indexNames(table)).contains(
+        DynamicTableWriter.declaredIndexName(spec, List.of("code"), 1L),
+        DynamicTableWriter.declaredIndexName(spec, List.of("code"), 2L));
+    assertThat(indexDefs(table))
+        .noneMatch(def -> def.contains("UNIQUE") && def.endsWith("(tenant_id, code)"))
+        .anySatisfy(def -> assertThat(def).endsWith("btree (code) WHERE (tenant_id = 1)"))
+        .anySatisfy(def -> assertThat(def).endsWith("btree (code) WHERE (tenant_id = 2)"));
+    if (nameLength == 0) {
+      assertThat(indexDefs(table)).anySatisfy(def -> assertThat(def).doesNotContain("UNIQUE").endsWith("(tenant_id, name)"));
+    }
   }
 
   /**
@@ -176,6 +232,11 @@ class RowHashPerTenantRlsIT {
     }
   }
 
+  private List<String> indexNames(String table) {
+    return Jdbc.query(adminDs, "indexnames", "SELECT indexname FROM pg_indexes WHERE schemaname = 'connector' "
+        + "AND tablename = ?", ps -> ps.setString(1, table), rs -> rs.getString(1));
+  }
+
   private List<String> indexDefs(String table) {
     return Jdbc.query(adminDs, "indexdefs", "SELECT indexdef FROM pg_indexes WHERE schemaname = 'connector' "
         + "AND tablename = ? AND indexname NOT LIKE '%pkey'", ps -> ps.setString(1, table), rs -> rs.getString(1));
@@ -187,11 +248,15 @@ class RowHashPerTenantRlsIT {
 
   /** Two rows, identical whichever tenant writes them, with the hash the writer would compute. */
   private void write(String table, long tenant, List<MappingTarget.Index> indexes) {
+    write(table, tenant, indexes, List.of(Map.of("code", "C-1"), Map.of("code", "C-2")));
+  }
+
+  /** Each row hashed by its code and its place, so two rows with one code are two rows. */
+  private void write(String table, long tenant, List<MappingTarget.Index> indexes, List<Map<String, Object>> rows) {
     MappingTarget.Table spec = new MappingTarget.Table("connector", table, true, MappingTarget.OnConflict.SKIP, indexes);
-    List<Map<String, Object>> rows = List.of(Map.of("code", "C-1"), Map.of("code", "C-2"));
-    List<Map<String, Object>> sys = rows.stream().map(r -> {
+    List<Map<String, Object>> sys = IntStream.range(0, rows.size()).mapToObj(i -> {
       Map<String, Object> s = new HashMap<>();
-      s.put("_row_hash", "h-" + r.get("code"));
+      s.put("_row_hash", "h-" + rows.get(i).get("code") + "-" + i);
       s.put("_mapping", "jdbc:" + table);
       s.put("_source", "jdbc:" + table);
       s.put("_mapping_version", 1);

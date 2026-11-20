@@ -272,6 +272,8 @@ transport:
   The default names are `lm secret` entries too: the hub's own AWS credentials are never used.
   A key rotated with `lm secret set` is used from the next run on. On a hub with several
   replicas, a connector without scopes may take up to 5 minutes to see it.
+- Without `endpoint`, the source reads from AWS. For MinIO or another store, write its
+  `endpoint`: the hub's own AWS settings are not used.
 
 **One export, archived after commit** — the manifest of the
 [S3 how-to](#ingest-a-headerless-export-under-an-s3-prefix-and-archive-it):

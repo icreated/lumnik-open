@@ -12,15 +12,20 @@ import (
 // file, a failed write may remove it: a stub left behind would otherwise block every retry with a
 // misleading "already exists".
 func Write(path string, data []byte) error {
-	return write(path, data, func(f *os.File, b []byte) error {
+	return WriteMode(path, data, 0o644)
+}
+
+// WriteMode is Write with the file's mode: 0o600 for a file only its owner may read (#2004).
+func WriteMode(path string, data []byte, perm os.FileMode) error {
+	return write(path, data, perm, func(f *os.File, b []byte) error {
 		_, err := f.Write(b)
 		return err
 	})
 }
 
 // write is Write with its write step as a parameter, so a failure of that step can be tested.
-func write(path string, data []byte, put func(*os.File, []byte) error) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+func write(path string, data []byte, perm os.FileMode, put func(*os.File, []byte) error) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
 	if err != nil {
 		return err
 	}

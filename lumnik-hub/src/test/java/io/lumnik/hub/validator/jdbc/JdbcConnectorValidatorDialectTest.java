@@ -34,8 +34,9 @@ class JdbcConnectorValidatorDialectTest {
     public String id() { return "oracle"; }
     public boolean acceptsUrl(String url) { return url != null && url.startsWith("jdbc:oracle:"); }
     public String driverClass() { throw new UnsupportedOperationException(); }
-    public List<String> connectHosts(String url) { throw new UnsupportedOperationException(); }
+    public List<String> connectHosts(String url) { return List.of("h"); }
     public Map<String, String> timeoutProperties(Duration connect, Optional<Duration> read) { throw new UnsupportedOperationException(); }
+    public Map<String, String> isolationProperties() { throw new UnsupportedOperationException(); }
     public String quoteIdentifier(String i) { throw new UnsupportedOperationException(); }
     public KeyComparison keyComparison(List<String> c, Comparison k) { throw new UnsupportedOperationException(); }
     public String limitClause(int l) { throw new UnsupportedOperationException(); }
@@ -95,6 +96,16 @@ class JdbcConnectorValidatorDialectTest {
     assertThat(errs.get(0).path()).isEqualTo("spec.connection.dialect");
     assertThat(errs.get(0).message()).isEqualTo(registryMessage("jdbc:db2://h/d", "db2"))
         .contains("not installed").contains("oracle, postgres");
+  }
+
+  /** #2027: a URL the dialect refuses at every run is refused at apply, with the run's own reason. */
+  @Test
+  void a_url_the_dialect_refuses_is_a_url_error_at_apply() throws Exception {
+    List<ValidationError> errs = connectionErrors("jdbc:postgresql://h/d?sslcert=/home/hub/x.crt", null);
+    assertThat(errs).hasSize(1);
+    assertThat(errs.get(0).path()).isEqualTo("spec.connection.url");
+    assertThat(errs.get(0).message())
+        .isEqualTo("the hub cannot tell where this URL connects: it sets sslcert, which the hub does not take");
   }
 
   @Test

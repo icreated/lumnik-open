@@ -543,8 +543,10 @@ indexes:
 ```
 
 Each entry is `{ columns: [non-empty strings], unique?: bool }`; a malformed entry fails validation.
-Each index starts with `tenant_id`, so `unique` means unique within your tenant: the table is
-shared with the other tenants that ingest under the same name.
+The table is shared with the other tenants that ingest under the same name. Each index holds
+your tenant only: a plain one starts with `tenant_id`, and a `unique` one covers your rows only
+(`WHERE tenant_id = <yours>`). Another tenant's rows never break your `unique`, and yours never
+break theirs.
 
 ## Resume, restart, reset
 

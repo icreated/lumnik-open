@@ -68,7 +68,7 @@ host with Docker. It runs anywhere Docker runs: a laptop, or a VM on any cloud (
 On the first run, `up.sh` creates `.env` with strong random secrets (`openssl rand`). When the hub is
 healthy it prints the URLs:
 
-- Hub — `http://localhost:8080` (health: `./deploy/selfhost/health.sh`, which asks the hub's unpublished management port; the `/api/platform/*` API needs a token)
+- Hub — `http://localhost:8080` (health: `./deploy/selfhost/health.sh`, which asks the hub's management port, 9000, never published; the `/api/platform/*` API needs a token)
 - Keycloak — `http://localhost:8180/realms/lumnik`
 
 Then point `lm` at the hub (server `http://localhost:8080`, OIDC `http://localhost:8180/realms/lumnik`).
@@ -90,20 +90,26 @@ and the per-install passwords for the demo realm users (`HUBADMIN_PASSWORD`, `IN
 losing `LUMNIK_SECRET_MASTER_KEY` makes secrets stored by the hub unrecoverable.
 
 `up.sh` pulls the hub image tagged `main`: in the open edition, the latest release. To upgrade only
-when you choose, pin a release in `.env`, `LUMNIK_VERSION=<version>`, and check out the same tag:
-the compose file and the hub go together.
-
-To prove an image was built by the open edition's own workflow, from its repository, at its tag:
+when you choose, pin a release in `.env` and check out the same tag: the compose file and the hub
+go together. The image tag has no `v`, the git tag has one:
 
 ```bash
-gh attestation verify oci://ghcr.io/icreated/lumnik:<version> -R icreated/lumnik-open
+LUMNIK_VERSION=1.13.0        # in .env
+git checkout v1.13.0
+```
+
+To prove an image was built by the open edition's own workflow, from its repository, at its tag
+(a recent GitHub CLI: an older `gh` stops at `unsupported tlog public key type`; upgrade it):
+
+```bash
+gh attestation verify oci://ghcr.io/icreated/lumnik:1.13.0 -R icreated/lumnik-open
 ```
 
 To see how it was built and what it holds:
 
 ```bash
-docker buildx imagetools inspect ghcr.io/icreated/lumnik:<version> --format '{{ json .Provenance }}'
-docker buildx imagetools inspect ghcr.io/icreated/lumnik:<version> --format '{{ json .SBOM }}'
+docker buildx imagetools inspect ghcr.io/icreated/lumnik:1.13.0 --format '{{ json .Provenance }}'
+docker buildx imagetools inspect ghcr.io/icreated/lumnik:1.13.0 --format '{{ json .SBOM }}'
 ```
 
 If `.env` is gone but the stack's volumes are still there, `up.sh` stops and writes nothing. The
@@ -114,6 +120,45 @@ remove the volumes with the `docker compose … down -v` line it prints. That de
 
 By default the hub (`8080`) and Keycloak (`8180`) bind to `127.0.0.1` — reachable from the host only.
 For a remote host, access them over an SSH tunnel, or see "Going public" below.
+
+## Files and outbound limits
+
+- **`LUMNIK_CSV_LOCAL_ROOT`** — the folder a `local` csv transport reads; unset, none. Set it in
+  `.env`, then run `up.sh` again ([CSV](../../docs/connectors/csv.md)). It is a path inside the hub's
+  container: to read a folder of the host, mount it there with a volume of your own (below).
+- **`LUMNIK_OUTBOUND_MAX_RESPONSE_MB`** — the largest REST response the hub reads (default 64).
+- **`LUMNIK_OUTBOUND_ALLOW_LOOPBACK`** — `true` lets a source reach `localhost` (default `false`).
+  In this stack `localhost` is the hub's own container: point a source at its host name instead.
+
+The stack passes only the first one from `.env`. For the others, and for a volume, write a compose
+file of your own:
+
+```yaml
+# hub-settings.yml
+services:
+  hub:
+    environment:
+      LUMNIK_OUTBOUND_MAX_RESPONSE_MB: "128"
+    volumes:
+      - /srv/lumnik-drop:/tmp/drop:ro   # only for LUMNIK_CSV_LOCAL_ROOT=/tmp/drop
+```
+
+From the repository root, list the files the running stack was started with (the TLS façade or
+Search add theirs):
+
+```bash
+docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' \
+  "$(docker compose -f docker-compose.selfhost.yml ps -q hub)"
+```
+
+Start the hub with every one of them, in that order, and yours last. `up.sh` keeps them all on later
+runs. With the TLS façade, for example:
+
+```bash
+docker compose -f docker-compose.selfhost.yml -f docker-compose.tls.yml -f hub-settings.yml up -d hub
+```
+
+What the hub refuses to reach: [Where the hub connects](../../docs/security/outbound-addresses.md).
 
 ## Going public — the TLS façade
 

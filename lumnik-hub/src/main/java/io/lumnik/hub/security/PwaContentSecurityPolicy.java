@@ -36,6 +36,11 @@ public class PwaContentSecurityPolicy {
             if (isPwa(ctx.normalizedPath())) {
                 HostAndPort authority = ctx.request().authority();
                 ctx.response().putHeader("Content-Security-Policy", policy(authority == null ? null : authority.host(), tiles));
+                if (isPage(ctx.normalizedPath())) {
+                    // The page carries this policy: a day-long immutable copy would keep an old one (#2059). Set at
+                    // headers end, because the static handler writes its own Cache-Control after this filter.
+                    ctx.addHeadersEndHandler(v -> ctx.response().headers().set("Cache-Control", "no-cache"));
+                }
             }
             ctx.next();
         }, 100);
@@ -43,6 +48,10 @@ public class PwaContentSecurityPolicy {
 
     static boolean isPwa(String path) {
         return path != null && (path.equals("/app") || path.startsWith("/app/"));
+    }
+
+    static boolean isPage(String path) {
+        return path.equals("/app") || path.equals("/app/") || path.equals("/app/index.html");
     }
 
     static String policy(String host) {

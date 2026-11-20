@@ -9,6 +9,7 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.net.InetAddress;
+import java.net.NetworkInterface;
 import java.net.URI;
 import java.net.UnknownHostException;
 import java.util.Collections;
@@ -79,6 +80,37 @@ class OutboundAddressTest {
             .hasMessageContaining("loopback")
             .hasMessageContaining("lumnik.outbound.allow-loopback");
         assertThatCode(() -> TESTS.require(local)).doesNotThrowAnyException();
+    }
+
+    /** #2090: the hub's own management port is no source, whatever the switches allow; another port of it is. */
+    @Test
+    void the_hubs_own_management_port_is_refused_whatever_the_switches_say() throws Exception {
+        var everythingAllowed = new OutboundAddress(true, true, 9000);
+        var ownAddresses = Collections.list(NetworkInterface.getNetworkInterfaces()).stream()
+            .flatMap(NetworkInterface::inetAddresses)
+            .filter(a -> !a.isLinkLocalAddress())   // refused already, as link-local (#2002)
+            .map(InetAddress::getHostAddress)
+            .map(a -> a.contains(":") ? "[" + a.replaceAll("%.*", "") + "]" : a).toList();
+
+        assertThat(ownAddresses).isNotEmpty().allSatisfy(own ->
+            assertThatThrownBy(() -> everythingAllowed.require(URI.create("http://" + own + ":9000/q/metrics")))
+                .as(own).isInstanceOf(ConfigValidationException.class)
+                .hasMessageContaining("the hub's own management port"));
+        assertThatCode(() -> everythingAllowed.require(URI.create("http://127.0.0.1:9001/"))).doesNotThrowAnyException();
+        assertThatThrownBy(() -> new OutboundAddress(true, true, 443).require(URI.create("https://localhost/q/metrics")))
+            .as("no port written: the scheme's").hasMessageContaining("the hub's own management port");
+        assertThatCode(() -> TESTS.require(URI.create("http://localhost/"))).as("no management port to protect")
+            .doesNotThrowAnyException();
+        assertThatCode(() -> everythingAllowed.require(URI.create("http://93.184.216.34:9000/")))
+            .as("another machine's 9000").doesNotThrowAnyException();
+    }
+
+    /** Quarkus reports the bound management port only when it is not the configured one: a fixed 9000 reads -1. */
+    @Test
+    void the_management_port_is_the_bound_one_else_the_configured_one() {
+        assertThat(OutboundAddress.managementPort(true, 9000, -1)).as("a packaged hub on 9000").isEqualTo(9000);
+        assertThat(OutboundAddress.managementPort(true, 9000, 57220)).as("a random test port").isEqualTo(57220);
+        assertThat(OutboundAddress.managementPort(false, 9000, -1)).as("no management interface").isEqualTo(-1);
     }
 
     @Test

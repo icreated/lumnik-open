@@ -116,7 +116,7 @@ public class PgcryptoSecretResolver implements SecretResolver {
         Key key = new Key(tenantId, name);
         Kept held = kept.getIfPresent(key);
         // Named in the label: a wrong master key or a damaged row says which secret of which tenant.
-        Optional<Row> read = Jdbc.queryOne(adminDs, "SecretResolver.resolve " + name + " (tenant " + tenantId + ")",
+        Optional<Row> read = Jdbc.queryOne(adminDs, "reading secret " + name + " (tenant " + tenantId + ")",
             READ_SQL, ps -> {
                 ps.setObject(1, held == null ? null : held.ciphertext(), Types.BINARY);
                 ps.setString(2, masterKey);

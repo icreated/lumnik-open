@@ -55,7 +55,7 @@ type Manifests struct {
 
 func NewManifests(app *tview.Application, src ManifestSource, toast, onError func(string)) *Manifests {
 	t := newListTable()
-	t.SetTitle(" :" + src.Title + " ").SetBorder(true)
+	t.SetTitle(" :" + tview.Escape(src.Title) + " ").SetBorder(true)
 	style.ApplyChrome(t.Box)
 	style.ApplyTableSelection(t)
 	p := &Manifests{app: app, src: src, table: t, toast: toast, onError: onError}

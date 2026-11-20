@@ -3,7 +3,6 @@ package resources
 import (
 	"cmp"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -253,8 +252,8 @@ func (a *Ask) exportCSV() {
 	if a.last == nil || len(a.last.Columns) == 0 {
 		return
 	}
-	name := fmt.Sprintf("lm-ask-%d.csv", time.Now().Unix())
-	if err := os.WriteFile(name, []byte(rowsToCSV(a.last.Columns, a.last.Rows)), 0o644); err != nil {
+	name, err := writeExport(".", time.Now(), []byte(rowsToCSV(a.last.Columns, a.last.Rows)))
+	if err != nil {
 		if a.onError != nil {
 			a.onError("export: " + err.Error())
 		}

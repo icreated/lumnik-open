@@ -54,9 +54,13 @@ that would let such a query:
 - switch to another tenant;
 - run SQL hidden inside a text value;
 - see or stop other people's questions;
-- read connector settings, secrets or rejected rows.
+- read connector settings, secrets or rejected rows;
+- wait, signal other sessions, or read a large object.
 
-The full list is in `infra/postgres/init/02-extensions.sql` and in migrations V92 and V93. The hub's other
+The server also stops each Ask query after 5 seconds, and the hub refuses an Ask result larger than
+16 MB. Ask then says the result is too large, and shows no row.
+
+The full list is in `infra/postgres/init/02-extensions.sql`; the hub completes it when it starts. The hub's other
 roles keep their rights, and so do monitoring roles (`pg_monitor`).
 
 ### What you do
@@ -65,7 +69,7 @@ roles keep their rights, and so do monitoring roles (`pg_monitor`).
 |---|---|
 | Self-host (`deploy/selfhost/up.sh`) | Nothing. Every start applies it. |
 | Helm with `LUMNIK_PG_MODE=external` | Nothing. Every `up.sh` applies it. |
-| Helm with the bundled database, the dev `docker-compose.yml`, or your own PostgreSQL | Once, on a volume created before this version (below). |
+| Helm with the bundled database, the dev `docker-compose.yml`, or your own PostgreSQL | Once after each upgrade that changes the list, such as the one that adds the large-object functions (below). |
 
 ```bash
 psql -U <superuser> -d lumnik -f infra/postgres/init/02-extensions.sql
@@ -232,7 +236,7 @@ flowchart LR
 |---|---|---|
 | `docker compose` refuses to start: `required variable LUMNIK_SECRET_MASTER_KEY is missing a value` (or `LUMNIK_CRYPTO_SECRET_KEY`) | The key is missing from `.env` | `openssl rand -base64 32`, put it in `.env` — only on a fresh install; on an existing one, restore the original key |
 | Hub refuses to boot: `lumnik.secret.master-key is too short (< 16 chars)` | The key is under 16 characters | Same fix |
-| A secret fails at runtime: `SecretResolver.resolve <NAME> (tenant <id>) failed (SQLSTATE 39000)` | The master key changed or was lost since the secret was encrypted | Restore the original key from your backup; there is no re-encryption path |
+| A secret fails at runtime: `reading secret <NAME> (tenant <id>) failed (SQLSTATE 39000)` | The master key changed or was lost since the secret was encrypted | Restore the original key from your backup; there is no re-encryption path |
 | A query as `lumnik_app` or `lumnik_readonly` returns zero rows, `lumnik_admin` shows the data | `app.current_tenant` was never set on that connection (a manual `psql` session) | `SET LOCAL app.current_tenant = '<id>'` inside a transaction, as in [the live check](index.md#verify-it-yourself-in-five-minutes) |
 
 ## See also

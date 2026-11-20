@@ -37,7 +37,8 @@ public interface JdbcDialect {
   /**
    * The hosts {@code url} connects to, as this provider's driver reads it (#2002): the hub judges each one before a
    * pool opens. A URL whose hosts the provider cannot tell — an alias resolved elsewhere, a parameter that picks its
-   * own socket — is an {@link IllegalArgumentException} that says so and never quotes the URL. No default, like
+   * own socket — is an {@link IllegalArgumentException} that says so and never quotes the URL; so is a URL setting a
+   * parameter the provider does not take, or one of {@link #isolationProperties()} (#2027). No default, like
    * {@link #keyComparison}: a provider that inherited one would let its URLs past unjudged.
    */
   List<String> connectHosts(String url);
@@ -48,6 +49,13 @@ public interface JdbcDialect {
    * long. No default: the names and units are the driver's.
    */
   Map<String, String> timeoutProperties(Duration connect, Optional<Duration> read);
+
+  /**
+   * The driver properties set on every connection so the driver offers nothing of the hub's own to a tenant's server:
+   * no file, key or ticket it would read by default (#2027). A URL cannot override them, {@link #connectHosts} refuses
+   * the names. No default: what a driver reads by itself is the driver's.
+   */
+  Map<String, String> isolationProperties();
 
   /** Quote an identifier for safe SQL composition. */
   String quoteIdentifier(String identifier);

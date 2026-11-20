@@ -145,3 +145,12 @@ func TestWriter_shortWriteIsErrShortWrite(t *testing.T) {
 		t.Fatalf("err=%v, want io.ErrShortWrite", err)
 	}
 }
+
+// #2004: a byte that is not UTF-8 never reaches the terminal raw.
+func TestWriter_escapesInvalidUTF8(t *testing.T) {
+	var buf bytes.Buffer
+	_, _ = NewWriter(&buf).Write([]byte("a\xffb\xc3("))
+	if got, want := buf.String(), `a\xFFb\xC3(`; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

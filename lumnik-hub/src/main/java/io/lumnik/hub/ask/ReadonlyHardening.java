@@ -38,7 +38,8 @@ public class ReadonlyHardening {
 
     /** The pg_catalog functions 02-extensions.sql revokes, in its own words (ReadonlyHardeningInventoryTest). */
     static final String REVOKED_FUNCTIONS = "p.proname IN ('set_config', 'ts_stat', 'ts_rewrite', "
-        + "'pg_cancel_backend', 'pg_terminate_backend') "
+        + "'pg_cancel_backend', 'pg_terminate_backend', 'pg_notify', 'loread') "
+        + "OR p.proname ~ '^(pg_sleep|lo_)' "
         + "OR p.proname ~ '^(query|table|cursor|schema|database)_to_xml' "
         + "OR p.proname ~ '^pg_(try_)?advisory_' "
         + "OR p.proname ~ '^pg_stat_get_(activity|backend_)'";
@@ -69,7 +70,7 @@ public class ReadonlyHardening {
     boolean required;
 
     @Inject
-    @DataSource("readonly")
+    @DataSource("ask")   // the pool that runs the model's SQL (#2090)
     AgroalDataSource readonlyDs;
 
     @Inject ModuleManifestRegistry registry;

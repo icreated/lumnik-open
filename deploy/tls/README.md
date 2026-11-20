@@ -48,6 +48,10 @@ warning, but the browser will not install the PWA.)
   origin in every URL it mints (`KC_HOSTNAME`); the hub keeps its internal
   back-channel (`keycloak:8180`, `KC_HOSTNAME_BACKCHANNEL_DYNAMIC`).
 - **The hub** validates tokens against the façade issuer and honors forwarded headers.
+- **`lm`** logs in against the façade issuer too:
+  `lm config set-context <name> --server https://erp.example.com --oidc-issuer https://erp.example.com/realms/lumnik`.
+  A context still on `http://localhost:8180/realms/lumnik` is refused at `lm login`: Keycloak
+  names the façade as its issuer, not localhost.
 - Nothing else moves: the plain-http workflow (`http://localhost:8080`) keeps working
   for a same-machine operator without this overlay.
 

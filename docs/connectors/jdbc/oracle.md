@@ -28,8 +28,10 @@ spec:
 - **Versions.** Oracle 12c and later; tested on Oracle 23ai Free only. Oracle 11g is not supported.
 - **Connect by service name**: `@//host:1521/SERVICE`, `@host:1521/SERVICE`, or a full
   `@(DESCRIPTION=…)` descriptor (quote it in YAML). The **SID** form (`@host:1521:SID`) works on a
-  non-multitenant database only; on a multitenant one it fails with `ORA-01017`. TCPS and wallets are not tested.
-- **Write the host in the URL.** A TNS alias (`@ERPPROD`), an LDAP URL and `TNS_ADMIN` are refused:
+  non-multitenant database only; on a multitenant one it fails with `ORA-01017`. TCPS is refused
+  for now.
+- **Write the host in the URL.** A TNS alias (`@ERPPROD`), an LDAP URL, `TNS_ADMIN`, a proxy, a
+  wallet and a token are refused, and so is a parameter outside the accepted list:
   the hub checks where a source connects before it opens it
   ([Where the hub connects](../../security/outbound-addresses.md)).
 - **`lm` needs `--schema`.** `lm source jdbc discover` and `add` default to `--schema public`; for

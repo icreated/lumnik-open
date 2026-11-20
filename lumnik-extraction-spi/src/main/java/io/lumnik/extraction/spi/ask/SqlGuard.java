@@ -41,7 +41,7 @@ public class SqlGuard {
      * readonly role ({@code infra/postgres/init/02-extensions.sql}); this list is the layer above it.
      */
     private static final Set<String> BANNED_OBJECTS = Set.of(
-        "information_schema", "lo_import", "lo_export", "dblink", "set_config", "ts_stat", "ts_rewrite");
+        "information_schema", "lo_import", "lo_export", "lo_get", "lo_open", "loread", "dblink", "set_config", "ts_stat", "ts_rewrite");
 
     /** {@code query_to_xml}, {@code table_to_xmlschema}…: the same pattern {@code 02-extensions.sql} revokes. */
     private static final Pattern XML_FAMILY = Pattern.compile("^(query|table|cursor|schema|database)_to_xml");

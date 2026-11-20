@@ -22,6 +22,7 @@ func TestLoginDiscoversFromIssuer(t *testing.T) {
 	var base string
 	mux.HandleFunc("/realms/lumnik/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                        base + "/realms/lumnik",
 			"device_authorization_endpoint": base + "/dev",
 			"token_endpoint":                base + "/tok",
 		})
@@ -79,6 +80,7 @@ func TestLoginDoesNotClobberManualEndpoint(t *testing.T) {
 	var base string
 	mux.HandleFunc("/realms/lumnik/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                        base + "/realms/lumnik",
 			"device_authorization_endpoint": base + "/discovered-dev", // NOT what we want used
 			"token_endpoint":                base + "/tok",
 		})

@@ -25,7 +25,9 @@ GRANT USAGE ON SCHEMA core, identity, connector, platform, rag TO lumnik_app, lu
 --   pg_*advisory*         a session lock outlives the query on the pooled connection;
 --   pg_stat_activity, pg_stat_get_activity/backend_*  every Ask runs as one role, so they show other
 --                         tenants' SQL in flight (given back to pg_monitor and pg_read_all_stats);
---   pg_cancel/terminate_backend  the same role may signal every other Ask (given back to pg_signal_backend).
+--   pg_cancel/terminate_backend  the same role may signal every other Ask (given back to pg_signal_backend);
+--   pg_sleep*, pg_notify  a wait that holds a pooled connection, a message to every listening session (#2090);
+--   lo_*, loread          a large object, read whatever the tenant (#2090).
 -- A grant made to lumnik_readonly itself is revoked too. A right it inherits from a role it is a member of is
 -- not: the hub's check sees it, and the member must be removed by hand (docs/security/rls.md).
 -- The command SET LOCAL (TenantRlsScope) does not go through set_config and keeps working.
@@ -41,7 +43,9 @@ BEGIN
   FOR f IN
     SELECT p.oid::regprocedure FROM pg_catalog.pg_proc p
     WHERE p.pronamespace = 'pg_catalog'::regnamespace
-      AND (p.proname IN ('set_config', 'ts_stat', 'ts_rewrite', 'pg_cancel_backend', 'pg_terminate_backend')
+      AND (p.proname IN ('set_config', 'ts_stat', 'ts_rewrite', 'pg_cancel_backend', 'pg_terminate_backend',
+                         'pg_notify', 'loread')
+           OR p.proname ~ '^(pg_sleep|lo_)'
            OR p.proname ~ '^(query|table|cursor|schema|database)_to_xml'
            OR p.proname ~ '^pg_(try_)?advisory_'
            OR p.proname ~ '^pg_stat_get_(activity|backend_)')

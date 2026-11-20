@@ -2,9 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -235,3 +238,65 @@ func TestSetContextTrimsTheIdentity(t *testing.T) {
 		t.Errorf("identity not trimmed: %s", s)
 	}
 }
+
+// --allow-insecure-http lets one context send its credentials over plain http off this machine; config view
+// shows it, and =false takes it back (#2004).
+func TestSetContextAllowInsecureHTTP(t *testing.T) {
+	writeConfig(t, "")
+	runRoot(t, "config", "set-context", "lan", "--server", "http://192.168.1.20:8080", "--allow-insecure-http")
+	if out := runRoot(t, "config", "view"); !strings.Contains(out, "allow-insecure-http: true") {
+		t.Errorf("config view does not show the option:\n%s", out)
+	}
+	runRoot(t, "config", "set-context", "lan", "--allow-insecure-http=false")
+	if out := runRoot(t, "config", "view"); strings.Contains(out, "allow-insecure-http") {
+		t.Errorf("the option was not taken back:\n%s", out)
+	}
+}
+
+// --server pointing at another hub keeps the context's own server, so its stored token stays home (#2004).
+func TestServerFlagToAnotherHubWithholdsStoredToken(t *testing.T) {
+	var auth atomic.Value
+	auth.Store("unset")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth.Store(r.Header.Get("Authorization"))
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	writeConfig(t, "current-context: local\ncontexts:\n  local:\n    server: http://localhost:1\n    token: STORED\n")
+	t.Setenv("LUMNIK_URL", "")
+	t.Setenv("LUMNIK_TOKEN", "")
+	cmd := NewRootCmd()
+	if err := cmd.ParseFlags([]string{"--server", srv.URL}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := ClientFromCmd(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.GET("/x", nil)
+	if auth.Load() != "" {
+		t.Errorf("Authorization = %q", auth.Load())
+	}
+}
+
+// #2004: a token read from stdin never shows in ps or the shell history.
+func TestSetContextTokenFromStdin(t *testing.T) {
+	path := writeConfig(t, "")
+	cmd := NewRootCmd()
+	cmd.SetOut(new(bytes.Buffer))
+	cmd.SetIn(strings.NewReader("tok-from-stdin\n"))
+	cmd.SetArgs([]string{"config", "set-context", "ci", "--server", "https://hub.example", "--token-stdin"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); !strings.Contains(string(data), "token: tok-from-stdin\n") {
+		t.Errorf("token not stored from stdin: %s", data)
+	}
+	cmd = NewRootCmd()
+	cmd.SetIn(strings.NewReader("x"))
+	cmd.SetArgs([]string{"config", "set-context", "ci", "--token", "a", "--token-stdin"})
+	if err := cmd.Execute(); err == nil {
+		t.Error("--token and --token-stdin together were accepted")
+	}
+}
+

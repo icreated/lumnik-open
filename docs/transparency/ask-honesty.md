@@ -57,6 +57,7 @@ LIMIT 500
 | *The answer summarises the first 48 of the 312 rows returned.* | the sentence is written from a sample; every row is still printed | For an exact figure, ask for the count |
 | *The SQL query stops at 500 rows: there may be more.* | the result was cut at the query's limit, 500 at most | Narrow the question |
 | *The phrased answer stated a figure these rows do not back, so it is withheld.* | the model wrote a number the rows do not support | The rows and the SQL are the answer |
+| *J'ai compris que vous cherchez ce qui se trouve autour de Lyon. Il manque un rayon…* | the question lacks a radius, a period, a metric or a threshold. Ask does not choose one | Send one of the questions it offers, with the brackets filled in |
 | *I couldn't tie this question to the previous one…* | a follow-up lumnik could not resolve | Ask the question in full |
 | *I couldn't run that query — the database refused it* | the query failed | Read the SQL; if it names a missing table, `lm source rediscover --scope <tag>` |
 
@@ -91,6 +92,8 @@ says so. The disagreement is yours to settle: `lm conflicts list` lists every on
 - **Dates:** write `2026-07-02`, or a month with its year: *juillet 2026*. `01/07/2026` is
   ambiguous and left to the model. The day is read in UTC, even on an entity that declares a
   `zone:`.
+- **Say how much.** *« autour de Lyon »*, *« récentes »*, *« meilleurs »* or *« faible »* alone are
+  not answered. Give a radius and coordinates, a date, the column to rank by, or a number.
 - **An identifier:** a terse lookup such as `status SO-000004` works when the identifier column
   declares an `example` in the entity.
 

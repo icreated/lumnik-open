@@ -31,6 +31,10 @@ func bearerToken(h *http.Client, tokenEndpoint string, ctx config.Context, now t
 	if ctx.Refresh == "" || tokenEndpoint == "" || ctx.OidcClientID == "" {
 		return "", nil, fmt.Errorf("access token expired and cannot refresh (missing refresh token or OIDC config)")
 	}
+	// The refresh token goes to the identity provider: same clear-text rule as the hub (#2004).
+	if err := config.CheckClearText(ctx, "", "your refresh token", tokenEndpoint); err != nil {
+		return "", nil, err
+	}
 	tok, err := oidc.Refresh(h, tokenEndpoint, ctx.OidcClientID, ctx.Refresh)
 	if err != nil {
 		return "", nil, err
@@ -60,6 +64,9 @@ func reloadAndRetry(h *http.Client, load func() (config.Context, bool),
 	clientID := disk.OidcClientID
 	if clientID == "" {
 		clientID = ctx.OidcClientID
+	}
+	if config.CheckClearText(ctx, "", "", endpoint) != nil {
+		return "", nil, false // the disk's endpoint is plain http off this machine: no refresh token goes there (#2004)
 	}
 	tok, err := oidc.Refresh(h, endpoint, clientID, disk.Refresh)
 	if err != nil {

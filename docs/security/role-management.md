@@ -17,7 +17,7 @@ flowchart LR
 | `lm_user` | the app surface: entities, views, chat, inbox, the PWA |
 | `lm_integrator` | the platform surface `lm` drives: connectors, runs, dead letters, views, apps, workflows, search indexes, exports |
 | `lm_admin` | entities, processes, secrets (write), the guided JDBC flow, schema discovery, workflow observations, outputs, email rules, users, SCIM tokens |
-| `lm_superadmin` | cross-tenant: tenant list, tenant CRUD, impersonation; on a hub with several tenants, entities, views, apps and the platform reindex ([below](#on-a-hub-with-several-tenants)); the only role with `wildcard: true` |
+| `lm_superadmin` | cross-tenant: tenant list, tenant CRUD, impersonation; on a hub with several tenants, entities, views, apps and the platform reindex ([below](#on-a-hub-with-several-tenants)): the operator role for cross-tenant and deployment-wide actions |
 | `scope:<tag>` | not a surface: a fence. One or more binds the user to those scopes; none means tenant-wide. [Scopes](../rag/scopes.md#binding-users-to-scopes-opt-in) |
 
 - **No hierarchy.** `lm_admin` does not imply `lm_user`. The bundled realm grants `integrator`
@@ -53,12 +53,11 @@ every tenant. On a hub with several tenants, only `lm_superadmin` runs `lm entit
 `lm rag reindex`. With one tenant, the table above holds.
 
 - **Several tenants** means two tenants besides `hubadmin`. The bundled `default` tenant is one, so the first tenant
-  you create turns the rule on, at the next write. An archived tenant still counts. A write running while a tenant
-  is created finishes first, and the creation waits for it; a write arriving meanwhile waits, then counts the new
-  tenant.
+  you create turns the rule on, at the next write. An archived tenant still counts. You have nothing to do while a tenant is created: a
+  write running then finishes first, under the old rule.
 - **`LUMNIK_TENANCY=multi`** turns it on from the start, before a second tenant exists. The Helm chart sets it
   (`tenancy: multi`). The default is `auto`, the count above; any other value stops the hub at startup.
-- **Who writes them:** the integrator who serves a tenant, with `lm_superadmin` added to their roles. The door's own
+- **Who writes them:** the integrator who serves a tenant, with `lm_superadmin` added to their roles. The endpoint's own
   role still applies: a view still needs `lm_integrator`, an entity `lm_admin`.
 - **As `hubadmin`,** even with one tenant, these commands need `lm_superadmin`, `lm rag reindex` too: what they
   write is shared with every tenant
@@ -142,7 +141,7 @@ the error message. A dead letter carries the rejected row's values.
 - On a connector outside those scopes, these answer `403`: `lm run get`/`cancel`,
   `lm dlq get`/`discard`/`replayed`, and the `--connector`/`--run` filters.
 
-The `lm source` doors create or reuse connectors, so they follow the writing rule:
+The `lm source` endpoints create or reuse connectors, so they follow the writing rule:
 
 - `lm csv ingest` refuses a `--scope` you do not hold. Without `--scope` the one-shot lands in
   `system`, which you need to hold too.
@@ -187,7 +186,7 @@ integrator sees in the same lists. `inventaire` is a `magasin` one-shot. Re-inge
 
 ### What a scope-bound caller cannot do
 
-Some doors act on the whole tenant, never on one scope. A caller holding any `scope:*` role is
+Some endpoints act on the whole tenant, never on one scope. A caller holding any `scope:*` role is
 refused all of them, whatever its other roles:
 
 - secrets: `lm secret list`, `describe`, `set`, `scope`, `rm`;
@@ -244,7 +243,7 @@ The password never left the hub, whatever host `base_url` named.
 | `Error: API error 403: missing role lm_integrator` | the platform gate, in front of every `/api/platform/*` path | Grant `lm_integrator` |
 | `Error: API error 403 (forbidden): no details from the server — your account may lack the required role` | the endpoint's role gate (an empty-body `403`) | Grant the role the gesture needs: [the table above](#which-role-for-which-gesture) |
 | `Error: access refused (403): scope not granted` | the scope gate: the caller holds `scope:*` roles and none matches the resource | Grant the matching `scope:<tag>`, or remove all scope roles to go tenant-wide |
-| `scope not granted` on `lm integration`, `lm notify`, `lm outputs`, `lm secret`, `lm hook list`/`get`, `lm rag reindex`, or on `/api/tenants/…` | these doors are tenant-wide: the caller holds any `scope:*` role | Use an account with no `scope:*` role ([the list](#what-a-scope-bound-caller-cannot-do); outputs: [Outputs](../outputs.md)) |
+| `scope not granted` on `lm integration`, `lm notify`, `lm outputs`, `lm secret`, `lm hook list`/`get`, `lm rag reindex`, or on `/api/tenants/…` | these endpoints are tenant-wide: the caller holds any `scope:*` role | Use an account with no `scope:*` role ([the list](#what-a-scope-bound-caller-cannot-do); outputs: [Outputs](../outputs.md)) |
 | `Error: connector "orders" not found`, an empty `lm run list` or `lm dlq list`, or `scope not granted` on `lm connector scope`, `lm run …`, `lm dlq …` — though an unscoped account sees the connector | the caller holds `scope:*` roles, but not every scope that connector carries | Grant every scope the connector carries, or use an account with no scope role |
 | `scope not granted` on `lm csv ingest` | the ingest asks for a scope the caller does not hold; without `--scope` it asks for `system` | Pass `--scope <tag>` with a granted tag |
 | `scope not granted` on `lm source jdbc add` | the guided add creates a scopeless connector | Declare the connector in a manifest with `scopes:`, or use an account with no scope role |

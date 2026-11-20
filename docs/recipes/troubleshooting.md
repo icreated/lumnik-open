@@ -28,6 +28,10 @@ Which restart is safe, and what each one costs: the [on-call runbook](../operati
 | Login broke after moving to TLS or a new hostname | the issuer changed — [Keep the same public address](../security/byo-idp.md#keep-the-same-public-address) |
 | SCIM calls misbehave | [SCIM troubleshooting](../security/scim.md#troubleshooting) — the issuer-mismatch `404` is the classic |
 | `lm` prints `API error 403 (forbidden): no details from the server — your account may lack the required role` (raw HTTP: `403` with an empty body) | a required role is missing — [Roles & permissions](../security/role-management.md#troubleshooting) |
+| `403 {"error":"deployment-wide: this hub serves several tenants, …"}` on an entity, view or app apply or delete, or `lm rag reindex` | several tenants: only `lm_superadmin` writes them — [Roles & permissions](../security/role-management.md#on-a-hub-with-several-tenants) |
+| `403 {"error":"deployment-wide: what is written from the hub's own tenant is shared with every tenant, and is written by lm_superadmin only"}` | you apply or delete as `hubadmin` without `lm_superadmin` — add `lm_superadmin` to that account ([Roles & permissions](../security/role-management.md#on-a-hub-with-several-tenants)) |
+| `409 {"error":"this name is already taken on this hub: choose another"}` on an apply | another tenant holds that entity, view or app name: choose another |
+| `400 a hook override carries no code` | an override only switches a hook on or off: `POST /api/platform/hooks/{hookId}/toggle`. A hook's code is built into the hub — [upgrade note](../operations/upgrade.md#a-hook-override-carries-no-code) |
 | `API error 403: missing role lm_integrator` | the `/api/platform/*` gate: the account lacks `lm_integrator` — same page |
 
 ## Refusals that are features

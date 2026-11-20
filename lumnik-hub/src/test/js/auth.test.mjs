@@ -90,12 +90,12 @@ test('loginUrl: verifier is optional — defaults to a random one via crypto.get
 });
 
 test('exchange: stores the 4 token keys and returns claims — navigation stays the caller\'s job', async () => {
-  const storage = fakeStorage({ pkce_verifier: 'v1' });
-  const tok = { access_token: jwt({ sub: 'u1' }), refresh_token: 'r1', id_token: 'idtok1', expires_in: 300 };
+  const storage = fakeStorage({ pkce_verifier: 'v1', oidc_state: 's1', oidc_nonce: 'n1' });
+  const tok = { access_token: jwt({ sub: 'u1' }), refresh_token: 'r1', id_token: jwt({ nonce: 'n1' }), expires_in: 300 };
   const fetchFn = fakeFetch(okJson(tok));
   const auth = createAuth({ ...BASE, storage, fetchFn });
 
-  const claims = await auth.exchange('the-code');
+  const claims = await auth.exchange('the-code', 's1');
 
   assert.equal(storage.getItem('access_token'), tok.access_token);
   assert.equal(storage.getItem('refresh_token'), tok.refresh_token);
@@ -114,10 +114,48 @@ test('exchange: stores the 4 token keys and returns claims — navigation stays 
 });
 
 test('exchange: a refused token POST throws and stores nothing', async () => {
-  const storage = fakeStorage({ pkce_verifier: 'v1' });
+  const storage = fakeStorage({ pkce_verifier: 'v1', oidc_state: 's1', oidc_nonce: 'n1' });
   const auth = createAuth({ ...BASE, storage, fetchFn: refusedFetch(400) });
-  await assert.rejects(() => auth.exchange('bad-code'));
+  await assert.rejects(() => auth.exchange('bad-code', 's1'));
   assert.equal(storage.getItem('access_token'), null);
+});
+
+test('loginUrl: sends a fresh state and nonce and keeps them for the return (#2004)', async () => {
+  const storage = fakeStorage();
+  const auth = createAuth({ ...BASE, storage, fetchFn: fakeFetch(okJson({})) });
+  const q = new URL(await auth.loginUrl()).searchParams;
+  assert.ok(q.get('state') && q.get('nonce'));
+  assert.notEqual(q.get('state'), q.get('nonce'));
+  assert.equal(storage.getItem('oidc_state'), q.get('state'));
+  assert.equal(storage.getItem('oidc_nonce'), q.get('nonce'));
+});
+
+test('exchange: a code this tab did not ask for is refused before any call to Keycloak (#2004)', async () => {
+  for (const [stored, returned] of [[{}, 's1'], [{ oidc_state: 's1' }, 'other'], [{ oidc_state: 's1' }, null]]) {
+    const storage = fakeStorage({ pkce_verifier: 'v1', oidc_nonce: 'n1', ...stored });
+    const fetchFn = fakeFetch(okJson({}));
+    const auth = createAuth({ ...BASE, storage, fetchFn });
+    await assert.rejects(() => auth.exchange('the-code', returned));
+    assert.equal(fetchFn.calls.length, 0);
+    assert.equal(storage.getItem('oidc_state'), null, 'a login is answered once');
+  }
+});
+
+test('exchange: an id_token minted for another login is refused and nothing is stored (#2004)', async () => {
+  for (const idToken of [jwt({ nonce: 'other' }), jwt({}), undefined]) {
+    const storage = fakeStorage({ pkce_verifier: 'v1', oidc_state: 's1', oidc_nonce: 'n1' });
+    const tok = { access_token: jwt({ sub: 'u1' }), refresh_token: 'r1', id_token: idToken, expires_in: 300 };
+    const auth = createAuth({ ...BASE, storage, fetchFn: fakeFetch(okJson(tok)) });
+    await assert.rejects(() => auth.exchange('the-code', 's1'));
+    assert.equal(storage.getItem('access_token'), null);
+  }
+});
+
+test('exchange: a login is answered once — state, nonce and verifier are gone after it (#2004)', async () => {
+  const storage = fakeStorage({ pkce_verifier: 'v1', oidc_state: 's1', oidc_nonce: 'n1' });
+  const tok = { access_token: jwt({ sub: 'u1' }), refresh_token: 'r1', id_token: jwt({ nonce: 'n1' }), expires_in: 300 };
+  await createAuth({ ...BASE, storage, fetchFn: fakeFetch(okJson(tok)) }).exchange('the-code', 's1');
+  for (const k of ['pkce_verifier', 'oidc_state', 'oidc_nonce']) assert.equal(storage.getItem(k), null, k);
 });
 
 test('renew: success rotates access/refresh/exp/id tokens', async () => {

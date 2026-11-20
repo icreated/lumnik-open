@@ -37,6 +37,7 @@ func Run(ctx context.Context, h *http.Client, cfg *config.Config, path, name str
 	if c.OidcClientID == "" {
 		c.OidcClientID = "lm-cli"
 	}
+	client.WarnInsecure(name, c) // before the first request to the identity provider, even if login fails (#2004)
 	if c.OidcDeviceEndpoint == "" || c.OidcTokenEndpoint == "" {
 		if c.OidcIssuer == "" {
 			return fmt.Errorf("context %q has no OIDC config: run 'lm config set-context %s --oidc-issuer <url>', "+
@@ -51,6 +52,13 @@ func Run(ctx context.Context, h *http.Client, cfg *config.Config, path, name str
 		}
 		if c.OidcTokenEndpoint == "" {
 			c.OidcTokenEndpoint = disc.TokenEndpoint
+		}
+	}
+	// The token request carries the device code and brings back the tokens: never in clear text off this machine,
+	// unless the context allows it (#2004).
+	for _, endpoint := range []string{c.OidcDeviceEndpoint, c.OidcTokenEndpoint} {
+		if err := config.CheckClearText(c, name, "the login request", endpoint); err != nil {
+			return err
 		}
 	}
 	dc, err := oidc.RequestDeviceCode(h, c.OidcDeviceEndpoint, c.OidcClientID)
@@ -95,7 +103,7 @@ func HTTPClient(ctx config.Context) *http.Client {
 	} else if tlsCfg != nil {
 		tr.TLSClientConfig = tlsCfg
 	}
-	return &http.Client{Timeout: 30 * time.Second, Transport: tr}
+	return &http.Client{Timeout: 30 * time.Second, Transport: tr, CheckRedirect: client.SameOriginRedirect}
 }
 
 // prompt is the login page: the wordmark, then the two things a human must actually do. Width 0

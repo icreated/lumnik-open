@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/icreated/lumnik-open/lm/internal/config"
@@ -64,6 +65,18 @@ func newConfigCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			server, _ := cmd.Flags().GetString("server")
 			token, _ := cmd.Flags().GetString("token")
+			if fromStdin, _ := cmd.Flags().GetBool("token-stdin"); fromStdin {
+				if token != "" {
+					return fmt.Errorf("--token and --token-stdin: give one")
+				}
+				b, err := io.ReadAll(cmd.InOrStdin())
+				if err != nil {
+					return err
+				}
+				if token = strings.TrimSpace(string(b)); token == "" {
+					return fmt.Errorf("--token-stdin: stdin held no token")
+				}
+			}
 			oidcIssuer, _ := cmd.Flags().GetString("oidc-issuer")
 			oidcClientID, _ := cmd.Flags().GetString("oidc-client-id")
 			path, err := config.DefaultPath()
@@ -105,6 +118,9 @@ func newConfigCmd() *cobra.Command {
 			if err := setIDFlag(cmd, "user", &ctx.User); err != nil {
 				return err
 			}
+			if cmd.Flags().Changed("allow-insecure-http") {
+				ctx.AllowInsecureHTTP, _ = cmd.Flags().GetBool("allow-insecure-http")
+			}
 			if err := config.CheckIdentity(ctx); err != nil {
 				return err
 			}
@@ -113,11 +129,14 @@ func newConfigCmd() *cobra.Command {
 		},
 	}
 	setCtx.Flags().String("server", "", "Server URL")
-	setCtx.Flags().String("token", "", "Auth token")
+	setCtx.Flags().String("token", "", "Auth token (shows in ps and the shell history: prefer --token-stdin)")
+	setCtx.Flags().Bool("token-stdin", false, "Read the auth token from stdin, e.g. lm config set-context ci --token-stdin < token.txt")
 	setCtx.Flags().String("oidc-issuer", "", "OIDC issuer URL (lm login discovers endpoints from it)")
 	setCtx.Flags().String("oidc-client-id", "", "OIDC client id for device flow (default: lm-cli)")
 	setCtx.Flags().String("tenant", "", "Dev-bypass hub only (make k8s-up): tenant id sent as X-Tenant-ID; empty clears it")
 	setCtx.Flags().String("user", "", "Dev-bypass hub only (make k8s-up): user id sent as X-User-ID; empty clears it")
+	setCtx.Flags().Bool("allow-insecure-http", false,
+		"Send this context's credentials over plain http to a host that is not this machine (=false takes it back)")
 	c.AddCommand(setCtx)
 	return c
 }

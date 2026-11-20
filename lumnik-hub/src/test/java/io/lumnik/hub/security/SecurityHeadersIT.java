@@ -33,4 +33,14 @@ class SecurityHeadersIT {
         assertThat(given().get("/api/bff/v1/me").header("Content-Security-Policy")).as("the API serves no page").isNull();
         assertThat(given().get("/app/src/config.mjs").header("Content-Security-Policy")).isEqualTo(csp);
     }
+
+    /** #2059: the page carries the policy, so a browser asks again on every load instead of keeping it a day. */
+    @Test
+    void thePwaPageIsRevalidatedOnEveryLoad() {
+        for (String page : new String[] {"/app/", "/app/index.html"}) {
+            assertThat(given().get(page).then().statusCode(200).extract().header("Cache-Control"))
+                .as(page).isEqualTo("no-cache");
+        }
+        assertThat(given().get("/app/src/config.mjs").header("Cache-Control")).as("a shell file").isNotEqualTo("no-cache");
+    }
 }

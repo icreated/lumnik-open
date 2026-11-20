@@ -29,4 +29,25 @@ for port in 9000 9100; do
   expect "port $port: no Service or route names it" "$routed" 0
 done
 
+# #2090: the NetworkPolicy opens the management port to the pods the operator names (hub.managementFrom) and to no
+# other pod. Read as YAML: for each ingress rule of the hub's policy, its ports and whether it names peers.
+rules() {
+  helm template t deploy/helm/lumnik "${REQUIRED[@]}" --show-only templates/networkpolicy.yaml "$@" | python3 -c '
+import sys, yaml
+for d in yaml.safe_load_all(sys.stdin):
+    if d and d["metadata"]["name"] == "t-hub":
+        for r in d["spec"].get("ingress", []):
+            print(",".join(str(p["port"]) for p in r["ports"]), "from" if r.get("from") else "anyone")'
+}
+for port in 9000 9100; do
+  expect "port $port, by default: the API to anyone, the management port to no pod" \
+    "$(rules --set hub.managementPort=$port | tr '\n' ';')" "8080 anyone;"
+  expect "port $port, scrapers named: the management port to them only" \
+    "$(rules --set hub.managementPort=$port \
+        --set 'hub.managementFrom[0].namespaceSelector.matchLabels.kubernetes\.io/metadata\.name=monitoring' | tr '\n' ';')" \
+    "8080 anyone;$port from;"
+done
+expect "a managementFrom that is not a list is refused" \
+  "$(helm template t deploy/helm/lumnik "${REQUIRED[@]}" --set hub.managementFrom.podSelector.x=y >/dev/null 2>&1 && echo rendered || echo refused)" refused
+
 exit "$fail"

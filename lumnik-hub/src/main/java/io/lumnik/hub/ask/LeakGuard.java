@@ -19,7 +19,8 @@ import java.util.Set;
  * without this a chat bound to one scope could read another's table within the same tenant.
  *
  * <p><b>High-confidence + fail-open.</b> Inspects every {@code schema.table} reference whose schema is one
- * the card declares — position-independent (FROM, JOIN, comma-join, ONLY/LATERAL, subquery, SELECT-list),
+ * the card declares or one {@code lumnik_readonly} reads ({@link #READABLE_SCHEMAS}, #2087) —
+ * position-independent (FROM, JOIN, comma-join, ONLY/LATERAL, subquery, SELECT-list),
  * so a qualified cross-scope read can't escape via a comma-join or a keyword. The schema filter is the
  * discriminator that avoids over-blocking: {@code alias.column} (e.g. {@code t.code}) has an alias, not a
  * declared schema, as its first part, so it is not inspected — the one exception being a query that names a
@@ -59,6 +60,9 @@ public class LeakGuard {
     /** All hub tables/views live here ({@code EntityViewCompiler.SCHEMA}); used to qualify a legacy card. */
     private static final String HUB_SCHEMA = "connector";
 
+    /** The schemas {@code lumnik_readonly} reads: every read in one of them is judged, declared or not (#2087). */
+    private static final Set<String> READABLE_SCHEMAS = Set.of("connector", "ext", "core");
+
     /**
      * Build the declared surface, then look for the first schema-qualified read outside it.
      * (S3776: a card fold and a token scan living in one method.)
@@ -92,7 +96,7 @@ public class LeakGuard {
     }
 
     private static Set<String> schemasOf(Set<String> declared) {
-        Set<String> schemas = new HashSet<>();
+        Set<String> schemas = new HashSet<>(READABLE_SCHEMAS);
         for (String fqn : declared) schemas.add(fqn.substring(0, fqn.indexOf('.')));
         return schemas;
     }

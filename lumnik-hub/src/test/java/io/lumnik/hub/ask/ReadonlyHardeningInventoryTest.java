@@ -62,7 +62,7 @@ class ReadonlyHardeningInventoryTest {
                 ReadonlyHardening.REVOKED_FUNCTIONS.substring(0, ReadonlyHardening.REVOKED_FUNCTIONS.indexOf(')')))
             .results().map(m -> m.group(1)).toList();
         var byPattern = List.of("query_to_xml", "database_to_xmlschema", "pg_advisory_lock", "pg_try_advisory_xact_lock",
-            "pg_stat_get_activity", "pg_stat_get_backend_activity");
+            "pg_stat_get_activity", "pg_stat_get_backend_activity", "pg_sleep_for", "lo_get", "lo_open");
         SqlGuard guard = new SqlGuard(500);
 
         assertThat(named).contains("set_config", "ts_rewrite");

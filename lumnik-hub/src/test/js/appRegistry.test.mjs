@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  readCachedRegistry, cacheRegistry, resolveCached, resolveFromRegistry, applyIdentity, applyTheme,
+  readCachedRegistry, cacheRegistry, forgetRegistry, resolveCached, resolveFromRegistry, applyIdentity, applyTheme,
 } from '../../main/resources/META-INF/resources/app/src/appRegistry.mjs';
 
 function fakeStorage(initial = {}) {
@@ -180,6 +180,23 @@ test('applyTheme: sets --accent and the meta theme-color tint, leaves --bg untou
   assert.equal(doc.documentElement.style.props['--accent'], '#f0796b');
   assert.equal(doc._nodes['meta[name="theme-color"]'].content, '#14121f');
   assert.deepEqual(Object.keys(doc.documentElement.style.props), ['--accent']);
+});
+
+test('applyTheme: a colour that is not #rrggbb is not applied — the neutral theme stands in (#2004)', () => {
+  for (const bad of ['red', 'url(https://x/y)', '#fff', '', null]) {
+    const doc = fakeDoc();
+    applyTheme({ ...CRISE, accentColor: bad, backgroundColor: bad }, doc);
+    assert.equal(doc.documentElement.style.props['--accent'], '#8b7ff0', String(bad));
+    assert.equal(doc._nodes['meta[name="theme-color"]'].content, '#14121f', String(bad));
+  }
+});
+
+test('forgetRegistry: after a logout the next person sees no app of the previous user (#2004)', () => {
+  const storage = fakeStorage();
+  cacheRegistry([{ name: 'stock', title: 'Stock', scope: 'stock', icon: 'stock',
+    accentColor: '#f0796b', backgroundColor: '#14121f', default: true }], storage);
+  forgetRegistry(storage);
+  assert.deepEqual(readCachedRegistry(storage), []);
 });
 
 // kind:App spec.tabs (#1030): null/absent = inherit every tab the hub offers; a list is the app's

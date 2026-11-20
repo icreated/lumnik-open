@@ -23,7 +23,8 @@
   `lumnik.ratelimit.tenant-factor` (5). A refused call counts against neither. `0` switches the
   ceiling off; a negative factor stops the hub at startup.
 - **A call with no user** (SCIM's bearer token) has a budget of its own per tenant, at the rpm.
-  Requests with no resolved tenant share one `system` budget.
+  A call the hub cannot tie to a tenant keeps its own user budget, but shares one tenant ceiling
+  with every such call.
 - **SCIM:** an IdP's first sync makes a GET and a POST or PATCH per user. Before you provision
   thousands of users at once, raise `LUMNIK_RATELIMIT_SCIM_RPM`.
 - **Only authenticated calls are counted.** A burst of bad tokens gets `401`, never `429`.
@@ -141,5 +142,5 @@ Monday. Both reset when the hub restarts.
 |---|---|---|
 | Set `LUMNIK_RATELIMIT_*` in `.env`, the limit did not move | the hub reads it at startup only, or the bucket name is misspelt (an unknown bucket is ignored) | Recreate the hub (`up -d hub`) and check the name against the bucket list (see [Tuning](#tuning)). |
 | The chat or RAG search endpoints never return 429 | open edition: they do not exist | Expected; `view-generate` and `search` are limited there. |
-| A request seems to share its budget with unrelated callers | the tenant's ceiling is spent, or requests with no resolved tenant share the `system` budget | Raise `LUMNIK_RATELIMIT_TENANT_FACTOR`, or check why the tenant did not resolve. |
+| A request seems to share its budget with unrelated callers | the tenant's ceiling is spent, or the call has no tenant and shares one tenant ceiling with every such call | Read the hub log line `rate limit exceeded: bucket=… tenant=… user=… limit=…`. `limit=tenant`: raise `LUMNIK_RATELIMIT_TENANT_FACTOR`. `limit=tenant` with `tenant=system`: the call carried no tenant; check the caller's token. |
 | `429 Too Many Requests` in a connector run, not from an API client | the **source system** throttling lumnik's outbound calls | Lower `default_rate_limit` in the connector YAML ([REST](../connectors/rest.md)). |

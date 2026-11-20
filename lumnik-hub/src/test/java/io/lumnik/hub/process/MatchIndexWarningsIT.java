@@ -17,6 +17,7 @@ import io.quarkus.test.junit.QuarkusTest;
 import io.restassured.response.ValidatableResponse;
 import jakarta.inject.Inject;
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,9 +45,41 @@ class MatchIndexWarningsIT {
         }
     }
 
+    /**
+     * The previous test's apply may still be building its indexes in the background (#2079): a DROP TABLE then waits
+     * for that CREATE INDEX CONCURRENTLY, which waits for the DROP's transaction, and PostgreSQL kills one of the two.
+     * Wait for those builds to end; a build that starts in between makes the reset deadlock once more, so it is
+     * replayed.
+     */
+    private void resetTables(String... sql) throws Exception {
+        for (int attempt = 1; ; attempt++) {
+            for (int i = 0; i < 300 && buildsUnderWay() > 0; i++) Thread.sleep(100);
+            if (buildsUnderWay() > 0) System.err.println("MatchIndexWarningsIT: an index build still runs after 30 s, resetting anyway");
+            try {
+                exec(sql);
+                return;
+            } catch (SQLException e) {
+                if (!"40P01".equals(e.getSQLState()) || attempt == 3) throw e;
+            }
+        }
+    }
+
+    /**
+     * PostgreSQL shows another session's build only to the same role: the background build and this probe both run on
+     * the admin datasource. Moved apart, the probe would always answer 0 and only the replay would remain.
+     */
+    private int buildsUnderWay() throws Exception {
+        try (Connection c = adminDs.getConnection(); Statement st = c.createStatement();
+             var rs = st.executeQuery("SELECT count(*) FROM pg_stat_progress_create_index p JOIN pg_class t ON t.oid = p.relid "
+                 + "WHERE t.relname IN ('" + ERP + "', '" + CRM + "')")) {
+            rs.next();
+            return rs.getInt(1);
+        }
+    }
+
     @BeforeEach
     void seed() throws Exception {
-        exec("DELETE FROM core.process_manifest WHERE tenant_id = 1 AND name = 'mxw-gold'",
+        resetTables("DELETE FROM core.process_manifest WHERE tenant_id = 1 AND name = 'mxw-gold'",
             "DROP VIEW IF EXISTS " + VIEW,
             "DROP TABLE IF EXISTS connector." + ERP, "DROP TABLE IF EXISTS connector." + CRM,
             "CREATE TABLE connector." + ERP + " (tenant_id bigint NOT NULL, code text, alt text, credit text, qty int)",

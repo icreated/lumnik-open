@@ -1,7 +1,10 @@
 package io.lumnik.hub.validator.jdbc;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.lumnik.hub.connector.jdbc.HikariPoolRegistry;
 import io.lumnik.hub.connector.jdbc.dialect.JdbcDialectRegistry;
+import io.lumnik.hub.outbound.OutboundRefusedException;
+import io.lumnik.jdbc.spi.JdbcDialect;
 import io.lumnik.hub.connector.mapping.MapColumnsRules;
 import io.lumnik.hub.connector.registry.ConnectorTypeId;
 import io.lumnik.hub.validator.ConfigDef;
@@ -108,11 +111,20 @@ public class JdbcConnectorValidator implements ConnectorValidator {
         if (!URL_PATTERN.matcher(url).matches()) return;
 
         String declared = conn.path("dialect").asText("").trim();
+        JdbcDialect dialect;
         try {
-            dialectRegistry.resolveFor(url, declared.isEmpty() ? null : declared);
+            dialect = dialectRegistry.resolveFor(url, declared.isEmpty() ? null : declared);
         } catch (IllegalArgumentException e) {
             String path = declared.isEmpty() ? "spec.connection.url" : "spec.connection.dialect";
             errs.add(new ValidationError(path, Severity.ERROR, e.getMessage(), List.of()));
+            return;
+        }
+        // The URL the dialect will refuse at every run, refused here instead (#2027). Only the provider's reading:
+        // whether its hosts are allowed is a resolution, judged when a pool opens.
+        try {
+            HikariPoolRegistry.connectHosts(url, dialect);
+        } catch (OutboundRefusedException e) {
+            errs.add(new ValidationError("spec.connection.url", Severity.ERROR, e.getMessage(), List.of()));
         }
     }
 

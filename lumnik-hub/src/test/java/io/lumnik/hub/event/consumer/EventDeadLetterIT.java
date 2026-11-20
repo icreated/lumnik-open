@@ -18,6 +18,7 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -45,6 +46,17 @@ class EventDeadLetterIT {
     void seed(long tenantId, String type) {
         em.createNativeQuery("SET LOCAL app.current_tenant = '0'").executeUpdate();
         em.persist(EventOutboxRow.of(tenantId, type, Map.of("k", "v")));
+    }
+
+    /**
+     * The consumer under test, on this class's events only (#2079): other tests of the same application may still be
+     * emitting (a connector run they started), and the sweep visits every event of the outbox. The others pass as
+     * consumed.
+     */
+    private static Consumer<EventOutboxRow> ours(Consumer<EventOutboxRow> consumer) {
+        return r -> {
+            if (r.getEventType().startsWith("dlq.test.")) consumer.accept(r);
+        };
     }
 
     private void awaitDecided() {
@@ -87,10 +99,10 @@ class EventDeadLetterIT {
         awaitDecided();
         List<String> seen = new ArrayList<>();
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("it-dlq", 100, r -> {
+        TenantContext.runAsSystem(() -> sweeper.sweep("it-dlq", 100, ours(r -> {
             seen.add(r.getEventType());
             if ("dlq.test.boom".equals(r.getEventType())) throw new IllegalStateException("secret row 42 in the message");
-        }));
+        })));
 
         assertEquals(List.of("dlq.test.ok1", "dlq.test.boom", "dlq.test.ok2"), seen, "the cursor never blocks");
         assertEquals(List.of(idOf("dlq.test.boom") + "|7||IllegalStateException|dlq.test.boom"), deadLetters("it-dlq"),
@@ -102,7 +114,7 @@ class EventDeadLetterIT {
         seed(7L, "dlq.test.dbpoison");
         awaitDecided();
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("it-dlq", 100, r -> em.createNativeQuery("SELECT 1/0").getSingleResult()));
+        TenantContext.runAsSystem(() -> sweeper.sweep("it-dlq", 100, ours(r -> em.createNativeQuery("SELECT 1/0").getSingleResult())));
 
         List<String> kept = deadLetters("it-dlq");
         assertEquals(1, kept.size());
@@ -113,11 +125,11 @@ class EventDeadLetterIT {
     void theSameEventFailingAgainIsOneRowStillToLookAt() {
         seed(7L, "dlq.test.again");
         awaitDecided();
-        TenantContext.runAsSystem(() -> sweeper.sweep("it-dlq", 100, r -> { throw new IllegalStateException("1"); }));
+        TenantContext.runAsSystem(() -> sweeper.sweep("it-dlq", 100, ours(r -> { throw new IllegalStateException("1"); })));
         markReplayed("it-dlq");
         rewind("it-dlq");
 
-        TenantContext.runAsSystem(() -> sweeper.sweep("it-dlq", 100, r -> { throw new IllegalStateException("2"); }));
+        TenantContext.runAsSystem(() -> sweeper.sweep("it-dlq", 100, ours(r -> { throw new IllegalStateException("2"); })));
 
         assertEquals(1, deadLetters("it-dlq").size(), "unique per (consumer, event, target)");
         assertEquals(0, scalar("SELECT count(*) FROM core.event_dead_letter WHERE consumer_name = 'it-dlq' AND replayed_at IS NOT NULL"),

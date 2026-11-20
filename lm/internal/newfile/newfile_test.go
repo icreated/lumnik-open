@@ -33,7 +33,7 @@ func TestWrite_refusesAnExistingFileAndLeavesItIntact(t *testing.T) {
 func TestWrite_aFailedWriteRemovesTheFileItCreated(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "half.yaml")
 	boom := errors.New("disk full")
-	err := write(p, []byte("x"), func(*os.File, []byte) error { return boom })
+	err := write(p, []byte("x"), 0o644, func(*os.File, []byte) error { return boom })
 	assert.ErrorIs(t, err, boom)
 	_, statErr := os.Stat(p)
 	assert.ErrorIs(t, statErr, fs.ErrNotExist)

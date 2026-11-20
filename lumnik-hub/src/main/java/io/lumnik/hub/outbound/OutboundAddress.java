@@ -1,6 +1,8 @@
 package io.lumnik.hub.outbound;
 
 import io.lumnik.common.text.Text;
+import io.quarkus.vertx.http.HttpServer;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -8,6 +10,8 @@ import org.jboss.logging.Logger;
 
 import java.net.Inet6Address;
 import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.SocketException;
 import java.net.URI;
 import java.net.UnknownHostException;
 import java.security.Security;
@@ -15,6 +19,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.IntSupplier;
 import java.util.regex.Pattern;
 
 /**
@@ -25,7 +30,8 @@ import java.util.regex.Pattern;
  * anything. Resolved with {@link InetAddress#getAllByName}, the resolver the JDK HTTP client uses a moment later, so
  * both read the JVM's address cache and agree while it holds the entry ({@code networkaddress.cache.ttl}, 30 s by
  * default). A name whose entry expires between the two is resolved again, unjudged: rebinding is narrowed, not
- * closed. A TTL of 0 is warned about at startup.
+ * closed — except for a client that takes its lookups from {@link #resolve} (S3), which connects to the very addresses
+ * judged. A TTL of 0 is warned about at startup.
  *
  * <ul>
  *   <li>Never: link-local (169.254.0.0/16, where the cloud metadata answers; fe80::/10), the metadata services
@@ -78,11 +84,22 @@ public final class OutboundAddress {
 
     private final boolean allowLoopback;
     private final boolean allowPrivate;
+    /** The hub's own management port (#1993), never a source (#2090); -1 when it is off or there is none. */
+    private final IntSupplier managementPort;
 
     /** As a test builds it: the JVM's own cache settings are not looked at. */
     public OutboundAddress(boolean allowLoopback, boolean allowPrivate) {
+        this(allowLoopback, allowPrivate, -1);
+    }
+
+    public OutboundAddress(boolean allowLoopback, boolean allowPrivate, int managementPort) {
+        this(allowLoopback, allowPrivate, () -> managementPort);
+    }
+
+    private OutboundAddress(boolean allowLoopback, boolean allowPrivate, IntSupplier managementPort) {
         this.allowLoopback = allowLoopback;
         this.allowPrivate = allowPrivate;
+        this.managementPort = managementPort;
     }
 
     /**
@@ -92,12 +109,25 @@ public final class OutboundAddress {
     @Inject
     public OutboundAddress(@ConfigProperty(name = "lumnik.outbound.allow-loopback", defaultValue = "false") boolean allowLoopback,
                            @ConfigProperty(name = "lumnik.outbound.allow-private", defaultValue = "true") boolean allowPrivate,
+                           @ConfigProperty(name = "quarkus.management.enabled", defaultValue = "false") boolean managementOn,
+                           @ConfigProperty(name = "quarkus.management.port", defaultValue = "9000") int configuredPort,
+                           Instance<HttpServer> server,
                            @ConfigProperty(name = "sun.net.inetaddr.ttl") Optional<String> legacyTtl) {
-        this(allowLoopback, allowPrivate);
+        this(allowLoopback, allowPrivate, () -> managementPort(managementOn, configuredPort,
+            server.isResolvable() ? server.get().getManagementPort() : -1));
         if (cacheOff(Security.getProperty("networkaddress.cache.ttl"), legacyTtl)) {
             LOG.warn("an address cache TTL of 0: the HTTP client resolves a host again after the outbound rule judged"
                 + " it, so a name that changes its answer in between is connected to unjudged (#2002)");
         }
+    }
+
+    /**
+     * The port the management interface listens on. Quarkus reports the bound port only when it differs from the
+     * configured one, a random test port: otherwise it answers -1, and the configured port is the bound one.
+     */
+    static int managementPort(boolean on, int configured, int bound) {
+        if (!on) return -1;
+        return bound > 0 ? bound : configured;
     }
 
     /** Whether the JVM caches no address: the security property, or else the legacy system property, is 0. */
@@ -113,7 +143,31 @@ public final class OutboundAddress {
     public void require(URI url) throws UnknownHostException {
         String host = url.getHost();
         if (Text.blank(host)) throw new OutboundRefusedException("the URL names no host");
-        require(host);
+        resolve(host, port(url));
+    }
+
+    /** As {@link #require(URI)}, for a client that resolves again later: unresolved is retried. */
+    public void requireResolved(URI url) {
+        try {
+            require(url);
+        } catch (UnknownHostException unresolved) {
+            throw new OutboundUnresolvedException();
+        }
+    }
+
+    /** The port the client will connect to: the URL's, else its scheme's; -1 when neither says. */
+    public static int port(URI url) {
+        if (url.getPort() != -1) return url.getPort();
+        return "https".equalsIgnoreCase(url.getScheme()) ? 443 : "http".equalsIgnoreCase(url.getScheme()) ? 80 : -1;
+    }
+
+    /** One of this machine's addresses; an interface list that cannot be read counts as one, closed. */
+    private static boolean ownAddress(InetAddress address) {
+        try {
+            return address.isLoopbackAddress() || NetworkInterface.getByInetAddress(address) != null;
+        } catch (SocketException e) {
+            return true;
+        }
     }
 
     /**
@@ -139,8 +193,7 @@ public final class OutboundAddress {
     }
 
     /**
-     * As {@link #requireAll}, for a client that keeps resolving for the whole run — a Kafka consumer reconnecting, an
-     * S3 client opening connections. Left an unresolved name, it would look it up again later, past the JVM's cache,
+     * As {@link #requireAll}, for a client that keeps resolving for the whole run — a Kafka consumer reconnecting. Left an unresolved name, it would look it up again later, past the JVM's cache,
      * and connect wherever it then led, unchecked. So a host that does not resolve is refused, as a source that cannot
      * be reached for now ({@link OutboundUnresolvedException}): the run retries it, and judges it again then.
      */
@@ -156,8 +209,23 @@ public final class OutboundAddress {
 
     /** As {@link #require(URI)}, for one host named outside a URL. A bracketed IPv6 literal is read as one. */
     public void require(String host) throws UnknownHostException {
+        resolve(host, -1);
+    }
+
+    /**
+     * {@code host}'s addresses, looked up once and each judged ({@code port} -1 when the client names none). Returns
+     * the addresses it judged, so the caller connects to exactly those.
+     */
+    public InetAddress[] resolve(String host, int port) throws UnknownHostException {
         if (Text.blank(host)) throw new OutboundRefusedException("the source names no host");
-        for (InetAddress address : InetAddress.getAllByName(host)) {
+        InetAddress[] addresses = InetAddress.getAllByName(host);
+        int management = port > 0 ? managementPort.getAsInt() : -1;
+        for (InetAddress address : addresses) {
+            // Health, metrics and the API spec answer there without a token, because nothing routes it (#1993): a
+            // connector pointed at it would route it. Whatever allow-private says: the compose name `hub` is private.
+            if (port > 0 && port == management && ownAddress(address)) {
+                throw new OutboundRefusedException("the URL is the hub's own management port, which the hub never connects to");
+            }
             Range range = range(address);
             String why = switch (range) {
                 case LINK_LOCAL, METADATA, UNSPECIFIED, MULTICAST ->
@@ -170,6 +238,7 @@ public final class OutboundAddress {
             };
             if (why != null) throw new OutboundRefusedException(why);
         }
+        return addresses;
     }
 
     static Range range(InetAddress a) {

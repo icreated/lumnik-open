@@ -25,7 +25,7 @@ import static org.hamcrest.Matchers.*;
  * <p>These assertions used to read {@code anyOf(is(200), is(500))} — a shape that passes whatever
  * the door does, which is how {@code lm source rest probe} stayed broken end to end in three
  * stacked layers without a single red test. The upstream is the hub itself: its {@code /q/openapi}
- * is a real spec, its {@code /q/health} (on its management port, #1993) a real JSON body, and any other path a real
+ * is a real spec and a real JSON body, its management port (#1993) a refusal (#2090), and any other path a real
  * 404. Nothing is
  * mocked and nothing leaves the machine.
  *
@@ -75,8 +75,8 @@ class RestDiscoveryResourceIT {
         });
     }
 
-    /** Its connection points at the hub's management port, where /q/health answers JSON (#1993). */
-    private String restConnectorPointingAtTheHubsHealth() {
+    /** Its connection points at the hub's management port (#1993), which is never a source (#2090). */
+    private String restConnectorPointingAtTheManagementPort() {
         return restConnector(Map.of("base_url", managementRoot.getProtocol() + "://" + managementRoot.getAuthority()));
     }
 
@@ -210,11 +210,20 @@ class RestDiscoveryResourceIT {
      */
     @Test
     void probe_drafts_an_endpoint_fragment_from_a_live_body() {
-        json(Map.of("connectorId", restConnectorPointingAtTheHubsHealth(), "endpointPath", "/q/health"))
+        json(Map.of("connectorId", restConnectorPointingAtTheHub(), "endpointPath", "/q/openapi"))
         .when().post("/api/platform/sources/rest/probe")
         .then().statusCode(200)
-            .body(containsString("path: /q/health"))
+            .body(containsString("path: /q/openapi\n"))
             .body(containsString("target:"));
+    }
+
+    /** The port the management interface really binds — random here, not the configured 9000 — is refused. */
+    @Test
+    void probe_refuses_the_hubs_own_management_port() {
+        json(Map.of("connectorId", restConnectorPointingAtTheManagementPort(), "endpointPath", "/q/health"))
+        .when().post("/api/platform/sources/rest/probe")
+        .then().statusCode(400)
+            .body("error", containsString("the hub's own management port"));
     }
 
     /**

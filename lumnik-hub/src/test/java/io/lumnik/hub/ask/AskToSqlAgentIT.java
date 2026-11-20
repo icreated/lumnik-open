@@ -55,15 +55,53 @@ class AskToSqlAgentIT {
     // --- the driver, a third reader (#2005) ----------------------------------------------------------
 
     @Inject @DataSource("readonly") AgroalDataSource readonlyDs;
+    @Inject @DataSource("ask") AgroalDataSource askDs;
 
-    /** select() as the Ask path runs it: in a transaction, the tenant and the string reading bound (TenantRlsScope). */
+    /** select() as the Ask path runs it: on Ask's pool, in a transaction, the tenant and the string reading bound. */
     private List<Map<String, Object>> selectAsAsk(String sql) {
         return QuarkusTransaction.requiringNew().call(() -> {
-            try (Connection c = readonlyDs.getConnection()) {
+            try (Connection c = askDs.getConnection()) {
                 TenantRlsScope.applyTo(c, 7L);
                 return AskToSqlAgent.select(c, sql);
             }
         });
+    }
+
+    /** #2090: a result past Ask's byte cap is refused before it lands on the hub's heap: Ask abstains, no rows. */
+    @Test
+    void aResultPastTheAskCapIsRefusedAndAskAbstains() {
+        Mockito.when(chatPort.chat(Mockito.anyString()))
+            .thenReturn("SELECT repeat('x', 40000000) AS big FROM connector.t_demo_order LIMIT 1")
+            .thenReturn("A long text.");
+
+        AskResult r = agent.ask(7L, "demo", "Show one order's text", "en");
+
+        assertThat(r.abstained()).as(r.answer()).isTrue();
+        assertThat(r.rows()).isEmpty();
+        assertThat(r.answer()).isEqualTo(AskSentences.resultTooLarge("en"));
+    }
+
+    /** #2090: the cap stops the driver in the middle of a row; the pool's connections stay usable after it. */
+    @Test
+    void askStillAnswersAfterMoreCappedResultsThanThePoolHolds() {
+        for (int i = 0; i < 25; i++) {
+            assertThatThrownBy(() -> selectAsAsk("SELECT repeat('x', 40000000) AS big"))
+                .hasStackTraceContaining("maxResultBuffer");
+        }
+        assertThat(selectAsAsk("SELECT count(*) AS n FROM connector.t_demo_order"))
+            .containsExactly(Map.of("n", 2L));
+    }
+
+    /** #2090: the cap is Ask's only — an export or a view on the readonly pool reads a wide row as before. */
+    @Test
+    void theReadonlyPoolKeepsNoCap() {
+        List<Map<String, Object>> rows = QuarkusTransaction.requiringNew().call(() -> {
+            try (Connection c = readonlyDs.getConnection()) {
+                TenantRlsScope.applyTo(c, 7L);
+                return AskToSqlAgent.select(c, "SELECT length(repeat('x', 20000000)) AS n, repeat('x', 20000000) AS big");
+            }
+        });
+        assertThat(rows).singleElement().satisfies(row -> assertThat(row.get("n")).isEqualTo(20000000));
     }
 
     /**
@@ -73,7 +111,7 @@ class AskToSqlAgentIT {
      */
     @Test
     void selectRefusesAConnectionThatReadsStringsOtherwiseThanTheGuards() throws Exception {
-        try (Connection c = readonlyDs.getConnection(); Statement st = c.createStatement()) {
+        try (Connection c = askDs.getConnection(); Statement st = c.createStatement()) {
             st.execute("SET standard_conforming_strings = off");
             try {
                 assertThatThrownBy(() -> AskToSqlAgent.select(c, "SELECT 1 AS x"))   // the deployment's fault, said so
@@ -100,7 +138,7 @@ class AskToSqlAgentIT {
     @ParameterizedTest
     @ValueSource(strings = {"SIMPLE", "EXTENDED_FOR_PREPARED", "EXTENDED_CACHE_EVERYTHING"})
     void selectRefusesAQueryModeTheReadingDoesNotDescribe(String mode) throws Exception {
-        try (Connection c = readonlyDs.getConnection()) {
+        try (Connection c = askDs.getConnection()) {
             QueryExecutor executor = c.unwrap(BaseConnection.class).getQueryExecutor();
             PreferQueryMode before = executor.getPreferQueryMode();
             executor.setPreferQueryMode(PreferQueryMode.valueOf(mode));

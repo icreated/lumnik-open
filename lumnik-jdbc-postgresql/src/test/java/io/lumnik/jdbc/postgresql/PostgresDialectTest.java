@@ -140,6 +140,66 @@ class PostgresDialectTest {
     assertTrue(e.getMessage().contains("socketFactory"), e.getMessage());
   }
 
+  /**
+   * #2027: a file, a class, a keystore or a ticket of the hub's, named in the URL. Refused by name, never echoing the
+   * value — as is any property outside the list.
+   */
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "sslcert=/home/hub/.postgresql/postgresql.crt | sslcert",
+      "sslkey=/home/hub/.postgresql/postgresql.pk8 | sslkey",
+      "sslrootcert=/home/hub/.postgresql/root.crt | sslrootcert",
+      "sslfactory=org.postgresql.ssl.DefaultJavaSSLFactory | sslfactory",
+      "sslpasswordcallback=x.Y | sslpasswordcallback",
+      "authenticationPluginClassName=x.Y | authenticationPluginClassName",
+      "jaasLogin=true | jaasLogin",
+      "gsslib=gssapi | gsslib",
+      "requireAuth=gss | requireAuth",
+      "loggerFile=/home/hub/x | loggerFile",
+  })
+  void a_property_outside_the_list_is_refused_by_name(String query, String name) {
+    IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+        () -> d.connectHosts("jdbc:postgresql://erp-db/erp?" + query));
+    assertTrue(e.getMessage().contains(name), e.getMessage());
+    assertFalse(e.getMessage().contains("/home/hub") || e.getMessage().contains("x.Y"), e.getMessage());
+  }
+
+  /** A name the driver does not know may be a piece of a password ({@code password=p&ss0rd}): never quoted. */
+  @Test
+  void a_name_the_driver_does_not_know_is_not_quoted() {
+    IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+        () -> d.connectHosts("jdbc:postgresql://erp-db/erp?user=erp&password=p&ss0rd"));
+    assertEquals("it sets a parameter, which the hub does not take", e.getMessage());
+  }
+
+  /** pgjdbc lets the URL win over the pool's properties: the isolation holds only while the URL cannot name them. */
+  @Test
+  void a_url_cannot_override_an_isolation_property() {
+    d.isolationProperties().keySet().forEach(name -> assertThrows(IllegalArgumentException.class,
+        () -> d.connectHosts("jdbc:postgresql://erp-db/erp?" + name + "=x"), name));
+  }
+
+  @Test
+  void the_listed_properties_pass() {
+    assertEquals(List.of("erp-db"), d.connectHosts("jdbc:postgresql://erp-db:5432/erp?user=erp&password=pw&sslmode=require"
+        + "&ApplicationName=lumnik&currentSchema=erp&connectTimeout=5&socketTimeout=30&tcpKeepAlive=true&ssl=false"));
+  }
+
+  /** #2027: checking the server needs a CA, and today the only one pgjdbc would read is the hub's own root.crt. */
+  @ParameterizedTest
+  @ValueSource(strings = {"sslmode=verify-ca", "sslmode=verify-full", "ssl=true", "ssl=", "ssl=true&sslmode=VERIFY-FULL"})
+  void a_server_check_that_would_read_the_hubs_ca_is_refused(String query) {
+    IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+        () -> d.connectHosts("jdbc:postgresql://erp-db/erp?" + query));
+    assertTrue(e.getMessage().contains("verify the server"), e.getMessage());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"sslmode=disable", "sslmode=allow", "sslmode=prefer", "sslmode=require", "ssl=true&sslmode=require"})
+  void a_mode_that_reads_no_ca_passes(String query) {
+    assertEquals(List.of("erp-db"), d.connectHosts("jdbc:postgresql://erp-db/erp?" + query));
+  }
+
   /** What pgjdbc does not read (userinfo, a single slash) or reads as no host is refused, never guessed. */
   @ParameterizedTest
   @ValueSource(strings = {

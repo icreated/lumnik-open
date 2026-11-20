@@ -8,6 +8,8 @@ import io.lumnik.jdbc.spi.KeyComparison;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.postgresql.Driver;
 import org.postgresql.PGProperty;
+import org.postgresql.jdbc.SslMode;
+import org.postgresql.util.PSQLException;
 
 import java.sql.*;
 import java.time.Duration;
@@ -26,6 +28,16 @@ public class PostgresDialect implements JdbcDialect {
   private static final Set<String> NUMERIC_TYPES = Set.of(
       "BIGINT", "INTEGER", "INT", "INT4", "INT8", "SMALLINT", "NUMERIC", "DECIMAL");
 
+  /**
+   * The properties a URL may set, as pgjdbc names them after parsing (its host, port and database included). Anything
+   * else is refused by name: a new driver property is closed until it is read and listed here.
+   */
+  private static final Set<String> URL_PROPERTIES = Set.of(
+      "PGHOST", "PGPORT", "PGDBNAME", "user", "password", "ssl", "sslmode", "targetServerType",
+      "loadBalanceHosts", "hostRecheckSeconds", "ApplicationName", "currentSchema", "readOnly", "connectTimeout",
+      "loginTimeout", "socketTimeout", "tcpKeepAlive", "defaultRowFetchSize", "prepareThreshold", "stringtype",
+      "loggerLevel");   // a no-op since 42.7, and Testcontainers' URLs carry it; loggerFile, a path, is not listed
+
   @Override
   public String id() { return "postgres"; }
 
@@ -40,8 +52,9 @@ public class PostgresDialect implements JdbcDialect {
 
   /**
    * Read by pgjdbc itself ({@link Driver#parseURL}), so the hosts judged are the ones it connects to: several in a
-   * failover URL, {@code localhost} when the URL names none. A {@code socketFactory} of the URL's choice could connect
-   * anywhere the hosts do not say, and a {@code service} is resolved from the hub's own files: both are refused.
+   * failover URL, {@code localhost} when the URL names none. A {@code service} is resolved from the hub's own files,
+   * and is refused; so is any property outside {@link #URL_PROPERTIES} (a {@code socketFactory}, a file, a class, a
+   * ticket of the hub's), and a server check that would read the hub's CA (#2027).
    */
   @Override
   public List<String> connectHosts(String url) {
@@ -62,13 +75,41 @@ public class PostgresDialect implements JdbcDialect {
       throw new IllegalArgumentException("the driver does not read it");
     }
     if (read == null) throw new IllegalArgumentException("the driver does not read it");
-    if (read.getProperty(PGProperty.SOCKET_FACTORY.getName()) != null) {
-      throw new IllegalArgumentException("it names its own socketFactory");
+    // Only what reaches the tenant's server: a file, a class or a ticket of the hub's is never the URL's to name (#2027).
+    for (String name : new TreeSet<>(read.stringPropertyNames())) {
+      if (!URL_PROPERTIES.contains(name)) {
+        // Named only when the driver knows it: a token pgjdbc kept whole may be a piece of a password.
+        throw new IllegalArgumentException("it sets " + (PGProperty.forName(name) != null ? name : "a parameter")
+            + ", which the hub does not take");
+      }
+    }
+    try {
+      // Verifying the server reads a CA: the hub's own ~/.postgresql/root.crt, as nothing else can name one yet.
+      if (SslMode.of(read).verifyCertificate()) {
+        throw new IllegalArgumentException("it asks to verify the server's certificate, which needs a CA the hub cannot take yet");
+      }
+    } catch (PSQLException invalidMode) {
+      throw new IllegalArgumentException("its sslmode is not one the driver reads");
     }
 
     String hosts = read.getProperty(PGProperty.PG_HOST.getName());
     if (hosts == null || hosts.isBlank()) throw new IllegalArgumentException("it names no host");
     return List.of(hosts.split(","));
+  }
+
+  /**
+   * What the driver would otherwise take from the hub (#2027): its client certificate and key, a CA, under
+   * {@code ~/.postgresql} — empty means none, never the default file; its Kerberos tickets, by GSS or SSPI.
+   */
+  @Override
+  public Map<String, String> isolationProperties() {
+    return Map.of(
+        PGProperty.SSL_CERT.getName(), "",
+        PGProperty.SSL_KEY.getName(), "",
+        PGProperty.SSL_ROOT_CERT.getName(), "",
+        PGProperty.GSS_ENC_MODE.getName(), "disable",
+        PGProperty.JAAS_LOGIN.getName(), "false",
+        PGProperty.REQUIRE_AUTH.getName(), "!gss,!sspi");
   }
 
   /** pgjdbc's own properties, in seconds: {@code connectTimeout}, {@code loginTimeout}, {@code socketTimeout}. */

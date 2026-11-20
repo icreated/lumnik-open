@@ -3,6 +3,7 @@ package io.lumnik.hub.ask;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
+import io.lumnik.common.error.Throwables;
 import io.lumnik.common.sql.Jdbc;
 import io.lumnik.common.text.Text;
 import io.lumnik.extraction.spi.ask.NoSchemaException;
@@ -91,8 +92,8 @@ public class AskToSqlAgent implements AskPort {
     void failProbesForTest(boolean fail) { this.probeFailureForTest = fail; }
 
     @Inject
-    @DataSource("readonly")
-    AgroalDataSource readonlyDs;
+    @DataSource("ask")
+    AgroalDataSource askDs;
 
     @Inject
     @DataSource("admin")
@@ -138,6 +139,15 @@ public class AskToSqlAgent implements AskPort {
 
         // #1096: "lumnik, …" addresses the chat; the address is not part of the question.
         String asked = FollowUp.withoutAddress(question);
+        // #2096: a question without the radius, period, metric or threshold an honest query needs is told what is
+        // missing before the model is asked — a model asked has already chosen one. Read on the asker's own words: a
+        // suggestion quotes them, never a follow-up's resolution.
+        Optional<String> clarification = Underspecified.clarify(asked, card, lang);
+        if (clarification.isPresent()) {
+            LOG.infof("ask clarified an underspecified question: scope=%s", scope);
+            return new AskResult(clarification.get(), "", List.of(), 0).withAbstained();
+        }
+
         if (Text.blank(previous)) {
             return answer(tenantId, scope, card, asked, lang);
         }
@@ -284,7 +294,7 @@ public class AskToSqlAgent implements AskPort {
             rows = read.rows();
             disputed = read.disputed();
         } catch (DriverReading.MisconfiguredConnection deployment) {
-            throw deployment;   // the readonly pool is not as the guards assume: said whole, not as the model's failure
+            throw deployment;   // Ask's pool is not as the guards assume: said whole, not as the model's failure
         } catch (SqlGuard.SqlRejectedException refused) {
             // The driver would not send the guarded text as it is (#2005): nothing reached the server, so this is the
             // guard's refusal, said the same way — never "the database refused it".
@@ -302,6 +312,10 @@ public class AskToSqlAgent implements AskPort {
                 if (disclosure.isPresent()) {
                     return new AskResult(disclosure.get(), safeSql, List.of(), 0).withAbstained();
                 }
+            }
+            // The 'ask' pool's byte cap (#2090): said as such. The driver names it in its own message only.
+            if (Throwables.causeChain(e).stream().anyMatch(t -> String.valueOf(t.getMessage()).contains("maxResultBuffer"))) {
+                return new AskResult(AskSentences.resultTooLarge(lang), safeSql, List.of(), 0).withAbstained();
             }
             // Report the refusal, do not attribute it: this message used to name an unqualified
             // table as the likely cause, and was wrong on the very failure that prompted the fix —
@@ -682,7 +696,7 @@ public class AskToSqlAgent implements AskPort {
     }
 
     private List<Map<String,Object>> readReadOnly(long tenantId, String sql) {
-        try (Connection c = readonlyDs.getConnection()) {
+        try (Connection c = askDs.getConnection()) {
             // Read-only + tenant-scoped RLS + empty search_path (the shared boundary; see TenantRlsScope).
             TenantRlsScope.applyTo(c, tenantId);
             return select(c, sql);
@@ -698,6 +712,8 @@ public class AskToSqlAgent implements AskPort {
         DriverReading.sentBy(c.unwrap(BaseConnection.class), sql);
         List<Map<String,Object>> out = new ArrayList<>();
         try (Statement st = c.createStatement()) {
+            // The server's own limit (#2090): the client timer alone leaves the backend running if the hub goes away.
+            st.execute("SET LOCAL statement_timeout = '" + TIMEOUT_S + "s'");
             st.setQueryTimeout(TIMEOUT_S);
             // The text the guards read is the text the server gets (#2005): escape processing rewrote it in between
             // ({fn ucase(x)} into upper(x), {oj …} unwrapped, text inside a comment dropped). No generated SQL needs it.
@@ -745,7 +761,7 @@ public class AskToSqlAgent implements AskPort {
 
     private Read readWithProbes(long tenantId, String safeSql, SchemaCard card, ProbePlan pp) {
         return QuarkusTransaction.requiringNew().call(() -> {
-            try (Connection c = readonlyDs.getConnection()) {
+            try (Connection c = askDs.getConnection()) {
                 // ONE snapshot for the main read and its probes (#874, spec §B), set before the first query.
                 // SET TRANSACTION, not Connection.setTransactionIsolation: the latter changes the SESSION
                 // default, and this is a pooled connection the next borrower would inherit at RR.

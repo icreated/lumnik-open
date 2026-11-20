@@ -66,6 +66,11 @@ export function readCachedRegistry(storage = localStorage) {
   }
 }
 
+/** On logout: the next person at the login screen sees none of this user's apps (#2004). Best-effort. */
+export function forgetRegistry(storage = localStorage) {
+  try { storage.removeItem(STORAGE_KEY); } catch { /* storage denied: nothing was cached either */ }
+}
+
 /** Best-effort — a full or denied localStorage must not break the boot it only caches for. */
 export function cacheRegistry(entries, storage = localStorage) {
   try {
@@ -137,8 +142,15 @@ export function applyIdentity(entry, doc = document) {
  * The in-app canvas (--bg/--card/--ink) stays fixed dark for every app — deliberately out of
  * scope (design doc, "Theme application").
  */
+// The hub validates both colours at apply; the cache is re-checked here, since it is only a browser's copy (#2004).
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
+function color(value, neutral) {
+  return HEX_COLOR.test(value ?? '') ? value : neutral;
+}
+
 export function applyTheme(entry, doc = document) {
-  doc.documentElement.style.setProperty('--accent', entry.accentColor);
+  doc.documentElement.style.setProperty('--accent', color(entry.accentColor, NEUTRAL.accentColor));
   const themeColor = doc.querySelector('meta[name="theme-color"]');
-  if (themeColor) themeColor.content = entry.backgroundColor;
+  if (themeColor) themeColor.content = color(entry.backgroundColor, NEUTRAL.backgroundColor);
 }

@@ -572,6 +572,20 @@ $ lm run get 9e962b07 > /dev/null
   `SASL_PLAINTEXT`.
 - SASL/SCRAM, mTLS and OAuth are [not yet supported](#limitations).
 
+## The broker addresses the hub checks
+
+The hub checks only the addresses written in `brokers` (or `brokers_env`). After the first
+connection, the cluster names its other brokers itself, and the hub connects to them unchecked.
+
+Before you apply the connector, ask the Kafka administrator to make sure every broker's
+`advertised.listeners` names an address the hub is allowed to reach.
+
+On a shared hub, do not connect to a Kafka cluster a tenant controls, unless network rules also
+keep the hub away from its own private infrastructure. Such a rule limits the private
+destinations the hub may reach, on every port, and allows by name what the hub needs: its
+PostgreSQL, its Keycloak, its model server. A broker can name any port, so a rule on Kafka
+ports alone is not enough.
+
 ## Azure Event Hubs — the `event-hubs` preset
 
 Event Hubs speaks Kafka with SASL/PLAIN: the username is the literal `$ConnectionString`, the

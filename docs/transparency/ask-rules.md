@@ -31,6 +31,26 @@ flowchart TB
 - Stage 7 never refuses. An empty result comes with a caveat, never as a confident *"there are
   none"*.
 
+### Before the model — an incomplete question
+
+**Trigger:** the question asks for something near a place without a radius, for "recent" rows without
+a period, for the "best" ones without a metric, or for "high" or "low" values without a threshold. French
+or English.
+
+```
+$ lm ask --scope sales "Combien de clients autour de Lyon ?"
+J'ai compris que vous cherchez ce qui se trouve autour de Lyon. Il manque un rayon, et je ne connais pas de coordonnées pour un nom de lieu. Vous pouvez demander « Combien de clients avec ville égale à Lyon ? » ou « Combien de clients à moins de [rayon] km de [latitude], [longitude] ? »
+```
+
+- The model is not asked. It would pick a radius, a period or a metric on its own.
+- A suggestion uses only your words, the scope's column names and placeholders in brackets.
+  It is offered only when the scope has what it names: a city column, a point, a date, a figure.
+- A word the scope declares (a column, a value, a description) is its meaning, not a gap.
+- Each gap has its own way out: a distance with its unit for a radius; a date, a number of days or "this
+  month" for a period; `par`/`by` or a column for a metric; a number or "above" for a threshold.
+- "The most recent" or "the highest" is an order, not a gap: it takes the normal path.
+- "Near" counts as a place only when a name follows, as typed: "Lyon", not "la faillite".
+
 ### 1. Abstention floor — nothing declared yet
 
 **Trigger:** the scope has no schema at all (no tables, or tables without columns).
@@ -81,7 +101,8 @@ sentence saying where the answer is:
 
 **Trigger:** the generated SQL is anything but one clean read: not a single `SELECT`/`WITH`
 statement, multiple statements, or a banned token (DML/DDL keywords, `pg_sleep`, `pg_catalog`,
-`information_schema`, `dblink`, …).
+`information_schema`, `dblink`, …), a name that starts with `pg_`, or a string written `E'…'`,
+`U&'…'` or `$$…$$`, or a name written `U&"…"`.
 
 > I couldn't translate that into a safe query.
 

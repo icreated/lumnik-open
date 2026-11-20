@@ -60,6 +60,12 @@ export function escapeText(text) {
   return String(text ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
+// The operator's tile layer. Under the hub's Referrer-Policy (same-origin) a request to another origin carries no
+// Referer, and OpenStreetMap refuses those (#2065). The tiles alone, cross-origin, send the page's origin, never its path.
+export function tileOptions(background) {
+  return { attribution: escapeText(background.attribution), maxZoom: 19, referrerPolicy: 'strict-origin-when-cross-origin' };
+}
+
 // The map's read, apart from the screen (#2057). The newest read wins; a read that lands once the map is
 // hidden (back to the list, the tab left) is kept for the next opening but never writes the header count:
 // that count belongs to whatever is on screen. reset() drops everything — a view change, an unmount.

@@ -154,7 +154,7 @@ class ConnectorConcurrencyCursorIT {
     @Timeout(120)
     void concurrentRunsSameConnector_serializedByAdvisoryLock() throws Exception {
         final int N = 4;
-        final long BUDGET_MS = 8_000;
+        final long BUDGET_MS = 30_000;   // a runaway guard, not a deadline: a slow runner must not cancel the one honest run
 
         Thread watchdog = new Thread(() -> {
             try { Thread.sleep(BUDGET_MS); } catch (InterruptedException ignored) { return; }
@@ -198,6 +198,15 @@ class ConnectorConcurrencyCursorIT {
         assertThat(sum)
             .as("total ingest stays bounded (≤ rows*runs): sum=%d", sum)
             .isLessThanOrEqualTo((long) ROWS * N);
+
+        // #2107: the submissions coalesce into ONE effective run that reads the whole table; the others are skipped
+        // (a Cancelled row) or not started at all — never all of them, each counting another's skip as the slot's run.
+        assertThat(scalar("SELECT COUNT(*) FROM connector.connector_run WHERE connector_id = '" + connectorId
+                + "' AND status = 'Completed' AND records_in = " + ROWS))
+            .as("exactly one run ingested the table. runs=%d", runCount).isEqualTo(1L);
+        assertThat(scalar("SELECT COUNT(*) FROM connector.connector_run WHERE connector_id = '" + connectorId
+                + "' AND status NOT IN ('Completed', 'Cancelled') AND COALESCE(error_message, '') NOT LIKE 'advisory lock%'"))
+            .as("every other submission was skipped, none failed (a retryable lock error excepted)").isZero();
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────

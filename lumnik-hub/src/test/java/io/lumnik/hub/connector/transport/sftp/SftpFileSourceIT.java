@@ -244,8 +244,10 @@ class SftpFileSourceIT {
             source.setProbeTimeoutForTest(Duration.ofSeconds(2));
             freezeServer();
             try {
-                // Without a bound the probe waits for MINA's idle timeout (10 minutes by default).
-                boolean usable = assertTimeoutPreemptively(Duration.ofSeconds(20), source::usable);
+                // Without a bound the probe waits for MINA's idle timeout (10 minutes by default). The verdict comes at the
+                // 2 s probe timeout; the rest of the margin is closing the socket to a frozen peer, which a slow CI
+                // runner took more than 18 s to do (#2108). The product's timeout is unchanged.
+                boolean usable = assertTimeoutPreemptively(Duration.ofSeconds(60), source::usable);
                 assertFalse(usable, "a server that never answers is a dead session");
             } finally {
                 thawServer();

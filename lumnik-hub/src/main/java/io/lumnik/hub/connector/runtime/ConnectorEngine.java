@@ -724,7 +724,9 @@ public class ConnectorEngine {
         if (!c.isEnabled() || c.isDeleted()) return "the connector was paused or deleted while it waited for a run slot";
         if (!endpoint.isEnabled() || endpoint.isDeleted()) return "the endpoint was disabled or deleted while it waited";
         if (!RunWindow.contains(c.getRunWindow(), LocalTime.now(ZoneOffset.UTC))) return "its run window closed while it waited";
-        if (runs.count("endpointId = ?1 and startedAt >= ?2", endpoint.getId(), scheduledAt) > 0) {
+        // A run that never executed (skipped at birth, refused by the queue: resolution_exempt) is not this slot having
+        // run, or concurrent fan-outs would each find the others' skips and none would run (#2107).
+        if (runs.count("endpointId = ?1 and startedAt >= ?2 and resolutionExempt = false", endpoint.getId(), scheduledAt) > 0) {
             return "it already ran since this slot was submitted";
         }
         return null;

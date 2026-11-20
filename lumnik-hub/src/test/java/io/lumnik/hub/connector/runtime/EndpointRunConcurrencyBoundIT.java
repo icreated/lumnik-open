@@ -165,6 +165,35 @@ class EndpointRunConcurrencyBoundIT {
         assertThat(outcomes(connectorId)).as("the manual run, and no second one for this slot").containsExactly("Completed");
     }
 
+    /**
+     * #2107: a run skipped at birth — another held the endpoint — never ran, so the slot is still owed. Counted as
+     * having run, four concurrent fan-outs of one connector each found the others' skips and none ingested.
+     */
+    @Test
+    @Timeout(60)
+    void a_run_skipped_at_birth_while_it_waited_does_not_count_as_the_slot_having_run() throws Exception {
+        UUID connectorId = csvConnectorWithEndpoints(1);
+        UUID endpointId = Jdbc.query(adminDs, "endpoint of", "SELECT id FROM connector.connector_endpoint WHERE connector_id = ?",
+            ps -> ps.setObject(1, connectorId), rs -> rs.getObject(1, UUID.class)).get(0);
+        Semaphore permits = engine.scheduledRunPermits();
+        int held = permits.drainPermits();
+        Future<RunStatus> fanOut;
+        try {
+            fanOut = engine.submitAsync(connectorId, SCHEDULE);
+            await().atMost(Duration.ofSeconds(30)).until(permits::hasQueuedThreads);   // the fan-out waits
+            try (RunLock busy = RunLock.tryAcquire(adminDs, endpointId)) {
+                assertThat(busy).as("the test holds the endpoint").isNotNull();
+                assertThat(engine.runSync(connectorId, new RunTrigger.Manual(1L))).isInstanceOf(RunStatus.Cancelled.class);
+            }
+        } finally {
+            permits.release(held);
+        }
+
+        assertThat(fanOut.get(1, TimeUnit.MINUTES)).isInstanceOf(RunStatus.Completed.class);
+        assertThat(outcomes(connectorId)).as("the skip, then the slot's own run")
+            .containsExactlyInAnyOrder("Cancelled — skipped: another run is already active for this endpoint", "Completed");
+    }
+
     @Test
     @Timeout(60)
     void the_manual_door_takes_no_permit() throws Exception {

@@ -25,8 +25,8 @@ func buildRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.PersistentFlags().String("context", "", "Override the current context from ~/.lm/config.yaml")
-	root.PersistentFlags().String("server", "", "Override the server URL")
-	root.PersistentFlags().String("token", "", "Override the auth token (sent as-is; the context's refresh is not run)")
+	root.PersistentFlags().String("server", "", "Override the server URL; another hub than the context's gets no stored token, only --token")
+	root.PersistentFlags().String("token", "", "Override the auth token (sent as-is; the context's refresh is not run). Shows in ps and the shell history: prefer LUMNIK_TOKEN")
 	root.PersistentFlags().StringP("output", "o", "table", "Output format: table|json|yaml")
 	root.PersistentFlags().BoolP("verbose", "v", false, "Verbose output (debug logs)")
 	root.AddCommand(newVersionCmd())
